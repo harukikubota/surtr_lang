@@ -2786,7 +2786,17 @@ fn completion_symbol_hides_tail_match(symbol: &CompletionSymbol, prefix: &str) -
     let Some((_, tail)) = symbol.label.rsplit_once("::") else {
         return false;
     };
-    tail.chars().next().is_some_and(char::is_uppercase)
+    if tail.chars().next().is_some_and(char::is_uppercase) {
+        return true;
+    }
+    matches!(
+        symbol.origin.as_ref(),
+        Some(CompletionOrigin::Declaration {
+            via_import: false,
+            via_auto_import: false,
+            ..
+        })
+    ) || (symbol.origin.is_none() && symbol.definition.is_some())
 }
 
 fn completion_kind_for_doc_kind(kind: &DocKind) -> CompletionKind {

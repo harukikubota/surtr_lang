@@ -650,6 +650,139 @@ Project::config({|config|
 }
 
 #[test]
+fn analysis_service_project_completion_excludes_private_module_declarations() {
+    let root = temp_root("project-completion-private-hidden");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(
+        &helper_path,
+        "defmod Helper { defp secret() -> Int { 1 } def public() -> Int { 2 } }",
+    )
+    .expect("write helper");
+    std::fs::write(&main_path, "sec").expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), "sec".to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let completion = service.completions(
+        &snapshot,
+        Utf16Position {
+            line: 0,
+            character: 3,
+        },
+    );
+
+    assert!(
+        completion
+            .candidates
+            .iter()
+            .all(|candidate| candidate.label != "Helper::secret"),
+        "private declarations must not leak through raw compile metadata: {completion:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn analysis_service_project_completion_excludes_unimported_module_members() {
+    let root = temp_root("project-completion-unimported-hidden");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(&helper_path, "defmod Helper { def helper() -> Int { 1 } }")
+        .expect("write helper");
+    std::fs::write(&main_path, "he").expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), "he".to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let completion = service.completions(
+        &snapshot,
+        Utf16Position {
+            line: 0,
+            character: 2,
+        },
+    );
+
+    assert!(
+        completion
+            .candidates
+            .iter()
+            .all(|candidate| candidate.label != "Helper::helper"),
+        "unimported module members must not leak through raw compile metadata: {completion:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn analysis_service_project_context_indexes_effective_imported_short_name() {
     let root = temp_root("project-imported-short-index");
     let src = root.join("src");
