@@ -1251,6 +1251,67 @@ fn semantic_index_compile_metadata_joins_declaration_docs_and_signatures() {
 }
 
 #[test]
+fn semantic_index_enriches_symbols_with_compile_metadata_aggregate() {
+    let mut declarations = DeclarationIndex::new();
+    declarations.insert(
+        "Global::Helper::User".to_string(),
+        declaration_entry(
+            "Global::Helper",
+            "User",
+            "Global::Helper::User",
+            DeclarationKind::Struct,
+            true,
+            false,
+        ),
+    );
+    let docs = vec![DocEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: Some("User(name: String)".to_string()),
+        doc: "User type.".to_string(),
+    }];
+    let signatures = vec![SignatureEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: "User(name: String)".to_string(),
+    }];
+    let index = SemanticIndex::enrich_symbols_with_compile_metadata(
+        vec![CompletionSymbol {
+            label: "Helper::User".to_string(),
+            replacement: "Helper::User".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: None,
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        }],
+        &declarations,
+        &docs,
+        &signatures,
+    );
+
+    let info = index
+        .symbol_semantic_infos()
+        .iter()
+        .find(|info| info.surface_name == "Helper::User")
+        .expect("enriched symbol should keep semantic info");
+
+    assert_eq!(info.detail.as_deref(), Some("User(name: String)"));
+    assert_eq!(
+        info.display_metadata.as_ref().map(|metadata| (
+            metadata.qualified_name.as_str(),
+            metadata.has_doc,
+            metadata.has_signature
+        )),
+        Some(("Global::Helper::User", true, true))
+    );
+}
+
+#[test]
 fn compile_metadata_exposes_symbol_semantic_info_before_completion_projection() {
     let mut declarations = DeclarationIndex::new();
     declarations.insert(

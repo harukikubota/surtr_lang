@@ -232,41 +232,49 @@ impl SemanticIndex {
     ) -> Self {
         let metadata = Self::from_compile_metadata(declarations, docs, signatures);
         let mut metadata_by_key = BTreeMap::new();
-        for symbol in metadata.symbols {
+        for info in metadata.symbol_semantic_infos {
             metadata_by_key.insert(
-                (symbol.label.clone(), completion_kind_rank(&symbol.kind)),
-                symbol,
+                (info.surface_name.clone(), completion_kind_rank(&info.kind)),
+                info,
             );
         }
 
         let mut enriched = Vec::with_capacity(symbols.len());
-        for mut symbol in symbols {
-            if let Some(metadata_symbol) =
+        for symbol in symbols {
+            let mut info = SymbolSemanticInfo::from_completion_symbol(&symbol);
+            if let Some(metadata_info) =
                 metadata_by_key.get(&(symbol.label.clone(), completion_kind_rank(&symbol.kind)))
             {
-                if symbol.detail.is_none() {
-                    symbol.detail = metadata_symbol.detail.clone();
+                if info.identity.is_none() {
+                    info.identity = metadata_info.identity;
                 }
-                if symbol.documentation.is_none() {
-                    symbol.documentation = metadata_symbol.documentation.clone();
+                if info.detail.is_none() {
+                    info.detail = metadata_info.detail.clone();
                 }
-                if symbol.sort_text.is_none() {
-                    symbol.sort_text = metadata_symbol.sort_text.clone();
+                if info.documentation.is_none() {
+                    info.documentation = metadata_info.documentation.clone();
                 }
-                if symbol.origin.is_none() {
-                    symbol.origin = metadata_symbol.origin.clone();
+                if info.sort_text.is_none() {
+                    info.sort_text = metadata_info.sort_text.clone();
                 }
-                if symbol.definition.is_none() {
-                    symbol.definition = metadata_symbol.definition.clone();
+                if info.origin.is_none() {
+                    info.origin = metadata_info.origin.clone();
                 }
-                if symbol.capabilities.is_none() {
-                    symbol.capabilities = metadata_symbol.capabilities.clone();
+                if info.definition.is_none() {
+                    info.definition = metadata_info.definition.clone();
                 }
+                if info.capabilities.is_none() {
+                    info.capabilities = metadata_info.capabilities.clone();
+                }
+                merge_symbol_display_metadata(
+                    &mut info.display_metadata,
+                    metadata_info.display_metadata.clone(),
+                );
             }
-            enriched.push(symbol);
+            enriched.push(info);
         }
 
-        Self::from_symbols(enriched)
+        Self::from_symbol_semantic_infos(enriched)
     }
 
     pub fn from_declaration_index(declarations: &DeclarationIndex) -> Self {
