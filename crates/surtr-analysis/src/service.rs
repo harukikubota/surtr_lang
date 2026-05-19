@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -978,10 +979,24 @@ fn analyze_project_stages(
     ) else {
         return;
     };
+    let visible_ast = if matches!(context.context.mode, AnalysisMode::Script)
+        && context.script_project.is_some()
+    {
+        project_user_ast_for_active_document(context, active_ast)
+    } else {
+        active_ast.unwrap_or(&[]).to_vec()
+    };
 
     match sigil::precollect_declaration_index(&module_stages) {
         Ok(declaration_index) => {
-            *semantic_index = semantic_index_with_declarations(semantic_index, &declaration_index);
+            *semantic_index = semantic_index_with_declarations(
+                semantic_index,
+                &declaration_index,
+                &module_stages,
+                &visible_ast,
+                completion_module_path_for_ast(&visible_ast).as_deref(),
+                active_stage_index_for_document(runner, active_document),
+            );
             let user_ast = project_user_ast_for_active_document(context, active_ast);
             match sigil::resolve_staged_program_with_state(
                 &module_stages,
@@ -1061,6 +1076,10 @@ fn is_load_project_statement(stmt: &Ast) -> bool {
 fn semantic_index_with_declarations(
     existing: &SemanticIndex,
     declaration_index: &sigil::DeclarationIndex,
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    active_ast: &[Ast],
+    current_module_path: Option<&str>,
+    current_stage_index: usize,
 ) -> SemanticIndex {
     let mut symbols = existing.symbols().to_vec();
     symbols.extend(
@@ -1069,7 +1088,162 @@ fn semantic_index_with_declarations(
             .iter()
             .cloned(),
     );
+    if let Ok(visible_entries) = sigil::effective_visible_entries(
+        module_stages,
+        active_ast,
+        current_module_path,
+        current_stage_index,
+    ) {
+        let visible_symbols = visible_entries
+            .into_iter()
+            .filter_map(|visible| completion_symbol_for_effective_visible_entry(&symbols, visible))
+            .collect::<Vec<_>>();
+        symbols.extend(visible_symbols);
+    }
+    let explicit_import_symbols = collect_explicit_import_completion_symbols(
+        &symbols,
+        active_ast,
+        declaration_index,
+        current_stage_index,
+    );
+    symbols.extend(explicit_import_symbols);
     SemanticIndex::from_symbols(symbols)
+}
+
+fn completion_symbol_for_effective_visible_entry(
+    existing_symbols: &[CompletionSymbol],
+    visible: sigil::EffectiveVisibleEntry,
+) -> Option<CompletionSymbol> {
+    let kind = match visible.entry.kind {
+        sigil::DeclarationKind::Def
+        | sigil::DeclarationKind::Extractor
+        | sigil::DeclarationKind::TraitMethod
+        | sigil::DeclarationKind::ImplMethod
+        | sigil::DeclarationKind::ImplCtorNew
+        | sigil::DeclarationKind::ResultCtor => CompletionKind::FunctionCall,
+        sigil::DeclarationKind::Struct
+        | sigil::DeclarationKind::Record
+        | sigil::DeclarationKind::Deferror
+        | sigil::DeclarationKind::Enum
+        | sigil::DeclarationKind::EnumVariant => CompletionKind::TypeConstructor,
+        sigil::DeclarationKind::Trait | sigil::DeclarationKind::Const => CompletionKind::TypePath,
+        sigil::DeclarationKind::BuiltinType => return None,
+    };
+    let capabilities = sigil::declaration_symbol_identity_info(&visible.entry.name, &visible.entry.kind)
+        .map(|info| info.capabilities);
+    let qualified_label = sindr::names::surface_rendered_name(&visible.entry.fq_name);
+    let definition = existing_symbols
+        .iter()
+        .find(|symbol| symbol.label == qualified_label && symbol.kind == kind)
+        .and_then(|symbol| symbol.definition.clone());
+    Some(CompletionSymbol {
+        label: visible.visible_name.clone(),
+        replacement: visible.visible_name,
+        kind,
+        detail: None,
+        documentation: None,
+        sort_text: None,
+        origin: Some(crate::CompletionOrigin::Declaration {
+            qualified_name: visible.entry.fq_name.clone(),
+            module_path: visible.entry.module_path.clone(),
+            name: visible.entry.name.clone(),
+            stage_index: visible.entry.stage_index,
+            auto_import: visible.entry.auto_import,
+            visibility: visible.entry.visibility,
+            user_importable: visible.entry.user_importable,
+            user_callable: visible.entry.user_callable,
+        }),
+        definition,
+        capabilities,
+    })
+}
+
+fn collect_explicit_import_completion_symbols(
+    existing_symbols: &[CompletionSymbol],
+    active_ast: &[Ast],
+    declaration_index: &sigil::DeclarationIndex,
+    current_stage_index: usize,
+) -> Vec<CompletionSymbol> {
+    let mut symbols = Vec::new();
+    for stmt in active_ast {
+        let Ast::Import(_, path, spec) = stmt else {
+            continue;
+        };
+        let module_name = path.segments.join("::");
+        let import_names = match spec {
+            spire::ast::ImportSpec::All => continue,
+            spire::ast::ImportSpec::Single(name) => vec![name.as_str()],
+            spire::ast::ImportSpec::List(names) => names.iter().map(String::as_str).collect(),
+        };
+        for import_name in import_names {
+            let Some(entry) = declaration_index.values().find(|entry| {
+                surface_path_name(&entry.module_path) == module_name
+                    && entry.stage_index <= current_stage_index
+                    && !entry.hidden
+                    && entry.visibility == spire::ast::Visibility::Public
+                    && (entry.user_importable || entry.user_callable)
+                    && (surface_path_name(&entry.name) == import_name
+                        || entry
+                            .name
+                            .rsplit_once("::")
+                            .is_some_and(|(_, tail)| surface_path_name(tail) == import_name))
+            }) else {
+                continue;
+            };
+            if let Some(symbol) = completion_symbol_for_effective_visible_entry(
+                existing_symbols,
+                sigil::EffectiveVisibleEntry {
+                    visible_name: import_name.to_string(),
+                    entry: entry.clone(),
+                },
+            ) {
+                symbols.push(symbol);
+            }
+        }
+    }
+    symbols
+}
+
+fn active_stage_index_for_document(
+    runner: &crate::RunnerContext,
+    active_document: &DocumentSnapshot,
+) -> usize {
+    runner
+        .module_stages
+        .iter()
+        .enumerate()
+        .find_map(|(stage_index, stage)| {
+            stage.files.iter().any(|file| file.path == active_document.path).then_some(stage_index)
+        })
+        .unwrap_or_else(|| runner.module_stages.len().saturating_sub(1))
+}
+
+fn completion_module_path_for_ast(ast: &[Ast]) -> Option<String> {
+    let mut module_paths = BTreeSet::new();
+    for stmt in ast {
+        match stmt {
+            Ast::Defmod(_, module_path, ..)
+            | Ast::Defagent(_, module_path, ..)
+            | Ast::Defgenserver(_, module_path, ..)
+            | Ast::Defsupervisor(_, module_path, ..)
+            | Ast::DefdynamicSupervisor(_, module_path, ..) => {
+                module_paths.insert(module_path.clone());
+            }
+            Ast::ImplDef(_, target, ..) => {
+                module_paths.insert(target.clone());
+            }
+            Ast::TraitImplDef(_, _, _, target_ty, ..) => match target_ty {
+                spire::ast::AstTy::Named(_, name)
+                | spire::ast::AstTy::ImplTrait(_, name)
+                | spire::ast::AstTy::Generic(_, name, _) => {
+                    module_paths.insert(name.clone());
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    (module_paths.len() == 1).then(|| module_paths.into_iter().next().unwrap())
 }
 
 fn build_staged_modules(

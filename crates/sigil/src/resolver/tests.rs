@@ -3,6 +3,7 @@ use sindr::names::{FacetRootKind, TypeIdentity};
 use sindr::primitives::int;
 use sindr::warning::WarningKind;
 use spire::ast::{AstTy, BinOp, Lit};
+use spire::parse;
 
 fn permissive_module_rules() -> spire::ParseRules {
     spire::ParseRules::permissive_for_tests()
@@ -3450,6 +3451,27 @@ deftrait Show {
         names.iter().all(|name| name != "Show"),
         "trait owner should not be reported as imported member: {names:?}"
     );
+}
+
+#[test]
+fn test_effective_visible_entries_include_explicit_imported_short_name() {
+    let module_stages = vec![vec![staged_module(
+        "Global::Helper",
+        parse_module_ast(
+            r#"def helper(value: Int) -> String { "" }"#,
+            "Global::Helper",
+        ),
+    )]];
+    let ast = parse("import Helper::helper\nhe").expect("parse should succeed");
+
+    let visible = crate::effective_visible_entries(&module_stages, &ast, None, 0)
+        .expect("effective visible query should succeed");
+    let imported = visible
+        .iter()
+        .find(|entry| entry.visible_name == "helper")
+        .expect("explicit import should expose short name");
+
+    assert_eq!(imported.entry.name, "helper");
 }
 
 #[test]

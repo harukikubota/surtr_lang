@@ -588,6 +588,74 @@ Project::config({|config|
 }
 
 #[test]
+fn analysis_service_project_context_indexes_effective_imported_short_name() {
+    let root = temp_root("project-imported-short-index");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(&helper_path, "defmod Helper { def helper() -> Int { 1 } }")
+        .expect("write helper");
+    std::fs::write(&main_path, "import Helper::helper").expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), "import Helper::helper".to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let helper_symbols = snapshot
+        .semantic_index
+        .symbols()
+        .iter()
+        .filter(|symbol| symbol.label == "helper")
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        helper_symbols.iter().any(|symbol| {
+            matches!(
+                symbol.origin.as_ref(),
+                Some(surtr_analysis::CompletionOrigin::Declaration { qualified_name, .. })
+                    if qualified_name == "Global::Helper::helper"
+            )
+        }),
+        "effective import should expose short declaration symbol: {helper_symbols:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn analysis_service_project_context_rejects_set_exit_code_outside_entrypoint() {
     let root = temp_root("project-set-exit-code");
     let src = root.join("src");

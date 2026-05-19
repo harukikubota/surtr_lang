@@ -791,6 +791,63 @@ pub fn effective_auto_import_entries(
         .collect())
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectiveVisibleEntry {
+    pub visible_name: String,
+    pub entry: DeclarationEntry,
+}
+
+pub fn effective_visible_entries(
+    module_stages: &[Vec<StagedModuleAst>],
+    stmts: &[Ast],
+    current_module_path: Option<&str>,
+    current_stage_index: usize,
+) -> Result<Vec<EffectiveVisibleEntry>, ResolveError> {
+    let declaration_index = precollect_declaration_index(module_stages)?;
+    let declaration_uids = assign_declaration_uids(&declaration_index);
+    let declaration_uid_kinds = declaration_uid_kind_map(&declaration_index, &declaration_uids);
+    let global_scope = build_global_scope(&declaration_index, &declaration_uids);
+    let auto_import_modules = auto_import_module_names(module_stages);
+    let build = build_module_scope_with_imports(
+        &global_scope,
+        &auto_import_modules,
+        &declaration_index,
+        &declaration_uids,
+        &declaration_uid_kinds,
+        stmts,
+        current_module_path,
+        current_stage_index,
+    )?;
+    let entries_by_uid = declaration_uids
+        .iter()
+        .filter_map(|(fq_name, uid)| declaration_index.get(fq_name).cloned().map(|entry| (*uid, entry)))
+        .collect::<HashMap<_, _>>();
+    let mut visible = Vec::new();
+    let mut seen = HashSet::new();
+    for (name, uid) in build.scope.bindings() {
+        let Some(entry) = entries_by_uid.get(&uid) else {
+            continue;
+        };
+        if entry.hidden || (!entry.user_importable && !entry.user_callable) {
+            continue;
+        }
+        let visible_name = global_surface_name(name).to_string();
+        if !seen.insert((visible_name.clone(), entry.fq_name.clone())) {
+            continue;
+        }
+        visible.push(EffectiveVisibleEntry {
+            visible_name,
+            entry: entry.clone(),
+        });
+    }
+    visible.sort_by(|left, right| {
+        left.visible_name
+            .cmp(&right.visible_name)
+            .then_with(|| left.entry.fq_name.cmp(&right.entry.fq_name))
+    });
+    Ok(visible)
+}
+
 struct Resolver {
     scope: Scope,
     /// Fresh IDs reserved in predeclaration order for each top-level declaration name.
