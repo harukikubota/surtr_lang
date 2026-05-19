@@ -101,7 +101,8 @@ pub struct SemanticIndex {
 impl SemanticIndex {
     fn from_semantic_infos(infos: Vec<SymbolSemanticInfo>) -> Self {
         Self::from_symbols(
-            infos.into_iter()
+            infos
+                .into_iter()
                 .map(SymbolSemanticInfo::into_completion_symbol)
                 .collect(),
         )
@@ -154,10 +155,7 @@ impl SemanticIndex {
         signatures: &[SignatureEntry],
     ) -> Self {
         let mut infos = semantic_info_from_declaration_index(declarations);
-        merge_semantic_info(
-            &mut infos,
-            semantic_info_from_metadata(docs, signatures),
-        );
+        merge_semantic_info(&mut infos, semantic_info_from_metadata(docs, signatures));
         Self::from_semantic_infos(infos)
     }
 
@@ -178,10 +176,8 @@ impl SemanticIndex {
 
         let mut enriched = Vec::with_capacity(symbols.len());
         for mut symbol in symbols {
-            if let Some(metadata_symbol) = metadata_by_key.get(&(
-                symbol.label.clone(),
-                completion_kind_rank(&symbol.kind),
-            ))
+            if let Some(metadata_symbol) =
+                metadata_by_key.get(&(symbol.label.clone(), completion_kind_rank(&symbol.kind)))
             {
                 if symbol.detail.is_none() {
                     symbol.detail = metadata_symbol.detail.clone();
@@ -271,10 +267,10 @@ fn semantic_info_from_metadata(
     docs: &[DocEntry],
     signatures: &[SignatureEntry],
 ) -> Vec<SymbolSemanticInfo> {
-        let signature_by_name = signatures
-            .iter()
-            .map(|entry| (entry.qualified_name.as_str(), entry.signature.as_str()))
-            .collect::<BTreeMap<_, _>>();
+    let signature_by_name = signatures
+        .iter()
+        .map(|entry| (entry.qualified_name.as_str(), entry.signature.as_str()))
+        .collect::<BTreeMap<_, _>>();
 
     let mut infos = Vec::new();
     for entry in signatures {
@@ -342,8 +338,8 @@ fn semantic_info_from_declaration_index(
 
         if let Some(kind) = completion_kind_for_declaration_kind(&entry.kind) {
             let qualified_name = surface_name(&entry.fq_name);
-            let capabilities =
-                declaration_symbol_identity_info(&entry.name, &entry.kind).map(|info| info.capabilities);
+            let capabilities = declaration_symbol_identity_info(&entry.name, &entry.kind)
+                .map(|info| info.capabilities);
             infos.push(SymbolSemanticInfo {
                 label: qualified_name.clone(),
                 replacement: qualified_name,
@@ -711,7 +707,8 @@ impl ReplInputSupportContext {
         &self,
         context: &CompletionCallContext,
     ) -> Option<InputSignatureHelp> {
-        let (qualified_name, signature) = self.signature_for_call_completion(&context.callee)?;
+        let (qualified_name, signature) =
+            self.display_signature_for_call_completion(&context.callee)?;
         let rendered = render_signature_with_qualified_name(&qualified_name, signature);
         Some(InputSignatureHelp {
             lines: vec![highlight_signature_parameter(
@@ -1334,6 +1331,28 @@ impl ReplInputSupportContext {
                         .map(|signature| (symbol.label.clone(), signature.clone()))
                 })
             })
+    }
+
+    fn display_signature_for_call_completion(&self, symbol: &str) -> Option<(String, String)> {
+        let found = if symbol.contains("::") {
+            self.index
+                .symbols()
+                .iter()
+                .find(|candidate| candidate.label == symbol)
+        } else {
+            self.index.find_symbol(symbol)
+        };
+        found
+            .and_then(|symbol| {
+                if symbol.kind != CompletionKind::FunctionCall {
+                    return None;
+                }
+                symbol
+                    .detail
+                    .as_ref()
+                    .map(|signature| (symbol.label.clone(), signature.clone()))
+            })
+            .or_else(|| self.signature_for_call_completion(symbol))
     }
 
     fn callable_signature_for_completion(&self, symbol: &str) -> Option<&(String, String)> {

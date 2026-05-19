@@ -965,9 +965,12 @@ impl ReplEngine {
             if self.module_stages.len() == snapshot.default_stage_count {
                 self.auto_import_modules = snapshot.auto_import_modules.clone();
                 self.declaration_index = snapshot.declaration_index().clone();
-                self.auto_import_records =
-                    Self::collect_auto_import_records(&snapshot.module_stages, &self.declaration_index);
-                self.scar_session.rollback(snapshot.scar_checkpoint().clone());
+                self.auto_import_records = Self::collect_auto_import_records(
+                    &snapshot.module_stages,
+                    &self.declaration_index,
+                );
+                self.scar_session
+                    .rollback(snapshot.scar_checkpoint().clone());
                 self.sync_scar_fun_index_with_vm();
                 self.process_metadata = collect_process_metadata(&snapshot.module_stages);
 
@@ -1297,136 +1300,53 @@ impl ReplEngine {
     }
 
     pub fn semantic_index(&self) -> surtr_analysis::SemanticIndex {
-        let mut symbols = Vec::new();
+        let mut symbols = surtr_analysis::SemanticIndex::from_compile_metadata(
+            &self.declaration_index,
+            &self.docs,
+            &self.signatures,
+        )
+        .symbols()
+        .iter()
+        .filter(|symbol| self.compile_symbol_is_repl_completion_surface(symbol))
+        .cloned()
+        .collect::<Vec<_>>();
+        self.enrich_compile_symbol_details(&mut symbols);
 
-        for entry in self.docs.iter().rev() {
-            if entry.kind != DocKind::Function {
-                continue;
-            }
-            let label = crate::surface_path_name(&entry.qualified_name).to_string();
-            if !self.doc_entry_is_completion_surface(entry, &label) {
-                continue;
-            }
-            let tail = label.rsplit("::").next().unwrap_or(label.as_str());
-            let detail = self
-                .find_signature(tail)
-                .map(|(qualified_name, signature)| {
-                    Self::render_signature_with_qualified_name(&qualified_name, signature)
-                })
-                .or_else(|| {
-                    Self::display_signature_for_doc_entry(entry).map(|signature| {
-                        Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
-                    })
-                });
-            symbols.push(surtr_analysis::CompletionSymbol {
-                label: label.clone(),
-                replacement: label,
-                kind: surtr_analysis::CompletionKind::FunctionCall,
-                detail,
-                documentation: Some(entry.doc.clone()),
-                sort_text: None,
-                origin: None,
-                definition: None,
-                capabilities: Self::completion_capabilities_for_builtin(&entry.qualified_name),
-            });
-            if let Some(tail) = crate::surface_path_name(&entry.qualified_name)
-                .rsplit("::")
-                .next()
-                .filter(|tail| self.visible_uid_matches(tail, &entry.qualified_name))
-            {
-                symbols.push(surtr_analysis::CompletionSymbol {
-                    label: tail.to_string(),
-                    replacement: tail.to_string(),
-                    kind: surtr_analysis::CompletionKind::FunctionCall,
-                    detail: self
-                        .find_signature(tail)
-                        .map(|(qualified_name, signature)| {
-                            Self::render_signature_with_qualified_name(&qualified_name, signature)
-                        }),
-                    documentation: Some(entry.doc.clone()),
-                    sort_text: None,
-                    origin: None,
-                    definition: None,
-                    capabilities: Self::completion_capabilities_for_builtin(&entry.qualified_name),
-                });
-            }
-        }
-
-        for decl in self.declaration_index.values() {
-            if let Some(label) = self.completion_visible_owner_label(decl) {
-                symbols.push(surtr_analysis::CompletionSymbol {
-                    label: label.clone(),
-                    replacement: label,
-                    kind: surtr_analysis::CompletionKind::TypeConstructor,
-                    detail: self.declaration_signature(decl),
-                    documentation: None,
-                    sort_text: None,
-                    origin: None,
-                    definition: None,
-                    capabilities: Self::completion_capabilities_for_declaration(decl),
-                });
-            }
-
-            if Self::declaration_is_function_completion_surface(decl) {
-                let label = crate::surface_path_name(&decl.fq_name).to_string();
-                let detail = self.declaration_signature(decl).or_else(|| {
-                    self.find_signature(&label)
-                        .map(|(qualified_name, signature)| {
-                            Self::render_signature_with_qualified_name(&qualified_name, signature)
-                        })
-                });
-                symbols.push(surtr_analysis::CompletionSymbol {
-                    label: label.clone(),
-                    replacement: label,
-                    kind: surtr_analysis::CompletionKind::FunctionCall,
-                    detail,
-                    documentation: None,
-                    sort_text: None,
-                    origin: None,
-                    definition: None,
-                    capabilities: Self::completion_capabilities_for_builtin(&decl.fq_name),
-                });
-                if let Some(tail) = crate::surface_path_name(&decl.fq_name)
-                    .rsplit("::")
-                    .next()
-                    .filter(|tail| self.visible_uid_matches(tail, &decl.fq_name))
-                {
-                    symbols.push(surtr_analysis::CompletionSymbol {
-                        label: tail.to_string(),
-                        replacement: tail.to_string(),
-                        kind: surtr_analysis::CompletionKind::FunctionCall,
-                        detail: self
-                            .find_signature(tail)
-                            .map(|(qualified_name, signature)| {
-                                Self::render_signature_with_qualified_name(
-                                    &qualified_name,
-                                    signature,
-                                )
-                            }),
-                        documentation: None,
-                        sort_text: None,
-                        origin: None,
-                        definition: None,
-                        capabilities: Self::completion_capabilities_for_builtin(&decl.fq_name),
-                    });
-                }
-            }
-        }
-
+        let compile_symbols = symbols.clone();
         let visible_symbols = self
             .sigil_session
             .visible_declaration_entries()
             .into_iter()
             .filter_map(|visible| {
                 surtr_analysis::semantic::completion_symbol_for_effective_visible_entry(
-                    &symbols, &visible,
+                    &compile_symbols,
+                    &visible,
                 )
             })
-            .filter(|symbol| symbol.kind == surtr_analysis::CompletionKind::FunctionCall)
+            .filter(|symbol| {
+                symbol.kind == surtr_analysis::CompletionKind::FunctionCall
+                    || self
+                        .completion_symbol_declaration(symbol)
+                        .is_some_and(|decl| {
+                            matches!(
+                                decl.kind,
+                                sigil::DeclarationKind::EnumVariant
+                                    | sigil::DeclarationKind::ResultCtor
+                            )
+                        })
+            })
             .collect::<Vec<_>>();
         symbols.extend(visible_symbols);
+        self.enrich_compile_symbol_details(&mut symbols);
+        Self::remove_shadowed_type_path_symbols(&mut symbols);
 
         for label in self.completion_visible_module_labels() {
+            if symbols.iter().any(|symbol| {
+                symbol.label == label
+                    && symbol.kind == surtr_analysis::CompletionKind::TypeConstructor
+            }) {
+                continue;
+            }
             let capabilities = Self::completion_capabilities_for_builtin(&label);
             symbols.push(surtr_analysis::CompletionSymbol {
                 label: label.clone(),
@@ -1500,27 +1420,116 @@ impl ReplEngine {
             }
         }
 
-        surtr_analysis::SemanticIndex::enrich_symbols_with_compile_metadata(
-            symbols,
-            &self.declaration_index,
-            &self.docs,
-            &self.signatures,
-        )
+        surtr_analysis::SemanticIndex::from_symbols(symbols)
+    }
+
+    fn compile_symbol_is_repl_completion_surface(
+        &self,
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> bool {
+        if symbol.label.contains("::impl ") {
+            return false;
+        }
+        if let Some((owner, _)) = symbol.label.split_once("::") {
+            if !Self::completion_visible_owner_name(owner) {
+                return false;
+            }
+        } else if symbol.kind == surtr_analysis::CompletionKind::TypeConstructor
+            && !Self::completion_visible_owner_name(&symbol.label)
+        {
+            return false;
+        }
+        match symbol.kind {
+            surtr_analysis::CompletionKind::TypePath => {
+                Self::completion_visible_module_name(&symbol.label)
+            }
+            surtr_analysis::CompletionKind::TypeConstructor => self
+                .completion_symbol_declaration(symbol)
+                .is_none_or(|decl| Self::declaration_is_repl_completion_surface(decl)),
+            _ => self
+                .completion_symbol_declaration(symbol)
+                .is_none_or(|decl| Self::declaration_is_repl_completion_surface(decl)),
+        }
+    }
+
+    fn enrich_compile_symbol_details(&self, symbols: &mut [surtr_analysis::CompletionSymbol]) {
+        for symbol in symbols {
+            if let Some(decl) = self.completion_symbol_declaration(symbol) {
+                if matches!(
+                    decl.kind,
+                    sigil::DeclarationKind::EnumVariant | sigil::DeclarationKind::ResultCtor
+                ) {
+                    symbol.kind = surtr_analysis::CompletionKind::FunctionCall;
+                    if let Some(signature) = Self::special_variant_completion_detail(decl) {
+                        symbol.detail = Some(signature);
+                    } else if let Some(signature) = symbol.detail.take() {
+                        symbol.detail = Some(Self::render_signature_with_qualified_name(
+                            &decl.fq_name,
+                            signature,
+                        ));
+                    }
+                }
+                symbol.capabilities = Self::completion_capabilities_for_declaration(decl);
+                if decl.kind == sigil::DeclarationKind::TraitMethod && !symbol.label.contains("::")
+                {
+                    if let Some((owner, _)) = decl.fq_name.rsplit_once("::") {
+                        if let Some(owner_decl) = self.qualified_declaration(owner) {
+                            symbol.detail = self
+                                .declaration_signature(owner_decl)
+                                .or(symbol.detail.take());
+                            continue;
+                        }
+                    }
+                }
+                if matches!(decl.kind, sigil::DeclarationKind::Trait) {
+                    symbol.detail = self.declaration_signature(decl).or(symbol.detail.take());
+                    continue;
+                }
+                if symbol.detail.is_some() {
+                    continue;
+                }
+                symbol.detail = self.declaration_signature(decl);
+            }
+        }
+    }
+
+    fn remove_shadowed_type_path_symbols(symbols: &mut Vec<surtr_analysis::CompletionSymbol>) {
+        let type_constructor_labels = symbols
+            .iter()
+            .filter(|symbol| symbol.kind == surtr_analysis::CompletionKind::TypeConstructor)
+            .map(|symbol| symbol.label.clone())
+            .collect::<BTreeSet<_>>();
+        symbols.retain(|symbol| {
+            symbol.kind != surtr_analysis::CompletionKind::TypePath
+                || !type_constructor_labels.contains(&symbol.label)
+        });
+    }
+
+    fn special_variant_completion_detail(entry: &sigil::DeclarationEntry) -> Option<String> {
+        match crate::surface_path_name(&entry.fq_name) {
+            "Result::Ok" => Some("Result::Ok($T) -> Result<$T, Error>".to_string()),
+            "Result::Err" => Some("Result::Err(Error) -> Result<$T, Error>".to_string()),
+            "Boolean::True" => Some("Boolean::True() -> Boolean".to_string()),
+            "Boolean::False" => Some("Boolean::False() -> Boolean".to_string()),
+            _ => None,
+        }
+    }
+
+    fn completion_symbol_declaration<'a>(
+        &'a self,
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> Option<&'a sigil::DeclarationEntry> {
+        match symbol.origin.as_ref() {
+            Some(surtr_analysis::CompletionOrigin::Declaration { qualified_name, .. }) => {
+                self.qualified_declaration(qualified_name)
+            }
+            _ => self.qualified_declaration(&symbol.label),
+        }
     }
 
     fn build_completion_context(&self) -> ReplCompletionContext {
         let semantic_index = self.semantic_index();
         let mut callable_signatures = BTreeMap::new();
-        let mut insert_signature = |label: &str, qualified_name: String, signature: String| {
-            callable_signatures
-                .entry(label.to_string())
-                .or_insert((qualified_name.clone(), signature.clone()));
-            if let Some(tail) = label.rsplit("::").next() {
-                callable_signatures
-                    .entry(tail.to_string())
-                    .or_insert((qualified_name, signature));
-            }
-        };
 
         for symbol in semantic_index.symbols() {
             if !matches!(
@@ -1530,12 +1539,26 @@ impl ReplEngine {
             ) {
                 continue;
             }
-            let Some((qualified_name, signature)) =
-                self.completion_symbol_signature_entry(symbol)
-            else {
+            let bare_trait_method_decl = (!symbol.label.contains("::"))
+                .then(|| self.completion_symbol_declaration(symbol))
+                .flatten()
+                .filter(|decl| decl.kind == sigil::DeclarationKind::TraitMethod);
+            let signature_entry = bare_trait_method_decl
+                .and_then(|decl| self.declaration_signature_entry(decl))
+                .or_else(|| self.completion_symbol_signature_entry(symbol));
+            let Some((qualified_name, signature)) = signature_entry else {
                 continue;
             };
-            insert_signature(&symbol.label, qualified_name, signature);
+            if bare_trait_method_decl.is_some() {
+                callable_signatures.insert(symbol.label.clone(), (qualified_name, signature));
+            } else {
+                Self::insert_completion_context_signature(
+                    &mut callable_signatures,
+                    &symbol.label,
+                    qualified_name,
+                    signature,
+                );
+            }
         }
 
         for entry in self.vm.function_entries().iter().rev() {
@@ -1552,7 +1575,12 @@ impl ReplEngine {
                 continue;
             };
             let label = crate::surface_path_name(qualified_name).to_string();
-            insert_signature(&label, qualified_name.to_string(), signature.clone());
+            Self::insert_completion_context_signature(
+                &mut callable_signatures,
+                &label,
+                qualified_name.to_string(),
+                signature.clone(),
+            );
         }
 
         let mut seen_bindings = BTreeSet::new();
@@ -1563,7 +1591,12 @@ impl ReplEngine {
             if let Some(signature) =
                 Self::callable_binding_signature_from_type(&binding.name, &binding.ty)
             {
-                insert_signature(&binding.name, binding.name.clone(), signature);
+                Self::insert_completion_context_signature(
+                    &mut callable_signatures,
+                    &binding.name,
+                    binding.name.clone(),
+                    signature,
+                );
             }
         }
 
@@ -1572,6 +1605,22 @@ impl ReplEngine {
                 semantic_index,
                 callable_signatures,
             ),
+        }
+    }
+
+    fn insert_completion_context_signature(
+        callable_signatures: &mut BTreeMap<String, (String, String)>,
+        label: &str,
+        qualified_name: String,
+        signature: String,
+    ) {
+        callable_signatures
+            .entry(label.to_string())
+            .or_insert((qualified_name.clone(), signature.clone()));
+        if let Some(tail) = label.rsplit("::").next() {
+            callable_signatures
+                .entry(tail.to_string())
+                .or_insert((qualified_name, signature));
         }
     }
 
@@ -2152,33 +2201,6 @@ impl ReplEngine {
 
     fn facet_type_root_capabilities() -> SymbolCapabilities {
         SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot))
-    }
-
-    fn declaration_is_function_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
-        Self::declaration_is_completion_surface(entry)
-            && matches!(
-                entry.kind,
-                sigil::DeclarationKind::Def
-                    | sigil::DeclarationKind::Extractor
-                    | sigil::DeclarationKind::TraitMethod
-                    | sigil::DeclarationKind::EnumVariant
-                    | sigil::DeclarationKind::ResultCtor
-                    | sigil::DeclarationKind::ImplMethod
-                    | sigil::DeclarationKind::ImplCtorNew
-            )
-    }
-
-    fn doc_entry_is_completion_surface(&self, entry: &DocEntry, lookup: &str) -> bool {
-        if let Some(decl) = self.qualified_declaration(&entry.qualified_name) {
-            return Self::declaration_is_completion_surface(decl);
-        }
-        if Self::is_qualified_symbol(lookup) {
-            self.qualified_declaration(lookup)
-                .is_some_and(Self::declaration_is_completion_surface)
-        } else {
-            self.sigil_session.lookup_uid(lookup).is_some()
-                || self.visible_helper_doc_alias(lookup).is_some()
-        }
     }
 
     pub fn prompt(&self) -> String {
@@ -2775,43 +2797,10 @@ impl ReplEngine {
         entry.visibility == spire::ast::Visibility::Public
     }
 
-    fn declaration_is_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
-        Self::declaration_is_public_surface(entry) && !entry.hidden && entry.user_callable
-    }
-
-    fn completion_visible_owner_label(&self, entry: &sigil::DeclarationEntry) -> Option<String> {
-        if !Self::declaration_is_public_surface(entry) || entry.hidden {
-            return None;
-        }
-        if !matches!(
-            entry.kind,
-            sigil::DeclarationKind::Struct
-                | sigil::DeclarationKind::Record
-                | sigil::DeclarationKind::Enum
-                | sigil::DeclarationKind::BuiltinType
-        ) {
-            return None;
-        }
-        let label = self
-            .visible_completion_label(entry)
-            .unwrap_or_else(|| crate::surface_path_name(&entry.fq_name).to_string());
-        Self::completion_visible_owner_name(&label).then_some(label)
-    }
-
-    fn visible_completion_label(&self, entry: &sigil::DeclarationEntry) -> Option<String> {
-        let qualified_uid = self.sigil_session.lookup_uid(&entry.fq_name).or_else(|| {
-            self.sigil_session
-                .lookup_uid(crate::surface_path_name(&entry.fq_name))
-        })?;
-        let mut labels = Vec::new();
-        labels.push(crate::surface_path_name(&entry.name).to_string());
-        if let Some(tail) = entry.name.rsplit("::").next() {
-            labels.push(tail.to_string());
-        }
-        labels.push(crate::surface_path_name(&entry.fq_name).to_string());
-        labels
-            .into_iter()
-            .find(|label| self.sigil_session.lookup_uid(label) == Some(qualified_uid))
+    fn declaration_is_repl_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
+        Self::declaration_is_public_surface(entry)
+            && !entry.hidden
+            && (entry.user_callable || entry.user_importable)
     }
 
     fn completion_visible_owner_name(label: &str) -> bool {
@@ -6772,16 +6761,17 @@ impl ReplEngine {
                     .iter()
                     .find(|stmt| !matches!(stmt, Ast::Import(_, _, _)));
                 match first_non_import {
-                    Some(
-                        Ast::ImplDef(_, _, _, _)
-                        | Ast::TraitImplDef(_, _, _, _, _, _),
-                    ) => {
+                    Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _)) => {
                         member_auto_import_modules.insert(module.module_path.clone());
                     }
                     _ => {
                         let item = crate::surface_rendered_name(&module.module_path);
-                        if seen.insert((0usize, "auto".to_string(), item.clone(), "@autoimport".to_string()))
-                        {
+                        if seen.insert((
+                            0usize,
+                            "auto".to_string(),
+                            item.clone(),
+                            "@autoimport".to_string(),
+                        )) {
                             records.push(ReplImportRecord {
                                 line: 0,
                                 src: "auto".to_string(),
@@ -6814,8 +6804,12 @@ impl ReplEngine {
                     continue;
                 }
                 let item = crate::surface_rendered_name(&method_entry.name);
-                if seen.insert((0usize, "auto".to_string(), item.clone(), "@autoimport".to_string()))
-                {
+                if seen.insert((
+                    0usize,
+                    "auto".to_string(),
+                    item.clone(),
+                    "@autoimport".to_string(),
+                )) {
                     records.push(ReplImportRecord {
                         line: 0,
                         src: "auto".to_string(),
@@ -6835,11 +6829,17 @@ impl ReplEngine {
                     continue;
                 }
                 let item = match entry.kind {
-                    sigil::DeclarationKind::TraitMethod => crate::surface_rendered_name(&entry.name),
+                    sigil::DeclarationKind::TraitMethod => {
+                        crate::surface_rendered_name(&entry.name)
+                    }
                     _ => crate::surface_rendered_name(&entry.fq_name),
                 };
-                if seen.insert((0usize, "auto".to_string(), item.clone(), "@autoimport".to_string()))
-                {
+                if seen.insert((
+                    0usize,
+                    "auto".to_string(),
+                    item.clone(),
+                    "@autoimport".to_string(),
+                )) {
                     records.push(ReplImportRecord {
                         line: 0,
                         src: "auto".to_string(),
