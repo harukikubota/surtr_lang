@@ -151,6 +151,38 @@ pub(super) fn is_importable_declaration(kind: &DeclarationKind) -> bool {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ImportSurfaceStatus {
+    Importable,
+    NonImportableKind,
+    Restricted,
+    Hidden,
+    Private,
+    FutureStage,
+}
+
+pub(super) fn declaration_import_surface_status(
+    entry: &DeclarationEntry,
+    current_stage_index: usize,
+) -> ImportSurfaceStatus {
+    if !is_importable_declaration(&entry.kind) {
+        return ImportSurfaceStatus::NonImportableKind;
+    }
+    if !entry.user_importable {
+        return ImportSurfaceStatus::Restricted;
+    }
+    if entry.hidden {
+        return ImportSurfaceStatus::Hidden;
+    }
+    if entry.visibility != Visibility::Public {
+        return ImportSurfaceStatus::Private;
+    }
+    if entry.stage_index > current_stage_index {
+        return ImportSurfaceStatus::FutureStage;
+    }
+    ImportSurfaceStatus::Importable
+}
+
 fn entry_visibility(attrs: &DeclAttrs) -> Visibility {
     attrs.visibility
 }
@@ -161,6 +193,78 @@ fn entry_user_importable(attrs: &DeclAttrs) -> bool {
 
 fn entry_user_callable(attrs: &DeclAttrs) -> bool {
     attrs.user_callable
+}
+
+#[cfg(test)]
+mod declaration_surface_tests {
+    use super::*;
+
+    fn entry(
+        kind: DeclarationKind,
+        stage_index: usize,
+        user_importable: bool,
+        hidden: bool,
+        visibility: Visibility,
+    ) -> DeclarationEntry {
+        declaration_entry(
+            "Test",
+            "name",
+            "Test::name",
+            kind,
+            stage_index,
+            false,
+            hidden,
+            visibility,
+            user_importable,
+            true,
+        )
+    }
+
+    #[test]
+    fn declaration_import_surface_status_classifies_effective_user_import_policy() {
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Struct, 0, true, false, Visibility::Public),
+                0
+            ),
+            ImportSurfaceStatus::NonImportableKind
+        );
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Def, 0, false, false, Visibility::Public),
+                0
+            ),
+            ImportSurfaceStatus::Restricted
+        );
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Def, 0, true, true, Visibility::Public),
+                0
+            ),
+            ImportSurfaceStatus::Hidden
+        );
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Def, 0, true, false, Visibility::Private),
+                0
+            ),
+            ImportSurfaceStatus::Private
+        );
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Def, 1, true, false, Visibility::Public),
+                0
+            ),
+            ImportSurfaceStatus::FutureStage
+        );
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Def, 0, true, false, Visibility::Public),
+                0
+            ),
+            ImportSurfaceStatus::Importable
+        );
+    }
 }
 
 fn normalize_impl_method_name(target: &str, method_name: &str) -> String {

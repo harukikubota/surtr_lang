@@ -1,4 +1,6 @@
-use super::declarations::{is_importable_declaration, is_module_visible_declaration};
+use super::declarations::{
+    declaration_import_surface_status, is_module_visible_declaration, ImportSurfaceStatus,
+};
 use super::scope_init::initialize_scope;
 use super::*;
 use spire::ast::Visibility;
@@ -392,25 +394,24 @@ fn import_list_into_scope(
             issues.not_importable.push(fq_name);
             continue;
         }
-        if !is_importable_declaration(&entry.kind) {
-            issues.not_importable.push(fq_name);
-            continue;
-        }
-        if !entry.user_importable {
-            issues.not_importable.push(fq_name);
-            continue;
-        }
-        if entry.hidden {
-            issues.hidden_builtins.push(fq_name);
-            continue;
-        }
-        if entry.visibility != Visibility::Public {
-            issues.private_functions.push(fq_name);
-            continue;
-        }
-        if entry.stage_index > import_context.current_stage_index {
-            issues.unavailable_members.push(fq_name);
-            continue;
+        match declaration_import_surface_status(entry, import_context.current_stage_index) {
+            ImportSurfaceStatus::Importable => {}
+            ImportSurfaceStatus::NonImportableKind | ImportSurfaceStatus::Restricted => {
+                issues.not_importable.push(fq_name);
+                continue;
+            }
+            ImportSurfaceStatus::Hidden => {
+                issues.hidden_builtins.push(fq_name);
+                continue;
+            }
+            ImportSurfaceStatus::Private => {
+                issues.private_functions.push(fq_name);
+                continue;
+            }
+            ImportSurfaceStatus::FutureStage => {
+                issues.unavailable_members.push(fq_name);
+                continue;
+            }
         }
 
         bind_import_name(
@@ -509,21 +510,16 @@ fn import_module_into_scope(
         if global_surface_name(&entry.module_path) != module_name {
             continue;
         }
-        if !is_importable_declaration(&entry.kind) {
-            continue;
-        }
-        if !entry.user_importable {
-            continue;
-        }
-        if entry.hidden {
-            continue;
-        }
-        if entry.visibility != Visibility::Public {
-            continue;
-        }
-        if entry.stage_index > import_context.current_stage_index {
-            blocked_by_stage = true;
-            continue;
+        match declaration_import_surface_status(entry, import_context.current_stage_index) {
+            ImportSurfaceStatus::Importable => {}
+            ImportSurfaceStatus::FutureStage => {
+                blocked_by_stage = true;
+                continue;
+            }
+            ImportSurfaceStatus::NonImportableKind
+            | ImportSurfaceStatus::Restricted
+            | ImportSurfaceStatus::Hidden
+            | ImportSurfaceStatus::Private => continue,
         }
         let uid = import_context.declaration_uids[&entry.fq_name];
         bind_import_name(
@@ -751,44 +747,46 @@ fn import_single_into_scope(
         });
     }
 
-    if !is_importable_declaration(&entry.kind) {
-        return Err(ResolveError {
-            message: format!("Import target `{}` is not importable", fq_name),
-            span,
-            related_labels: Vec::new(),
-        });
-    }
-    if !entry.user_importable {
-        return Err(ResolveError {
-            message: restricted_surface_import_message(&fq_name),
-            span,
-            related_labels: Vec::new(),
-        });
-    }
-    if entry.hidden {
-        return Err(ResolveError {
-            message: hidden_builtin_import_message(&fq_name),
-            span,
-            related_labels: Vec::new(),
-        });
-    }
-    if entry.visibility != Visibility::Public {
-        return Err(ResolveError {
-            message: format!("Import target `{}` is private", fq_name),
-            span,
-            related_labels: Vec::new(),
-        });
-    }
-
-    if entry.stage_index > import_context.current_stage_index {
-        return Err(ResolveError {
-            message: format!(
-                "Import target `{}` is not available in the current stage",
-                fq_name
-            ),
-            span,
-            related_labels: Vec::new(),
-        });
+    match declaration_import_surface_status(entry, import_context.current_stage_index) {
+        ImportSurfaceStatus::Importable => {}
+        ImportSurfaceStatus::NonImportableKind => {
+            return Err(ResolveError {
+                message: format!("Import target `{}` is not importable", fq_name),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+        ImportSurfaceStatus::Restricted => {
+            return Err(ResolveError {
+                message: restricted_surface_import_message(&fq_name),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+        ImportSurfaceStatus::Hidden => {
+            return Err(ResolveError {
+                message: hidden_builtin_import_message(&fq_name),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+        ImportSurfaceStatus::Private => {
+            return Err(ResolveError {
+                message: format!("Import target `{}` is private", fq_name),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+        ImportSurfaceStatus::FutureStage => {
+            return Err(ResolveError {
+                message: format!(
+                    "Import target `{}` is not available in the current stage",
+                    fq_name
+                ),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
     }
 
     bind_import_name(
