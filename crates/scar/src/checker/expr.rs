@@ -1,6 +1,7 @@
 use super::*;
 use sindr::names::FacetRootKind;
 use sindr::primitives::int;
+use spire::ast::Symbol;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static SYNTHETIC_RANGE_UID: AtomicU32 = AtomicU32::new(3_000_000_000);
@@ -8427,7 +8428,9 @@ impl Checker {
                     false,
                 ))
             }
-            Ty::Enum(enum_name, _) => {
+            source if Self::facet_enum_source_name(&source).is_some() => {
+                let enum_name =
+                    Self::facet_enum_source_name(&source).expect("checked enum-like Facet source");
                 if self.lookup_enum_variants_of(&enum_name).is_none() {
                     return Err(TypeError {
                         message: format!(
@@ -8485,51 +8488,6 @@ impl Checker {
                     true,
                 ))
             }
-            Ty::Bool => {
-                let Some(variant) = self.lookup_enum_variant_by_short_name("Boolean", field) else {
-                    return Err(TypeError {
-                        message: format!(
-                            "No variant selector '{}' on Boolean (use True or False)",
-                            field
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                };
-                let variant = self.instantiate_enum_variant(&variant);
-                if !self.types_compatible(&variant.enum_ty, source_ty) {
-                    return Err(TypeError {
-                        message: format!(
-                            "Variant selector Boolean.{} does not match {}",
-                            field,
-                            self.ty_name(source_ty)
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-                let payload_arity = variant.payload.len() as u32;
-                let focus_ty = match variant.payload.len() {
-                    0 => Ty::Unit,
-                    1 => variant.payload[0].clone(),
-                    _ => Ty::Tuple(variant.payload.clone()),
-                };
-                Ok((
-                    TypedFacetSegment::Variant {
-                        enum_name: variant.enum_name,
-                        variant_name: variant.short_name,
-                        variant_tag: variant.tag,
-                        discriminant: variant.discriminant,
-                        payload_arity,
-                        optional: *optional,
-                        focus_readonly_root: self.ty_is_readonly_root(&focus_ty),
-                        focus_type_name: Self::readonly_type_name(&self.resolve_ty(&focus_ty))
-                            .map(str::to_string),
-                    },
-                    focus_ty,
-                    true,
-                ))
-            }
             other => {
                 let message = if field.starts_with('_')
                     && field
@@ -8550,6 +8508,14 @@ impl Checker {
                     hint: None,
                 })
             }
+        }
+    }
+
+    fn facet_enum_source_name(source_ty: &Ty) -> Option<Symbol> {
+        match source_ty {
+            Ty::Enum(enum_name, _) => Some(enum_name.clone()),
+            Ty::Bool => Some("Boolean".into()),
+            _ => None,
         }
     }
 

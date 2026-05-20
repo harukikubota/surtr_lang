@@ -255,9 +255,25 @@ impl Parser<'_> {
                 self.advance();
                 let mut segments = vec![name.clone()];
                 let mut path_end = sp.end;
-                while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+                while self.has_path_separator()
+                    && matches!(
+                        self.peek_n(2),
+                        Some(Token::Ident(_) | Token::True | Token::False)
+                    )
+                {
                     self.consume_path_separator()?;
-                    let (seg, seg_span) = self.expect_ident()?;
+                    let (seg, seg_span) = match self.peek().clone() {
+                        Token::Ident(_) => self.expect_ident()?,
+                        Token::True => {
+                            let span = self.advance().span;
+                            ("True".into(), span)
+                        }
+                        Token::False => {
+                            let span = self.advance().span;
+                            ("False".into(), span)
+                        }
+                        _ => unreachable!("path segment token was checked before consuming `::`"),
+                    };
                     path_end = seg_span.end;
                     segments.push(seg);
                 }

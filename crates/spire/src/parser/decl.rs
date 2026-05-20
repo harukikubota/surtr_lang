@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::error::ParseError;
 use crate::token::Token;
-use sindr::builtin::builtin_type_meta_by_name;
+use sindr::names::reserved_owner_surface_name_constraint;
 
 use super::ast_ty_span;
 use super::context::{DeclLevel, TopLevelDeclKind};
@@ -2257,15 +2257,30 @@ impl Parser<'_> {
             ));
         }
         self.expect(&Token::Defmod)?;
-        let (name, _) = self.expect_qualified_ident(2, "module")?;
-        let reserved_check_name = name.rsplit("::").next().unwrap_or(&name);
-        if reserved_check_name != "ProcessInit"
-            && builtin_type_meta_by_name(reserved_check_name).is_some()
-        {
+        if matches!(self.peek(), Token::True | Token::False) {
+            let reserved_name = match self.peek() {
+                Token::True => "True",
+                Token::False => "False",
+                _ => unreachable!(),
+            };
+            let constraint = reserved_owner_surface_name_constraint(reserved_name)
+                .expect("Boolean variant aliases are reserved owner names");
             return Err(ParseError::syntax(
                 format!(
-                    "Module name `{}` is reserved by a canonical builtin type declaration",
-                    reserved_check_name
+                    "Module name `{}` is {}",
+                    constraint.surface_name,
+                    constraint.kind.diagnostic_suffix()
+                ),
+                sp,
+            ));
+        }
+        let (name, _) = self.expect_qualified_ident(2, "module")?;
+        if let Some(constraint) = reserved_owner_surface_name_constraint(&name) {
+            return Err(ParseError::syntax(
+                format!(
+                    "Module name `{}` is {}",
+                    constraint.surface_name,
+                    constraint.kind.diagnostic_suffix()
                 ),
                 sp,
             ));

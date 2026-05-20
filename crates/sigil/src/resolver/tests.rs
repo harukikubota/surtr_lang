@@ -138,7 +138,10 @@ fn const_only_fallback_module_path_requires_const_only_source() {
         "const VERSION: Int = 1\ndef version() -> Int { VERSION }",
         "Config",
     );
-    assert_eq!(const_only_fallback_module_path(&with_def, Some("Config")), None);
+    assert_eq!(
+        const_only_fallback_module_path(&with_def, Some("Config")),
+        None
+    );
 }
 
 #[test]
@@ -3069,6 +3072,36 @@ x = match s {
 }
 
 #[test]
+fn test_match_qualified_boolean_constructor_patterns_resolve() {
+    let resolved = parse_and_resolve(
+        r#"flag = True
+x = match flag {
+  Boolean::True => 1,
+  Boolean::False => 0,
+}"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Match(_, _, arms) => {
+                assert!(matches!(
+                    &arms[0].pattern,
+                    ResolvedPattern::Constructor(ctor, inner)
+                        if ctor.name == "Boolean::True" && inner.is_empty()
+                ));
+                assert!(matches!(
+                    &arms[1].pattern,
+                    ResolvedPattern::Constructor(ctor, inner)
+                        if ctor.name == "Boolean::False" && inner.is_empty()
+                ));
+            }
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
 fn test_closure_and_capture_resolution() {
     let resolved = parse_and_resolve(
         r#"x = 1
@@ -4450,6 +4483,44 @@ deferror Oops(reason: String) { reason }"#,
             assert_eq!(info.capabilities.facet_root_path, None);
         }
         other => panic!("Expected DeferrorDef, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_builtin_special_variant_aliases_cannot_be_declared_as_owners() {
+    for alias in ["Ok", "Err", "True", "False"] {
+        let module_path = format!("Global::{alias}");
+        let err = precollect_declaration_index(&[vec![staged_module(&module_path, Vec::new())]])
+            .expect_err("builtin-special variant alias should not be usable as a module owner");
+        assert!(
+            err.message
+                .contains("reserved for builtin-special enum variant sugar"),
+            "{alias}: {}",
+            err.message
+        );
+
+        let err = precollect_declaration_index(&[vec![staged_module(
+            "User",
+            vec![Ast::EnumDef(
+                Span { start: 0, end: 0 },
+                format!("Global::{alias}"),
+                Vec::new(),
+                vec![spire::ast::EnumVariant {
+                    name: "Value".to_string(),
+                    payload: Vec::new(),
+                    discriminant: None,
+                    span: Span { start: 0, end: 0 },
+                }],
+                DeclAttrs::default(),
+            )],
+        )]])
+        .expect_err("builtin-special variant alias should not be usable as a type owner");
+        assert!(
+            err.message
+                .contains("reserved for builtin-special enum variant sugar"),
+            "{alias}: {}",
+            err.message
+        );
     }
 }
 

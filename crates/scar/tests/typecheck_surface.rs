@@ -48,6 +48,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         match_bool_requires_exhaustive_arms as fn(),
     ),
     (
+        "match_bool_accepts_qualified_boolean_constructor_patterns",
+        match_bool_accepts_qualified_boolean_constructor_patterns as fn(),
+    ),
+    (
+        "match_bool_qualified_constructor_patterns_require_exhaustive_arms",
+        match_bool_qualified_constructor_patterns_require_exhaustive_arms as fn(),
+    ),
+    (
         "safebind_total_pattern_accepts_plain_rhs",
         safebind_total_pattern_accepts_plain_rhs as fn(),
     ),
@@ -150,6 +158,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     (
         "facet_preview_accepts_option_variant",
         facet_preview_accepts_option_variant as fn(),
+    ),
+    (
+        "facet_boolean_selector_uses_regular_enum_diagnostic",
+        facet_boolean_selector_uses_regular_enum_diagnostic as fn(),
     ),
     (
         "facet_list_and_map_segments_are_fallible_structural_paths",
@@ -1333,6 +1345,30 @@ print(match flag {
     assert!(err.message.contains("Non-exhaustive match. Missing: False"));
 }
 
+fn match_bool_accepts_qualified_boolean_constructor_patterns() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"flag = True
+print(match flag {
+  Boolean::True => "yes",
+  Boolean::False => "no",
+})"#,
+    );
+
+    typecheck(resolved).expect("Boolean constructor patterns should typecheck like enum variants");
+}
+
+fn match_bool_qualified_constructor_patterns_require_exhaustive_arms() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"flag = True
+print(match flag {
+  Boolean::True => "yes",
+})"#,
+    );
+    let err = typecheck(resolved)
+        .expect_err("qualified Boolean constructor patterns should use enum exhaustiveness");
+    assert!(err.message.contains("Non-exhaustive match. Missing: False"));
+}
+
 fn safebind_total_pattern_accepts_plain_rhs() {
     let resolved = resolve_with_builtin_prelude("num =? 10");
     let typed = typecheck(resolved).expect("typecheck should succeed");
@@ -1706,6 +1742,18 @@ Facet::preview(Boolean.True, flag)"#,
             if matches!(ok.as_ref(), scar::types::Ty::Unit)
                 && matches!(err.as_ref(), scar::types::Ty::Error)
     ));
+}
+
+fn facet_boolean_selector_uses_regular_enum_diagnostic() {
+    let err = typecheck_with_rules(
+        r#"flag = True
+Facet::preview(Boolean.Maybe, flag)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("unknown Boolean selector should fail through regular enum selector handling");
+    assert!(err
+        .message
+        .contains("No variant selector 'Maybe' on Boolean (use PascalCase constructor names)"));
 }
 
 fn facet_list_and_map_segments_are_fallible_structural_paths() {

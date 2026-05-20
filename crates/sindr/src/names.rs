@@ -182,6 +182,31 @@ pub struct BuiltinSymbolSurfaceMeta {
     pub capabilities: SymbolCapabilities,
 }
 
+/// Reason why a surface name cannot be used as a declaration owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReservedOwnerSurfaceNameKind {
+    CanonicalBuiltinType,
+    BuiltinSpecialEnumVariantAlias,
+}
+
+impl ReservedOwnerSurfaceNameKind {
+    pub const fn diagnostic_suffix(self) -> &'static str {
+        match self {
+            Self::CanonicalBuiltinType => "reserved by a canonical builtin type declaration",
+            Self::BuiltinSpecialEnumVariantAlias => {
+                "reserved for builtin-special enum variant sugar"
+            }
+        }
+    }
+}
+
+/// Shared uniqueness/reservation constraint for names that would become owners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReservedOwnerSurfaceNameConstraint {
+    pub surface_name: &'static str,
+    pub kind: ReservedOwnerSurfaceNameKind,
+}
+
 /// Compile-space usage policy for builtin type heads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuiltinTypeUsagePolicy {
@@ -383,6 +408,91 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
     }
 }
 
+pub const fn canonical_builtin_type_has_surface_declaration(type_name: TypeName) -> bool {
+    matches!(
+        type_name,
+        TypeName::Int
+            | TypeName::Float
+            | TypeName::String
+            | TypeName::Boolean
+            | TypeName::Unit
+            | TypeName::Closure
+            | TypeName::MatchArms
+            | TypeName::CondClauses
+            | TypeName::BulkUpdateEntries
+            | TypeName::Error
+            | TypeName::Regex
+            | TypeName::RegexCaptures
+            | TypeName::RegexMatch
+            | TypeName::RandomGenerator
+            | TypeName::FileHandle
+            | TypeName::List
+            | TypeName::HashMap
+            | TypeName::Generator
+            | TypeName::Result
+            | TypeName::ProcessInit
+            | TypeName::Lazy
+            | TypeName::TypeRef
+            | TypeName::Hole
+            | TypeName::Facet
+            | TypeName::Workers
+            | TypeName::WorkerLease
+            | TypeName::TaskHandle
+    )
+}
+
+fn owner_surface_tail(name: &str) -> &str {
+    surface_path_name(name)
+        .rsplit("::")
+        .next()
+        .unwrap_or_else(|| surface_path_name(name))
+}
+
+pub fn reserved_owner_surface_name_constraint(
+    name: &str,
+) -> Option<ReservedOwnerSurfaceNameConstraint> {
+    let surface_name = owner_surface_tail(name);
+    match surface_name {
+        "Ok" => {
+            return Some(ReservedOwnerSurfaceNameConstraint {
+                surface_name: "Ok",
+                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
+            });
+        }
+        "Err" => {
+            return Some(ReservedOwnerSurfaceNameConstraint {
+                surface_name: "Err",
+                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
+            });
+        }
+        "True" => {
+            return Some(ReservedOwnerSurfaceNameConstraint {
+                surface_name: "True",
+                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
+            });
+        }
+        "False" => {
+            return Some(ReservedOwnerSurfaceNameConstraint {
+                surface_name: "False",
+                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
+            });
+        }
+        _ => {}
+    }
+
+    let type_name = builtin_type_name(surface_name)?;
+    if surface_name != TypeName::ProcessInit.as_str()
+        && canonical_builtin_type_has_surface_declaration(type_name)
+    {
+        return Some(ReservedOwnerSurfaceNameConstraint {
+            surface_name: type_name.as_str(),
+            kind: ReservedOwnerSurfaceNameKind::CanonicalBuiltinType,
+        });
+    }
+
+    None
+}
+
 pub fn builtin_type_usage_policy(name: &str) -> Option<BuiltinTypeUsagePolicy> {
     builtin_type_name(surface_path_name(name)).map(TypeName::usage_policy)
 }
@@ -546,6 +656,39 @@ mod tests {
         assert!(
             builtin_symbol_surface_meta("String::len").is_none(),
             "runtime dispatch aliases must not become symbol surface metadata"
+        );
+    }
+
+    #[test]
+    fn reserved_owner_surface_name_constraint_marks_builtin_special_variant_aliases() {
+        for name in ["Ok", "Err", "True", "False"] {
+            let constraint = reserved_owner_surface_name_constraint(name)
+                .expect("builtin-special variant alias should be reserved as owner");
+            assert_eq!(constraint.surface_name, name);
+            assert_eq!(
+                constraint.kind,
+                ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias
+            );
+        }
+
+        let nested = reserved_owner_surface_name_constraint("Auth::Ok")
+            .expect("owner tail should be reserved inside qualified paths");
+        assert_eq!(nested.surface_name, "Ok");
+    }
+
+    #[test]
+    fn reserved_owner_surface_name_constraint_marks_canonical_builtin_types() {
+        let constraint = reserved_owner_surface_name_constraint("MatchArms")
+            .expect("canonical builtin type surface should be reserved as owner");
+        assert_eq!(constraint.surface_name, "MatchArms");
+        assert_eq!(
+            constraint.kind,
+            ReservedOwnerSurfaceNameKind::CanonicalBuiltinType
+        );
+
+        assert!(
+            reserved_owner_surface_name_constraint("ProcessInit").is_none(),
+            "ProcessInit owner remains allowed for runtime init lowering"
         );
     }
 

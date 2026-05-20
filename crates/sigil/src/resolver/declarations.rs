@@ -1,15 +1,54 @@
 use super::scope_init::initialize_scope;
 use super::scope_init::is_doc_only_builtin_decl;
 use super::*;
-use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
-use sindr::names::surface_path_name;
+use sindr::builtin::builtin_type_supports_inherent_impl;
+use sindr::names::{
+    reserved_owner_surface_name_constraint, surface_path_name, ReservedOwnerSurfaceNameKind,
+};
 use spire::ast::FacetPathSegment;
 
 use serde::{Deserialize, Serialize};
 
-fn is_reserved_builtin_type_redefinition(name: &str) -> bool {
-    let surface_name = global_surface_name(name);
-    builtin_type_meta_by_name(surface_name).is_some() && surface_name != "ProcessInit"
+fn reserved_owner_name_error(
+    owner_kind: &str,
+    name: &str,
+    span: &Span,
+    allow_canonical_builtin_type: bool,
+) -> Option<ResolveError> {
+    let constraint = reserved_owner_surface_name_constraint(name)?;
+    if allow_canonical_builtin_type
+        && matches!(
+            constraint.kind,
+            ReservedOwnerSurfaceNameKind::CanonicalBuiltinType
+        )
+    {
+        return None;
+    }
+
+    Some(ResolveError {
+        message: format!(
+            "{} `{}` is {}",
+            owner_kind,
+            constraint.surface_name,
+            constraint.kind.diagnostic_suffix()
+        ),
+        span: span.clone(),
+        related_labels: Vec::new(),
+    })
+}
+
+fn reject_reserved_owner_name(
+    owner_kind: &str,
+    name: &str,
+    span: &Span,
+    allow_canonical_builtin_type: bool,
+) -> Result<(), ResolveError> {
+    if let Some(err) =
+        reserved_owner_name_error(owner_kind, name, span, allow_canonical_builtin_type)
+    {
+        return Err(err);
+    }
+    Ok(())
 }
 
 fn builtin_special_enum_surface_name(name: &str) -> bool {
@@ -297,12 +336,9 @@ pub fn const_only_fallback_module_path<'a>(
     let has_const = ast
         .iter()
         .any(|stmt| matches!(stmt, Ast::ConstDef(_, _, _, _, _)));
-    let const_only = ast.iter().all(|stmt| {
-        matches!(
-            stmt,
-            Ast::Import(_, _, _) | Ast::ConstDef(_, _, _, _, _)
-        )
-    });
+    let const_only = ast
+        .iter()
+        .all(|stmt| matches!(stmt, Ast::Import(_, _, _) | Ast::ConstDef(_, _, _, _, _)));
     (has_const && const_only)
         .then_some(fallback_module_path)
         .flatten()
@@ -316,6 +352,26 @@ pub fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
             .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
         Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _))
     )
+}
+
+fn staged_module_is_impl_owner(module: &StagedModuleAst) -> bool {
+    matches!(
+        module
+            .ast
+            .iter()
+            .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
+        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _))
+    )
+}
+
+fn module_owner_fallback_span(module: &StagedModuleAst) -> Span {
+    module
+        .ast
+        .iter()
+        .find(|stmt| !matches!(stmt, Ast::Import(_, _, _)))
+        .map(Ast::span)
+        .cloned()
+        .unwrap_or(Span { start: 0, end: 0 })
 }
 
 fn partition_nested_imports(body: Vec<Ast>) -> (Vec<Ast>, Vec<Ast>) {
@@ -1190,6 +1246,25 @@ pub fn precollect_declaration_index(
     for (stage_index, stage) in module_stages.iter().enumerate() {
         let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
         for module in stage {
+            if !module.module_path.is_empty()
+                && !staged_module_is_impl_owner(module)
+                && reserved_owner_surface_name_constraint(&module.module_path).is_some_and(
+                    |constraint| {
+                        matches!(
+                            constraint.kind,
+                            ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias
+                        )
+                    },
+                )
+            {
+                reject_reserved_owner_name(
+                    "Module name",
+                    &module.module_path,
+                    &module_owner_fallback_span(module),
+                    true,
+                )?;
+            }
+
             for stmt in &module.ast {
                 if let Ast::ImplDef(span, target, methods, _) = stmt {
                     let target_kind = resolve_impl_target_kind(target, span, &stage_impl_targets)?;
@@ -1296,6 +1371,7 @@ pub fn precollect_declaration_index(
                 }
 
                 if let Ast::TraitDef(span, name, _type_params, methods, attrs) = stmt {
+                    reject_reserved_owner_name("Owner name", name, span, false)?;
                     let fq_name = if module.module_path.is_empty() {
                         name.clone()
                     } else {
@@ -1399,16 +1475,7 @@ pub fn precollect_declaration_index(
                 }
 
                 if let Ast::EnumDef(span, name, _, variants, attrs) = stmt {
-                    if !attrs.builtin && is_reserved_builtin_type_redefinition(name) {
-                        return Err(ResolveError {
-                            message: format!(
-                                "Type name `{}` is reserved by a canonical builtin type declaration",
-                                global_surface_name(name)
-                            ),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    reject_reserved_owner_name("Type name", name, span, attrs.builtin)?;
                     let fq_name = name.to_string();
                     insert_declaration_entry(
                         &mut index,
@@ -1556,19 +1623,11 @@ pub fn precollect_declaration_index(
 
                 if matches!(
                     stmt,
-                    Ast::StructDef(_, name, ..)
-                        | Ast::RecordDef(_, name, _, _)
-                        | Ast::DeferrorDef(_, name, _, _, _)
-                        if is_reserved_builtin_type_redefinition(name)
+                    Ast::StructDef(_, ..)
+                        | Ast::RecordDef(_, _, _, _)
+                        | Ast::DeferrorDef(_, _, _, _, _)
                 ) {
-                    return Err(ResolveError {
-                        message: format!(
-                            "Type name `{}` is reserved by a canonical builtin type declaration",
-                            global_surface_name(name)
-                        ),
-                        span: span.clone(),
-                        related_labels: Vec::new(),
-                    });
+                    reject_reserved_owner_name("Type name", name, span, false)?;
                 }
 
                 let fq_name = if kind == DeclarationKind::Const {
@@ -2006,6 +2065,7 @@ impl Resolver {
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
                 Ast::TraitDef(span, name, _type_params, methods, _) => {
+                    reject_reserved_owner_name("Owner name", name, span, false)?;
                     self.reject_duplicate_top_level_declaration(
                         &mut declared_in_batch,
                         name,
@@ -2093,16 +2153,7 @@ impl Resolver {
                 | Ast::RecordDef(span, name, _, _)
                 | Ast::DeferrorDef(span, name, _, _, _) => {
                     let surface = global_surface_name(name).to_string();
-                    if is_reserved_builtin_type_redefinition(name) {
-                        return Err(ResolveError {
-                            message: format!(
-                                "Type name `{}` is reserved by a canonical builtin type declaration",
-                                global_surface_name(name)
-                            ),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    reject_reserved_owner_name("Type name", name, span, false)?;
                     self.reject_duplicate_top_level_declaration(
                         &mut declared_in_batch,
                         &surface,
@@ -2119,16 +2170,7 @@ impl Resolver {
                 }
                 Ast::EnumDef(span, name, _, variants, attrs) => {
                     let surface = global_surface_name(name).to_string();
-                    if !attrs.builtin && is_reserved_builtin_type_redefinition(name) {
-                        return Err(ResolveError {
-                            message: format!(
-                                "Type name `{}` is reserved by a canonical builtin type declaration",
-                                global_surface_name(name)
-                            ),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    reject_reserved_owner_name("Type name", name, span, attrs.builtin)?;
                     self.reject_duplicate_top_level_declaration(
                         &mut declared_in_batch,
                         &surface,
