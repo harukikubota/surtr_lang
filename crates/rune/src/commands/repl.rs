@@ -168,19 +168,16 @@ mod tests {
 
     #[test]
     fn parse_repl_options_accepts_no_local_config() {
-        let options = parse_repl_options(&["--no-local-config".to_string()])
-            .expect("options should parse");
+        let options =
+            parse_repl_options(&["--no-local-config".to_string()]).expect("options should parse");
 
         assert!(options.no_local_config);
     }
 
     #[test]
     fn parse_repl_options_accepts_explicit_config_path() {
-        let options = parse_repl_options(&[
-            "--config".to_string(),
-            "custom-xldr.yaml".to_string(),
-        ])
-        .expect("options should parse");
+        let options = parse_repl_options(&["--config".to_string(), "custom-xldr.yaml".to_string()])
+            .expect("options should parse");
 
         assert_eq!(options.config_path.as_deref(), Some("custom-xldr.yaml"));
     }
@@ -348,7 +345,10 @@ mod tests {
             .expect_err("missing config value must fail");
 
         let rendered = format!("{err:?}");
-        assert!(rendered.contains("missing value for --config"), "{rendered}");
+        assert!(
+            rendered.contains("missing value for --config"),
+            "{rendered}"
+        );
     }
 
     #[test]

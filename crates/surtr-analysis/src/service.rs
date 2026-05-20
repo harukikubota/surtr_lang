@@ -1100,11 +1100,13 @@ fn semantic_index_with_declarations(
     current_stage_index: usize,
 ) -> SemanticIndex {
     let mut infos = existing.symbol_semantic_infos().to_vec();
-    infos.extend(crate::semantic::symbol_semantic_infos_from_compile_metadata(
-        declaration_index,
-        docs,
-        signatures,
-    ));
+    infos.extend(
+        crate::semantic::symbol_semantic_infos_from_compile_metadata(
+            declaration_index,
+            docs,
+            signatures,
+        ),
+    );
     if let Ok(visible_entries) = sigil::effective_visible_entries(
         module_stages,
         active_ast,

@@ -2130,10 +2130,20 @@ mod policy_tests {
 
     #[test]
     fn public_trait_target_surface_uses_builtin_type_usage_policy() {
-        assert!(Checker::builtin_type_has_public_trait_target_surface("String"));
-        assert!(Checker::builtin_type_has_public_trait_target_surface("User"));
-        assert!(!Checker::builtin_type_has_public_trait_target_surface("Self"));
-        assert!(!Checker::builtin_type_has_public_trait_target_surface("TypeRef"));
-        assert!(!Checker::builtin_type_has_public_trait_target_surface("ProcessInit"));
+        assert!(Checker::builtin_type_has_public_trait_target_surface(
+            "String"
+        ));
+        assert!(Checker::builtin_type_has_public_trait_target_surface(
+            "User"
+        ));
+        assert!(!Checker::builtin_type_has_public_trait_target_surface(
+            "Self"
+        ));
+        assert!(!Checker::builtin_type_has_public_trait_target_surface(
+            "TypeRef"
+        ));
+        assert!(!Checker::builtin_type_has_public_trait_target_surface(
+            "ProcessInit"
+        ));
     }
 }

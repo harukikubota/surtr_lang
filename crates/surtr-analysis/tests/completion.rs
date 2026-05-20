@@ -1090,37 +1090,38 @@ fn semantic_index_builds_completion_symbols_from_doc_and_signature_metadata() {
 
 #[test]
 fn semantic_index_builds_from_symbol_semantic_infos() {
-    let index = SemanticIndex::from_symbol_semantic_infos(vec![surtr_analysis::SymbolSemanticInfo {
-        canonical_name: "Global::Helper::helper".to_string(),
-        surface_name: "Helper::helper".to_string(),
-        replacement: "Helper::helper".to_string(),
-        kind: CompletionKind::FunctionCall,
-        identity: None,
-        detail: Some("Helper::helper(value: Int) -> Int".to_string()),
-        documentation: Some("Increment a number.".to_string()),
-        sort_text: Some("1:Helper::helper".to_string()),
-        origin: Some(CompletionOrigin::Declaration {
-            qualified_name: "Global::Helper::helper".to_string(),
-            module_path: "Global::Helper".to_string(),
-            name: "helper".to_string(),
-            stage_index: 1,
-            auto_import: false,
-            visibility: spire::ast::Visibility::Public,
-            user_importable: true,
-            user_callable: true,
-            via_import: false,
-            via_auto_import: false,
-            shadowed_auto_import: false,
-        }),
-        definition: None,
-        capabilities: None,
-        display_metadata: Some(SymbolDisplayMetadata {
-            qualified_name: "Global::Helper::helper".to_string(),
-            module_path: "Global::Helper".to_string(),
-            has_doc: true,
-            has_signature: true,
-        }),
-    }]);
+    let index =
+        SemanticIndex::from_symbol_semantic_infos(vec![surtr_analysis::SymbolSemanticInfo {
+            canonical_name: "Global::Helper::helper".to_string(),
+            surface_name: "Helper::helper".to_string(),
+            replacement: "Helper::helper".to_string(),
+            kind: CompletionKind::FunctionCall,
+            identity: None,
+            detail: Some("Helper::helper(value: Int) -> Int".to_string()),
+            documentation: Some("Increment a number.".to_string()),
+            sort_text: Some("1:Helper::helper".to_string()),
+            origin: Some(CompletionOrigin::Declaration {
+                qualified_name: "Global::Helper::helper".to_string(),
+                module_path: "Global::Helper".to_string(),
+                name: "helper".to_string(),
+                stage_index: 1,
+                auto_import: false,
+                visibility: spire::ast::Visibility::Public,
+                user_importable: true,
+                user_callable: true,
+                via_import: false,
+                via_auto_import: false,
+                shadowed_auto_import: false,
+            }),
+            definition: None,
+            capabilities: None,
+            display_metadata: Some(SymbolDisplayMetadata {
+                qualified_name: "Global::Helper::helper".to_string(),
+                module_path: "Global::Helper".to_string(),
+                has_doc: true,
+                has_signature: true,
+            }),
+        }]);
 
     let symbol = index
         .symbols()
@@ -1137,10 +1138,7 @@ fn semantic_index_builds_from_symbol_semantic_infos() {
         symbol.detail.as_deref(),
         Some("Helper::helper(value: Int) -> Int")
     );
-    assert_eq!(
-        symbol.documentation.as_deref(),
-        Some("Increment a number.")
-    );
+    assert_eq!(symbol.documentation.as_deref(), Some("Increment a number."));
     assert_eq!(
         info.display_metadata.as_ref().map(|metadata| (
             metadata.qualified_name.as_str(),

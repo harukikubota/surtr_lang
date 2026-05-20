@@ -448,7 +448,10 @@ fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
     let duration = index
         .find_symbol("Duration")
         .expect("stdlib type should be visible through shared semantic index");
-    assert_eq!(duration.kind, surtr_analysis::CompletionKind::TypeConstructor);
+    assert_eq!(
+        duration.kind,
+        surtr_analysis::CompletionKind::TypeConstructor
+    );
     assert!(duration
         .detail
         .as_deref()
@@ -3976,10 +3979,7 @@ fn core_eldr_restore_reports_partial_semantic_restore_notice() {
             .iter()
             .any(|result| rendered_text(result).contains("compile semantic metadata")),
         "startup results should report partial semantic restore: {:?}",
-        startup
-            .iter()
-            .map(rendered_text)
-            .collect::<Vec<_>>()
+        startup.iter().map(rendered_text).collect::<Vec<_>>()
     );
 }
 

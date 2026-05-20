@@ -1274,7 +1274,9 @@ pub fn builtin_meta_by_id(builtin_id: u16) -> Option<&'static BuiltinMeta> {
 }
 
 pub fn builtin_type_head_meta_by_name(name: &str) -> Option<&'static BuiltinTypeHeadMeta> {
-    BUILTIN_TYPE_HEAD_METAS.iter().find(|meta| meta.name == name)
+    BUILTIN_TYPE_HEAD_METAS
+        .iter()
+        .find(|meta| meta.name == name)
 }
 
 pub fn builtin_type_meta_by_name(name: &str) -> Option<&'static BuiltinTypeMeta> {
@@ -1311,7 +1313,9 @@ mod tests {
         assert_eq!(BUILTIN_FUNCTION_METAS.len(), BUILTIN_METAS.len());
         assert_eq!(BUILTIN_FUNCTION_METAS[0].name, "print");
         assert_eq!(BUILTIN_TYPE_HEAD_METAS.len(), BUILTIN_TYPE_METAS.len());
-        assert!(BUILTIN_TYPE_HEAD_METAS.iter().any(|meta| meta.name == "ProcessInit"));
+        assert!(BUILTIN_TYPE_HEAD_METAS
+            .iter()
+            .any(|meta| meta.name == "ProcessInit"));
     }
 
     #[test]

@@ -3,9 +3,7 @@ use std::path::PathBuf;
 
 use sigil::{declaration_symbol_identity_info, DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
-use sindr::names::{
-    builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities, TypeIdentity,
-};
+use sindr::names::{builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities, TypeIdentity};
 use spire::ast::{AstTy, Visibility};
 
 use crate::query::{format_query_ty, parse_signature_type};
@@ -278,9 +276,7 @@ impl SemanticIndex {
     }
 
     pub fn from_declaration_index(declarations: &DeclarationIndex) -> Self {
-        Self::from_symbol_semantic_infos(symbol_semantic_infos_from_declaration_index(
-            declarations,
-        ))
+        Self::from_symbol_semantic_infos(symbol_semantic_infos_from_declaration_index(declarations))
     }
 
     pub fn symbols(&self) -> &[CompletionSymbol] {
@@ -356,9 +352,12 @@ impl SemanticIndex {
 fn merge_duplicate_symbol_semantic_infos(infos: &mut Vec<SymbolSemanticInfo>) {
     let mut deduped = Vec::new();
     for info in std::mem::take(infos) {
-        if let Some(existing) = deduped.iter_mut().find(|existing: &&mut SymbolSemanticInfo| {
-            existing.surface_name == info.surface_name && existing.kind == info.kind
-        }) {
+        if let Some(existing) = deduped
+            .iter_mut()
+            .find(|existing: &&mut SymbolSemanticInfo| {
+                existing.surface_name == info.surface_name && existing.kind == info.kind
+            })
+        {
             if existing.identity.is_none() {
                 existing.identity = info.identity;
             }
@@ -521,7 +520,10 @@ pub fn symbol_semantic_infos_from_compile_metadata(
     signatures: &[SignatureEntry],
 ) -> Vec<SymbolSemanticInfo> {
     let mut infos = symbol_semantic_infos_from_declaration_index(declarations);
-    merge_semantic_info(&mut infos, symbol_semantic_infos_from_metadata(docs, signatures));
+    merge_semantic_info(
+        &mut infos,
+        symbol_semantic_infos_from_metadata(docs, signatures),
+    );
     infos
 }
 
@@ -637,8 +639,7 @@ pub fn symbol_capabilities_for_declaration_entry(
     symbol_capabilities_for_builtin_surface(&entry.name)
         .or_else(|| symbol_capabilities_for_builtin_surface(&entry.fq_name))
         .or_else(|| {
-            declaration_symbol_identity_info(&entry.name, &entry.kind)
-                .map(|info| info.capabilities)
+            declaration_symbol_identity_info(&entry.name, &entry.kind).map(|info| info.capabilities)
         })
 }
 

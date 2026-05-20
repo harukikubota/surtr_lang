@@ -79,7 +79,10 @@ fn run_repl_session_with_color(input: &str) -> Output {
 
 fn repl_args_with_default_no_local_config(args: &[&str]) -> Vec<String> {
     let mut merged = Vec::with_capacity(args.len() + 1);
-    if !args.iter().any(|arg| *arg == "--no-local-config" || *arg == "--config") {
+    if !args
+        .iter()
+        .any(|arg| *arg == "--no-local-config" || *arg == "--config")
+    {
         merged.push("--no-local-config".to_string());
     }
     merged.extend(args.iter().map(|arg| (*arg).to_string()));
@@ -446,8 +449,7 @@ fn repl_completion_candidates_render_over_pty() {
 #[test]
 fn repl_implicit_local_config_loads_workspace_file_without_asserting_value_effect() {
     let dir = unique_temp_dir("repl-implicit-local-config");
-    fs::write(dir.join(".xldr.yaml"), "repl:\n  cli: {}\n")
-        .expect("config file should be written");
+    fs::write(dir.join(".xldr.yaml"), "repl:\n  cli: {}\n").expect("config file should be written");
 
     let output = run_repl_session_allowing_implicit_local_config_in_dir(&["--version"], "", &dir);
     assert!(

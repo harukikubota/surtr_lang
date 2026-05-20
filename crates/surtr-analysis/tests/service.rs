@@ -803,7 +803,11 @@ Project::config({|config|
 "#;
 
     let mut service = AnalysisService::new();
-    service.update_document(main_path.clone(), Some(1), "import Helper::helper".to_string());
+    service.update_document(
+        main_path.clone(),
+        Some(1),
+        "import Helper::helper".to_string(),
+    );
     let context = resolve_context(AnalysisContextRequest {
         workspace_root: root.clone(),
         active_file: main_path.clone(),
@@ -888,7 +892,11 @@ Project::config({|config|
             }),
         },
     ]));
-    service.update_document(main_path.clone(), Some(1), "defmod Main { def main() -> Int { 1 } }".to_string());
+    service.update_document(
+        main_path.clone(),
+        Some(1),
+        "defmod Main { def main() -> Int { 1 } }".to_string(),
+    );
 
     let context = resolve_context(AnalysisContextRequest {
         workspace_root: root.clone(),
@@ -1015,8 +1023,7 @@ Project::config({|config|
     );
     assert!(hover.contents.contains("Increment a number."), "{hover:?}");
 
-    let signature_column =
-        hover_line.find("helper(1").expect("call exists") + "helper(1".len();
+    let signature_column = hover_line.find("helper(1").expect("call exists") + "helper(1".len();
     let signature_column = signature_column as u32;
     let help = service
         .signature_help(

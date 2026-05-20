@@ -722,15 +722,20 @@ fn record_effective_auto_import_binding(
     uid: u32,
     short_name: &str,
 ) {
-    let Some((fq_name, entry)) = import_context.declaration_uids.iter().find_map(|(fq_name, known_uid)| {
-        if *known_uid != uid {
-            return None;
-        }
+    let Some((fq_name, entry)) =
         import_context
-            .declaration_index
-            .get(fq_name)
-            .map(|entry| (fq_name.clone(), entry))
-    }) else {
+            .declaration_uids
+            .iter()
+            .find_map(|(fq_name, known_uid)| {
+                if *known_uid != uid {
+                    return None;
+                }
+                import_context
+                    .declaration_index
+                    .get(fq_name)
+                    .map(|entry| (fq_name.clone(), entry))
+            })
+    else {
         return;
     };
     if short_name != entry.name || !effective_auto_import_member_kind(&entry.kind) {

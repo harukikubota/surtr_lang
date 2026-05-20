@@ -286,7 +286,11 @@ fn format_trait_method_signature(trait_name: &str, method: &TraitMethodSig) -> S
     }
 }
 
-fn format_trait_impl_signature(trait_name: &str, trait_args: &[AstTy], target_ty: &AstTy) -> String {
+fn format_trait_impl_signature(
+    trait_name: &str,
+    trait_args: &[AstTy],
+    target_ty: &AstTy,
+) -> String {
     if trait_args.is_empty() {
         format!("impl {trait_name} for {}", format_ast_ty(target_ty))
     } else {
@@ -389,7 +393,10 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                         kind: DocKind::Function,
                         module_path: surface_path_name(module_path).to_string(),
                         signature: Some(format_extractor_signature(
-                            name, type_params, param, ret_ty,
+                            name,
+                            type_params,
+                            param,
+                            ret_ty,
                         )),
                         doc: doc.clone(),
                     });
@@ -469,18 +476,23 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     match method {
                         Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name =
-                                    if surface_path_name(module_path) == surface_path_name(target) {
-                                        format!("{}::{name}", surface_path_name(target))
-                                    } else {
-                                        qualified_name(module_path, &format!("{target}::{name}"))
-                                    };
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
                                     module_path: surface_path_name(module_path).to_string(),
                                     signature: Some(format_impl_method_signature(
-                                        target, name, type_params, params, ret_ty,
+                                        target,
+                                        name,
+                                        type_params,
+                                        params,
+                                        ret_ty,
                                     )),
                                     doc: doc.clone(),
                                 });
@@ -488,18 +500,23 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                         }
                         Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name =
-                                    if surface_path_name(module_path) == surface_path_name(target) {
-                                        format!("{}::{name}", surface_path_name(target))
-                                    } else {
-                                        qualified_name(module_path, &format!("{target}::{name}"))
-                                    };
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
                                     module_path: surface_path_name(module_path).to_string(),
                                     signature: Some(format_impl_method_signature(
-                                        target, name, &[], params, ret_ty,
+                                        target,
+                                        name,
+                                        &[],
+                                        params,
+                                        ret_ty,
                                     )),
                                     doc: doc.clone(),
                                 });
@@ -507,18 +524,23 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                         }
                         Ast::ExtractorDef(_, name, type_params, param, ret_ty, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name =
-                                    if surface_path_name(module_path) == surface_path_name(target) {
-                                        format!("{}::{name}", surface_path_name(target))
-                                    } else {
-                                        qualified_name(module_path, &format!("{target}::{name}"))
-                                    };
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
                                     module_path: surface_path_name(module_path).to_string(),
                                     signature: Some(format_impl_extractor_signature(
-                                        target, name, type_params, param, ret_ty,
+                                        target,
+                                        name,
+                                        type_params,
+                                        param,
+                                        ret_ty,
                                     )),
                                     doc: doc.clone(),
                                 });
@@ -526,18 +548,23 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                         }
                         Ast::BuiltinExtractorDecl(_, name, param, ret_ty, attrs) => {
                             if let Some(doc) = &attrs.doc {
-                                let qualified_method_name =
-                                    if surface_path_name(module_path) == surface_path_name(target) {
-                                        format!("{}::{name}", surface_path_name(target))
-                                    } else {
-                                        qualified_name(module_path, &format!("{target}::{name}"))
-                                    };
+                                let qualified_method_name = if surface_path_name(module_path)
+                                    == surface_path_name(target)
+                                {
+                                    format!("{}::{name}", surface_path_name(target))
+                                } else {
+                                    qualified_name(module_path, &format!("{target}::{name}"))
+                                };
                                 out.push(DocEntry {
                                     qualified_name: qualified_method_name,
                                     kind: DocKind::Function,
                                     module_path: surface_path_name(module_path).to_string(),
                                     signature: Some(format_impl_extractor_signature(
-                                        target, name, &[], param, ret_ty,
+                                        target,
+                                        name,
+                                        &[],
+                                        param,
+                                        ret_ty,
                                     )),
                                     doc: doc.clone(),
                                 });
@@ -575,7 +602,13 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     if let Some((name, type_params, params, ret_ty, method_attrs)) = method_parts {
                         if let Some(doc) = &method_attrs.doc {
                             let rendered = format_trait_impl_method_signature(
-                                trait_name, trait_args, target_ty, name, type_params, params, ret_ty,
+                                trait_name,
+                                trait_args,
+                                target_ty,
+                                name,
+                                type_params,
+                                params,
+                                ret_ty,
                             );
                             out.push(DocEntry {
                                 qualified_name: qualified_name(
@@ -796,7 +829,13 @@ fn collect_signature_entries_for_ast(
                                 module_path,
                                 qualified_method_name,
                                 DocKind::Function,
-                                format_impl_method_signature(target, name, type_params, params, ret_ty),
+                                format_impl_method_signature(
+                                    target,
+                                    name,
+                                    type_params,
+                                    params,
+                                    ret_ty,
+                                ),
                             );
                         }
                         Ast::BuiltinDecl(_, name, params, ret_ty, _) => {
@@ -826,7 +865,13 @@ fn collect_signature_entries_for_ast(
                                 module_path,
                                 qualified_method_name,
                                 DocKind::Function,
-                                format_impl_extractor_signature(target, name, type_params, param, ret_ty),
+                                format_impl_extractor_signature(
+                                    target,
+                                    name,
+                                    type_params,
+                                    param,
+                                    ret_ty,
+                                ),
                             );
                         }
                         Ast::BuiltinExtractorDecl(_, name, param, ret_ty, _) => {
@@ -869,7 +914,13 @@ fn collect_signature_entries_for_ast(
                     };
                     if let Some((name, type_params, params, ret_ty)) = method_parts {
                         let rendered = format_trait_impl_method_signature(
-                            trait_name, trait_args, target_ty, name, type_params, params, ret_ty,
+                            trait_name,
+                            trait_args,
+                            target_ty,
+                            name,
+                            type_params,
+                            params,
+                            ret_ty,
                         );
                         push_signature_entry(
                             out,

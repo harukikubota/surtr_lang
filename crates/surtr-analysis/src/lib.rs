@@ -33,9 +33,9 @@ pub use semantic::{
     symbol_semantic_infos_from_declaration_index, symbol_semantic_infos_from_metadata,
     CallableSignature, CompletionCandidate, CompletionKind, CompletionOrigin, CompletionRequest,
     CompletionResponse, CompletionScope, CompletionSymbol, FacetPathCompletionContext,
-    FacetPathRootKind, InputSignatureHelp, ReplAssist, ReplInputSupport,
-    ReplInputSupportContext, ReplInputSupportUpdate, SemanticIndex, SignatureLookup,
-    SourceLocation, SymbolDisplayMetadata, SymbolLookup, SymbolSemanticInfo,
+    FacetPathRootKind, InputSignatureHelp, ReplAssist, ReplInputSupport, ReplInputSupportContext,
+    ReplInputSupportUpdate, SemanticIndex, SignatureLookup, SourceLocation, SymbolDisplayMetadata,
+    SymbolLookup, SymbolSemanticInfo,
 };
 pub use service::{
     AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisHost, AnalysisRange, AnalysisService,

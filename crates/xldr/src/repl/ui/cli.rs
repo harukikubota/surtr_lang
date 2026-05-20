@@ -1822,18 +1822,12 @@ mod tests {
             rendered_completion.telemetry
         );
         assert!(
-            rendered_completion
-                .telemetry
-                .completion_apply_ns
-                .is_some(),
+            rendered_completion.telemetry.completion_apply_ns.is_some(),
             "telemetry should include apply timing: {:?}",
             rendered_completion.telemetry
         );
         assert!(
-            rendered_completion
-                .telemetry
-                .completion_render_ns
-                .is_some(),
+            rendered_completion.telemetry.completion_render_ns.is_some(),
             "telemetry should include render timing: {:?}",
             rendered_completion.telemetry
         );

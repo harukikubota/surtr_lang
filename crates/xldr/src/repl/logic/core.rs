@@ -495,7 +495,11 @@ impl ReplEngine {
             symbols: ["Ok", "Err"]
                 .into_iter()
                 .map(str::to_string)
-                .chain(builtin_function_metas().iter().map(|meta| meta.name.to_string()))
+                .chain(
+                    builtin_function_metas()
+                        .iter()
+                        .map(|meta| meta.name.to_string()),
+                )
                 .collect(),
             docs: Vec::new(),
             signatures: Vec::new(),
@@ -546,7 +550,11 @@ impl ReplEngine {
         let mut symbols: BTreeSet<String> = ["Ok", "Err"]
             .into_iter()
             .map(str::to_string)
-            .chain(builtin_function_metas().iter().map(|meta| meta.name.to_string()))
+            .chain(
+                builtin_function_metas()
+                    .iter()
+                    .map(|meta| meta.name.to_string()),
+            )
             .collect();
         for entry in vm.bytecode().functions.iter() {
             if let Some(name) = &entry.qualified_name {
@@ -869,10 +877,10 @@ impl ReplEngine {
             }
         };
 
-        let typed = match self.scar_session.typecheck_with_context(
-            resolved,
-            Self::std_definition_typecheck_context(),
-        ) {
+        let typed = match self
+            .scar_session
+            .typecheck_with_context(resolved, Self::std_definition_typecheck_context())
+        {
             Ok(t) => t,
             Err(e) => {
                 return Err(load_error_from_span_failure(
@@ -1054,10 +1062,10 @@ impl ReplEngine {
         };
 
         // Type-check to populate scar session; discard typed nodes (no codegen).
-        if let Err(e) = self.scar_session.typecheck_with_context(
-            resolved,
-            Self::std_definition_typecheck_context(),
-        ) {
+        if let Err(e) = self
+            .scar_session
+            .typecheck_with_context(resolved, Self::std_definition_typecheck_context())
+        {
             return Err(load_error_from_span_failure(
                 &self.sources,
                 &self.module_stages,
@@ -1578,22 +1586,15 @@ impl ReplEngine {
                 .map(|decl| (decl.fq_name.as_str(), decl.module_path.as_str()))?,
         };
         let surface_name = crate::surface_path_name(qualified_name);
-        let has_doc = self
-            .docs
-            .iter()
-            .any(|entry| {
-                entry.qualified_name == qualified_name || entry.qualified_name == surface_name
-            });
-        let has_signature = self
-            .signatures
-            .iter()
-            .any(|entry| {
-                entry.qualified_name == qualified_name || entry.qualified_name == surface_name
-            })
-            || self.docs.iter().any(|entry| {
-                (entry.qualified_name == qualified_name || entry.qualified_name == surface_name)
-                    && entry.signature.is_some()
-            });
+        let has_doc = self.docs.iter().any(|entry| {
+            entry.qualified_name == qualified_name || entry.qualified_name == surface_name
+        });
+        let has_signature = self.signatures.iter().any(|entry| {
+            entry.qualified_name == qualified_name || entry.qualified_name == surface_name
+        }) || self.docs.iter().any(|entry| {
+            (entry.qualified_name == qualified_name || entry.qualified_name == surface_name)
+                && entry.signature.is_some()
+        });
         (has_doc || has_signature).then(|| surtr_analysis::SymbolDisplayMetadata {
             qualified_name: qualified_name.to_string(),
             module_path: module_path.to_string(),
@@ -4259,10 +4260,7 @@ impl ReplEngine {
                     "type: {}",
                     crate::surface_rendered_name(binding.ty.as_str())
                 ),
-                format!(
-                    "identity: {}",
-                    self.render_type_identity(binding, None)
-                ),
+                format!("identity: {}", self.render_type_identity(binding, None)),
             ]);
         }
 
@@ -7150,11 +7148,7 @@ impl ReplEngine {
         chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
     }
 
-    fn render_type_identity(
-        &self,
-        binding: &forge::BindingInfo,
-        value: Option<&Value>,
-    ) -> String {
+    fn render_type_identity(&self, binding: &forge::BindingInfo, value: Option<&Value>) -> String {
         if binding.facet_info.is_some() {
             return ReplTypeDisplayCategory::FacetPath
                 .identity_label()
@@ -7172,18 +7166,16 @@ impl ReplEngine {
                 sindr::runtime::CallableOrigin::Capture => ReplTypeDisplayCategory::Capture,
                 sindr::runtime::CallableOrigin::Unknown => ReplTypeDisplayCategory::Closure,
             },
-            Some(Value::Tagged { tag, .. }) => {
-                self
-                    .vm
-                    .type_registry()
-                    .lookup(*tag)
-                    .map(|entry| match entry.kind {
-                        TypeKind::Struct => ReplTypeDisplayCategory::Struct,
-                        TypeKind::Record => ReplTypeDisplayCategory::Record,
-                        TypeKind::EnumVariant => ReplTypeDisplayCategory::Enum,
-                    })
-                    .unwrap_or(ReplTypeDisplayCategory::Type)
-            }
+            Some(Value::Tagged { tag, .. }) => self
+                .vm
+                .type_registry()
+                .lookup(*tag)
+                .map(|entry| match entry.kind {
+                    TypeKind::Struct => ReplTypeDisplayCategory::Struct,
+                    TypeKind::Record => ReplTypeDisplayCategory::Record,
+                    TypeKind::EnumVariant => ReplTypeDisplayCategory::Enum,
+                })
+                .unwrap_or(ReplTypeDisplayCategory::Type),
             Some(_) => ReplTypeDisplayCategory::Type,
         };
         category.identity_label().to_string()
@@ -7994,7 +7986,8 @@ fn compile_repl_preload_from_module_stages(
         .typecheck_staged_program_with_context(
             staged_program,
             scar::TypecheckContext::from_source_policy(
-                mode.runtime_source_kind.policy(mode.compile_unit_kind, None),
+                mode.runtime_source_kind
+                    .policy(mode.compile_unit_kind, None),
             ),
         )
         .map_err(|e| ReplLoadError::Diagnostic {
@@ -8065,7 +8058,11 @@ fn compile_repl_preload_from_module_stages(
     let mut symbols: BTreeSet<String> = ["Ok", "Err"]
         .into_iter()
         .map(str::to_string)
-        .chain(builtin_function_metas().iter().map(|meta| meta.name.to_string()))
+        .chain(
+            builtin_function_metas()
+                .iter()
+                .map(|meta| meta.name.to_string()),
+        )
         .collect();
     for entry in vm.bytecode().functions.iter() {
         if let Some(name) = &entry.qualified_name {
@@ -9278,7 +9275,11 @@ mod tests {
             symbols: ["Ok", "Err"]
                 .into_iter()
                 .map(str::to_string)
-                .chain(builtin_function_metas().iter().map(|meta| meta.name.to_string()))
+                .chain(
+                    builtin_function_metas()
+                        .iter()
+                        .map(|meta| meta.name.to_string()),
+                )
                 .collect(),
             docs: Vec::new(),
             signatures: Vec::new(),
@@ -9347,8 +9348,7 @@ mod tests {
     fn handle_line_type_error_returns_diagnostic_without_writing_process_stderr() {
         let mut engine = ReplEngine::new().expect("engine should initialize");
 
-        let (result, stderr) =
-            capture_process_stderr(|| engine.handle_line("bad: Int = \"oops\""));
+        let (result, stderr) = capture_process_stderr(|| engine.handle_line("bad: Int = \"oops\""));
         let rendered = ReplEngine::repl_result_text(&result);
 
         assert!(

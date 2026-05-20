@@ -173,9 +173,10 @@ impl SourceKind {
         let exit_code_policy = match (self, compile_unit_kind) {
             (Self::Script, _) => ExitCodePolicy::Anywhere,
             (Self::ReplChunk, _) => ExitCodePolicy::Forbidden,
-            (Self::DefinitionSource | Self::StdDefinitionSource | Self::ProjectConfigSource, CompileUnitKind::Project) => {
-                ExitCodePolicy::EntryOnly
-            }
+            (
+                Self::DefinitionSource | Self::StdDefinitionSource | Self::ProjectConfigSource,
+                CompileUnitKind::Project,
+            ) => ExitCodePolicy::EntryOnly,
             (Self::DefinitionSource | Self::StdDefinitionSource | Self::ProjectConfigSource, _) => {
                 ExitCodePolicy::Forbidden
             }
@@ -231,8 +232,7 @@ mod tests {
 
     #[test]
     fn project_config_policy_uses_project_parser_context_only_in_project_mode() {
-        let project_policy =
-            SourceKind::ProjectConfigSource.policy(CompileUnitKind::Project, None);
+        let project_policy = SourceKind::ProjectConfigSource.policy(CompileUnitKind::Project, None);
         let definition_policy =
             SourceKind::ProjectConfigSource.policy(CompileUnitKind::DefinitionCheck, None);
 
@@ -240,7 +240,10 @@ mod tests {
         assert_eq!(project_policy.parser_context, ParserContextKind::Project);
         assert!(project_policy.allows_top_level_expr);
         assert!(!project_policy.allows_builtin_decls);
-        assert_eq!(project_policy.runtime_policy.exit_code_policy, ExitCodePolicy::EntryOnly);
+        assert_eq!(
+            project_policy.runtime_policy.exit_code_policy,
+            ExitCodePolicy::EntryOnly
+        );
 
         assert_eq!(definition_policy.parse_profile, ParseProfile::Project);
         assert_eq!(definition_policy.parser_context, ParserContextKind::Module);
@@ -259,7 +262,10 @@ mod tests {
         assert_eq!(policy.parser_context, ParserContextKind::Script);
         assert!(policy.allows_top_level_expr);
         assert!(!policy.allows_builtin_decls);
-        assert_eq!(policy.runtime_policy.exit_code_policy, ExitCodePolicy::Anywhere);
+        assert_eq!(
+            policy.runtime_policy.exit_code_policy,
+            ExitCodePolicy::Anywhere
+        );
         assert_eq!(
             policy.runtime_policy.normalized_entrypoint.as_deref(),
             Some("App::main")

@@ -307,10 +307,9 @@ fn cached_test_prefix_root() -> PathBuf {
 fn script_prefix_typecheck_context(
     compile_unit_kind: sindr::policy::CompileUnitKind,
 ) -> scar::TypecheckContext {
-    scar::TypecheckContext::from_source_policy(xldr::SourceKind::Script.policy(
-        compile_unit_kind,
-        None,
-    ))
+    scar::TypecheckContext::from_source_policy(
+        xldr::SourceKind::Script.policy(compile_unit_kind, None),
+    )
 }
 
 fn build_cached_script_compile_prefix(
@@ -404,15 +403,15 @@ fn build_cached_script_compile_prefix(
             })?;
         let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode().clone(), chunk)
             .map_err(|e| {
-                let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
-                RuneError::diagnostic(
-                    1,
-                    sources,
-                    source_id,
-                    "codegen",
-                    diagnostics::simple_error("CodegenError", &e.message, span, None),
-                )
-            })?;
+            let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
+            RuneError::diagnostic(
+                1,
+                sources,
+                source_id,
+                "codegen",
+                diagnostics::simple_error("CodegenError", &e.message, span, None),
+            )
+        })?;
         scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
             entry
                 .qualified_name
@@ -461,18 +460,18 @@ fn parse_program_with_module_sources<'a>(
     let expanded =
         xldr::expand_snapshot_module_stages(compile_sources, std_snapshot, compile_unit_kind)
             .map_err(|e| {
-        RuneError::diagnostic(
-            1,
-            sources,
-            e.source_id,
-            "parse",
-            diagnostics::parse_error_spec(
-                sources.source(e.source_id).unwrap_or(""),
-                e.message(),
-                e.span(),
-            ),
-        )
-    })?;
+                RuneError::diagnostic(
+                    1,
+                    sources,
+                    e.source_id,
+                    "parse",
+                    diagnostics::parse_error_spec(
+                        sources.source(e.source_id).unwrap_or(""),
+                        e.message(),
+                        e.span(),
+                    ),
+                )
+            })?;
 
     let user_source = sources.source(user_source_id).unwrap_or("");
     let user_ast = parse_script_ast_for_compile(user_source, user_source_id.0, source_kind)
@@ -594,9 +593,10 @@ pub(crate) fn compile_source(
     let typed = scar_session
         .typecheck_staged_program_with_context(
             resolved,
-            scar::TypecheckContext::from_source_policy(
-                source_kind.policy(compile_unit_kind, compile_plan.normalized_entrypoint.as_ref()),
-            ),
+            scar::TypecheckContext::from_source_policy(source_kind.policy(
+                compile_unit_kind,
+                compile_plan.normalized_entrypoint.as_ref(),
+            )),
         )
         .map_err(|e| {
             let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
