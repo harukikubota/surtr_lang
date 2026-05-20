@@ -1,0 +1,2 @@
+handler = {|err| eprint(err)}
+escaped = handler

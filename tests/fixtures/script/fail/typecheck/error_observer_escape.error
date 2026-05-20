@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Error observer closure cannot escape

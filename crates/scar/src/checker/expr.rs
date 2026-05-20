@@ -551,6 +551,11 @@ impl Checker {
                         }
                         _ => self.resolve_ty(&stored_ty),
                     };
+                    if self.error_observer_bindings.contains(&id.unique_id)
+                        && self.allow_error_observer_value_use == 0
+                    {
+                        return Err(self.error_observer_escape_error(span));
+                    }
                     if matches!(ty, Ty::Facet(_, _)) {
                         if let Some(path) = self.facet_bindings.get(&id.unique_id).cloned() {
                             return Ok(match path {
@@ -713,6 +718,11 @@ impl Checker {
                 let typed_rhs = if let ResolvedPattern::Annotated(_, ast_ty) = pat {
                     let expected =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
+                    if Self::ty_exposes_error_value(&expected) {
+                        return Err(self.error_function_param_not_allowed_error(
+                            Self::ast_ty_span(ast_ty),
+                        ));
+                    }
                     let typed_rhs = self.check_node_with_expected(rhs, Some(&expected))?;
                     if !self.types_compatible(&expected, &typed_rhs.ty) {
                         if let Some(err) =
@@ -4242,6 +4252,7 @@ impl Checker {
         params: &[Ty],
         args: &[ResolvedRecordLitArg],
         callable_hint: Option<&str>,
+        allow_error_observer_args: bool,
     ) -> Result<Vec<TypedNode>, TypeError> {
         let has_named = args
             .iter()
@@ -4312,11 +4323,11 @@ impl Checker {
                     span: span.clone(),
                     hint: None,
                 })?;
-                let typed = if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
-                    self.check_node(expr)?
-                } else {
-                    self.check_node_with_expected(expr, Some(expected_ty))?
-                };
+                let typed = self.check_argument_node_with_error_observer_context(
+                    expr,
+                    expected_ty,
+                    allow_error_observer_args,
+                )?;
                 self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
                 if !matches!(self.resolve_ty(expected_ty), Ty::Hole)
                     && !self.types_compatible(expected_ty, &typed.ty)
@@ -4352,11 +4363,11 @@ impl Checker {
                     hint: None,
                 });
             };
-            let typed = if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
-                self.check_node(expr)?
-            } else {
-                self.check_node_with_expected(expr, Some(expected_ty))?
-            };
+            let typed = self.check_argument_node_with_error_observer_context(
+                expr,
+                expected_ty,
+                allow_error_observer_args,
+            )?;
             self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
             if !matches!(self.resolve_ty(expected_ty), Ty::Hole)
                 && !self.types_compatible(expected_ty, &typed.ty)
@@ -4371,6 +4382,50 @@ impl Checker {
         }
 
         Ok(typed_args)
+    }
+
+    fn typed_callee_allows_error_observer_arg(&self, typed_func: &TypedNode) -> bool {
+        let TypedInner::Var(id) = &typed_func.node else {
+            return false;
+        };
+        matches!(
+            Self::surface_qualified_name(id.qualified_name.as_deref()),
+            Some("Result::tap_err") | Some("Result::_tap_err_value") | Some("Test::_finish_it_err")
+        )
+    }
+
+    fn check_argument_node_with_error_observer_context(
+        &mut self,
+        expr: &Resolved,
+        expected_ty: &Ty,
+        allow_error_observer_args: bool,
+    ) -> Result<TypedNode, TypeError> {
+        let allow = allow_error_observer_args
+            && Self::ty_is_error_observer_callable(&self.resolve_ty(expected_ty));
+        let allow_restricted_binding =
+            allow && self.resolved_is_error_observer_binding_reference(expr);
+        if allow_restricted_binding {
+            self.allow_error_observer_value_use =
+                self.allow_error_observer_value_use.saturating_add(1);
+        }
+        let result = if matches!(self.resolve_ty(expected_ty), Ty::Hole) {
+            self.check_node(expr)
+        } else {
+            self.check_node_with_expected(expr, Some(expected_ty))
+        };
+        if allow_restricted_binding {
+            self.allow_error_observer_value_use =
+                self.allow_error_observer_value_use.saturating_sub(1);
+        }
+        result
+    }
+
+    fn resolved_is_error_observer_binding_reference(&self, expr: &Resolved) -> bool {
+        match expr {
+            Resolved::Var(_, id) => self.error_observer_bindings.contains(&id.unique_id),
+            Resolved::Grouped(_, inner) => self.resolved_is_error_observer_binding_reference(inner),
+            _ => false,
+        }
     }
 
     fn facet_intrinsic_kind(&self, func: &Resolved) -> Option<&'static str> {
@@ -5701,6 +5756,12 @@ impl Checker {
             );
         }
 
+        if let Resolved::Var(call_span, id) = func {
+            if self.error_observer_bindings.contains(&id.unique_id) {
+                return Err(self.error_observer_call_error(call_span));
+            }
+        }
+
         let typed_func = self.check_node(func)?;
         let func_ty = self.resolve_ty(&typed_func.ty);
 
@@ -5818,6 +5879,7 @@ impl Checker {
                     params,
                     args,
                     callable_hint.as_deref(),
+                    self.typed_callee_allows_error_observer_arg(&typed_func),
                 )?;
                 let typed_args = typed_args
                     .into_iter()
@@ -6713,6 +6775,11 @@ impl Checker {
                 let param_ty = if let Some(ast_ty) = &param.ty {
                     let annotated =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
+                    if Self::ty_exposes_error_value(&annotated) {
+                        return Err(
+                            self.error_function_param_not_allowed_error(Self::ast_ty_span(ast_ty))
+                        );
+                    }
                     if !self.types_compatible(param_ty, &annotated) {
                         return Err(TypeError {
                             message: format!(

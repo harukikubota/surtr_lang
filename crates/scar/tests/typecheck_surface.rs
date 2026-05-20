@@ -1049,6 +1049,34 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         "workers_reserve_can_flow_into_worker_call",
         workers_reserve_can_flow_into_worker_call as fn(),
     ),
+    (
+        "tap_err_accepts_local_error_observer_binding",
+        tap_err_accepts_local_error_observer_binding as fn(),
+    ),
+    (
+        "tap_err_accepts_error_observer_captures_and_composition",
+        tap_err_accepts_error_observer_captures_and_composition as fn(),
+    ),
+    (
+        "error_observer_binding_cannot_escape_as_plain_value",
+        error_observer_binding_cannot_escape_as_plain_value as fn(),
+    ),
+    (
+        "error_observer_binding_cannot_be_called_directly",
+        error_observer_binding_cannot_be_called_directly as fn(),
+    ),
+    (
+        "error_observer_binding_cannot_use_error_annotation",
+        error_observer_binding_cannot_use_error_annotation as fn(),
+    ),
+    (
+        "error_observer_closure_param_cannot_use_error_annotation",
+        error_observer_closure_param_cannot_use_error_annotation as fn(),
+    ),
+    (
+        "error_observer_binding_cannot_flow_through_generic_identity",
+        error_observer_binding_cannot_flow_through_generic_identity as fn(),
+    ),
 ];
 
 macro_rules! surface_bucket_test {
@@ -6879,4 +6907,76 @@ fn workers_reserve_can_flow_into_worker_call() {
     )
     .expect("workers reserve should typecheck as worker capability");
     assert!(!typed.nodes.is_empty());
+}
+
+fn tap_err_accepts_local_error_observer_binding() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"handler = {|err| eprint(err)}
+value = Result::tap_err(Err(NoneError), handler)"#,
+    );
+    assert!(!typed.is_empty());
+}
+
+fn tap_err_accepts_error_observer_captures_and_composition() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"logged = Result::tap_err(Err(NoneError), &eprint)
+named = Result::tap_err(Err(NoneError), &Error::kind >> &print)"#,
+    );
+    assert!(!typed.is_empty());
+}
+
+fn error_observer_binding_cannot_escape_as_plain_value() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"handler = {|err| eprint(err)}
+escaped = handler"#,
+    );
+    let err = typecheck(resolved).expect_err("Error observer binding must not escape");
+    assert!(err.message.contains("Error observer closure cannot escape"));
+}
+
+fn error_observer_binding_cannot_be_called_directly() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"handler = {|err| eprint(err)}
+value = match Err(NoneError) {
+  Ok(_) => (),
+  Err(err) => handler(err),
+}"#,
+    );
+    let err =
+        typecheck(resolved).expect_err("Error observer binding must not be callable directly");
+    assert!(err
+        .message
+        .contains("Error observer closure can only be passed"));
+}
+
+fn error_observer_binding_cannot_use_error_annotation() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"handler: (Error -> Unit) = {|err| eprint(err)}
+value = Result::tap_err(Err(NoneError), handler)"#,
+    );
+    let err = typecheck(resolved).expect_err("Error observer binding annotation must fail");
+    assert!(err
+        .message
+        .contains("Error cannot be used as a user-defined function parameter type"));
+}
+
+fn error_observer_closure_param_cannot_use_error_annotation() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"handler = {|err: Error| eprint(err)}
+value = Result::tap_err(Err(NoneError), handler)"#,
+    );
+    let err = typecheck(resolved).expect_err("Error observer closure param annotation must fail");
+    assert!(err
+        .message
+        .contains("Error cannot be used as a user-defined function parameter type"));
+}
+
+fn error_observer_binding_cannot_flow_through_generic_identity() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def id(value: $A) -> $A { value }
+handler = {|err| eprint(err)}
+value = Result::tap_err(Err(NoneError), id(handler))"#,
+    );
+    let err = typecheck(resolved).expect_err("Error observer binding must be a direct argument");
+    assert!(err.message.contains("Error observer closure cannot escape"));
 }

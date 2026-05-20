@@ -144,6 +144,38 @@ impl Checker {
         }
     }
 
+    pub(super) fn ty_is_error_observer_callable(ty: &Ty) -> bool {
+        match ty {
+            Ty::Func(params, ret)
+            | Ty::BuiltinFunc { params, ret, .. }
+            | Ty::UserFunc { params, ret, .. } => {
+                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn error_observer_escape_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "Error observer closure cannot escape its Error-observation call".into(),
+            span: span.clone(),
+            hint: Some(
+                "Pass the closure directly to Result::tap_err or another Error-observation API; do not store, return, or rebind it."
+                    .into(),
+            ),
+        }
+    }
+
+    pub(super) fn error_observer_call_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "Error observer closure can only be passed to Error-observation APIs".into(),
+            span: span.clone(),
+            hint: Some(
+                "Use Result::tap_err(value, handler) instead of calling handler directly.".into(),
+            ),
+        }
+    }
+
     pub(super) fn allows_std_error_function_param_exception(id: &ResolvedId) -> bool {
         matches!(
             Self::surface_qualified_name(id.qualified_name.as_deref()),
@@ -937,9 +969,7 @@ impl Checker {
             AstTy::Named(span, name) if matches!(Self::surface_name(name), "_" | "Hole") => {
                 self.resolve_hole_surface_ty(span, context)
             }
-            AstTy::Named(span, name)
-                if Self::builtin_type_is_clause_block_surface_only(name) =>
-            {
+            AstTy::Named(span, name) if Self::builtin_type_is_clause_block_surface_only(name) => {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
             AstTy::Named(span, name) if Self::surface_name(name) == "Seq" => {
@@ -966,9 +996,7 @@ impl Checker {
                 }
                 Ok(fresh)
             }
-            AstTy::Generic(span, name, _)
-                if Self::builtin_type_ref_witness_allowed(name) =>
-            {
+            AstTy::Generic(span, name, _) if Self::builtin_type_ref_witness_allowed(name) => {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
@@ -977,7 +1005,8 @@ impl Checker {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
             AstTy::Generic(span, name, args)
-                if Self::builtin_type_is_lazy_signature_surface_only(name) && mode.allows_lazy() =>
+                if Self::builtin_type_is_lazy_signature_surface_only(name)
+                    && mode.allows_lazy() =>
             {
                 let args = self.require_type_arg_count(
                     span,
@@ -2566,15 +2595,21 @@ mod tests {
 
     #[test]
     fn clause_block_surface_type_query_uses_builtin_type_usage_policy() {
-        assert!(Checker::builtin_type_is_clause_block_surface_only("MatchArms"));
+        assert!(Checker::builtin_type_is_clause_block_surface_only(
+            "MatchArms"
+        ));
         assert!(Checker::builtin_type_is_clause_block_surface_only(
             "Global::CondClauses"
         ));
         assert!(Checker::builtin_type_is_clause_block_surface_only(
             "BulkUpdateEntries"
         ));
-        assert!(!Checker::builtin_type_is_clause_block_surface_only("String"));
-        assert!(!Checker::builtin_type_is_clause_block_surface_only("ProcessInit"));
+        assert!(!Checker::builtin_type_is_clause_block_surface_only(
+            "String"
+        ));
+        assert!(!Checker::builtin_type_is_clause_block_surface_only(
+            "ProcessInit"
+        ));
         assert!(!Checker::builtin_type_is_clause_block_surface_only("Lazy"));
     }
 
@@ -2587,6 +2622,8 @@ mod tests {
         assert!(!Checker::builtin_type_is_lazy_signature_surface_only(
             "MatchArms"
         ));
-        assert!(!Checker::builtin_type_is_lazy_signature_surface_only("String"));
+        assert!(!Checker::builtin_type_is_lazy_signature_surface_only(
+            "String"
+        ));
     }
 }

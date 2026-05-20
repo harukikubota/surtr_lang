@@ -58,7 +58,9 @@ mod process_boundary_policy_tests {
 
     #[test]
     fn process_boundary_only_type_query_uses_builtin_usage_policy() {
-        assert!(Checker::builtin_type_is_process_boundary_only("ProcessInit"));
+        assert!(Checker::builtin_type_is_process_boundary_only(
+            "ProcessInit"
+        ));
         assert!(Checker::builtin_type_is_process_boundary_only(
             "Global::ProcessInit"
         ));
@@ -1028,6 +1030,7 @@ struct PersistentCheckerState {
     env: TypeEnv,
     consts: HashMap<u32, ConstMeta>,
     facet_bindings: HashMap<u32, StoredFacetPath>,
+    error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -1046,6 +1049,7 @@ impl PersistentCheckerState {
             env: initialize_env(),
             consts: HashMap::new(),
             facet_bindings: HashMap::new(),
+            error_observer_bindings: HashSet::new(),
             user_func_params: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
@@ -1064,6 +1068,7 @@ impl PersistentCheckerState {
             env: self.env.clone(),
             consts: self.consts.clone(),
             facet_bindings: self.facet_bindings.clone(),
+            error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
@@ -1085,6 +1090,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             env: checkpoint.env,
             consts: checkpoint.consts,
             facet_bindings: checkpoint.facet_bindings,
+            error_observer_bindings: checkpoint.error_observer_bindings,
             user_func_params: checkpoint.user_func_params,
             impl_method_uids: checkpoint.impl_method_uids,
             function_ids_by_name: checkpoint.function_ids_by_name,
@@ -1104,6 +1110,8 @@ pub struct ScarCheckpoint {
     env: TypeEnv,
     consts: HashMap<u32, ConstMeta>,
     facet_bindings: HashMap<u32, StoredFacetPath>,
+    #[serde(default)]
+    error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -1893,6 +1901,7 @@ struct Checker {
     in_extractor_body: bool,
     closure_depth: usize,
     facet_bindings: HashMap<u32, StoredFacetPath>,
+    error_observer_bindings: HashSet<u32>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     impl_method_uids: HashMap<String, u32>,
@@ -1904,6 +1913,7 @@ struct Checker {
     runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
     allow_error_function_params: bool,
+    allow_error_observer_value_use: usize,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
@@ -1970,6 +1980,7 @@ impl Checker {
             in_extractor_body: false,
             closure_depth: 0,
             facet_bindings: state.facet_bindings,
+            error_observer_bindings: state.error_observer_bindings,
             consts: state.consts,
             user_func_params: state.user_func_params,
             impl_method_uids: state.impl_method_uids,
@@ -1981,6 +1992,7 @@ impl Checker {
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             allow_error_function_params: context.allow_error_function_params,
+            allow_error_observer_value_use: 0,
             seen_builtin_type_decls: HashMap::new(),
             traits: state.traits,
             trait_impls: state.trait_impls,
@@ -2013,6 +2025,7 @@ impl Checker {
         checker.in_extractor_body = self.in_extractor_body;
         checker.closure_depth = self.closure_depth;
         checker.facet_bindings = self.facet_bindings.clone();
+        checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();
@@ -2874,6 +2887,7 @@ impl Checker {
             env: self.env.clone(),
             consts: self.consts.clone(),
             facet_bindings: self.facet_bindings.clone(),
+            error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
@@ -2892,6 +2906,7 @@ impl Checker {
             env: self.env,
             consts: self.consts,
             facet_bindings: self.facet_bindings,
+            error_observer_bindings: self.error_observer_bindings,
             user_func_params: self.user_func_params,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,

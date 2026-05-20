@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Error observer closure can only be passed

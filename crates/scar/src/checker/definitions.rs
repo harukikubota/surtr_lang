@@ -1874,6 +1874,7 @@ impl Checker {
                         params,
                         args,
                         Some(callable_hint.as_str()),
+                        false,
                     )?;
                     return Ok(TypedNode {
                         ty: ret.as_ref().clone(),
@@ -2020,7 +2021,7 @@ impl Checker {
             };
 
             let typed_args =
-                self.typecheck_user_function_args(span, new_uid, &params, args, None)?;
+                self.typecheck_user_function_args(span, new_uid, &params, args, None, false)?;
             let expected_self_ty = Ty::Struct(id.name.clone(), def.fields.clone());
             let returns_self = self.types_compatible(&expected_self_ty, &ret_ty);
             let returns_result_self = match self.resolve_ty(&ret_ty) {

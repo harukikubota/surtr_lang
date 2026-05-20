@@ -406,9 +406,20 @@ impl Checker {
         match pat {
             TypedPattern::Var(_, id) => {
                 self.env.bind_var(id.unique_id, rhs_ty.clone());
+                if Self::ty_is_error_observer_callable(&rhs_ty) {
+                    self.error_observer_bindings.insert(id.unique_id);
+                } else {
+                    self.error_observer_bindings.remove(&id.unique_id);
+                }
             }
             TypedPattern::As(alias_ty, inner, id) => {
-                self.env.bind_var(id.unique_id, self.resolve_ty(alias_ty));
+                let alias_ty = self.resolve_ty(alias_ty);
+                self.env.bind_var(id.unique_id, alias_ty.clone());
+                if Self::ty_is_error_observer_callable(&alias_ty) {
+                    self.error_observer_bindings.insert(id.unique_id);
+                } else {
+                    self.error_observer_bindings.remove(&id.unique_id);
+                }
                 self.bind_typed_pattern(inner, &rhs_ty);
             }
             TypedPattern::Pin(_, _, _) => {}
