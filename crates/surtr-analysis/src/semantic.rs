@@ -2025,7 +2025,14 @@ where
             .as_deref()
             .is_none_or(|actual_type| !accepts(expected_type, actual_type))
     });
+    apply_contextual_sort_text(&mut candidates);
     candidates
+}
+
+fn apply_contextual_sort_text(candidates: &mut [CompletionCandidate]) {
+    for (index, candidate) in candidates.iter_mut().enumerate() {
+        candidate.sort_text = Some(format!("{index:04}:{}", candidate.label));
+    }
 }
 
 pub fn lookup_symbol_at_cursor(
@@ -2656,10 +2663,12 @@ fn rank_completion_candidates_by_trait_constraint(
                 .then_with(|| left_idx.cmp(right_idx))
         },
     );
-    ranked
+    let mut candidates = ranked
         .into_iter()
         .map(|(_, _, candidate)| candidate)
-        .collect()
+        .collect::<Vec<_>>();
+    apply_contextual_sort_text(&mut candidates);
+    candidates
 }
 
 fn type_satisfies_trait_constraint(index: &SemanticIndex, ty: &str, trait_name: &str) -> bool {

@@ -1557,6 +1557,14 @@ fn call_argument_completion_ranks_self_trait_constraint_candidates_from_impl_sig
             .collect::<Vec<_>>(),
         vec!["count", "flag"]
     );
+    assert_eq!(
+        completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.sort_text.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("0000:count"), Some("0001:flag")]
+    );
 }
 
 #[test]
@@ -1740,6 +1748,29 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
 
     assert_eq!(completion.candidates[0].label, "alpha");
     assert_eq!(completion.candidates[1].label, "atom");
+}
+
+#[test]
+fn expected_type_ranking_updates_sort_text_for_lsp_clients() {
+    let candidates = vec![
+        completion_candidate("text", "String"),
+        completion_candidate("count", "Int"),
+    ];
+
+    let ranked =
+        rank_completion_candidates_by_expected_type(candidates, Some("Int"), |expected, actual| {
+            expected == actual
+        });
+
+    assert_eq!(
+        ranked
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["count", "text"]
+    );
+    assert_eq!(ranked[0].sort_text.as_deref(), Some("0000:count"));
+    assert_eq!(ranked[1].sort_text.as_deref(), Some("0001:text"));
 }
 
 fn completion_symbol(label: &str, kind: CompletionKind, detail: &str) -> CompletionSymbol {

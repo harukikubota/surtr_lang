@@ -195,6 +195,71 @@ fn completion_uses_facet_api_first_argument_constraints_through_lsp() {
 }
 
 #[test]
+fn completion_preserves_contextual_sort_text_through_lsp() {
+    let workspace = PathBuf::from("/repo");
+    let path = workspace.join("main.srt");
+    let uri = path_to_file_uri(&path);
+    let mut host = LspAnalysisHost::new(workspace);
+    host.did_open(uri.clone(), Some(1), "print(value_".to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
+    host.set_semantic_index(SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "print".to_string(),
+            replacement: "print".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("print(value: String) -> Unit".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "value_text".to_string(),
+            replacement: "value_text".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "value_count".to_string(),
+            replacement: "value_count".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+    ]));
+
+    let items = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: "print(value_".len() as u32,
+        },
+    );
+
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| (item.label.as_str(), item.sort_text.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("value_text", Some("0000:value_text")),
+            ("value_count", Some("0001:value_count")),
+        ]
+    );
+}
+
+#[test]
 fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");
