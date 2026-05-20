@@ -57,19 +57,19 @@ pub fn execute_project_runner_source(
     let resolved = sigil::resolve_staged_program_from_state(
         &std_snapshot.module_stages,
         user_ast,
-        &std_snapshot.declaration_index,
+        std_snapshot.declaration_index(),
         Some(crate::script_pseudo_module_path(
             &input.project_file.to_string_lossy(),
         )),
         std_snapshot.default_stage_count,
-        std_snapshot.resolve_state,
+        std_snapshot.resolve_state(),
     )
     .map_err(|error| ProjectRunnerVmError::new("resolve", error.message))?;
 
     let mut scar_session = scar::ScarSession::new();
-    scar_session.rollback(std_snapshot.scar_checkpoint.clone());
+    scar_session.rollback(std_snapshot.scar_checkpoint().clone());
     let next_fun_idx = std_snapshot
-        .bytecode
+        .bytecode()
         .functions
         .iter()
         .map(|entry| entry.fun_idx.saturating_add(1))
@@ -79,23 +79,17 @@ pub fn execute_project_runner_source(
     let typed = scar_session
         .typecheck_staged_program_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: crate::derive_runtime_policy(
-                    CompileUnitKind::Project,
-                    SourceKind::ProjectConfigSource,
-                    None,
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            scar::TypecheckContext::from_source_policy(
+                SourceKind::ProjectConfigSource.policy(CompileUnitKind::Project, None),
+            ),
         )
         .map_err(|error| ProjectRunnerVmError::new("typecheck", error.message))?;
 
-    let mut forge_session = forge::ForgeSession::from_bytecode(&std_snapshot.bytecode);
+    let mut forge_session = forge::ForgeSession::from_bytecode(std_snapshot.bytecode());
     let (chunk, _) = forge_session
         .codegen_chunk_typed_program(typed)
         .map_err(|error| ProjectRunnerVmError::new("codegen", error.message))?;
-    let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode.clone(), chunk)
+    let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode().clone(), chunk)
         .map_err(|error| ProjectRunnerVmError::new("codegen", error.message))?;
 
     let runner_args = input

@@ -65,9 +65,15 @@ Xldr は少なくとも次の session phase を区別する。
 
 phase ごとの VM 実行ポリシーは Xldr が決め、Eldr へは `InteractiveChunkPolicy` として渡す。`Bootstrap` と `Preload` は `Preload` policy、`Live` は `ReplAppendOnly` policy を使う。
 
+Xldr の compile-time prefix は `StagedCompilationSnapshot` / `CompilationPrefixSnapshot` として扱う。
+これは標準定義、preload module/script/project stage、REPL live chunk の compile metadata を束ねる
+aggregate であり、Eldr の runtime append policy とは別責務である。REPL command / completion は
+この snapshot から得た `SymbolSemanticInfo` を query し、表示候補へ投影する。
+
 ### 3.2 初期化
 
 - セッション開始時に標準 definition source を `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test]` の順で読み込む
+- この標準ロード順と stage 分割の実装正本は [crates/xldr/src/loader.rs](/Users/haruca/work/rust/surtr/crates/xldr/src/loader.rs:137) の `STDLIB_MODULE_SPECS` とし、本書の列挙はその要約として扱う
 - `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
 - `SpecialTypes` source では `Unit`, `TypeRef<$T>`, `Hole`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ProcessInit<$T>` の canonical builtin type head を登録する
 - `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin を登録する
@@ -77,6 +83,7 @@ phase ごとの VM 実行ポリシーは Xldr が決め、Eldr へは `Interacti
 - loader は追加標準定義ソースも `./lib/**/*.srt` から収集し、`lib/tests/**` と built-in 標準定義ソースと重複するものはデフォルト入力から除外する
 - definition source の primary module path は parse 後 AST と namespace lowering 結果から導出し、loader / Xldr は token 走査で `defmod` head を推定しない
 - qualified `defmod A::B` と `namespace A { defmod B { ... } }` は同じ canonical module path `A::B` として扱う
+- 通常 module source 同士の同一 canonical module path は常に compile error とする。`impl` owner module は既存通常 module への拡張としてのみ同一 path を許可し、`normal A -> impl A -> normal A` のような通常 module 再定義は拒否する
 - internal module path は `Global::Name` または `Namespace::Name` の canonical string を使うが、user-facing 表示では `Global::` を省略する
 - REPL user chunk は標準定義ソース読み込み後に `SourceKind::ReplChunk` として追加される
 - `surtr repl --module <file>` は追加の definition source を 1 件だけ preload し、`Std + 単品 definition` として成立する場合に限って受理する
@@ -102,7 +109,7 @@ phase ごとの VM 実行ポリシーは Xldr が決め、Eldr へは `Interacti
 - セッションは `.eldr` と live compile の両方から doc metadata を保持し、`:doc` 表示へ利用する
 - `.eldr` から初期化した場合、標準 library の compile-time context は source から復元する
 - `.eldr` に含まれる user-defined function は VM には常駐するが、新しい REPL 入力の名前解決対象としては復元されない
-- したがって `.eldr` 復元は現時点では部分復元であり、完全な semantic restore は後続課題とする
+- したがって `.eldr` 復元は現時点では部分復元であり、compile semantic aggregate の復元欠落を通知する。完全な semantic restore は後続課題とする
 
 `Bootstrap` / `Kernel` と、`@autoimport` が付いた標準 trait / 標準 `impl Type` owner helper surface は REPL でも auto import 対象とし、`Bootstrap` / `Kernel` への明示 `import` は compile error とする。
 
@@ -122,6 +129,7 @@ REPL 実装は次の 3 層に分ける。
 - core: `ReplEngine` が入力処理、checkpoint/rollback、command 解決、doc/sig/save を担う
 - presenter: `ReplResult` を CLI/TUI が消費しやすい表示単位へ変換する
 - UI adapter: CLI/TUI が terminal I/O と color on/off、pane state を担当する
+- core は process stderr/stdout へ直接出力しない。compile / runtime diagnostic は `ReplResult` / `ReplOutput` の rendered lines と structured diagnostic として返し、CLI/TUI adapter が必要に応じて stderr へ投影する
 
 ### 4.1 入力源
 
@@ -150,7 +158,7 @@ REPL 実装は次の 3 層に分ける。
 - 型定義評価は `> TypeName` 形式で表示する
 - 表示対象のない `Unit` は表示しない
 - `:doc` / `:sig` は evaluator result と同じ `> ` プレフィクスを付けず、presenter が専用レイアウトで表示する
-- compile error / runtime diagnostic の人間向け表示は stderr に流し、structured result 側には UI テスト用の rendered lines を保持する
+- compile error / runtime diagnostic の人間向け表示は UI adapter が stderr に流し、structured result 側には UI テスト用の rendered lines を保持する
 
 ---
 
@@ -166,7 +174,7 @@ REPL 実装は次の 3 層に分ける。
 | `:doc <target>` | public declaration の `@doc` を引く。定義 doc、型 doc、constructor / extractor doc、impl doc、binding 起点 doc、process surface doc を表示する。binding lookup を明示する時は `$name` を使う。typed query は `compare(Int, Int)`, `lt(Int, Int)`, `compare($left, $right)`, `ret |>= up`, `Result<Int> |>= &parse_int`, `xs |> map(&to_string)` のような command query 専用 surface に限定する。`literal` / 任意式 / generic type variable は query 引数に受けない。callable binding が closure のときは `Closure` type doc を返し、続けて binding 付属の `@doc` 本文と最小限の補足情報（signature / captures / provenance）を表示する。process surface では hidden stdlib surface (`GenServer::spawn` など) と concrete public surface (`MyServer::spawn` など) の両方を引け、concrete query は hidden stdlib doc 本文を流用しつつ表示 symbol / signature だけ concrete 名に差し替える。special form を含め、表示する signature は stdlib / user source に書かれた宣言文字列を正本とするが、`impl Type { ... }` / `impl Trait for Type { ... }` 由来の user-facing signature では `Self` を concrete owner type へ正規化する。trait 定義 surface では source-written `Self` を保持する。private declaration は undocumented 扱いにせず、private surface であることを明示して拒否する。 |
 | `:sig <target>` | public declaration の signature を表示する。関数、operator、constructor、extractor、enum 定義 surface、callable binding、impl specialization、process surface を表示対象に含む。bare `:sig Ty` は constructor signature、`Ty(args...)` は constructor 照合、`Ty!()` は extractor signature、`StringEncoding` のような enum は variant constructor surface 一覧を返す。enum variant 単体は query target にしない。typed query は concrete type、visible binding、`$binding`、`CaptureQuery` のみを引数に受ける。process surface では hidden stdlib 名と concrete public 名の両方を受け、表示名は query 側に揃える。process owner への bare query (`:sig MyServer`, `:sig MyWorker`) は process summary surface として扱い、PID binding query (`:sig $server`) はその handle の messaging summary を返す。special form を含め、表示する signature は stdlib / user source に書かれた宣言文字列を正本とし、completion candidate の `detail` も同じ authored signature surface を使う。`impl Type { ... }` / `impl Trait for Type { ... }` 由来の user-facing signature では `Self` を concrete owner type へ正規化する。trait 定義 surface では source-written `Self` を保持する。source-written signature が取得できない場合だけ synthesized / inferred fallback を許可する。private declaration は generic な not-found に落とさず、private surface であることを明示して拒否する。 |
 | `:info <target>` | 定義、binding、dispatch、operator application query、singleton process owner、PID binding の解決情報を表示する。`$name` による binding 強制、typed call / typed operator の正規化結果、選択 impl、関連 command を出せることを契約に含める。process runtime lookup は singleton を owner 名、worker を PID binding で引く。PID binding の `:info` は raw inspect 表示や数値 PID を出さず、型と process metadata を返す。 |
-| `:type <binding>` | REPL binding の型と `TypeIdentity` を表示する。`$name` による binding 強制を許可する。通常の値は binding のみを対象とし、定義名、typed query、任意式は受けない。process runtime lookup では singleton process owner 名を追加で受け、worker process は PID binding 経由のみを受ける。 |
+| `:type <binding>` | REPL binding の型と `RuntimeTypeDisplay` を表示する。これは runtime 表示カテゴリであり compile-space `TypeIdentity` ではない。`$name` による binding 強制を許可する。通常の値は binding のみを対象とし、定義名、typed query、任意式は受けない。process runtime lookup では singleton process owner 名を追加で受け、worker process は PID binding 経由のみを受ける。 |
 | `:facet <facet-target>` | FacetPath 定義または `$facet_binding` の canonical path、segment 一覧、停止点を表示する。値 access 式や一般の callable / plain value は受けず、Facet query surface は command query 専用の制限された対象に限る。 |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 | `:save <path>` | 現在の REPL session を `.eldr` に保存する |
@@ -229,8 +237,9 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - REPL core は matching completion candidate を全件保持する。CLI UI は表示件数だけを制限し、将来のページャ導入時にも同じ候補集合を再利用できる構成を保つ
 - CLI REPL は実行ディレクトリの `.xldr.yaml` を読み、`repl.cli.completion_candidates` でユーザに表示する補完候補件数を上書きできる。既定値は `5`
 - preload script の入力行も REPL 履歴の一部として扱い、`vars` と `history` は同じ行番号体系を共有する
-
-候補一覧表示の改善や型文脈つき補完は `doc/open-issues.md` の将来課題として扱う。
+- 演算子 RHS 位置では演算子そのものを補完候補に出さず、シグネチャ表示行に現在位置で期待される型を表示する。例: `1 + ` は `Int + [Int]`、`x |> ` は `Int |> [(Int -> _)]` を表示する
+- `|>` / `|*>` / `|>=` / `>>` / `>*` / `>=>` のような関数演算子は、左から右へ段階的に推論できた型を次段に渡す。未確定の型は `_` として表示し、後続段の部分推論を妨げない
+- 演算子 RHS 位置の候補は、期待型が分かる場合に一致候補を優先表示する。関数演算子では RHS として使える callable surface を候補に含める
 
 ---
 

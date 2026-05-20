@@ -1,7 +1,7 @@
 use std::fs;
 use std::time::Duration;
 
-use xldr::repl::logic::core::ReplCompletionKind;
+use xldr::repl::logic::core::{ReplCompletionContext, ReplCompletionKind};
 use xldr::repl::logic::{ReplOutput, ReplResult};
 use xldr::ReplEngine;
 
@@ -236,6 +236,194 @@ fn core_completion_keeps_all_matching_candidates() {
 }
 
 #[test]
+fn core_operator_completion_shows_inferred_rhs_signature_without_operator_candidates() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
+    assert!(rendered_text(&engine.handle_line("name = \"surtr\"")).contains("name: String"));
+
+    let completion = engine.completions("1 + ", "1 + ".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("operator rhs should show signature help");
+    assert_eq!(signature.lines.join("\n"), "Int + [Int]");
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        !labels
+            .iter()
+            .any(|label| matches!(*label, "+" | "|>" | "++")),
+        "operator symbols must not be completion candidates: {labels:?}"
+    );
+    let answer_pos = labels
+        .iter()
+        .position(|label| *label == "answer")
+        .expect("Int binding should be suggested");
+    let name_pos = labels
+        .iter()
+        .position(|label| *label == "name")
+        .expect("String binding should remain available after matching Int candidates");
+    assert!(
+        answer_pos < name_pos,
+        "Int candidates should rank before nonmatching variables: {labels:?}"
+    );
+
+    assert!(ReplCompletionContext::should_request("1 + ", "1 + ".len()));
+
+    let partial = engine.completions("1 + an", "1 + an".len());
+    assert_eq!(
+        partial
+            .signature
+            .as_ref()
+            .expect("operator rhs prefix should keep signature help")
+            .lines
+            .join("\n"),
+        "Int + [Int]"
+    );
+    let partial_labels = partial
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        partial_labels.iter().any(|label| *label == "answer"),
+        "matching Int variable should remain visible with a RHS prefix: {partial_labels:?}"
+    );
+}
+
+#[test]
+fn core_operator_completion_shows_string_concat_rhs_signature() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("name = \"surtr\"")).contains("name: String"));
+
+    let completion = engine.completions("name ++ ", "name ++ ".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("concat rhs should show signature help");
+    assert_eq!(signature.lines.join("\n"), "String ++ [String]");
+}
+
+#[test]
+fn core_operator_completion_stages_function_operator_types() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("x = 1")).contains("x: Int"));
+
+    let first = engine.completions("x |> ", "x |> ".len());
+    let first_signature = first
+        .signature
+        .as_ref()
+        .expect("pipe rhs should show callable shape");
+    assert_eq!(first_signature.lines.join("\n"), "Int |> [(Int -> _)]");
+    let first_labels = first
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        !first_labels
+            .iter()
+            .any(|label| matches!(*label, "|>" | "|*>" | "|>=" | ">>" | ">*" | ">=>")),
+        "function operator symbols must not be completion candidates: {first_labels:?}"
+    );
+    let to_string_pos = first_labels
+        .iter()
+        .position(|label| *label == "to_string")
+        .expect("callable RHS candidate should be suggested for pipe");
+    let print_pos = first_labels
+        .iter()
+        .position(|label| *label == "print")
+        .expect("nonmatching callable should remain available after matching candidates");
+    assert!(
+        to_string_pos < print_pos,
+        "callable candidates accepting Int should rank first: {:?}",
+        first
+            .candidates
+            .iter()
+            .filter(|candidate| matches!(
+                candidate.label.as_str(),
+                "to_string" | "print" | "Show::to_string" | "Kernel::print"
+            ))
+            .collect::<Vec<_>>()
+    );
+
+    let chained = engine.completions("x |> to_string |> ", "x |> to_string |> ".len());
+    let chained_signature = chained
+        .signature
+        .as_ref()
+        .expect("chained pipe rhs should carry staged type");
+    assert_eq!(
+        chained_signature.lines.join("\n"),
+        "Int |> (Int -> String) |> [(String -> _)]"
+    );
+}
+
+#[test]
+fn core_operator_completion_stages_specialized_function_operators() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("xs = [1, 2]")).contains("xs: List<Int>"));
+    assert!(rendered_text(&engine.handle_line("ret = Ok(1)")).contains("ret: Result<Int"));
+    assert!(
+        rendered_text(&engine.handle_line("to_s = {|n: Int| to_string(n)}"))
+            .contains("to_s: (Int -> String)")
+    );
+    assert!(
+        rendered_text(&engine.handle_line("strings = {|n: Int| [to_string(n)]}"))
+            .contains("strings: (Int -> List<String>)")
+    );
+    assert!(
+        rendered_text(&engine.handle_line("inc_ok = {|n: Int| Ok(n + 1)}"))
+            .contains("inc_ok: (Int -> Result<Int")
+    );
+
+    let mapped = engine.completions("xs |*> ", "xs |*> ".len());
+    assert_eq!(
+        mapped.signature.as_ref().unwrap().lines.join("\n"),
+        "List<Int> |*> [(Int -> _)]"
+    );
+
+    let bound = engine.completions("ret |>= ", "ret |>= ".len());
+    assert_eq!(
+        bound.signature.as_ref().unwrap().lines.join("\n"),
+        "Result<Int> |>= [(Int -> Result<_>)]"
+    );
+
+    let composed = engine.completions("to_s >> ", "to_s >> ".len());
+    assert_eq!(
+        composed.signature.as_ref().unwrap().lines.join("\n"),
+        "(Int -> String) >> [(String -> _)]"
+    );
+
+    let lifted = engine.completions("strings >* ", "strings >* ".len());
+    assert_eq!(
+        lifted.signature.as_ref().unwrap().lines.join("\n"),
+        "(Int -> List<String>) >* [(String -> _)]"
+    );
+
+    let kleisli = engine.completions("inc_ok >=> ", "inc_ok >=> ".len());
+    assert_eq!(
+        kleisli.signature.as_ref().unwrap().lines.join("\n"),
+        "(Int -> Result<Int>) >=> [(Int -> Result<_>)]"
+    );
+}
+
+#[test]
+fn core_operator_completion_keeps_unknown_lhs_as_placeholder() {
+    let engine = engine();
+    let completion = engine.completions("missing |> ", "missing |> ".len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("unknown lhs should still show staged operator help");
+
+    assert_eq!(signature.lines.join("\n"), "_ |> [(_ -> _)]");
+}
+
+#[test]
 fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
@@ -256,6 +444,54 @@ fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
         .as_deref()
         .is_some_and(|detail| detail.contains("print(")));
     assert!(print.documentation.is_some());
+
+    let duration = index
+        .find_symbol("Duration")
+        .expect("stdlib type should be visible through shared semantic index");
+    assert_eq!(
+        duration.kind,
+        surtr_analysis::CompletionKind::TypeConstructor
+    );
+    assert!(duration
+        .detail
+        .as_deref()
+        .is_some_and(|detail| detail.contains("Duration")));
+    assert!(
+        duration.documentation.is_some(),
+        "type constructors should retain shared doc metadata: {duration:?}"
+    );
+}
+
+#[test]
+fn core_exposes_symbol_semantic_infos_before_completion_projection() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
+
+    let infos = engine.symbol_semantic_infos();
+
+    let answer = infos
+        .iter()
+        .find(|info| info.surface_name == "answer")
+        .expect("REPL binding should be visible as semantic info");
+    assert_eq!(answer.kind, surtr_analysis::CompletionKind::Variable);
+    assert_eq!(answer.detail.as_deref(), Some("Int"));
+
+    let print = infos
+        .iter()
+        .find(|info| info.surface_name == "print")
+        .expect("stdlib function should be visible as semantic info");
+    assert_eq!(print.kind, surtr_analysis::CompletionKind::FunctionCall);
+    assert!(print.documentation.is_some());
+    assert!(
+        print.display_metadata.is_some(),
+        "REPL semantic info should retain stdlib display metadata origin: {print:?}"
+    );
+
+    let duration = infos
+        .iter()
+        .find(|info| info.surface_name == "Duration")
+        .expect("stdlib type should be visible as semantic info");
+    assert_eq!(duration.identity, Some(sindr::names::TypeIdentity::Type));
 }
 
 #[test]
@@ -1217,6 +1453,324 @@ fn core_completion_hides_trait_impl_members_from_qualified_type_paths() {
 }
 
 #[test]
+fn core_completion_shows_facet_path_candidates_for_type_root() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String, age: Int)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User.", "User.".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"name"),
+        "type-root facet completion should include record fields: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"age"),
+        "type-root facet completion should include record fields: {labels:?}"
+    );
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("type-root facet completion should show signature help");
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("User.[field] -> Facet<User, _>"),
+        "unexpected facet signature help: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_facet_path_candidates_for_value_root() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String, age: Int)
+"#,
+    )
+    .expect("script preload should bootstrap");
+    assert!(
+        rendered_text(&engine.handle_line(r#"user = User("alice", 42)"#)).contains("user: User")
+    );
+
+    let completion = engine.completions("user.", "user.".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"name"),
+        "value-root facet completion should include record fields: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"age"),
+        "value-root facet completion should include record fields: {labels:?}"
+    );
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("value-root facet completion should show signature help");
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("user.[field] -> _"),
+        "unexpected value-root facet signature help: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_facet_view_closure_candidates() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String, age: Int)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("&User.", "&User.".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"name"),
+        "facet view-closure completion should include record fields: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"age"),
+        "facet view-closure completion should include record fields: {labels:?}"
+    );
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("facet view-closure completion should show signature help");
+    let rendered = signature.lines.join("\n");
+    assert!(
+        rendered.contains("&User.[field] -> (User -> _)"),
+        "unexpected facet view-closure signature help: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_result_focus_api_help_for_facet_paths() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(score: Result<Int>)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User.score.", "User.score.".len());
+    let rendered = completion
+        .signature
+        .as_ref()
+        .expect("result focus facet completion should show signature help")
+        .lines
+        .join("\n");
+    assert!(
+        rendered.contains("Facet::view(User.score, User) -> Result<Int>"),
+        "result focus should use view-based return help: {rendered:?}"
+    );
+    assert!(
+        rendered.contains(
+            "Facet::over_result(User.score, User, (Result<Int> -> Result<Result<Int>>)) -> Result<User>"
+        ),
+        "result focus should expose over_result help: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_combined_list_tuple_result_help() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(scores: List<(String, Result<Int>)>)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User.scores.[0]._1.", "User.scores.[0]._1.".len());
+    let rendered = completion
+        .signature
+        .as_ref()
+        .expect("combined facet path completion should show signature help")
+        .lines
+        .join("\n");
+    assert!(
+        rendered.contains("Facet::view(User.scores.[0]._1, User) -> Result<Result<Int>>"),
+        "combined facet path should keep list-index fallibility in view help: {rendered:?}"
+    );
+    assert!(
+        rendered.contains("Facet::over_result(User.scores.[0]._1, User, (Result<Int> -> Result<Result<Int>>)) -> Result<User>"),
+        "combined facet path should preserve result-focus API help: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_suggests_facet_path_roots_for_facet_api_first_argument() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String, age: Int)
+defenum Slot { Some(String), None }
+"#,
+    )
+    .expect("script preload should bootstrap");
+    assert!(
+        rendered_text(&engine.handle_line("name_path = User.name")).contains("Facet<User, String>")
+    );
+
+    for api in [
+        "view",
+        "preview",
+        "put",
+        "set",
+        "over",
+        "over_result",
+        "case_set",
+        "case_over",
+    ] {
+        let input = format!("Facet::{api}(");
+        let completion = engine.completions(&input, input.len());
+        let labels = completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            labels.contains(&"User"),
+            "{api} first argument should suggest path-constructable record roots: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"Slot"),
+            "{api} first argument should suggest path-constructable enum roots: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"Boolean"),
+            "{api} first argument should suggest Boolean variant root: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"name_path"),
+            "{api} first argument should suggest Facet bindings: {labels:?}"
+        );
+        for primitive in ["String", "Int", "Float", "Function"] {
+            assert!(
+                !labels.contains(&primitive),
+                "{api} first argument should not suggest primitive root {primitive}: {labels:?}"
+            );
+        }
+    }
+
+    for api in [
+        "view",
+        "preview",
+        "put",
+        "set",
+        "over",
+        "over_result",
+        "case_set",
+        "case_over",
+    ] {
+        let input = format!("{api}(");
+        let completion = engine.completions(&input, input.len());
+        let labels = completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(
+            labels.contains(&"User"),
+            "{api} short-form first argument should suggest path roots: {labels:?}"
+        );
+        assert!(
+            labels.contains(&"name_path"),
+            "{api} short-form first argument should suggest Facet bindings: {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"String"),
+            "{api} short-form first argument should not suggest primitive roots: {labels:?}"
+        );
+    }
+}
+
+#[test]
+fn core_completion_derives_facet_segments_from_facet_binding_focus() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord Profile(first: String, last: String)
+defrecord User(profile: Profile, age: Int)
+"#,
+    )
+    .expect("script preload should bootstrap");
+    assert!(rendered_text(&engine.handle_line("p = User.profile")).contains("Facet<User, Profile>"));
+
+    let completion = engine.completions("p.", "p.".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        labels.contains(&"first"),
+        "Facet binding focus should expose Profile fields: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"last"),
+        "Facet binding focus should expose Profile fields: {labels:?}"
+    );
+    assert!(
+        !labels.contains(&"age"),
+        "Facet binding completion should use focus type, not original source type: {labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_respects_shadowed_facet_api_names() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String)
+def view(value: Int) -> Int { value }
+"#,
+    )
+    .expect("script preload should bootstrap");
+    assert!(
+        rendered_text(&engine.handle_line("name_path = User.name")).contains("Facet<User, String>")
+    );
+    assert!(rendered_text(&engine.handle_line("n = 1")).contains("n: Int"));
+
+    let completion = engine.completions("view(", "view(".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(
+        !labels.contains(&"User"),
+        "shadowed view(Int) should not trigger Facet path roots: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"n"),
+        "ordinary argument inference should still offer Int variables: {labels:?}"
+    );
+}
+
+#[test]
 fn core_completion_uses_argument_position_for_variable_candidates_and_signature_help() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));
@@ -1660,6 +2214,44 @@ Project::config({|project|
 
     let call = engine.handle_line("add2(20, 22)");
     assert!(rendered_text(&call).contains("42"));
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn core_from_project_runner_source_exposes_const_only_file_by_stem_module() {
+    let root = tempfile_dir("xldr-project-runner-repl-const-only");
+    let src = root.join("src");
+    fs::create_dir_all(&src).expect("src dir should be created");
+    let project_file = root.join("project.srt");
+    let config_file = src.join("AppConfig.srt");
+    fs::write(
+        &config_file,
+        r#"
+const APP_NAME = "surtr"
+"#,
+    )
+    .expect("config source should be writable");
+    let project_source = r#"
+Project::config({|project|
+  Project::entrypoint(project, "dev", {|config|
+    Config::add_path(config, "./src/AppConfig.srt")
+  })
+})
+"#;
+
+    let mut engine =
+        ReplEngine::from_project_runner_source(surtr_analysis::ProjectRunnerSourceInput {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: Vec::new(),
+            active_file: None,
+            source: project_source.to_string(),
+        })
+        .expect("project runner source should preload const-only file");
+
+    let output = engine.handle_line("AppConfig::APP_NAME");
+    assert!(rendered_text(&output).contains("surtr"));
 
     let _ = fs::remove_dir_all(root);
 }
@@ -2209,6 +2801,8 @@ import Math::add2
 
     let imported = rendered_text(&engine.handle_line(":imported"));
     assert!(imported.contains("auto"), "{imported}");
+    assert!(imported.contains("Kernel"), "{imported}");
+    assert!(imported.contains("Show::to_string"), "{imported}");
     assert!(imported.contains("Math::add2"), "{imported}");
 
     let defs = rendered_text(&engine.handle_line(":defs"));
@@ -2654,6 +3248,23 @@ fn core_sig_type_owner_falls_back_to_constructor_signatures() {
         "style = StyledDocStyle::new(Option::None, Option::None, True, False, False, False)",
     ));
     assert!(style.contains("style: StyledDocStyle"), "{style}");
+}
+
+#[test]
+fn core_sig_record_owner_uses_record_constructor_surface() {
+    let mut engine = ReplEngine::from_script_source(
+        "record_sig.srt",
+        r#"
+defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
+"#,
+    )
+    .expect("record preload should bootstrap");
+
+    let sig = signature_text(&engine.handle_line(":sig ScoreFixture"));
+    assert_eq!(
+        sig.trim(),
+        "ScoreFixture(scores: List<Int>, score: HashMap<Int>) -> ScoreFixture"
+    );
 }
 
 #[test]
@@ -3348,6 +3959,27 @@ fn core_eldr_sig_queries_do_not_depend_on_docs_chunk() {
     assert!(
         sig.contains("specialized:\n  compare(Int, Int) -> Ordering"),
         "{sig}"
+    );
+}
+
+#[test]
+fn core_eldr_restore_reports_partial_semantic_restore_notice() {
+    let mut engine = engine();
+    let dir = tempfile_dir("xldr-repl-core-eldr-partial-restore");
+    let path = dir.join("session.eldr");
+
+    let save = engine.handle_line(&format!(":save {}", path.display()));
+    assert!(rendered_text(&save).contains("saved to"));
+
+    let bytes = fs::read(&path).expect("saved .eldr should exist");
+    let mut restored = ReplEngine::from_eldr(&bytes).expect("restored engine should load");
+    let startup = restored.take_startup_results();
+    assert!(
+        startup
+            .iter()
+            .any(|result| rendered_text(result).contains("compile semantic metadata")),
+        "startup results should report partial semantic restore: {:?}",
+        startup.iter().map(rendered_text).collect::<Vec<_>>()
     );
 }
 

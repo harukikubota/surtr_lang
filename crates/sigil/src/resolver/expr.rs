@@ -14,14 +14,55 @@ use spire::ast::{
 const TUPLE_TYPE_ROOT_UID: u32 = u32::MAX - 7;
 const LIST_TYPE_ROOT_UID: u32 = u32::MAX - 8;
 const HASH_MAP_TYPE_ROOT_UID: u32 = u32::MAX - 9;
+const STRING_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 10;
+const INT_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 11;
+const FLOAT_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 12;
+const BOOLEAN_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 13;
+const FUNCTION_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 14;
 
-fn special_facet_root_uid(name: &str) -> Option<u32> {
-    match name {
-        "Tuple" => Some(TUPLE_TYPE_ROOT_UID),
-        "List" => Some(LIST_TYPE_ROOT_UID),
-        "HashMap" => Some(HASH_MAP_TYPE_ROOT_UID),
+fn synthetic_builtin_symbol_uid(name: &str, info: &SymbolIdentityInfo) -> Option<u32> {
+    let name = global_surface_name(name);
+    match (name, info.capabilities.facet_root_path) {
+        ("Tuple", Some(FacetRootKind::Tuple)) => Some(TUPLE_TYPE_ROOT_UID),
+        ("List", Some(FacetRootKind::List)) => Some(LIST_TYPE_ROOT_UID),
+        ("HashMap", Some(FacetRootKind::HashMap)) => Some(HASH_MAP_TYPE_ROOT_UID),
+        ("String", None) if info.capabilities.module_owner => Some(STRING_PRIMITIVE_ROOT_UID),
+        ("Int", None) if info.capabilities.module_owner => Some(INT_PRIMITIVE_ROOT_UID),
+        ("Float", None) if info.capabilities.module_owner => Some(FLOAT_PRIMITIVE_ROOT_UID),
+        ("Boolean", Some(FacetRootKind::TypeRoot)) if info.capabilities.module_owner => {
+            Some(BOOLEAN_PRIMITIVE_ROOT_UID)
+        }
+        ("Function", None) if info.capabilities.module_owner => Some(FUNCTION_PRIMITIVE_ROOT_UID),
         _ => None,
     }
+}
+
+fn synthetic_facet_root_uid(name: &str) -> Option<u32> {
+    let info = builtin_symbol_identity_info(name)?;
+    info.capabilities.facet_root_path?;
+    synthetic_builtin_symbol_uid(name, &info)
+}
+
+fn synthetic_member_root(name: &str) -> Option<(u32, SymbolIdentityInfo)> {
+    let info = builtin_symbol_identity_info(name)?;
+    if !info.capabilities.module_owner {
+        return None;
+    }
+    synthetic_builtin_symbol_uid(name, &info).map(|uid| (uid, info))
+}
+
+fn is_synthetic_builtin_symbol_uid(uid: u32) -> bool {
+    matches!(
+        uid,
+        TUPLE_TYPE_ROOT_UID
+            | LIST_TYPE_ROOT_UID
+            | HASH_MAP_TYPE_ROOT_UID
+            | STRING_PRIMITIVE_ROOT_UID
+            | INT_PRIMITIVE_ROOT_UID
+            | FLOAT_PRIMITIVE_ROOT_UID
+            | BOOLEAN_PRIMITIVE_ROOT_UID
+            | FUNCTION_PRIMITIVE_ROOT_UID
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1551,6 +1592,7 @@ impl Resolver {
                     qualified_name: Some(fq_name),
                     unique_id: uid,
                     compiler_generated: false,
+                    symbol_info: None,
                     span,
                 },
             )
@@ -1788,6 +1830,15 @@ impl Resolver {
         }
     }
 
+    pub(super) fn symbol_info_for_uid(&self, name: &str, uid: u32) -> Option<SymbolIdentityInfo> {
+        if is_synthetic_builtin_symbol_uid(uid) {
+            return builtin_symbol_identity_info(name);
+        }
+        self.declaration_uid_kinds
+            .get(&uid)
+            .and_then(|kind| declaration_symbol_identity_info(name, kind))
+    }
+
     pub(super) fn with_child_scope<T>(
         &mut self,
         f: impl FnOnce(&mut Resolver) -> Result<T, ResolveError>,
@@ -1944,7 +1995,7 @@ impl Resolver {
             .lookup(&name)
             .or_else(|| {
                 if compiler_generated && is_runtime_builtin_decl(&name) {
-                    BUILTIN_METAS
+                    builtin_function_metas()
                         .iter()
                         .position(|meta| meta.name == name)
                         .map(|idx| builtin_uid(idx as u16))
@@ -1952,18 +2003,16 @@ impl Resolver {
                     None
                 }
             })
-            .or_else(|| special_facet_root_uid(&name))
+            .or_else(|| synthetic_facet_root_uid(&name))
             .ok_or_else(|| ResolveError {
                 message: format!("Undefined variable: {}", name),
                 span: span.clone(),
                 related_labels: Vec::new(),
             })?;
-        let qualified_name = (!matches!(
-            uid,
-            TUPLE_TYPE_ROOT_UID | LIST_TYPE_ROOT_UID | HASH_MAP_TYPE_ROOT_UID
-        ))
-        .then(|| self.declaration_fq_name_for_uid(uid))
-        .flatten();
+        let qualified_name = (!is_synthetic_builtin_symbol_uid(uid))
+            .then(|| self.declaration_fq_name_for_uid(uid))
+            .flatten();
+        let symbol_info = self.symbol_info_for_uid(&name, uid);
         if self
             .declaration_uid_kinds
             .get(&uid)
@@ -2001,6 +2050,7 @@ impl Resolver {
                 qualified_name,
                 unique_id: uid,
                 compiler_generated,
+                symbol_info,
                 span,
             },
         ))
@@ -2596,6 +2646,22 @@ impl Resolver {
                 if matches!(expr.as_ref(), Ast::Var(_, name) if name == "ctx") {
                     return Ok(Resolved::ProcessContextHandler(span, field));
                 }
+                if let Ast::Var(root_span, name) = expr.as_ref() {
+                    if let Some((unique_id, symbol_info)) = synthetic_member_root(name) {
+                        let root = Resolved::Var(
+                            root_span.clone(),
+                            ResolvedId {
+                                name: name.clone(),
+                                qualified_name: None,
+                                unique_id,
+                                compiler_generated: true,
+                                symbol_info: Some(symbol_info),
+                                span: root_span.clone(),
+                            },
+                        );
+                        return Ok(Resolved::FieldAccess(span, Box::new(root), field));
+                    }
+                }
                 let resolved_expr = self.resolve_node(*expr)?;
                 Ok(Resolved::FieldAccess(span, Box::new(resolved_expr), field))
             }
@@ -2648,6 +2714,7 @@ impl Resolver {
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
+                    symbol_info: user_type_symbol_identity_info(&DeclarationKind::Struct),
                     span: span.clone(),
                 };
                 let resolved_type_params = self.resolve_type_params(type_params)?;
@@ -2686,6 +2753,7 @@ impl Resolver {
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
+                    symbol_info: user_type_symbol_identity_info(&DeclarationKind::Record),
                     span: span.clone(),
                 };
                 let rfields = fields
@@ -2717,6 +2785,7 @@ impl Resolver {
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
+                    symbol_info: user_type_symbol_identity_info(&DeclarationKind::Deferror),
                     span: span.clone(),
                 };
                 let mut error_scope = self.scope.clone();
@@ -2729,6 +2798,7 @@ impl Resolver {
                             qualified_name: None,
                             unique_id: uid,
                             compiler_generated: false,
+                            symbol_info: None,
                             span: f.span.clone(),
                         }),
                         name: f.name,
@@ -2767,6 +2837,7 @@ impl Resolver {
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
+                    symbol_info: user_type_symbol_identity_info(&DeclarationKind::Enum),
                     span: span.clone(),
                 };
                 let resolved_type_params = type_params
@@ -2790,6 +2861,7 @@ impl Resolver {
                             qualified_name: Some(qualified_ctor_name),
                             unique_id: ctor_uid,
                             compiler_generated: false,
+                            symbol_info: None,
                             span: variant.span.clone(),
                         },
                         payload: variant
@@ -2847,6 +2919,7 @@ impl Resolver {
                     qualified_name: Some(qualified_name),
                     unique_id: fun_uid,
                     compiler_generated: false,
+                    symbol_info: None,
                     span: span.clone(),
                 };
 
@@ -2882,6 +2955,7 @@ impl Resolver {
                     qualified_name,
                     unique_id: uid,
                     compiler_generated: false,
+                    symbol_info: None,
                     span: span.clone(),
                 };
                 Ok(Resolved::ConstDef(
@@ -2918,6 +2992,7 @@ impl Resolver {
                     qualified_name: Some(qualified_name),
                     unique_id: fun_uid,
                     compiler_generated: false,
+                    symbol_info: None,
                     span: span.clone(),
                 };
 
@@ -2943,6 +3018,7 @@ impl Resolver {
                     qualified_name: Some(qualified_trait_name.clone()),
                     unique_id: trait_uid,
                     compiler_generated: false,
+                    symbol_info: None,
                     span: span.clone(),
                 };
                 let resolved_type_params = self.resolve_type_params(type_params)?;
@@ -2999,6 +3075,7 @@ impl Resolver {
                             qualified_name: Some(qualified_method),
                             unique_id: method_uid,
                             compiler_generated: false,
+                            symbol_info: None,
                             span: method_span.clone(),
                         },
                         type_params: self.resolve_type_params(type_params)?,
@@ -3025,6 +3102,7 @@ impl Resolver {
                     qualified_name: Some(qualified_trait_name.clone()),
                     unique_id: trait_uid,
                     compiler_generated: false,
+                    symbol_info: None,
                     span: span.clone(),
                 };
                 let resolved_target_ty = self.resolve_type_annotation(target_ty)?;
@@ -3130,6 +3208,7 @@ impl Resolver {
                             qualified_name: Some(qualified_function_name),
                             unique_id: method_uid,
                             compiler_generated: false,
+                            symbol_info: None,
                             span: method_span.clone(),
                         },
                         type_params: self.resolve_type_params(type_params)?,
@@ -3194,6 +3273,7 @@ impl Resolver {
                     qualified_name: Some(qualified_name),
                     unique_id: builtin_uid,
                     compiler_generated: false,
+                    symbol_info: None,
                     span: span.clone(),
                 };
                 Ok(Resolved::BuiltinDecl(
@@ -3227,6 +3307,7 @@ impl Resolver {
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
+                    symbol_info: None,
                     span: span.clone(),
                 };
                 let resolved_param = self.resolve_extractor_param(param)?;
@@ -3245,11 +3326,13 @@ impl Resolver {
                 self.scope.define_with_id(&head.name, builtin_type_uid);
                 define_global_surface_alias(&mut self.scope, &head.name, builtin_type_uid);
                 let qualified_name = self.qualify_current_declaration_name(&head.name);
+                let symbol_info = builtin_symbol_identity_info(&head.name);
                 let rid = ResolvedId {
                     name: head.name,
                     qualified_name: Some(qualified_name),
                     unique_id: builtin_type_uid,
                     compiler_generated: false,
+                    symbol_info,
                     span: span.clone(),
                 };
                 Ok(Resolved::BuiltinTypeDecl(
@@ -3272,6 +3355,7 @@ impl Resolver {
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
+                    symbol_info: None,
                     span: span.clone(),
                 };
                 Ok(Resolved::ResultCtorDecl(
@@ -3322,6 +3406,7 @@ impl Resolver {
                             qualified_name: None,
                             unique_id: uid,
                             compiler_generated: false,
+                            symbol_info: None,
                             span: param.span,
                         },
                         ty: param.ty,
@@ -3380,11 +3465,13 @@ impl Resolver {
                     span: span.clone(),
                     related_labels: Vec::new(),
                 })?;
+                let symbol_info = self.symbol_info_for_uid(&type_name, uid);
                 let rid = ResolvedId {
                     name: type_name,
                     qualified_name: None,
                     unique_id: uid,
                     compiler_generated: false,
+                    symbol_info,
                     span: span.clone(),
                 };
                 let resolved_fields = field_vals
@@ -3408,11 +3495,13 @@ impl Resolver {
                     span: span.clone(),
                     related_labels: Vec::new(),
                 })?;
+                let symbol_info = self.symbol_info_for_uid(&type_name, uid);
                 let rid = ResolvedId {
                     name: type_name,
                     qualified_name: None,
                     unique_id: uid,
                     compiler_generated: true,
+                    symbol_info,
                     span: span.clone(),
                 };
                 let resolved_fields = field_vals
@@ -3448,11 +3537,13 @@ impl Resolver {
                         .is_some_and(|kind| matches!(kind, DeclarationKind::Const))
                     {
                         let qualified_name = self.declaration_fq_name_for_uid(uid);
+                        let symbol_info = self.symbol_info_for_uid(&normalized_name, uid);
                         let rid = ResolvedId {
                             name: normalized_name,
                             qualified_name,
                             unique_id: uid,
                             compiler_generated: false,
+                            symbol_info,
                             span: span.clone(),
                         };
                         if args.is_empty() {
@@ -3484,11 +3575,13 @@ impl Resolver {
                         span: span.clone(),
                         related_labels: Vec::new(),
                     })?;
+                let symbol_info = self.symbol_info_for_uid(&normalized_name, uid);
                 let rid = ResolvedId {
                     name: normalized_name,
                     qualified_name: None,
                     unique_id: uid,
                     compiler_generated: false,
+                    symbol_info,
                     span: span.clone(),
                 };
                 let resolved_args = args
@@ -3541,6 +3634,7 @@ impl Resolver {
                 qualified_name: None,
                 unique_id: uid,
                 compiler_generated: false,
+                symbol_info: None,
                 span: param.span,
             },
             ty: self.resolve_type_annotation(param.ty)?,
@@ -3568,6 +3662,7 @@ impl Resolver {
                 qualified_name: None,
                 unique_id: uid,
                 compiler_generated: false,
+                symbol_info: None,
                 span: param.span,
             },
             ty: param

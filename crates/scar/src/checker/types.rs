@@ -1,5 +1,5 @@
 use super::*;
-use sindr::names::{builtin_type_name, TypeName};
+use sindr::names::{builtin_type_name, builtin_type_usage_policy, TypeName};
 
 #[derive(Clone, Copy)]
 enum SignatureTyMode<'a> {
@@ -36,6 +36,21 @@ impl Checker {
         } else {
             format!("Global::{name}")
         }
+    }
+
+    fn builtin_type_ref_witness_allowed(name: &str) -> bool {
+        builtin_type_usage_policy(Self::surface_name(name))
+            .is_some_and(|policy| policy.type_ref_witness_allowed)
+    }
+
+    fn builtin_type_is_clause_block_surface_only(name: &str) -> bool {
+        builtin_type_usage_policy(Self::surface_name(name))
+            .is_some_and(|policy| policy.clause_block_surface_only)
+    }
+
+    fn builtin_type_is_lazy_signature_surface_only(name: &str) -> bool {
+        builtin_type_usage_policy(Self::surface_name(name))
+            .is_some_and(|policy| policy.lazy_signature_surface_only)
     }
 
     fn builtin_special_enum_ty(name: &str, args: &[Ty]) -> Option<Ty> {
@@ -126,6 +141,38 @@ impl Checker {
             | Ty::Hole
             | Ty::Var(_)
             | Ty::Pid(_) => false,
+        }
+    }
+
+    pub(super) fn ty_is_error_observer_callable(ty: &Ty) -> bool {
+        match ty {
+            Ty::Func(params, ret)
+            | Ty::BuiltinFunc { params, ret, .. }
+            | Ty::UserFunc { params, ret, .. } => {
+                params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn error_observer_escape_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "Error observer closure cannot escape its Error-observation call".into(),
+            span: span.clone(),
+            hint: Some(
+                "Pass the closure directly to Result::tap_err or another Error-observation API; do not store, return, or rebind it."
+                    .into(),
+            ),
+        }
+    }
+
+    pub(super) fn error_observer_call_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "Error observer closure can only be passed to Error-observation APIs".into(),
+            span: span.clone(),
+            hint: Some(
+                "Use Result::tap_err(value, handler) instead of calling handler directly.".into(),
+            ),
         }
     }
 
@@ -460,8 +507,12 @@ impl Checker {
                             ),
                         }),
                     "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
-                    "MatchArms" | "CondClauses" | "BulkUpdateEntries" => Err(self
-                        .clause_block_type_not_allowed_error(span, Self::surface_name(name))),
+                    builtin_name if Self::builtin_type_is_clause_block_surface_only(builtin_name) => {
+                        Err(self.clause_block_type_not_allowed_error(
+                            span,
+                            Self::surface_name(name),
+                        ))
+                    }
                     "Seq" => Err(self.seq_not_allowed_error(span)),
                     builtin_name => {
                         if let Some(def) = self.env.lookup_type_def(name) {
@@ -559,15 +610,19 @@ impl Checker {
                     }
                 }
             }
-            AstTy::Generic(span, name, _) if Self::surface_name(name) == "TypeRef" => {
+            AstTy::Generic(span, name, _)
+                if Self::builtin_type_ref_witness_allowed(name) =>
+            {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
-                if matches!(Self::surface_name(name), "MatchArms" | "CondClauses" | "BulkUpdateEntries") =>
+                if Self::builtin_type_is_clause_block_surface_only(name) =>
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
-            AstTy::Generic(span, name, _) if Self::surface_name(name) == "Lazy" => {
+            AstTy::Generic(span, name, _)
+                if Self::builtin_type_is_lazy_signature_surface_only(name) =>
+            {
                 Err(self.lazy_type_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _) if Self::surface_name(name) == "Seq" => {
@@ -914,12 +969,7 @@ impl Checker {
             AstTy::Named(span, name) if matches!(Self::surface_name(name), "_" | "Hole") => {
                 self.resolve_hole_surface_ty(span, context)
             }
-            AstTy::Named(span, name)
-                if matches!(
-                    Self::surface_name(name),
-                    "MatchArms" | "CondClauses" | "BulkUpdateEntries"
-                ) =>
-            {
+            AstTy::Named(span, name) if Self::builtin_type_is_clause_block_surface_only(name) => {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
             AstTy::Named(span, name) if Self::surface_name(name) == "Seq" => {
@@ -946,19 +996,17 @@ impl Checker {
                 }
                 Ok(fresh)
             }
-            AstTy::Generic(span, name, _) if Self::surface_name(name) == "TypeRef" => {
+            AstTy::Generic(span, name, _) if Self::builtin_type_ref_witness_allowed(name) => {
                 Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
-                if matches!(
-                    Self::surface_name(name),
-                    "MatchArms" | "CondClauses" | "BulkUpdateEntries"
-                ) =>
+                if Self::builtin_type_is_clause_block_surface_only(name) =>
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
             AstTy::Generic(span, name, args)
-                if Self::surface_name(name) == "Lazy" && mode.allows_lazy() =>
+                if Self::builtin_type_is_lazy_signature_surface_only(name)
+                    && mode.allows_lazy() =>
             {
                 let args = self.require_type_arg_count(
                     span,
@@ -2532,5 +2580,50 @@ impl Checker {
             ),
             _ => Some(node.span.clone()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Checker;
+
+    #[test]
+    fn type_ref_witness_gate_uses_builtin_type_usage_policy() {
+        assert!(Checker::builtin_type_ref_witness_allowed("TypeRef"));
+        assert!(!Checker::builtin_type_ref_witness_allowed("String"));
+    }
+
+    #[test]
+    fn clause_block_surface_type_query_uses_builtin_type_usage_policy() {
+        assert!(Checker::builtin_type_is_clause_block_surface_only(
+            "MatchArms"
+        ));
+        assert!(Checker::builtin_type_is_clause_block_surface_only(
+            "Global::CondClauses"
+        ));
+        assert!(Checker::builtin_type_is_clause_block_surface_only(
+            "BulkUpdateEntries"
+        ));
+        assert!(!Checker::builtin_type_is_clause_block_surface_only(
+            "String"
+        ));
+        assert!(!Checker::builtin_type_is_clause_block_surface_only(
+            "ProcessInit"
+        ));
+        assert!(!Checker::builtin_type_is_clause_block_surface_only("Lazy"));
+    }
+
+    #[test]
+    fn lazy_signature_surface_type_query_uses_builtin_type_usage_policy() {
+        assert!(Checker::builtin_type_is_lazy_signature_surface_only("Lazy"));
+        assert!(Checker::builtin_type_is_lazy_signature_surface_only(
+            "Global::Lazy"
+        ));
+        assert!(!Checker::builtin_type_is_lazy_signature_surface_only(
+            "MatchArms"
+        ));
+        assert!(!Checker::builtin_type_is_lazy_signature_surface_only(
+            "String"
+        ));
     }
 }

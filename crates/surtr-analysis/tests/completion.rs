@@ -1,10 +1,13 @@
 use sigil::{DeclarationEntry, DeclarationIndex, DeclarationKind};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
+use sindr::names::{FacetRootKind, SymbolCapabilities, TypeIdentity};
 use spire::ast::Visibility;
 use surtr_analysis::{
-    complete_prefix, lookup_symbol_at_cursor, rank_completion_candidates_by_expected_type,
-    repl_assist_at_cursor, signature_help_at_cursor, CompletionCandidate, CompletionKind,
-    CompletionOrigin, CompletionRequest, CompletionScope, CompletionSymbol, SemanticIndex,
+    complete_call_argument, complete_prefix, lookup_symbol_at_cursor,
+    rank_completion_candidates_by_expected_type, repl_assist_at_cursor, signature_help_at_cursor,
+    CallableSignature, CompletionCandidate, CompletionKind, CompletionOrigin, CompletionRequest,
+    CompletionScope, CompletionSymbol, ReplInputSupportContext, ReplInputSupportUpdate,
+    SemanticIndex, SymbolDisplayMetadata,
 };
 
 #[test]
@@ -19,6 +22,8 @@ fn completion_request_clamps_cursor_to_char_boundary_and_returns_byte_replacemen
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]);
     let source = "値.pr";
     let cursor_inside_multibyte = 1;
@@ -47,6 +52,8 @@ fn completion_request_filters_symbols_by_token_prefix() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Process::sleep".to_string(),
@@ -58,6 +65,8 @@ fn completion_request_filters_symbols_by_token_prefix() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
         CompletionSymbol {
             label: "String".to_string(),
@@ -69,6 +78,8 @@ fn completion_request_filters_symbols_by_token_prefix() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
     ]);
 
@@ -82,6 +93,36 @@ fn completion_request_filters_symbols_by_token_prefix() {
     assert_eq!(completion.replace_end, 3);
     assert_eq!(completion.candidates.len(), 1);
     assert_eq!(completion.candidates[0].label, "print");
+}
+
+#[test]
+fn completion_candidates_preserve_symbol_capabilities() {
+    let capabilities = SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot));
+    let index = SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "User".to_string(),
+        replacement: "User".to_string(),
+        kind: CompletionKind::TypeConstructor,
+        detail: None,
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        definition: None,
+        capabilities: Some(capabilities),
+    }]);
+
+    let completion = complete_prefix(CompletionRequest {
+        index: &index,
+        source: "Us",
+        cursor: 2,
+    });
+
+    assert_eq!(
+        completion.candidates[0]
+            .capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.facet_root_path),
+        Some(FacetRootKind::TypeRoot)
+    );
 }
 
 #[test]
@@ -139,6 +180,8 @@ fn completion_request_matches_qualified_symbol_tail_for_unqualified_prefix() {
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]);
 
     let completion = complete_prefix(CompletionRequest {
@@ -162,6 +205,7 @@ fn repl_completion_requires_unqualified_symbols_for_unqualified_prefix() {
         sort_text: None,
         origin: None,
         definition: None,
+        capabilities: None,
     }]);
 
     let unqualified = surtr_analysis::complete_repl_prefix(
@@ -189,6 +233,7 @@ fn repl_completion_requires_unqualified_symbols_for_unqualified_prefix() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "repeat".to_string(),
@@ -199,6 +244,7 @@ fn repl_completion_requires_unqualified_symbols_for_unqualified_prefix() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -247,6 +293,7 @@ fn repl_completion_prefers_type_owners_before_members_for_pascal_case_prefix() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "IntBase".to_string(),
@@ -257,6 +304,7 @@ fn repl_completion_prefers_type_owners_before_members_for_pascal_case_prefix() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "IntBase::label".to_string(),
@@ -267,6 +315,7 @@ fn repl_completion_prefers_type_owners_before_members_for_pascal_case_prefix() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -301,6 +350,7 @@ fn repl_completion_hides_qualified_enum_variants_until_owner_path_is_confirmed()
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "IntBase::Bin".to_string(),
@@ -311,6 +361,7 @@ fn repl_completion_hides_qualified_enum_variants_until_owner_path_is_confirmed()
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "IntBase::Dec".to_string(),
@@ -321,6 +372,7 @@ fn repl_completion_hides_qualified_enum_variants_until_owner_path_is_confirmed()
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -370,6 +422,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Ok".to_string(),
@@ -380,6 +433,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Result::Err".to_string(),
@@ -390,6 +444,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Err".to_string(),
@@ -400,6 +455,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Boolean::True".to_string(),
@@ -410,6 +466,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "True".to_string(),
@@ -420,6 +477,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "Boolean::False".to_string(),
@@ -430,6 +488,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "False".to_string(),
@@ -440,6 +499,7 @@ fn completion_request_injects_shared_result_ctors_and_bool_variants() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -530,6 +590,7 @@ fn repl_completion_scope_can_limit_candidates_to_variables() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "normalize".to_string(),
@@ -540,6 +601,7 @@ fn repl_completion_scope_can_limit_candidates_to_variables() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -573,6 +635,7 @@ fn repl_variable_scope_allows_empty_prefix_for_call_argument_completion() {
         sort_text: None,
         origin: None,
         definition: None,
+        capabilities: None,
     }]);
 
     let completion = surtr_analysis::complete_repl_prefix(
@@ -602,6 +665,8 @@ fn semantic_index_finds_symbol_at_cursor_for_shared_hover_and_completion_detail(
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]);
 
     let lookup = lookup_symbol_at_cursor(&index, "value = helper()", "value = hel".len())
@@ -629,6 +694,8 @@ fn semantic_index_returns_signature_help_from_call_context() {
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]);
 
     let help = signature_help_at_cursor(&index, "print(\"hello\", Tr", "print(\"hello\", Tr".len())
@@ -655,6 +722,7 @@ fn repl_assist_combines_call_signature_and_argument_variable_completion() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "name".to_string(),
@@ -665,6 +733,7 @@ fn repl_assist_combines_call_signature_and_argument_variable_completion() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "normalize".to_string(),
@@ -675,6 +744,7 @@ fn repl_assist_combines_call_signature_and_argument_variable_completion() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -719,6 +789,7 @@ fn repl_assist_preserves_repl_tail_presentation() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "repeat".to_string(),
@@ -729,6 +800,7 @@ fn repl_assist_preserves_repl_tail_presentation() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]);
 
@@ -745,6 +817,95 @@ fn repl_assist_preserves_repl_tail_presentation() {
     assert_eq!(assist.candidates.len(), 1);
     assert_eq!(assist.candidates[0].label, "repeat");
     assert_eq!(assist.candidates[0].replacement, "repeat");
+}
+
+#[test]
+fn repl_input_support_context_accepts_session_updates() {
+    let mut context = ReplInputSupportContext::default();
+    context.apply_update(ReplInputSupportUpdate {
+        symbols: vec![CompletionSymbol {
+            label: "value".to_string(),
+            replacement: "value".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        }],
+        callable_signatures: vec![CallableSignature {
+            label: "fresh".to_string(),
+            qualified_name: "Fresh::fresh".to_string(),
+            signature: "fresh(value: String) -> Unit".to_string(),
+        }],
+    });
+
+    let completion = context.input_support("val", 3, CompletionScope::All);
+    assert_eq!(completion.candidates.len(), 1);
+    assert_eq!(completion.candidates[0].label, "value");
+    assert_eq!(completion.candidates[0].detail.as_deref(), Some("Int"));
+
+    let support = context.input_support("fresh(", "fresh(".len(), CompletionScope::All);
+    let signature = support
+        .signature
+        .expect("call signature should be produced by input support core");
+    assert_eq!(
+        signature.lines,
+        vec!["Fresh::fresh(value: [String]) -> Unit".to_string()]
+    );
+    assert_eq!(signature.active_parameter, Some(0));
+}
+
+#[test]
+fn repl_input_support_context_produces_operator_assist_and_ranked_candidates() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: vec![
+            CompletionSymbol {
+                label: "answer".to_string(),
+                replacement: "answer".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("Int".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+            CompletionSymbol {
+                label: "name".to_string(),
+                replacement: "name".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("String".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+        ],
+        callable_signatures: Vec::new(),
+    });
+
+    assert!(ReplInputSupportContext::should_request(
+        "1 + ",
+        "1 + ".len()
+    ));
+
+    let support = context.input_support("1 + ", "1 + ".len(), CompletionScope::All);
+    let signature = support
+        .signature
+        .expect("operator rhs should show signature help");
+    assert_eq!(signature.lines, vec!["Int + [Int]".to_string()]);
+
+    assert_eq!(
+        support
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["answer", "name"]
+    );
 }
 
 #[test]
@@ -792,6 +953,9 @@ fn semantic_index_adds_module_owner_symbols_from_declarations() {
             visibility: Visibility::Public,
             user_importable: true,
             user_callable: true,
+            via_import: false,
+            via_auto_import: false,
+            shadowed_auto_import: false,
         })
     );
 }
@@ -809,6 +973,8 @@ fn semantic_index_deduplicates_completion_symbols() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
         CompletionSymbol {
             label: "print".to_string(),
@@ -820,6 +986,8 @@ fn semantic_index_deduplicates_completion_symbols() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
     ]);
 
@@ -921,6 +1089,627 @@ fn semantic_index_builds_completion_symbols_from_doc_and_signature_metadata() {
 }
 
 #[test]
+fn semantic_index_builds_from_symbol_semantic_infos() {
+    let index =
+        SemanticIndex::from_symbol_semantic_infos(vec![surtr_analysis::SymbolSemanticInfo {
+            canonical_name: "Global::Helper::helper".to_string(),
+            surface_name: "Helper::helper".to_string(),
+            replacement: "Helper::helper".to_string(),
+            kind: CompletionKind::FunctionCall,
+            identity: None,
+            detail: Some("Helper::helper(value: Int) -> Int".to_string()),
+            documentation: Some("Increment a number.".to_string()),
+            sort_text: Some("1:Helper::helper".to_string()),
+            origin: Some(CompletionOrigin::Declaration {
+                qualified_name: "Global::Helper::helper".to_string(),
+                module_path: "Global::Helper".to_string(),
+                name: "helper".to_string(),
+                stage_index: 1,
+                auto_import: false,
+                visibility: spire::ast::Visibility::Public,
+                user_importable: true,
+                user_callable: true,
+                via_import: false,
+                via_auto_import: false,
+                shadowed_auto_import: false,
+            }),
+            definition: None,
+            capabilities: None,
+            display_metadata: Some(SymbolDisplayMetadata {
+                qualified_name: "Global::Helper::helper".to_string(),
+                module_path: "Global::Helper".to_string(),
+                has_doc: true,
+                has_signature: true,
+            }),
+        }]);
+
+    let symbol = index
+        .symbols()
+        .iter()
+        .find(|symbol| symbol.label == "Helper::helper")
+        .expect("semantic info should project to completion symbol");
+    let info = index
+        .symbol_semantic_infos()
+        .iter()
+        .find(|info| info.surface_name == "Helper::helper")
+        .expect("semantic index should preserve aggregate info");
+
+    assert_eq!(
+        symbol.detail.as_deref(),
+        Some("Helper::helper(value: Int) -> Int")
+    );
+    assert_eq!(symbol.documentation.as_deref(), Some("Increment a number."));
+    assert_eq!(
+        info.display_metadata.as_ref().map(|metadata| (
+            metadata.qualified_name.as_str(),
+            metadata.has_doc,
+            metadata.has_signature
+        )),
+        Some(("Global::Helper::helper", true, true))
+    );
+}
+
+#[test]
+fn semantic_index_upsert_preserves_existing_symbol_semantic_info() {
+    let mut index =
+        SemanticIndex::from_symbol_semantic_infos(vec![surtr_analysis::SymbolSemanticInfo {
+            canonical_name: "Global::Helper::helper".to_string(),
+            surface_name: "helper".to_string(),
+            replacement: "helper".to_string(),
+            kind: CompletionKind::FunctionCall,
+            identity: None,
+            detail: Some("helper() -> Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+            display_metadata: Some(SymbolDisplayMetadata {
+                qualified_name: "Global::Helper::helper".to_string(),
+                module_path: "Global::Helper".to_string(),
+                has_doc: false,
+                has_signature: true,
+            }),
+        }]);
+
+    index.upsert_symbol(CompletionSymbol {
+        label: "helper".to_string(),
+        replacement: "helper".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: None,
+        documentation: Some("Imported helper.".to_string()),
+        sort_text: None,
+        origin: None,
+        definition: None,
+        capabilities: None,
+    });
+
+    let info = index
+        .symbol_semantic_infos()
+        .iter()
+        .find(|info| info.surface_name == "helper")
+        .expect("upserted helper should remain visible");
+    assert_eq!(info.documentation.as_deref(), Some("Imported helper."));
+    assert_eq!(
+        info.display_metadata.as_ref().map(|metadata| (
+            metadata.qualified_name.as_str(),
+            metadata.has_doc,
+            metadata.has_signature
+        )),
+        Some(("Global::Helper::helper", false, true))
+    );
+}
+
+#[test]
+fn semantic_index_compile_metadata_joins_declaration_docs_and_signatures() {
+    let mut declarations = DeclarationIndex::new();
+    declarations.insert(
+        "Global::Helper::User".to_string(),
+        declaration_entry(
+            "Global::Helper",
+            "User",
+            "Global::Helper::User",
+            DeclarationKind::Struct,
+            true,
+            false,
+        ),
+    );
+    let docs = vec![DocEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: Some("User(name: String)".to_string()),
+        doc: "User type.".to_string(),
+    }];
+    let signatures = vec![SignatureEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: "User(name: String)".to_string(),
+    }];
+
+    let index = SemanticIndex::from_compile_metadata(&declarations, &docs, &signatures);
+    let symbol = index
+        .symbols()
+        .iter()
+        .find(|symbol| symbol.label == "Helper::User")
+        .expect("user symbol should exist");
+
+    assert_eq!(symbol.detail.as_deref(), Some("User(name: String)"));
+    assert_eq!(symbol.documentation.as_deref(), Some("User type."));
+    assert!(matches!(
+        symbol.origin.as_ref(),
+        Some(CompletionOrigin::Declaration { qualified_name, .. })
+            if qualified_name == "Global::Helper::User"
+    ));
+    assert!(
+        symbol.capabilities.is_some(),
+        "joined declaration metadata should preserve capabilities: {symbol:?}"
+    );
+}
+
+#[test]
+fn semantic_index_enriches_symbols_with_compile_metadata_aggregate() {
+    let mut declarations = DeclarationIndex::new();
+    declarations.insert(
+        "Global::Helper::User".to_string(),
+        declaration_entry(
+            "Global::Helper",
+            "User",
+            "Global::Helper::User",
+            DeclarationKind::Struct,
+            true,
+            false,
+        ),
+    );
+    let docs = vec![DocEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: Some("User(name: String)".to_string()),
+        doc: "User type.".to_string(),
+    }];
+    let signatures = vec![SignatureEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: "User(name: String)".to_string(),
+    }];
+    let index = SemanticIndex::enrich_symbols_with_compile_metadata(
+        vec![CompletionSymbol {
+            label: "Helper::User".to_string(),
+            replacement: "Helper::User".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: None,
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        }],
+        &declarations,
+        &docs,
+        &signatures,
+    );
+
+    let info = index
+        .symbol_semantic_infos()
+        .iter()
+        .find(|info| info.surface_name == "Helper::User")
+        .expect("enriched symbol should keep semantic info");
+
+    assert_eq!(info.detail.as_deref(), Some("User(name: String)"));
+    assert_eq!(
+        info.display_metadata.as_ref().map(|metadata| (
+            metadata.qualified_name.as_str(),
+            metadata.has_doc,
+            metadata.has_signature
+        )),
+        Some(("Global::Helper::User", true, true))
+    );
+}
+
+#[test]
+fn compile_metadata_exposes_symbol_semantic_info_before_completion_projection() {
+    let mut declarations = DeclarationIndex::new();
+    declarations.insert(
+        "Global::Helper::User".to_string(),
+        declaration_entry(
+            "Global::Helper",
+            "User",
+            "Global::Helper::User",
+            DeclarationKind::Struct,
+            true,
+            false,
+        ),
+    );
+    let docs = vec![DocEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: Some("User(name: String)".to_string()),
+        doc: "User type.".to_string(),
+    }];
+    let signatures = vec![SignatureEntry {
+        qualified_name: "Global::Helper::User".to_string(),
+        kind: DocKind::Type,
+        module_path: "Global::Helper".to_string(),
+        signature: "User(name: String)".to_string(),
+    }];
+
+    let infos = surtr_analysis::symbol_semantic_infos_from_compile_metadata(
+        &declarations,
+        &docs,
+        &signatures,
+    );
+    let info = infos
+        .iter()
+        .find(|info| info.canonical_name == "Global::Helper::User")
+        .expect("semantic info should preserve canonical symbol identity");
+
+    assert_eq!(info.surface_name, "Helper::User");
+    assert_eq!(info.kind, CompletionKind::TypeConstructor);
+    assert_eq!(info.identity, Some(TypeIdentity::Struct));
+    assert_eq!(info.detail.as_deref(), Some("User(name: String)"));
+    assert_eq!(info.documentation.as_deref(), Some("User type."));
+    let display_metadata = info
+        .display_metadata
+        .as_ref()
+        .expect("compile semantic info should retain display metadata origin");
+    let _: &SymbolDisplayMetadata = display_metadata;
+    assert_eq!(display_metadata.qualified_name, "Global::Helper::User");
+    assert!(display_metadata.has_doc);
+    assert!(display_metadata.has_signature);
+    assert!(
+        info.capabilities.is_some(),
+        "semantic info should preserve capabilities before completion projection: {info:?}"
+    );
+}
+
+#[test]
+fn shared_builtin_surface_capability_query_excludes_runtime_aliases() {
+    let string_caps =
+        surtr_analysis::symbol_capabilities_for_builtin_surface("String").expect("String caps");
+    assert!(string_caps.type_annotation);
+    assert!(string_caps.module_owner);
+    assert!(string_caps.impl_target);
+    assert_eq!(string_caps.facet_root_path, None);
+
+    let boolean_caps =
+        surtr_analysis::symbol_capabilities_for_builtin_surface("Boolean").expect("Boolean caps");
+    assert!(boolean_caps.type_annotation);
+    assert!(boolean_caps.module_owner);
+    assert!(boolean_caps.impl_target);
+    assert_eq!(boolean_caps.facet_root_path, Some(FacetRootKind::TypeRoot));
+
+    assert!(
+        surtr_analysis::symbol_capabilities_for_builtin_surface("String::len").is_none(),
+        "runtime builtin aliases are not compile-space symbol surfaces"
+    );
+    assert_eq!(
+        surtr_analysis::facet_type_root_capabilities().facet_root_path,
+        Some(FacetRootKind::TypeRoot)
+    );
+}
+
+#[test]
+fn shared_declaration_capability_query_handles_user_and_builtin_surfaces() {
+    let user = declaration_entry(
+        "Global",
+        "User",
+        "Global::User",
+        DeclarationKind::Struct,
+        true,
+        false,
+    );
+    let user_caps =
+        surtr_analysis::symbol_capabilities_for_declaration_entry(&user).expect("user caps");
+    assert_eq!(user_caps.facet_root_path, Some(FacetRootKind::TypeRoot));
+    assert_eq!(
+        surtr_analysis::symbol_identity_for_declaration_entry(&user),
+        Some(TypeIdentity::Struct)
+    );
+
+    let builtin = declaration_entry(
+        "Global",
+        "String",
+        "Global::String",
+        DeclarationKind::BuiltinType,
+        true,
+        false,
+    );
+    let builtin_caps =
+        surtr_analysis::symbol_capabilities_for_declaration_entry(&builtin).expect("builtin caps");
+    assert!(builtin_caps.type_annotation);
+    assert_eq!(builtin_caps.facet_root_path, None);
+    assert_eq!(
+        surtr_analysis::symbol_identity_for_declaration_entry(&builtin),
+        Some(TypeIdentity::Type)
+    );
+}
+
+#[test]
+fn effective_visible_entry_semantic_info_reuses_qualified_symbol_metadata() {
+    let source_location = surtr_analysis::SourceLocation {
+        path: "/repo/helper.srt".into(),
+        start: 4,
+        end: 10,
+    };
+    let visible = sigil::EffectiveVisibleEntry {
+        visible_name: "helper".to_string(),
+        via_import: true,
+        via_auto_import: false,
+        shadowed_auto_import: false,
+        importable: true,
+        callable: true,
+        entry: declaration_entry(
+            "Global::Helper",
+            "helper",
+            "Global::Helper::helper",
+            DeclarationKind::Def,
+            true,
+            true,
+        ),
+    };
+
+    let projected = surtr_analysis::symbol_semantic_info_for_effective_visible_entry(
+        &[surtr_analysis::SymbolSemanticInfo {
+            canonical_name: "Global::Helper::helper".to_string(),
+            surface_name: "Helper::helper".to_string(),
+            replacement: "Helper::helper".to_string(),
+            kind: CompletionKind::FunctionCall,
+            identity: None,
+            detail: Some("Helper::helper(value: Int) -> Int".to_string()),
+            documentation: Some("Increment a number.".to_string()),
+            sort_text: Some("1:Helper::helper".to_string()),
+            origin: None,
+            definition: Some(source_location.clone()),
+            capabilities: Some(SymbolCapabilities::new(
+                true,
+                true,
+                true,
+                Some(FacetRootKind::TypeRoot),
+            )),
+            display_metadata: Some(SymbolDisplayMetadata {
+                qualified_name: "Global::Helper::helper".to_string(),
+                module_path: "Global::Helper".to_string(),
+                has_doc: true,
+                has_signature: true,
+            }),
+        }],
+        &visible,
+    )
+    .expect("visible helper should project");
+
+    assert_eq!(projected.canonical_name, "Global::Helper::helper");
+    assert_eq!(projected.surface_name, "helper");
+    assert_eq!(projected.replacement, "helper");
+    assert_eq!(
+        projected.detail.as_deref(),
+        Some("Helper::helper(value: Int) -> Int")
+    );
+    assert_eq!(
+        projected.documentation.as_deref(),
+        Some("Increment a number.")
+    );
+    assert_eq!(projected.sort_text.as_deref(), Some("1:Helper::helper"));
+    assert_eq!(projected.definition, Some(source_location));
+    assert!(matches!(
+        projected.origin.as_ref(),
+        Some(CompletionOrigin::Declaration {
+            qualified_name,
+            via_import,
+            via_auto_import,
+            shadowed_auto_import,
+            ..
+        }) if qualified_name == "Global::Helper::helper"
+            && *via_import
+            && !*via_auto_import
+            && !*shadowed_auto_import
+    ));
+    assert_eq!(
+        projected.capabilities,
+        Some(SymbolCapabilities::new(
+            true,
+            true,
+            true,
+            Some(FacetRootKind::TypeRoot),
+        ))
+    );
+    assert_eq!(
+        projected
+            .display_metadata
+            .as_ref()
+            .map(|metadata| (metadata.qualified_name.as_str(), metadata.has_doc)),
+        Some(("Global::Helper::helper", true))
+    );
+}
+
+#[test]
+fn call_argument_completion_ranks_self_trait_constraint_candidates_from_impl_signatures() {
+    let index = SemanticIndex::from_symbols(vec![
+        completion_symbol(
+            "compare",
+            CompletionKind::FunctionCall,
+            "Compare::compare(self: Self, rhs: Self) -> Ordering",
+        ),
+        completion_symbol(
+            "impl Compare for Int",
+            CompletionKind::TypeConstructor,
+            "impl Compare for Int",
+        ),
+        completion_symbol("count", CompletionKind::Variable, "Int"),
+        completion_symbol("flag", CompletionKind::Variable, "Boolean"),
+    ]);
+
+    let completion = complete_call_argument(CompletionRequest {
+        index: &index,
+        source: "compare(",
+        cursor: "compare(".len(),
+    })
+    .expect("compare call argument should use signature context");
+
+    assert_eq!(
+        completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["count", "flag"]
+    );
+    assert_eq!(
+        completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.sort_text.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("0000:count"), Some("0001:flag")]
+    );
+}
+
+#[test]
+fn call_argument_completion_uses_trait_impl_signature_not_builtin_type_whitelist() {
+    let index = SemanticIndex::from_symbols(vec![
+        completion_symbol(
+            "compare",
+            CompletionKind::FunctionCall,
+            "Compare::compare(self: Self, rhs: Self) -> Ordering",
+        ),
+        completion_symbol(
+            "impl Compare for UserRank",
+            CompletionKind::TypeConstructor,
+            "impl Compare for UserRank",
+        ),
+        completion_symbol("rank", CompletionKind::Variable, "UserRank"),
+        completion_symbol("name", CompletionKind::Variable, "String"),
+    ]);
+
+    let completion = complete_call_argument(CompletionRequest {
+        index: &index,
+        source: "compare(",
+        cursor: "compare(".len(),
+    })
+    .expect("compare call argument should use signature context");
+
+    assert_eq!(
+        completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["rank", "name"]
+    );
+}
+
+#[test]
+fn facet_arg_completion_includes_capability_declared_roots_without_detail_heuristics() {
+    let mut declarations = DeclarationIndex::new();
+    declarations.insert(
+        "User".to_string(),
+        declaration_entry("", "User", "User", DeclarationKind::Struct, true, true),
+    );
+    declarations.insert(
+        "Config".to_string(),
+        declaration_entry("", "Config", "Config", DeclarationKind::Record, true, true),
+    );
+    declarations.insert(
+        "Choice".to_string(),
+        declaration_entry("", "Choice", "Choice", DeclarationKind::Enum, true, true),
+    );
+    declarations.insert(
+        "Problem".to_string(),
+        declaration_entry(
+            "",
+            "Problem",
+            "Problem",
+            DeclarationKind::Deferror,
+            true,
+            true,
+        ),
+    );
+
+    let mut symbols = vec![completion_symbol(
+        "Facet::view",
+        CompletionKind::FunctionCall,
+        "Facet::view(path: Facet<$S, $A>, source: $S) -> $A",
+    )];
+    symbols.extend(
+        SemanticIndex::from_declaration_index(&declarations)
+            .symbols()
+            .iter()
+            .cloned(),
+    );
+    let index = SemanticIndex::from_symbols(symbols);
+
+    let completion = complete_call_argument(CompletionRequest {
+        index: &index,
+        source: "Facet::view(",
+        cursor: "Facet::view(".len(),
+    })
+    .expect("Facet first argument should use facet-root capabilities");
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec!["Choice", "Config", "User"]);
+}
+
+#[test]
+fn facet_arg_completion_includes_builtin_path_roots_and_excludes_plain_builtin_types() {
+    let docs = [
+        ("Global::Tuple", "Tuple path root."),
+        ("Global::List", "List path root."),
+        ("Global::HashMap", "HashMap path root."),
+        ("Global::Boolean", "Boolean variant path root."),
+        ("Global::String", "Plain string type."),
+        ("Global::Result", "Plain result type."),
+        ("Global::Facet", "Facet type."),
+    ]
+    .into_iter()
+    .map(|(qualified_name, doc)| DocEntry {
+        qualified_name: qualified_name.to_string(),
+        kind: DocKind::Type,
+        module_path: "Global".to_string(),
+        signature: Some(format!(
+            "type {}",
+            qualified_name.rsplit("::").next().unwrap()
+        )),
+        doc: doc.to_string(),
+    })
+    .collect::<Vec<_>>();
+    let mut symbols = vec![completion_symbol(
+        "Facet::view",
+        CompletionKind::FunctionCall,
+        "Facet::view(path: Facet<$S, $A>, source: $S) -> $A",
+    )];
+    symbols.extend(
+        SemanticIndex::from_metadata(&docs, &[])
+            .symbols()
+            .iter()
+            .cloned(),
+    );
+    let index = SemanticIndex::from_symbols(symbols);
+
+    let completion = complete_call_argument(CompletionRequest {
+        index: &index,
+        source: "Facet::view(",
+        cursor: "Facet::view(".len(),
+    })
+    .expect("Facet first argument should include builtin facet path roots");
+
+    assert_eq!(
+        completion
+            .candidates
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Boolean", "HashMap", "List", "Tuple"]
+    );
+}
+
+#[test]
 fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
     let index = SemanticIndex::from_symbols(vec![
         CompletionSymbol {
@@ -933,6 +1722,8 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
         CompletionSymbol {
             label: "alpha".to_string(),
@@ -944,6 +1735,8 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
             origin: None,
 
             definition: None,
+
+            capabilities: None,
         },
     ]);
 
@@ -957,6 +1750,43 @@ fn completion_candidates_are_sorted_by_label_for_stable_lsp_output() {
     assert_eq!(completion.candidates[1].label, "atom");
 }
 
+#[test]
+fn expected_type_ranking_updates_sort_text_for_lsp_clients() {
+    let candidates = vec![
+        completion_candidate("text", "String"),
+        completion_candidate("count", "Int"),
+    ];
+
+    let ranked =
+        rank_completion_candidates_by_expected_type(candidates, Some("Int"), |expected, actual| {
+            expected == actual
+        });
+
+    assert_eq!(
+        ranked
+            .iter()
+            .map(|candidate| candidate.label.as_str())
+            .collect::<Vec<_>>(),
+        vec!["count", "text"]
+    );
+    assert_eq!(ranked[0].sort_text.as_deref(), Some("0000:count"));
+    assert_eq!(ranked[1].sort_text.as_deref(), Some("0001:text"));
+}
+
+fn completion_symbol(label: &str, kind: CompletionKind, detail: &str) -> CompletionSymbol {
+    CompletionSymbol {
+        label: label.to_string(),
+        replacement: label.to_string(),
+        kind,
+        detail: Some(detail.to_string()),
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        definition: None,
+        capabilities: None,
+    }
+}
+
 fn completion_candidate(label: &str, ty: &str) -> CompletionCandidate {
     CompletionCandidate {
         label: label.to_string(),
@@ -966,6 +1796,7 @@ fn completion_candidate(label: &str, ty: &str) -> CompletionCandidate {
         documentation: None,
         sort_text: None,
         origin: None,
+        capabilities: None,
         replace_start: 0,
         replace_end: 0,
     }

@@ -157,6 +157,20 @@ impl SigilSession {
     pub fn define_with_id(&mut self, name: &str, id: u32) {
         self.scope.define_with_id(name, id);
     }
+
+    pub fn visible_declaration_entries(&self) -> Vec<EffectiveVisibleEntry> {
+        let entries_by_uid = self
+            .declaration_uids
+            .iter()
+            .filter_map(|(fq_name, uid)| {
+                self.declaration_entries
+                    .get(fq_name)
+                    .cloned()
+                    .map(|entry| (*uid, entry))
+            })
+            .collect::<HashMap<_, _>>();
+        collect_effective_visible_entries(&self.scope, &entries_by_uid, &[], &[], &[])
+    }
 }
 
 impl Default for SigilSession {

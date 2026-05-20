@@ -577,7 +577,7 @@ impl Checker {
             return Ok(());
         }
 
-        for meta in BUILTIN_TYPE_METAS {
+        for meta in builtin_type_head_metas() {
             if !self.seen_builtin_type_decls.contains_key(meta.name) {
                 return Err(TypeError {
                     message: format!(
@@ -1874,6 +1874,7 @@ impl Checker {
                         params,
                         args,
                         Some(callable_hint.as_str()),
+                        false,
                     )?;
                     return Ok(TypedNode {
                         ty: ret.as_ref().clone(),
@@ -2020,7 +2021,7 @@ impl Checker {
             };
 
             let typed_args =
-                self.typecheck_user_function_args(span, new_uid, &params, args, None)?;
+                self.typecheck_user_function_args(span, new_uid, &params, args, None, false)?;
             let expected_self_ty = Ty::Struct(id.name.clone(), def.fields.clone());
             let returns_self = self.types_compatible(&expected_self_ty, &ret_ty);
             let returns_result_self = match self.resolve_ty(&ret_ty) {
@@ -2050,6 +2051,7 @@ impl Checker {
                         node: TypedInner::Var(ResolvedId {
                             name: new_name,
                             qualified_name: None,
+                            symbol_info: None,
                             unique_id: new_uid,
                             compiler_generated: false,
                             span: id.span.clone(),

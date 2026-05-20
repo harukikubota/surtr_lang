@@ -14,6 +14,34 @@ pub enum InteractiveChunkPolicy {
     Preload,
 }
 
+/// Runtime append permissions derived from an interactive chunk policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeAppendPolicy {
+    pub preserve_function_table_prefix: bool,
+    pub allow_type_entries: bool,
+    pub allow_runtime_process_specs: bool,
+    pub allow_runtime_boot_plan: bool,
+}
+
+impl InteractiveChunkPolicy {
+    pub fn runtime_append_policy(self) -> RuntimeAppendPolicy {
+        match self {
+            Self::ReplAppendOnly => RuntimeAppendPolicy {
+                preserve_function_table_prefix: true,
+                allow_type_entries: false,
+                allow_runtime_process_specs: false,
+                allow_runtime_boot_plan: false,
+            },
+            Self::Preload => RuntimeAppendPolicy {
+                preserve_function_table_prefix: false,
+                allow_type_entries: true,
+                allow_runtime_process_specs: true,
+                allow_runtime_boot_plan: true,
+            },
+        }
+    }
+}
+
 /// Result of one committed interactive bytecode chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChunkExecution {
@@ -147,31 +175,33 @@ impl InteractiveVm {
         chunk: &BytecodeChunk,
         policy: InteractiveChunkPolicy,
     ) -> Result<(), RuntimeError> {
-        if policy == InteractiveChunkPolicy::Preload {
-            return Ok(());
+        let append_policy = policy.runtime_append_policy();
+        if append_policy.preserve_function_table_prefix {
+            let current_function_len = self.vm.function_entries().len();
+            if let Some(entry) = chunk
+                .functions
+                .iter()
+                .find(|entry| (entry.fun_idx as usize) < current_function_len)
+            {
+                return Err(RuntimeError::new(format!(
+                    "InteractiveVm append-only function table violation: fun_idx {} would overwrite an existing function slot",
+                    entry.fun_idx
+                )));
+            }
         }
-        let current_function_len = self.vm.function_entries().len();
-        if let Some(entry) = chunk
-            .functions
-            .iter()
-            .find(|entry| (entry.fun_idx as usize) < current_function_len)
-        {
-            return Err(RuntimeError::new(format!(
-                "InteractiveVm append-only function table violation: fun_idx {} would overwrite an existing function slot",
-                entry.fun_idx
-            )));
-        }
-        if !chunk.type_entries.is_empty() {
+        if !append_policy.allow_type_entries && !chunk.type_entries.is_empty() {
             return Err(RuntimeError::new(
                 "InteractiveVm append-only REPL chunk cannot add type_entries",
             ));
         }
-        if !chunk.runtime_process_specs.is_empty() {
+        if !append_policy.allow_runtime_process_specs && !chunk.runtime_process_specs.is_empty() {
             return Err(RuntimeError::new(
                 "InteractiveVm append-only REPL chunk cannot add runtime_process_specs",
             ));
         }
-        if chunk.runtime_boot_plan != RuntimeBootPlan::default() {
+        if !append_policy.allow_runtime_boot_plan
+            && chunk.runtime_boot_plan != RuntimeBootPlan::default()
+        {
             return Err(RuntimeError::new(
                 "InteractiveVm append-only REPL chunk cannot add runtime_boot_plan entries",
             ));
@@ -182,7 +212,7 @@ impl InteractiveVm {
 
 #[cfg(test)]
 mod tests {
-    use super::{InteractiveChunkPolicy, InteractiveVm};
+    use super::{InteractiveChunkPolicy, InteractiveVm, RuntimeAppendPolicy};
     use sindr::ir::{
         Bytecode, BytecodeChunk, FunctionEntry, Opcode, RuntimeBootPlan, RuntimeCallableRef,
         RuntimeInitPolicy, RuntimeInitResultShape, RuntimeInitSpec, RuntimeProcessInstance,
@@ -226,6 +256,28 @@ mod tests {
             runtime_process_specs: Vec::new(),
             runtime_boot_plan: Default::default(),
         }
+    }
+
+    #[test]
+    fn interactive_chunk_policy_maps_to_runtime_append_policy() {
+        assert_eq!(
+            InteractiveChunkPolicy::ReplAppendOnly.runtime_append_policy(),
+            RuntimeAppendPolicy {
+                preserve_function_table_prefix: true,
+                allow_type_entries: false,
+                allow_runtime_process_specs: false,
+                allow_runtime_boot_plan: false,
+            }
+        );
+        assert_eq!(
+            InteractiveChunkPolicy::Preload.runtime_append_policy(),
+            RuntimeAppendPolicy {
+                preserve_function_table_prefix: false,
+                allow_type_entries: true,
+                allow_runtime_process_specs: true,
+                allow_runtime_boot_plan: true,
+            }
+        );
     }
 
     #[test]

@@ -1,14 +1,54 @@
 use super::scope_init::initialize_scope;
 use super::scope_init::is_doc_only_builtin_decl;
 use super::*;
-use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
+use sindr::builtin::builtin_type_supports_inherent_impl;
+use sindr::names::{
+    reserved_owner_surface_name_constraint, surface_path_name, ReservedOwnerSurfaceNameKind,
+};
 use spire::ast::FacetPathSegment;
 
 use serde::{Deserialize, Serialize};
 
-fn is_reserved_builtin_type_redefinition(name: &str) -> bool {
-    let surface_name = global_surface_name(name);
-    builtin_type_meta_by_name(surface_name).is_some() && surface_name != "ProcessInit"
+fn reserved_owner_name_error(
+    owner_kind: &str,
+    name: &str,
+    span: &Span,
+    allow_canonical_builtin_type: bool,
+) -> Option<ResolveError> {
+    let constraint = reserved_owner_surface_name_constraint(name)?;
+    if allow_canonical_builtin_type
+        && matches!(
+            constraint.kind,
+            ReservedOwnerSurfaceNameKind::CanonicalBuiltinType
+        )
+    {
+        return None;
+    }
+
+    Some(ResolveError {
+        message: format!(
+            "{} `{}` is {}",
+            owner_kind,
+            constraint.surface_name,
+            constraint.kind.diagnostic_suffix()
+        ),
+        span: span.clone(),
+        related_labels: Vec::new(),
+    })
+}
+
+fn reject_reserved_owner_name(
+    owner_kind: &str,
+    name: &str,
+    span: &Span,
+    allow_canonical_builtin_type: bool,
+) -> Result<(), ResolveError> {
+    if let Some(err) =
+        reserved_owner_name_error(owner_kind, name, span, allow_canonical_builtin_type)
+    {
+        return Err(err);
+    }
+    Ok(())
 }
 
 fn builtin_special_enum_surface_name(name: &str) -> bool {
@@ -39,6 +79,341 @@ pub struct StagedModuleAst {
     pub module_doc: Option<String>,
     pub auto_import: bool,
     pub process_spec: Option<spire::ast::ProcessSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoweredModuleAst {
+    pub module_path: String,
+    pub doc_module_path: Option<String>,
+    pub ast: Vec<Ast>,
+    pub declared_span: Option<Span>,
+    pub module_doc: Option<String>,
+    pub auto_import: bool,
+    pub process_spec: Option<spire::ast::ProcessSpec>,
+}
+
+impl From<LoweredModuleAst> for StagedModuleAst {
+    fn from(lowered: LoweredModuleAst) -> Self {
+        Self {
+            module_path: lowered.module_path,
+            doc_module_path: lowered.doc_module_path,
+            ast: lowered.ast,
+            module_doc: lowered.module_doc,
+            auto_import: lowered.auto_import,
+            process_spec: lowered.process_spec,
+        }
+    }
+}
+
+pub fn lower_module_source_ast(
+    ast: Vec<Ast>,
+    fallback_module_path: Option<&str>,
+) -> Vec<LoweredModuleAst> {
+    let shared_imports = ast
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Ast::Import(_, _, _) => Some(stmt.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut lowered = Vec::new();
+    let mut shared_global_defs = Vec::new();
+    let mut shared_namespace_consts = Vec::new();
+    let mut shared_result_ctor_contracts = Vec::new();
+
+    for stmt in ast {
+        match stmt {
+            Ast::Defmod(span, module_path, body, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    declared_span: Some(span),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: None,
+                });
+            }
+            Ast::Defagent(span, module_path, body, process_spec, attrs)
+            | Ast::Defgenserver(span, module_path, body, process_spec, attrs)
+            | Ast::Defsupervisor(span, module_path, body, process_spec, attrs)
+            | Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    declared_span: Some(span),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
+                });
+            }
+            Ast::ImplDef(span, target, methods, attrs) => {
+                let declared_span = span.clone();
+                let module_path = target.clone();
+                let mut module_ast = shared_imports.clone();
+                let (local_imports, methods) = partition_nested_imports(methods);
+                module_ast.extend(local_imports);
+                module_ast.push(Ast::ImplDef(span, target, methods, attrs.clone()));
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    declared_span: Some(declared_span),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: None,
+                });
+            }
+            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+                let declared_span = span.clone();
+                let module_path = match &target_ty {
+                    AstTy::Named(_, name)
+                    | AstTy::ImplTrait(_, name)
+                    | AstTy::Generic(_, name, _) => name.clone(),
+                    _ => fallback_module_path.unwrap_or_default().to_string(),
+                };
+                let mut module_ast = shared_imports.clone();
+                let (local_imports, methods) = partition_nested_imports(methods);
+                module_ast.extend(local_imports);
+                module_ast.push(Ast::TraitImplDef(
+                    span,
+                    trait_name,
+                    trait_args,
+                    target_ty,
+                    methods,
+                    attrs.clone(),
+                ));
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: fallback_module_path.map(str::to_string),
+                    ast: module_ast,
+                    declared_span: Some(declared_span),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: None,
+                });
+            }
+            Ast::Import(_, _, _) => {}
+            Ast::ResultCtorDecl(_, _, _, _, _) => {
+                shared_result_ctor_contracts.push(stmt);
+            }
+            Ast::ConstDef(_, _, _, _, _) => {
+                shared_namespace_consts.push(stmt);
+            }
+            Ast::StructDef(..)
+            | Ast::RecordDef(..)
+            | Ast::DeferrorDef(_, _, _, _, _)
+            | Ast::EnumDef(_, _, _, _, _)
+            | Ast::BuiltinDecl(_, _, _, _, _)
+            | Ast::IntrinsicDecl(_, _, _, _)
+            | Ast::BuiltinTypeDecl(_, _, _) => {
+                shared_global_defs.push(stmt);
+            }
+            _ => {
+                shared_global_defs.push(stmt);
+            }
+        }
+    }
+
+    if !shared_namespace_consts.is_empty() {
+        if let Some(idx) = find_fallback_namespace_module(&lowered, fallback_module_path)
+            .or_else(|| (lowered.len() == 1).then_some(0))
+        {
+            let insert_at = first_non_import_index(&lowered[idx].ast);
+            lowered[idx]
+                .ast
+                .splice(insert_at..insert_at, shared_namespace_consts);
+        } else {
+            let mut shared_ast = shared_imports.clone();
+            shared_ast.extend(shared_namespace_consts);
+            lowered.push(LoweredModuleAst {
+                module_path: fallback_module_path.unwrap_or_default().to_string(),
+                doc_module_path: None,
+                ast: shared_ast,
+                declared_span: None,
+                module_doc: None,
+                auto_import: false,
+                process_spec: None,
+            });
+        }
+    }
+
+    if !shared_result_ctor_contracts.is_empty() {
+        if let Some(idx) =
+            find_result_owner_module(&lowered).or_else(|| (lowered.len() == 1).then_some(0))
+        {
+            let insert_at = first_non_import_index(&lowered[idx].ast);
+            lowered[idx]
+                .ast
+                .splice(insert_at..insert_at, shared_result_ctor_contracts);
+        } else {
+            let mut shared_ast = shared_imports.clone();
+            shared_ast.extend(shared_result_ctor_contracts);
+            lowered.push(LoweredModuleAst {
+                module_path: fallback_module_path.unwrap_or_default().to_string(),
+                doc_module_path: None,
+                ast: shared_ast,
+                declared_span: None,
+                module_doc: None,
+                auto_import: false,
+                process_spec: None,
+            });
+        }
+    }
+
+    if !shared_global_defs.is_empty() {
+        let mut shared_ast = shared_imports;
+        shared_ast.extend(shared_global_defs);
+        lowered.push(LoweredModuleAst {
+            module_path: fallback_module_path.unwrap_or_default().to_string(),
+            doc_module_path: None,
+            ast: shared_ast,
+            declared_span: None,
+            module_doc: None,
+            auto_import: false,
+            process_spec: None,
+        });
+    }
+
+    lowered
+}
+
+pub fn staged_modules_from_source_ast(
+    ast: Vec<Ast>,
+    fallback_module_path: Option<&str>,
+) -> Vec<StagedModuleAst> {
+    lower_module_source_ast(ast, fallback_module_path)
+        .into_iter()
+        .map(StagedModuleAst::from)
+        .collect()
+}
+
+pub fn extract_process_modules_from_user_ast(ast: Vec<Ast>) -> (Vec<StagedModuleAst>, Vec<Ast>) {
+    let shared_imports = ast
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Ast::Import(_, _, _) => Some(stmt.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let mut process_modules = Vec::new();
+    let mut remaining_ast = Vec::new();
+
+    for stmt in ast {
+        match stmt {
+            Ast::Defagent(_, module_path, body, process_spec, attrs)
+            | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
+            | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
+            | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                process_modules.push(StagedModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
+                });
+            }
+            other => remaining_ast.push(other),
+        }
+    }
+
+    (process_modules, remaining_ast)
+}
+
+pub fn const_only_fallback_module_path<'a>(
+    ast: &[Ast],
+    fallback_module_path: Option<&'a str>,
+) -> Option<&'a str> {
+    let has_const = ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::ConstDef(_, _, _, _, _)));
+    let const_only = ast
+        .iter()
+        .all(|stmt| matches!(stmt, Ast::Import(_, _, _) | Ast::ConstDef(_, _, _, _, _)));
+    (has_const && const_only)
+        .then_some(fallback_module_path)
+        .flatten()
+}
+
+pub fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
+    matches!(
+        lowered
+            .ast
+            .iter()
+            .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
+        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _))
+    )
+}
+
+fn staged_module_is_impl_owner(module: &StagedModuleAst) -> bool {
+    matches!(
+        module
+            .ast
+            .iter()
+            .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
+        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _))
+    )
+}
+
+fn module_owner_fallback_span(module: &StagedModuleAst) -> Span {
+    module
+        .ast
+        .iter()
+        .find(|stmt| !matches!(stmt, Ast::Import(_, _, _)))
+        .map(Ast::span)
+        .cloned()
+        .unwrap_or(Span { start: 0, end: 0 })
+}
+
+fn partition_nested_imports(body: Vec<Ast>) -> (Vec<Ast>, Vec<Ast>) {
+    let mut imports = Vec::new();
+    let mut rest = Vec::new();
+    for stmt in body {
+        if matches!(stmt, Ast::Import(_, _, _)) {
+            imports.push(stmt);
+        } else {
+            rest.push(stmt);
+        }
+    }
+    (imports, rest)
+}
+
+fn first_non_import_index(ast: &[Ast]) -> usize {
+    ast.iter()
+        .take_while(|stmt| matches!(stmt, Ast::Import(_, _, _)))
+        .count()
+}
+
+fn find_result_owner_module(lowered: &[LoweredModuleAst]) -> Option<usize> {
+    lowered.iter().position(|module| {
+        surface_path_name(&module.module_path) == "Result"
+            && matches!(
+                module
+                    .ast
+                    .iter()
+                    .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
+                Some(Ast::ImplDef(_, target, _, _)) if surface_path_name(target) == "Result"
+            )
+    })
+}
+
+fn find_fallback_namespace_module(
+    lowered: &[LoweredModuleAst],
+    fallback_module_path: Option<&str>,
+) -> Option<usize> {
+    let fallback = fallback_module_path?;
+    lowered
+        .iter()
+        .position(|module| module.module_path == fallback && !lowered_module_is_impl_owner(module))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +449,30 @@ pub struct DeclarationEntry {
 }
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StageOrderedDeclaration {
+    pub stage_index: usize,
+    pub fq_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeclarationOrdering {
+    entries: Vec<StageOrderedDeclaration>,
+}
+
+impl DeclarationOrdering {
+    pub fn entries(&self) -> &[StageOrderedDeclaration] {
+        &self.entries
+    }
+
+    pub fn fq_names(&self) -> Vec<String> {
+        self.entries
+            .iter()
+            .map(|entry| entry.fq_name.clone())
+            .collect()
+    }
+}
 
 fn duplicate_fq_declaration_error(
     fq_name: &str,
@@ -151,6 +550,38 @@ pub(super) fn is_importable_declaration(kind: &DeclarationKind) -> bool {
     )
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ImportSurfaceStatus {
+    Importable,
+    NonImportableKind,
+    Restricted,
+    Hidden,
+    Private,
+    FutureStage,
+}
+
+pub(super) fn declaration_import_surface_status(
+    entry: &DeclarationEntry,
+    current_stage_index: usize,
+) -> ImportSurfaceStatus {
+    if !is_importable_declaration(&entry.kind) {
+        return ImportSurfaceStatus::NonImportableKind;
+    }
+    if !entry.user_importable {
+        return ImportSurfaceStatus::Restricted;
+    }
+    if entry.hidden {
+        return ImportSurfaceStatus::Hidden;
+    }
+    if entry.visibility != Visibility::Public {
+        return ImportSurfaceStatus::Private;
+    }
+    if entry.stage_index > current_stage_index {
+        return ImportSurfaceStatus::FutureStage;
+    }
+    ImportSurfaceStatus::Importable
+}
+
 fn entry_visibility(attrs: &DeclAttrs) -> Visibility {
     attrs.visibility
 }
@@ -161,6 +592,78 @@ fn entry_user_importable(attrs: &DeclAttrs) -> bool {
 
 fn entry_user_callable(attrs: &DeclAttrs) -> bool {
     attrs.user_callable
+}
+
+#[cfg(test)]
+mod declaration_surface_tests {
+    use super::*;
+
+    fn entry(
+        kind: DeclarationKind,
+        stage_index: usize,
+        user_importable: bool,
+        hidden: bool,
+        visibility: Visibility,
+    ) -> DeclarationEntry {
+        declaration_entry(
+            "Test",
+            "name",
+            "Test::name",
+            kind,
+            stage_index,
+            false,
+            hidden,
+            visibility,
+            user_importable,
+            true,
+        )
+    }
+
+    #[test]
+    fn declaration_import_surface_status_classifies_effective_user_import_policy() {
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Struct, 0, true, false, Visibility::Public),
+                0
+            ),
+            ImportSurfaceStatus::NonImportableKind
+        );
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Def, 0, false, false, Visibility::Public),
+                0
+            ),
+            ImportSurfaceStatus::Restricted
+        );
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Def, 0, true, true, Visibility::Public),
+                0
+            ),
+            ImportSurfaceStatus::Hidden
+        );
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Def, 0, true, false, Visibility::Private),
+                0
+            ),
+            ImportSurfaceStatus::Private
+        );
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Def, 1, true, false, Visibility::Public),
+                0
+            ),
+            ImportSurfaceStatus::FutureStage
+        );
+        assert_eq!(
+            declaration_import_surface_status(
+                &entry(DeclarationKind::Def, 0, true, false, Visibility::Public),
+                0
+            ),
+            ImportSurfaceStatus::Importable
+        );
+    }
 }
 
 fn normalize_impl_method_name(target: &str, method_name: &str) -> String {
@@ -678,17 +1181,33 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
     }
 }
 
-pub(super) fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
-    let mut scope = initialize_scope();
-    let mut declaration_uids = HashMap::with_capacity(index.len());
+pub fn declaration_stage_ordering(index: &DeclarationIndex) -> DeclarationOrdering {
     let mut entries = index.values().collect::<Vec<_>>();
     entries.sort_by(|left, right| {
         left.stage_index
             .cmp(&right.stage_index)
             .then_with(|| left.fq_name.cmp(&right.fq_name))
     });
-    for entry in entries {
-        declaration_uids.insert(entry.fq_name.clone(), scope.reserve_id());
+    DeclarationOrdering {
+        entries: entries
+            .into_iter()
+            .map(|entry| StageOrderedDeclaration {
+                stage_index: entry.stage_index,
+                fq_name: entry.fq_name.clone(),
+            })
+            .collect(),
+    }
+}
+
+pub fn declaration_uid_order(index: &DeclarationIndex) -> Vec<String> {
+    declaration_stage_ordering(index).fq_names()
+}
+
+pub(super) fn assign_declaration_uids(index: &DeclarationIndex) -> HashMap<String, u32> {
+    let mut scope = initialize_scope();
+    let mut declaration_uids = HashMap::with_capacity(index.len());
+    for fq_name in declaration_uid_order(index) {
+        declaration_uids.insert(fq_name, scope.reserve_id());
     }
     declaration_uids
 }
@@ -727,6 +1246,25 @@ pub fn precollect_declaration_index(
     for (stage_index, stage) in module_stages.iter().enumerate() {
         let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
         for module in stage {
+            if !module.module_path.is_empty()
+                && !staged_module_is_impl_owner(module)
+                && reserved_owner_surface_name_constraint(&module.module_path).is_some_and(
+                    |constraint| {
+                        matches!(
+                            constraint.kind,
+                            ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias
+                        )
+                    },
+                )
+            {
+                reject_reserved_owner_name(
+                    "Module name",
+                    &module.module_path,
+                    &module_owner_fallback_span(module),
+                    true,
+                )?;
+            }
+
             for stmt in &module.ast {
                 if let Ast::ImplDef(span, target, methods, _) = stmt {
                     let target_kind = resolve_impl_target_kind(target, span, &stage_impl_targets)?;
@@ -833,6 +1371,7 @@ pub fn precollect_declaration_index(
                 }
 
                 if let Ast::TraitDef(span, name, _type_params, methods, attrs) = stmt {
+                    reject_reserved_owner_name("Owner name", name, span, false)?;
                     let fq_name = if module.module_path.is_empty() {
                         name.clone()
                     } else {
@@ -936,16 +1475,7 @@ pub fn precollect_declaration_index(
                 }
 
                 if let Ast::EnumDef(span, name, _, variants, attrs) = stmt {
-                    if !attrs.builtin && is_reserved_builtin_type_redefinition(name) {
-                        return Err(ResolveError {
-                            message: format!(
-                                "Type name `{}` is reserved by a canonical builtin type declaration",
-                                global_surface_name(name)
-                            ),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    reject_reserved_owner_name("Type name", name, span, attrs.builtin)?;
                     let fq_name = name.to_string();
                     insert_declaration_entry(
                         &mut index,
@@ -1093,19 +1623,11 @@ pub fn precollect_declaration_index(
 
                 if matches!(
                     stmt,
-                    Ast::StructDef(_, name, ..)
-                        | Ast::RecordDef(_, name, _, _)
-                        | Ast::DeferrorDef(_, name, _, _, _)
-                        if is_reserved_builtin_type_redefinition(name)
+                    Ast::StructDef(_, ..)
+                        | Ast::RecordDef(_, _, _, _)
+                        | Ast::DeferrorDef(_, _, _, _, _)
                 ) {
-                    return Err(ResolveError {
-                        message: format!(
-                            "Type name `{}` is reserved by a canonical builtin type declaration",
-                            global_surface_name(name)
-                        ),
-                        span: span.clone(),
-                        related_labels: Vec::new(),
-                    });
+                    reject_reserved_owner_name("Type name", name, span, false)?;
                 }
 
                 let fq_name = if kind == DeclarationKind::Const {
@@ -1543,6 +2065,7 @@ impl Resolver {
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
                 Ast::TraitDef(span, name, _type_params, methods, _) => {
+                    reject_reserved_owner_name("Owner name", name, span, false)?;
                     self.reject_duplicate_top_level_declaration(
                         &mut declared_in_batch,
                         name,
@@ -1630,16 +2153,7 @@ impl Resolver {
                 | Ast::RecordDef(span, name, _, _)
                 | Ast::DeferrorDef(span, name, _, _, _) => {
                     let surface = global_surface_name(name).to_string();
-                    if is_reserved_builtin_type_redefinition(name) {
-                        return Err(ResolveError {
-                            message: format!(
-                                "Type name `{}` is reserved by a canonical builtin type declaration",
-                                global_surface_name(name)
-                            ),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    reject_reserved_owner_name("Type name", name, span, false)?;
                     self.reject_duplicate_top_level_declaration(
                         &mut declared_in_batch,
                         &surface,
@@ -1656,16 +2170,7 @@ impl Resolver {
                 }
                 Ast::EnumDef(span, name, _, variants, attrs) => {
                     let surface = global_surface_name(name).to_string();
-                    if !attrs.builtin && is_reserved_builtin_type_redefinition(name) {
-                        return Err(ResolveError {
-                            message: format!(
-                                "Type name `{}` is reserved by a canonical builtin type declaration",
-                                global_surface_name(name)
-                            ),
-                            span: span.clone(),
-                            related_labels: Vec::new(),
-                        });
-                    }
+                    reject_reserved_owner_name("Type name", name, span, attrs.builtin)?;
                     self.reject_duplicate_top_level_declaration(
                         &mut declared_in_batch,
                         &surface,

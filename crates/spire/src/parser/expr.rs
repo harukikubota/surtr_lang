@@ -471,6 +471,20 @@ impl Parser<'_> {
                     Ok((FacetPathSegment::field(name), name_span))
                 }
             }
+            Token::True | Token::False => {
+                let token = self.advance();
+                let name = match token.token {
+                    Token::True => "True",
+                    Token::False => "False",
+                    _ => unreachable!("matched Boolean variant token"),
+                };
+                if matches!(self.peek(), Token::Question) {
+                    let question_span = self.advance().span;
+                    Ok((FacetPathSegment::optional_field(name.to_string()), question_span))
+                } else {
+                    Ok((FacetPathSegment::field(name.to_string()), token.span))
+                }
+            }
             Token::LBrack => {
                 self.advance();
                 let start_expr = self.parse_expr()?;

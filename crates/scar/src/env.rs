@@ -68,6 +68,12 @@ pub struct TypeDefInfo {
     pub state: TypeDefState,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TypeFieldPolicy {
+    pub private: bool,
+    pub readonly: bool,
+}
+
 /// Resolution state for user-defined type signatures.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeDefState {
@@ -271,13 +277,20 @@ impl TypeEnv {
     }
 
     pub fn is_private_field(&self, type_name: &str, field_name: &str) -> bool {
-        self.lookup_type_def(type_name)
-            .is_some_and(|def| def.private_fields.contains(field_name))
+        self.field_policy(type_name, field_name)
+            .is_some_and(|policy| policy.private)
     }
 
     pub fn is_readonly_field(&self, type_name: &str, field_name: &str) -> bool {
-        self.lookup_type_def(type_name)
-            .is_some_and(|def| def.readonly_fields.contains(field_name))
+        self.field_policy(type_name, field_name)
+            .is_some_and(|policy| policy.readonly)
+    }
+
+    pub fn field_policy(&self, type_name: &str, field_name: &str) -> Option<TypeFieldPolicy> {
+        self.lookup_type_def(type_name).map(|def| TypeFieldPolicy {
+            private: def.private_fields.contains(field_name),
+            readonly: def.readonly_fields.contains(field_name),
+        })
     }
 
     pub fn is_readonly_root(&self, type_name: &str) -> bool {
@@ -472,6 +485,11 @@ mod tests {
         assert!(env.is_readonly_field("Profile", "name"));
         assert!(env.is_readonly_field("Global::Profile", "name"));
         assert!(env.is_readonly_field("Types::Profile", "name"));
+        let policy = env
+            .field_policy("Types::Profile", "name")
+            .expect("field policy should resolve through surface candidates");
+        assert!(!policy.private);
+        assert!(policy.readonly);
         assert!(env.is_readonly_root("Profile"));
         assert!(env.is_readonly_root("Global::Profile"));
         assert!(env.is_readonly_root("Types::Profile"));

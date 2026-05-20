@@ -24,6 +24,21 @@ pub struct IncompleteParseResult {
     pub context: CompletionContext,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorCompletionContext {
+    pub stages: Vec<OperatorCompletionStage>,
+    pub active_stage: usize,
+    pub cursor_span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorCompletionStage {
+    pub lhs: Span,
+    pub operator: String,
+    pub operator_span: Span,
+    pub rhs: Option<Span>,
+}
+
 pub fn parse_incomplete_stmt(
     source: &str,
     context: ParserContext,
@@ -91,6 +106,42 @@ pub fn parse_incomplete_expr(
             })
         }
     }
+}
+
+pub fn parse_operator_completion_context(
+    source: &str,
+    cursor: usize,
+) -> Option<OperatorCompletionContext> {
+    let cursor = clamp_to_char_boundary(source, cursor.min(source.len()));
+    let before = &source[..cursor];
+    let operators = top_level_operators(before)?;
+    let active_stage = operators.len().checked_sub(1)?;
+    let mut stages = Vec::with_capacity(operators.len());
+
+    for (idx, operator) in operators.iter().enumerate() {
+        let next_operator_start = operators
+            .get(idx + 1)
+            .map(|next| next.start)
+            .unwrap_or(cursor);
+        let lhs = trim_byte_range_to_span(source, 0, operator.start)?;
+        let rhs = if idx == active_stage {
+            None
+        } else {
+            trim_byte_range_to_span(source, operator.end, next_operator_start)
+        };
+        stages.push(OperatorCompletionStage {
+            lhs,
+            operator: operator.symbol.to_string(),
+            operator_span: byte_range_to_span(source, operator.start, operator.end),
+            rhs,
+        });
+    }
+
+    Some(OperatorCompletionContext {
+        stages,
+        active_stage,
+        cursor_span: byte_range_to_span(source, cursor, cursor),
+    })
 }
 
 fn completion_span(tokens: &[Spanned<Token>]) -> Span {
@@ -180,6 +231,122 @@ fn looks_like_call_arg_site(prefix: &str) -> bool {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct TopLevelOperator<'a> {
+    symbol: &'a str,
+    start: usize,
+    end: usize,
+}
+
+const COMPLETION_OPERATORS: &[&str] = &[
+    "|>=", "|*>", ">=>", ">>", ">*", "|>", "++", "==", "!=", "<=", ">=", "&&", "||", "+", "-", "*",
+    "/", "<", ">",
+];
+
+fn top_level_operators(input: &str) -> Option<Vec<TopLevelOperator<'_>>> {
+    let mut out = Vec::new();
+    let mut paren_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut iter = input.char_indices().peekable();
+
+    while let Some((idx, ch)) = iter.next() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+
+        match ch {
+            '"' => {
+                in_string = true;
+                continue;
+            }
+            '(' => {
+                paren_depth += 1;
+                continue;
+            }
+            ')' => {
+                paren_depth = paren_depth.saturating_sub(1);
+                continue;
+            }
+            '[' => {
+                bracket_depth += 1;
+                continue;
+            }
+            ']' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                continue;
+            }
+            '{' => {
+                brace_depth += 1;
+                continue;
+            }
+            '}' => {
+                brace_depth = brace_depth.saturating_sub(1);
+                continue;
+            }
+            _ => {}
+        }
+
+        if paren_depth != 0 || bracket_depth != 0 || brace_depth != 0 {
+            continue;
+        }
+
+        if let Some(symbol) = COMPLETION_OPERATORS
+            .iter()
+            .find(|symbol| input[idx..].starts_with(**symbol))
+        {
+            out.push(TopLevelOperator {
+                symbol,
+                start: idx,
+                end: idx + symbol.len(),
+            });
+            for _ in 1..symbol.chars().count() {
+                iter.next();
+            }
+        }
+    }
+
+    (!in_string && !out.is_empty()).then_some(out)
+}
+
+fn clamp_to_char_boundary(input: &str, mut cursor: usize) -> usize {
+    cursor = cursor.min(input.len());
+    while cursor > 0 && !input.is_char_boundary(cursor) {
+        cursor -= 1;
+    }
+    cursor
+}
+
+fn trim_byte_range_to_span(source: &str, start: usize, end: usize) -> Option<Span> {
+    let trimmed = source[start..end].trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let leading = source[start..end].len() - source[start..end].trim_start().len();
+    let trailing = source[start..end].trim_end().len();
+    Some(byte_range_to_span(
+        source,
+        start + leading,
+        start + trailing,
+    ))
+}
+
+fn byte_range_to_span(source: &str, start: usize, end: usize) -> Span {
+    Span {
+        start: source[..start].chars().count(),
+        end: source[..end].chars().count(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,5 +376,63 @@ mod tests {
         let result = parse_incomplete_expr("print(", ParserContext::repl(1)).expect("incomplete");
         assert_eq!(result.context, CompletionContext::CallArgName);
         assert!(!result.expected_tokens.is_empty());
+    }
+
+    #[test]
+    fn operator_completion_context_detects_empty_rhs() {
+        let context = parse_operator_completion_context("1 + ", 4).expect("operator context");
+
+        assert_eq!(context.active_stage, 0);
+        assert_eq!(context.stages.len(), 1);
+        assert_eq!(context.stages[0].lhs, Span { start: 0, end: 1 });
+        assert_eq!(context.stages[0].operator, "+");
+        assert_eq!(context.stages[0].operator_span, Span { start: 2, end: 3 });
+        assert_eq!(context.stages[0].rhs, None);
+        assert_eq!(context.cursor_span, Span { start: 4, end: 4 });
+    }
+
+    #[test]
+    fn operator_completion_context_treats_rhs_prefix_as_active() {
+        let context = parse_operator_completion_context("1 + ans", 7).expect("operator context");
+
+        assert_eq!(context.active_stage, 0);
+        assert_eq!(context.stages.len(), 1);
+        assert_eq!(context.stages[0].lhs, Span { start: 0, end: 1 });
+        assert_eq!(context.stages[0].operator, "+");
+        assert_eq!(context.stages[0].rhs, None);
+        assert_eq!(context.cursor_span, Span { start: 7, end: 7 });
+    }
+
+    #[test]
+    fn operator_completion_context_tracks_function_operator_chain() {
+        let context =
+            parse_operator_completion_context("x |> f |> ", 10).expect("operator context");
+
+        assert_eq!(context.active_stage, 1);
+        assert_eq!(context.stages.len(), 2);
+        assert_eq!(context.stages[0].operator, "|>");
+        assert_eq!(context.stages[0].lhs, Span { start: 0, end: 1 });
+        assert_eq!(context.stages[0].rhs, Some(Span { start: 5, end: 6 }));
+        assert_eq!(context.stages[1].operator, "|>");
+        assert_eq!(context.stages[1].lhs, Span { start: 0, end: 6 });
+        assert_eq!(context.stages[1].rhs, None);
+    }
+
+    #[test]
+    fn operator_completion_context_ignores_nested_operators_and_strings() {
+        let context = parse_operator_completion_context("wrap(1 + 2) |> ", 15)
+            .expect("top-level operator context");
+
+        assert_eq!(context.stages.len(), 1);
+        assert_eq!(context.stages[0].operator, "|>");
+        assert_eq!(context.stages[0].lhs, Span { start: 0, end: 11 });
+
+        assert!(parse_operator_completion_context("\"1 + \"", 6).is_none());
+    }
+
+    #[test]
+    fn operator_completion_context_rejects_non_operator_prefix() {
+        assert!(parse_operator_completion_context("print(", 6).is_none());
+        assert!(parse_operator_completion_context("name", 4).is_none());
     }
 }

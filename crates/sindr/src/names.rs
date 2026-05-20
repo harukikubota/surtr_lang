@@ -21,6 +21,97 @@ pub fn surface_rendered_name(name: &str) -> String {
     surface_path_name(name).replace("::Global::", "::")
 }
 
+/// Compare two names after hiding a leading implicit root namespace.
+pub fn surface_path_eq(left: &str, right: &str) -> bool {
+    surface_path_name(left) == surface_path_name(right)
+}
+
+/// Compare two names after applying the full user-facing surface rendering.
+pub fn surface_rendered_eq(left: &str, right: &str) -> bool {
+    surface_rendered_name(left) == surface_rendered_name(right)
+}
+
+/// Canonical compile-space symbol identity. This form may include implicit
+/// compiler namespaces such as `Global::`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CanonicalSymbolName(String);
+
+impl CanonicalSymbolName {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn to_surface_symbol_name(&self) -> SurfaceSymbolName {
+        SurfaceSymbolName(surface_rendered_name(&self.0))
+    }
+}
+
+/// User-facing rendered symbol name for diagnostics, docs, and completion UI.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SurfaceSymbolName(String);
+
+impl SurfaceSymbolName {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
+    }
+}
+
+/// A symbol reference in the names visible from a specific source context.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct VisibleSymbolRef(String);
+
+impl VisibleSymbolRef {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self(name.into())
+    }
+
+    pub fn from_surface(surface: SurfaceSymbolName) -> Self {
+        Self(surface.into_string())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn matches_qualified_name(&self, qualified_name: &CanonicalSymbolName) -> bool {
+        let qualified = surface_path_name(qualified_name.as_str());
+        let visible = surface_path_name(&self.0);
+        qualified == visible
+            || qualified
+                .rsplit("::")
+                .next()
+                .is_some_and(|tail| tail == visible)
+    }
+}
+
+/// Marker for the compiler's implicit root namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ImplicitRootNamespace;
+
+impl ImplicitRootNamespace {
+    pub const PREFIX: &'static str = IMPLICIT_ROOT_NAMESPACE_PREFIX;
+
+    pub fn hide(name: &str) -> &str {
+        surface_path_name(name)
+    }
+}
+
+/// Bump when compile-space symbol capability semantics change in a way that
+/// invalidates staged semantic snapshots.
+pub const SYMBOL_CAPABILITY_SCHEMA_VERSION: u32 = 1;
+
 /// Surface-level type identity defined by the language spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeIdentity {
@@ -31,6 +122,142 @@ pub enum TypeIdentity {
     ConcreteError,
     Mod,
     Const,
+}
+
+/// Compile-space root kind used when a symbol can serve as a Facet path root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FacetRootKind {
+    TypeRoot,
+    Tuple,
+    List,
+    HashMap,
+}
+
+/// Compile-space capability flags attached to a resolved symbol identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolCapabilities {
+    pub type_annotation: bool,
+    pub module_owner: bool,
+    pub impl_target: bool,
+    pub facet_root_path: Option<FacetRootKind>,
+}
+
+impl SymbolCapabilities {
+    pub const fn new(
+        type_annotation: bool,
+        module_owner: bool,
+        impl_target: bool,
+        facet_root_path: Option<FacetRootKind>,
+    ) -> Self {
+        Self {
+            type_annotation,
+            module_owner,
+            impl_target,
+            facet_root_path,
+        }
+    }
+}
+
+/// Compile-space identity plus capabilities for a resolved symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SymbolIdentityInfo {
+    pub identity: TypeIdentity,
+    pub capabilities: SymbolCapabilities,
+}
+
+impl SymbolIdentityInfo {
+    pub const fn new(identity: TypeIdentity, capabilities: SymbolCapabilities) -> Self {
+        Self {
+            identity,
+            capabilities,
+        }
+    }
+}
+
+/// Builtin symbol surface metadata for compile-space name/capability queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuiltinSymbolSurfaceMeta {
+    pub name: &'static str,
+    pub identity: TypeIdentity,
+    pub capabilities: SymbolCapabilities,
+}
+
+/// Reason why a surface name cannot be used as a declaration owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReservedOwnerSurfaceNameKind {
+    CanonicalBuiltinType,
+    BuiltinSpecialEnumVariantAlias,
+}
+
+impl ReservedOwnerSurfaceNameKind {
+    pub const fn diagnostic_suffix(self) -> &'static str {
+        match self {
+            Self::CanonicalBuiltinType => "reserved by a canonical builtin type declaration",
+            Self::BuiltinSpecialEnumVariantAlias => {
+                "reserved for builtin-special enum variant sugar"
+            }
+        }
+    }
+}
+
+/// Shared uniqueness/reservation constraint for names that would become owners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReservedOwnerSurfaceNameConstraint {
+    pub surface_name: &'static str,
+    pub kind: ReservedOwnerSurfaceNameKind,
+}
+
+/// Compile-space usage policy for builtin type heads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuiltinTypeUsagePolicy {
+    pub type_annotation_allowed: bool,
+    pub signature_allowed: bool,
+    pub runtime_value_allowed: bool,
+    pub type_ref_witness_allowed: bool,
+    pub process_boundary_allowed: bool,
+    pub facet_value_forbidden_in_stage1: bool,
+    pub clause_block_surface_only: bool,
+    pub lazy_signature_surface_only: bool,
+}
+
+impl BuiltinTypeUsagePolicy {
+    pub const fn new(
+        type_annotation_allowed: bool,
+        signature_allowed: bool,
+        runtime_value_allowed: bool,
+        type_ref_witness_allowed: bool,
+        process_boundary_allowed: bool,
+        facet_value_forbidden_in_stage1: bool,
+        clause_block_surface_only: bool,
+        lazy_signature_surface_only: bool,
+    ) -> Self {
+        Self {
+            type_annotation_allowed,
+            signature_allowed,
+            runtime_value_allowed,
+            type_ref_witness_allowed,
+            process_boundary_allowed,
+            facet_value_forbidden_in_stage1,
+            clause_block_surface_only,
+            lazy_signature_surface_only,
+        }
+    }
+
+    pub const fn ordinary_runtime_type() -> Self {
+        Self::new(true, true, true, false, true, false, false, false)
+    }
+
+    pub const fn compiler_surface_only() -> Self {
+        Self::new(false, false, false, false, false, true, false, false)
+    }
+
+    pub const fn clause_block_surface_only() -> Self {
+        Self::new(false, false, false, false, false, true, true, false)
+    }
+
+    pub const fn lazy_signature_surface_only() -> Self {
+        Self::new(false, false, false, false, false, true, false, true)
+    }
 }
 
 /// Canonical builtin type heads reserved by the compiler.
@@ -121,6 +348,29 @@ impl TypeName {
                 | Self::FileHandle
         )
     }
+
+    pub const fn usage_policy(self) -> BuiltinTypeUsagePolicy {
+        match self {
+            Self::TypeRef => {
+                BuiltinTypeUsagePolicy::new(false, false, false, true, false, false, false, false)
+            }
+            Self::ProcessInit => {
+                BuiltinTypeUsagePolicy::new(false, false, false, false, true, false, false, false)
+            }
+            Self::Lazy => BuiltinTypeUsagePolicy::lazy_signature_surface_only(),
+            Self::Hole | Self::Closure => BuiltinTypeUsagePolicy::compiler_surface_only(),
+            Self::MatchArms | Self::CondClauses | Self::BulkUpdateEntries => {
+                BuiltinTypeUsagePolicy::clause_block_surface_only()
+            }
+            Self::Facet => {
+                BuiltinTypeUsagePolicy::new(true, true, true, false, true, true, false, false)
+            }
+            Self::Pid | Self::Workers | Self::WorkerLease | Self::TaskHandle => {
+                BuiltinTypeUsagePolicy::new(true, true, true, false, true, false, false, false)
+            }
+            _ => BuiltinTypeUsagePolicy::ordinary_runtime_type(),
+        }
+    }
 }
 
 pub fn builtin_type_name(name: &str) -> Option<TypeName> {
@@ -158,6 +408,142 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
     }
 }
 
+pub const fn canonical_builtin_type_has_surface_declaration(type_name: TypeName) -> bool {
+    matches!(
+        type_name,
+        TypeName::Int
+            | TypeName::Float
+            | TypeName::String
+            | TypeName::Boolean
+            | TypeName::Unit
+            | TypeName::Closure
+            | TypeName::MatchArms
+            | TypeName::CondClauses
+            | TypeName::BulkUpdateEntries
+            | TypeName::Error
+            | TypeName::Regex
+            | TypeName::RegexCaptures
+            | TypeName::RegexMatch
+            | TypeName::RandomGenerator
+            | TypeName::FileHandle
+            | TypeName::List
+            | TypeName::HashMap
+            | TypeName::Generator
+            | TypeName::Result
+            | TypeName::ProcessInit
+            | TypeName::Lazy
+            | TypeName::TypeRef
+            | TypeName::Hole
+            | TypeName::Facet
+            | TypeName::Workers
+            | TypeName::WorkerLease
+            | TypeName::TaskHandle
+    )
+}
+
+fn owner_surface_tail(name: &str) -> &str {
+    surface_path_name(name)
+        .rsplit("::")
+        .next()
+        .unwrap_or_else(|| surface_path_name(name))
+}
+
+pub fn reserved_owner_surface_name_constraint(
+    name: &str,
+) -> Option<ReservedOwnerSurfaceNameConstraint> {
+    let surface_name = owner_surface_tail(name);
+    match surface_name {
+        "Ok" => {
+            return Some(ReservedOwnerSurfaceNameConstraint {
+                surface_name: "Ok",
+                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
+            });
+        }
+        "Err" => {
+            return Some(ReservedOwnerSurfaceNameConstraint {
+                surface_name: "Err",
+                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
+            });
+        }
+        "True" => {
+            return Some(ReservedOwnerSurfaceNameConstraint {
+                surface_name: "True",
+                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
+            });
+        }
+        "False" => {
+            return Some(ReservedOwnerSurfaceNameConstraint {
+                surface_name: "False",
+                kind: ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias,
+            });
+        }
+        _ => {}
+    }
+
+    let type_name = builtin_type_name(surface_name)?;
+    if surface_name != TypeName::ProcessInit.as_str()
+        && canonical_builtin_type_has_surface_declaration(type_name)
+    {
+        return Some(ReservedOwnerSurfaceNameConstraint {
+            surface_name: type_name.as_str(),
+            kind: ReservedOwnerSurfaceNameKind::CanonicalBuiltinType,
+        });
+    }
+
+    None
+}
+
+pub fn builtin_type_usage_policy(name: &str) -> Option<BuiltinTypeUsagePolicy> {
+    builtin_type_name(surface_path_name(name)).map(TypeName::usage_policy)
+}
+
+/// Return builtin surface metadata for compile-space name/capability queries.
+pub fn builtin_symbol_surface_meta(name: &str) -> Option<BuiltinSymbolSurfaceMeta> {
+    let name = surface_path_name(name);
+    match name {
+        "Tuple" => {
+            return Some(BuiltinSymbolSurfaceMeta {
+                name: "Tuple",
+                identity: TypeIdentity::Type,
+                capabilities: SymbolCapabilities::new(
+                    false,
+                    true,
+                    false,
+                    Some(FacetRootKind::Tuple),
+                ),
+            });
+        }
+        "Function" => {
+            return Some(BuiltinSymbolSurfaceMeta {
+                name: "Function",
+                identity: TypeIdentity::Type,
+                capabilities: SymbolCapabilities::new(false, true, false, None),
+            });
+        }
+        _ => {}
+    }
+
+    let type_name = builtin_type_name(name)?;
+    let facet_root_path = match type_name {
+        TypeName::Boolean => Some(FacetRootKind::TypeRoot),
+        TypeName::List => Some(FacetRootKind::List),
+        TypeName::HashMap => Some(FacetRootKind::HashMap),
+        _ => None,
+    };
+    let impl_target = type_name.supports_inherent_impl();
+    Some(BuiltinSymbolSurfaceMeta {
+        name: type_name.as_str(),
+        identity: type_name.identity(),
+        capabilities: SymbolCapabilities::new(true, impl_target, impl_target, facet_root_path),
+    })
+}
+
+/// Return compile-space identity/capability metadata for builtin surface roots.
+pub fn builtin_symbol_identity_info(name: &str) -> Option<SymbolIdentityInfo> {
+    builtin_symbol_surface_meta(name)
+        .map(|meta| SymbolIdentityInfo::new(meta.identity, meta.capabilities))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +556,166 @@ mod tests {
             surface_rendered_name("Trait::Global::User::method"),
             "Trait::User::method"
         );
+    }
+
+    #[test]
+    fn surface_name_equality_normalizes_canonical_and_rendered_forms() {
+        assert!(surface_path_eq("Global::User", "User"));
+        assert!(surface_rendered_eq(
+            "Trait::Global::User::method",
+            "Trait::User::method"
+        ));
+        assert!(!surface_rendered_eq("Trait::User::method", "User::method"));
+    }
+
+    #[test]
+    fn symbol_name_types_separate_canonical_surface_and_visible_forms() {
+        let canonical = CanonicalSymbolName::new("Trait::Global::User::method");
+        let surface = canonical.to_surface_symbol_name();
+        let visible = VisibleSymbolRef::from_surface(surface.clone());
+
+        assert_eq!(canonical.as_str(), "Trait::Global::User::method");
+        assert_eq!(surface.as_str(), "Trait::User::method");
+        assert_eq!(visible.as_str(), "Trait::User::method");
+        let tail_visible = VisibleSymbolRef::new("method");
+        assert!(tail_visible.matches_qualified_name(&canonical));
+        assert_eq!(ImplicitRootNamespace::hide("Global::User"), "User");
+    }
+
+    #[test]
+    fn builtin_symbol_identity_info_marks_core_type_capabilities() {
+        let string = builtin_symbol_identity_info("String").expect("String should be known");
+        assert_eq!(string.identity, TypeIdentity::Type);
+        assert!(string.capabilities.type_annotation);
+        assert!(string.capabilities.module_owner);
+        assert!(string.capabilities.impl_target);
+        assert_eq!(string.capabilities.facet_root_path, None);
+
+        let result = builtin_symbol_identity_info("Result").expect("Result should be known");
+        assert_eq!(result.identity, TypeIdentity::Type);
+        assert!(result.capabilities.type_annotation);
+        assert!(result.capabilities.module_owner);
+        assert!(result.capabilities.impl_target);
+        assert_eq!(result.capabilities.facet_root_path, None);
+
+        let facet = builtin_symbol_identity_info("Facet").expect("Facet should be known");
+        assert_eq!(facet.identity, TypeIdentity::Type);
+        assert!(facet.capabilities.type_annotation);
+        assert!(facet.capabilities.module_owner);
+        assert!(facet.capabilities.impl_target);
+        assert_eq!(facet.capabilities.facet_root_path, None);
+
+        let boolean = builtin_symbol_identity_info("Boolean").expect("Boolean should be known");
+        assert_eq!(boolean.identity, TypeIdentity::Type);
+        assert!(boolean.capabilities.type_annotation);
+        assert!(boolean.capabilities.module_owner);
+        assert!(boolean.capabilities.impl_target);
+        assert_eq!(
+            boolean.capabilities.facet_root_path,
+            Some(FacetRootKind::TypeRoot)
+        );
+    }
+
+    #[test]
+    fn builtin_symbol_identity_info_marks_container_facet_roots() {
+        let tuple = builtin_symbol_identity_info("Tuple").expect("Tuple should be known");
+        assert_eq!(tuple.identity, TypeIdentity::Type);
+        assert!(!tuple.capabilities.type_annotation);
+        assert!(tuple.capabilities.module_owner);
+        assert!(!tuple.capabilities.impl_target);
+        assert_eq!(
+            tuple.capabilities.facet_root_path,
+            Some(FacetRootKind::Tuple)
+        );
+
+        let list = builtin_symbol_identity_info("List").expect("List should be known");
+        assert_eq!(list.identity, TypeIdentity::Type);
+        assert!(list.capabilities.type_annotation);
+        assert!(list.capabilities.module_owner);
+        assert!(list.capabilities.impl_target);
+        assert_eq!(list.capabilities.facet_root_path, Some(FacetRootKind::List));
+
+        let hash_map = builtin_symbol_identity_info("HashMap").expect("HashMap should be known");
+        assert_eq!(hash_map.identity, TypeIdentity::Type);
+        assert!(hash_map.capabilities.type_annotation);
+        assert!(hash_map.capabilities.module_owner);
+        assert!(hash_map.capabilities.impl_target);
+        assert_eq!(
+            hash_map.capabilities.facet_root_path,
+            Some(FacetRootKind::HashMap)
+        );
+    }
+
+    #[test]
+    fn builtin_symbol_surface_meta_is_separate_from_runtime_aliases() {
+        let string = builtin_symbol_surface_meta("String").expect("String should be known");
+        assert_eq!(string.name, "String");
+        assert_eq!(string.identity, TypeIdentity::Type);
+        assert!(string.capabilities.module_owner);
+
+        assert!(
+            builtin_symbol_surface_meta("String::len").is_none(),
+            "runtime dispatch aliases must not become symbol surface metadata"
+        );
+    }
+
+    #[test]
+    fn reserved_owner_surface_name_constraint_marks_builtin_special_variant_aliases() {
+        for name in ["Ok", "Err", "True", "False"] {
+            let constraint = reserved_owner_surface_name_constraint(name)
+                .expect("builtin-special variant alias should be reserved as owner");
+            assert_eq!(constraint.surface_name, name);
+            assert_eq!(
+                constraint.kind,
+                ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias
+            );
+        }
+
+        let nested = reserved_owner_surface_name_constraint("Auth::Ok")
+            .expect("owner tail should be reserved inside qualified paths");
+        assert_eq!(nested.surface_name, "Ok");
+    }
+
+    #[test]
+    fn reserved_owner_surface_name_constraint_marks_canonical_builtin_types() {
+        let constraint = reserved_owner_surface_name_constraint("MatchArms")
+            .expect("canonical builtin type surface should be reserved as owner");
+        assert_eq!(constraint.surface_name, "MatchArms");
+        assert_eq!(
+            constraint.kind,
+            ReservedOwnerSurfaceNameKind::CanonicalBuiltinType
+        );
+
+        assert!(
+            reserved_owner_surface_name_constraint("ProcessInit").is_none(),
+            "ProcessInit owner remains allowed for runtime init lowering"
+        );
+    }
+
+    #[test]
+    fn builtin_type_usage_policy_separates_annotation_and_witness_capabilities() {
+        let string = builtin_type_usage_policy("String").expect("String should be known");
+        assert!(string.type_annotation_allowed);
+        assert!(string.signature_allowed);
+        assert!(string.runtime_value_allowed);
+        assert!(!string.type_ref_witness_allowed);
+
+        let type_ref = builtin_type_usage_policy("TypeRef").expect("TypeRef should be known");
+        assert!(!type_ref.type_annotation_allowed);
+        assert!(!type_ref.runtime_value_allowed);
+        assert!(type_ref.type_ref_witness_allowed);
+
+        let process_init =
+            builtin_type_usage_policy("ProcessInit").expect("ProcessInit should be known");
+        assert!(!process_init.type_annotation_allowed);
+        assert!(process_init.process_boundary_allowed);
+
+        let match_arms = builtin_type_usage_policy("MatchArms").expect("MatchArms should be known");
+        assert!(match_arms.clause_block_surface_only);
+
+        let lazy = builtin_type_usage_policy("Lazy").expect("Lazy should be known");
+        assert!(!lazy.clause_block_surface_only);
+        assert!(lazy.lazy_signature_surface_only);
+        assert!(!match_arms.lazy_signature_surface_only);
     }
 }

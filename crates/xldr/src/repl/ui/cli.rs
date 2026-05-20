@@ -2,7 +2,7 @@
 
 use std::env;
 use std::io::{self, IsTerminal, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 #[cfg(feature = "line-editor")]
 use std::time::{Duration, Instant};
@@ -32,7 +32,7 @@ use crate::repl::logic::core::{
     ReplCompletionContext, ReplCompletionKind,
 };
 use crate::repl::logic::core::{xldr_version, CompletionTelemetry, ReplEngine};
-use crate::repl::logic::{present_for_cli, styled, ReplResult};
+use crate::repl::logic::{present_for_cli, styled, ReplOutput, ReplResult};
 #[cfg(feature = "line-editor")]
 use crate::repl::ui::completion::{
     BackgroundReplCompletionProvider, ReplCompletionController, ReplCompletionProvider,
@@ -60,6 +60,8 @@ pub struct ReplOptions {
     pub module_path: Option<String>,
     pub project_path: Option<String>,
     pub project_profile: Option<String>,
+    pub no_local_config: bool,
+    pub config_path: Option<String>,
 }
 
 impl Default for ReplOptions {
@@ -72,8 +74,16 @@ impl Default for ReplOptions {
             module_path: None,
             project_path: None,
             project_profile: None,
+            no_local_config: false,
+            config_path: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoadedCliUserConfig {
+    config: CliUserConfig,
+    loaded_from: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, serde::Deserialize)]
@@ -102,21 +112,8 @@ impl CliUserConfig {
     }
 }
 
-fn load_cli_user_config(cwd: &Path) -> Result<CliUserConfig, CommandError> {
-    let path = cwd.join(".xldr.yaml");
-    let contents = match std::fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return Ok(CliUserConfig::default());
-        }
-        Err(error) => {
-            return Err(CommandError::message(
-                1,
-                format!("repl: failed to read {}: {}", path.display(), error),
-            ));
-        }
-    };
-    let config = serde_yaml::from_str::<CliUserConfig>(&contents).map_err(|error| {
+fn parse_cli_user_config(path: &Path, contents: &str) -> Result<CliUserConfig, CommandError> {
+    let config = serde_yaml::from_str::<CliUserConfig>(contents).map_err(|error| {
         CommandError::message(
             1,
             format!("repl: failed to parse {}: {}", path.display(), error),
@@ -132,6 +129,42 @@ fn load_cli_user_config(cwd: &Path) -> Result<CliUserConfig, CommandError> {
         ));
     }
     Ok(config)
+}
+
+fn load_cli_user_config(cwd: &Path) -> Result<LoadedCliUserConfig, CommandError> {
+    let path = cwd.join(".xldr.yaml");
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(LoadedCliUserConfig {
+                config: CliUserConfig::default(),
+                loaded_from: None,
+            });
+        }
+        Err(error) => {
+            return Err(CommandError::message(
+                1,
+                format!("repl: failed to read {}: {}", path.display(), error),
+            ));
+        }
+    };
+    Ok(LoadedCliUserConfig {
+        config: parse_cli_user_config(&path, &contents)?,
+        loaded_from: Some(path),
+    })
+}
+
+fn load_cli_user_config_from_path(path: &Path) -> Result<LoadedCliUserConfig, CommandError> {
+    let contents = std::fs::read_to_string(path).map_err(|error| {
+        CommandError::message(
+            1,
+            format!("repl: failed to read {}: {}", path.display(), error),
+        )
+    })?;
+    Ok(LoadedCliUserConfig {
+        config: parse_cli_user_config(path, &contents)?,
+        loaded_from: Some(path.to_path_buf()),
+    })
 }
 
 // ── Line editor helper ────────────────────────────────────────────────────────
@@ -267,13 +300,23 @@ pub fn cli_command(options: ReplOptions) -> CommandResult<()> {
         ));
     }
 
-    let cli_config = load_cli_user_config(&env::current_dir().map_err(|error| {
+    let current_dir = env::current_dir().map_err(|error| {
         CommandError::message(
             1,
             format!("repl: failed to resolve current directory: {}", error),
         )
-    })?)?;
-    let completion_candidate_count = cli_config.completion_candidate_count();
+    })?;
+    let cli_config = if let Some(path) = &options.config_path {
+        load_cli_user_config_from_path(Path::new(path))?
+    } else if options.no_local_config {
+        LoadedCliUserConfig {
+            config: CliUserConfig::default(),
+            loaded_from: None,
+        }
+    } else {
+        load_cli_user_config(&current_dir)?
+    };
+    let completion_candidate_count = cli_config.config.completion_candidate_count();
 
     let mut engine = match (
         &options.project_path,
@@ -888,6 +931,7 @@ fn repl_result_has_visible_output(result: &ReplResult, color: bool) -> bool {
 #[cfg(feature = "line-editor")]
 fn repl_result_lines(result: &ReplResult, color: bool) -> Vec<String> {
     let mut lines = present_for_cli(result, color);
+    lines.extend(repl_result_diagnostic_lines(result));
     lines.extend(result.stderr.iter().cloned());
     lines
 }
@@ -1148,8 +1192,26 @@ fn print_result(result: &ReplResult, color: bool) {
     for line in present_for_cli(result, color) {
         println!("{line}");
     }
+    for line in repl_result_diagnostic_lines(result) {
+        eprintln!("{line}");
+    }
     for line in &result.stderr {
         eprintln!("{line}");
+    }
+}
+
+fn repl_result_diagnostic_lines(result: &ReplResult) -> Vec<String> {
+    match &result.output {
+        ReplOutput::EvalError { rendered, .. } => rendered.clone(),
+        ReplOutput::Diagnostic {
+            rendered,
+            summary_tail,
+        } => {
+            let mut lines = rendered.clone();
+            lines.extend(summary_tail.iter().cloned());
+            lines
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -1167,6 +1229,8 @@ mod command_error_tests {
             module_path: None,
             project_path: None,
             project_profile: None,
+            no_local_config: true,
+            config_path: None,
         })
         .expect_err("missing preload script must fail");
 
@@ -1177,6 +1241,7 @@ mod command_error_tests {
 
 #[cfg(all(test, feature = "line-editor"))]
 mod tests {
+    use std::collections::VecDeque;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
@@ -1186,10 +1251,51 @@ mod tests {
     use rustyline::history::DefaultHistory;
 
     use crate::repl::logic::core::{
-        CompletionTelemetry, ReplCompletion, ReplCompletionCandidate, ReplCompletionKind,
-        ReplSignatureHelp,
+        CompletionTelemetry, ReplCompletion, ReplCompletionCandidate, ReplCompletionContext,
+        ReplCompletionKind, ReplSignatureHelp,
+    };
+    use crate::repl::ui::completion::{
+        ReplCompletionController, ReplCompletionProvider, ReplCompletionRequest,
+        ReplCompletionResult,
     };
     use crate::ReplEngine;
+
+    struct ReadyCompletionProvider {
+        context: ReplCompletionContext,
+        ready: VecDeque<ReplCompletionResult>,
+    }
+
+    impl ReadyCompletionProvider {
+        fn new(engine: &ReplEngine) -> Self {
+            Self {
+                context: engine.completion_context(),
+                ready: VecDeque::new(),
+            }
+        }
+    }
+
+    impl ReplCompletionProvider for ReadyCompletionProvider {
+        fn submit(&mut self, request: ReplCompletionRequest) {
+            let mut completion = self.context.completions(&request.input, request.cursor);
+            completion
+                .telemetry
+                .record_completion_queue(Duration::from_nanos(1));
+            self.ready.push_back(ReplCompletionResult {
+                input: request.input,
+                cursor: request.cursor,
+                generation: request.generation,
+                completion,
+                enqueued_at: request.enqueued_at,
+                event_received_at: request.event_received_at,
+            });
+        }
+
+        fn poll_ready(&mut self) -> Option<ReplCompletionResult> {
+            self.ready.pop_front()
+        }
+
+        fn schedule_context_refresh(&mut self, _context: ReplCompletionContext) {}
+    }
 
     #[test]
     fn submitted_terminal_line_keeps_prompt_and_input_together() {
@@ -1590,9 +1696,36 @@ mod tests {
         )
         .expect("config file should be written");
 
-        let config =
+        let loaded =
             super::load_cli_user_config(&temp_root).expect("config should load successfully");
-        assert_eq!(config.repl.cli.completion_candidates, Some(7));
+        assert_eq!(loaded.config.repl.cli.completion_candidates, Some(7));
+        assert_eq!(loaded.loaded_from.as_deref(), Some(config_path.as_path()));
+    }
+
+    #[test]
+    fn load_cli_config_returns_loaded_from_for_implicit_xldr_yaml() {
+        let temp_root = temp_root("xldr-cli-config-loaded-from");
+        let config_path = temp_root.join(".xldr.yaml");
+        fs::write(&config_path, "repl:\n  cli: {}\n").expect("config file should be written");
+
+        let loaded = super::load_cli_user_config(&temp_root).expect("config should load");
+        assert_eq!(loaded.loaded_from.as_deref(), Some(config_path.as_path()));
+    }
+
+    #[test]
+    fn load_cli_config_reads_explicit_config_path() {
+        let temp_root = temp_root("xldr-cli-explicit-config");
+        let config_path = temp_root.join("custom-xldr.yaml");
+        fs::write(
+            &config_path,
+            "repl:\n  cli:\n    completion_candidates: 3\n",
+        )
+        .expect("config file should be written");
+
+        let loaded = super::load_cli_user_config_from_path(&config_path)
+            .expect("explicit config should load successfully");
+        assert_eq!(loaded.config.repl.cli.completion_candidates, Some(3));
+        assert_eq!(loaded.loaded_from.as_deref(), Some(config_path.as_path()));
     }
 
     #[test]
@@ -1632,6 +1765,79 @@ mod tests {
                 .total_key_to_visible_response_ns
                 .is_some_and(|value| value > 0),
             "telemetry should include end-to-end redraw timing: {telemetry:?}"
+        );
+    }
+
+    #[test]
+    fn apply_terminal_completion_result_records_positive_latency_samples() {
+        let engine = ReplEngine::new().expect("REPL engine should bootstrap");
+        let mut stdout = std::io::stdout();
+        let mut provider = ReadyCompletionProvider::new(&engine);
+        let mut controller = ReplCompletionController::default();
+        let event_received_at = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .expect("test event timestamp should fit");
+
+        assert!(controller.submit_if_changed(
+            &mut provider,
+            "String::re",
+            "String::re".len(),
+            Some(event_received_at),
+        ));
+
+        let mut rendered_completion = ReplCompletion::default();
+        let mut rendered_completion_key = None;
+        let applied = super::apply_terminal_completion_result(
+            &mut stdout,
+            &engine,
+            "String::re",
+            "String::re".chars().count(),
+            &mut provider,
+            &mut controller,
+            &mut rendered_completion,
+            &mut rendered_completion_key,
+            5,
+        )
+        .expect("completion result should apply");
+
+        assert!(applied, "completion should be rendered");
+        assert_eq!(
+            rendered_completion_key,
+            Some(("String::re".to_string(), "String::re".len()))
+        );
+        assert!(
+            rendered_completion
+                .telemetry
+                .completion_queue_ns
+                .is_some_and(|value| value > 0),
+            "telemetry should include queue timing: {:?}",
+            rendered_completion.telemetry
+        );
+        assert!(
+            rendered_completion
+                .telemetry
+                .completion_compute_ns
+                .is_some(),
+            "telemetry should include compute timing: {:?}",
+            rendered_completion.telemetry
+        );
+        assert!(
+            rendered_completion.telemetry.completion_apply_ns.is_some(),
+            "telemetry should include apply timing: {:?}",
+            rendered_completion.telemetry
+        );
+        assert!(
+            rendered_completion.telemetry.completion_render_ns.is_some(),
+            "telemetry should include render timing: {:?}",
+            rendered_completion.telemetry
+        );
+        assert!(
+            rendered_completion
+                .telemetry
+                .total_key_to_visible_response_ns
+                .is_some_and(|value| value > 0),
+            "telemetry should include end-to-end timing: {:?}",
+            rendered_completion.telemetry
         );
     }
 

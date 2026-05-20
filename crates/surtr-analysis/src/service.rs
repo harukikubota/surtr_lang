@@ -1,6 +1,8 @@
+use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
+use sindr::names::FacetRootKind;
 use sindr::policy::{CompileUnitKind, SourceKind};
 use spire::ast::{Ast, Lit, RecordLitArg, Span};
 use spire::{SyntaxOutlineItem, SyntaxOutlineKind};
@@ -295,11 +297,12 @@ impl AnalysisService {
             return CompletionResponse::default();
         };
 
-        complete_prefix(CompletionRequest {
+        let request = CompletionRequest {
             index: &snapshot.semantic_index,
             source: &document.text,
             cursor,
-        })
+        };
+        crate::complete_call_argument(request).unwrap_or_else(|| complete_prefix(request))
     }
 
     pub fn repl_assist(
@@ -779,9 +782,15 @@ fn semantic_index_with_source_locations(
     path: &Path,
     ast: &[Ast],
 ) -> SemanticIndex {
-    let mut symbols = existing.symbols().to_vec();
+    let mut symbols = Vec::new();
     collect_source_location_symbols(ast, None, path, &mut symbols);
-    SemanticIndex::from_symbols(symbols)
+    let mut infos = existing.symbol_semantic_infos().to_vec();
+    infos.extend(
+        symbols
+            .into_iter()
+            .map(|symbol| crate::semantic::SymbolSemanticInfo::from_completion_symbol(&symbol)),
+    );
+    SemanticIndex::from_symbol_semantic_infos(infos)
 }
 
 fn collect_source_location_symbols(
@@ -807,35 +816,51 @@ fn source_location_symbol_for_ast(
     owner: Option<&str>,
     path: &Path,
 ) -> Option<CompletionSymbol> {
-    let (name, kind, span) = match node {
+    let (name, kind, span, capabilities) = match node {
         Ast::Def(span, name, ..) | Ast::ExtractorDef(span, name, ..) => (
             qualify_symbol(owner, name),
             CompletionKind::FunctionCall,
             span,
+            None,
         ),
-        Ast::ConstDef(span, name, ..) => {
-            (qualify_symbol(owner, name), CompletionKind::Variable, span)
-        }
+        Ast::ConstDef(span, name, ..) => (
+            qualify_symbol(owner, name),
+            CompletionKind::Variable,
+            span,
+            None,
+        ),
         Ast::StructDef(span, name, ..)
         | Ast::RecordDef(span, name, ..)
-        | Ast::DeferrorDef(span, name, ..)
         | Ast::EnumDef(span, name, ..) => (
             qualify_symbol(owner, name),
             CompletionKind::TypeConstructor,
             span,
+            Some(crate::semantic::facet_root_capabilities(
+                FacetRootKind::TypeRoot,
+            )),
+        ),
+        Ast::DeferrorDef(span, name, ..) => (
+            qualify_symbol(owner, name),
+            CompletionKind::TypeConstructor,
+            span,
+            None,
         ),
         Ast::Defmod(span, name, ..)
         | Ast::Defagent(span, name, ..)
         | Ast::Defgenserver(span, name, ..)
         | Ast::Defsupervisor(span, name, ..)
         | Ast::DefdynamicSupervisor(span, name, ..)
-        | Ast::TraitDef(span, name, ..) => {
-            (qualify_symbol(owner, name), CompletionKind::TypePath, span)
-        }
+        | Ast::TraitDef(span, name, ..) => (
+            qualify_symbol(owner, name),
+            CompletionKind::TypePath,
+            span,
+            None,
+        ),
         Ast::ImplDef(span, target, ..) => (
             qualify_symbol(owner, target),
             CompletionKind::TypePath,
             span,
+            None,
         ),
         _ => return None,
     };
@@ -853,6 +878,7 @@ fn source_location_symbol_for_ast(
             start: span.start,
             end: span.end,
         }),
+        capabilities,
     })
 }
 
@@ -911,7 +937,7 @@ fn analyze_single_document(
         Ok(resolved_nodes) => {
             match scar::typecheck_with_context(
                 resolved_nodes.clone(),
-                typecheck_context_for_mode(&context.context.mode),
+                typecheck_context_for_analysis(context),
             ) {
                 Ok(typed_nodes) => *typed = Some(typed_nodes),
                 Err(error) => diagnostics.push(diagnostic_from_span(
@@ -951,6 +977,7 @@ fn analyze_project_stages(
     };
     let Some(module_stages) = build_staged_modules(
         service,
+        context,
         runner,
         active_document,
         diagnostics,
@@ -958,10 +985,34 @@ fn analyze_project_stages(
     ) else {
         return;
     };
+    let visible_ast = if matches!(context.context.mode, AnalysisMode::Script)
+        && context.script_project.is_some()
+    {
+        project_user_ast_for_active_document(context, active_ast)
+    } else {
+        active_ast.unwrap_or(&[]).to_vec()
+    };
+    let current_module_path = completion_module_path_for_ast(&visible_ast);
+    let docs =
+        sigil::collect_doc_entries(&module_stages, &visible_ast, current_module_path.as_deref());
+    let signatures = sigil::collect_signature_entries(
+        &module_stages,
+        &visible_ast,
+        current_module_path.as_deref(),
+    );
 
     match sigil::precollect_declaration_index(&module_stages) {
         Ok(declaration_index) => {
-            *semantic_index = semantic_index_with_declarations(semantic_index, &declaration_index);
+            *semantic_index = semantic_index_with_declarations(
+                semantic_index,
+                &declaration_index,
+                &docs,
+                &signatures,
+                &module_stages,
+                &visible_ast,
+                current_module_path.as_deref(),
+                active_stage_index_for_document(runner, active_document),
+            );
             let user_ast = project_user_ast_for_active_document(context, active_ast);
             match sigil::resolve_staged_program_with_state(
                 &module_stages,
@@ -973,7 +1024,7 @@ fn analyze_project_stages(
                     let resolved_nodes = resolved_program.resolved.clone();
                     match scar::typecheck_staged_program_with_context(
                         resolved_program,
-                        typecheck_context_for_mode(&context.context.mode),
+                        typecheck_context_for_analysis(context),
                     ) {
                         Ok(typed_program) => *typed = Some(typed_program.nodes),
                         Err(error) => diagnostics.push(diagnostic_from_span(
@@ -1041,24 +1092,93 @@ fn is_load_project_statement(stmt: &Ast) -> bool {
 fn semantic_index_with_declarations(
     existing: &SemanticIndex,
     declaration_index: &sigil::DeclarationIndex,
+    docs: &[sindr::ir::DocEntry],
+    signatures: &[sindr::ir::SignatureEntry],
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    active_ast: &[Ast],
+    current_module_path: Option<&str>,
+    current_stage_index: usize,
 ) -> SemanticIndex {
-    let mut symbols = existing.symbols().to_vec();
-    symbols.extend(
-        SemanticIndex::from_declaration_index(declaration_index)
-            .symbols()
-            .iter()
-            .cloned(),
+    let mut infos = existing.symbol_semantic_infos().to_vec();
+    infos.extend(
+        crate::semantic::symbol_semantic_infos_from_compile_metadata(
+            declaration_index,
+            docs,
+            signatures,
+        ),
     );
-    SemanticIndex::from_symbols(symbols)
+    if let Ok(visible_entries) = sigil::effective_visible_entries(
+        module_stages,
+        active_ast,
+        current_module_path,
+        current_stage_index,
+    ) {
+        let visible_infos = visible_entries
+            .into_iter()
+            .filter_map(|visible| {
+                crate::semantic::symbol_semantic_info_for_effective_visible_entry(&infos, &visible)
+            })
+            .collect::<Vec<_>>();
+        infos.extend(visible_infos);
+    }
+    SemanticIndex::from_symbol_semantic_infos(infos)
+}
+
+fn active_stage_index_for_document(
+    runner: &crate::RunnerContext,
+    active_document: &DocumentSnapshot,
+) -> usize {
+    runner
+        .module_stages
+        .iter()
+        .enumerate()
+        .find_map(|(stage_index, stage)| {
+            stage
+                .files
+                .iter()
+                .any(|file| file.path == active_document.path)
+                .then_some(stage_index)
+        })
+        .unwrap_or_else(|| runner.module_stages.len().saturating_sub(1))
+}
+
+fn completion_module_path_for_ast(ast: &[Ast]) -> Option<String> {
+    let mut module_paths = BTreeSet::new();
+    for stmt in ast {
+        match stmt {
+            Ast::Defmod(_, module_path, ..)
+            | Ast::Defagent(_, module_path, ..)
+            | Ast::Defgenserver(_, module_path, ..)
+            | Ast::Defsupervisor(_, module_path, ..)
+            | Ast::DefdynamicSupervisor(_, module_path, ..) => {
+                module_paths.insert(module_path.clone());
+            }
+            Ast::ImplDef(_, target, ..) => {
+                module_paths.insert(target.clone());
+            }
+            Ast::TraitImplDef(_, _, _, target_ty, ..) => match target_ty {
+                spire::ast::AstTy::Named(_, name)
+                | spire::ast::AstTy::ImplTrait(_, name)
+                | spire::ast::AstTy::Generic(_, name, _) => {
+                    module_paths.insert(name.clone());
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    (module_paths.len() == 1).then(|| module_paths.into_iter().next().unwrap())
 }
 
 fn build_staged_modules(
     service: &AnalysisService,
+    context: &ResolvedAnalysisContext,
     runner: &crate::RunnerContext,
     active_document: &DocumentSnapshot,
     diagnostics: &mut Vec<AnalysisDiagnostic>,
     semantic_index: &mut SemanticIndex,
 ) -> Option<Vec<Vec<sigil::StagedModuleAst>>> {
+    let compile_unit_kind = compile_unit_kind_for_mode(&context.context.mode);
     let mut module_stages = Vec::new();
     for stage in &runner.module_stages {
         let mut staged_modules = Vec::new();
@@ -1070,24 +1190,23 @@ fn build_staged_modules(
                 parse_document(
                     &active_document.text,
                     0,
-                    SourceKind::DefinitionSource,
-                    CompileUnitKind::DefinitionCheck,
+                    file.source_kind,
+                    compile_unit_kind,
                     None,
                 )
             } else {
-                parse_document(
-                    &source,
-                    0,
-                    file.source_kind,
-                    CompileUnitKind::DefinitionCheck,
-                    None,
-                )
+                parse_document(&source, 0, file.source_kind, compile_unit_kind, None)
             };
             match ast {
                 Ok(ast) => {
                     *semantic_index =
                         semantic_index_with_source_locations(semantic_index, &file.path, &ast);
-                    staged_modules.extend(lower_module_ast(ast, None));
+                    let fallback_module_path =
+                        fallback_module_path_for_const_only_project_file(&file.path, &ast);
+                    staged_modules.extend(sigil::staged_modules_from_source_ast(
+                        ast,
+                        fallback_module_path.as_deref(),
+                    ));
                 }
                 Err(error) => {
                     let span = error.span();
@@ -1120,80 +1239,12 @@ fn source_for_module_file(service: &AnalysisService, path: &Path) -> Option<Stri
         .or_else(|| service.host.read_to_string(path))
 }
 
-fn lower_module_ast(
-    ast: Vec<Ast>,
-    fallback_module_path: Option<&str>,
-) -> Vec<sigil::StagedModuleAst> {
-    let shared_imports = ast
-        .iter()
-        .filter_map(|stmt| match stmt {
-            Ast::Import(_, _, _) => Some(stmt.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let mut lowered = Vec::new();
-    let mut shared_global_defs = Vec::new();
-
-    for stmt in ast {
-        match stmt {
-            Ast::Defmod(_, module_path, body, attrs) => {
-                let mut module_ast = shared_imports.clone();
-                module_ast.extend(body);
-                lowered.push(sigil::StagedModuleAst {
-                    module_path,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: None,
-                });
-            }
-            Ast::Defagent(_, module_path, body, process_spec, attrs)
-            | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
-            | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
-            | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
-                let mut module_ast = shared_imports.clone();
-                module_ast.extend(body);
-                lowered.push(sigil::StagedModuleAst {
-                    module_path,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: Some(process_spec),
-                });
-            }
-            Ast::ImplDef(span, target, methods, attrs) => {
-                let mut module_ast = shared_imports.clone();
-                module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
-                lowered.push(sigil::StagedModuleAst {
-                    module_path: target,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: None,
-                });
-            }
-            Ast::Import(_, _, _) => {}
-            other => shared_global_defs.push(other),
-        }
-    }
-
-    if !shared_global_defs.is_empty() {
-        let mut module_ast = shared_imports;
-        module_ast.extend(shared_global_defs);
-        lowered.push(sigil::StagedModuleAst {
-            module_path: fallback_module_path.unwrap_or_default().to_string(),
-            doc_module_path: None,
-            ast: module_ast,
-            module_doc: None,
-            auto_import: false,
-            process_spec: None,
-        });
-    }
-
-    lowered
+fn fallback_module_path_for_const_only_project_file(path: &Path, ast: &[Ast]) -> Option<String> {
+    let fallback = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty());
+    sigil::const_only_fallback_module_path(ast, fallback).map(str::to_string)
 }
 
 fn diagnostic_from_span(
@@ -1408,12 +1459,19 @@ fn should_analyze_project_stages(context: &ResolvedAnalysisContext) -> bool {
             .is_some_and(|entry| entry == &context.context.active_file)
 }
 
-fn typecheck_context_for_mode(mode: &AnalysisMode) -> scar::TypecheckContext {
-    let mut context = scar::TypecheckContext::default();
-    if matches!(mode, AnalysisMode::ReplPreview) {
-        context.runtime_policy = sindr::policy::RuntimeSourcePolicy::repl_chunk();
-    }
-    context
+fn typecheck_context_for_analysis(context: &ResolvedAnalysisContext) -> scar::TypecheckContext {
+    let compile_unit_kind = compile_unit_kind_for_mode(&context.context.mode);
+    let entrypoint = context
+        .runner
+        .as_ref()
+        .map(|runner| sindr::policy::EntryPoint::qualified(runner.entrypoint.clone()));
+
+    scar::TypecheckContext::from_source_policy(
+        context
+            .context
+            .source_kind
+            .policy(compile_unit_kind, entrypoint.as_ref()),
+    )
 }
 
 fn module_path_for_document(mode: AnalysisMode, path: &Path) -> Option<String> {
@@ -1429,4 +1487,33 @@ fn module_path_for_document(mode: AnalysisMode, path: &Path) -> Option<String> {
 #[allow(dead_code)]
 fn _text_position_for_byte(line_index: &LineIndex, byte_offset: usize) -> TextPosition {
     line_index.byte_to_text_position(byte_offset)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn lower_module_ast_hoists_impl_local_imports_like_xldr() {
+        let ast = spire::parse_with_context(
+            r#"
+impl User {
+  import Helper::help
+  def use() -> Int { help() }
+}
+"#,
+            spire::ParserContext::module(0, Some("User".to_string())),
+        )
+        .expect("module source should parse");
+
+        let lowered = sigil::staged_modules_from_source_ast(ast, Some("User"));
+        let module = lowered.first().expect("impl owner module should exist");
+
+        assert!(matches!(
+            module.ast.first(),
+            Some(spire::ast::Ast::Import(_, _, _))
+        ));
+        assert!(matches!(
+            module.ast.get(1),
+            Some(spire::ast::Ast::ImplDef(_, _, _, _))
+        ));
+    }
 }

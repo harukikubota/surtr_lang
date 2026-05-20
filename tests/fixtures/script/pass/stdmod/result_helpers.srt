@@ -71,5 +71,8 @@ print(inspect(Result::flatten(Ok(Ok(1)))))
 print(inspect(Result::flatten(Err(NoneError))))
 print(inspect(Result::tap_ok(Ok(1), {|x| print("tap:#{to_string(x)}")})))
 print(inspect(Result::tap_err(Err(NoneError), {|err| print("tap_err:#{inspect(err)}")})))
+tap_bound = {|err| print("tap_bound:#{Error::kind(err)}")}
+print(inspect(Result::tap_err(Err(NoneError), tap_bound)))
+print(inspect(Result::tap_err(Err(NoneError), &Error::kind >> &print)))
 print(inspect(Result::then(Ok(1), &emit_next)))
 print(inspect(Result::then(Err(NoneError), &emit_next)))

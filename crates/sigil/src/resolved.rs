@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sindr::names::SymbolIdentityInfo;
 use sindr::primitives::SurtrInt;
 use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
 
@@ -34,6 +35,8 @@ pub struct ResolvedId {
     pub qualified_name: Option<Symbol>,
     pub unique_id: u32,
     pub compiler_generated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol_info: Option<SymbolIdentityInfo>,
     pub span: Span,
 }
 

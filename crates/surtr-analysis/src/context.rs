@@ -132,6 +132,7 @@ pub struct ReplAnalysisContext {
 pub struct RunnerContext {
     pub project_file: PathBuf,
     pub selected_profile: String,
+    pub entrypoint: String,
     pub normalized_args: Vec<(String, String)>,
     pub resolved_paths: Vec<ResolvedProjectPath>,
     pub active_file_profiles: Vec<String>,
@@ -448,6 +449,7 @@ fn empty_runner_context(project_file: PathBuf, selection: RunnerSelection) -> Ru
     resolve_project_runner(ProjectRunnerInput {
         project_file,
         selected_profile: selection.selected_profile,
+        entrypoint: "Main::main".to_string(),
         normalized_args: selection.normalized_args,
         declared_paths: Vec::new(),
         active_file_profiles: Vec::new(),
@@ -683,21 +685,9 @@ fn parser_context_for_document(
     compile_unit_kind: CompileUnitKind,
     module_path: Option<String>,
 ) -> spire::ParserContext {
-    let context = match (compile_unit_kind, source_kind, module_path) {
-        (CompileUnitKind::Project, SourceKind::ProjectConfigSource, None) => {
-            spire::ParserContext::project(source_id)
-        }
-        (_, SourceKind::Script, _) => spire::ParserContext::script(source_id),
-        (_, SourceKind::ReplChunk, _) => spire::ParserContext::repl(source_id),
-        (
-            _,
-            SourceKind::DefinitionSource
-            | SourceKind::StdDefinitionSource
-            | SourceKind::ProjectConfigSource,
-            module_path,
-        ) => spire::ParserContext::module(source_id, module_path)
-            .with_rules(spire::parse_rules_for_source_kind(source_kind)),
-    };
-
-    context
+    spire::parser_context_for_source_policy(
+        source_id,
+        source_kind.policy(compile_unit_kind, None),
+        module_path,
+    )
 }

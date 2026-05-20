@@ -2,7 +2,11 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::panic;
 
 use serde::{Deserialize, Serialize};
-use sindr::builtin::{builtin_uid, BUILTIN_METAS};
+use sindr::builtin::{builtin_function_metas, builtin_uid};
+use sindr::names::{
+    builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities, SymbolIdentityInfo,
+    TypeIdentity,
+};
 use sindr::warning::PhaseOutput;
 use spire::ast::{
     Ast, AstMatchArm, AstPattern, AstTy, ClosureParam, DeclAttrs, ExtractorParam, FunParam, Lit,
@@ -26,8 +30,11 @@ mod tests;
 mod warnings;
 
 pub use self::declarations::{
-    precollect_declaration_index, DeclarationEntry, DeclarationIndex, DeclarationKind,
-    StagedModuleAst,
+    const_only_fallback_module_path, declaration_stage_ordering, declaration_uid_order,
+    extract_process_modules_from_user_ast, lower_module_source_ast, lowered_module_is_impl_owner,
+    precollect_declaration_index, staged_modules_from_source_ast, DeclarationEntry,
+    DeclarationIndex, DeclarationKind, DeclarationOrdering, LoweredModuleAst,
+    StageOrderedDeclaration, StagedModuleAst,
 };
 pub use self::session::{SigilCheckpoint, SigilSession};
 
@@ -56,6 +63,40 @@ fn define_global_surface_alias(scope: &mut Scope, canonical_name: &str, uid: u32
     let surface_name = global_surface_name(canonical_name);
     if surface_name != canonical_name {
         scope.define_with_id(surface_name, uid);
+    }
+}
+
+pub fn user_type_symbol_identity_info(kind: &DeclarationKind) -> Option<SymbolIdentityInfo> {
+    let (identity, capabilities) = match kind {
+        DeclarationKind::Struct => (
+            TypeIdentity::Struct,
+            SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot)),
+        ),
+        DeclarationKind::Record => (
+            TypeIdentity::Record,
+            SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot)),
+        ),
+        DeclarationKind::Enum => (
+            TypeIdentity::Enum,
+            SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot)),
+        ),
+        DeclarationKind::Deferror => (
+            TypeIdentity::ConcreteError,
+            SymbolCapabilities::new(true, false, false, None),
+        ),
+        _ => return None,
+    };
+    Some(SymbolIdentityInfo::new(identity, capabilities))
+}
+
+pub fn declaration_symbol_identity_info(
+    name: &str,
+    kind: &DeclarationKind,
+) -> Option<SymbolIdentityInfo> {
+    if matches!(kind, DeclarationKind::BuiltinType) {
+        builtin_symbol_identity_info(global_surface_name(name))
+    } else {
+        user_type_symbol_identity_info(kind)
     }
 }
 
@@ -724,6 +765,132 @@ pub fn build_scope_for_module(
         current_module_path,
         current_stage_index,
     )
+}
+
+pub fn effective_auto_import_entries(
+    module_stages: &[Vec<StagedModuleAst>],
+    current_module_path: Option<&str>,
+    current_stage_index: usize,
+) -> Result<Vec<DeclarationEntry>, ResolveError> {
+    let declaration_index = precollect_declaration_index(module_stages)?;
+    let declaration_uids = assign_declaration_uids(&declaration_index);
+    let declaration_uid_kinds = declaration_uid_kind_map(&declaration_index, &declaration_uids);
+    let global_scope = build_global_scope(&declaration_index, &declaration_uids);
+    let auto_import_modules = auto_import_module_names(module_stages);
+    let build = build_module_scope_with_imports(
+        &global_scope,
+        &auto_import_modules,
+        &declaration_index,
+        &declaration_uids,
+        &declaration_uid_kinds,
+        &[],
+        current_module_path,
+        current_stage_index,
+    )?;
+    Ok(build
+        .effective_auto_import_fq_names
+        .into_iter()
+        .filter_map(|fq_name| declaration_index.get(&fq_name).cloned())
+        .collect())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EffectiveVisibleEntry {
+    pub visible_name: String,
+    pub entry: DeclarationEntry,
+    pub via_import: bool,
+    pub via_auto_import: bool,
+    pub shadowed_auto_import: bool,
+    pub importable: bool,
+    pub callable: bool,
+}
+
+fn collect_effective_visible_entries(
+    scope: &Scope,
+    entries_by_uid: &HashMap<u32, DeclarationEntry>,
+    explicit_imports: &[ExplicitFunctionImport],
+    effective_auto_import_fq_names: &[String],
+    shadowed_auto_import_bindings: &[(String, u32)],
+) -> Vec<EffectiveVisibleEntry> {
+    let mut visible = Vec::new();
+    let mut seen = HashSet::new();
+    for (name, uid) in scope.bindings() {
+        let Some(entry) = entries_by_uid.get(&uid) else {
+            continue;
+        };
+        if entry.hidden || (!entry.user_importable && !entry.user_callable) {
+            continue;
+        }
+        let visible_name = global_surface_name(name).to_string();
+        if !seen.insert((visible_name.clone(), entry.fq_name.clone())) {
+            continue;
+        }
+        let via_import = explicit_imports
+            .iter()
+            .any(|import| import.uid == uid && import.alias == visible_name);
+        let via_auto_import = !via_import
+            && effective_auto_import_fq_names
+                .iter()
+                .any(|fq_name| fq_name == &entry.fq_name)
+            && visible_name == global_surface_name(&entry.name);
+        let shadowed_auto_import = shadowed_auto_import_bindings
+            .iter()
+            .any(|(shadow_name, shadow_uid)| shadow_name == &visible_name && *shadow_uid == uid);
+        visible.push(EffectiveVisibleEntry {
+            visible_name,
+            via_import,
+            via_auto_import,
+            shadowed_auto_import,
+            importable: entry.user_importable,
+            callable: entry.user_callable,
+            entry: entry.clone(),
+        });
+    }
+    visible.sort_by(|left, right| {
+        left.visible_name
+            .cmp(&right.visible_name)
+            .then_with(|| left.entry.fq_name.cmp(&right.entry.fq_name))
+    });
+    visible
+}
+
+pub fn effective_visible_entries(
+    module_stages: &[Vec<StagedModuleAst>],
+    stmts: &[Ast],
+    current_module_path: Option<&str>,
+    current_stage_index: usize,
+) -> Result<Vec<EffectiveVisibleEntry>, ResolveError> {
+    let declaration_index = precollect_declaration_index(module_stages)?;
+    let declaration_uids = assign_declaration_uids(&declaration_index);
+    let declaration_uid_kinds = declaration_uid_kind_map(&declaration_index, &declaration_uids);
+    let global_scope = build_global_scope(&declaration_index, &declaration_uids);
+    let auto_import_modules = auto_import_module_names(module_stages);
+    let build = build_module_scope_with_imports(
+        &global_scope,
+        &auto_import_modules,
+        &declaration_index,
+        &declaration_uids,
+        &declaration_uid_kinds,
+        stmts,
+        current_module_path,
+        current_stage_index,
+    )?;
+    let entries_by_uid = declaration_uids
+        .iter()
+        .filter_map(|(fq_name, uid)| {
+            declaration_index
+                .get(fq_name)
+                .cloned()
+                .map(|entry| (*uid, entry))
+        })
+        .collect::<HashMap<_, _>>();
+    Ok(collect_effective_visible_entries(
+        &build.scope,
+        &entries_by_uid,
+        &build.explicit_function_imports,
+        &build.effective_auto_import_fq_names,
+        &build.shadowed_auto_import_bindings,
+    ))
 }
 
 struct Resolver {

@@ -1592,6 +1592,27 @@ fn test_defmod_rejects_matcharms_builtin_type_name() {
 }
 
 #[test]
+fn test_defmod_rejects_builtin_special_variant_owner_name() {
+    let err = parse("defmod Ok { def ok() -> Int { 1 } }")
+        .expect_err("builtin-special variant alias should be reserved as an owner");
+    assert!(err
+        .message()
+        .contains("Module name `Ok` is reserved for builtin-special enum variant sugar"));
+
+    let err = parse("defmod Auth::Err { def ok() -> Int { 1 } }")
+        .expect_err("builtin-special variant alias should be reserved as a qualified owner tail");
+    assert!(err
+        .message()
+        .contains("Module name `Err` is reserved for builtin-special enum variant sugar"));
+
+    let err = parse("defmod True { def ok() -> Int { 1 } }")
+        .expect_err("Boolean variant alias should be reserved as an owner");
+    assert!(err
+        .message()
+        .contains("Module name `True` is reserved for builtin-special enum variant sugar"));
+}
+
+#[test]
 fn test_builtin_decl() {
     let ast = parse_with_context(
         "@builtin def to_string(a: $A) -> String",
@@ -3939,6 +3960,14 @@ fn parses_optional_enum_facet_segment() {
 }
 
 #[test]
+fn parses_boolean_variant_facet_segment() {
+    let ast = parse("print(inspect(Facet::preview(Boolean.True, flag)))").unwrap();
+    let rendered = format!("{ast:?}");
+    assert!(rendered.contains("FieldAccess"), "{rendered}");
+    assert!(rendered.contains("\"True\""), "{rendered}");
+}
+
+#[test]
 fn parses_bulk_update_index_key_optional_and_case_actions() {
     let ast = parse(
         r#"user2 =? Facet::bulk_update(user) {
@@ -4020,6 +4049,31 @@ fn test_match_string_pattern() {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
                 assert!(matches!(&arms[0].pattern, AstPattern::StrLit(_, s) if s == "a"));
+            }
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
+fn test_match_qualified_boolean_constructor_patterns() {
+    let ast = parse(
+        r#"x = match flag {
+  Boolean::True => 1,
+  Boolean::False => 0,
+}"#,
+    )
+    .unwrap();
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::Match(_, _, arms) => {
+                assert!(
+                    matches!(&arms[0].pattern, AstPattern::Constructor(_, name, args) if name == "Boolean::True" && args.is_empty())
+                );
+                assert!(
+                    matches!(&arms[1].pattern, AstPattern::Constructor(_, name, args) if name == "Boolean::False" && args.is_empty())
+                );
             }
             _ => panic!("Expected Match"),
         },

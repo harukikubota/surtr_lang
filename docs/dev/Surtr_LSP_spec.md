@@ -432,7 +432,10 @@ AnalysisService
 ```
 
 `AnalysisSnapshot` は parse / resolve / typecheck の結果、doc metadata、visible scope、
-type environment、declaration index、import surface、source map を保持する。
+type environment、declaration index、import surface、source map、semantic index を保持する。
+semantic index の正本要素は `SymbolSemanticInfo` であり、`CompletionSymbol` は completion UI 用の
+投影 DTO とする。identity / capability / visibility / importability / doc/signature metadata は
+completion detail 文字列から再推定しない。
 
 strict parse が成功した場合だけ、Sigil / Scar による resolve / typecheck を実行する。
 parse diagnostics が存在する document は compiler pipeline へ流さず、diagnostics は
@@ -448,6 +451,7 @@ strict path には使わない。
 REPL と共有する semantic resolver は次を担う。
 
 - public / private / hidden / user-callable 判定
+- declaration index と import state から effective symbol を query する
 - `Global::` を user-facing 表示から隠す surface name 変換
 - `Self` を concrete owner type へ正規化した signature 表示
 - completion item `detail` / REPL `:sig` では source-written signature を優先し、source 不在時だけ synthesized fallback を使う
@@ -643,6 +647,8 @@ cache key には少なくとも次を含める。
 - stdlib source version / content hash
 - include graph edge set と directive span hash
 - module stage order
+- source policy schema version
+- stdlib module spec / semantic cache schema version
 - module file path と content hash
 - selected profile
 - normalized runner args

@@ -18,6 +18,7 @@ fn id(name: &str, uid: u32) -> ResolvedId {
     ResolvedId {
         name: name.to_string(),
         qualified_name: Some(format!("Global::{name}")),
+        symbol_info: None,
         unique_id: uid,
         compiler_generated: false,
         span: span(uid as usize, uid as usize + 1),
@@ -51,6 +52,7 @@ fn empty_new_def(struct_name: &str, uid: u32) -> Resolved {
         ResolvedId {
             name: method_name.clone(),
             qualified_name: Some(format!("Global::{method_name}")),
+            symbol_info: None,
             unique_id: uid,
             compiler_generated: false,
             span: span(uid as usize, uid as usize + 1),

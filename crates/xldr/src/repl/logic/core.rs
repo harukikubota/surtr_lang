@@ -18,8 +18,9 @@ use scar::typed::{
 use scar::types::Ty;
 use serde::{Deserialize, Serialize};
 use sigil::error::ResolveError;
-use sindr::builtin::BUILTIN_METAS;
+use sindr::builtin::builtin_function_metas;
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
+use sindr::names::SymbolCapabilities;
 use sindr::policy::CompileUnitKind;
 use spire::ast::{Ast, AstTy, BinOp, ImportSpec, RecordLitArg, Span};
 
@@ -35,8 +36,8 @@ use super::{eval, render, session};
 use crate::loader::{self, StagedModule};
 use crate::ErrorDisplayMode;
 use crate::{
-    collect_additional_default_std_module_inputs, derive_parse_rules, derive_runtime_policy,
-    error_display, LoadError, ModuleStageParseError, ModuleStageParseErrorKind, SourceKind,
+    collect_additional_default_std_module_inputs, error_display, LoadError, ModuleStageParseError,
+    ModuleStageParseErrorKind, SourceKind,
 };
 
 const XLDR_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -149,29 +150,6 @@ pub enum ReplLoadError {
     },
 }
 
-impl ReplLoadError {
-    pub fn emit(&self) {
-        match self {
-            Self::SourceReadFailed { file_name, message } => {
-                eprintln!("repl: cannot read {}: {}", file_name, message);
-            }
-            Self::Diagnostic {
-                phase: _,
-                sources,
-                source_id,
-                spec,
-            } => diagnostics::report_error_by_id(sources, *source_id, spec.clone()),
-            Self::Load(error) => eprintln!("repl: {}", error),
-            Self::Runtime { file_name, message } => {
-                eprintln!(
-                    "repl: runtime error while preloading {}: {}",
-                    file_name, message
-                );
-            }
-        }
-    }
-}
-
 impl std::fmt::Display for ReplLoadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -214,6 +192,7 @@ struct PreloadedChunkState {
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     symbols: BTreeSet<String>,
     auto_import_modules: BTreeSet<String>,
+    auto_import_records: Vec<ReplImportRecord>,
     script_runtime_inputs: Vec<String>,
     script_preload_docs: Vec<DocEntry>,
     script_preload_signatures: Vec<SignatureEntry>,
@@ -226,6 +205,31 @@ struct ReplProcessMetadata {
     kind: spire::ast::ProcessKind,
     instance: spire::ast::ProcessInstance,
     handler_specs: Vec<spire::ast::ProcessRuntimeHandlerSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplTypeDisplayCategory {
+    Type,
+    Struct,
+    Record,
+    Enum,
+    Closure,
+    Capture,
+    FacetPath,
+}
+
+impl ReplTypeDisplayCategory {
+    fn identity_label(self) -> &'static str {
+        match self {
+            Self::Type => "TypeIdentity::Type",
+            Self::Struct => "TypeIdentity::Struct",
+            Self::Record => "TypeIdentity::Record",
+            Self::Enum => "TypeIdentity::Enum",
+            Self::Closure => "TypeIdentity::Closure",
+            Self::Capture => "TypeIdentity::Capture",
+            Self::FacetPath => "TypeIdentity::FacetPath",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -359,85 +363,24 @@ pub struct ReplCompletion {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReplCompletionContext {
-    index: surtr_analysis::SemanticIndex,
-    callable_signatures: BTreeMap<String, (String, String)>,
+    input_support: surtr_analysis::ReplInputSupportContext,
 }
 
 impl ReplCompletionContext {
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
         let started = Instant::now();
-        let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
-        if !completion_allowed_at_cursor(input, cursor) {
-            let mut telemetry = CompletionTelemetry::default();
-            telemetry.record_completion_compute(started.elapsed());
-            return ReplCompletion {
-                candidates: Vec::new(),
-                signature: None,
-                telemetry,
-            };
-        }
-        let (replace_start, replace_end, prefix) = completion_token(input, cursor);
-        let call_context = completion_call_context(input, cursor);
-        let signature = call_context
-            .as_ref()
-            .and_then(|context| self.signature_help_for_call(context));
-
-        if call_context.is_none() && prefix.is_empty() {
-            let mut telemetry = CompletionTelemetry::default();
-            telemetry.record_completion_compute(started.elapsed());
-            return ReplCompletion {
-                candidates: Vec::new(),
-                signature,
-                telemetry,
-            };
-        }
-
-        let completion_request = surtr_analysis::CompletionRequest {
-            index: &self.index,
-            source: input,
-            cursor,
-        };
-        let completion = if let Some(context) = call_context.as_ref() {
-            let expected_ty = signature
-                .as_ref()
-                .and_then(|_| self.expected_param_type_for_call(context));
-            let mut completion = surtr_analysis::complete_repl_prefix(
-                completion_request,
-                surtr_analysis::CompletionScope::VariablesOnly,
-            );
-            completion.candidates = surtr_analysis::rank_completion_candidates_by_expected_type(
-                completion.candidates,
-                expected_ty.as_deref(),
-                ReplEngine::parameter_type_accepts_arg_type,
-            );
-            if completion.candidates.is_empty() && expected_ty.is_none() && !prefix.is_empty() {
-                surtr_analysis::complete_repl_prefix(
-                    completion_request,
-                    surtr_analysis::CompletionScope::All,
-                )
-            } else {
-                completion
-            }
-        } else {
-            surtr_analysis::complete_repl_prefix(
-                completion_request,
-                surtr_analysis::CompletionScope::All,
-            )
-        };
-
-        let mut candidates = completion
+        let support =
+            self.input_support
+                .input_support(input, cursor, surtr_analysis::CompletionScope::All);
+        let candidates = support
             .candidates
             .into_iter()
             .map(ReplEngine::repl_completion_candidate_from_analysis)
             .collect::<Vec<_>>();
-        if call_context.is_none() {
-            self.inject_special_repl_candidates(
-                &mut candidates,
-                &prefix,
-                replace_start,
-                replace_end,
-            );
-        }
+        let signature = support.signature.map(|signature| ReplSignatureHelp {
+            lines: signature.lines,
+            active_parameter: signature.active_parameter,
+        });
         let mut telemetry = CompletionTelemetry::default();
         telemetry.record_completion_compute(started.elapsed());
         ReplCompletion {
@@ -448,109 +391,7 @@ impl ReplCompletionContext {
     }
 
     pub fn should_request(input: &str, cursor: usize) -> bool {
-        let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
-        if !completion_allowed_at_cursor(input, cursor) {
-            return false;
-        }
-        let (_, _, prefix) = completion_token(input, cursor);
-        completion_call_context(input, cursor).is_some() || !prefix.is_empty()
-    }
-
-    fn signature_help_for_call(
-        &self,
-        context: &CompletionCallContext,
-    ) -> Option<ReplSignatureHelp> {
-        let (qualified_name, signature) =
-            self.callable_signature_for_completion(&context.callee)?;
-        let rendered =
-            ReplEngine::render_signature_with_qualified_name(&qualified_name, signature.clone());
-        Some(ReplSignatureHelp {
-            lines: vec![highlight_signature_parameter(
-                &rendered,
-                context.active_parameter,
-            )],
-            active_parameter: Some(context.active_parameter),
-        })
-    }
-
-    fn inject_special_repl_candidates(
-        &self,
-        candidates: &mut Vec<ReplCompletionCandidate>,
-        prefix: &str,
-        replace_start: usize,
-        replace_end: usize,
-    ) {
-        for (label, replacement) in [("true", "True"), ("false", "False")] {
-            if !label.starts_with(prefix) {
-                continue;
-            }
-            if candidates
-                .iter()
-                .any(|candidate| candidate.label == label && candidate.replacement == label)
-            {
-                continue;
-            }
-            if candidates
-                .iter()
-                .any(|candidate| candidate.label == label && candidate.replacement == replacement)
-            {
-                continue;
-            }
-            candidates.push(ReplCompletionCandidate {
-                label: label.to_string(),
-                replacement: replacement.to_string(),
-                kind: ReplCompletionKind::FunctionCall,
-                detail: self.special_repl_candidate_detail(replacement),
-                documentation: None,
-                replace_start,
-                replace_end,
-            });
-        }
-        candidates.sort_by(|left, right| {
-            Self::repl_completion_kind_rank(&left.kind)
-                .cmp(&Self::repl_completion_kind_rank(&right.kind))
-                .then_with(|| left.label.cmp(&right.label))
-                .then_with(|| left.replacement.cmp(&right.replacement))
-        });
-    }
-
-    fn repl_completion_kind_rank(kind: &ReplCompletionKind) -> u8 {
-        match kind {
-            ReplCompletionKind::Variable => 0,
-            ReplCompletionKind::TypeConstructor => 1,
-            ReplCompletionKind::TypePath => 2,
-            ReplCompletionKind::FunctionCall => 3,
-        }
-    }
-
-    fn special_repl_candidate_detail(&self, replacement: &str) -> Option<String> {
-        self.callable_signatures
-            .get(replacement)
-            .map(|(qualified_name, signature)| {
-                ReplEngine::render_signature_with_qualified_name(qualified_name, signature.clone())
-            })
-    }
-
-    fn expected_param_type_for_call(&self, context: &CompletionCallContext) -> Option<String> {
-        let (_qualified_name, signature) =
-            self.callable_signature_for_completion(&context.callee)?;
-        let types = ReplEngine::signature_param_types(signature)?;
-        types.get(context.active_parameter).cloned()
-    }
-
-    fn callable_signature_for_completion(&self, symbol: &str) -> Option<&(String, String)> {
-        self.callable_signatures
-            .get(symbol)
-            .or_else(|| {
-                self.callable_signatures
-                    .get(ReplEngine::canonical_symbol(symbol))
-            })
-            .or_else(|| {
-                symbol
-                    .rsplit("::")
-                    .next()
-                    .and_then(|tail| self.callable_signatures.get(tail))
-            })
+        surtr_analysis::ReplInputSupportContext::should_request(input, cursor)
     }
 
     #[cfg(test)]
@@ -560,17 +401,29 @@ impl ReplCompletionContext {
         qualified_name: &str,
         signature: &str,
     ) {
-        self.callable_signatures.insert(
-            label.to_string(),
-            (qualified_name.to_string(), signature.to_string()),
-        );
+        self.input_support
+            .apply_update(surtr_analysis::ReplInputSupportUpdate {
+                symbols: Vec::new(),
+                callable_signatures: vec![surtr_analysis::CallableSignature {
+                    label: label.to_string(),
+                    qualified_name: qualified_name.to_string(),
+                    signature: signature.to_string(),
+                }],
+            });
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct CompletionCallContext {
-    callee: String,
-    active_parameter: usize,
+struct FacetCompletionAssist {
+    candidates: Vec<ReplCompletionCandidate>,
+    signature: ReplSignatureHelp,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FacetStep {
+    ty: AstTy,
+    fallible: bool,
+    variant: bool,
 }
 
 pub struct ReplEngine {
@@ -593,6 +446,7 @@ pub struct ReplEngine {
     signatures: Vec<SignatureEntry>,
     process_metadata: BTreeMap<String, ReplProcessMetadata>,
     auto_import_modules: BTreeSet<String>,
+    auto_import_records: Vec<ReplImportRecord>,
     reload_seed: ReplReloadSeed,
     replay_inputs: Vec<String>,
     history_entries: Vec<ReplHistoryEntry>,
@@ -641,12 +495,17 @@ impl ReplEngine {
             symbols: ["Ok", "Err"]
                 .into_iter()
                 .map(str::to_string)
-                .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
+                .chain(
+                    builtin_function_metas()
+                        .iter()
+                        .map(|meta| meta.name.to_string()),
+                )
                 .collect(),
             docs: Vec::new(),
             signatures: Vec::new(),
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            auto_import_records: Vec::new(),
             reload_seed: ReplReloadSeed::Empty,
             replay_inputs: Vec::new(),
             history_entries: Vec::new(),
@@ -691,7 +550,11 @@ impl ReplEngine {
         let mut symbols: BTreeSet<String> = ["Ok", "Err"]
             .into_iter()
             .map(str::to_string)
-            .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
+            .chain(
+                builtin_function_metas()
+                    .iter()
+                    .map(|meta| meta.name.to_string()),
+            )
             .collect();
         for entry in vm.bytecode().functions.iter() {
             if let Some(name) = &entry.qualified_name {
@@ -732,6 +595,7 @@ impl ReplEngine {
             signatures,
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            auto_import_records: Vec::new(),
             reload_seed: ReplReloadSeed::Empty,
             replay_inputs: Vec::new(),
             history_entries: Vec::new(),
@@ -741,7 +605,7 @@ impl ReplEngine {
             completion_context_cache: RefCell::new(None),
             #[cfg(test)]
             completion_context_builds: Cell::new(0),
-            startup_results: Vec::new(),
+            startup_results: vec![Self::eldr_partial_semantic_restore_notice()],
             error_display_mode: ErrorDisplayMode::Full,
         };
         // Set up sigil / scar scope for stdlib without re-executing bytecode.
@@ -883,6 +747,7 @@ impl ReplEngine {
             signatures: state.signatures,
             process_metadata: state.process_metadata,
             auto_import_modules: state.auto_import_modules,
+            auto_import_records: state.auto_import_records,
             reload_seed: ReplReloadSeed::Empty,
             replay_inputs: Vec::new(),
             history_entries: Vec::new(),
@@ -949,6 +814,12 @@ impl ReplEngine {
         std::mem::take(&mut self.startup_results)
     }
 
+    fn eldr_partial_semantic_restore_notice() -> ReplResult {
+        Self::plain(vec![
+            ".eldr runtime image loaded; compile semantic metadata for user definitions is not restored yet.".to_string(),
+        ])
+    }
+
     fn bootstrap_std_modules(&mut self) -> Result<(), LoadError> {
         let module_stages = match parse_module_stages_from_sources(
             &self.sources,
@@ -984,6 +855,8 @@ impl ReplEngine {
             }
         };
         self.declaration_index = declaration_index.clone();
+        self.auto_import_records =
+            Self::collect_auto_import_records(&module_stages, &declaration_index);
 
         let resolved = match sigil::resolve_staged_program(
             &module_stages,
@@ -1004,18 +877,10 @@ impl ReplEngine {
             }
         };
 
-        let typed = match self.scar_session.typecheck_with_context(
-            resolved,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Repl,
-                    SourceKind::StdDefinitionSource,
-                    None,
-                ),
-                enforce_builtin_type_contracts: true,
-                allow_error_function_params: true,
-            },
-        ) {
+        let typed = match self
+            .scar_session
+            .typecheck_with_context(resolved, Self::std_definition_typecheck_context())
+        {
             Ok(t) => t,
             Err(e) => {
                 return Err(load_error_from_span_failure(
@@ -1107,8 +972,13 @@ impl ReplEngine {
         if let Ok(snapshot) = crate::default_stdlib_semantic_snapshot() {
             if self.module_stages.len() == snapshot.default_stage_count {
                 self.auto_import_modules = snapshot.auto_import_modules.clone();
-                self.declaration_index = snapshot.declaration_index.clone();
-                self.scar_session.rollback(snapshot.scar_checkpoint.clone());
+                self.declaration_index = snapshot.declaration_index().clone();
+                self.auto_import_records = Self::collect_auto_import_records(
+                    &snapshot.module_stages,
+                    &self.declaration_index,
+                );
+                self.scar_session
+                    .rollback(snapshot.scar_checkpoint().clone());
                 self.sync_scar_fun_index_with_vm();
                 self.process_metadata = collect_process_metadata(&snapshot.module_stages);
 
@@ -1169,6 +1039,8 @@ impl ReplEngine {
             }
         };
         self.declaration_index = declaration_index.clone();
+        self.auto_import_records =
+            Self::collect_auto_import_records(&module_stages, &declaration_index);
 
         let resolved = match sigil::resolve_staged_program(
             &module_stages,
@@ -1190,18 +1062,10 @@ impl ReplEngine {
         };
 
         // Type-check to populate scar session; discard typed nodes (no codegen).
-        if let Err(e) = self.scar_session.typecheck_with_context(
-            resolved,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Repl,
-                    SourceKind::StdDefinitionSource,
-                    None,
-                ),
-                enforce_builtin_type_contracts: true,
-                allow_error_function_params: true,
-            },
-        ) {
+        if let Err(e) = self
+            .scar_session
+            .typecheck_with_context(resolved, Self::std_definition_typecheck_context())
+        {
             return Err(load_error_from_span_failure(
                 &self.sources,
                 &self.module_stages,
@@ -1436,118 +1300,63 @@ impl ReplEngine {
     }
 
     pub fn semantic_index(&self) -> surtr_analysis::SemanticIndex {
-        let mut symbols = Vec::new();
+        surtr_analysis::SemanticIndex::from_symbol_semantic_infos(self.symbol_semantic_infos())
+    }
 
-        for entry in self.docs.iter().rev() {
-            if entry.kind != DocKind::Function {
-                continue;
-            }
-            let label = crate::surface_path_name(&entry.qualified_name).to_string();
-            if !self.doc_entry_is_completion_surface(entry, &label) {
-                continue;
-            }
-            let tail = label.rsplit("::").next().unwrap_or(label.as_str());
-            let detail = self
-                .find_signature(tail)
-                .map(|(qualified_name, signature)| {
-                    Self::render_signature_with_qualified_name(&qualified_name, signature)
-                })
-                .or_else(|| {
-                    Self::display_signature_for_doc_entry(entry).map(|signature| {
-                        Self::render_signature_with_qualified_name(&entry.qualified_name, signature)
-                    })
-                });
-            symbols.push(surtr_analysis::CompletionSymbol {
-                label: label.clone(),
-                replacement: label,
-                kind: surtr_analysis::CompletionKind::FunctionCall,
-                detail,
-                documentation: Some(entry.doc.clone()),
-                sort_text: None,
-                origin: None,
-                definition: None,
-            });
-            if let Some(tail) = crate::surface_path_name(&entry.qualified_name)
-                .rsplit("::")
-                .next()
-                .filter(|tail| self.visible_uid_matches(tail, &entry.qualified_name))
-            {
-                symbols.push(surtr_analysis::CompletionSymbol {
-                    label: tail.to_string(),
-                    replacement: tail.to_string(),
-                    kind: surtr_analysis::CompletionKind::FunctionCall,
-                    detail: self
-                        .find_signature(tail)
-                        .map(|(qualified_name, signature)| {
-                            Self::render_signature_with_qualified_name(&qualified_name, signature)
-                        }),
-                    documentation: Some(entry.doc.clone()),
-                    sort_text: None,
-                    origin: None,
-                    definition: None,
-                });
-            }
-        }
+    pub fn symbol_semantic_infos(&self) -> Vec<surtr_analysis::SymbolSemanticInfo> {
+        let mut symbols = surtr_analysis::SemanticIndex::from_compile_metadata(
+            &self.declaration_index,
+            &self.docs,
+            &self.signatures,
+        )
+        .symbols()
+        .iter()
+        .filter(|symbol| self.compile_symbol_is_repl_completion_surface(symbol))
+        .cloned()
+        .collect::<Vec<_>>();
+        self.enrich_compile_symbol_details(&mut symbols);
 
-        for decl in self.declaration_index.values() {
-            if let Some(label) = self.completion_visible_owner_label(decl) {
-                symbols.push(surtr_analysis::CompletionSymbol {
-                    label: label.clone(),
-                    replacement: label,
-                    kind: surtr_analysis::CompletionKind::TypeConstructor,
-                    detail: self.declaration_signature(decl),
-                    documentation: None,
-                    sort_text: None,
-                    origin: None,
-                    definition: None,
-                });
-            }
-
-            if Self::declaration_is_function_completion_surface(decl) {
-                let label = crate::surface_path_name(&decl.fq_name).to_string();
-                let detail = self.declaration_signature(decl).or_else(|| {
-                    self.find_signature(&label)
-                        .map(|(qualified_name, signature)| {
-                            Self::render_signature_with_qualified_name(&qualified_name, signature)
+        let compile_symbols = symbols.clone();
+        let compile_semantic_infos = compile_symbols
+            .iter()
+            .map(|symbol| self.symbol_semantic_info_from_completion_symbol(symbol))
+            .collect::<Vec<_>>();
+        let visible_symbols = self
+            .sigil_session
+            .visible_declaration_entries()
+            .into_iter()
+            .filter_map(|visible| {
+                surtr_analysis::symbol_semantic_info_for_effective_visible_entry(
+                    &compile_semantic_infos,
+                    &visible,
+                )
+                .map(surtr_analysis::SymbolSemanticInfo::into_completion_symbol)
+            })
+            .filter(|symbol| {
+                symbol.kind == surtr_analysis::CompletionKind::FunctionCall
+                    || self
+                        .completion_symbol_declaration(symbol)
+                        .is_some_and(|decl| {
+                            matches!(
+                                decl.kind,
+                                sigil::DeclarationKind::EnumVariant
+                                    | sigil::DeclarationKind::ResultCtor
+                            )
                         })
-                });
-                symbols.push(surtr_analysis::CompletionSymbol {
-                    label: label.clone(),
-                    replacement: label,
-                    kind: surtr_analysis::CompletionKind::FunctionCall,
-                    detail,
-                    documentation: None,
-                    sort_text: None,
-                    origin: None,
-                    definition: None,
-                });
-                if let Some(tail) = crate::surface_path_name(&decl.fq_name)
-                    .rsplit("::")
-                    .next()
-                    .filter(|tail| self.visible_uid_matches(tail, &decl.fq_name))
-                {
-                    symbols.push(surtr_analysis::CompletionSymbol {
-                        label: tail.to_string(),
-                        replacement: tail.to_string(),
-                        kind: surtr_analysis::CompletionKind::FunctionCall,
-                        detail: self
-                            .find_signature(tail)
-                            .map(|(qualified_name, signature)| {
-                                Self::render_signature_with_qualified_name(
-                                    &qualified_name,
-                                    signature,
-                                )
-                            }),
-                        documentation: None,
-                        sort_text: None,
-                        origin: None,
-                        definition: None,
-                    });
-                }
-            }
-        }
+            })
+            .collect::<Vec<_>>();
+        symbols.extend(visible_symbols);
+        self.enrich_compile_symbol_details(&mut symbols);
+        Self::remove_shadowed_type_path_symbols(&mut symbols);
 
         for label in self.completion_visible_module_labels() {
+            if symbols.iter().any(|symbol| {
+                symbol.label == label
+                    && symbol.kind == surtr_analysis::CompletionKind::TypeConstructor
+            }) {
+                continue;
+            }
+            let capabilities = Self::completion_capabilities_for_builtin(&label);
             symbols.push(surtr_analysis::CompletionSymbol {
                 label: label.clone(),
                 replacement: label,
@@ -1557,6 +1366,7 @@ impl ReplEngine {
                 sort_text: None,
                 origin: None,
                 definition: None,
+                capabilities,
             });
         }
 
@@ -1574,6 +1384,7 @@ impl ReplEngine {
                 sort_text: None,
                 origin: None,
                 definition: None,
+                capabilities: None,
             });
         }
 
@@ -1599,6 +1410,7 @@ impl ReplEngine {
                 sort_text: None,
                 origin: None,
                 definition: None,
+                capabilities: None,
             });
             if let Some(tail) = crate::surface_path_name(qualified_name).rsplit("::").next() {
                 symbols.push(surtr_analysis::CompletionSymbol {
@@ -1612,69 +1424,216 @@ impl ReplEngine {
                     sort_text: None,
                     origin: None,
                     definition: None,
+                    capabilities: Self::completion_capabilities_for_builtin(qualified_name),
                 });
             }
         }
 
-        surtr_analysis::SemanticIndex::from_symbols(symbols)
+        symbols
+            .into_iter()
+            .map(|symbol| self.symbol_semantic_info_from_completion_symbol(&symbol))
+            .collect()
     }
 
-    pub fn completion_context(&self) -> ReplCompletionContext {
-        if let Some(cached) = self.completion_context_cache.borrow().clone() {
-            return cached;
+    fn typecheck_context_for_source(source_kind: SourceKind) -> scar::TypecheckContext {
+        scar::TypecheckContext::from_source_policy(source_kind.policy(CompileUnitKind::Repl, None))
+    }
+
+    fn std_definition_typecheck_context() -> scar::TypecheckContext {
+        let mut context = Self::typecheck_context_for_source(SourceKind::StdDefinitionSource);
+        context.enforce_builtin_type_contracts = true;
+        context.allow_error_function_params = true;
+        context
+    }
+
+    fn compile_symbol_is_repl_completion_surface(
+        &self,
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> bool {
+        if symbol.label.contains("::impl ") {
+            return false;
         }
-
-        let mut callable_signatures = BTreeMap::new();
-        let mut insert_signature = |label: &str, qualified_name: String, signature: String| {
-            callable_signatures
-                .entry(label.to_string())
-                .or_insert((qualified_name.clone(), signature.clone()));
-            if let Some(tail) = label.rsplit("::").next() {
-                callable_signatures
-                    .entry(tail.to_string())
-                    .or_insert((qualified_name, signature));
+        if let Some((owner, _)) = symbol.label.split_once("::") {
+            if !Self::completion_visible_owner_name(owner) {
+                return false;
             }
-        };
-
-        for entry in self.docs.iter().rev() {
-            if entry.kind != DocKind::Function {
-                continue;
-            }
-            let label = crate::surface_path_name(&entry.qualified_name).to_string();
-            if !self.doc_entry_is_completion_surface(entry, &label) {
-                continue;
-            }
-            if let Some((qualified_name, signature)) = self
-                .find_signature(label.rsplit("::").next().unwrap_or(label.as_str()))
-                .or_else(|| {
-                    Self::display_signature_for_doc_entry(entry)
-                        .map(|signature| (entry.qualified_name.clone(), signature))
-                })
-            {
-                insert_signature(&label, qualified_name, signature);
-            }
+        } else if symbol.kind == surtr_analysis::CompletionKind::TypeConstructor
+            && !Self::completion_visible_owner_name(&symbol.label)
+        {
+            return false;
         }
+        match symbol.kind {
+            surtr_analysis::CompletionKind::TypePath => {
+                Self::completion_visible_module_name(&symbol.label)
+            }
+            surtr_analysis::CompletionKind::TypeConstructor => self
+                .completion_symbol_declaration(symbol)
+                .is_none_or(|decl| Self::declaration_is_repl_completion_surface(decl)),
+            _ => self
+                .completion_symbol_declaration(symbol)
+                .is_none_or(|decl| Self::declaration_is_repl_completion_surface(decl)),
+        }
+    }
 
-        for decl in self.declaration_index.values() {
-            if let Some(label) = self.completion_visible_owner_label(decl) {
-                if let Some((qualified_name, signature)) = self.constructor_signature_entry(decl) {
-                    insert_signature(&label, qualified_name.clone(), signature.clone());
-                    insert_signature(
-                        crate::surface_path_name(&decl.fq_name),
-                        qualified_name,
-                        signature,
-                    );
+    fn enrich_compile_symbol_details(&self, symbols: &mut [surtr_analysis::CompletionSymbol]) {
+        for symbol in symbols {
+            if let Some(decl) = self.completion_symbol_declaration(symbol) {
+                if matches!(
+                    decl.kind,
+                    sigil::DeclarationKind::EnumVariant | sigil::DeclarationKind::ResultCtor
+                ) {
+                    symbol.kind = surtr_analysis::CompletionKind::FunctionCall;
+                    if let Some(signature) = Self::special_variant_completion_detail(decl) {
+                        symbol.detail = Some(signature);
+                    } else if let Some(signature) = symbol.detail.take() {
+                        symbol.detail = Some(Self::render_signature_with_qualified_name(
+                            &decl.fq_name,
+                            signature,
+                        ));
+                    }
                 }
-            }
-
-            if Self::declaration_is_function_completion_surface(decl) {
-                let label = crate::surface_path_name(&decl.fq_name).to_string();
-                if let Some((qualified_name, signature)) = self
-                    .find_signature(&label)
-                    .or_else(|| self.declaration_signature_entry(decl))
+                symbol.capabilities = Self::completion_capabilities_for_declaration(decl);
+                if decl.kind == sigil::DeclarationKind::TraitMethod && !symbol.label.contains("::")
                 {
-                    insert_signature(&label, qualified_name, signature);
+                    if let Some((owner, _)) = decl.fq_name.rsplit_once("::") {
+                        if let Some(owner_decl) = self.qualified_declaration(owner) {
+                            symbol.detail = self
+                                .declaration_signature(owner_decl)
+                                .or(symbol.detail.take());
+                            continue;
+                        }
+                    }
                 }
+                if matches!(decl.kind, sigil::DeclarationKind::Trait) {
+                    symbol.detail = self.declaration_signature(decl).or(symbol.detail.take());
+                    continue;
+                }
+                if symbol.detail.is_some() {
+                    continue;
+                }
+                symbol.detail = self.declaration_signature(decl);
+            }
+        }
+    }
+
+    fn remove_shadowed_type_path_symbols(symbols: &mut Vec<surtr_analysis::CompletionSymbol>) {
+        let type_constructor_labels = symbols
+            .iter()
+            .filter(|symbol| symbol.kind == surtr_analysis::CompletionKind::TypeConstructor)
+            .map(|symbol| symbol.label.clone())
+            .collect::<BTreeSet<_>>();
+        symbols.retain(|symbol| {
+            symbol.kind != surtr_analysis::CompletionKind::TypePath
+                || !type_constructor_labels.contains(&symbol.label)
+        });
+    }
+
+    fn special_variant_completion_detail(entry: &sigil::DeclarationEntry) -> Option<String> {
+        match crate::surface_path_name(&entry.fq_name) {
+            "Result::Ok" => Some("Result::Ok($T) -> Result<$T, Error>".to_string()),
+            "Result::Err" => Some("Result::Err(Error) -> Result<$T, Error>".to_string()),
+            "Boolean::True" => Some("Boolean::True() -> Boolean".to_string()),
+            "Boolean::False" => Some("Boolean::False() -> Boolean".to_string()),
+            _ => None,
+        }
+    }
+
+    fn completion_symbol_declaration<'a>(
+        &'a self,
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> Option<&'a sigil::DeclarationEntry> {
+        match symbol.origin.as_ref() {
+            Some(surtr_analysis::CompletionOrigin::Declaration { qualified_name, .. }) => {
+                self.qualified_declaration(qualified_name)
+            }
+            _ => self.qualified_declaration(&symbol.label),
+        }
+    }
+
+    fn symbol_semantic_info_from_completion_symbol(
+        &self,
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> surtr_analysis::SymbolSemanticInfo {
+        let mut info = surtr_analysis::SymbolSemanticInfo::from_completion_symbol(symbol);
+        if info.identity.is_none() {
+            info.identity = self
+                .completion_symbol_declaration(symbol)
+                .and_then(surtr_analysis::symbol_identity_for_declaration_entry)
+                .or_else(|| surtr_analysis::symbol_identity_for_builtin_surface(&symbol.label));
+        }
+        if info.display_metadata.is_none() {
+            info.display_metadata = self.symbol_display_metadata_for_completion_symbol(symbol);
+        }
+        info
+    }
+
+    fn symbol_display_metadata_for_completion_symbol(
+        &self,
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> Option<surtr_analysis::SymbolDisplayMetadata> {
+        let (qualified_name, module_path) = match symbol.origin.as_ref() {
+            Some(surtr_analysis::CompletionOrigin::Metadata {
+                qualified_name,
+                module_path,
+            })
+            | Some(surtr_analysis::CompletionOrigin::Declaration {
+                qualified_name,
+                module_path,
+                ..
+            }) => (qualified_name.as_str(), module_path.as_str()),
+            None => self
+                .completion_symbol_declaration(symbol)
+                .map(|decl| (decl.fq_name.as_str(), decl.module_path.as_str()))?,
+        };
+        let surface_name = crate::surface_path_name(qualified_name);
+        let has_doc = self.docs.iter().any(|entry| {
+            entry.qualified_name == qualified_name || entry.qualified_name == surface_name
+        });
+        let has_signature = self.signatures.iter().any(|entry| {
+            entry.qualified_name == qualified_name || entry.qualified_name == surface_name
+        }) || self.docs.iter().any(|entry| {
+            (entry.qualified_name == qualified_name || entry.qualified_name == surface_name)
+                && entry.signature.is_some()
+        });
+        (has_doc || has_signature).then(|| surtr_analysis::SymbolDisplayMetadata {
+            qualified_name: qualified_name.to_string(),
+            module_path: module_path.to_string(),
+            has_doc,
+            has_signature,
+        })
+    }
+
+    fn build_completion_context(&self) -> ReplCompletionContext {
+        let semantic_index = self.semantic_index();
+        let mut callable_signatures = BTreeMap::new();
+
+        for symbol in semantic_index.symbols() {
+            if !matches!(
+                symbol.kind,
+                surtr_analysis::CompletionKind::FunctionCall
+                    | surtr_analysis::CompletionKind::TypeConstructor
+            ) {
+                continue;
+            }
+            let bare_trait_method_decl = (!symbol.label.contains("::"))
+                .then(|| self.completion_symbol_declaration(symbol))
+                .flatten()
+                .filter(|decl| decl.kind == sigil::DeclarationKind::TraitMethod);
+            let signature_entry = bare_trait_method_decl
+                .and_then(|decl| self.declaration_signature_entry(decl))
+                .or_else(|| self.completion_symbol_signature_entry(symbol));
+            let Some((qualified_name, signature)) = signature_entry else {
+                continue;
+            };
+            if bare_trait_method_decl.is_some() {
+                callable_signatures.insert(symbol.label.clone(), (qualified_name, signature));
+            } else {
+                Self::insert_completion_context_signature(
+                    &mut callable_signatures,
+                    &symbol.label,
+                    qualified_name,
+                    signature,
+                );
             }
         }
 
@@ -1692,7 +1651,12 @@ impl ReplEngine {
                 continue;
             };
             let label = crate::surface_path_name(qualified_name).to_string();
-            insert_signature(&label, qualified_name.to_string(), signature.clone());
+            Self::insert_completion_context_signature(
+                &mut callable_signatures,
+                &label,
+                qualified_name.to_string(),
+                signature.clone(),
+            );
         }
 
         let mut seen_bindings = BTreeSet::new();
@@ -1703,14 +1667,78 @@ impl ReplEngine {
             if let Some(signature) =
                 Self::callable_binding_signature_from_type(&binding.name, &binding.ty)
             {
-                insert_signature(&binding.name, binding.name.clone(), signature);
+                Self::insert_completion_context_signature(
+                    &mut callable_signatures,
+                    &binding.name,
+                    binding.name.clone(),
+                    signature,
+                );
             }
         }
 
-        let context = ReplCompletionContext {
-            index: self.semantic_index(),
-            callable_signatures,
-        };
+        ReplCompletionContext {
+            input_support: surtr_analysis::ReplInputSupportContext::from_parts(
+                semantic_index,
+                callable_signatures,
+            ),
+        }
+    }
+
+    fn insert_completion_context_signature(
+        callable_signatures: &mut BTreeMap<String, (String, String)>,
+        label: &str,
+        qualified_name: String,
+        signature: String,
+    ) {
+        callable_signatures
+            .entry(label.to_string())
+            .or_insert((qualified_name.clone(), signature.clone()));
+        if let Some(tail) = label.rsplit("::").next() {
+            callable_signatures
+                .entry(tail.to_string())
+                .or_insert((qualified_name, signature));
+        }
+    }
+
+    fn completion_symbol_qualified_name(
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> Option<String> {
+        match symbol.origin.as_ref()? {
+            surtr_analysis::CompletionOrigin::Metadata { qualified_name, .. }
+            | surtr_analysis::CompletionOrigin::Declaration { qualified_name, .. } => {
+                Some(qualified_name.clone())
+            }
+        }
+    }
+
+    fn completion_symbol_signature_entry(
+        &self,
+        symbol: &surtr_analysis::CompletionSymbol,
+    ) -> Option<(String, String)> {
+        let qualified_name = Self::completion_symbol_qualified_name(symbol)?;
+        if symbol.kind == surtr_analysis::CompletionKind::TypeConstructor {
+            if let Some(decl) = self.qualified_declaration(&qualified_name) {
+                if let Some(signature) = self.constructor_signature_entry(decl) {
+                    return Some(signature);
+                }
+            }
+        }
+        symbol
+            .detail
+            .clone()
+            .map(|signature| (qualified_name.clone(), signature))
+            .or_else(|| {
+                self.qualified_declaration(&qualified_name)
+                    .and_then(|decl| self.declaration_signature_entry(decl))
+            })
+    }
+
+    pub fn completion_context(&self) -> ReplCompletionContext {
+        if let Some(cached) = self.completion_context_cache.borrow().clone() {
+            return cached;
+        }
+
+        let context = self.build_completion_context();
         #[cfg(test)]
         self.completion_context_builds
             .set(self.completion_context_builds.get() + 1);
@@ -1731,6 +1759,13 @@ impl ReplEngine {
     }
 
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
+        if let Some(assist) = self.facet_completion_assist(input, cursor) {
+            return ReplCompletion {
+                candidates: assist.candidates,
+                signature: Some(assist.signature),
+                telemetry: CompletionTelemetry::default(),
+            };
+        }
         self.completion_context().completions(input, cursor)
     }
 
@@ -1769,6 +1804,409 @@ impl ReplEngine {
         }
     }
 
+    fn facet_completion_assist(&self, input: &str, cursor: usize) -> Option<FacetCompletionAssist> {
+        let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+        if !completion_allowed_at_cursor(input, cursor) {
+            return None;
+        }
+        let context = surtr_analysis::facet_path_context_at_cursor(input, cursor)?;
+        let (root_ty, mut focus_ty, source_is_result) = self.facet_root_ast_ty(&context)?;
+        let mut path_is_variant = false;
+        let mut path_is_fallible = false;
+        for segment in &context.completed_segments {
+            let step = self.facet_next_ast_ty(&focus_ty, segment)?;
+            path_is_variant |= step.variant;
+            path_is_fallible |= step.fallible;
+            focus_ty = step.ty;
+        }
+        let placeholder = if matches!(focus_ty, AstTy::Tuple(_, _)) {
+            "[segment]"
+        } else {
+            "[field]"
+        };
+        let candidates = self
+            .facet_candidate_segments(&focus_ty, context.replace_start, context.replace_end)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|candidate| candidate.label.starts_with(&context.prefix))
+            .collect::<Vec<_>>();
+        let path_display = if context.completed_segments.is_empty() {
+            format!(
+                "{}{}",
+                &input[context.token_start..context.replace_start],
+                placeholder
+            )
+        } else {
+            context.current_path.clone()
+        };
+        let signature = ReplSignatureHelp {
+            lines: self.facet_api_help_lines(
+                &path_display,
+                &root_ty,
+                &focus_ty,
+                source_is_result || path_is_fallible,
+                path_is_variant,
+                context.completed_segments.is_empty(),
+                context.root_kind,
+                context.root_kind == surtr_analysis::FacetPathRootKind::ViewClosureRoot,
+            ),
+            active_parameter: Some(0),
+        };
+        Some(FacetCompletionAssist {
+            candidates,
+            signature,
+        })
+    }
+
+    fn facet_root_ast_ty(
+        &self,
+        context: &surtr_analysis::FacetPathCompletionContext,
+    ) -> Option<(AstTy, AstTy, bool)> {
+        match context.root_kind {
+            surtr_analysis::FacetPathRootKind::TypeRoot
+            | surtr_analysis::FacetPathRootKind::ViewClosureRoot => Some((
+                AstTy::Named(Span { start: 0, end: 0 }, context.root.clone()),
+                AstTy::Named(Span { start: 0, end: 0 }, context.root.clone()),
+                false,
+            )),
+            surtr_analysis::FacetPathRootKind::ValueRoot => self
+                .binding_type(&context.root)
+                .as_deref()
+                .and_then(parse_signature_type)
+                .or_else(|| {
+                    self.semantic_index()
+                        .find_symbol(&context.root)
+                        .and_then(|symbol| symbol.detail.as_deref())
+                        .and_then(parse_signature_type)
+                })
+                .map(|root_ty| {
+                    if let Some((source, focus)) = Self::facet_source_and_focus_ast_ty(&root_ty) {
+                        return (source, focus, false);
+                    }
+                    if let Some(inner) = Self::result_inner_ast_ty(&root_ty) {
+                        (root_ty.clone(), inner.clone(), true)
+                    } else {
+                        (root_ty.clone(), root_ty, false)
+                    }
+                }),
+        }
+    }
+
+    fn facet_candidate_segments(
+        &self,
+        ty: &AstTy,
+        replace_start: usize,
+        replace_end: usize,
+    ) -> Option<Vec<ReplCompletionCandidate>> {
+        match ty {
+            AstTy::Named(_, name) => {
+                if let Some(def) = self.scar_session.lookup_type_def(name) {
+                    let mut candidates = def
+                        .fields
+                        .iter()
+                        .filter(|(field, _)| !def.private_fields.contains(field))
+                        .map(|(field, field_ty)| ReplCompletionCandidate {
+                            label: field.clone(),
+                            replacement: field.clone(),
+                            kind: ReplCompletionKind::TypePath,
+                            detail: Some(format!("{}: {}", field, Self::ty_to_string(field_ty))),
+                            documentation: None,
+                            replace_start,
+                            replace_end,
+                        })
+                        .collect::<Vec<_>>();
+                    if matches!(def.kind, scar::env::TypeKind::Enum) {
+                        candidates.extend(
+                            self.scar_session
+                                .enum_variants_of(name)
+                                .into_iter()
+                                .flatten()
+                                .map(|variant| ReplCompletionCandidate {
+                                    label: variant.short_name.clone(),
+                                    replacement: variant.short_name.clone(),
+                                    kind: ReplCompletionKind::TypePath,
+                                    detail: Some(if variant.payload.is_empty() {
+                                        format!(
+                                            "{}::{}",
+                                            crate::surface_path_name(name),
+                                            variant.short_name
+                                        )
+                                    } else {
+                                        format!(
+                                            "{}::{}({})",
+                                            crate::surface_path_name(name),
+                                            variant.short_name,
+                                            variant
+                                                .payload
+                                                .iter()
+                                                .map(Self::ty_to_string)
+                                                .collect::<Vec<_>>()
+                                                .join(", ")
+                                        )
+                                    }),
+                                    documentation: None,
+                                    replace_start,
+                                    replace_end,
+                                }),
+                        );
+                    }
+                    candidates.sort_by(|left, right| left.label.cmp(&right.label));
+                    return Some(candidates);
+                }
+                None
+            }
+            AstTy::Tuple(_, items) => Some(
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, item)| ReplCompletionCandidate {
+                        label: format!("_{idx}"),
+                        replacement: format!("_{idx}"),
+                        kind: ReplCompletionKind::TypePath,
+                        detail: Some(format!("_{idx}: {}", format_query_ty(item))),
+                        documentation: None,
+                        replace_start,
+                        replace_end,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        }
+    }
+
+    fn facet_next_ast_ty(&self, ty: &AstTy, segment: &str) -> Option<FacetStep> {
+        match ty {
+            AstTy::Named(_, name) => {
+                let def = self.scar_session.lookup_type_def(name)?;
+                if let Some((_, field_ty)) = def
+                    .fields
+                    .iter()
+                    .find(|(field, _)| field == segment && !def.private_fields.contains(field))
+                {
+                    return parse_signature_type(&Self::ty_to_string(field_ty)).map(|ty| {
+                        FacetStep {
+                            ty,
+                            fallible: false,
+                            variant: false,
+                        }
+                    });
+                }
+                if matches!(def.kind, scar::env::TypeKind::Enum) {
+                    let variant = self
+                        .scar_session
+                        .enum_variants_of(name)?
+                        .iter()
+                        .find(|variant| variant.short_name == segment.trim_end_matches('?'))?;
+                    return match variant.payload.as_slice() {
+                        [] => Some(FacetStep {
+                            ty: AstTy::Named(
+                                Span { start: 0, end: 0 },
+                                crate::surface_path_name(name).to_string(),
+                            ),
+                            fallible: true,
+                            variant: true,
+                        }),
+                        [single] => {
+                            parse_signature_type(&Self::ty_to_string(single)).map(|ty| FacetStep {
+                                ty,
+                                fallible: true,
+                                variant: true,
+                            })
+                        }
+                        many => Some(FacetStep {
+                            ty: AstTy::Tuple(
+                                Span { start: 0, end: 0 },
+                                many.iter()
+                                    .map(|item| parse_signature_type(&Self::ty_to_string(item)))
+                                    .collect::<Option<Vec<_>>>()?,
+                            ),
+                            fallible: true,
+                            variant: true,
+                        }),
+                    };
+                }
+                None
+            }
+            AstTy::Tuple(_, items) => segment
+                .strip_prefix('_')
+                .and_then(|value| value.parse::<usize>().ok())
+                .and_then(|idx| items.get(idx).cloned())
+                .map(|ty| FacetStep {
+                    ty,
+                    fallible: false,
+                    variant: false,
+                }),
+            AstTy::Generic(_, name, args) if segment.starts_with('[') && segment.ends_with(']') => {
+                match name.as_str() {
+                    "List" if args.len() == 1 => Some(FacetStep {
+                        ty: args[0].clone(),
+                        fallible: true,
+                        variant: false,
+                    }),
+                    "HashMap" if args.len() == 1 => Some(FacetStep {
+                        ty: args[0].clone(),
+                        fallible: true,
+                        variant: false,
+                    }),
+                    _ => None,
+                }
+            }
+            AstTy::Generic(_, name, args) => match (name.as_str(), segment.trim_end_matches('?')) {
+                ("Option", "Some") if args.len() == 1 => Some(FacetStep {
+                    ty: args[0].clone(),
+                    fallible: true,
+                    variant: true,
+                }),
+                ("Result", "Ok") if args.len() == 1 => Some(FacetStep {
+                    ty: args[0].clone(),
+                    fallible: true,
+                    variant: true,
+                }),
+                ("Result", "Err") => Some(FacetStep {
+                    ty: AstTy::Named(Span { start: 0, end: 0 }, "Error".to_string()),
+                    fallible: true,
+                    variant: true,
+                }),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn result_inner_ast_ty(ty: &AstTy) -> Option<&AstTy> {
+        match ty {
+            AstTy::Generic(_, name, args) if name == "Result" && !args.is_empty() => args.first(),
+            _ => None,
+        }
+    }
+
+    fn facet_source_and_focus_ast_ty(ty: &AstTy) -> Option<(AstTy, AstTy)> {
+        match ty {
+            AstTy::Generic(_, name, args) if name == "Facet" && args.len() == 2 => {
+                Some((args[0].clone(), args[1].clone()))
+            }
+            _ => None,
+        }
+    }
+
+    fn facet_api_help_lines(
+        &self,
+        path_display: &str,
+        source_ty: &AstTy,
+        focus_ty: &AstTy,
+        path_is_fallible: bool,
+        path_is_variant: bool,
+        root_only: bool,
+        root_kind: surtr_analysis::FacetPathRootKind,
+        is_view_closure: bool,
+    ) -> Vec<String> {
+        let source = Self::facet_help_ty_display(source_ty);
+        let focus = Self::facet_help_ty_display(focus_ty);
+        let view_result = if path_is_fallible {
+            format!("Result<{focus}>")
+        } else {
+            focus.clone()
+        };
+        let mut lines = if root_only && is_view_closure {
+            vec![format!("{path_display} -> ({source} -> _)")]
+        } else if root_only && root_kind == surtr_analysis::FacetPathRootKind::TypeRoot {
+            vec![format!("{path_display} -> Facet<{source}, _>")]
+        } else if root_only && root_kind == surtr_analysis::FacetPathRootKind::ValueRoot {
+            vec![format!("{path_display} -> _")]
+        } else if is_view_closure {
+            vec![format!("&{path_display} -> ({source} -> {view_result})")]
+        } else {
+            vec![format!(
+                "Facet::view({path_display}, {source}) -> {view_result}"
+            )]
+        };
+        lines.push(format!(
+            "Facet::set({path_display}, {source}, {}) -> Result<{source}>",
+            self.facet_set_value_display(focus_ty)
+        ));
+        let over_input = self.facet_over_input_display(focus_ty);
+        lines.push(format!(
+            "Facet::over({path_display}, {source}, ({over_input} -> Result<{over_input}>)) -> Result<{source}>"
+        ));
+        if Self::result_inner_ast_ty(focus_ty).is_some() {
+            lines.push(format!(
+                "Facet::over_result({path_display}, {source}, ({focus} -> Result<{focus}>)) -> Result<{source}>"
+            ));
+        }
+        if path_is_variant {
+            lines.push(format!(
+                "Facet::preview({path_display}, {source}) -> {view_result}"
+            ));
+            lines.push(format!(
+                "Facet::case_set({path_display}, {source}, {}) -> Result<{source}>",
+                self.facet_set_value_display(focus_ty)
+            ));
+            lines.push(format!(
+                "Facet::case_over({path_display}, {source}, ({over_input} -> Result<{over_input}>)) -> Result<{source}>"
+            ));
+        }
+        lines
+    }
+
+    fn facet_set_value_display(&self, focus_ty: &AstTy) -> String {
+        if let Some(inner) = Self::result_inner_ast_ty(focus_ty) {
+            format!(
+                "{} or {}",
+                Self::facet_help_ty_display(inner),
+                Self::facet_help_ty_display(focus_ty)
+            )
+        } else {
+            Self::facet_help_ty_display(focus_ty)
+        }
+    }
+
+    fn facet_over_input_display(&self, focus_ty: &AstTy) -> String {
+        Self::result_inner_ast_ty(focus_ty)
+            .map(Self::facet_help_ty_display)
+            .unwrap_or_else(|| Self::facet_help_ty_display(focus_ty))
+    }
+
+    fn facet_help_ty_display(ty: &AstTy) -> String {
+        match ty {
+            AstTy::Generic(_, name, args)
+                if name == "Result"
+                    && args.len() == 2
+                    && matches!(
+                        args.get(1),
+                        Some(AstTy::Named(_, error)) if error == "Error"
+                    ) =>
+            {
+                format!("Result<{}>", Self::facet_help_ty_display(&args[0]))
+            }
+            AstTy::Generic(_, name, args) => format!(
+                "{}<{}>",
+                name,
+                args.iter()
+                    .map(Self::facet_help_ty_display)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Tuple(_, items) => format!(
+                "({})",
+                items
+                    .iter()
+                    .map(Self::facet_help_ty_display)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            AstTy::Func(_, params, ret) => format!(
+                "({} -> {})",
+                params
+                    .iter()
+                    .map(Self::facet_help_ty_display)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Self::facet_help_ty_display(ret)
+            ),
+            _ => format_query_ty(ty),
+        }
+    }
+
     fn repl_completion_label(label: &str, replacement: &str, detail: Option<&str>) -> String {
         if label != replacement {
             return label.to_string();
@@ -1800,144 +2238,29 @@ impl ReplEngine {
         ))
     }
 
-    fn cached_completion_symbol_for_name(
-        &self,
-        name: &str,
-    ) -> Option<surtr_analysis::CompletionSymbol> {
-        if let Some(binding) = self
-            .binding_records
-            .iter()
-            .rev()
-            .find(|binding| binding.name == name)
-        {
-            return Some(surtr_analysis::CompletionSymbol {
-                label: binding.name.clone(),
-                replacement: binding.name.clone(),
-                kind: surtr_analysis::CompletionKind::Variable,
-                detail: Some(binding.ty.clone()),
-                documentation: None,
-                sort_text: None,
-                origin: None,
-                definition: None,
-            });
-        }
-
-        let decl = self.visible_declaration(name)?;
-        if let Some(label) = self.completion_visible_owner_label(decl) {
-            if label == name {
-                return Some(surtr_analysis::CompletionSymbol {
-                    label: label.clone(),
-                    replacement: label,
-                    kind: surtr_analysis::CompletionKind::TypeConstructor,
-                    detail: self.declaration_signature(decl),
-                    documentation: None,
-                    sort_text: None,
-                    origin: None,
-                    definition: None,
-                });
-            }
-        }
-        if Self::declaration_is_function_completion_surface(decl) {
-            let detail = self.declaration_signature(decl).or_else(|| {
-                self.find_signature(name)
-                    .map(|(qualified_name, signature)| {
-                        Self::render_signature_with_qualified_name(&qualified_name, signature)
-                    })
-            });
-            return Some(surtr_analysis::CompletionSymbol {
-                label: name.to_string(),
-                replacement: name.to_string(),
-                kind: surtr_analysis::CompletionKind::FunctionCall,
-                detail,
-                documentation: None,
-                sort_text: None,
-                origin: None,
-                definition: None,
-            });
-        }
-        None
-    }
-
     fn sync_cached_completion_context_after_commit(
         &self,
         imported_symbols: &[String],
         bindings: &[forge::BindingInfo],
         function_defs: &[String],
     ) {
-        let Some(mut context) = self.completion_context_cache.borrow().clone() else {
+        if self.completion_context_cache.borrow().is_none() {
             return;
-        };
-
-        let mut seen = BTreeSet::new();
-        for name in imported_symbols
-            .iter()
-            .chain(bindings.iter().map(|binding| &binding.name))
-            .chain(function_defs.iter())
-        {
-            if !seen.insert(name.clone()) {
-                continue;
-            }
-            if let Some(symbol) = self.cached_completion_symbol_for_name(name) {
-                context.index.upsert_symbol(symbol);
-            }
-            if let Some(binding) = self
-                .binding_records
-                .iter()
-                .rev()
-                .find(|binding| binding.name == *name)
-            {
-                if let Some(signature) =
-                    Self::callable_binding_signature_from_type(&binding.name, &binding.ty)
-                {
-                    context
-                        .callable_signatures
-                        .entry(binding.name.clone())
-                        .or_insert((binding.name.clone(), signature));
-                }
-                continue;
-            }
-            if let Some((qualified_name, signature)) = self.find_signature(name) {
-                context
-                    .callable_signatures
-                    .entry(name.clone())
-                    .or_insert((qualified_name.clone(), signature.clone()));
-                if let Some(tail) = name.rsplit("::").next() {
-                    context
-                        .callable_signatures
-                        .entry(tail.to_string())
-                        .or_insert((qualified_name, signature));
-                }
-            }
         }
 
-        *self.completion_context_cache.borrow_mut() = Some(context);
+        let _ = (imported_symbols, bindings, function_defs);
+        *self.completion_context_cache.borrow_mut() = Some(self.build_completion_context());
     }
 
-    fn declaration_is_function_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
-        Self::declaration_is_completion_surface(entry)
-            && matches!(
-                entry.kind,
-                sigil::DeclarationKind::Def
-                    | sigil::DeclarationKind::Extractor
-                    | sigil::DeclarationKind::TraitMethod
-                    | sigil::DeclarationKind::EnumVariant
-                    | sigil::DeclarationKind::ResultCtor
-                    | sigil::DeclarationKind::ImplMethod
-                    | sigil::DeclarationKind::ImplCtorNew
-            )
+    fn completion_capabilities_for_builtin(name: &str) -> Option<SymbolCapabilities> {
+        let surface_name = crate::surface_rendered_name(name);
+        surtr_analysis::symbol_capabilities_for_builtin_surface(&surface_name)
     }
 
-    fn doc_entry_is_completion_surface(&self, entry: &DocEntry, lookup: &str) -> bool {
-        if let Some(decl) = self.qualified_declaration(&entry.qualified_name) {
-            return Self::declaration_is_completion_surface(decl);
-        }
-        if Self::is_qualified_symbol(lookup) {
-            self.qualified_declaration(lookup)
-                .is_some_and(Self::declaration_is_completion_surface)
-        } else {
-            self.sigil_session.lookup_uid(lookup).is_some()
-                || self.visible_helper_doc_alias(lookup).is_some()
-        }
+    fn completion_capabilities_for_declaration(
+        entry: &sigil::DeclarationEntry,
+    ) -> Option<SymbolCapabilities> {
+        surtr_analysis::symbol_capabilities_for_declaration_entry(entry)
     }
 
     pub fn prompt(&self) -> String {
@@ -1962,7 +2285,6 @@ impl ReplEngine {
                         self.vm.source_file(),
                         self.vm.runtime_error_location(),
                     );
-                    error_display::emit_text(&text, self.error_display_mode);
                     Some(error_display::lines_for_mode(
                         &text,
                         self.error_display_mode,
@@ -1974,13 +2296,6 @@ impl ReplEngine {
     }
 
     fn report_error_value(&self, value: &Value) -> Vec<String> {
-        error_display::emit_runtime_value_error_with_registry(
-            self.vm.as_vm(),
-            value,
-            &self.sources,
-            self.repl_source_id,
-            self.error_display_mode,
-        );
         error_display::runtime_value_error_lines_with_registry(
             self.vm.as_vm(),
             value,
@@ -2120,11 +2435,6 @@ impl ReplEngine {
         }
         let rendered =
             error_display::diagnostic_lines("REPL", source, &spec, self.error_display_mode);
-        error_display::emit_diagnostic("REPL", source, &spec, self.error_display_mode);
-        if matches!(self.error_display_mode, ErrorDisplayMode::Summary) && !summary_tail.is_empty()
-        {
-            error_display::emit_text(&summary_tail.join("\n"), self.error_display_mode);
-        }
         ReplResult::diagnostic(rendered, summary_tail)
     }
 
@@ -2141,7 +2451,6 @@ impl ReplEngine {
         }
         let rendered =
             error_display::diagnostic_lines("REPL", source, &spec, self.error_display_mode);
-        error_display::emit_diagnostic("REPL", source, &spec, self.error_display_mode);
         ReplResult::diagnostic(rendered, Vec::new())
     }
 
@@ -2380,13 +2689,9 @@ impl ReplEngine {
     }
 
     fn symbol_matches(qualified_name: &str, symbol: &str) -> bool {
-        let qualified_name = crate::surface_path_name(qualified_name);
-        let symbol = crate::surface_path_name(symbol);
-        qualified_name == symbol
-            || qualified_name
-                .rsplit("::")
-                .next()
-                .is_some_and(|tail| tail == symbol)
+        let qualified_name = sindr::names::CanonicalSymbolName::new(qualified_name);
+        let symbol = sindr::names::VisibleSymbolRef::new(symbol);
+        symbol.matches_qualified_name(&qualified_name)
     }
 
     fn is_qualified_symbol(symbol: &str) -> bool {
@@ -2448,16 +2753,13 @@ impl ReplEngine {
             return false;
         }
         if entry.kind == DocKind::Module {
-            return crate::surface_path_name(&entry.qualified_name)
-                == crate::surface_path_name(symbol);
+            return sindr::names::surface_path_eq(&entry.qualified_name, symbol);
         }
         if Self::is_qualified_symbol(symbol) {
             let Some(decl) = self.qualified_declaration(symbol) else {
-                return crate::surface_path_name(&entry.qualified_name)
-                    == crate::surface_path_name(symbol);
+                return sindr::names::surface_path_eq(&entry.qualified_name, symbol);
             };
-            return crate::surface_path_name(&entry.qualified_name)
-                == crate::surface_path_name(&decl.fq_name)
+            return sindr::names::surface_path_eq(&entry.qualified_name, &decl.fq_name)
                 && Self::declaration_is_public_surface(decl);
         }
         self.visible_uid_matches(symbol, &entry.qualified_name)
@@ -2469,7 +2771,7 @@ impl ReplEngine {
         self.declaration_index.get(symbol).or_else(|| {
             self.declaration_index
                 .values()
-                .find(|entry| crate::surface_path_name(&entry.fq_name) == symbol)
+                .find(|entry| sindr::names::surface_path_eq(&entry.fq_name, symbol))
         })
     }
 
@@ -2537,43 +2839,10 @@ impl ReplEngine {
         entry.visibility == spire::ast::Visibility::Public
     }
 
-    fn declaration_is_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
-        Self::declaration_is_public_surface(entry) && !entry.hidden && entry.user_callable
-    }
-
-    fn completion_visible_owner_label(&self, entry: &sigil::DeclarationEntry) -> Option<String> {
-        if !Self::declaration_is_public_surface(entry) || entry.hidden {
-            return None;
-        }
-        if !matches!(
-            entry.kind,
-            sigil::DeclarationKind::Struct
-                | sigil::DeclarationKind::Record
-                | sigil::DeclarationKind::Enum
-                | sigil::DeclarationKind::BuiltinType
-        ) {
-            return None;
-        }
-        let label = self
-            .visible_completion_label(entry)
-            .unwrap_or_else(|| crate::surface_path_name(&entry.fq_name).to_string());
-        Self::completion_visible_owner_name(&label).then_some(label)
-    }
-
-    fn visible_completion_label(&self, entry: &sigil::DeclarationEntry) -> Option<String> {
-        let qualified_uid = self.sigil_session.lookup_uid(&entry.fq_name).or_else(|| {
-            self.sigil_session
-                .lookup_uid(crate::surface_path_name(&entry.fq_name))
-        })?;
-        let mut labels = Vec::new();
-        labels.push(crate::surface_path_name(&entry.name).to_string());
-        if let Some(tail) = entry.name.rsplit("::").next() {
-            labels.push(tail.to_string());
-        }
-        labels.push(crate::surface_path_name(&entry.fq_name).to_string());
-        labels
-            .into_iter()
-            .find(|label| self.sigil_session.lookup_uid(label) == Some(qualified_uid))
+    fn declaration_is_repl_completion_surface(entry: &sigil::DeclarationEntry) -> bool {
+        Self::declaration_is_public_surface(entry)
+            && !entry.hidden
+            && (entry.user_callable || entry.user_importable)
     }
 
     fn completion_visible_owner_name(label: &str) -> bool {
@@ -4156,8 +4425,12 @@ impl ReplEngine {
     ) -> ReplResult {
         let ast = match spire::parse_with_context(
             query_source,
-            spire::ParserContext::repl(self.repl_source_id.0)
-                .with_rules(derive_parse_rules(SourceKind::ReplChunk)),
+            crate::derive_parser_context(
+                self.repl_source_id.0,
+                SourceKind::ReplChunk,
+                CompileUnitKind::Repl,
+                None,
+            ),
         ) {
             Ok(ast) => ast,
             Err(e) => {
@@ -4198,15 +4471,7 @@ impl ReplEngine {
 
         let typed = match self.scar_session.typecheck_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Repl,
-                    SourceKind::ReplChunk,
-                    None,
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            Self::typecheck_context_for_source(SourceKind::ReplChunk),
         ) {
             Ok(t) => t,
             Err(e) => {
@@ -4420,7 +4685,7 @@ impl ReplEngine {
     fn origin_for_name(name: &str) -> &'static str {
         if name.contains("REPL::") {
             "repl"
-        } else if BUILTIN_METAS
+        } else if builtin_function_metas()
             .iter()
             .any(|meta| name == meta.name || name.ends_with(&format!("::{}", meta.name)))
         {
@@ -4508,8 +4773,12 @@ impl ReplEngine {
     ) -> ReplResult {
         let ast = match spire::parse_with_context(
             query_source,
-            spire::ParserContext::repl(self.repl_source_id.0)
-                .with_rules(derive_parse_rules(SourceKind::ReplChunk)),
+            crate::derive_parser_context(
+                self.repl_source_id.0,
+                SourceKind::ReplChunk,
+                CompileUnitKind::Repl,
+                None,
+            ),
         ) {
             Ok(ast) => ast,
             Err(e) => {
@@ -4558,15 +4827,7 @@ impl ReplEngine {
 
         let typed = match self.scar_session.typecheck_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Repl,
-                    SourceKind::ReplChunk,
-                    None,
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            Self::typecheck_context_for_source(SourceKind::ReplChunk),
         ) {
             Ok(t) => t,
             Err(e) => {
@@ -5459,8 +5720,8 @@ impl ReplEngine {
         &self,
         decl: &sigil::DeclarationEntry,
     ) -> Option<(String, String)> {
-        let qualified_name = format!("{}::new", decl.fq_name);
-        if let Some(signature) = self.find_signature(&qualified_name) {
+        let constructor_qualified_name = format!("{}::new", decl.fq_name);
+        if let Some(signature) = self.find_signature(&constructor_qualified_name) {
             return Some(signature);
         }
 
@@ -5470,7 +5731,7 @@ impl ReplEngine {
             .filter(|entry| entry.kind == DocKind::Function)
             .filter(|entry| {
                 crate::surface_path_name(&entry.qualified_name)
-                    == crate::surface_path_name(&qualified_name)
+                    == crate::surface_path_name(&constructor_qualified_name)
             })
             .map(|entry| (entry.qualified_name.clone(), entry.signature.clone()))
             .collect::<Vec<_>>();
@@ -5494,14 +5755,25 @@ impl ReplEngine {
                     .map(|(name, ty)| format!("{name}: {}", Self::ty_to_string(ty)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                (
-                    qualified_name,
-                    format!(
-                        "{}::new({params}) -> {}",
-                        crate::surface_path_name(&decl.fq_name),
-                        crate::surface_path_name(&decl.fq_name)
+                match def.kind {
+                    scar::env::TypeKind::Record => (
+                        decl.fq_name.clone(),
+                        format!(
+                            "{}({params}) -> {}",
+                            crate::surface_path_name(&decl.fq_name),
+                            crate::surface_path_name(&decl.fq_name)
+                        ),
                     ),
-                )
+                    scar::env::TypeKind::Struct => (
+                        constructor_qualified_name,
+                        format!(
+                            "{}::new({params}) -> {}",
+                            crate::surface_path_name(&decl.fq_name),
+                            crate::surface_path_name(&decl.fq_name)
+                        ),
+                    ),
+                    _ => unreachable!("constructor signatures only support struct/record"),
+                }
             })
     }
 
@@ -6505,6 +6777,123 @@ impl ReplEngine {
         records
     }
 
+    fn collect_auto_import_records(
+        module_stages: &[Vec<sigil::StagedModuleAst>],
+        declaration_index: &sigil::DeclarationIndex,
+    ) -> Vec<ReplImportRecord> {
+        let mut seen = BTreeSet::new();
+        let mut records = Vec::new();
+        let mut member_auto_import_modules = BTreeSet::new();
+
+        for stage in module_stages {
+            for module in stage {
+                if !module.auto_import {
+                    continue;
+                }
+                let first_non_import = module
+                    .ast
+                    .iter()
+                    .find(|stmt| !matches!(stmt, Ast::Import(_, _, _)));
+                match first_non_import {
+                    Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _)) => {
+                        member_auto_import_modules.insert(module.module_path.clone());
+                    }
+                    _ => {
+                        let item = crate::surface_rendered_name(&module.module_path);
+                        if seen.insert((
+                            0usize,
+                            "auto".to_string(),
+                            item.clone(),
+                            "@autoimport".to_string(),
+                        )) {
+                            records.push(ReplImportRecord {
+                                line: 0,
+                                src: "auto".to_string(),
+                                item,
+                                via: "@autoimport".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        for entry in declaration_index.values() {
+            if entry.kind != sigil::DeclarationKind::Trait
+                || !entry.auto_import
+                || entry.hidden
+                || !entry.user_importable
+                || entry.visibility != spire::ast::Visibility::Public
+            {
+                continue;
+            }
+            let method_prefix = format!("{}::", entry.fq_name);
+            for method_entry in declaration_index.values() {
+                if method_entry.kind != sigil::DeclarationKind::TraitMethod
+                    || !method_entry.fq_name.starts_with(&method_prefix)
+                    || method_entry.hidden
+                    || !method_entry.user_importable
+                    || method_entry.visibility != spire::ast::Visibility::Public
+                {
+                    continue;
+                }
+                let item = crate::surface_rendered_name(&method_entry.name);
+                if seen.insert((
+                    0usize,
+                    "auto".to_string(),
+                    item.clone(),
+                    "@autoimport".to_string(),
+                )) {
+                    records.push(ReplImportRecord {
+                        line: 0,
+                        src: "auto".to_string(),
+                        item,
+                        via: "@autoimport".to_string(),
+                    });
+                }
+            }
+        }
+
+        let current_stage_index = module_stages.len().saturating_sub(1);
+        if let Ok(entries) =
+            sigil::effective_auto_import_entries(module_stages, None, current_stage_index)
+        {
+            for entry in entries {
+                if !member_auto_import_modules.contains(&entry.module_path) {
+                    continue;
+                }
+                let item = match entry.kind {
+                    sigil::DeclarationKind::TraitMethod => {
+                        crate::surface_rendered_name(&entry.name)
+                    }
+                    _ => crate::surface_rendered_name(&entry.fq_name),
+                };
+                if seen.insert((
+                    0usize,
+                    "auto".to_string(),
+                    item.clone(),
+                    "@autoimport".to_string(),
+                )) {
+                    records.push(ReplImportRecord {
+                        line: 0,
+                        src: "auto".to_string(),
+                        item,
+                        via: "@autoimport".to_string(),
+                    });
+                }
+            }
+        }
+
+        records.sort_by(|left, right| {
+            left.line
+                .cmp(&right.line)
+                .then_with(|| left.src.cmp(&right.src))
+                .then_with(|| left.item.cmp(&right.item))
+                .then_with(|| left.via.cmp(&right.via))
+        });
+        records
+    }
+
     fn handle_vars(&self) -> ReplResult {
         if self.binding_records.is_empty() {
             return Self::plain(vec!["No visible value bindings.".to_string()]);
@@ -6520,11 +6909,12 @@ impl ReplEngine {
 
     fn handle_imported(&self) -> ReplResult {
         let mut lines = vec!["line | src | item | via".to_string()];
-        lines.extend(
-            self.auto_import_modules
-                .iter()
-                .map(|module| format!("0 | auto | {} | @autoimport", module)),
-        );
+        lines.extend(self.auto_import_records.iter().map(|record| {
+            format!(
+                "{} | {} | {} | {}",
+                record.line, record.src, record.item, record.via
+            )
+        }));
         lines.extend(self.import_records.iter().map(|record| {
             format!(
                 "{} | {} | {} | {}",
@@ -6760,35 +7150,41 @@ impl ReplEngine {
 
     fn render_type_identity(&self, binding: &forge::BindingInfo, value: Option<&Value>) -> String {
         if binding.facet_info.is_some() {
-            return "TypeIdentity::FacetPath".to_string();
+            return ReplTypeDisplayCategory::FacetPath
+                .identity_label()
+                .to_string();
         }
         if let Some(kind) = binding.callable_kind {
-            return match kind {
-                forge::ReplCallableKind::Closure => "TypeIdentity::Closure".to_string(),
-                forge::ReplCallableKind::Capture => "TypeIdentity::Capture".to_string(),
-            };
+            return Self::callable_display_category(kind)
+                .identity_label()
+                .to_string();
         }
-        match value {
-            None => "TypeIdentity::Type".to_string(),
+        let category = match value {
+            None => ReplTypeDisplayCategory::Type,
             Some(Value::Callable(callable)) => match callable.metadata.origin {
-                sindr::runtime::CallableOrigin::Closure => "TypeIdentity::Closure".to_string(),
-                sindr::runtime::CallableOrigin::Capture => "TypeIdentity::Capture".to_string(),
-                sindr::runtime::CallableOrigin::Unknown => "TypeIdentity::Closure".to_string(),
+                sindr::runtime::CallableOrigin::Closure => ReplTypeDisplayCategory::Closure,
+                sindr::runtime::CallableOrigin::Capture => ReplTypeDisplayCategory::Capture,
+                sindr::runtime::CallableOrigin::Unknown => ReplTypeDisplayCategory::Closure,
             },
-            Some(Value::Tagged { tag, .. }) => {
-                let identity = self
-                    .vm
-                    .type_registry()
-                    .lookup(*tag)
-                    .map(|entry| match entry.kind {
-                        TypeKind::Struct => "Struct",
-                        TypeKind::Record => "Record",
-                        TypeKind::EnumVariant => "Enum",
-                    })
-                    .unwrap_or("Type");
-                format!("TypeIdentity::{}", identity)
-            }
-            Some(_) => "TypeIdentity::Type".to_string(),
+            Some(Value::Tagged { tag, .. }) => self
+                .vm
+                .type_registry()
+                .lookup(*tag)
+                .map(|entry| match entry.kind {
+                    TypeKind::Struct => ReplTypeDisplayCategory::Struct,
+                    TypeKind::Record => ReplTypeDisplayCategory::Record,
+                    TypeKind::EnumVariant => ReplTypeDisplayCategory::Enum,
+                })
+                .unwrap_or(ReplTypeDisplayCategory::Type),
+            Some(_) => ReplTypeDisplayCategory::Type,
+        };
+        category.identity_label().to_string()
+    }
+
+    fn callable_display_category(kind: forge::ReplCallableKind) -> ReplTypeDisplayCategory {
+        match kind {
+            forge::ReplCallableKind::Closure => ReplTypeDisplayCategory::Closure,
+            forge::ReplCallableKind::Capture => ReplTypeDisplayCategory::Capture,
         }
     }
 
@@ -6931,8 +7327,12 @@ impl ReplEngine {
 
         let ast = match spire::parse_with_context(
             &self.pending,
-            spire::ParserContext::repl(self.repl_source_id.0)
-                .with_rules(derive_parse_rules(SourceKind::ReplChunk)),
+            crate::derive_parser_context(
+                self.repl_source_id.0,
+                SourceKind::ReplChunk,
+                CompileUnitKind::Repl,
+                None,
+            ),
         ) {
             Ok(ast) => ast,
             Err(e) if e.is_incomplete() => {
@@ -6942,12 +7342,6 @@ impl ReplEngine {
                 let message = e.message();
                 let spec = diagnostics::parse_error_spec(&self.pending, message, e.span().clone());
                 let rendered = error_display::diagnostic_lines_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
-                error_display::emit_diagnostic_by_id(
                     &self.sources,
                     self.repl_source_id,
                     &spec,
@@ -6990,12 +7384,6 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
-                error_display::emit_diagnostic_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
                 self.history_entries.push(ReplHistoryEntry {
                     line: committed_line,
                     source: self.pending.clone(),
@@ -7027,12 +7415,6 @@ impl ReplEngine {
                     &spec,
                     self.error_display_mode,
                 );
-                error_display::emit_diagnostic_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
                 self.history_entries.push(ReplHistoryEntry {
                     line: committed_line,
                     source: self.pending.clone(),
@@ -7049,15 +7431,7 @@ impl ReplEngine {
 
         let typed = match self.scar_session.typecheck_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    CompileUnitKind::Repl,
-                    SourceKind::ReplChunk,
-                    None,
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            Self::typecheck_context_for_source(SourceKind::ReplChunk),
         ) {
             Ok(t) => t,
             Err(e) => {
@@ -7068,12 +7442,6 @@ impl ReplEngine {
                 let spec =
                     diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &error);
                 let rendered = error_display::diagnostic_lines_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
-                error_display::emit_diagnostic_by_id(
                     &self.sources,
                     self.repl_source_id,
                     &spec,
@@ -7119,12 +7487,6 @@ impl ReplEngine {
                 &spec,
                 self.error_display_mode,
             );
-            error_display::emit_diagnostic_by_id(
-                &self.sources,
-                self.repl_source_id,
-                &spec,
-                self.error_display_mode,
-            );
             self.history_entries.push(ReplHistoryEntry {
                 line: committed_line,
                 source: self.pending.clone(),
@@ -7147,12 +7509,6 @@ impl ReplEngine {
                 let spec =
                     diagnostics::simple_error("CodegenError", &e.message, e.span.clone(), None);
                 let rendered = error_display::diagnostic_lines_by_id(
-                    &self.sources,
-                    self.repl_source_id,
-                    &spec,
-                    self.error_display_mode,
-                );
-                error_display::emit_diagnostic_by_id(
                     &self.sources,
                     self.repl_source_id,
                     &spec,
@@ -7277,13 +7633,6 @@ impl ReplEngine {
                     self.error_display_mode,
                 );
                 let (stdout, stderr) = self.take_repl_host_io_lines();
-                error_display::emit_runtime_error_with_registry(
-                    &e,
-                    &self.sources,
-                    self.repl_source_id,
-                    location,
-                    self.error_display_mode,
-                );
                 self.history_entries.push(ReplHistoryEntry {
                     line: committed_line,
                     source: committed_source,
@@ -7569,7 +7918,7 @@ fn compile_repl_preload_from_module_stages(
     );
 
     let mut declaration_index = if module_stage_asts.len() == snapshot.default_stage_count {
-        snapshot.declaration_index.clone()
+        snapshot.declaration_index().clone()
     } else {
         sigil::precollect_declaration_index(&module_stage_asts).map_err(|e| {
             let spec = diagnostics::simple_error("ResolveError", &e.message, e.span, None);
@@ -7596,7 +7945,7 @@ fn compile_repl_preload_from_module_stages(
         &declaration_index,
         Some(compile_sources.user_module_path.clone()),
         snapshot.default_stage_count,
-        snapshot.resolve_state,
+        snapshot.resolve_state(),
     )
     .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
 
@@ -7632,28 +7981,14 @@ fn compile_repl_preload_from_module_stages(
         staged_program.resolved.extend(user_resolved);
     }
 
-    let mut scar_session = scar::ScarSession::new();
-    scar_session.rollback(snapshot.scar_checkpoint.clone());
-    let next_fun_idx = snapshot
-        .bytecode
-        .functions
-        .iter()
-        .map(|entry| entry.fun_idx.saturating_add(1))
-        .max()
-        .unwrap_or(0);
-    scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+    let mut scar_session = snapshot.compile_prefix().restored_scar_session();
     let typed = scar_session
         .typecheck_staged_program_with_context(
             staged_program,
-            scar::TypecheckContext {
-                runtime_policy: derive_runtime_policy(
-                    mode.compile_unit_kind,
-                    mode.runtime_source_kind,
-                    None,
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            scar::TypecheckContext::from_source_policy(
+                mode.runtime_source_kind
+                    .policy(mode.compile_unit_kind, None),
+            ),
         )
         .map_err(|e| ReplLoadError::Diagnostic {
             phase: "typecheck".to_string(),
@@ -7670,7 +8005,7 @@ fn compile_repl_preload_from_module_stages(
             ),
         })?;
 
-    let mut forge_session = forge::ForgeSession::from_bytecode(&snapshot.bytecode);
+    let mut forge_session = snapshot.compile_prefix().forge_session();
     let (mut chunk, meta) = forge_session
         .codegen_chunk_typed_program(typed)
         .map_err(|e| ReplLoadError::Diagnostic {
@@ -7706,9 +8041,9 @@ fn compile_repl_preload_from_module_stages(
                 .owned_context(compile_sources.builtin_source_id)
         });
     let mut vm = match source_context {
-        Some((source, file_name)) => session::bytecode_interactive_vm(snapshot.bytecode.clone())
+        Some((source, file_name)) => session::bytecode_interactive_vm(snapshot.bytecode().clone())
             .with_source(source, file_name),
-        None => session::bytecode_interactive_vm(snapshot.bytecode.clone()),
+        None => session::bytecode_interactive_vm(snapshot.bytecode().clone()),
     };
     vm.push_chunk(chunk, ReplSessionPhase::Preload.execution_policy())
         .map_err(|e| ReplLoadError::Runtime {
@@ -7723,7 +8058,11 @@ fn compile_repl_preload_from_module_stages(
     let mut symbols: BTreeSet<String> = ["Ok", "Err"]
         .into_iter()
         .map(str::to_string)
-        .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
+        .chain(
+            builtin_function_metas()
+                .iter()
+                .map(|meta| meta.name.to_string()),
+        )
         .collect();
     for entry in vm.bytecode().functions.iter() {
         if let Some(name) = &entry.qualified_name {
@@ -7754,6 +8093,8 @@ fn compile_repl_preload_from_module_stages(
         .filter(|module| module.auto_import)
         .map(|module| module.module_path.clone())
         .collect();
+    let auto_import_records =
+        ReplEngine::collect_auto_import_records(&module_stage_asts, &declaration_index);
     let import_records = ReplEngine::collect_import_records(&user_ast, 0);
     let def_records = ReplEngine::collect_def_records(&user_ast, 0);
 
@@ -7772,6 +8113,7 @@ fn compile_repl_preload_from_module_stages(
         process_metadata,
         symbols,
         auto_import_modules,
+        auto_import_records,
         script_runtime_inputs,
         script_preload_docs,
         script_preload_signatures,
@@ -7793,26 +8135,20 @@ fn parse_preload_sources(
     ),
     ReplLoadError,
 > {
-    let mut module_stage_asts = snapshot.module_stages.clone();
+    let expanded =
+        crate::expand_snapshot_module_stages(compile_sources, snapshot, compile_unit_kind)
+            .map_err(|e| ReplLoadError::Diagnostic {
+                phase: "parse".to_string(),
+                sources: compile_sources.sources.clone(),
+                source_id: e.source_id,
+                spec: diagnostics::parse_error_spec(
+                    compile_sources.sources.source(e.source_id).unwrap_or(""),
+                    e.message(),
+                    e.span(),
+                ),
+            })?;
+    let mut module_stage_asts = expanded.module_stages.into_owned();
     let raw_module_stages = compile_sources.module_stages.clone();
-    let mut suffix_stages = crate::parse_module_stages_from_compile_sources_suffix(
-        compile_sources,
-        compile_unit_kind,
-        snapshot.default_stage_count,
-    )
-    .map_err(|e| ReplLoadError::Diagnostic {
-        phase: "parse".to_string(),
-        sources: compile_sources.sources.clone(),
-        source_id: e.source_id,
-        spec: diagnostics::parse_error_spec(
-            compile_sources.sources.source(e.source_id).unwrap_or(""),
-            e.message(),
-            e.span(),
-        ),
-    })?;
-    if !suffix_stages.is_empty() {
-        module_stage_asts.append(&mut suffix_stages);
-    }
 
     let user_source = compile_sources
         .sources
@@ -7820,8 +8156,12 @@ fn parse_preload_sources(
         .unwrap_or("");
     let user_ast = spire::parse_with_context(
         user_source,
-        spire::ParserContext::script(compile_sources.user_source_id.0)
-            .with_rules(derive_parse_rules(SourceKind::Script)),
+        crate::derive_parser_context(
+            compile_sources.user_source_id.0,
+            SourceKind::Script,
+            CompileUnitKind::Script,
+            None,
+        ),
     )
     .map_err(|e| ReplLoadError::Diagnostic {
         phase: "parse".to_string(),
@@ -8538,14 +8878,14 @@ fn load_error_from_span_failure(
 pub(crate) fn parse_module_stages_from_sources(
     sources: &SourceRegistry,
     module_stages: &[Vec<StagedModule>],
-    _compile_unit_kind: CompileUnitKind,
+    compile_unit_kind: CompileUnitKind,
 ) -> Result<Vec<Vec<sigil::StagedModuleAst>>, ModuleStageParseError> {
     let mut staged_module_asts = Vec::with_capacity(module_stages.len());
-    let mut seen_module_paths: HashMap<String, (String, bool)> = HashMap::new();
+    let mut seen_module_paths: HashMap<String, SeenModulePath> = HashMap::new();
 
     for stage in module_stages {
         let mut stage_ast = Vec::new();
-        let parsed_stage = parse_stage_modules_parallel(sources, stage);
+        let parsed_stage = parse_stage_modules_parallel(sources, stage, compile_unit_kind);
         for (module, lowered_modules) in stage.iter().zip(parsed_stage) {
             for lowered in lowered_modules? {
                 if !lowered.module_path.is_empty() {
@@ -8554,15 +8894,16 @@ pub(crate) fn parse_module_stages_from_sources(
                         .file_name(module.source_id)
                         .unwrap_or("<unknown>")
                         .to_string();
-                    if let Some((first_file_name, first_is_impl_owner)) =
-                        seen_module_paths.get(&lowered.module_path)
-                    {
-                        if !(*first_is_impl_owner || is_impl_owner) {
+                    if let Some(seen) = seen_module_paths.get(&lowered.module_path) {
+                        if !is_impl_owner && seen.has_normal_module() {
                             return Err(ModuleStageParseError {
                                 source_id: module.source_id,
                                 kind: ModuleStageParseErrorKind::DuplicateModulePath {
                                     module_path: lowered.module_path.clone(),
-                                    first_file_name: first_file_name.clone(),
+                                    first_file_name: seen
+                                        .first_normal_file_name()
+                                        .unwrap_or_else(|| seen.first_file_name())
+                                        .to_string(),
                                     second_file_name,
                                     span: lowered
                                         .declared_span
@@ -8571,10 +8912,10 @@ pub(crate) fn parse_module_stages_from_sources(
                             });
                         }
                     }
-                    seen_module_paths.insert(
-                        lowered.module_path.clone(),
-                        (second_file_name, is_impl_owner),
-                    );
+                    seen_module_paths
+                        .entry(lowered.module_path.clone())
+                        .and_modify(|seen| seen.record(second_file_name.clone(), is_impl_owner))
+                        .or_insert_with(|| SeenModulePath::new(second_file_name, is_impl_owner));
                 }
 
                 stage_ast.push(sigil::StagedModuleAst {
@@ -8593,9 +8934,43 @@ pub(crate) fn parse_module_stages_from_sources(
     Ok(staged_module_asts)
 }
 
+#[derive(Debug, Clone)]
+struct SeenModulePath {
+    first_file_name: String,
+    first_normal_file_name: Option<String>,
+}
+
+impl SeenModulePath {
+    fn new(file_name: String, is_impl_owner: bool) -> Self {
+        Self {
+            first_normal_file_name: (!is_impl_owner).then(|| file_name.clone()),
+            first_file_name: file_name,
+        }
+    }
+
+    fn record(&mut self, file_name: String, is_impl_owner: bool) {
+        if !is_impl_owner && self.first_normal_file_name.is_none() {
+            self.first_normal_file_name = Some(file_name);
+        }
+    }
+
+    fn has_normal_module(&self) -> bool {
+        self.first_normal_file_name.is_some()
+    }
+
+    fn first_file_name(&self) -> &str {
+        &self.first_file_name
+    }
+
+    fn first_normal_file_name(&self) -> Option<&str> {
+        self.first_normal_file_name.as_deref()
+    }
+}
+
 fn parse_stage_modules_parallel(
     sources: &SourceRegistry,
     stage: &[StagedModule],
+    compile_unit_kind: CompileUnitKind,
 ) -> Vec<Result<Vec<crate::LoweredModuleAst>, ModuleStageParseError>> {
     std::thread::scope(|scope| {
         let mut handles = Vec::with_capacity(stage.len());
@@ -8607,8 +8982,12 @@ fn parse_stage_modules_parallel(
                         let module_source = sources.source(module.source_id).unwrap_or("");
                         let parsed = spire::parse_with_context(
                             module_source,
-                            spire::ParserContext::module(module.source_id.0, None)
-                                .with_rules(derive_parse_rules(module.source_kind)),
+                            crate::derive_parser_context(
+                                module.source_id.0,
+                                module.source_kind,
+                                compile_unit_kind,
+                                None,
+                            ),
                         )
                         .map_err(|e| ModuleStageParseError {
                             source_id: module.source_id,
@@ -8617,20 +8996,10 @@ fn parse_stage_modules_parallel(
                                 span: e.span().clone(),
                             },
                         })?;
-                        let fallback_module_path = if parsed
-                            .iter()
-                            .any(|stmt| matches!(stmt, spire::ast::Ast::ConstDef(_, _, _, _, _)))
-                            && parsed.iter().all(|stmt| {
-                                matches!(
-                                    stmt,
-                                    spire::ast::Ast::Import(_, _, _)
-                                        | spire::ast::Ast::ConstDef(_, _, _, _, _)
-                                )
-                            }) {
-                            Some(module.module_path.as_str())
-                        } else {
-                            None
-                        };
+                        let fallback_module_path = sigil::const_only_fallback_module_path(
+                            &parsed,
+                            Some(module.module_path.as_str()),
+                        );
                         Ok(crate::lower_module_source_ast(parsed, fallback_module_path))
                     })
                     .expect("stage parser worker thread should spawn"),
@@ -8754,114 +9123,6 @@ pub(crate) fn completion_allowed_at_cursor(input: &str, cursor: usize) -> bool {
     )
 }
 
-fn completion_call_context(input: &str, cursor: usize) -> Option<CompletionCallContext> {
-    let cursor = clamp_to_char_boundary(input, cursor);
-    let before = &input[..cursor];
-    let open = innermost_unclosed_lparen(before)?;
-    let callee_end = before[..open].trim_end().len();
-    let callee_start = before[..callee_end]
-        .char_indices()
-        .rev()
-        .find_map(|(idx, ch)| (!completion_token_char(ch)).then_some(idx + ch.len_utf8()))
-        .unwrap_or(0);
-    let callee = before[callee_start..callee_end].trim();
-    if callee.is_empty() {
-        return None;
-    }
-    let args = &before[open + 1..];
-    Some(CompletionCallContext {
-        callee: callee.to_string(),
-        active_parameter: active_call_parameter(args),
-    })
-}
-
-fn innermost_unclosed_lparen(input: &str) -> Option<usize> {
-    let mut stack = Vec::new();
-    let mut in_string = false;
-    let mut escaped = false;
-
-    for (idx, ch) in input.char_indices() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        match ch {
-            '"' => in_string = true,
-            '(' => stack.push(idx),
-            ')' => {
-                stack.pop();
-            }
-            _ => {}
-        }
-    }
-
-    stack.pop()
-}
-
-fn active_call_parameter(args: &str) -> usize {
-    let mut active = 0usize;
-    let mut paren_depth = 0usize;
-    let mut angle_depth = 0usize;
-    let mut bracket_depth = 0usize;
-    let mut in_string = false;
-    let mut escaped = false;
-
-    for ch in args.chars() {
-        if in_string {
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-
-        match ch {
-            '"' => in_string = true,
-            '(' => paren_depth += 1,
-            ')' => paren_depth = paren_depth.saturating_sub(1),
-            '<' => angle_depth += 1,
-            '>' => angle_depth = angle_depth.saturating_sub(1),
-            '[' => bracket_depth += 1,
-            ']' => bracket_depth = bracket_depth.saturating_sub(1),
-            ',' if paren_depth == 0 && angle_depth == 0 && bracket_depth == 0 => active += 1,
-            _ => {}
-        }
-    }
-
-    active
-}
-
-fn highlight_signature_parameter(signature: &str, active_parameter: usize) -> String {
-    let Some((head, rest)) = signature.split_once('(') else {
-        return signature.to_string();
-    };
-    let Some((params_src, tail)) = rest.rsplit_once(')') else {
-        return signature.to_string();
-    };
-    let mut params = split_top_level_commas(params_src)
-        .into_iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    if let Some(param) = params.get_mut(active_parameter) {
-        if let Some((name, ty)) = param.split_once(':') {
-            *param = format!("{}: [{}]", name.trim(), ty.trim());
-        } else {
-            *param = format!("[{}]", param.trim());
-        }
-    }
-    format!("{head}({}){tail}", params.join(", "))
-}
-
 fn split_top_level_commas(input: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut start = 0;
@@ -8916,6 +9177,49 @@ mod tests {
         BootEntrySource, BytecodeChunk, Constant, Opcode, RuntimeBootPlan, SingletonBootEntry,
     };
     use sindr::runtime::{TypeEntry, TypeKind};
+    #[cfg(unix)]
+    use std::io::{Read, Write};
+    #[cfg(unix)]
+    use std::os::fd::FromRawFd;
+    #[cfg(unix)]
+    use std::sync::Mutex;
+
+    #[cfg(unix)]
+    static STDERR_CAPTURE_LOCK: Mutex<()> = Mutex::new(());
+
+    #[cfg(unix)]
+    extern "C" {
+        fn close(fd: i32) -> i32;
+        fn dup(fd: i32) -> i32;
+        fn dup2(src: i32, dst: i32) -> i32;
+        fn pipe(fds: *mut i32) -> i32;
+    }
+
+    #[cfg(unix)]
+    fn capture_process_stderr<T>(f: impl FnOnce() -> T) -> (T, String) {
+        let _guard = STDERR_CAPTURE_LOCK.lock().expect("stderr capture lock");
+        let mut pipe_fds = [0_i32; 2];
+        unsafe {
+            assert_eq!(pipe(pipe_fds.as_mut_ptr()), 0, "pipe should succeed");
+            let saved_stderr = dup(2);
+            assert!(saved_stderr >= 0, "dup stderr should succeed");
+            assert_eq!(dup2(pipe_fds[1], 2), 2, "redirect stderr should succeed");
+            assert_eq!(close(pipe_fds[1]), 0, "close write pipe should succeed");
+
+            let result = f();
+            std::io::stderr().flush().expect("flush stderr");
+
+            assert_eq!(dup2(saved_stderr, 2), 2, "restore stderr should succeed");
+            assert_eq!(close(saved_stderr), 0, "close saved stderr should succeed");
+
+            let mut stderr = String::new();
+            let mut reader = std::fs::File::from_raw_fd(pipe_fds[0]);
+            reader
+                .read_to_string(&mut stderr)
+                .expect("read captured stderr");
+            (result, stderr)
+        }
+    }
 
     fn interactive_test_chunk() -> BytecodeChunk {
         BytecodeChunk {
@@ -8971,12 +9275,17 @@ mod tests {
             symbols: ["Ok", "Err"]
                 .into_iter()
                 .map(str::to_string)
-                .chain(BUILTIN_METAS.iter().map(|meta| meta.name.to_string()))
+                .chain(
+                    builtin_function_metas()
+                        .iter()
+                        .map(|meta| meta.name.to_string()),
+                )
                 .collect(),
             docs: Vec::new(),
             signatures: Vec::new(),
             process_metadata: BTreeMap::new(),
             auto_import_modules: BTreeSet::new(),
+            auto_import_records: Vec::new(),
             reload_seed: ReplReloadSeed::Empty,
             replay_inputs: Vec::new(),
             history_entries: Vec::new(),
@@ -9032,6 +9341,22 @@ mod tests {
         let rendered = ReplEngine::repl_result_text(&help);
 
         assert!(rendered.contains(":quit, :exit, :q"), "{rendered}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn handle_line_type_error_returns_diagnostic_without_writing_process_stderr() {
+        let mut engine = ReplEngine::new().expect("engine should initialize");
+
+        let (result, stderr) = capture_process_stderr(|| engine.handle_line("bad: Int = \"oops\""));
+        let rendered = ReplEngine::repl_result_text(&result);
+
+        assert!(
+            stderr.is_empty(),
+            "REPL core wrote directly to process stderr:\n{stderr}"
+        );
+        assert!(matches!(result.output, ReplOutput::EvalError { .. }));
+        assert!(rendered.contains("expected Int"), "{rendered}");
     }
 
     #[test]
@@ -9235,7 +9560,10 @@ mod tests {
             .cached_completion_context()
             .expect("completion cache should stay available after commit");
         assert!(
-            after_mutation.callable_signatures.get("value").is_none(),
+            after_mutation
+                .completions("value(", "value(".len())
+                .signature
+                .is_none(),
             "plain value bindings should not become callable signatures"
         );
         assert_eq!(engine.completion_context_build_count(), baseline + 1);
@@ -9265,6 +9593,59 @@ mod tests {
         assert!(
             labels.iter().any(|label| label == "value"),
             "cached completion context should include new binding: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn core_completion_uses_live_imported_short_names_from_session_scope() {
+        let mut engine = ReplEngine::from_module_source(
+            "helper.srt",
+            r#"defmod Helper {
+  def helper() -> Int { 1 }
+}"#,
+        )
+        .expect("module source should initialize");
+
+        let imported = engine.handle_line("import Helper::helper");
+        assert!(
+            !imported.should_exit,
+            "{}",
+            ReplEngine::repl_result_text(&imported)
+        );
+
+        let semantic_labels = engine
+            .semantic_index()
+            .symbols()
+            .iter()
+            .map(|symbol| symbol.label.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            semantic_labels.iter().any(|label| label == "helper"),
+            "semantic index should include imported short symbol: {semantic_labels:?}"
+        );
+
+        let completion_labels = engine
+            .completions("hel", 3)
+            .candidates
+            .into_iter()
+            .map(|candidate| candidate.label)
+            .collect::<Vec<_>>();
+        assert!(
+            completion_labels.iter().any(|label| label == "helper"),
+            "completion should expose imported short symbol: {completion_labels:?}"
+        );
+
+        let signature_lines = engine
+            .completion_context()
+            .completions("helper(", "helper(".len())
+            .signature
+            .map(|signature| signature.lines)
+            .unwrap_or_default();
+        assert!(
+            signature_lines
+                .iter()
+                .any(|line| line.contains("helper() -> Int")),
+            "signature help should resolve imported short callable: {signature_lines:?}"
         );
     }
 
@@ -9402,6 +9783,22 @@ supervisor_init {
             ),
             "{}",
             ReplEngine::repl_result_text(&tick)
+        );
+    }
+
+    #[test]
+    fn core_type_identity_reports_repl_surface_contract() {
+        assert_eq!(
+            ReplTypeDisplayCategory::FacetPath.identity_label(),
+            "TypeIdentity::FacetPath"
+        );
+        assert_eq!(
+            ReplTypeDisplayCategory::Closure.identity_label(),
+            "TypeIdentity::Closure"
+        );
+        assert_eq!(
+            ReplTypeDisplayCategory::Struct.identity_label(),
+            "TypeIdentity::Struct"
         );
     }
 }

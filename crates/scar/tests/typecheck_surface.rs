@@ -3,7 +3,13 @@ use scar::typed::{
     TypedPattern, TypedProgram,
 };
 use scar::types::Ty;
+use sigil::resolved::{
+    Resolved, ResolvedFacetBracketExpr, ResolvedFacetPathSegment, ResolvedHashMapLiteralEntry,
+    ResolvedId, ResolvedPattern,
+};
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
+use sindr::primitives::int;
+use spire::ast::{Lit, Span};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -40,6 +46,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     (
         "match_bool_requires_exhaustive_arms",
         match_bool_requires_exhaustive_arms as fn(),
+    ),
+    (
+        "match_bool_accepts_qualified_boolean_constructor_patterns",
+        match_bool_accepts_qualified_boolean_constructor_patterns as fn(),
+    ),
+    (
+        "match_bool_qualified_constructor_patterns_require_exhaustive_arms",
+        match_bool_qualified_constructor_patterns_require_exhaustive_arms as fn(),
     ),
     (
         "safebind_total_pattern_accepts_plain_rhs",
@@ -144,6 +158,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     (
         "facet_preview_accepts_option_variant",
         facet_preview_accepts_option_variant as fn(),
+    ),
+    (
+        "facet_boolean_selector_uses_regular_enum_diagnostic",
+        facet_boolean_selector_uses_regular_enum_diagnostic as fn(),
     ),
     (
         "facet_list_and_map_segments_are_fallible_structural_paths",
@@ -1031,6 +1049,34 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         "workers_reserve_can_flow_into_worker_call",
         workers_reserve_can_flow_into_worker_call as fn(),
     ),
+    (
+        "tap_err_accepts_local_error_observer_binding",
+        tap_err_accepts_local_error_observer_binding as fn(),
+    ),
+    (
+        "tap_err_accepts_error_observer_captures_and_composition",
+        tap_err_accepts_error_observer_captures_and_composition as fn(),
+    ),
+    (
+        "error_observer_binding_cannot_escape_as_plain_value",
+        error_observer_binding_cannot_escape_as_plain_value as fn(),
+    ),
+    (
+        "error_observer_binding_cannot_be_called_directly",
+        error_observer_binding_cannot_be_called_directly as fn(),
+    ),
+    (
+        "error_observer_binding_cannot_use_error_annotation",
+        error_observer_binding_cannot_use_error_annotation as fn(),
+    ),
+    (
+        "error_observer_closure_param_cannot_use_error_annotation",
+        error_observer_closure_param_cannot_use_error_annotation as fn(),
+    ),
+    (
+        "error_observer_binding_cannot_flow_through_generic_identity",
+        error_observer_binding_cannot_flow_through_generic_identity as fn(),
+    ),
 ];
 
 macro_rules! surface_bucket_test {
@@ -1161,6 +1207,24 @@ fn typed_bind_rhs<'a>(typed: &'a [TypedNode], name: &str) -> &'a TypedNode {
             _ => None,
         })
         .unwrap_or_else(|| panic!("expected binding `{name}`"))
+}
+
+fn resolved_test_id(name: &str, unique_id: u32, span: &Span) -> ResolvedId {
+    ResolvedId {
+        name: name.into(),
+        qualified_name: None,
+        symbol_info: None,
+        unique_id,
+        compiler_generated: false,
+        span: span.clone(),
+    }
+}
+
+fn resolved_bracket_segment(expr: Resolved, display: &str) -> ResolvedFacetPathSegment {
+    ResolvedFacetPathSegment::Bracket(ResolvedFacetBracketExpr {
+        expr: Box::new(expr),
+        display: display.into(),
+    })
 }
 
 fn process_stdlib_no_longer_declares_task_hidden_lower_helpers() {
@@ -1306,6 +1370,30 @@ print(match flag {
     );
 
     let err = typecheck(resolved).expect_err("typecheck should fail");
+    assert!(err.message.contains("Non-exhaustive match. Missing: False"));
+}
+
+fn match_bool_accepts_qualified_boolean_constructor_patterns() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"flag = True
+print(match flag {
+  Boolean::True => "yes",
+  Boolean::False => "no",
+})"#,
+    );
+
+    typecheck(resolved).expect("Boolean constructor patterns should typecheck like enum variants");
+}
+
+fn match_bool_qualified_constructor_patterns_require_exhaustive_arms() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"flag = True
+print(match flag {
+  Boolean::True => "yes",
+})"#,
+    );
+    let err = typecheck(resolved)
+        .expect_err("qualified Boolean constructor patterns should use enum exhaustiveness");
     assert!(err.message.contains("Non-exhaustive match. Missing: False"));
 }
 
@@ -1665,6 +1753,37 @@ Facet::preview(Option.Some, value)"#,
     ));
 }
 
+#[test]
+fn facet_preview_accepts_boolean_variant_root() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"flag = True
+Facet::preview(Boolean.True, flag)"#,
+    );
+    let last = typed.last().expect("typed program should not be empty");
+    let TypedInner::FacetView { path, .. } = &last.node else {
+        panic!("expected Boolean.True to lower as a variant Facet view");
+    };
+    assert_eq!(path.path_kind, TypedFacetPathKind::Variant);
+    assert!(matches!(
+        &last.ty,
+        scar::types::Ty::Result(ok, err)
+            if matches!(ok.as_ref(), scar::types::Ty::Unit)
+                && matches!(err.as_ref(), scar::types::Ty::Error)
+    ));
+}
+
+fn facet_boolean_selector_uses_regular_enum_diagnostic() {
+    let err = typecheck_with_rules(
+        r#"flag = True
+Facet::preview(Boolean.Maybe, flag)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("unknown Boolean selector should fail through regular enum selector handling");
+    assert!(err
+        .message
+        .contains("No variant selector 'Maybe' on Boolean (use PascalCase constructor names)"));
+}
+
 fn facet_list_and_map_segments_are_fallible_structural_paths() {
     let typed = typecheck_with_builtin_prelude(
         r#"scores = [10, 20, 30]
@@ -1726,6 +1845,165 @@ talk = get_talk(score_map)"#,
             "{name} should be Result<Int>, got {:?}",
             rhs.ty
         );
+    }
+}
+
+#[test]
+fn facet_root_dispatch_requires_symbol_capability_metadata_not_matching_names() {
+    let span = Span { start: 0, end: 0 };
+    let tuple_id = resolved_test_id("Tuple", 900_001, &span);
+    let tuple_value_id = resolved_test_id("tuple_value", 900_002, &span);
+    let list_id = resolved_test_id("List", 900_003, &span);
+    let list_value_id = resolved_test_id("list_value", 900_004, &span);
+    let map_id = resolved_test_id("HashMap", 900_005, &span);
+    let map_value_id = resolved_test_id("map_value", 900_006, &span);
+
+    let typed = typecheck(vec![
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(tuple_id.clone()),
+            Box::new(Resolved::TupleLiteral(
+                span.clone(),
+                vec![
+                    Resolved::Lit(span.clone(), Lit::Str("alice".into())),
+                    Resolved::Lit(span.clone(), Lit::Int(int(42))),
+                ],
+            )),
+        ),
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(tuple_value_id),
+            Box::new(Resolved::FieldAccess(
+                span.clone(),
+                Box::new(Resolved::Var(span.clone(), tuple_id)),
+                "_0".into(),
+            )),
+        ),
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(list_id.clone()),
+            Box::new(Resolved::ListLiteral(
+                span.clone(),
+                vec![
+                    Resolved::Lit(span.clone(), Lit::Int(int(10))),
+                    Resolved::Lit(span.clone(), Lit::Int(int(20))),
+                ],
+            )),
+        ),
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(list_value_id),
+            Box::new(Resolved::FacetSegmentAccess(
+                span.clone(),
+                Box::new(Resolved::Var(span.clone(), list_id)),
+                resolved_bracket_segment(Resolved::Lit(span.clone(), Lit::Int(int(0))), "0"),
+            )),
+        ),
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(map_id.clone()),
+            Box::new(Resolved::HashMapLiteral(
+                span.clone(),
+                vec![ResolvedHashMapLiteralEntry {
+                    key: Resolved::Lit(span.clone(), Lit::Str("talk".into())),
+                    value: Resolved::Lit(span.clone(), Lit::Int(int(80))),
+                }],
+            )),
+        ),
+        Resolved::Bind(
+            span.clone(),
+            ResolvedPattern::Var(map_value_id),
+            Box::new(Resolved::FacetSegmentAccess(
+                span.clone(),
+                Box::new(Resolved::Var(span.clone(), map_id)),
+                resolved_bracket_segment(
+                    Resolved::Lit(span.clone(), Lit::Str("talk".into())),
+                    "\"talk\"",
+                ),
+            )),
+        ),
+    ])
+    .expect("value bindings with root-like names should typecheck as ordinary values");
+
+    let tuple_rhs = typed_bind_rhs(&typed, "tuple_value");
+    assert!(matches!(tuple_rhs.ty, Ty::Str));
+
+    for name in ["list_value", "map_value"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<Int>, got {:?}",
+            rhs.ty
+        );
+        assert!(matches!(rhs.node, TypedInner::FacetView { .. }));
+    }
+}
+
+#[test]
+fn facet_root_capability_dispatch_preserves_standard_roots_and_string_diagnostic() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"defrecord User(name: String)
+user = User("alice")
+pair = ("bob", 7)
+scores = [10, 20]
+score_map = HashMap::from_entries([("talk", 80)])
+user_name = Facet::view(User.name, user)
+tuple_name = Facet::view(Tuple._0, pair)
+list_score = Facet::view(List.[0], scores)
+map_score = Facet::view(HashMap.["talk"], score_map)"#,
+    );
+
+    for name in ["user_name", "tuple_name"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(matches!(rhs.ty, Ty::Str), "{name} should be String");
+        assert!(matches!(rhs.node, TypedInner::FacetView { .. }));
+    }
+    for name in ["list_score", "map_score"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<Int>, got {:?}",
+            rhs.ty
+        );
+        assert!(matches!(rhs.node, TypedInner::FacetView { .. }));
+    }
+
+    let err = typecheck_with_rules("bad = String.len", RuntimeSourcePolicy::script())
+        .expect_err("String.len should stay a known-symbol non-Facet-root diagnostic");
+    assert!(err.message.contains("String is not a Facet path root"));
+}
+
+#[test]
+fn deferred_list_and_hashmap_facet_bindings_can_be_reused_by_facet_intrinsics() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"scores = [10, 20]
+score_map = HashMap::from_entries([("talk", 80)])
+list_path = List.[0]
+map_path = HashMap.["talk"]
+list_score = Facet::view(list_path, scores)
+map_score = Facet::view(map_path, score_map)"#,
+    );
+
+    for name in ["list_score", "map_score"] {
+        let rhs = typed_bind_rhs(&typed, name);
+        assert!(
+            matches!(
+                &rhs.ty,
+                Ty::Result(ok, err)
+                    if matches!(ok.as_ref(), Ty::Int) && matches!(err.as_ref(), Ty::Error)
+            ),
+            "{name} should be Result<Int>, got {:?}",
+            rhs.ty
+        );
+        assert!(matches!(rhs.node, TypedInner::FacetView { .. }));
     }
 }
 
@@ -6629,4 +6907,76 @@ fn workers_reserve_can_flow_into_worker_call() {
     )
     .expect("workers reserve should typecheck as worker capability");
     assert!(!typed.nodes.is_empty());
+}
+
+fn tap_err_accepts_local_error_observer_binding() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"handler = {|err| eprint(err)}
+value = Result::tap_err(Err(NoneError), handler)"#,
+    );
+    assert!(!typed.is_empty());
+}
+
+fn tap_err_accepts_error_observer_captures_and_composition() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"logged = Result::tap_err(Err(NoneError), &eprint)
+named = Result::tap_err(Err(NoneError), &Error::kind >> &print)"#,
+    );
+    assert!(!typed.is_empty());
+}
+
+fn error_observer_binding_cannot_escape_as_plain_value() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"handler = {|err| eprint(err)}
+escaped = handler"#,
+    );
+    let err = typecheck(resolved).expect_err("Error observer binding must not escape");
+    assert!(err.message.contains("Error observer closure cannot escape"));
+}
+
+fn error_observer_binding_cannot_be_called_directly() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"handler = {|err| eprint(err)}
+value = match Err(NoneError) {
+  Ok(_) => (),
+  Err(err) => handler(err),
+}"#,
+    );
+    let err =
+        typecheck(resolved).expect_err("Error observer binding must not be callable directly");
+    assert!(err
+        .message
+        .contains("Error observer closure can only be passed"));
+}
+
+fn error_observer_binding_cannot_use_error_annotation() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"handler: (Error -> Unit) = {|err| eprint(err)}
+value = Result::tap_err(Err(NoneError), handler)"#,
+    );
+    let err = typecheck(resolved).expect_err("Error observer binding annotation must fail");
+    assert!(err
+        .message
+        .contains("Error cannot be used as a user-defined function parameter type"));
+}
+
+fn error_observer_closure_param_cannot_use_error_annotation() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"handler = {|err: Error| eprint(err)}
+value = Result::tap_err(Err(NoneError), handler)"#,
+    );
+    let err = typecheck(resolved).expect_err("Error observer closure param annotation must fail");
+    assert!(err
+        .message
+        .contains("Error cannot be used as a user-defined function parameter type"));
+}
+
+fn error_observer_binding_cannot_flow_through_generic_identity() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def id(value: $A) -> $A { value }
+handler = {|err| eprint(err)}
+value = Result::tap_err(Err(NoneError), id(handler))"#,
+    );
+    let err = typecheck(resolved).expect_err("Error observer binding must be a direct argument");
+    assert!(err.message.contains("Error observer closure cannot escape"));
 }

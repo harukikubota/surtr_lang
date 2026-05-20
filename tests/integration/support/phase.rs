@@ -27,7 +27,10 @@ fn resolve_sources_in_compile_order(
     };
     let (start_stage_index, resume_state) = if matches!(mode, TestCompileMode::Script) {
         let std_snapshot = default_stdlib_snapshot()?;
-        (std_snapshot.default_stage_count, std_snapshot.resolve_state)
+        (
+            std_snapshot.default_stage_count,
+            std_snapshot.resolve_state(),
+        )
     } else {
         let std_resolved = sigil::resolve_staged_program_with_state(
             &cached_modules.module_asts,
@@ -63,7 +66,7 @@ fn typecheck_sources_in_compile_order(
         module_asts.push(process_stage);
     }
     let declaration_index = if module_asts.len() == compile_prefix.module_asts.len() {
-        compile_prefix.declaration_index.clone()
+        compile_prefix.declaration_index().clone()
     } else {
         sigil::precollect_declaration_index(&module_asts)
             .map_err(|e| format!("phase=resolve; message={}", e))?
@@ -74,11 +77,11 @@ fn typecheck_sources_in_compile_order(
         &declaration_index,
         Some(compile_sources.user_module_path.clone()),
         compile_prefix.module_asts.len(),
-        compile_prefix.resolve_state,
+        compile_prefix.resolve_state(),
     )
     .map_err(|e| format!("phase=resolve; message={}", e))?;
     let mut scar_session = scar::ScarSession::new();
-    scar_session.rollback(compile_prefix.scar_checkpoint.clone());
+    scar_session.rollback(compile_prefix.scar_checkpoint().clone());
     scar_session
         .typecheck_with_context(
             resolved.resolved,

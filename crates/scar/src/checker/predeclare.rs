@@ -1,5 +1,6 @@
 use super::*;
 use sindr::builtin::builtin_type_meta_by_name;
+use sindr::names::builtin_type_usage_policy;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 static SYNTHETIC_DEFAULT_METHOD_UID: AtomicU32 = AtomicU32::new(0x6000_0000);
@@ -46,6 +47,7 @@ impl Checker {
         ResolvedId {
             name: method_name.to_string(),
             qualified_name: Some(qualified_name),
+            symbol_info: None,
             unique_id: Self::next_synthetic_default_method_uid(),
             compiler_generated: true,
             span: span.clone(),
@@ -1115,11 +1117,18 @@ impl Checker {
     fn public_trait_target_display(info: &TraitImplInfo) -> Option<String> {
         let display = Self::surface_ast_ty_key(&info.target_ast_ty);
         let base = display.split('<').next().unwrap_or(display.as_str());
-        match base {
-            "TypeRef" | "Hole" | "Closure" | "MatchArms" | "CondClauses" | "BulkUpdateEntries"
-            | "Self" => None,
-            _ => Some(display),
+        if Self::builtin_type_has_public_trait_target_surface(base) {
+            Some(display)
+        } else {
+            None
         }
+    }
+
+    fn builtin_type_has_public_trait_target_surface(base: &str) -> bool {
+        if base == "Self" {
+            return false;
+        }
+        builtin_type_usage_policy(base).map_or(true, |policy| policy.type_annotation_allowed)
     }
 
     fn surface_ast_ty_key(ty: &AstTy) -> String {
@@ -2112,5 +2121,29 @@ impl Checker {
 
         self.env.next_fun_idx = fun_idx;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod policy_tests {
+    use super::*;
+
+    #[test]
+    fn public_trait_target_surface_uses_builtin_type_usage_policy() {
+        assert!(Checker::builtin_type_has_public_trait_target_surface(
+            "String"
+        ));
+        assert!(Checker::builtin_type_has_public_trait_target_surface(
+            "User"
+        ));
+        assert!(!Checker::builtin_type_has_public_trait_target_surface(
+            "Self"
+        ));
+        assert!(!Checker::builtin_type_has_public_trait_target_surface(
+            "TypeRef"
+        ));
+        assert!(!Checker::builtin_type_has_public_trait_target_surface(
+            "ProcessInit"
+        ));
     }
 }

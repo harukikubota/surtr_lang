@@ -346,6 +346,7 @@ mod tests {
             qualified_name: None,
             unique_id,
             compiler_generated: false,
+            symbol_info: None,
             span: test_span(),
         }
     }

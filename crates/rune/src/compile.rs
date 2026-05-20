@@ -13,15 +13,7 @@ use spire::error::ParseError;
 
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
 
-#[derive(Clone)]
-struct CachedScriptCompilePrefix {
-    declaration_index: sigil::DeclarationIndex,
-    resolve_state: sigil::ResolveResumeState,
-    scar_checkpoint: scar::ScarCheckpoint,
-    bytecode: forge::bytecode::Bytecode,
-}
-
-type SharedScriptCompilePrefix = Arc<CachedScriptCompilePrefix>;
+type SharedScriptCompilePrefix = Arc<xldr::CompilationPrefixSnapshot>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ScriptCompilePlan {
@@ -315,15 +307,9 @@ fn cached_test_prefix_root() -> PathBuf {
 fn script_prefix_typecheck_context(
     compile_unit_kind: sindr::policy::CompileUnitKind,
 ) -> scar::TypecheckContext {
-    scar::TypecheckContext {
-        runtime_policy: xldr::derive_runtime_policy(
-            compile_unit_kind,
-            xldr::SourceKind::Script,
-            None,
-        ),
-        enforce_builtin_type_contracts: false,
-        allow_error_function_params: false,
-    }
+    scar::TypecheckContext::from_source_policy(
+        xldr::SourceKind::Script.policy(compile_unit_kind, None),
+    )
 }
 
 fn build_cached_script_compile_prefix(
@@ -365,12 +351,12 @@ fn build_cached_script_compile_prefix(
     let prefix = if let Some(payload) =
         xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key)
     {
-        Arc::new(CachedScriptCompilePrefix {
-            declaration_index: rebuilt_declaration_index.clone(),
-            resolve_state: payload.resolve_state,
-            scar_checkpoint: payload.scar_checkpoint,
-            bytecode: payload.bytecode,
-        })
+        Arc::new(xldr::CompilationPrefixSnapshot::from_parts(
+            rebuilt_declaration_index.clone(),
+            payload.resolve_state,
+            payload.scar_checkpoint,
+            payload.bytecode,
+        ))
     } else {
         let resolved = sigil::resolve_staged_program_from_state(
             module_stages,
@@ -378,23 +364,14 @@ fn build_cached_script_compile_prefix(
             &rebuilt_declaration_index,
             None,
             std_snapshot.default_stage_count,
-            std_snapshot.resolve_state,
+            std_snapshot.resolve_state(),
         )
         .map_err(|e| {
             let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
             RuneError::diagnostic(1, sources, source_id, "resolve", spec)
         })?;
         let resume_state = resolved.resume_state;
-        let mut scar_session = scar::ScarSession::new();
-        scar_session.rollback(std_snapshot.scar_checkpoint.clone());
-        let next_fun_idx = std_snapshot
-            .bytecode
-            .functions
-            .iter()
-            .map(|entry| entry.fun_idx.saturating_add(1))
-            .max()
-            .unwrap_or(0);
-        scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+        let mut scar_session = std_snapshot.compile_prefix().restored_scar_session();
         let typed = scar_session
             .typecheck_staged_program_with_context(
                 resolved,
@@ -411,7 +388,7 @@ fn build_cached_script_compile_prefix(
                     diagnostics::type_error_spec_by_id(sources, source_id, &local_error),
                 )
             })?;
-        let mut forge_session = forge::ForgeSession::from_bytecode(&std_snapshot.bytecode);
+        let mut forge_session = std_snapshot.compile_prefix().forge_session();
         let (chunk, _) = forge_session
             .codegen_chunk_typed_program(typed)
             .map_err(|e| {
@@ -424,17 +401,17 @@ fn build_cached_script_compile_prefix(
                     diagnostics::simple_error("CodegenError", &e.message, span, None),
                 )
             })?;
-        let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode.clone(), chunk)
+        let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode().clone(), chunk)
             .map_err(|e| {
-                let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
-                RuneError::diagnostic(
-                    1,
-                    sources,
-                    source_id,
-                    "codegen",
-                    diagnostics::simple_error("CodegenError", &e.message, span, None),
-                )
-            })?;
+            let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
+            RuneError::diagnostic(
+                1,
+                sources,
+                source_id,
+                "codegen",
+                diagnostics::simple_error("CodegenError", &e.message, span, None),
+            )
+        })?;
         scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
             entry
                 .qualified_name
@@ -451,22 +428,13 @@ fn build_cached_script_compile_prefix(
                     .unwrap_or(0),
             ),
         };
-        let prefix = Arc::new(CachedScriptCompilePrefix {
-            declaration_index: rebuilt_declaration_index.clone(),
+        let prefix = Arc::new(xldr::CompilationPrefixSnapshot::from_parts(
+            rebuilt_declaration_index.clone(),
             resolve_state,
-            scar_checkpoint: scar_session.checkpoint(),
+            scar_session.checkpoint(),
             bytecode,
-        });
-        xldr::store_cached_test_semantic_prefix(
-            &cache_path,
-            &cache_key,
-            xldr::CachedTestSemanticPrefixPayload {
-                declaration_index: prefix.declaration_index.clone(),
-                resolve_state: prefix.resolve_state,
-                scar_checkpoint: prefix.scar_checkpoint.clone(),
-                bytecode: prefix.bytecode.clone(),
-            },
-        );
+        ));
+        xldr::store_cached_test_semantic_prefix_snapshot(&cache_path, &cache_key, &prefix);
         prefix
     };
 
@@ -489,28 +457,21 @@ fn parse_program_with_module_sources<'a>(
     let source_kind = env.source_kind();
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
-    let mut staged_module_asts = std::borrow::Cow::Borrowed(std_snapshot.module_stages.as_slice());
-    let mut suffix_module_asts = xldr::parse_module_stages_from_compile_sources_suffix(
-        compile_sources,
-        compile_unit_kind,
-        std_snapshot.default_stage_count,
-    )
-    .map_err(|e| {
-        RuneError::diagnostic(
-            1,
-            sources,
-            e.source_id,
-            "parse",
-            diagnostics::parse_error_spec(
-                sources.source(e.source_id).unwrap_or(""),
-                e.message(),
-                e.span(),
-            ),
-        )
-    })?;
-    if !suffix_module_asts.is_empty() {
-        staged_module_asts.to_mut().append(&mut suffix_module_asts);
-    }
+    let expanded =
+        xldr::expand_snapshot_module_stages(compile_sources, std_snapshot, compile_unit_kind)
+            .map_err(|e| {
+                RuneError::diagnostic(
+                    1,
+                    sources,
+                    e.source_id,
+                    "parse",
+                    diagnostics::parse_error_spec(
+                        sources.source(e.source_id).unwrap_or(""),
+                        e.message(),
+                        e.span(),
+                    ),
+                )
+            })?;
 
     let user_source = sources.source(user_source_id).unwrap_or("");
     let user_ast = parse_script_ast_for_compile(user_source, user_source_id.0, source_kind)
@@ -528,7 +489,7 @@ fn parse_program_with_module_sources<'a>(
             )
         })?;
 
-    Ok((staged_module_asts, user_ast))
+    Ok((expanded.module_stages, user_ast))
 }
 
 pub(crate) fn compile_source(
@@ -560,13 +521,13 @@ pub(crate) fn compile_source(
     } else {
         &[]
     };
-    let docs = xldr::collect_doc_entries_with_base(
+    let docs = sigil::collect_doc_entries_with_base(
         &std_snapshot.docs,
         suffix_module_stages,
         &user_ast,
         Some(compile_sources.user_module_path.as_str()),
     );
-    let signatures = xldr::collect_signature_entries_with_base(
+    let signatures = sigil::collect_signature_entries_with_base(
         &std_snapshot.signatures,
         suffix_module_stages,
         &user_ast,
@@ -576,7 +537,7 @@ pub(crate) fn compile_source(
     let mut cached_prefix: Option<SharedScriptCompilePrefix> = None;
     let rebuilt_declaration_index;
     let declaration_index = if module_stages.len() == std_snapshot.default_stage_count {
-        &std_snapshot.declaration_index
+        std_snapshot.declaration_index()
     } else if matches!(env, ExecutionEnv::Test) && !has_script_process_stage {
         cached_prefix = Some(build_cached_script_compile_prefix(
             env,
@@ -601,7 +562,7 @@ pub(crate) fn compile_source(
     let resume_state = cached_prefix
         .as_ref()
         .map(|prefix| prefix.resolve_state)
-        .unwrap_or(std_snapshot.resolve_state);
+        .unwrap_or(std_snapshot.resolve_state());
     let start_stage_index = if cached_prefix.is_some() {
         module_stages.len()
     } else {
@@ -620,35 +581,22 @@ pub(crate) fn compile_source(
         RuneError::diagnostic(1, sources, source_id, "resolve", spec)
     })?;
 
-    let mut scar_session = scar::ScarSession::new();
     let prefix_bytecode = cached_prefix
         .as_ref()
         .map(|prefix| prefix.bytecode.clone())
-        .unwrap_or_else(|| std_snapshot.bytecode.clone());
-    let prefix_checkpoint = cached_prefix
+        .unwrap_or_else(|| std_snapshot.bytecode().clone());
+    let active_prefix = cached_prefix
         .as_ref()
-        .map(|prefix| prefix.scar_checkpoint.clone())
-        .unwrap_or_else(|| std_snapshot.scar_checkpoint.clone());
-    scar_session.rollback(prefix_checkpoint);
-    let next_fun_idx = prefix_bytecode
-        .functions
-        .iter()
-        .map(|entry| entry.fun_idx.saturating_add(1))
-        .max()
-        .unwrap_or(0);
-    scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+        .map(|prefix| prefix.as_ref())
+        .unwrap_or_else(|| std_snapshot.compile_prefix());
+    let mut scar_session = active_prefix.restored_scar_session();
     let typed = scar_session
         .typecheck_staged_program_with_context(
             resolved,
-            scar::TypecheckContext {
-                runtime_policy: xldr::derive_runtime_policy(
-                    compile_unit_kind,
-                    source_kind,
-                    compile_plan.normalized_entrypoint.as_ref(),
-                ),
-                enforce_builtin_type_contracts: false,
-                allow_error_function_params: false,
-            },
+            scar::TypecheckContext::from_source_policy(source_kind.policy(
+                compile_unit_kind,
+                compile_plan.normalized_entrypoint.as_ref(),
+            )),
         )
         .map_err(|e| {
             let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
@@ -662,7 +610,7 @@ pub(crate) fn compile_source(
             )
         })?;
 
-    let mut forge_session = forge::ForgeSession::from_bytecode(&prefix_bytecode);
+    let mut forge_session = active_prefix.forge_session();
     let (chunk, _) = forge_session
         .codegen_chunk_typed_program(typed)
         .map_err(|e| {
@@ -777,8 +725,12 @@ fn parse_script_ast_for_compile(
     source_id: u32,
     source_kind: xldr::SourceKind,
 ) -> Result<Vec<Ast>, ParseError> {
-    let strict_context =
-        spire::ParserContext::script(source_id).with_rules(xldr::derive_parse_rules(source_kind));
+    let strict_context = xldr::derive_parser_context(
+        source_id,
+        source_kind,
+        sindr::policy::CompileUnitKind::Script,
+        None,
+    );
     spire::parse_with_context(source, strict_context)
 }
 

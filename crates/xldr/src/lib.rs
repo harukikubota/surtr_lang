@@ -13,6 +13,7 @@ use std::sync::{Arc, OnceLock};
 
 pub use command_error::{CommandDiagnostic, CommandError, CommandResult};
 pub use error_display::ErrorDisplayMode;
+use loader::stdlib_module_spec_cache_key;
 pub use loader::{
     collect_additional_default_std_module_inputs, collect_lib_module_inputs,
     collect_module_sources_with_extra_std_sources, collect_module_sources_with_module_file_stages,
@@ -39,10 +40,12 @@ pub use repl::ui::completion::{
     ReplCompletionProvider, ReplCompletionRequest, ReplCompletionResult,
 };
 use serde::{Deserialize, Serialize};
-use sindr::builtin::{BUILTIN_METAS, BUILTIN_TYPE_METAS};
-use sindr::ir::{stable_hash_hex, Bytecode, DocEntry, DocKind, SignatureEntry};
+use sindr::builtin::{builtin_function_metas, builtin_type_head_metas};
+use sindr::ir::{stable_hash_hex, DocEntry, SignatureEntry};
 pub use sindr::policy::SourceKind;
-use sindr::policy::{CompileUnitKind, EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
+use sindr::policy::{
+    CompileUnitKind, EntryPoint, RuntimeSourcePolicy, SOURCE_POLICY_SCHEMA_VERSION,
+};
 
 pub const MODULE_SPAN_STRIDE: usize = 1_000_000;
 
@@ -104,1101 +107,18 @@ pub fn decode_rebased_module_span(span: &spire::ast::Span) -> Option<(SourceId, 
 
 // ── Public types used by other crates ────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct LoweredModuleAst {
-    pub module_path: String,
-    pub doc_module_path: Option<String>,
-    pub ast: Vec<spire::ast::Ast>,
-    pub declared_span: Option<spire::ast::Span>,
-    pub module_doc: Option<String>,
-    pub auto_import: bool,
-    pub process_spec: Option<spire::ast::ProcessSpec>,
-}
+pub use sigil::LoweredModuleAst;
 
 pub(crate) fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
-    matches!(
-        lowered
-            .ast
-            .iter()
-            .find(|stmt| !matches!(stmt, spire::ast::Ast::Import(_, _, _))),
-        Some(
-            spire::ast::Ast::ImplDef(_, _, _, _) | spire::ast::Ast::TraitImplDef(_, _, _, _, _, _)
-        )
-    )
-}
-
-fn partition_nested_imports(
-    body: Vec<spire::ast::Ast>,
-) -> (Vec<spire::ast::Ast>, Vec<spire::ast::Ast>) {
-    let mut imports = Vec::new();
-    let mut rest = Vec::new();
-    for stmt in body {
-        if matches!(stmt, spire::ast::Ast::Import(_, _, _)) {
-            imports.push(stmt);
-        } else {
-            rest.push(stmt);
-        }
-    }
-    (imports, rest)
-}
-
-fn first_non_import_index(ast: &[spire::ast::Ast]) -> usize {
-    ast.iter()
-        .take_while(|stmt| matches!(stmt, spire::ast::Ast::Import(_, _, _)))
-        .count()
-}
-
-fn find_result_owner_module(lowered: &[LoweredModuleAst]) -> Option<usize> {
-    lowered.iter().position(|module| {
-        surface_path_name(&module.module_path) == "Result"
-            && matches!(
-                module
-                    .ast
-                    .iter()
-                    .find(|stmt| !matches!(stmt, spire::ast::Ast::Import(_, _, _))),
-                Some(spire::ast::Ast::ImplDef(_, target, _, _)) if surface_path_name(target) == "Result"
-            )
-    })
-}
-
-fn find_fallback_namespace_module(
-    lowered: &[LoweredModuleAst],
-    fallback_module_path: Option<&str>,
-) -> Option<usize> {
-    let fallback = fallback_module_path?;
-    lowered
-        .iter()
-        .position(|module| module.module_path == fallback && !lowered_module_is_impl_owner(module))
-}
-
-fn format_ast_ty(ty: &spire::ast::AstTy) -> String {
-    match ty {
-        spire::ast::AstTy::Named(_, name) => surface_path_name(name).to_string(),
-        spire::ast::AstTy::ImplTrait(_, name) => format!("impl {}", surface_path_name(name)),
-        spire::ast::AstTy::Generic(_, name, args) => {
-            let args = args
-                .iter()
-                .map(format_ast_ty)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("{}<{args}>", surface_path_name(name))
-        }
-        spire::ast::AstTy::Tuple(_, items) => {
-            let items = items
-                .iter()
-                .map(format_ast_ty)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("({items})")
-        }
-        spire::ast::AstTy::Func(_, params, ret) => {
-            if params.is_empty() {
-                format!("(-> {})", format_ast_ty(ret))
-            } else {
-                let params = params
-                    .iter()
-                    .map(format_ast_ty)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("({params} -> {})", format_ast_ty(ret))
-            }
-        }
-    }
-}
-
-fn rewrite_self_ast_ty(ty: &spire::ast::AstTy, self_ty: &spire::ast::AstTy) -> spire::ast::AstTy {
-    match ty {
-        spire::ast::AstTy::Named(_, name) if name == "Self" => self_ty.clone(),
-        spire::ast::AstTy::Named(_, _) | spire::ast::AstTy::ImplTrait(_, _) => ty.clone(),
-        spire::ast::AstTy::Generic(span, name, args) => spire::ast::AstTy::Generic(
-            span.clone(),
-            name.clone(),
-            args.iter()
-                .map(|arg| rewrite_self_ast_ty(arg, self_ty))
-                .collect(),
-        ),
-        spire::ast::AstTy::Tuple(span, items) => spire::ast::AstTy::Tuple(
-            span.clone(),
-            items
-                .iter()
-                .map(|item| rewrite_self_ast_ty(item, self_ty))
-                .collect(),
-        ),
-        spire::ast::AstTy::Func(span, params, ret) => spire::ast::AstTy::Func(
-            span.clone(),
-            params
-                .iter()
-                .map(|param| rewrite_self_ast_ty(param, self_ty))
-                .collect(),
-            Box::new(rewrite_self_ast_ty(ret, self_ty)),
-        ),
-    }
-}
-
-fn format_type_params(type_params: &[spire::ast::TypeParam]) -> String {
-    if type_params.is_empty() {
-        String::new()
-    } else {
-        let params = type_params
-            .iter()
-            .map(|param| match &param.bound {
-                Some(bound) => format!("{}: {}", param.name, bound),
-                None => param.name.clone(),
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("<{params}>")
-    }
-}
-
-fn format_fun_signature(
-    name: &str,
-    type_params: &[spire::ast::TypeParam],
-    params: &[spire::ast::FunParam],
-    ret_ty: &Option<spire::ast::AstTy>,
-) -> String {
-    let type_params = format_type_params(type_params);
-    let params = params
-        .iter()
-        .map(|param| format!("{}: {}", param.name, format_ast_ty(&param.ty)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    match ret_ty {
-        Some(ret) => format!("{name}{type_params}({params}) -> {}", format_ast_ty(ret)),
-        None => format!("{name}{type_params}({params})"),
-    }
-}
-
-fn format_extractor_signature(
-    name: &str,
-    type_params: &[spire::ast::TypeParam],
-    param: &spire::ast::ExtractorParam,
-    ret_ty: &spire::ast::AstTy,
-) -> String {
-    let type_params = format_type_params(type_params);
-    let param = match &param.ty {
-        Some(ty) => format!("{}: {}", param.name, format_ast_ty(ty)),
-        None => param.name.clone(),
-    };
-    format!("{name}{type_params}({param}) -> {}", format_ast_ty(ret_ty))
-}
-
-fn format_result_ctor_signature(
-    name: &str,
-    param_ty: &spire::ast::AstTy,
-    ret_ty: &spire::ast::AstTy,
-) -> String {
-    format!(
-        "{name}({}) -> {}",
-        format_ast_ty(param_ty),
-        format_ast_ty(ret_ty)
-    )
-}
-
-fn format_builtin_type_signature(head: &spire::ast::BuiltinTypeHead) -> String {
-    if head.params.is_empty() {
-        format!("type {}", surface_path_name(&head.name))
-    } else {
-        format!(
-            "type {}<{}>",
-            surface_path_name(&head.name),
-            head.params.join(", ")
-        )
-    }
-}
-
-fn format_deferror_signature(name: &str, fields: &[spire::ast::RecordField]) -> String {
-    if fields.is_empty() {
-        format!("deferror {}", surface_path_name(name))
-    } else {
-        let fields = fields
-            .iter()
-            .map(|field| format!("{}: {}", field.name, format_ast_ty(&field.ty)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("deferror {}({fields})", surface_path_name(name))
-    }
-}
-
-fn format_defenum_signature(name: &str, variants: &[spire::ast::EnumVariant]) -> String {
-    if variants.is_empty() {
-        return format!("defenum {}", surface_path_name(name));
-    }
-    let variants = variants
-        .iter()
-        .map(|variant| {
-            if variant.payload.is_empty() {
-                variant.name.clone()
-            } else {
-                let payload = variant
-                    .payload
-                    .iter()
-                    .map(format_ast_ty)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{}({})", variant.name, payload)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("defenum {} {{ {variants} }}", surface_path_name(name))
-}
-
-fn builtin_special_enum_variant_signature(
-    enum_name: &str,
-    type_params: &[spire::ast::TypeParam],
-    variant: &spire::ast::EnumVariant,
-) -> Option<String> {
-    match (surface_path_name(enum_name), variant.name.as_str()) {
-        ("Result", "Ok") => {
-            let ok_ty = variant
-                .payload
-                .first()
-                .map(format_ast_ty)
-                .unwrap_or_else(|| "$T".to_string());
-            Some(format!("Ok({ok_ty}) -> Result<{ok_ty}, Error>"))
-        }
-        ("Result", "Err") => Some("Err(Error) -> Result<$T, Error>".to_string()),
-        ("Boolean", "True") if type_params.is_empty() && variant.payload.is_empty() => {
-            Some("True() -> Boolean".to_string())
-        }
-        ("Boolean", "False") if type_params.is_empty() && variant.payload.is_empty() => {
-            Some("False() -> Boolean".to_string())
-        }
-        _ => None,
-    }
+    sigil::lowered_module_is_impl_owner(lowered)
 }
 
 fn format_struct_signature(name: &str) -> String {
     format!("defstruct {}", surface_path_name(name))
 }
 
-fn format_generic_struct_signature(name: &str, type_params: &[spire::ast::TypeParam]) -> String {
-    let type_params = format_type_params(type_params);
-    format!("defstruct {}{type_params}", surface_path_name(name))
-}
-
 fn format_record_signature(name: &str) -> String {
     format!("defrecord {}", surface_path_name(name))
-}
-
-fn format_impl_method_signature(
-    target: &str,
-    name: &str,
-    type_params: &[spire::ast::TypeParam],
-    params: &[spire::ast::FunParam],
-    ret_ty: &Option<spire::ast::AstTy>,
-) -> String {
-    let self_ty =
-        spire::ast::AstTy::Named(spire::ast::Span { start: 0, end: 0 }, target.to_string());
-    let params = params
-        .iter()
-        .map(|param| {
-            format!(
-                "{}: {}",
-                param.name,
-                format_ast_ty(&rewrite_self_ast_ty(&param.ty, &self_ty))
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let type_params = format_type_params(type_params);
-    let signature = match ret_ty {
-        Some(ret) => format!(
-            "{name}{type_params}({params}) -> {}",
-            format_ast_ty(&rewrite_self_ast_ty(ret, &self_ty))
-        ),
-        None => format!("{name}{type_params}({params})"),
-    };
-    if let Some(rest) = signature.strip_prefix(name) {
-        format!("{}::{name}{rest}", surface_path_name(target))
-    } else {
-        signature
-    }
-}
-
-fn format_impl_extractor_signature(
-    target: &str,
-    name: &str,
-    type_params: &[spire::ast::TypeParam],
-    param: &spire::ast::ExtractorParam,
-    ret_ty: &spire::ast::AstTy,
-) -> String {
-    let self_ty =
-        spire::ast::AstTy::Named(spire::ast::Span { start: 0, end: 0 }, target.to_string());
-    let type_params = format_type_params(type_params);
-    let param = match &param.ty {
-        Some(ty) => format!(
-            "{}: {}",
-            param.name,
-            format_ast_ty(&rewrite_self_ast_ty(ty, &self_ty))
-        ),
-        None => param.name.clone(),
-    };
-    let signature = format!(
-        "{name}{type_params}({param}) -> {}",
-        format_ast_ty(&rewrite_self_ast_ty(ret_ty, &self_ty))
-    );
-    if let Some(rest) = signature.strip_prefix(name) {
-        format!("{}::{name}{rest}", surface_path_name(target))
-    } else {
-        signature
-    }
-}
-
-fn format_trait_method_signature(trait_name: &str, method: &spire::ast::TraitMethodSig) -> String {
-    let signature = format_fun_signature(
-        &method.name,
-        &method.type_params,
-        &method.params,
-        &Some(method.ret_ty.clone()),
-    );
-    if let Some(rest) = signature.strip_prefix(&method.name) {
-        format!("{}::{}{}", surface_path_name(trait_name), method.name, rest)
-    } else {
-        signature
-    }
-}
-
-fn format_trait_impl_signature(
-    trait_name: &str,
-    trait_args: &[spire::ast::AstTy],
-    target_ty: &spire::ast::AstTy,
-) -> String {
-    if trait_args.is_empty() {
-        format!("impl {trait_name} for {}", format_ast_ty(target_ty))
-    } else {
-        let args = trait_args
-            .iter()
-            .map(format_ast_ty)
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("impl {trait_name}<{args}> for {}", format_ast_ty(target_ty))
-    }
-}
-
-fn format_trait_impl_method_signature(
-    trait_name: &str,
-    trait_args: &[spire::ast::AstTy],
-    target_ty: &spire::ast::AstTy,
-    method_name: &str,
-    type_params: &[spire::ast::TypeParam],
-    params: &[spire::ast::FunParam],
-    ret_ty: &Option<spire::ast::AstTy>,
-) -> String {
-    let params = params
-        .iter()
-        .map(|param| {
-            format!(
-                "{}: {}",
-                param.name,
-                format_ast_ty(&rewrite_self_ast_ty(&param.ty, target_ty))
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    let type_params = format_type_params(type_params);
-    let method_sig = match ret_ty {
-        Some(ret) => format!(
-            "{method_name}{type_params}({params}) -> {}",
-            format_ast_ty(&rewrite_self_ast_ty(ret, target_ty))
-        ),
-        None => format!("{method_name}{type_params}({params})"),
-    };
-    let impl_sig = format_trait_impl_signature(trait_name, trait_args, target_ty);
-    format!("{impl_sig}::{method_sig}")
-}
-
-fn qualified_name(module_path: &str, name: &str) -> String {
-    let module_path = surface_path_name(module_path);
-    let name = surface_path_name(name);
-    if module_path.is_empty() {
-        name.to_string()
-    } else if name
-        .strip_prefix(module_path)
-        .is_some_and(|rest| rest.starts_with("::"))
-    {
-        name.to_string()
-    } else {
-        format!("{module_path}::{name}")
-    }
-}
-
-fn collect_doc_entries_for_ast(
-    ast: &[spire::ast::Ast],
-    module_path: &str,
-    out: &mut Vec<DocEntry>,
-) {
-    for stmt in ast {
-        match stmt {
-            spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Function,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_fun_signature(name, type_params, params, ret_ty)),
-                        doc: doc.clone(),
-                    });
-                }
-            }
-            spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Function,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_fun_signature(name, &[], params, ret_ty)),
-                        doc: doc.clone(),
-                    });
-                }
-            }
-            spire::ast::Ast::IntrinsicDecl(_, name, signature, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Function,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(signature.clone()),
-                        doc: doc.clone(),
-                    });
-                }
-            }
-            spire::ast::Ast::ExtractorDef(_, name, type_params, param, ret_ty, _, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Function,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_extractor_signature(
-                            name,
-                            type_params,
-                            param,
-                            ret_ty,
-                        )),
-                        doc: doc.clone(),
-                    });
-                }
-            }
-            spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Function,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_extractor_signature(name, &[], param, ret_ty)),
-                        doc: doc.clone(),
-                    });
-                }
-            }
-            spire::ast::Ast::TraitDef(_, name, _type_params, methods, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Type,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format!(
-                            "trait {} {{ {} }}",
-                            surface_path_name(name),
-                            methods
-                                .iter()
-                                .map(|method| format!(
-                                    "{}",
-                                    format_fun_signature(
-                                        &method.name,
-                                        &method.type_params,
-                                        &method.params,
-                                        &Some(method.ret_ty.clone()),
-                                    )
-                                ))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )),
-                        doc: doc.clone(),
-                    });
-                    for method in methods {
-                        out.push(DocEntry {
-                            qualified_name: qualified_name(
-                                module_path,
-                                &format!("{name}::{}", method.name),
-                            ),
-                            kind: DocKind::Function,
-                            module_path: surface_path_name(module_path).to_string(),
-                            signature: Some(format_trait_method_signature(name, method)),
-                            doc: doc.clone(),
-                        });
-                    }
-                }
-            }
-            spire::ast::Ast::StructDef(_, name, type_params, _fields, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Type,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_generic_struct_signature(name, type_params)),
-                        doc: doc.clone(),
-                    });
-                }
-            }
-            spire::ast::Ast::RecordDef(_, name, _, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Type,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_record_signature(name)),
-                        doc: doc.clone(),
-                    });
-                }
-            }
-            spire::ast::Ast::ImplDef(_, target, methods, _attrs) => {
-                for method in methods {
-                    match method {
-                        spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
-                            if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if surface_path_name(module_path)
-                                    == surface_path_name(target)
-                                {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
-                                out.push(DocEntry {
-                                    qualified_name: qualified_method_name,
-                                    kind: DocKind::Function,
-                                    module_path: surface_path_name(module_path).to_string(),
-                                    signature: Some(format_impl_method_signature(
-                                        target,
-                                        name,
-                                        type_params,
-                                        params,
-                                        ret_ty,
-                                    )),
-                                    doc: doc.clone(),
-                                });
-                            }
-                        }
-                        spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
-                            if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if surface_path_name(module_path)
-                                    == surface_path_name(target)
-                                {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
-                                out.push(DocEntry {
-                                    qualified_name: qualified_method_name,
-                                    kind: DocKind::Function,
-                                    module_path: surface_path_name(module_path).to_string(),
-                                    signature: Some(format_impl_method_signature(
-                                        target,
-                                        name,
-                                        &[],
-                                        params,
-                                        ret_ty,
-                                    )),
-                                    doc: doc.clone(),
-                                });
-                            }
-                        }
-                        spire::ast::Ast::ExtractorDef(
-                            _,
-                            name,
-                            type_params,
-                            param,
-                            ret_ty,
-                            _,
-                            attrs,
-                        ) => {
-                            if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if surface_path_name(module_path)
-                                    == surface_path_name(target)
-                                {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
-                                out.push(DocEntry {
-                                    qualified_name: qualified_method_name,
-                                    kind: DocKind::Function,
-                                    module_path: surface_path_name(module_path).to_string(),
-                                    signature: Some(format_impl_extractor_signature(
-                                        target,
-                                        name,
-                                        type_params,
-                                        param,
-                                        ret_ty,
-                                    )),
-                                    doc: doc.clone(),
-                                });
-                            }
-                        }
-                        spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, attrs) => {
-                            if let Some(doc) = &attrs.doc {
-                                let qualified_method_name = if surface_path_name(module_path)
-                                    == surface_path_name(target)
-                                {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
-                                out.push(DocEntry {
-                                    qualified_name: qualified_method_name,
-                                    kind: DocKind::Function,
-                                    module_path: surface_path_name(module_path).to_string(),
-                                    signature: Some(format_impl_extractor_signature(
-                                        target,
-                                        name,
-                                        &[],
-                                        param,
-                                        ret_ty,
-                                    )),
-                                    doc: doc.clone(),
-                                });
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            spire::ast::Ast::TraitImplDef(_, trait_name, trait_args, target_ty, methods, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    let rendered = format_trait_impl_signature(trait_name, trait_args, target_ty);
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, &rendered),
-                        kind: DocKind::Type,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(rendered),
-                        doc: doc.clone(),
-                    });
-                }
-                for method in methods {
-                    let method_parts = match method {
-                        spire::ast::Ast::Def(
-                            _,
-                            name,
-                            type_params,
-                            params,
-                            ret_ty,
-                            _,
-                            method_attrs,
-                        ) => Some((
-                            name,
-                            type_params.as_slice(),
-                            params.as_slice(),
-                            ret_ty,
-                            method_attrs,
-                        )),
-                        spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, method_attrs) => {
-                            Some((name, [].as_slice(), params.as_slice(), ret_ty, method_attrs))
-                        }
-                        _ => None,
-                    };
-                    if let Some((name, type_params, params, ret_ty, method_attrs)) = method_parts {
-                        if let Some(doc) = &method_attrs.doc {
-                            let rendered = format_trait_impl_method_signature(
-                                trait_name,
-                                trait_args,
-                                target_ty,
-                                name,
-                                type_params,
-                                params,
-                                ret_ty,
-                            );
-                            out.push(DocEntry {
-                                qualified_name: qualified_name(
-                                    module_path,
-                                    &format!(
-                                        "{}::{}",
-                                        format_trait_impl_signature(
-                                            trait_name, trait_args, target_ty,
-                                        ),
-                                        name
-                                    ),
-                                ),
-                                kind: DocKind::Function,
-                                module_path: surface_path_name(module_path).to_string(),
-                                signature: Some(rendered),
-                                doc: doc.clone(),
-                            });
-                        }
-                    }
-                }
-            }
-            spire::ast::Ast::BuiltinTypeDecl(_, head, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, &head.name),
-                        kind: DocKind::Type,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_builtin_type_signature(head)),
-                        doc: doc.clone(),
-                    });
-                }
-            }
-            spire::ast::Ast::ResultCtorDecl(_, name, param_ty, ret_ty, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Function,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_result_ctor_signature(name, param_ty, ret_ty)),
-                        doc: doc.clone(),
-                    });
-                }
-            }
-            spire::ast::Ast::DeferrorDef(_, name, fields, _, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Type,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_deferror_signature(name, fields)),
-                        doc: doc.clone(),
-                    });
-                }
-            }
-            spire::ast::Ast::EnumDef(_, name, type_params, variants, attrs) => {
-                if let Some(doc) = &attrs.doc {
-                    out.push(DocEntry {
-                        qualified_name: qualified_name(module_path, name),
-                        kind: DocKind::Type,
-                        module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_defenum_signature(name, variants)),
-                        doc: doc.clone(),
-                    });
-                }
-                if attrs.builtin {
-                    for variant in variants {
-                        let Some(signature) =
-                            builtin_special_enum_variant_signature(name, type_params, variant)
-                        else {
-                            continue;
-                        };
-                        out.push(DocEntry {
-                            qualified_name: qualified_name(
-                                module_path,
-                                &format!("{name}::{}", variant.name),
-                            ),
-                            kind: DocKind::Function,
-                            module_path: surface_path_name(module_path).to_string(),
-                            signature: Some(signature),
-                            doc: String::new(),
-                        });
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn push_signature_entry(
-    out: &mut Vec<SignatureEntry>,
-    module_path: &str,
-    qualified_name: String,
-    kind: DocKind,
-    signature: String,
-) {
-    out.push(SignatureEntry {
-        qualified_name,
-        kind,
-        module_path: surface_path_name(module_path).to_string(),
-        signature,
-    });
-}
-
-fn collect_signature_entries_for_ast(
-    ast: &[spire::ast::Ast],
-    module_path: &str,
-    out: &mut Vec<SignatureEntry>,
-) {
-    for stmt in ast {
-        match stmt {
-            spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Function,
-                    format_fun_signature(name, type_params, params, ret_ty),
-                );
-            }
-            spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Function,
-                    format_fun_signature(name, &[], params, ret_ty),
-                );
-            }
-            spire::ast::Ast::IntrinsicDecl(_, name, signature, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Function,
-                    signature.clone(),
-                );
-            }
-            spire::ast::Ast::ExtractorDef(_, name, type_params, param, ret_ty, _, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Function,
-                    format_extractor_signature(name, type_params, param, ret_ty),
-                );
-            }
-            spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Function,
-                    format_extractor_signature(name, &[], param, ret_ty),
-                );
-            }
-            spire::ast::Ast::TraitDef(_, name, _type_params, methods, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Type,
-                    format!(
-                        "trait {} {{ {} }}",
-                        surface_path_name(name),
-                        methods
-                            .iter()
-                            .map(|method| format_fun_signature(
-                                &method.name,
-                                &method.type_params,
-                                &method.params,
-                                &Some(method.ret_ty.clone()),
-                            ))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                );
-                for method in methods {
-                    push_signature_entry(
-                        out,
-                        module_path,
-                        qualified_name(module_path, &format!("{name}::{}", method.name)),
-                        DocKind::Function,
-                        format_trait_method_signature(name, method),
-                    );
-                }
-            }
-            spire::ast::Ast::StructDef(_, name, type_params, _fields, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Type,
-                    format_generic_struct_signature(name, type_params),
-                );
-            }
-            spire::ast::Ast::RecordDef(_, name, _, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Type,
-                    format_record_signature(name),
-                );
-            }
-            spire::ast::Ast::ImplDef(_, target, methods, _) => {
-                for method in methods {
-                    match method {
-                        spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
-                            let qualified_method_name =
-                                if surface_path_name(module_path) == surface_path_name(target) {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
-                            push_signature_entry(
-                                out,
-                                module_path,
-                                qualified_method_name,
-                                DocKind::Function,
-                                format_impl_method_signature(
-                                    target,
-                                    name,
-                                    type_params,
-                                    params,
-                                    ret_ty,
-                                ),
-                            );
-                        }
-                        spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, _) => {
-                            let qualified_method_name =
-                                if surface_path_name(module_path) == surface_path_name(target) {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
-                            push_signature_entry(
-                                out,
-                                module_path,
-                                qualified_method_name,
-                                DocKind::Function,
-                                format_impl_method_signature(target, name, &[], params, ret_ty),
-                            );
-                        }
-                        spire::ast::Ast::ExtractorDef(
-                            _,
-                            name,
-                            type_params,
-                            param,
-                            ret_ty,
-                            _,
-                            _,
-                        ) => {
-                            let qualified_method_name =
-                                if surface_path_name(module_path) == surface_path_name(target) {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
-                            push_signature_entry(
-                                out,
-                                module_path,
-                                qualified_method_name,
-                                DocKind::Function,
-                                format_impl_extractor_signature(
-                                    target,
-                                    name,
-                                    type_params,
-                                    param,
-                                    ret_ty,
-                                ),
-                            );
-                        }
-                        spire::ast::Ast::BuiltinExtractorDecl(_, name, param, ret_ty, _) => {
-                            let qualified_method_name =
-                                if surface_path_name(module_path) == surface_path_name(target) {
-                                    format!("{}::{name}", surface_path_name(target))
-                                } else {
-                                    qualified_name(module_path, &format!("{target}::{name}"))
-                                };
-                            push_signature_entry(
-                                out,
-                                module_path,
-                                qualified_method_name,
-                                DocKind::Function,
-                                format_impl_extractor_signature(target, name, &[], param, ret_ty),
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            spire::ast::Ast::TraitImplDef(_, trait_name, trait_args, target_ty, methods, _) => {
-                let rendered = format_trait_impl_signature(trait_name, trait_args, target_ty);
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, &rendered),
-                    DocKind::Type,
-                    rendered.clone(),
-                );
-                for method in methods {
-                    let method_parts = match method {
-                        spire::ast::Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
-                            Some((name, type_params.as_slice(), params.as_slice(), ret_ty))
-                        }
-                        spire::ast::Ast::BuiltinDecl(_, name, params, ret_ty, _) => {
-                            Some((name, [].as_slice(), params.as_slice(), ret_ty))
-                        }
-                        _ => None,
-                    };
-                    if let Some((name, type_params, params, ret_ty)) = method_parts {
-                        let rendered = format_trait_impl_method_signature(
-                            trait_name,
-                            trait_args,
-                            target_ty,
-                            name,
-                            type_params,
-                            params,
-                            ret_ty,
-                        );
-                        push_signature_entry(
-                            out,
-                            module_path,
-                            qualified_name(
-                                module_path,
-                                &format!(
-                                    "{}::{}",
-                                    format_trait_impl_signature(trait_name, trait_args, target_ty),
-                                    name
-                                ),
-                            ),
-                            DocKind::Function,
-                            rendered,
-                        );
-                    }
-                }
-            }
-            spire::ast::Ast::BuiltinTypeDecl(_, head, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, &head.name),
-                    DocKind::Type,
-                    format_builtin_type_signature(head),
-                );
-            }
-            spire::ast::Ast::ResultCtorDecl(_, name, param_ty, ret_ty, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Function,
-                    format_result_ctor_signature(name, param_ty, ret_ty),
-                );
-            }
-            spire::ast::Ast::DeferrorDef(_, name, fields, _, _) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Type,
-                    format_deferror_signature(name, fields),
-                );
-            }
-            spire::ast::Ast::EnumDef(_, name, type_params, variants, attrs) => {
-                push_signature_entry(
-                    out,
-                    module_path,
-                    qualified_name(module_path, name),
-                    DocKind::Type,
-                    format_defenum_signature(name, variants),
-                );
-                if attrs.builtin {
-                    for variant in variants {
-                        let Some(signature) =
-                            builtin_special_enum_variant_signature(name, type_params, variant)
-                        else {
-                            continue;
-                        };
-                        push_signature_entry(
-                            out,
-                            module_path,
-                            qualified_name(module_path, &format!("{name}::{}", variant.name)),
-                            DocKind::Function,
-                            signature,
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
 }
 
 /// Collect doc metadata from lowered std/user modules so it can be attached to
@@ -1208,9 +128,7 @@ pub fn collect_doc_entries(
     user_ast: &[spire::ast::Ast],
     user_module_path: Option<&str>,
 ) -> Vec<DocEntry> {
-    let mut docs = Vec::new();
-    collect_doc_entries_into(&mut docs, module_stages, user_ast, user_module_path);
-    docs
+    sigil::collect_doc_entries(module_stages, user_ast, user_module_path)
 }
 
 pub fn collect_signature_entries(
@@ -1218,9 +136,7 @@ pub fn collect_signature_entries(
     user_ast: &[spire::ast::Ast],
     user_module_path: Option<&str>,
 ) -> Vec<SignatureEntry> {
-    let mut signatures = Vec::new();
-    collect_signature_entries_into(&mut signatures, module_stages, user_ast, user_module_path);
-    signatures
+    sigil::collect_signature_entries(module_stages, user_ast, user_module_path)
 }
 
 /// Collect doc metadata while reusing already-collected prefix docs, such as
@@ -1231,9 +147,7 @@ pub fn collect_doc_entries_with_base(
     user_ast: &[spire::ast::Ast],
     user_module_path: Option<&str>,
 ) -> Vec<DocEntry> {
-    let mut docs = base_docs.to_vec();
-    collect_doc_entries_into(&mut docs, module_stages, user_ast, user_module_path);
-    docs
+    sigil::collect_doc_entries_with_base(base_docs, module_stages, user_ast, user_module_path)
 }
 
 pub fn collect_signature_entries_with_base(
@@ -1242,56 +156,12 @@ pub fn collect_signature_entries_with_base(
     user_ast: &[spire::ast::Ast],
     user_module_path: Option<&str>,
 ) -> Vec<SignatureEntry> {
-    let mut signatures = base_signatures.to_vec();
-    collect_signature_entries_into(&mut signatures, module_stages, user_ast, user_module_path);
-    signatures
-}
-
-fn collect_doc_entries_into(
-    docs: &mut Vec<DocEntry>,
-    module_stages: &[Vec<sigil::StagedModuleAst>],
-    user_ast: &[spire::ast::Ast],
-    user_module_path: Option<&str>,
-) {
-    for stage in module_stages {
-        for module in stage {
-            let doc_module_path = module
-                .doc_module_path
-                .as_deref()
-                .unwrap_or(module.module_path.as_str());
-            if let Some(doc) = &module.module_doc {
-                docs.push(DocEntry {
-                    qualified_name: doc_module_path.to_string(),
-                    kind: DocKind::Module,
-                    module_path: doc_module_path.to_string(),
-                    signature: None,
-                    doc: doc.clone(),
-                });
-            }
-            collect_doc_entries_for_ast(&module.ast, doc_module_path, docs);
-        }
-    }
-
-    collect_doc_entries_for_ast(user_ast, user_module_path.unwrap_or_default(), docs);
-}
-
-fn collect_signature_entries_into(
-    signatures: &mut Vec<SignatureEntry>,
-    module_stages: &[Vec<sigil::StagedModuleAst>],
-    user_ast: &[spire::ast::Ast],
-    user_module_path: Option<&str>,
-) {
-    for stage in module_stages {
-        for module in stage {
-            let doc_module_path = module
-                .doc_module_path
-                .as_deref()
-                .unwrap_or(module.module_path.as_str());
-            collect_signature_entries_for_ast(&module.ast, doc_module_path, signatures);
-        }
-    }
-
-    collect_signature_entries_for_ast(user_ast, user_module_path.unwrap_or_default(), signatures);
+    sigil::collect_signature_entries_with_base(
+        base_signatures,
+        module_stages,
+        user_ast,
+        user_module_path,
+    )
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1338,8 +208,30 @@ impl ModuleStageParseError {
     }
 }
 
+pub fn derive_source_policy(
+    compile_unit_kind: CompileUnitKind,
+    source_kind: SourceKind,
+    entrypoint: Option<&EntryPoint>,
+) -> sindr::policy::SourcePolicy {
+    source_kind.policy(compile_unit_kind, entrypoint)
+}
+
 pub fn derive_parse_rules(source_kind: SourceKind) -> spire::ParseRules {
-    spire::parse_rules_for_source_kind(source_kind)
+    let policy = derive_source_policy(CompileUnitKind::DefinitionCheck, source_kind, None);
+    spire::parse_rules_for_source_policy(&policy)
+}
+
+pub fn derive_parser_context(
+    source_id: u32,
+    source_kind: SourceKind,
+    compile_unit_kind: CompileUnitKind,
+    module_path: Option<String>,
+) -> spire::ParserContext {
+    spire::parser_context_for_source_policy(
+        source_id,
+        derive_source_policy(compile_unit_kind, source_kind, None),
+        module_path,
+    )
 }
 
 pub fn derive_runtime_policy(
@@ -1347,270 +239,20 @@ pub fn derive_runtime_policy(
     source_kind: SourceKind,
     entrypoint: Option<&EntryPoint>,
 ) -> RuntimeSourcePolicy {
-    let base = match source_kind {
-        SourceKind::Script => RuntimeSourcePolicy::script(),
-        SourceKind::DefinitionSource => RuntimeSourcePolicy::module(),
-        SourceKind::StdDefinitionSource => RuntimeSourcePolicy::std_module(),
-        SourceKind::ProjectConfigSource => RuntimeSourcePolicy::module(),
-        SourceKind::ReplChunk => RuntimeSourcePolicy::repl_chunk(),
-    };
-
-    let policy = match source_kind {
-        SourceKind::Script => ExitCodePolicy::Anywhere,
-        SourceKind::ReplChunk => ExitCodePolicy::Forbidden,
-        SourceKind::DefinitionSource
-        | SourceKind::StdDefinitionSource
-        | SourceKind::ProjectConfigSource
-            if compile_unit_kind == CompileUnitKind::Project =>
-        {
-            ExitCodePolicy::EntryOnly
-        }
-        SourceKind::DefinitionSource
-        | SourceKind::StdDefinitionSource
-        | SourceKind::ProjectConfigSource => ExitCodePolicy::Forbidden,
-    };
-
-    base.with_exit_code_policy(policy, entrypoint)
+    derive_source_policy(compile_unit_kind, source_kind, entrypoint).runtime_policy
 }
 
 pub fn lower_module_source_ast(
     ast: Vec<spire::ast::Ast>,
     fallback_module_path: Option<&str>,
 ) -> Vec<LoweredModuleAst> {
-    let shared_imports = ast
-        .iter()
-        .filter_map(|stmt| match stmt {
-            spire::ast::Ast::Import(_, _, _) => Some(stmt.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-
-    let mut lowered = Vec::new();
-    let mut shared_global_defs = Vec::new();
-    let mut shared_namespace_consts = Vec::new();
-    let mut shared_result_ctor_contracts = Vec::new();
-
-    for stmt in ast {
-        match stmt {
-            spire::ast::Ast::Defmod(span, module_path, body, attrs) => {
-                let mut module_ast = shared_imports.clone();
-                module_ast.extend(body);
-                lowered.push(LoweredModuleAst {
-                    module_path,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    declared_span: Some(span),
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: None,
-                });
-            }
-            spire::ast::Ast::Defagent(span, module_path, body, process_spec, attrs)
-            | spire::ast::Ast::Defgenserver(span, module_path, body, process_spec, attrs)
-            | spire::ast::Ast::Defsupervisor(span, module_path, body, process_spec, attrs)
-            | spire::ast::Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) =>
-            {
-                let mut module_ast = shared_imports.clone();
-                module_ast.extend(body);
-                lowered.push(LoweredModuleAst {
-                    module_path,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    declared_span: Some(span),
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: Some(process_spec),
-                });
-            }
-            spire::ast::Ast::ImplDef(span, target, methods, attrs) => {
-                let declared_span = span.clone();
-                let module_path = target.clone();
-                let mut module_ast = shared_imports.clone();
-                let (local_imports, methods) = partition_nested_imports(methods);
-                module_ast.extend(local_imports);
-                module_ast.push(spire::ast::Ast::ImplDef(
-                    span,
-                    target,
-                    methods,
-                    attrs.clone(),
-                ));
-                lowered.push(LoweredModuleAst {
-                    module_path,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    declared_span: Some(declared_span),
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: None,
-                });
-            }
-            spire::ast::Ast::TraitImplDef(
-                span,
-                trait_name,
-                trait_args,
-                target_ty,
-                methods,
-                attrs,
-            ) => {
-                let declared_span = span.clone();
-                let module_path = match &target_ty {
-                    spire::ast::AstTy::Named(_, name)
-                    | spire::ast::AstTy::ImplTrait(_, name)
-                    | spire::ast::AstTy::Generic(_, name, _) => name.clone(),
-                    _ => fallback_module_path.unwrap_or_default().to_string(),
-                };
-                let mut module_ast = shared_imports.clone();
-                let (local_imports, methods) = partition_nested_imports(methods);
-                module_ast.extend(local_imports);
-                module_ast.push(spire::ast::Ast::TraitImplDef(
-                    span,
-                    trait_name,
-                    trait_args,
-                    target_ty,
-                    methods,
-                    attrs.clone(),
-                ));
-                lowered.push(LoweredModuleAst {
-                    module_path,
-                    doc_module_path: fallback_module_path.map(str::to_string),
-                    ast: module_ast,
-                    declared_span: Some(declared_span),
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: None,
-                });
-            }
-            spire::ast::Ast::Import(_, _, _) => {}
-            // `Ok` / `Err` are the one top-level std declaration we want to
-            // associate with the `Result` module proper. They are surface
-            // contracts for the runtime constructors, so keeping them under the
-            // `Result` module path lets later phases validate
-            // `Result::Ok` / `Result::Err` explicitly.
-            spire::ast::Ast::ResultCtorDecl(_, _, _, _, _) => {
-                shared_result_ctor_contracts.push(stmt);
-            }
-            spire::ast::Ast::ConstDef(_, _, _, _, _) => {
-                shared_namespace_consts.push(stmt);
-            }
-            spire::ast::Ast::StructDef(..)
-            | spire::ast::Ast::RecordDef(..)
-            | spire::ast::Ast::DeferrorDef(_, _, _, _, _)
-            | spire::ast::Ast::EnumDef(_, _, _, _, _)
-            | spire::ast::Ast::BuiltinDecl(_, _, _, _, _)
-            | spire::ast::Ast::IntrinsicDecl(_, _, _, _)
-            | spire::ast::Ast::BuiltinTypeDecl(_, _, _) => {
-                // Std-module files are allowed to carry top-level declarations
-                // alongside their `defmod`. We deliberately keep these in the
-                // global declaration layer so source organization by file does
-                // not silently change the public surface from `print(...)` to
-                // `Kernel::print(...)`, etc.
-                shared_global_defs.push(stmt);
-            }
-            _ => {
-                // Defensive fallback. Parser policy should keep this unreachable for definition sources.
-                shared_global_defs.push(stmt);
-            }
-        }
-    }
-
-    if !shared_namespace_consts.is_empty() {
-        if let Some(idx) = find_fallback_namespace_module(&lowered, fallback_module_path)
-            .or_else(|| (lowered.len() == 1).then_some(0))
-        {
-            let insert_at = first_non_import_index(&lowered[idx].ast);
-            lowered[idx]
-                .ast
-                .splice(insert_at..insert_at, shared_namespace_consts);
-        } else {
-            let mut shared_ast = shared_imports.clone();
-            shared_ast.extend(shared_namespace_consts);
-            lowered.push(LoweredModuleAst {
-                module_path: fallback_module_path.unwrap_or_default().to_string(),
-                doc_module_path: None,
-                ast: shared_ast,
-                declared_span: None,
-                module_doc: None,
-                auto_import: false,
-                process_spec: None,
-            });
-        }
-    }
-
-    if !shared_result_ctor_contracts.is_empty() {
-        if let Some(idx) =
-            find_result_owner_module(&lowered).or_else(|| (lowered.len() == 1).then_some(0))
-        {
-            let insert_at = first_non_import_index(&lowered[idx].ast);
-            lowered[idx]
-                .ast
-                .splice(insert_at..insert_at, shared_result_ctor_contracts);
-        } else {
-            let mut shared_ast = shared_imports.clone();
-            shared_ast.extend(shared_result_ctor_contracts);
-            lowered.push(LoweredModuleAst {
-                module_path: fallback_module_path.unwrap_or_default().to_string(),
-                doc_module_path: None,
-                ast: shared_ast,
-                declared_span: None,
-                module_doc: None,
-                auto_import: false,
-                process_spec: None,
-            });
-        }
-    }
-
-    if !shared_global_defs.is_empty() {
-        let mut shared_ast = shared_imports;
-        shared_ast.extend(shared_global_defs);
-        lowered.push(LoweredModuleAst {
-            module_path: fallback_module_path.unwrap_or_default().to_string(),
-            doc_module_path: None,
-            ast: shared_ast,
-            declared_span: None,
-            module_doc: None,
-            auto_import: false,
-            process_spec: None,
-        });
-    }
-
-    lowered
+    sigil::lower_module_source_ast(ast, fallback_module_path)
 }
 
 pub fn extract_process_modules_from_user_ast(
     user_ast: Vec<spire::ast::Ast>,
 ) -> (Vec<sigil::StagedModuleAst>, Vec<spire::ast::Ast>) {
-    let shared_imports = user_ast
-        .iter()
-        .filter_map(|stmt| match stmt {
-            spire::ast::Ast::Import(_, _, _) => Some(stmt.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let mut process_modules = Vec::new();
-    let mut remaining_user_ast = Vec::new();
-
-    for stmt in user_ast {
-        match stmt {
-            spire::ast::Ast::Defagent(_, module_path, body, process_spec, attrs)
-            | spire::ast::Ast::Defgenserver(_, module_path, body, process_spec, attrs)
-            | spire::ast::Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
-            | spire::ast::Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
-                let mut module_ast = shared_imports.clone();
-                module_ast.extend(body);
-                process_modules.push(sigil::StagedModuleAst {
-                    module_path,
-                    doc_module_path: None,
-                    ast: module_ast,
-                    module_doc: attrs.doc,
-                    auto_import: attrs.auto_import,
-                    process_spec: Some(process_spec),
-                });
-            }
-            other => remaining_user_ast.push(other),
-        }
-    }
-
-    (process_modules, remaining_user_ast)
+    sigil::extract_process_modules_from_user_ast(user_ast)
 }
 
 pub fn parse_module_stages_from_compile_sources(
@@ -1642,17 +284,138 @@ pub fn parse_module_stages_from_compile_sources_suffix(
     )
 }
 
+pub struct ExpandedSnapshotModuleStages<'a> {
+    pub module_stages: std::borrow::Cow<'a, [Vec<sigil::StagedModuleAst>]>,
+    default_stage_count: usize,
+}
+
+impl<'a> ExpandedSnapshotModuleStages<'a> {
+    pub fn suffix_module_stages(&self) -> &[Vec<sigil::StagedModuleAst>] {
+        if self.module_stages.len() > self.default_stage_count {
+            &self.module_stages[self.default_stage_count..]
+        } else {
+            &[]
+        }
+    }
+}
+
+pub fn expand_snapshot_module_stages<'a>(
+    compile_sources: &CompileSources,
+    snapshot: &'a DefaultStdlibSnapshot,
+    compile_unit_kind: CompileUnitKind,
+) -> Result<ExpandedSnapshotModuleStages<'a>, ModuleStageParseError> {
+    let mut module_stages = std::borrow::Cow::Borrowed(snapshot.module_stages.as_slice());
+    let mut suffix_module_stages = parse_module_stages_from_compile_sources_suffix(
+        compile_sources,
+        compile_unit_kind,
+        snapshot.default_stage_count,
+    )?;
+    if !suffix_module_stages.is_empty() {
+        module_stages.to_mut().append(&mut suffix_module_stages);
+    }
+    Ok(ExpandedSnapshotModuleStages {
+        module_stages,
+        default_stage_count: snapshot.default_stage_count,
+    })
+}
+
 #[derive(Debug, Clone)]
-pub struct DefaultStdlibSnapshot {
+pub struct StagedCompilationSnapshot {
     pub module_stages: Vec<Vec<sigil::StagedModuleAst>>,
-    pub declaration_index: sigil::DeclarationIndex,
-    pub resolve_state: sigil::ResolveResumeState,
-    pub scar_checkpoint: scar::ScarCheckpoint,
-    pub bytecode: forge::bytecode::Bytecode,
+    pub compile_prefix: CompilationPrefixSnapshot,
     pub docs: Vec<DocEntry>,
     pub signatures: Vec<SignatureEntry>,
     pub auto_import_modules: BTreeSet<String>,
     pub default_stage_count: usize,
+}
+
+/// Backward-compatible name for the default standard-library staged snapshot.
+pub type DefaultStdlibSnapshot = StagedCompilationSnapshot;
+
+impl StagedCompilationSnapshot {
+    pub fn compile_prefix(&self) -> &CompilationPrefixSnapshot {
+        &self.compile_prefix
+    }
+
+    pub fn declaration_index(&self) -> &sigil::DeclarationIndex {
+        &self.compile_prefix.declaration_index
+    }
+
+    pub fn resolve_state(&self) -> sigil::ResolveResumeState {
+        self.compile_prefix.resolve_state
+    }
+
+    pub fn scar_checkpoint(&self) -> &scar::ScarCheckpoint {
+        &self.compile_prefix.scar_checkpoint
+    }
+
+    pub fn bytecode(&self) -> &forge::bytecode::Bytecode {
+        &self.compile_prefix.bytecode
+    }
+
+    pub fn symbol_semantic_infos(&self) -> Vec<surtr_analysis::SymbolSemanticInfo> {
+        surtr_analysis::symbol_semantic_infos_from_compile_metadata(
+            self.declaration_index(),
+            &self.docs,
+            &self.signatures,
+        )
+    }
+
+    pub fn semantic_index(&self) -> surtr_analysis::SemanticIndex {
+        surtr_analysis::SemanticIndex::from_compile_metadata(
+            self.declaration_index(),
+            &self.docs,
+            &self.signatures,
+        )
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompilationPrefixSnapshot {
+    pub declaration_index: sigil::DeclarationIndex,
+    pub resolve_state: sigil::ResolveResumeState,
+    pub scar_checkpoint: scar::ScarCheckpoint,
+    pub bytecode: forge::bytecode::Bytecode,
+}
+
+impl CompilationPrefixSnapshot {
+    pub fn from_parts(
+        declaration_index: sigil::DeclarationIndex,
+        resolve_state: sigil::ResolveResumeState,
+        scar_checkpoint: scar::ScarCheckpoint,
+        bytecode: forge::bytecode::Bytecode,
+    ) -> Self {
+        Self {
+            declaration_index,
+            resolve_state,
+            scar_checkpoint,
+            bytecode,
+        }
+    }
+
+    pub fn bytecode(&self) -> &forge::bytecode::Bytecode {
+        &self.bytecode
+    }
+
+    pub fn next_fun_idx(&self) -> u32 {
+        self.bytecode
+            .functions
+            .iter()
+            .map(|entry| entry.fun_idx.saturating_add(1))
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn restored_scar_session(&self) -> scar::ScarSession {
+        let mut scar_session = scar::ScarSession::new();
+        scar_session.rollback(self.scar_checkpoint.clone());
+        scar_session.ensure_next_fun_idx_at_least(self.next_fun_idx());
+        scar_session
+    }
+
+    pub fn forge_session(&self) -> forge::ForgeSession {
+        forge::ForgeSession::from_bytecode(&self.bytecode)
+    }
 }
 
 const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 10;
@@ -1667,10 +430,7 @@ struct CachedStdlibSemanticEnvelope {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedStdlibSemanticPayload {
-    declaration_index: sigil::DeclarationIndex,
-    resolve_state: sigil::ResolveResumeState,
-    scar_checkpoint: scar::ScarCheckpoint,
-    bytecode: Bytecode,
+    compile_prefix: CompilationPrefixSnapshot,
     docs: Vec<DocEntry>,
     signatures: Vec<SignatureEntry>,
     auto_import_modules: BTreeSet<String>,
@@ -1684,13 +444,7 @@ struct CachedTestSemanticPrefixEnvelope {
     payload: CachedTestSemanticPrefixPayload,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CachedTestSemanticPrefixPayload {
-    pub declaration_index: sigil::DeclarationIndex,
-    pub resolve_state: sigil::ResolveResumeState,
-    pub scar_checkpoint: scar::ScarCheckpoint,
-    pub bytecode: Bytecode,
-}
+pub type CachedTestSemanticPrefixPayload = CompilationPrefixSnapshot;
 
 pub fn cached_lib_module_inputs() -> Result<Vec<ModuleInput>, LoadError> {
     static CACHE: OnceLock<Result<Vec<ModuleInput>, LoadError>> = OnceLock::new();
@@ -1856,6 +610,14 @@ pub fn store_cached_test_semantic_prefix(
     }
 }
 
+pub fn store_cached_test_semantic_prefix_snapshot(
+    cache_path: &Path,
+    key: &str,
+    snapshot: &CompilationPrefixSnapshot,
+) {
+    store_cached_test_semantic_prefix(cache_path, key, snapshot.clone());
+}
+
 pub fn default_stdlib_semantic_snapshot() -> Result<Arc<DefaultStdlibSnapshot>, LoadError> {
     static SNAPSHOT: OnceLock<Result<Arc<DefaultStdlibSnapshot>, LoadError>> = OnceLock::new();
     SNAPSHOT
@@ -1913,10 +675,7 @@ fn build_stdlib_snapshot(
         if payload.default_stage_count == default_stage_count {
             return Ok(DefaultStdlibSnapshot {
                 module_stages,
-                declaration_index: payload.declaration_index,
-                resolve_state: payload.resolve_state,
-                scar_checkpoint: payload.scar_checkpoint,
-                bytecode: payload.bytecode,
+                compile_prefix: payload.compile_prefix,
                 docs: payload.docs,
                 signatures: payload.signatures,
                 auto_import_modules: payload.auto_import_modules,
@@ -1945,15 +704,13 @@ fn build_stdlib_snapshot(
     })?;
     let resume_state = resolved.resume_state;
     let mut scar_session = scar::ScarSession::new();
+    let mut typecheck_context = scar::TypecheckContext::from_source_policy(
+        SourceKind::StdDefinitionSource.policy(CompileUnitKind::DefinitionCheck, None),
+    );
+    typecheck_context.enforce_builtin_type_contracts = true;
+    typecheck_context.allow_error_function_params = true;
     let typed = scar_session
-        .typecheck_staged_program_with_context(
-            resolved,
-            scar::TypecheckContext {
-                runtime_policy: RuntimeSourcePolicy::std_module(),
-                enforce_builtin_type_contracts: true,
-                allow_error_function_params: true,
-            },
-        )
+        .typecheck_staged_program_with_context(resolved, typecheck_context)
         .map_err(|e| LoadError::BootstrapFailed {
             phase: "typecheck".into(),
             file_name: "<stdlib>".into(),
@@ -1985,10 +742,12 @@ fn build_stdlib_snapshot(
 
     let snapshot = DefaultStdlibSnapshot {
         default_stage_count,
-        declaration_index,
-        resolve_state,
-        scar_checkpoint: scar_session.checkpoint(),
-        bytecode,
+        compile_prefix: CompilationPrefixSnapshot::from_parts(
+            declaration_index,
+            resolve_state,
+            scar_session.checkpoint(),
+            bytecode,
+        ),
         docs,
         signatures,
         auto_import_modules,
@@ -1998,10 +757,7 @@ fn build_stdlib_snapshot(
         &stdlib_semantic_cache_path(stdlib_variant),
         &cache_key,
         CachedStdlibSemanticPayload {
-            declaration_index: snapshot.declaration_index.clone(),
-            resolve_state: snapshot.resolve_state,
-            scar_checkpoint: snapshot.scar_checkpoint.clone(),
-            bytecode: snapshot.bytecode.clone(),
+            compile_prefix: snapshot.compile_prefix.clone(),
             docs: snapshot.docs.clone(),
             signatures: snapshot.signatures.clone(),
             auto_import_modules: snapshot.auto_import_modules.clone(),
@@ -2082,13 +838,23 @@ pub fn target_root_from_current_exe() -> Option<PathBuf> {
 }
 
 fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
+    stable_hash_hex(&stdlib_semantic_cache_material(module_sources))
+}
+
+fn stdlib_semantic_cache_material(module_sources: &ModuleSources) -> String {
     let mut key = String::new();
     key.push_str("surtr-stdlib-semantic-cache-v");
     key.push_str(&STDLIB_SEMANTIC_CACHE_SCHEMA.to_string());
     key.push('\x1f');
     key.push_str(env!("CARGO_PKG_VERSION"));
     key.push('\x1f');
-    for meta in BUILTIN_METAS {
+    key.push_str("source-policy-schema-v");
+    key.push_str(&SOURCE_POLICY_SCHEMA_VERSION.to_string());
+    key.push('\x1f');
+    key.push_str("symbol-capability-schema-v");
+    key.push_str(&sindr::names::SYMBOL_CAPABILITY_SCHEMA_VERSION.to_string());
+    key.push('\x1f');
+    for meta in builtin_function_metas() {
         key.push_str(meta.name);
         key.push('\x1e');
         key.push_str(meta.sig_str);
@@ -2097,12 +863,24 @@ fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
         key.push('\x1f');
     }
     key.push('\x1d');
-    for meta in BUILTIN_TYPE_METAS {
+    for meta in builtin_type_head_metas() {
         key.push_str(meta.name);
         key.push('\x1e');
         key.push_str(&meta.params.join(","));
         key.push('\x1f');
     }
+    key.push('\x1d');
+    let stdlib_variant = if module_sources
+        .module_stages
+        .iter()
+        .flatten()
+        .any(|module| module.module_path == "Test")
+    {
+        StdlibVariant::TestEnabled
+    } else {
+        StdlibVariant::Default
+    };
+    key.push_str(&stdlib_module_spec_cache_key(stdlib_variant));
     key.push('\x1d');
     for stage in &module_sources.module_stages {
         key.push('|');
@@ -2125,7 +903,7 @@ fn stdlib_semantic_cache_key(module_sources: &ModuleSources) -> String {
             key.push('\x1f');
         }
     }
-    stable_hash_hex(&key)
+    key
 }
 
 pub fn source_kind_cache_key(kind: SourceKind) -> &'static str {
@@ -2144,6 +922,7 @@ pub fn source_kind_cache_key(kind: SourceKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sindr::ir::DocKind;
 
     #[test]
     fn lower_module_source_extracts_defmods_and_shared_defs() {
@@ -2185,17 +964,48 @@ defmod B {
 
         assert_eq!(snapshot.default_stage_count, snapshot.module_stages.len());
         assert!(snapshot
-            .declaration_index
+            .declaration_index()
             .values()
             .any(|entry| entry.fq_name == "Global::Kernel::print"));
         assert!(!snapshot
-            .declaration_index
+            .declaration_index()
             .values()
             .any(|entry| entry.fq_name.starts_with("Global::Test::")));
         assert!(!snapshot
-            .declaration_index
+            .declaration_index()
             .values()
             .any(|entry| entry.module_path == "TestOnly"));
+    }
+
+    #[test]
+    fn stdlib_snapshot_is_a_staged_compilation_snapshot() {
+        let snapshot =
+            default_stdlib_semantic_snapshot().expect("default stdlib snapshot should build");
+        let staged: &StagedCompilationSnapshot = snapshot.as_ref();
+
+        assert_eq!(staged.default_stage_count, staged.module_stages.len());
+        assert!(!staged.compile_prefix.declaration_index.is_empty());
+    }
+
+    #[test]
+    fn stdlib_snapshot_exposes_joined_symbol_semantic_info() {
+        let snapshot =
+            default_stdlib_semantic_snapshot().expect("default stdlib snapshot should build");
+
+        let infos = snapshot.symbol_semantic_infos();
+        let index = snapshot.semantic_index();
+
+        assert!(infos.iter().any(|info| {
+            info.canonical_name == "Global::Kernel::print"
+                && info.surface_name == "Kernel::print"
+                && info.detail.is_some()
+                && info.documentation.is_some()
+        }));
+        assert!(index.symbols().iter().any(|symbol| {
+            symbol.label == "Kernel::print"
+                && symbol.detail.is_some()
+                && symbol.documentation.is_some()
+        }));
     }
 
     #[test]
@@ -2204,7 +1014,7 @@ defmod B {
             .expect("test-enabled stdlib snapshot should build");
 
         assert!(snapshot
-            .declaration_index
+            .declaration_index()
             .values()
             .any(|entry| entry.fq_name.starts_with("Global::Test::")));
     }
@@ -2224,25 +1034,80 @@ defmod B {
     }
 
     #[test]
-    fn test_semantic_prefix_cache_roundtrips_payload() {
+    fn stdlib_semantic_cache_key_tracks_stdlib_module_spec_variant() {
+        let default_sources =
+            collect_module_sources_with_module_stages(&[]).expect("default stdlib should load");
+        let test_sources = collect_test_module_sources_with_module_stages(&[])
+            .expect("test-enabled stdlib should load");
+
+        assert_ne!(
+            crate::loader::stdlib_module_spec_cache_key(StdlibVariant::Default),
+            crate::loader::stdlib_module_spec_cache_key(StdlibVariant::TestEnabled)
+        );
+        assert_ne!(
+            stdlib_semantic_cache_key(&default_sources),
+            stdlib_semantic_cache_key(&test_sources)
+        );
+    }
+
+    #[test]
+    fn stdlib_semantic_cache_material_tracks_shared_semantic_schemas() {
+        let module_sources =
+            collect_module_sources_with_module_stages(&[]).expect("default stdlib should load");
+
+        let material = stdlib_semantic_cache_material(&module_sources);
+
+        assert!(material.contains(&format!(
+            "source-policy-schema-v{}",
+            sindr::policy::SOURCE_POLICY_SCHEMA_VERSION
+        )));
+        assert!(material.contains(&format!(
+            "symbol-capability-schema-v{}",
+            sindr::names::SYMBOL_CAPABILITY_SCHEMA_VERSION
+        )));
+    }
+
+    #[test]
+    fn derive_source_policy_carries_parse_and_runtime_policy() {
+        let entrypoint = EntryPoint::qualified("App::main");
+
+        let policy = derive_source_policy(
+            CompileUnitKind::Project,
+            SourceKind::ProjectConfigSource,
+            Some(&entrypoint),
+        );
+
+        assert_eq!(policy.parse_profile, sindr::policy::ParseProfile::Project);
+        assert_eq!(
+            policy.runtime_policy.exit_code_policy,
+            sindr::policy::ExitCodePolicy::EntryOnly
+        );
+        assert_eq!(
+            policy.runtime_policy.normalized_entrypoint.as_deref(),
+            Some("App::main")
+        );
+    }
+
+    #[test]
+    fn test_semantic_prefix_cache_roundtrips_snapshot() {
         let cache_path = std::env::temp_dir().join(format!(
             "surtr-test-prefix-cache-{}.semantic",
             std::process::id()
         ));
-        let payload = CachedTestSemanticPrefixPayload {
-            declaration_index: sigil::DeclarationIndex::new(),
-            resolve_state: sigil::ResolveResumeState { next_local_id: 7 },
-            scar_checkpoint: scar::ScarSession::new().checkpoint(),
-            bytecode: forge::bytecode::Bytecode::default(),
-        };
+        let snapshot = CompilationPrefixSnapshot::from_parts(
+            sigil::DeclarationIndex::new(),
+            sigil::ResolveResumeState { next_local_id: 7 },
+            scar::ScarSession::new().checkpoint(),
+            forge::bytecode::Bytecode::default(),
+        );
 
-        store_cached_test_semantic_prefix(&cache_path, "expected-key", payload.clone());
+        store_cached_test_semantic_prefix_snapshot(&cache_path, "expected-key", &snapshot);
 
         let loaded = load_cached_test_semantic_prefix(&cache_path, "expected-key")
             .expect("payload should roundtrip");
 
         assert_eq!(loaded.resolve_state.next_local_id, 7);
-        assert_eq!(loaded.declaration_index, payload.declaration_index);
+        assert_eq!(loaded.declaration_index, snapshot.declaration_index);
         let _ = std::fs::remove_file(cache_path);
     }
 
@@ -2258,6 +1123,31 @@ defmod B {
 
         assert!(loaded.is_none());
         let _ = std::fs::remove_file(cache_path);
+    }
+
+    #[test]
+    fn compilation_prefix_snapshot_derives_next_fun_idx_from_bytecode() {
+        let mut bytecode = forge::bytecode::Bytecode::default();
+        bytecode.functions.push(sindr::ir::FunctionEntry {
+            fun_idx: 4,
+            entry_pc: 0,
+            num_locals: 0,
+            arity: 0,
+            qualified_name: Some("Global::prefix".to_string()),
+            signature: None,
+            end_pc: 0,
+            span_start: 0,
+            span_end: 0,
+            flags: Default::default(),
+        });
+        let snapshot = CompilationPrefixSnapshot::from_parts(
+            sigil::DeclarationIndex::new(),
+            sigil::ResolveResumeState { next_local_id: 0 },
+            scar::ScarSession::new().checkpoint(),
+            bytecode,
+        );
+
+        assert_eq!(snapshot.next_fun_idx(), 5);
     }
 
     #[test]
@@ -3049,6 +1939,38 @@ impl User {
     }
 
     #[test]
+    fn parse_module_stages_rejects_normal_duplicate_after_impl_owner_extension() {
+        let module_sources = collect_module_sources_with_module_stages(&[vec![
+            ModuleInput {
+                file_name: "a.srt".into(),
+                source: "defmod Shared { def a() -> Int { 1 } }".into(),
+                module_path: "A".into(),
+            },
+            ModuleInput {
+                file_name: "impl.srt".into(),
+                source: "impl Shared { def new() -> Self { Shared } }".into(),
+                module_path: "Shared".into(),
+            },
+            ModuleInput {
+                file_name: "b.srt".into(),
+                source: "defmod Shared { def b() -> Int { 2 } }".into(),
+                module_path: "B".into(),
+            },
+        ]])
+        .expect("module collection should succeed");
+        let compile_sources =
+            compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
+
+        let err =
+            parse_module_stages_from_compile_sources(&compile_sources, CompileUnitKind::Script)
+                .expect_err("normal duplicate after impl owner must fail");
+        assert!(matches!(
+            err.kind,
+            ModuleStageParseErrorKind::DuplicateModulePath { ref module_path, .. } if module_path == "Global::Shared"
+        ));
+    }
+
+    #[test]
     fn parse_module_stages_preserves_same_stage_file_order_after_parallel_parse() {
         let module_sources = collect_module_sources_with_module_stages(&[vec![
             ModuleInput {
@@ -3072,5 +1994,48 @@ impl User {
 
         assert_eq!(user_stage[0].module_path, "Global::First");
         assert_eq!(user_stage[1].module_path, "Global::Second");
+    }
+
+    #[test]
+    fn expanded_snapshot_module_stages_borrow_prefix_when_no_suffix_exists() {
+        let snapshot =
+            default_stdlib_semantic_snapshot().expect("default stdlib snapshot should build");
+        let module_sources =
+            collect_module_sources_with_module_stages(&[]).expect("module collection should work");
+        let compile_sources =
+            compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
+
+        let expanded =
+            expand_snapshot_module_stages(&compile_sources, &snapshot, CompileUnitKind::Script)
+                .expect("snapshot expansion should succeed");
+
+        assert!(matches!(
+            expanded.module_stages,
+            std::borrow::Cow::Borrowed(_)
+        ));
+        assert!(expanded.suffix_module_stages().is_empty());
+    }
+
+    #[test]
+    fn expanded_snapshot_module_stages_append_parsed_suffix_stages() {
+        let snapshot =
+            default_stdlib_semantic_snapshot().expect("default stdlib snapshot should build");
+        let module_sources = collect_module_sources_with_module_stages(&[vec![ModuleInput {
+            file_name: "extra.srt".into(),
+            source: "defmod Extra { def value() -> Int { 1 } }".into(),
+            module_path: "Extra".into(),
+        }]])
+        .expect("module collection should succeed");
+        let compile_sources =
+            compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
+
+        let expanded =
+            expand_snapshot_module_stages(&compile_sources, &snapshot, CompileUnitKind::Script)
+                .expect("snapshot expansion should succeed");
+
+        assert!(matches!(expanded.module_stages, std::borrow::Cow::Owned(_)));
+        let suffix = expanded.suffix_module_stages();
+        assert_eq!(suffix.len(), 1);
+        assert_eq!(suffix[0][0].module_path, "Global::Extra");
     }
 }

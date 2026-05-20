@@ -66,7 +66,7 @@ pub(super) fn compile_sources_with_mode(
         module_asts.push(process_stage);
     }
     let declaration_index = if module_asts.len() == compile_prefix.module_asts.len() {
-        compile_prefix.declaration_index.clone()
+        compile_prefix.declaration_index().clone()
     } else {
         sigil::precollect_declaration_index(&module_asts)
             .map_err(|e| format!("phase=resolve; message={}", e))?
@@ -87,13 +87,13 @@ pub(super) fn compile_sources_with_mode(
         &declaration_index,
         Some(compile_sources.user_module_path.clone()),
         compile_prefix.module_asts.len(),
-        compile_prefix.resolve_state,
+        compile_prefix.resolve_state(),
     )
     .map_err(|e| format!("phase=resolve; message={}", e))?;
     let mut scar_session = scar::ScarSession::new();
-    scar_session.rollback(compile_prefix.scar_checkpoint.clone());
+    scar_session.rollback(compile_prefix.scar_checkpoint().clone());
     let next_fun_idx = compile_prefix
-        .bytecode
+        .bytecode()
         .functions
         .iter()
         .map(|entry| entry.fun_idx.saturating_add(1))
@@ -106,11 +106,11 @@ pub(super) fn compile_sources_with_mode(
             compile_chunk_typecheck_context_for_mode(mode),
         )
         .map_err(|e| format!("phase=typecheck; message={}", e))?;
-    let mut forge_session = forge::ForgeSession::from_bytecode(&compile_prefix.bytecode);
+    let mut forge_session = forge::ForgeSession::from_bytecode(compile_prefix.bytecode());
     let (chunk, _) = forge_session
         .codegen_chunk_typed_program(typed)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
-    let mut bytecode = forge::compose_bytecode_with_chunk(compile_prefix.bytecode.clone(), chunk)
+    let mut bytecode = forge::compose_bytecode_with_chunk(compile_prefix.bytecode().clone(), chunk)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
     let user_source = compile_sources
         .sources

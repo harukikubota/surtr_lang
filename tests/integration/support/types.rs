@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use forge::bytecode::Bytecode;
+use xldr::CompilationPrefixSnapshot;
 
 #[derive(Clone, Copy)]
 pub(super) enum TestCompileMode {
@@ -40,10 +40,25 @@ pub(super) struct CachedModulePipeline {
 #[derive(Clone)]
 pub(super) struct CachedCompilePrefix {
     pub(super) module_asts: Vec<Vec<sigil::StagedModuleAst>>,
-    pub(super) declaration_index: sigil::DeclarationIndex,
-    pub(super) resolve_state: sigil::ResolveResumeState,
-    pub(super) scar_checkpoint: scar::ScarCheckpoint,
-    pub(super) bytecode: Bytecode,
+    pub(super) compile_prefix: CompilationPrefixSnapshot,
+}
+
+impl CachedCompilePrefix {
+    pub(super) fn declaration_index(&self) -> &sigil::DeclarationIndex {
+        &self.compile_prefix.declaration_index
+    }
+
+    pub(super) fn resolve_state(&self) -> sigil::ResolveResumeState {
+        self.compile_prefix.resolve_state
+    }
+
+    pub(super) fn scar_checkpoint(&self) -> &scar::ScarCheckpoint {
+        &self.compile_prefix.scar_checkpoint
+    }
+
+    pub(super) fn bytecode(&self) -> &forge::bytecode::Bytecode {
+        &self.compile_prefix.bytecode
+    }
 }
 
 pub(super) type SharedCompilePrefix = Arc<CachedCompilePrefix>;

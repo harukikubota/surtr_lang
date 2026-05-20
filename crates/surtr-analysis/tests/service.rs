@@ -2,11 +2,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use sindr::names::{FacetRootKind, SymbolCapabilities};
 use surtr_analysis::{
     resolve_context, AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisHost, AnalysisMode,
     AnalysisService, CompletionKind, CompletionScope, CompletionSymbol, ProjectRunnerInput,
     ProjectRunnerSourceInput, RunnerContext, RunnerSelection, SelectedContext, SemanticIndex,
-    Utf16Position,
+    SymbolDisplayMetadata, SymbolSemanticInfo, Utf16Position,
 };
 
 #[derive(Debug)]
@@ -362,6 +363,7 @@ fn analysis_service_definition_uses_injected_host_sources_for_line_index() {
             start: 4,
             end: 10,
         }),
+        capabilities: None,
     }]);
     service.set_semantic_index(index);
 
@@ -521,6 +523,68 @@ Project::config({|config|
 }
 
 #[test]
+fn analysis_service_project_context_lowers_const_only_file_under_file_module_path() {
+    let root = temp_root("project-const-only-module");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let config_path = src.join("Config.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(&config_path, "const VERSION: Int = 1").expect("write config");
+    let main_source = "defmod Main { def main() -> Int { Config::VERSION } }";
+    std::fs::write(&main_path, main_source).expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/Config.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), main_source.to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let diagnostics = service.diagnostics(&snapshot);
+
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.kind != AnalysisDiagnosticKind::Resolve),
+        "const-only project file should lower under Config module path: {diagnostics:?}"
+    );
+    assert!(
+        snapshot.typed.is_some(),
+        "const-only project stage should typecheck: {diagnostics:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn analysis_service_project_context_builds_completion_index_from_runner_module_stage() {
     let root = temp_root("project-completion");
     let src = root.join("src");
@@ -586,6 +650,470 @@ Project::config({|config|
 }
 
 #[test]
+fn analysis_service_project_completion_excludes_private_module_declarations() {
+    let root = temp_root("project-completion-private-hidden");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(
+        &helper_path,
+        "defmod Helper { defp secret() -> Int { 1 } def public() -> Int { 2 } }",
+    )
+    .expect("write helper");
+    std::fs::write(&main_path, "sec").expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), "sec".to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let completion = service.completions(
+        &snapshot,
+        Utf16Position {
+            line: 0,
+            character: 3,
+        },
+    );
+
+    assert!(
+        completion
+            .candidates
+            .iter()
+            .all(|candidate| candidate.label != "Helper::secret"),
+        "private declarations must not leak through raw compile metadata: {completion:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn analysis_service_project_completion_excludes_unimported_module_members() {
+    let root = temp_root("project-completion-unimported-hidden");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(&helper_path, "defmod Helper { def helper() -> Int { 1 } }")
+        .expect("write helper");
+    std::fs::write(&main_path, "he").expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), "he".to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let completion = service.completions(
+        &snapshot,
+        Utf16Position {
+            line: 0,
+            character: 2,
+        },
+    );
+
+    assert!(
+        completion
+            .candidates
+            .iter()
+            .all(|candidate| candidate.label != "Helper::helper"),
+        "unimported module members must not leak through raw compile metadata: {completion:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn analysis_service_project_context_indexes_effective_imported_short_name() {
+    let root = temp_root("project-imported-short-index");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(&helper_path, "defmod Helper { def helper() -> Int { 1 } }")
+        .expect("write helper");
+    std::fs::write(&main_path, "import Helper::helper").expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(
+        main_path.clone(),
+        Some(1),
+        "import Helper::helper".to_string(),
+    );
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let helper_symbols = snapshot
+        .semantic_index
+        .symbols()
+        .iter()
+        .filter(|symbol| symbol.label == "helper")
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        helper_symbols.iter().any(|symbol| {
+            matches!(
+                symbol.origin.as_ref(),
+                Some(surtr_analysis::CompletionOrigin::Declaration { qualified_name, .. })
+                    if qualified_name == "Global::Helper::helper"
+            )
+        }),
+        "effective import should expose short declaration symbol: {helper_symbols:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn analysis_service_project_context_preserves_existing_semantic_infos() {
+    let root = temp_root("project-existing-semantic-infos");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(&main_path, "defmod Main { def main() -> Int { 1 } }").expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.set_semantic_index(SemanticIndex::from_symbol_semantic_infos(vec![
+        SymbolSemanticInfo {
+            canonical_name: "Global::External::helper".to_string(),
+            surface_name: "External::helper".to_string(),
+            replacement: "External::helper".to_string(),
+            kind: CompletionKind::FunctionCall,
+            identity: None,
+            detail: Some("External::helper() -> Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+            display_metadata: Some(SymbolDisplayMetadata {
+                qualified_name: "Global::External::helper".to_string(),
+                module_path: "Global::External".to_string(),
+                has_doc: false,
+                has_signature: true,
+            }),
+        },
+    ]));
+    service.update_document(
+        main_path.clone(),
+        Some(1),
+        "defmod Main { def main() -> Int { 1 } }".to_string(),
+    );
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let external = snapshot
+        .semantic_index
+        .symbol_semantic_infos()
+        .iter()
+        .find(|info| info.surface_name == "External::helper")
+        .expect("existing semantic info should survive project context enrichment");
+    assert_eq!(
+        external
+            .display_metadata
+            .as_ref()
+            .map(|metadata| (metadata.qualified_name.as_str(), metadata.has_signature)),
+        Some(("Global::External::helper", true))
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn analysis_service_project_context_imported_short_name_inherits_compile_metadata() {
+    let root = temp_root("project-imported-short-metadata");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    let helper_source = r#"defmod Helper {
+  @doc """
+  Increment a number.
+  """
+  def helper(value: Int) -> Int { value + 1 }
+}"#;
+    let main_source = "import Helper::helper\ndefmod Main { def main() -> Int { helper(1) } }";
+    std::fs::write(&helper_path, helper_source).expect("write helper");
+    std::fs::write(&main_path, main_source).expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(main_path.clone(), Some(1), main_source.to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: main_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(main_path.clone()),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let helper_symbol = snapshot
+        .semantic_index
+        .symbols()
+        .iter()
+        .find(|symbol| symbol.label == "helper")
+        .expect("effective import should expose helper");
+    assert_eq!(
+        helper_symbol.detail.as_deref(),
+        Some("helper(value: Int) -> Int")
+    );
+    assert_eq!(
+        helper_symbol.documentation.as_deref().map(str::trim),
+        Some("Increment a number.")
+    );
+
+    let hover_line = main_source.lines().nth(1).expect("call line");
+    let hover_column = hover_line.find("helper").expect("helper call exists") as u32 + 3;
+    let hover = service
+        .hover(
+            &snapshot,
+            Utf16Position {
+                line: 1,
+                character: hover_column,
+            },
+        )
+        .expect("imported helper should produce hover");
+    assert!(
+        hover.contents.contains("helper(value: Int) -> Int"),
+        "{hover:?}"
+    );
+    assert!(hover.contents.contains("Increment a number."), "{hover:?}");
+
+    let signature_column = hover_line.find("helper(1").expect("call exists") + "helper(1".len();
+    let signature_column = signature_column as u32;
+    let help = service
+        .signature_help(
+            &snapshot,
+            Utf16Position {
+                line: 1,
+                character: signature_column,
+            },
+        )
+        .expect("imported helper should produce signature help");
+    assert_eq!(
+        help.signatures,
+        vec!["helper(value: Int) -> Int".to_string()]
+    );
+    assert_eq!(help.active_parameter, Some(0));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn analysis_service_project_context_rejects_set_exit_code_outside_entrypoint() {
+    let root = temp_root("project-set-exit-code");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = root.join("project.srt");
+    std::fs::write(
+        &helper_path,
+        "defmod Helper { def helper() -> Unit { set_exit_code(9) } }",
+    )
+    .expect("write helper");
+    std::fs::write(&main_path, "defmod Main { def main() -> Int { 1 } }").expect("write main");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::entry_fun(c, "Main::main")
+    |> Config::add_path("./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(
+        helper_path.clone(),
+        Some(1),
+        "defmod Helper { def helper() -> Unit { set_exit_code(9) } }".to_string(),
+    );
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: helper_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(helper_path.clone()),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let diagnostics = service.diagnostics(&snapshot);
+
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.kind == AnalysisDiagnosticKind::Typecheck
+                && diagnostic.path == helper_path
+                && diagnostic
+                    .message
+                    .contains("set_exit_code is only allowed inside entrypoint")
+        }),
+        "project context should reject set_exit_code outside entrypoint: {diagnostics:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -600,6 +1128,8 @@ fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position()
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]));
 
     let context = resolve_context(AnalysisContextRequest {
@@ -625,6 +1155,211 @@ fn analysis_service_completions_use_snapshot_semantic_index_and_utf16_position()
 }
 
 #[test]
+fn analysis_service_completions_use_facet_api_first_argument_constraints() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    service.update_document(path.clone(), Some(1), "Facet::set(".to_string());
+    service.set_semantic_index(SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "Facet::set".to_string(),
+            replacement: "Facet::set".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some(
+                "set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>".to_string(),
+            ),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        },
+        CompletionSymbol {
+            label: "User".to_string(),
+            replacement: "User".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: None,
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: Some(SymbolCapabilities::new(
+                true,
+                true,
+                true,
+                Some(FacetRootKind::TypeRoot),
+            )),
+        },
+        CompletionSymbol {
+            label: "String".to_string(),
+            replacement: "String".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: Some("type String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        },
+        CompletionSymbol {
+            label: "name_path".to_string(),
+            replacement: "name_path".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("Facet<User, String>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        },
+        CompletionSymbol {
+            label: "user".to_string(),
+            replacement: "user".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("User".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        },
+    ]));
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let completion = service.completions(
+        &snapshot,
+        Utf16Position {
+            line: 0,
+            character: "Facet::set(".len() as u32,
+        },
+    );
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(labels.contains(&"User"), "{labels:?}");
+    assert!(labels.contains(&"name_path"), "{labels:?}");
+    assert!(!labels.contains(&"String"), "{labels:?}");
+    assert!(!labels.contains(&"user"), "{labels:?}");
+}
+
+#[test]
+fn analysis_service_facet_arg_completion_uses_source_location_root_capabilities() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    let source = "defrecord User(name: String)\nFacet::view(User.name, user)";
+    service.update_document(path.clone(), Some(1), source.to_string());
+    service.set_semantic_index(SemanticIndex::from_symbols(vec![CompletionSymbol {
+        label: "Facet::view".to_string(),
+        replacement: "Facet::view".to_string(),
+        kind: CompletionKind::FunctionCall,
+        detail: Some("view(facet: Facet<$S, $A>, source: $S) -> $A".to_string()),
+        documentation: None,
+        sort_text: None,
+        origin: None,
+        definition: None,
+        capabilities: None,
+    }]));
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let completion = service.completions(
+        &snapshot,
+        Utf16Position {
+            line: 1,
+            character: "Facet::view(".len() as u32,
+        },
+    );
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(labels.contains(&"User"), "{labels:?}");
+}
+
+#[test]
+fn analysis_service_facet_arg_completion_uses_call_signature_not_name() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/main.srt");
+    service.update_document(path.clone(), Some(1), "view(".to_string());
+    service.set_semantic_index(SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "view".to_string(),
+            replacement: "view".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("view(value: Int) -> Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        },
+        CompletionSymbol {
+            label: "User".to_string(),
+            replacement: "User".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: Some("defrecord User".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        },
+        CompletionSymbol {
+            label: "name_path".to_string(),
+            replacement: "name_path".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("Facet<User, String>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        },
+    ]));
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(path)),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let completion = service.completions(
+        &snapshot,
+        Utf16Position {
+            line: 0,
+            character: "view(".len() as u32,
+        },
+    );
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(!labels.contains(&"User"), "{labels:?}");
+    assert!(!labels.contains(&"name_path"), "{labels:?}");
+}
+
+#[test]
 fn analysis_service_repl_assist_uses_repl_scope_and_signature_help() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/main.srt");
@@ -639,6 +1374,7 @@ fn analysis_service_repl_assist_uses_repl_scope_and_signature_help() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
         CompletionSymbol {
             label: "name".to_string(),
@@ -649,6 +1385,7 @@ fn analysis_service_repl_assist_uses_repl_scope_and_signature_help() {
             sort_text: None,
             origin: None,
             definition: None,
+            capabilities: None,
         },
     ]));
 
@@ -696,6 +1433,8 @@ fn analysis_service_hover_uses_snapshot_semantic_index_and_token_range() {
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]));
 
     let context = resolve_context(AnalysisContextRequest {
@@ -738,6 +1477,8 @@ fn analysis_service_signature_help_uses_snapshot_semantic_index() {
         origin: None,
 
         definition: None,
+
+        capabilities: None,
     }]));
 
     let context = resolve_context(AnalysisContextRequest {

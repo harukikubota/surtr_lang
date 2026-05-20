@@ -299,6 +299,7 @@ fn project_runner_resolves_literal_paths_into_module_stage() {
     let runner = resolve_project_runner(ProjectRunnerInput {
         project_file: root.join("project.srt"),
         selected_profile: "dev".to_string(),
+        entrypoint: "Main::main".to_string(),
         normalized_args: vec![("profile".to_string(), "dev".to_string())],
         declared_paths: vec![DeclaredProjectPath {
             declared_by: root.join("project.srt"),
@@ -334,6 +335,7 @@ fn project_runner_expands_globs_in_stable_path_order() {
     let runner = resolve_project_runner(ProjectRunnerInput {
         project_file: root.join("project.srt"),
         selected_profile: "test".to_string(),
+        entrypoint: "Main::main".to_string(),
         normalized_args: Vec::new(),
         declared_paths: vec![DeclaredProjectPath {
             declared_by: root.join("project.srt"),
@@ -370,6 +372,7 @@ fn project_runner_expands_recursive_globs_in_stable_path_order() {
     let runner = resolve_project_runner(ProjectRunnerInput {
         project_file: root.join("project.srt"),
         selected_profile: "test".to_string(),
+        entrypoint: "Main::main".to_string(),
         normalized_args: Vec::new(),
         declared_paths: vec![DeclaredProjectPath {
             declared_by: root.join("project.srt"),
@@ -401,6 +404,7 @@ fn project_runner_reports_glob_no_match_as_runner_diagnostic() {
     let runner = resolve_project_runner(ProjectRunnerInput {
         project_file: root.join("project.srt"),
         selected_profile: "test".to_string(),
+        entrypoint: "Main::main".to_string(),
         normalized_args: Vec::new(),
         declared_paths: vec![DeclaredProjectPath {
             declared_by: root.join("project.srt"),

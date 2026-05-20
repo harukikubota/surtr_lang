@@ -1,4 +1,6 @@
-use super::declarations::{is_importable_declaration, is_module_visible_declaration};
+use super::declarations::{
+    declaration_import_surface_status, is_module_visible_declaration, ImportSurfaceStatus,
+};
 use super::scope_init::initialize_scope;
 use super::*;
 use spire::ast::Visibility;
@@ -142,6 +144,8 @@ pub(super) fn build_module_scope(
 pub(super) struct ModuleScopeBuild {
     pub scope: Scope,
     pub explicit_function_imports: Vec<ExplicitFunctionImport>,
+    pub effective_auto_import_fq_names: Vec<String>,
+    pub shadowed_auto_import_bindings: Vec<(String, u32)>,
 }
 
 pub(super) fn build_module_scope_with_imports(
@@ -157,6 +161,8 @@ pub(super) fn build_module_scope_with_imports(
     let mut scope = global_scope.clone();
     let mut import_state = ImportState::default();
     let mut explicit_function_imports = Vec::new();
+    let mut effective_auto_import_fq_names = Vec::new();
+    let mut shadowed_auto_import_bindings = Vec::new();
     let auto_import_traits = auto_import_trait_names(declaration_index);
     let auto_import_module_set = auto_import_modules
         .iter()
@@ -171,6 +177,8 @@ pub(super) fn build_module_scope_with_imports(
         auto_import_traits: &auto_import_traits,
         import_state: &mut import_state,
         explicit_function_imports: &mut explicit_function_imports,
+        effective_auto_import_fq_names: &mut effective_auto_import_fq_names,
+        shadowed_auto_import_bindings: &mut shadowed_auto_import_bindings,
     };
 
     for stmt in stmts {
@@ -227,6 +235,8 @@ pub(super) fn build_module_scope_with_imports(
     Ok(ModuleScopeBuild {
         scope,
         explicit_function_imports,
+        effective_auto_import_fq_names,
+        shadowed_auto_import_bindings,
     })
 }
 
@@ -239,6 +249,8 @@ struct ImportContext<'a> {
     auto_import_traits: &'a HashSet<String>,
     import_state: &'a mut ImportState,
     explicit_function_imports: &'a mut Vec<ExplicitFunctionImport>,
+    effective_auto_import_fq_names: &'a mut Vec<String>,
+    shadowed_auto_import_bindings: &'a mut Vec<(String, u32)>,
 }
 
 fn lookup_trait_entry<'a>(
@@ -392,25 +404,24 @@ fn import_list_into_scope(
             issues.not_importable.push(fq_name);
             continue;
         }
-        if !is_importable_declaration(&entry.kind) {
-            issues.not_importable.push(fq_name);
-            continue;
-        }
-        if !entry.user_importable {
-            issues.not_importable.push(fq_name);
-            continue;
-        }
-        if entry.hidden {
-            issues.hidden_builtins.push(fq_name);
-            continue;
-        }
-        if entry.visibility != Visibility::Public {
-            issues.private_functions.push(fq_name);
-            continue;
-        }
-        if entry.stage_index > import_context.current_stage_index {
-            issues.unavailable_members.push(fq_name);
-            continue;
+        match declaration_import_surface_status(entry, import_context.current_stage_index) {
+            ImportSurfaceStatus::Importable => {}
+            ImportSurfaceStatus::NonImportableKind | ImportSurfaceStatus::Restricted => {
+                issues.not_importable.push(fq_name);
+                continue;
+            }
+            ImportSurfaceStatus::Hidden => {
+                issues.hidden_builtins.push(fq_name);
+                continue;
+            }
+            ImportSurfaceStatus::Private => {
+                issues.private_functions.push(fq_name);
+                continue;
+            }
+            ImportSurfaceStatus::FutureStage => {
+                issues.unavailable_members.push(fq_name);
+                continue;
+            }
         }
 
         bind_import_name(
@@ -509,21 +520,16 @@ fn import_module_into_scope(
         if global_surface_name(&entry.module_path) != module_name {
             continue;
         }
-        if !is_importable_declaration(&entry.kind) {
-            continue;
-        }
-        if !entry.user_importable {
-            continue;
-        }
-        if entry.hidden {
-            continue;
-        }
-        if entry.visibility != Visibility::Public {
-            continue;
-        }
-        if entry.stage_index > import_context.current_stage_index {
-            blocked_by_stage = true;
-            continue;
+        match declaration_import_surface_status(entry, import_context.current_stage_index) {
+            ImportSurfaceStatus::Importable => {}
+            ImportSurfaceStatus::FutureStage => {
+                blocked_by_stage = true;
+                continue;
+            }
+            ImportSurfaceStatus::NonImportableKind
+            | ImportSurfaceStatus::Restricted
+            | ImportSurfaceStatus::Hidden
+            | ImportSurfaceStatus::Private => continue,
         }
         let uid = import_context.declaration_uids[&entry.fq_name];
         bind_import_name(
@@ -700,6 +706,49 @@ fn record_explicit_function_import(
         });
 }
 
+fn effective_auto_import_member_kind(kind: &DeclarationKind) -> bool {
+    matches!(
+        kind,
+        DeclarationKind::Def
+            | DeclarationKind::Extractor
+            | DeclarationKind::TraitMethod
+            | DeclarationKind::ImplMethod
+            | DeclarationKind::ImplCtorNew
+    )
+}
+
+fn record_effective_auto_import_binding(
+    import_context: &mut ImportContext<'_>,
+    uid: u32,
+    short_name: &str,
+) {
+    let Some((fq_name, entry)) =
+        import_context
+            .declaration_uids
+            .iter()
+            .find_map(|(fq_name, known_uid)| {
+                if *known_uid != uid {
+                    return None;
+                }
+                import_context
+                    .declaration_index
+                    .get(fq_name)
+                    .map(|entry| (fq_name.clone(), entry))
+            })
+    else {
+        return;
+    };
+    if short_name != entry.name || !effective_auto_import_member_kind(&entry.kind) {
+        return;
+    }
+    if !import_context
+        .effective_auto_import_fq_names
+        .contains(&fq_name)
+    {
+        import_context.effective_auto_import_fq_names.push(fq_name);
+    }
+}
+
 fn import_single_into_scope(
     scope: &mut Scope,
     import_context: &mut ImportContext<'_>,
@@ -751,44 +800,46 @@ fn import_single_into_scope(
         });
     }
 
-    if !is_importable_declaration(&entry.kind) {
-        return Err(ResolveError {
-            message: format!("Import target `{}` is not importable", fq_name),
-            span,
-            related_labels: Vec::new(),
-        });
-    }
-    if !entry.user_importable {
-        return Err(ResolveError {
-            message: restricted_surface_import_message(&fq_name),
-            span,
-            related_labels: Vec::new(),
-        });
-    }
-    if entry.hidden {
-        return Err(ResolveError {
-            message: hidden_builtin_import_message(&fq_name),
-            span,
-            related_labels: Vec::new(),
-        });
-    }
-    if entry.visibility != Visibility::Public {
-        return Err(ResolveError {
-            message: format!("Import target `{}` is private", fq_name),
-            span,
-            related_labels: Vec::new(),
-        });
-    }
-
-    if entry.stage_index > import_context.current_stage_index {
-        return Err(ResolveError {
-            message: format!(
-                "Import target `{}` is not available in the current stage",
-                fq_name
-            ),
-            span,
-            related_labels: Vec::new(),
-        });
+    match declaration_import_surface_status(entry, import_context.current_stage_index) {
+        ImportSurfaceStatus::Importable => {}
+        ImportSurfaceStatus::NonImportableKind => {
+            return Err(ResolveError {
+                message: format!("Import target `{}` is not importable", fq_name),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+        ImportSurfaceStatus::Restricted => {
+            return Err(ResolveError {
+                message: restricted_surface_import_message(&fq_name),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+        ImportSurfaceStatus::Hidden => {
+            return Err(ResolveError {
+                message: hidden_builtin_import_message(&fq_name),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+        ImportSurfaceStatus::Private => {
+            return Err(ResolveError {
+                message: format!("Import target `{}` is private", fq_name),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
+        ImportSurfaceStatus::FutureStage => {
+            return Err(ResolveError {
+                message: format!(
+                    "Import target `{}` is not available in the current stage",
+                    fq_name
+                ),
+                span,
+                related_labels: Vec::new(),
+            });
+        }
     }
 
     bind_import_name(
@@ -862,7 +913,7 @@ fn import_single_into_scope(
 
 fn bind_import_name(
     scope: &mut Scope,
-    import_context: &ImportContext<'_>,
+    import_context: &mut ImportContext<'_>,
     short_name: &str,
     uid: u32,
     module_name: &str,
@@ -871,6 +922,9 @@ fn bind_import_name(
 ) -> Result<(), ResolveError> {
     if let Some(existing_uid) = scope.lookup(short_name) {
         if existing_uid == uid {
+            if auto_import {
+                record_effective_auto_import_binding(import_context, uid, short_name);
+            }
             return Ok(());
         }
         if auto_import
@@ -879,6 +933,7 @@ fn bind_import_name(
                 .contains_key(&existing_uid)
         {
             scope.define_with_id(short_name, uid);
+            record_effective_auto_import_binding(import_context, uid, short_name);
             return Ok(());
         }
         if auto_import
@@ -889,6 +944,7 @@ fn bind_import_name(
                 .contains_key(&existing_uid)
         {
             scope.define_with_id(short_name, uid);
+            record_effective_auto_import_binding(import_context, uid, short_name);
             return Ok(());
         }
         if auto_import
@@ -899,6 +955,7 @@ fn bind_import_name(
                 .contains_key(&existing_uid)
         {
             scope.define_with_id(short_name, uid);
+            record_effective_auto_import_binding(import_context, uid, short_name);
             return Ok(());
         }
         if auto_import {
@@ -911,6 +968,9 @@ fn bind_import_name(
             let existing_is_auto_imported =
                 declaration_is_auto_imported(import_context, &existing_name);
             if !existing_is_auto_imported {
+                import_context
+                    .shadowed_auto_import_bindings
+                    .push((short_name.to_string(), existing_uid));
                 return Ok(());
             }
             let incoming_name = import_context
@@ -943,6 +1003,10 @@ fn bind_import_name(
             declaration_is_auto_imported(import_context, &existing_name);
         if existing_is_auto_imported {
             scope.define_with_id(short_name, uid);
+            import_context
+                .shadowed_auto_import_bindings
+                .push((short_name.to_string(), uid));
+            record_effective_auto_import_binding(import_context, uid, short_name);
             return Ok(());
         }
         return Err(ResolveError {
@@ -956,6 +1020,9 @@ fn bind_import_name(
     }
 
     scope.define_with_id(short_name, uid);
+    if auto_import {
+        record_effective_auto_import_binding(import_context, uid, short_name);
+    }
     Ok(())
 }
 

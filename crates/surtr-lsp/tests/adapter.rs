@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use surtr_analysis::{
-    CompletionKind, CompletionSymbol, ProjectBootSummary, ProjectRunnerPath, ProjectRunnerProfile,
-    ProjectRunnerResult, RunnerSelection, SelectedContext, SemanticIndex,
+    CompletionKind, CompletionSymbol, FacetRootKind, ProjectBootSummary, ProjectRunnerPath,
+    ProjectRunnerProfile, ProjectRunnerResult, RunnerSelection, SelectedContext, SemanticIndex,
+    SymbolCapabilities,
 };
 use surtr_lsp::{
     completion_items, definition, diagnostics, document_symbols, file_uri_to_path, hover,
@@ -80,7 +81,7 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
         documentation: None,
         sort_text: None,
         origin: None,
-
+        capabilities: None,
         definition: None,
     }]));
 
@@ -116,6 +117,149 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
 }
 
 #[test]
+fn completion_uses_facet_api_first_argument_constraints_through_lsp() {
+    let workspace = PathBuf::from("/repo");
+    let path = workspace.join("main.srt");
+    let uri = path_to_file_uri(&path);
+    let mut host = LspAnalysisHost::new(workspace);
+    host.did_open(uri.clone(), Some(1), "Facet::view(".to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
+    host.set_semantic_index(SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "Facet::view".to_string(),
+            replacement: "Facet::view".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("view(facet: Facet<$S, $A>, source: $S) -> Result<$A>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "User".to_string(),
+            replacement: "User".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: Some("defrecord User".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: Some(SymbolCapabilities::new(
+                true,
+                true,
+                true,
+                Some(FacetRootKind::TypeRoot),
+            )),
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "Int".to_string(),
+            replacement: "Int".to_string(),
+            kind: CompletionKind::TypeConstructor,
+            detail: Some("type Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "name_path".to_string(),
+            replacement: "name_path".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("Facet<User, String>".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+    ]));
+
+    let items = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: "Facet::view(".len() as u32,
+        },
+    );
+    let labels = items
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(labels.contains(&"User"), "{labels:?}");
+    assert!(labels.contains(&"name_path"), "{labels:?}");
+    assert!(!labels.contains(&"Int"), "{labels:?}");
+}
+
+#[test]
+fn completion_preserves_contextual_sort_text_through_lsp() {
+    let workspace = PathBuf::from("/repo");
+    let path = workspace.join("main.srt");
+    let uri = path_to_file_uri(&path);
+    let mut host = LspAnalysisHost::new(workspace);
+    host.did_open(uri.clone(), Some(1), "print(value_".to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
+    host.set_semantic_index(SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "print".to_string(),
+            replacement: "print".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some("print(value: String) -> Unit".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "value_text".to_string(),
+            replacement: "value_text".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("String".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "value_count".to_string(),
+            replacement: "value_count".to_string(),
+            kind: CompletionKind::Variable,
+            detail: Some("Int".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+    ]));
+
+    let items = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: "print(value_".len() as u32,
+        },
+    );
+
+    assert_eq!(
+        items
+            .iter()
+            .map(|item| (item.label.as_str(), item.sort_text.as_deref()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("value_text", Some("0000:value_text")),
+            ("value_count", Some("0001:value_count")),
+        ]
+    );
+}
+
+#[test]
 fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");
@@ -132,6 +276,7 @@ fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: None,
             definition: None,
         },
         CompletionSymbol {
@@ -142,6 +287,7 @@ fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: None,
             definition: None,
         },
         CompletionSymbol {
@@ -152,6 +298,7 @@ fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: None,
             definition: None,
         },
         CompletionSymbol {
@@ -162,6 +309,7 @@ fn completion_exposes_shared_result_ctors_and_bool_variants_through_lsp() {
             documentation: None,
             sort_text: None,
             origin: None,
+            capabilities: None,
             definition: None,
         },
     ]));
@@ -222,7 +370,7 @@ fn hover_maps_semantic_detail_and_documentation_to_lsp_dto() {
         documentation: Some("Writes a line.".to_string()),
         sort_text: None,
         origin: None,
-
+        capabilities: None,
         definition: None,
     }]));
 
@@ -269,7 +417,7 @@ fn signature_help_maps_semantic_call_context_to_lsp_dto() {
         documentation: Some("Writes a line.".to_string()),
         sort_text: None,
         origin: None,
-
+        capabilities: None,
         definition: None,
     }]));
 
@@ -334,7 +482,7 @@ fn completion_uses_project_stage_declarations_through_lsp_host() {
         .expect("write helper source");
 
     let uri = path_to_file_uri(&main_path);
-    let source = "defmod Main { def main() -> Int { he } }";
+    let source = "defmod Main { def main() -> Int { Helper::he } }";
     let project_source = r#"
 Project::config({|config|
   Project::entrypoint(config, "dev", {|c|
@@ -368,7 +516,10 @@ Project::config({|config|
         &uri,
         LspPosition {
             line: 0,
-            character: source.find("he }").expect("completion token exists") as u32 + 2,
+            character: source
+                .find("Helper::he }")
+                .expect("completion token exists") as u32
+                + "Helper::he".len() as u32,
         },
     );
 
@@ -394,7 +545,7 @@ fn completion_uses_injected_project_runner_executor() {
         .expect("write helper source");
 
     let uri = path_to_file_uri(&main_path);
-    let source = "he";
+    let source = "Helper::he";
     let mut host = LspAnalysisHost::new(workspace.clone());
     let helper_path_for_executor = helper_path.clone();
     host.set_project_runner_executor(Some(
@@ -439,7 +590,7 @@ fn completion_uses_injected_project_runner_executor() {
         &uri,
         LspPosition {
             line: 0,
-            character: 2,
+            character: "Helper::he".len() as u32,
         },
     );
 
@@ -479,7 +630,7 @@ Project::config({|config|
     let uri = path_to_file_uri(&script_path);
     let source = r#"load_project("../project.srt", profile: "dev")
 
-he
+Helper::he
 "#;
     let mut host = LspAnalysisHost::new(workspace.clone());
     host.did_open(uri.clone(), Some(1), source.to_string());
@@ -490,7 +641,7 @@ he
         &uri,
         LspPosition {
             line: 2,
-            character: 2,
+            character: "Helper::he".len() as u32,
         },
     );
 

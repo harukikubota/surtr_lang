@@ -7138,7 +7138,7 @@ mod tests {
     }
 
     fn builtin_id(name: &str) -> u16 {
-        sindr::builtin::BUILTIN_METAS
+        sindr::builtin::builtin_function_metas()
             .iter()
             .position(|meta| meta.name == name)
             .unwrap_or_else(|| panic!("missing builtin `{name}`")) as u16

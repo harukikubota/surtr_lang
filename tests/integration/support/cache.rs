@@ -302,10 +302,12 @@ fn cached_script_compile_prefix(
     if cached_modules.module_asts.len() == std_snapshot.default_stage_count {
         return Ok(Arc::new(CachedCompilePrefix {
             module_asts: cached_modules.module_asts,
-            declaration_index: cached_modules.declaration_index,
-            resolve_state: std_snapshot.resolve_state,
-            scar_checkpoint: std_snapshot.scar_checkpoint.clone(),
-            bytecode: std_snapshot.bytecode.clone(),
+            compile_prefix: xldr::CompilationPrefixSnapshot {
+                declaration_index: cached_modules.declaration_index,
+                resolve_state: std_snapshot.resolve_state(),
+                scar_checkpoint: std_snapshot.scar_checkpoint().clone(),
+                bytecode: std_snapshot.bytecode().clone(),
+            },
         }));
     }
 
@@ -325,10 +327,12 @@ fn cached_script_compile_prefix(
         record_cache_event(|stats| stats.semantic_prefix_hits += 1);
         return Ok(Arc::new(CachedCompilePrefix {
             module_asts: cached_modules.module_asts,
-            declaration_index: cached_modules.declaration_index,
-            resolve_state: payload.resolve_state,
-            scar_checkpoint: payload.scar_checkpoint,
-            bytecode: payload.bytecode,
+            compile_prefix: xldr::CompilationPrefixSnapshot {
+                declaration_index: cached_modules.declaration_index,
+                resolve_state: payload.resolve_state,
+                scar_checkpoint: payload.scar_checkpoint,
+                bytecode: payload.bytecode,
+            },
         }));
     }
     if cache_path.exists() {
@@ -343,14 +347,14 @@ fn cached_script_compile_prefix(
         &cached_modules.declaration_index,
         None,
         std_snapshot.default_stage_count,
-        std_snapshot.resolve_state,
+        std_snapshot.resolve_state(),
     )
     .map_err(|e| format!("phase=resolve; message={}", e))?;
     let resume_state = resolved.resume_state;
 
     let mut scar_session = scar::ScarSession::new();
-    scar_session.rollback(std_snapshot.scar_checkpoint.clone());
-    scar_session.ensure_next_fun_idx_at_least(next_fun_idx(&std_snapshot.bytecode));
+    scar_session.rollback(std_snapshot.scar_checkpoint().clone());
+    scar_session.ensure_next_fun_idx_at_least(next_fun_idx(std_snapshot.bytecode()));
     let typed = scar_session
         .typecheck_staged_program_with_context(
             resolved,
@@ -358,11 +362,11 @@ fn cached_script_compile_prefix(
         )
         .map_err(|e| format!("phase=typecheck; message={}", e))?;
 
-    let mut forge_session = forge::ForgeSession::from_bytecode(&std_snapshot.bytecode);
+    let mut forge_session = forge::ForgeSession::from_bytecode(std_snapshot.bytecode());
     let (chunk, _) = forge_session
         .codegen_chunk_typed_program(typed)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
-    let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode.clone(), chunk)
+    let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode().clone(), chunk)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
     scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
         entry
@@ -373,21 +377,23 @@ fn cached_script_compile_prefix(
 
     let prefix = Arc::new(CachedCompilePrefix {
         module_asts: cached_modules.module_asts,
-        declaration_index: cached_modules.declaration_index,
-        resolve_state: sigil::ResolveResumeState {
-            next_local_id: resume_state.next_local_id.max(next_fun_idx(&bytecode)),
+        compile_prefix: xldr::CompilationPrefixSnapshot {
+            declaration_index: cached_modules.declaration_index,
+            resolve_state: sigil::ResolveResumeState {
+                next_local_id: resume_state.next_local_id.max(next_fun_idx(&bytecode)),
+            },
+            scar_checkpoint: scar_session.checkpoint(),
+            bytecode,
         },
-        scar_checkpoint: scar_session.checkpoint(),
-        bytecode,
     });
     xldr::store_cached_test_semantic_prefix(
         &cache_path,
         &cache_key,
         CachedTestSemanticPrefixPayload {
-            declaration_index: prefix.declaration_index.clone(),
-            resolve_state: prefix.resolve_state,
-            scar_checkpoint: prefix.scar_checkpoint.clone(),
-            bytecode: prefix.bytecode.clone(),
+            declaration_index: prefix.declaration_index().clone(),
+            resolve_state: prefix.resolve_state(),
+            scar_checkpoint: prefix.scar_checkpoint().clone(),
+            bytecode: prefix.bytecode().clone(),
         },
     );
     record_cache_event(|stats| stats.semantic_prefix_writes += 1);
@@ -431,10 +437,12 @@ pub(super) fn cached_compile_prefix(
             record_cache_event(|stats| stats.semantic_prefix_hits += 1);
             Arc::new(CachedCompilePrefix {
                 module_asts: cached_modules.module_asts,
-                declaration_index: cached_modules.declaration_index,
-                resolve_state: payload.resolve_state,
-                scar_checkpoint: payload.scar_checkpoint,
-                bytecode: payload.bytecode,
+                compile_prefix: xldr::CompilationPrefixSnapshot {
+                    declaration_index: cached_modules.declaration_index,
+                    resolve_state: payload.resolve_state,
+                    scar_checkpoint: payload.scar_checkpoint,
+                    bytecode: payload.bytecode,
+                },
             })
         } else {
             if cache_path.exists() {
@@ -469,21 +477,23 @@ pub(super) fn cached_compile_prefix(
             ));
             let prefix = Arc::new(CachedCompilePrefix {
                 module_asts: cached_modules.module_asts,
-                declaration_index: cached_modules.declaration_index,
-                resolve_state: sigil::ResolveResumeState {
-                    next_local_id: resume_state.next_local_id.max(next_fun_idx(&bytecode)),
+                compile_prefix: xldr::CompilationPrefixSnapshot {
+                    declaration_index: cached_modules.declaration_index,
+                    resolve_state: sigil::ResolveResumeState {
+                        next_local_id: resume_state.next_local_id.max(next_fun_idx(&bytecode)),
+                    },
+                    scar_checkpoint: scar_session.checkpoint(),
+                    bytecode,
                 },
-                scar_checkpoint: scar_session.checkpoint(),
-                bytecode,
             });
             xldr::store_cached_test_semantic_prefix(
                 &cache_path,
                 &cache_key,
                 CachedTestSemanticPrefixPayload {
-                    declaration_index: prefix.declaration_index.clone(),
-                    resolve_state: prefix.resolve_state,
-                    scar_checkpoint: prefix.scar_checkpoint.clone(),
-                    bytecode: prefix.bytecode.clone(),
+                    declaration_index: prefix.declaration_index().clone(),
+                    resolve_state: prefix.resolve_state(),
+                    scar_checkpoint: prefix.scar_checkpoint().clone(),
+                    bytecode: prefix.bytecode().clone(),
                 },
             );
             record_cache_event(|stats| stats.semantic_prefix_writes += 1);

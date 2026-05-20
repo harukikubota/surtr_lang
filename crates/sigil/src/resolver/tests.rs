@@ -1,7 +1,9 @@
 use super::*;
+use sindr::names::{FacetRootKind, TypeIdentity};
 use sindr::primitives::int;
 use sindr::warning::WarningKind;
 use spire::ast::{AstTy, BinOp, Lit};
+use spire::parse;
 
 fn permissive_module_rules() -> spire::ParseRules {
     spire::ParseRules::permissive_for_tests()
@@ -29,6 +31,117 @@ fn parse_and_resolve_with_warnings(
     let ast =
         spire::parse_with_context(src, spire::ParserContext::project(0)).expect("parse failed");
     resolve_with_warnings(ast)
+}
+
+#[test]
+fn lower_module_source_ast_attaches_namespace_consts_to_fallback_module() {
+    let ast = spire::parse_with_context(
+        r#"
+const APP_NAME: String = "surtr"
+defmod App {
+  def main() -> Int { 1 }
+}
+"#,
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("definition source should parse");
+
+    let lowered = lower_module_source_ast(ast, Some("App"));
+
+    assert_eq!(lowered.len(), 1);
+    assert_eq!(lowered[0].module_path, "Global::App");
+    assert!(matches!(
+        lowered[0].ast.first(),
+        Some(Ast::ConstDef(_, name, _, _, _)) if name == "APP_NAME"
+    ));
+}
+
+#[test]
+fn staged_modules_from_source_ast_projects_lowered_modules() {
+    let ast = spire::parse_with_context(
+        r#"
+import Helper::help
+impl User {
+  def use() -> Int { help() }
+}
+"#,
+        spire::ParserContext::module(0, Some("User".to_string()))
+            .with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("definition source should parse");
+
+    let staged = staged_modules_from_source_ast(ast, Some("User"));
+
+    assert_eq!(staged.len(), 1);
+    assert_eq!(staged[0].module_path, "Global::User");
+    assert!(matches!(staged[0].ast.first(), Some(Ast::Import(_, _, _))));
+    assert!(matches!(
+        staged[0].ast.get(1),
+        Some(Ast::ImplDef(_, _, _, _))
+    ));
+}
+
+#[test]
+fn extract_process_modules_from_user_ast_hoists_shared_imports_and_removes_process_defs() {
+    let ast = spire::parse_with_context(
+        r#"
+import Helper::help
+defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int) -> Result<Int> { Ok(state) }
+}
+
+def main() -> Int { help() }
+"#,
+        spire::ParserContext::script(0).with_rules(permissive_module_rules()),
+    )
+    .expect("script source should parse");
+
+    let (process_modules, remaining_ast) = extract_process_modules_from_user_ast(ast);
+
+    assert_eq!(process_modules.len(), 1);
+    assert_eq!(process_modules[0].module_path, "Global::Counter");
+    assert!(matches!(
+        process_modules[0].ast.first(),
+        Some(Ast::Import(_, _, _))
+    ));
+    assert!(process_modules[0].process_spec.is_some());
+    assert!(remaining_ast
+        .iter()
+        .all(|stmt| !matches!(stmt, Ast::Defagent(_, _, _, _, _))));
+    assert!(remaining_ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::Import(_, _, _))));
+    assert!(remaining_ast
+        .iter()
+        .any(|stmt| matches!(stmt, Ast::Def(_, _, _, _, _, _, _))));
+}
+
+#[test]
+fn const_only_fallback_module_path_requires_const_only_source() {
+    let const_only = parse_module_ast("import Env::env\nconst VERSION: Int = 1", "Config");
+    assert_eq!(
+        const_only_fallback_module_path(&const_only, Some("Config")),
+        Some("Config")
+    );
+
+    let with_def = parse_module_ast(
+        "const VERSION: Int = 1\ndef version() -> Int { VERSION }",
+        "Config",
+    );
+    assert_eq!(
+        const_only_fallback_module_path(&with_def, Some("Config")),
+        None
+    );
 }
 
 #[test]
@@ -522,6 +635,86 @@ fn test_precollect_declaration_index_tracks_bootstrap_std_user_stage_split() {
     assert_eq!(index["Global::NoneError"].stage_index, 0);
     assert_eq!(index["Std::Math::add"].stage_index, 1);
     assert_eq!(index["User::Main::main"].stage_index, 2);
+}
+
+#[test]
+fn declaration_uid_order_is_stage_then_fq_name() {
+    let module_stages = vec![
+        vec![staged_module(
+            "User::B",
+            parse_module_ast(r#"def beta() -> Int { 1 }"#, "User::B"),
+        )],
+        vec![
+            staged_module(
+                "User::Z",
+                parse_module_ast(r#"def zeta() -> Int { 1 }"#, "User::Z"),
+            ),
+            staged_module(
+                "User::A",
+                parse_module_ast(r#"def alpha() -> Int { 1 }"#, "User::A"),
+            ),
+        ],
+    ];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+
+    assert_eq!(
+        declaration_uid_order(&index),
+        vec![
+            "User::B::beta".to_string(),
+            "User::A::alpha".to_string(),
+            "User::Z::zeta".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn declaration_ordering_exposes_stage_metadata() {
+    let module_stages = vec![
+        vec![staged_module(
+            "User::B",
+            parse_module_ast(r#"def beta() -> Int { 1 }"#, "User::B"),
+        )],
+        vec![
+            staged_module(
+                "User::Z",
+                parse_module_ast(r#"def zeta() -> Int { 1 }"#, "User::Z"),
+            ),
+            staged_module(
+                "User::A",
+                parse_module_ast(r#"def alpha() -> Int { 1 }"#, "User::A"),
+            ),
+        ],
+    ];
+
+    let index = precollect_declaration_index(&module_stages).expect("precollect should succeed");
+    let ordering = declaration_stage_ordering(&index);
+
+    assert_eq!(
+        ordering.entries(),
+        &[
+            StageOrderedDeclaration {
+                stage_index: 0,
+                fq_name: "User::B::beta".to_string(),
+            },
+            StageOrderedDeclaration {
+                stage_index: 1,
+                fq_name: "User::A::alpha".to_string(),
+            },
+            StageOrderedDeclaration {
+                stage_index: 1,
+                fq_name: "User::Z::zeta".to_string(),
+            },
+        ]
+    );
+    assert_eq!(
+        ordering.fq_names(),
+        vec![
+            "User::B::beta".to_string(),
+            "User::A::alpha".to_string(),
+            "User::Z::zeta".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -2879,6 +3072,36 @@ x = match s {
 }
 
 #[test]
+fn test_match_qualified_boolean_constructor_patterns_resolve() {
+    let resolved = parse_and_resolve(
+        r#"flag = True
+x = match flag {
+  Boolean::True => 1,
+  Boolean::False => 0,
+}"#,
+    )
+    .unwrap();
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Match(_, _, arms) => {
+                assert!(matches!(
+                    &arms[0].pattern,
+                    ResolvedPattern::Constructor(ctor, inner)
+                        if ctor.name == "Boolean::True" && inner.is_empty()
+                ));
+                assert!(matches!(
+                    &arms[1].pattern,
+                    ResolvedPattern::Constructor(ctor, inner)
+                        if ctor.name == "Boolean::False" && inner.is_empty()
+                ));
+            }
+            _ => panic!("Expected Match"),
+        },
+        _ => panic!("Expected Bind with Match"),
+    }
+}
+
+#[test]
 fn test_closure_and_capture_resolution() {
     let resolved = parse_and_resolve(
         r#"x = 1
@@ -3422,6 +3645,87 @@ deftrait Fake {
 }
 
 #[test]
+fn test_effective_auto_import_entries_include_autoimport_trait_methods_only() {
+    let module_stages = vec![vec![staged_module(
+        "Show",
+        parse_module_ast(
+            r#"@autoimport
+deftrait Show {
+  def to_string(self: Self) -> String
+}"#,
+            "Show",
+        ),
+    )]];
+
+    let entries = crate::effective_auto_import_entries(&module_stages, None, 0)
+        .expect("effective auto-import query should succeed");
+    let names = entries
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect::<Vec<_>>();
+
+    assert!(
+        names.iter().any(|name| name == "Show::to_string"),
+        "actual entries: {names:?}"
+    );
+    assert!(
+        names.iter().all(|name| name != "Show"),
+        "trait owner should not be reported as imported member: {names:?}"
+    );
+}
+
+#[test]
+fn test_effective_visible_entries_include_explicit_imported_short_name() {
+    let module_stages = vec![vec![staged_module(
+        "Global::Helper",
+        parse_module_ast(
+            r#"def helper(value: Int) -> String { "" }"#,
+            "Global::Helper",
+        ),
+    )]];
+    let ast = parse("import Helper::helper\nhe").expect("parse should succeed");
+
+    let visible = crate::effective_visible_entries(&module_stages, &ast, None, 0)
+        .expect("effective visible query should succeed");
+    let imported = visible
+        .iter()
+        .find(|entry| entry.visible_name == "helper")
+        .expect("explicit import should expose short name");
+
+    assert_eq!(imported.entry.name, "helper");
+    assert!(imported.via_import);
+    assert!(!imported.via_auto_import);
+    assert!(imported.importable);
+    assert!(imported.callable);
+}
+
+#[test]
+fn test_effective_visible_entries_mark_explicit_import_shadowing_auto_import() {
+    let module_stages = vec![vec![
+        staged_auto_import_module(
+            "Kernel",
+            parse_module_ast(r#"def helper() -> Int { 1 }"#, "Kernel"),
+        ),
+        staged_module(
+            "UserHelpers",
+            parse_module_ast(r#"def helper() -> Int { 2 }"#, "UserHelpers"),
+        ),
+    ]];
+    let ast = parse("import UserHelpers::helper\nhelper").expect("parse should succeed");
+
+    let visible = crate::effective_visible_entries(&module_stages, &ast, None, 0)
+        .expect("effective visible query should succeed");
+    let imported = visible
+        .iter()
+        .find(|entry| entry.visible_name == "helper" && entry.entry.module_path == "UserHelpers")
+        .expect("explicit import should expose short name");
+
+    assert!(imported.via_import);
+    assert!(!imported.via_auto_import);
+    assert!(imported.shadowed_auto_import);
+}
+
+#[test]
 fn test_duplicate_module_import_is_rejected() {
     let module_stages = vec![vec![staged_module(
         "Helper",
@@ -3887,6 +4191,74 @@ fn test_sigil_session_allows_top_level_shadowing_of_imported_name() {
     assert_ne!(def_id, 99);
 }
 
+#[test]
+fn test_sigil_session_visible_entries_filter_hidden_surfaces_and_keep_visible_aliases() {
+    let mut declaration_index = DeclarationIndex::new();
+    declaration_index.insert(
+        "Global::Helper::helper".to_string(),
+        DeclarationEntry {
+            module_path: "Global::Helper".to_string(),
+            name: "helper".to_string(),
+            fq_name: "Global::Helper::helper".to_string(),
+            kind: DeclarationKind::Def,
+            stage_index: 0,
+            auto_import: false,
+            hidden: false,
+            visibility: Visibility::Public,
+            user_importable: true,
+            user_callable: true,
+        },
+    );
+    declaration_index.insert(
+        "Global::Kernel::hidden_pid".to_string(),
+        DeclarationEntry {
+            module_path: "Global::Kernel".to_string(),
+            name: "hidden_pid".to_string(),
+            fq_name: "Global::Kernel::hidden_pid".to_string(),
+            kind: DeclarationKind::Def,
+            stage_index: 0,
+            auto_import: false,
+            hidden: true,
+            visibility: Visibility::Public,
+            user_importable: true,
+            user_callable: true,
+        },
+    );
+
+    let declaration_uids = assign_declaration_uids(&declaration_index);
+    let mut scope = Scope::new();
+    scope.define_with_id(
+        "helper",
+        *declaration_uids
+            .get("Global::Helper::helper")
+            .expect("helper uid should exist"),
+    );
+    scope.define_with_id(
+        "hidden_pid",
+        *declaration_uids
+            .get("Global::Kernel::hidden_pid")
+            .expect("hidden uid should exist"),
+    );
+
+    let mut session = SigilSession::new();
+    session.replace_scope_with_declarations(scope, &declaration_index);
+
+    let visible = session.visible_declaration_entries();
+
+    assert!(
+        visible.iter().any(|entry| {
+            entry.visible_name == "helper" && entry.entry.fq_name == "Global::Helper::helper"
+        }),
+        "visible entries should preserve the visible alias: {visible:?}"
+    );
+    assert!(
+        visible
+            .iter()
+            .all(|entry| entry.entry.fq_name != "Global::Kernel::hidden_pid"),
+        "hidden surfaces should not be exposed: {visible:?}"
+    );
+}
+
 // --- Expression resolution tests ---
 
 #[test]
@@ -3953,14 +4325,202 @@ fn test_tuple_type_root_resolves_in_field_access() {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::FieldAccess(_, expr, field) => {
                 assert_eq!(field, "_0");
-                assert!(
-                    matches!(expr.as_ref(), Resolved::Var(_, id) if id.name == "Tuple"),
-                    "field access target should be tuple type root"
-                );
+                let id = resolved_var_id(expr.as_ref());
+                assert_eq!(id.name, "Tuple");
+                assert_symbol_info_facet_root(id, Some(FacetRootKind::Tuple));
             }
             other => panic!("Expected FieldAccess, got {:?}", other),
         },
         other => panic!("Expected Bind, got {:?}", other),
+    }
+}
+
+fn bind_rhs(node: &Resolved) -> &Resolved {
+    match node {
+        Resolved::Bind(_, _, rhs) => rhs.as_ref(),
+        other => panic!("Expected Bind, got {:?}", other),
+    }
+}
+
+fn resolved_var_id(node: &Resolved) -> &ResolvedId {
+    match node {
+        Resolved::Var(_, id) => id,
+        other => panic!("Expected Var, got {:?}", other),
+    }
+}
+
+fn assert_symbol_info_facet_root(id: &ResolvedId, expected: Option<FacetRootKind>) {
+    let info = id
+        .symbol_info
+        .as_ref()
+        .expect("resolved id should carry symbol identity info");
+    assert_eq!(info.capabilities.facet_root_path, expected);
+}
+
+#[test]
+fn test_container_facet_roots_carry_symbol_identity_info() {
+    let resolved = parse_and_resolve(
+        r#"tuple_facet = Tuple._0
+list_facet = List.[0]
+map_facet = HashMap.["k"]"#,
+    )
+    .unwrap();
+
+    match bind_rhs(&resolved[0]) {
+        Resolved::FieldAccess(_, expr, field) => {
+            assert_eq!(field, "_0");
+            assert_symbol_info_facet_root(resolved_var_id(expr), Some(FacetRootKind::Tuple));
+        }
+        other => panic!("Expected Tuple FieldAccess, got {:?}", other),
+    }
+
+    match bind_rhs(&resolved[1]) {
+        Resolved::FacetSegmentAccess(_, expr, ResolvedFacetPathSegment::Bracket(_)) => {
+            assert_symbol_info_facet_root(resolved_var_id(expr), Some(FacetRootKind::List));
+        }
+        other => panic!("Expected List FacetSegmentAccess, got {:?}", other),
+    }
+
+    match bind_rhs(&resolved[2]) {
+        Resolved::FacetSegmentAccess(_, expr, ResolvedFacetPathSegment::Bracket(_)) => {
+            assert_symbol_info_facet_root(resolved_var_id(expr), Some(FacetRootKind::HashMap));
+        }
+        other => panic!("Expected HashMap FacetSegmentAccess, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_primitive_facet_roots_carry_symbol_identity_info_without_facet_path() {
+    let resolved = parse_and_resolve("string_facet = String.len").unwrap();
+
+    match bind_rhs(&resolved[0]) {
+        Resolved::FieldAccess(_, expr, field) => {
+            assert_eq!(field, "len");
+            assert_symbol_info_facet_root(resolved_var_id(expr), None);
+        }
+        other => panic!("Expected String FieldAccess, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_boolean_variant_facet_root_carries_type_root_symbol_identity_info() {
+    let resolved = parse_and_resolve("true_facet = Boolean.True").unwrap();
+
+    match bind_rhs(&resolved[0]) {
+        Resolved::FieldAccess(_, expr, field) => {
+            assert_eq!(field, "True");
+            assert_symbol_info_facet_root(resolved_var_id(expr), Some(FacetRootKind::TypeRoot));
+        }
+        other => panic!("Expected Boolean FieldAccess, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_user_type_declarations_carry_symbol_identity_info() {
+    let resolved = parse_and_resolve(
+        r#"defstruct User { name: String }
+defrecord Pair(left: Int, right: Int)
+defenum Light {
+  Red,
+  Green,
+}
+deferror Oops(reason: String) { reason }"#,
+    )
+    .unwrap();
+
+    match &resolved[0] {
+        Resolved::StructDef(_, id, ..) => {
+            let info = id.symbol_info.as_ref().expect("struct should carry info");
+            assert_eq!(info.identity, TypeIdentity::Struct);
+            assert!(info.capabilities.type_annotation);
+            assert!(info.capabilities.module_owner);
+            assert!(info.capabilities.impl_target);
+            assert_eq!(
+                info.capabilities.facet_root_path,
+                Some(FacetRootKind::TypeRoot)
+            );
+        }
+        other => panic!("Expected StructDef, got {:?}", other),
+    }
+
+    match &resolved[1] {
+        Resolved::RecordDef(_, id, _) => {
+            let info = id.symbol_info.as_ref().expect("record should carry info");
+            assert_eq!(info.identity, TypeIdentity::Record);
+            assert!(info.capabilities.type_annotation);
+            assert!(info.capabilities.module_owner);
+            assert!(info.capabilities.impl_target);
+            assert_eq!(
+                info.capabilities.facet_root_path,
+                Some(FacetRootKind::TypeRoot)
+            );
+        }
+        other => panic!("Expected RecordDef, got {:?}", other),
+    }
+
+    match &resolved[2] {
+        Resolved::EnumDef(_, id, ..) => {
+            let info = id.symbol_info.as_ref().expect("enum should carry info");
+            assert_eq!(info.identity, TypeIdentity::Enum);
+            assert!(info.capabilities.type_annotation);
+            assert!(info.capabilities.module_owner);
+            assert!(info.capabilities.impl_target);
+            assert_eq!(
+                info.capabilities.facet_root_path,
+                Some(FacetRootKind::TypeRoot)
+            );
+        }
+        other => panic!("Expected EnumDef, got {:?}", other),
+    }
+
+    match &resolved[3] {
+        Resolved::DeferrorDef(_, id, _, _) => {
+            let info = id.symbol_info.as_ref().expect("deferror should carry info");
+            assert_eq!(info.identity, TypeIdentity::ConcreteError);
+            assert!(info.capabilities.type_annotation);
+            assert!(!info.capabilities.module_owner);
+            assert!(!info.capabilities.impl_target);
+            assert_eq!(info.capabilities.facet_root_path, None);
+        }
+        other => panic!("Expected DeferrorDef, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_builtin_special_variant_aliases_cannot_be_declared_as_owners() {
+    for alias in ["Ok", "Err", "True", "False"] {
+        let module_path = format!("Global::{alias}");
+        let err = precollect_declaration_index(&[vec![staged_module(&module_path, Vec::new())]])
+            .expect_err("builtin-special variant alias should not be usable as a module owner");
+        assert!(
+            err.message
+                .contains("reserved for builtin-special enum variant sugar"),
+            "{alias}: {}",
+            err.message
+        );
+
+        let err = precollect_declaration_index(&[vec![staged_module(
+            "User",
+            vec![Ast::EnumDef(
+                Span { start: 0, end: 0 },
+                format!("Global::{alias}"),
+                Vec::new(),
+                vec![spire::ast::EnumVariant {
+                    name: "Value".to_string(),
+                    payload: Vec::new(),
+                    discriminant: None,
+                    span: Span { start: 0, end: 0 },
+                }],
+                DeclAttrs::default(),
+            )],
+        )]])
+        .expect_err("builtin-special variant alias should not be usable as a type owner");
+        assert!(
+            err.message
+                .contains("reserved for builtin-special enum variant sugar"),
+            "{alias}: {}",
+            err.message
+        );
     }
 }
 

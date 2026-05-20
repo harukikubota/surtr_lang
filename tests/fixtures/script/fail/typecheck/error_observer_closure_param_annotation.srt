@@ -1,0 +1,2 @@
+handler = {|err: Error| eprint(err)}
+value = Result::tap_err(Err(NoneError), handler)

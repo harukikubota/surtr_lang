@@ -119,31 +119,7 @@ impl Checker {
         }
 
         let result = match scrut_ty {
-            Ty::Bool => {
-                let has_true = arms.iter().any(|arm| {
-                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::BoolLit(true))
-                });
-                let has_false = arms.iter().any(|arm| {
-                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::BoolLit(false))
-                });
-
-                if has_true && has_false {
-                    Ok(())
-                } else {
-                    let mut missing = Vec::new();
-                    if !has_true {
-                        missing.push("True");
-                    }
-                    if !has_false {
-                        missing.push("False");
-                    }
-                    Err(TypeError {
-                        message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
-                        span: span.clone(),
-                        hint: None,
-                    })
-                }
-            }
+            Ty::Bool => self.check_enum_like_match_exhaustive(span, "Boolean", arms),
             Ty::Result(_, _) => {
                 let has_ok = arms.iter().any(|arm| {
                     arm.guard.is_none()
@@ -171,34 +147,7 @@ impl Checker {
                     })
                 }
             }
-            Ty::Enum(enum_name, _) => {
-                let mut missing = Vec::new();
-                if let Some(variants) = self.lookup_enum_variants_of(enum_name) {
-                    for variant in variants {
-                        let covered = arms.iter().any(|arm| {
-                            if arm.guard.is_some() {
-                                return false;
-                            }
-                            matches!(
-                                &arm.pattern,
-                                TypedMatchPattern::Constructor { tag, .. } if *tag == variant.tag
-                            )
-                        });
-                        if !covered {
-                            missing.push(variant.short_name.clone());
-                        }
-                    }
-                }
-                if missing.is_empty() {
-                    Ok(())
-                } else {
-                    Err(TypeError {
-                        message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
-                        span: span.clone(),
-                        hint: None,
-                    })
-                }
-            }
+            Ty::Enum(enum_name, _) => self.check_enum_like_match_exhaustive(span, enum_name, arms),
             Ty::List(_) => {
                 let has_nil = arms.iter().any(|arm| {
                     arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::ListNil)
@@ -265,6 +214,54 @@ impl Checker {
         };
         self.profiler.finish(ProfileEvent::MatchExhaustive, profile);
         result
+    }
+
+    fn check_enum_like_match_exhaustive(
+        &self,
+        span: &Span,
+        enum_name: &str,
+        arms: &[TypedMatchArm],
+    ) -> Result<(), TypeError> {
+        let variants = self
+            .lookup_enum_variants_of(enum_name)
+            .ok_or_else(|| TypeError {
+                message: format!("Unknown enum metadata for match: {}", enum_name),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let mut missing = Vec::new();
+        for variant in variants {
+            let covered = arms.iter().any(|arm| {
+                arm.guard.is_none()
+                    && Self::match_arm_covers_enum_variant(enum_name, &arm.pattern, variant)
+            });
+            if !covered {
+                missing.push(variant.short_name.clone());
+            }
+        }
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(TypeError {
+                message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
+                span: span.clone(),
+                hint: None,
+            })
+        }
+    }
+
+    fn match_arm_covers_enum_variant(
+        enum_name: &str,
+        pattern: &TypedMatchPattern,
+        variant: &crate::env::EnumVariantInfo,
+    ) -> bool {
+        match pattern {
+            TypedMatchPattern::Constructor { tag, .. } => *tag == variant.tag,
+            TypedMatchPattern::BoolLit(value) if Self::surface_name(enum_name) == "Boolean" => {
+                variant.short_name == if *value { "True" } else { "False" }
+            }
+            _ => false,
+        }
     }
 
     pub(super) fn check_match_arm(
@@ -505,6 +502,47 @@ impl Checker {
                         });
                     }
                     return Ok(TypedMatchPattern::ErrorKind(ctor_id.name.clone()));
+                }
+                if matches!(expected_ty, Ty::Bool) {
+                    let variant = self
+                        .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
+                        .ok_or_else(|| TypeError {
+                            message: format!("Unknown constructor: {}", ctor_id.name),
+                            span: ctor_id.span.clone(),
+                            hint: None,
+                        })?
+                        .clone();
+                    let variant = self.instantiate_enum_variant(&variant);
+                    if Self::surface_name(&variant.enum_name) != "Boolean" {
+                        return Err(TypeError {
+                            message: format!(
+                                "Constructor {} does not belong to enum Boolean",
+                                ctor_id.name
+                            ),
+                            span: ctor_id.span.clone(),
+                            hint: None,
+                        });
+                    }
+                    if !inner_pats.is_empty() {
+                        return Err(TypeError {
+                            message: format!(
+                                "{} pattern expects 0 argument(s), got {}",
+                                ctor_id.name,
+                                inner_pats.len()
+                            ),
+                            span: ctor_id.span.clone(),
+                            hint: None,
+                        });
+                    }
+                    return match variant.short_name.as_str() {
+                        "True" => Ok(TypedMatchPattern::BoolLit(true)),
+                        "False" => Ok(TypedMatchPattern::BoolLit(false)),
+                        _ => Err(TypeError {
+                            message: format!("Unknown Boolean constructor: {}", ctor_id.name),
+                            span: ctor_id.span.clone(),
+                            hint: None,
+                        }),
+                    };
                 }
                 if let Ty::Result(ok_ty, err_ty) = expected_ty {
                     let tag = match ctor_id.name.as_str() {
