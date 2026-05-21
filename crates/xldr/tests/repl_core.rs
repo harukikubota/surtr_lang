@@ -540,6 +540,33 @@ fn core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation
 fn core_command_completion_uses_command_use_sites() {
     let mut engine = engine();
 
+    let all_command_candidates = engine.completions(":", ":".len()).candidates;
+    let all_command_rendered = all_command_candidates
+        .iter()
+        .map(|candidate| {
+            format!(
+                "{}=>{}::{:?}",
+                candidate.label, candidate.replacement, candidate.detail
+            )
+        })
+        .collect::<Vec<_>>();
+    for expected in [":help", ":sig", ":quit", ":q"] {
+        assert!(
+            all_command_candidates
+                .iter()
+                .any(|candidate| candidate.label == expected && candidate.replacement == expected),
+            "command-head completion should expose {expected}: {all_command_rendered:?}"
+        );
+    }
+    let sig = all_command_candidates
+        .iter()
+        .find(|candidate| candidate.label == ":sig")
+        .expect(":sig should be present");
+    assert_eq!(
+        sig.detail.as_deref(),
+        Some(":sig <symbol|query>  Show signatures for visible callable, family, owner, or process surfaces")
+    );
+
     let head_candidates = engine.completions(":si", ":si".len()).candidates;
     let head_rendered = head_candidates
         .iter()
@@ -552,8 +579,44 @@ fn core_command_completion_uses_command_use_sites() {
         "command-head completion should expose :sig: {head_rendered:?}"
     );
 
+    let indented_candidates = engine.completions("  :si", "  :si".len()).candidates;
+    assert!(
+        indented_candidates
+            .iter()
+            .any(|candidate| candidate.label == ":sig" && candidate.replacement == ":sig"),
+        "command-head completion should allow leading whitespace: {indented_candidates:?}"
+    );
+
+    let plain_candidates = engine.completions("si", "si".len()).candidates;
+    assert!(
+        !plain_candidates
+            .iter()
+            .any(|candidate| candidate.label.starts_with(':')
+                || candidate.replacement.starts_with(':')),
+        "plain input should not expose REPL commands: {plain_candidates:?}"
+    );
+
     let bound = rendered_text(&engine.handle_line("print = \"shadowed\""));
     assert!(bound.contains("print: String = \"shadowed\""), "{bound}");
+
+    let sig_unqualified_candidates = engine.completions(":sig pri", ":sig pri".len()).candidates;
+    let sig_unqualified_rendered = sig_unqualified_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        sig_unqualified_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print" && candidate.replacement == "print"),
+        ":sig argument completion should use normal semantic candidates: {sig_unqualified_rendered:?}"
+    );
+    assert!(
+        !sig_unqualified_candidates
+            .iter()
+            .any(|candidate| candidate.label.starts_with(':')
+                || candidate.replacement.starts_with(':')),
+        ":sig argument completion should not include command heads: {sig_unqualified_rendered:?}"
+    );
 
     let type_candidates = engine
         .completions(":type pri", ":type pri".len())
@@ -588,6 +651,123 @@ fn core_command_completion_uses_command_use_sites() {
             .any(|candidate| candidate.label == "Kernel::print"
                 && candidate.replacement == "Kernel::print"),
         "qualified command completion should preserve callable escape hatches: {sig_rendered:?}"
+    );
+}
+
+#[test]
+fn core_command_argument_completion_uses_command_policies() {
+    let mut engine = engine();
+    let bound = rendered_text(&engine.handle_line("print = \"shadowed\""));
+    assert!(bound.contains("print: String = \"shadowed\""), "{bound}");
+    let value = rendered_text(&engine.handle_line("41 + 1"));
+    assert!(value.contains("42"), "{value}");
+
+    let error_candidates = engine.completions(":error s", ":error s".len()).candidates;
+    assert!(
+        error_candidates
+            .iter()
+            .any(|candidate| candidate.label == "summary" && candidate.replacement == "summary"),
+        ":error should complete summary: {error_candidates:?}"
+    );
+    assert!(
+        !error_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":error should not fall through to semantic symbols: {error_candidates:?}"
+    );
+
+    let reload_candidates = engine
+        .completions(":reload d", ":reload d".len())
+        .candidates;
+    assert!(
+        reload_candidates
+            .iter()
+            .any(|candidate| candidate.label == "defs" && candidate.replacement == "defs"),
+        ":reload should complete defs: {reload_candidates:?}"
+    );
+    assert!(
+        !reload_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":reload should not fall through to semantic symbols: {reload_candidates:?}"
+    );
+
+    let help_candidates = engine.completions(":help s", ":help s".len()).candidates;
+    assert!(
+        help_candidates
+            .iter()
+            .any(|candidate| candidate.label == ":sig" && candidate.replacement == "sig"),
+        ":help should complete command topics: {help_candidates:?}"
+    );
+    assert!(
+        !help_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":help should not fall through to semantic symbols: {help_candidates:?}"
+    );
+
+    let no_arg_candidates = engine.completions(":clear p", ":clear p".len()).candidates;
+    assert!(
+        no_arg_candidates.is_empty(),
+        ":clear should not complete command arguments: {no_arg_candidates:?}"
+    );
+
+    let value_candidates = engine.completions(":v ", ":v ".len()).candidates;
+    assert!(
+        value_candidates
+            .iter()
+            .any(|candidate| candidate.label == "2" && candidate.replacement == "2"),
+        ":v should complete result line numbers: {value_candidates:?}"
+    );
+    assert!(
+        !value_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":v should not fall through to semantic symbols: {value_candidates:?}"
+    );
+
+    let history_candidates = engine
+        .completions(":history 1,", ":history 1,".len())
+        .candidates;
+    assert!(
+        history_candidates
+            .iter()
+            .any(|candidate| candidate.label == "2" && candidate.replacement == "2"),
+        ":history should complete selector line numbers after commas: {history_candidates:?}"
+    );
+
+    let facet = rendered_text(&engine.handle_line("path = Tuple._0"));
+    assert!(facet.contains("path: Facet<_, _>"), "{facet}");
+    let facet_candidates = engine
+        .completions(":facet pa", ":facet pa".len())
+        .candidates;
+    assert!(
+        facet_candidates
+            .iter()
+            .any(|candidate| candidate.label == "path" && candidate.replacement == "path"),
+        ":facet should complete visible facet bindings: {facet_candidates:?}"
+    );
+    assert!(
+        !facet_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":facet should not fall through to broad semantic symbols: {facet_candidates:?}"
+    );
+
+    let dir = tempfile_dir("xldr-repl-core-save-completion");
+    let session_path = dir.join("session.eldr");
+    fs::write(&session_path, b"snapshot").expect("path completion fixture should be written");
+    let path_prefix = dir.join("sess");
+    let save_input = format!(":save {}", path_prefix.display());
+    let save_candidates = engine.completions(&save_input, save_input.len()).candidates;
+    assert!(
+        save_candidates.iter().any(|candidate| {
+            candidate.label == "session.eldr"
+                && candidate.replacement.ends_with("session.eldr")
+                && candidate.replace_start == ":save ".len()
+                && candidate.replace_end == save_input.len()
+        }),
+        ":save should complete .eldr paths without semantic fallback: {save_candidates:?}"
     );
 }
 

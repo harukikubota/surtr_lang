@@ -27,6 +27,10 @@ use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Helper};
 
 #[cfg(feature = "line-editor")]
+use crate::repl::logic::command::{
+    repl_command_spec_for_alias, repl_command_specs, ReplCommandArgCompletion, ReplCommandSpec,
+};
+#[cfg(feature = "line-editor")]
 use crate::repl::logic::core::{
     completion_allowed_at_cursor, completion_token, ReplCompletion, ReplCompletionCandidate,
     ReplCompletionContext, ReplCompletionKind,
@@ -228,36 +232,79 @@ impl Completer for ReplHelper {
         if !completion_allowed_at_cursor(line, pos) {
             return Ok((pos, Vec::new()));
         }
-        const COMMANDS: &[&str] = &[
-            ":help",
-            ":h",
-            ":quit",
-            ":exit",
-            ":q",
-            ":doc",
-            ":sig",
-            ":info",
-            ":type",
-            ":facet",
-            ":error",
-            ":save",
-            ":vars",
-            ":imported",
-            ":defs",
-            ":history",
-            ":reload",
-            ":clear",
-            ":v",
-        ];
         let (start, _end, word) = completion_token(line, pos);
 
         let mut matches = Vec::new();
-        for cmd in COMMANDS {
-            if cmd.starts_with(&word) {
-                matches.push(Pair {
-                    display: cmd.to_string(),
-                    replacement: cmd.to_string(),
-                });
+        let use_site = surtr_analysis::repl_completion_use_site(line, pos);
+        if matches!(use_site, surtr_analysis::ReplCompletionUseSite::CommandHead) {
+            for spec in repl_command_specs() {
+                for alias in spec.aliases {
+                    let cmd = format!(":{alias}");
+                    if cmd.starts_with(&word) {
+                        matches.push(Pair {
+                            display: spec.completion_detail(),
+                            replacement: cmd,
+                        });
+                    }
+                }
+            }
+            return Ok((start, matches));
+        }
+        if matches!(use_site, surtr_analysis::ReplCompletionUseSite::Command(_)) {
+            if let Some((spec, arg_start)) = rustyline_command_arg_spec(line, pos) {
+                return match spec.arg_completion {
+                    ReplCommandArgCompletion::Semantic
+                    | ReplCommandArgCompletion::TypeTarget
+                    | ReplCommandArgCompletion::FacetTarget => {
+                        let mut matches = Vec::new();
+                        for symbol in &self.symbols {
+                            if symbol.starts_with(&word) {
+                                matches.push(Pair {
+                                    display: symbol.clone(),
+                                    replacement: symbol.clone(),
+                                });
+                            }
+                        }
+                        Ok((start, matches))
+                    }
+                    ReplCommandArgCompletion::CommandTopic => {
+                        let typed_colon = word.starts_with(':');
+                        let topic_prefix = word.strip_prefix(':').unwrap_or(&word);
+                        let mut matches = Vec::new();
+                        for spec in repl_command_specs() {
+                            for alias in spec.aliases {
+                                let label = format!(":{alias}");
+                                if !alias.starts_with(topic_prefix) && !label.starts_with(&word) {
+                                    continue;
+                                }
+                                matches.push(Pair {
+                                    display: spec.completion_detail(),
+                                    replacement: if typed_colon {
+                                        label
+                                    } else {
+                                        (*alias).to_string()
+                                    },
+                                });
+                            }
+                        }
+                        Ok((start.max(arg_start), matches))
+                    }
+                    ReplCommandArgCompletion::Fixed(options) => {
+                        let matches = options
+                            .iter()
+                            .filter(|option| option.starts_with(&word))
+                            .map(|option| Pair {
+                                display: format!("{}  {}", option, spec.usage),
+                                replacement: (*option).to_string(),
+                            })
+                            .collect();
+                        Ok((start.max(arg_start), matches))
+                    }
+                    ReplCommandArgCompletion::None
+                    | ReplCommandArgCompletion::ResultLine
+                    | ReplCommandArgCompletion::HistorySelector
+                    | ReplCommandArgCompletion::SavePath => Ok((pos, Vec::new())),
+                };
             }
         }
         for symbol in &self.symbols {
@@ -270,6 +317,37 @@ impl Completer for ReplHelper {
         }
         Ok((start, matches))
     }
+}
+
+#[cfg(feature = "line-editor")]
+fn rustyline_command_arg_spec(line: &str, pos: usize) -> Option<(ReplCommandSpec, usize)> {
+    let pos = pos.min(line.len());
+    let before = &line[..pos];
+    let trimmed = before.trim_start();
+    let line_start = before.len() - trimmed.len();
+    if !trimmed.starts_with(':') {
+        return None;
+    }
+    let command_start = line_start + ':'.len_utf8();
+    let command_tail = &line[command_start..];
+    let command_len = command_tail
+        .char_indices()
+        .find_map(|(idx, ch)| ch.is_whitespace().then_some(idx))
+        .unwrap_or(command_tail.len());
+    let command_end = command_start + command_len;
+    if pos <= command_end {
+        return None;
+    }
+    let spec = repl_command_spec_for_alias(&line[command_start..command_end])?;
+    let mut arg_start = command_end;
+    for (idx, ch) in line[command_end..pos].char_indices() {
+        if !ch.is_whitespace() {
+            arg_start = command_end + idx;
+            break;
+        }
+        arg_start = command_end + idx + ch.len_utf8();
+    }
+    Some((spec, arg_start))
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -1561,6 +1639,92 @@ mod tests {
                 .iter()
                 .any(|candidate| candidate.replacement == "String"),
             "rustyline fallback completion should run inside interpolation"
+        );
+    }
+
+    #[test]
+    fn rustyline_helper_uses_repl_command_metadata_for_command_heads() {
+        let mut helper = super::ReplHelper::new();
+        helper.set_symbols(vec!["print".to_string(), "String".to_string()]);
+        let history = DefaultHistory::new();
+        let ctx = rustyline::Context::new(&history);
+
+        let (_start, command_matches) = helper
+            .complete("  :si", "  :si".len(), &ctx)
+            .expect("rustyline completion should succeed");
+        let sig = command_matches
+            .iter()
+            .find(|candidate| candidate.replacement == ":sig")
+            .expect(":sig should be completed from command metadata");
+        assert_eq!(
+            sig.display,
+            ":sig <symbol|query>  Show signatures for visible callable, family, owner, or process surfaces"
+        );
+
+        let (_start, plain_matches) = helper
+            .complete("si", "si".len(), &ctx)
+            .expect("rustyline completion should succeed");
+        let plain_replacements = plain_matches
+            .iter()
+            .map(|candidate| candidate.replacement.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            !plain_matches
+                .iter()
+                .any(|candidate| candidate.replacement.starts_with(':')),
+            "plain rustyline completion should not include commands: {plain_replacements:?}"
+        );
+
+        let (_start, arg_matches) = helper
+            .complete(":sig pri", ":sig pri".len(), &ctx)
+            .expect("rustyline completion should succeed");
+        let arg_replacements = arg_matches
+            .iter()
+            .map(|candidate| candidate.replacement.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            arg_matches
+                .iter()
+                .any(|candidate| candidate.replacement == "print"),
+            "command argument completion should use normal symbols: {arg_replacements:?}"
+        );
+        assert!(
+            !arg_matches
+                .iter()
+                .any(|candidate| candidate.replacement.starts_with(':')),
+            "command arguments should not include command heads: {arg_replacements:?}"
+        );
+
+        let (_start, error_matches) = helper
+            .complete(":error s", ":error s".len(), &ctx)
+            .expect("rustyline completion should succeed");
+        let error_replacements = error_matches
+            .iter()
+            .map(|candidate| candidate.replacement.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            error_matches
+                .iter()
+                .any(|candidate| candidate.replacement == "summary"),
+            ":error should complete fixed arguments: {error_replacements:?}"
+        );
+        assert!(
+            !error_matches
+                .iter()
+                .any(|candidate| candidate.replacement == "String"),
+            ":error should not fall through to symbols: {error_replacements:?}"
+        );
+
+        let (_start, vars_matches) = helper
+            .complete(":vars Str", ":vars Str".len(), &ctx)
+            .expect("rustyline completion should succeed");
+        let vars_replacements = vars_matches
+            .iter()
+            .map(|candidate| candidate.replacement.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            vars_matches.is_empty(),
+            "no-arg commands should suppress symbol fallback: {vars_replacements:?}"
         );
     }
 

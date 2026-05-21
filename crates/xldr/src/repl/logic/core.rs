@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::panic;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
@@ -23,7 +24,10 @@ use sindr::names::SymbolCapabilities;
 use sindr::policy::CompileUnitKind;
 use spire::ast::{Ast, AstTy, ImportSpec, Span};
 
-use super::command::{parse_repl_command, ReplCommand};
+use super::command::{
+    parse_repl_command, repl_command_help_lines, repl_command_spec_for_alias, repl_command_specs,
+    repl_command_topic_help_lines, ReplCommand, ReplCommandArgCompletion, ReplCommandSpec,
+};
 use super::output::{ReplOutput, ReplResult};
 use super::preload::PreloadCompileMode;
 use super::query::{
@@ -368,16 +372,25 @@ impl ReplCompletionContext {
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
         let started = Instant::now();
         let use_site = surtr_analysis::repl_completion_use_site(input, cursor);
-        let support = self.input_support.input_support(input, cursor, use_site);
-        let candidates = support
-            .candidates
-            .into_iter()
-            .map(ReplEngine::repl_completion_candidate_from_analysis)
-            .collect::<Vec<_>>();
-        let signature = support.signature.map(|signature| ReplSignatureHelp {
-            lines: signature.lines,
-            active_parameter: signature.active_parameter,
-        });
+        let (candidates, signature) =
+            if matches!(use_site, surtr_analysis::ReplCompletionUseSite::CommandHead) {
+                (
+                    Self::command_head_completion_candidates(input, cursor),
+                    None,
+                )
+            } else {
+                let support = self.input_support.input_support(input, cursor, use_site);
+                let candidates = support
+                    .candidates
+                    .into_iter()
+                    .map(ReplEngine::repl_completion_candidate_from_analysis)
+                    .collect::<Vec<_>>();
+                let signature = support.signature.map(|signature| ReplSignatureHelp {
+                    lines: signature.lines,
+                    active_parameter: signature.active_parameter,
+                });
+                (candidates, signature)
+            };
         let mut telemetry = CompletionTelemetry::default();
         telemetry.record_completion_compute(started.elapsed());
         ReplCompletion {
@@ -389,6 +402,35 @@ impl ReplCompletionContext {
 
     pub fn should_request(input: &str, cursor: usize) -> bool {
         surtr_analysis::ReplInputSupportContext::should_request(input, cursor)
+    }
+
+    fn command_head_completion_candidates(
+        input: &str,
+        cursor: usize,
+    ) -> Vec<ReplCompletionCandidate> {
+        if !completion_allowed_at_cursor(input, cursor) {
+            return Vec::new();
+        }
+        let (replace_start, replace_end, prefix) = completion_token(input, cursor);
+        let mut candidates = Vec::new();
+        for spec in repl_command_specs() {
+            for alias in spec.aliases {
+                let label = format!(":{alias}");
+                if !label.starts_with(&prefix) {
+                    continue;
+                }
+                candidates.push(ReplCompletionCandidate {
+                    label: label.clone(),
+                    replacement: label,
+                    kind: ReplCompletionKind::FunctionCall,
+                    detail: Some(spec.completion_detail()),
+                    documentation: None,
+                    replace_start,
+                    replace_end,
+                });
+            }
+        }
+        candidates
     }
 
     #[cfg(test)]
@@ -421,6 +463,14 @@ struct FacetStep {
     ty: AstTy,
     fallible: bool,
     variant: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ReplCommandArgContext<'a> {
+    spec: ReplCommandSpec,
+    arg_start: usize,
+    cursor: usize,
+    args_before_cursor: &'a str,
 }
 
 pub struct ReplEngine {
@@ -1755,8 +1805,393 @@ impl ReplEngine {
         }
     }
 
+    fn empty_completion() -> ReplCompletion {
+        ReplCompletion {
+            candidates: Vec::new(),
+            signature: None,
+            telemetry: CompletionTelemetry::default(),
+        }
+    }
+
+    fn completion_from_candidates(candidates: Vec<ReplCompletionCandidate>) -> ReplCompletion {
+        ReplCompletion {
+            candidates,
+            signature: None,
+            telemetry: CompletionTelemetry::default(),
+        }
+    }
+
+    fn repl_command_arg_context<'a>(
+        input: &'a str,
+        cursor: usize,
+    ) -> Option<ReplCommandArgContext<'a>> {
+        let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+        let before_cursor = &input[..cursor];
+        let trimmed_start = before_cursor.trim_start();
+        let line_start = before_cursor.len() - trimmed_start.len();
+        if !trimmed_start.starts_with(':') {
+            return None;
+        }
+
+        let command_start = line_start + ':'.len_utf8();
+        let command_tail = &input[command_start..];
+        let command_len = command_tail
+            .char_indices()
+            .find_map(|(idx, ch)| ch.is_whitespace().then_some(idx))
+            .unwrap_or(command_tail.len());
+        let command_end = command_start + command_len;
+        if cursor <= command_end {
+            return None;
+        }
+
+        let command = &input[command_start..command_end];
+        let spec = repl_command_spec_for_alias(command)?;
+        let mut arg_start = command_end;
+        for (idx, ch) in input[command_end..cursor].char_indices() {
+            if !ch.is_whitespace() {
+                arg_start = command_end + idx;
+                break;
+            }
+            arg_start = command_end + idx + ch.len_utf8();
+        }
+        Some(ReplCommandArgContext {
+            spec,
+            arg_start,
+            cursor,
+            args_before_cursor: &input[arg_start..cursor],
+        })
+    }
+
+    fn command_arg_word_range(
+        input: &str,
+        cursor: usize,
+        arg_start: usize,
+    ) -> (usize, usize, String) {
+        let (replace_start, replace_end, prefix) = completion_token(input, cursor);
+        if replace_start < arg_start {
+            (arg_start, cursor, input[arg_start..cursor].to_string())
+        } else {
+            (replace_start, replace_end, prefix)
+        }
+    }
+
+    fn selector_arg_word_range(
+        input: &str,
+        cursor: usize,
+        arg_start: usize,
+    ) -> (usize, usize, String) {
+        let before = &input[arg_start..cursor];
+        let comma_start = before.rfind(',').map(|idx| arg_start + idx + 1);
+        let range_start = before.rfind("..").map(|idx| arg_start + idx + 2);
+        let mut replace_start = comma_start
+            .into_iter()
+            .chain(range_start)
+            .max()
+            .unwrap_or(arg_start);
+        while replace_start < cursor {
+            let Some(ch) = input[replace_start..cursor].chars().next() else {
+                break;
+            };
+            if !ch.is_whitespace() {
+                break;
+            }
+            replace_start += ch.len_utf8();
+        }
+        (
+            replace_start,
+            cursor,
+            input[replace_start..cursor].to_string(),
+        )
+    }
+
+    fn fixed_arg_candidates(
+        options: &[&str],
+        detail: Option<String>,
+        replace_start: usize,
+        replace_end: usize,
+        prefix: &str,
+    ) -> Vec<ReplCompletionCandidate> {
+        options
+            .iter()
+            .filter(|option| option.starts_with(prefix))
+            .map(|option| ReplCompletionCandidate {
+                label: (*option).to_string(),
+                replacement: (*option).to_string(),
+                kind: ReplCompletionKind::Variable,
+                detail: detail.clone(),
+                documentation: None,
+                replace_start,
+                replace_end,
+            })
+            .collect()
+    }
+
+    fn help_topic_candidates(
+        input: &str,
+        ctx: &ReplCommandArgContext<'_>,
+    ) -> Vec<ReplCompletionCandidate> {
+        let (replace_start, replace_end, prefix) =
+            Self::command_arg_word_range(input, ctx.cursor, ctx.arg_start);
+        let typed_colon = prefix.starts_with(':');
+        let topic_prefix = prefix.strip_prefix(':').unwrap_or(&prefix).to_string();
+        repl_command_specs()
+            .iter()
+            .flat_map(|spec| {
+                spec.aliases.iter().filter_map({
+                    let prefix = prefix.clone();
+                    let topic_prefix = topic_prefix.clone();
+                    move |alias| {
+                        let label = format!(":{alias}");
+                        if !alias.starts_with(&topic_prefix) && !label.starts_with(&prefix) {
+                            return None;
+                        }
+                        Some(ReplCompletionCandidate {
+                            label,
+                            replacement: if typed_colon {
+                                format!(":{alias}")
+                            } else {
+                                (*alias).to_string()
+                            },
+                            kind: ReplCompletionKind::FunctionCall,
+                            detail: Some(spec.completion_detail()),
+                            documentation: None,
+                            replace_start,
+                            replace_end,
+                        })
+                    }
+                })
+            })
+            .collect()
+    }
+
+    fn numeric_line_candidates<I>(
+        lines: I,
+        replace_start: usize,
+        replace_end: usize,
+        prefix: &str,
+    ) -> Vec<ReplCompletionCandidate>
+    where
+        I: IntoIterator<Item = usize>,
+    {
+        lines
+            .into_iter()
+            .map(|line| line.to_string())
+            .filter(|line| line.starts_with(prefix))
+            .map(|line| ReplCompletionCandidate {
+                label: line.clone(),
+                replacement: line,
+                kind: ReplCompletionKind::Variable,
+                detail: Some("REPL line".to_string()),
+                documentation: None,
+                replace_start,
+                replace_end,
+            })
+            .collect()
+    }
+
+    fn save_path_candidates(ctx: &ReplCommandArgContext<'_>) -> Vec<ReplCompletionCandidate> {
+        let (replace_start, replace_end) = (ctx.arg_start, ctx.cursor);
+        let typed_path = ctx.args_before_cursor;
+        let path = Path::new(typed_path);
+        let (dir, prefix) = if typed_path.is_empty() {
+            (PathBuf::from("."), "")
+        } else if typed_path.ends_with(std::path::MAIN_SEPARATOR) {
+            (PathBuf::from(path), "")
+        } else {
+            (
+                path.parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from(".")),
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(""),
+            )
+        };
+
+        let Ok(entries) = fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        let mut candidates = entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| {
+                let file_name = entry.file_name().to_str()?.to_string();
+                if !file_name.starts_with(prefix) {
+                    return None;
+                }
+                let is_dir = entry.file_type().ok().is_some_and(|ty| ty.is_dir());
+                let mut replacement = if dir == Path::new(".") {
+                    file_name.clone()
+                } else {
+                    dir.join(&file_name).display().to_string()
+                };
+                let label = if is_dir {
+                    replacement.push(std::path::MAIN_SEPARATOR);
+                    format!("{file_name}{}", std::path::MAIN_SEPARATOR)
+                } else {
+                    file_name
+                };
+                Some(ReplCompletionCandidate {
+                    label,
+                    replacement,
+                    kind: ReplCompletionKind::Variable,
+                    detail: Some(if is_dir {
+                        "directory".to_string()
+                    } else {
+                        ".eldr session path".to_string()
+                    }),
+                    documentation: None,
+                    replace_start,
+                    replace_end,
+                })
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by(|left, right| left.label.cmp(&right.label));
+        candidates
+    }
+
+    fn binding_target_candidates(
+        &self,
+        input: &str,
+        ctx: &ReplCommandArgContext<'_>,
+        facet_only: bool,
+    ) -> Vec<ReplCompletionCandidate> {
+        let (replace_start, replace_end, prefix) =
+            Self::command_arg_word_range(input, ctx.cursor, ctx.arg_start);
+        let mut seen = BTreeSet::new();
+        let mut candidates = Vec::new();
+        for binding in self
+            .result_metas
+            .iter()
+            .rev()
+            .flatten()
+            .flat_map(|meta| meta.bindings.iter().rev())
+        {
+            if facet_only && binding.facet_info.is_none() {
+                continue;
+            }
+            if !seen.insert(binding.name.as_str()) || !binding.name.starts_with(&prefix) {
+                continue;
+            }
+            candidates.push(ReplCompletionCandidate {
+                label: binding.name.clone(),
+                replacement: binding.name.clone(),
+                kind: if binding.facet_info.is_some() {
+                    ReplCompletionKind::TypePath
+                } else {
+                    ReplCompletionKind::Variable
+                },
+                detail: Some(crate::surface_rendered_name(&binding.ty)),
+                documentation: None,
+                replace_start,
+                replace_end,
+            });
+        }
+        if !facet_only {
+            for (name, metadata) in &self.process_metadata {
+                if metadata.instance != spire::ast::ProcessInstance::Singleton {
+                    continue;
+                }
+                let rendered = name.rsplit("::").next().unwrap_or(name);
+                if !seen.insert(rendered) || !rendered.starts_with(&prefix) {
+                    continue;
+                }
+                candidates.push(ReplCompletionCandidate {
+                    label: rendered.to_string(),
+                    replacement: rendered.to_string(),
+                    kind: ReplCompletionKind::Variable,
+                    detail: Some("singleton process owner".to_string()),
+                    documentation: None,
+                    replace_start,
+                    replace_end,
+                });
+            }
+        }
+        candidates
+    }
+
+    fn command_argument_completion(
+        &self,
+        input: &str,
+        cursor: usize,
+        use_site: surtr_analysis::ReplCompletionUseSite,
+    ) -> Option<ReplCompletion> {
+        if !matches!(use_site, surtr_analysis::ReplCompletionUseSite::Command(_)) {
+            return None;
+        }
+        if !completion_allowed_at_cursor(input, cursor) {
+            return Some(Self::empty_completion());
+        }
+        let ctx = Self::repl_command_arg_context(input, cursor)?;
+        match ctx.spec.arg_completion {
+            ReplCommandArgCompletion::Semantic => None,
+            ReplCommandArgCompletion::None => Some(Self::empty_completion()),
+            ReplCommandArgCompletion::CommandTopic => Some(Self::completion_from_candidates(
+                Self::help_topic_candidates(input, &ctx),
+            )),
+            ReplCommandArgCompletion::Fixed(options) => {
+                let (replace_start, replace_end, prefix) =
+                    Self::command_arg_word_range(input, cursor, ctx.arg_start);
+                Some(Self::completion_from_candidates(
+                    Self::fixed_arg_candidates(
+                        options,
+                        Some(ctx.spec.usage.to_string()),
+                        replace_start,
+                        replace_end,
+                        &prefix,
+                    ),
+                ))
+            }
+            ReplCommandArgCompletion::ResultLine => {
+                let (replace_start, replace_end, prefix) =
+                    Self::selector_arg_word_range(input, cursor, ctx.arg_start);
+                Some(Self::completion_from_candidates(
+                    Self::numeric_line_candidates(
+                        1..=self.results.len(),
+                        replace_start,
+                        replace_end,
+                        &prefix,
+                    ),
+                ))
+            }
+            ReplCommandArgCompletion::HistorySelector => {
+                let (replace_start, replace_end, prefix) =
+                    Self::selector_arg_word_range(input, cursor, ctx.arg_start);
+                Some(Self::completion_from_candidates(
+                    Self::numeric_line_candidates(
+                        self.history_entries.iter().map(|entry| entry.line),
+                        replace_start,
+                        replace_end,
+                        &prefix,
+                    ),
+                ))
+            }
+            ReplCommandArgCompletion::SavePath => Some(Self::completion_from_candidates(
+                Self::save_path_candidates(&ctx),
+            )),
+            ReplCommandArgCompletion::TypeTarget => Some(Self::completion_from_candidates(
+                self.binding_target_candidates(input, &ctx, false),
+            )),
+            ReplCommandArgCompletion::FacetTarget => {
+                if let Some(assist) = self.facet_completion_assist(input, cursor) {
+                    return Some(ReplCompletion {
+                        candidates: assist.candidates,
+                        signature: Some(assist.signature),
+                        telemetry: CompletionTelemetry::default(),
+                    });
+                }
+                Some(Self::completion_from_candidates(
+                    self.binding_target_candidates(input, &ctx, true),
+                ))
+            }
+        }
+    }
+
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
         let use_site = surtr_analysis::repl_completion_use_site(input, cursor);
+        if let Some(completion) = self.command_argument_completion(input, cursor, use_site) {
+            return completion;
+        }
         if matches!(
             use_site,
             surtr_analysis::ReplCompletionUseSite::Input
@@ -2318,90 +2753,37 @@ impl ReplEngine {
     }
 
     fn help_lines() -> Vec<String> {
-        vec![
-            "REPL commands:".to_string(),
-            ":help, :h [command]  Show REPL help".to_string(),
-            ":quit, :exit, :q     Exit the REPL".to_string(),
-            ":doc <symbol|query>  Show documentation for visible symbols, including process surfaces".to_string(),
-            ":sig <symbol|query>  Show signatures for visible callable, family, owner, or process surfaces".to_string(),
-            ":info <query>        Show derived information for visible symbols, retained query targets, or process handles"
-                .to_string(),
-            ":type <binding>      Show the type for a visible binding or singleton process owner".to_string(),
-            "                      Unresolved generic bindings must be annotated before persistence.".to_string(),
-            ":facet <FacetPath|binding> Inspect a FacetPath and its API boundaries".to_string(),
-            ":error [full|summary]  Show or change error display mode".to_string(),
-            ":save <path.eldr>    Save the current session as .eldr".to_string(),
-            ":vars                List visible value bindings".to_string(),
-            ":imported            List imports active in the REPL scope".to_string(),
-            ":defs                List visible top-level REPL defs".to_string(),
-            ":history [selector]  Show committed REPL input history".to_string(),
-            ":reload [all|defs]   Rebuild the REPL session from preload and defs".to_string(),
-            ":clear               Clear the screen when the host supports it".to_string(),
-            ":v <line>            Recall a previous result".to_string(),
-        ]
+        repl_command_help_lines()
     }
 
     fn doc_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :doc <symbol|query>".to_string(),
-            "Examples: :doc print, :doc formatter, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc compare(Int, Int), :doc |*> Option"
-                .to_string(),
-        ]
+        repl_command_topic_help_lines("doc").expect(":doc should have topic help")
     }
 
     fn sig_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :sig <symbol|query>".to_string(),
-            "Examples: :sig compare, :sig Compare, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig compare(Int, Int), :sig |*> Option"
-                .to_string(),
-        ]
+        repl_command_topic_help_lines("sig").expect(":sig should have topic help")
     }
 
     fn info_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :info <query>".to_string(),
-            "Accepts: symbol | singleton-owner | typed-call | operator-target".to_string(),
-            "Examples: :info print, :info Counter, :info pid, :info compare(Int, Int), :info |*> Option".to_string(),
-        ]
+        repl_command_topic_help_lines("info").expect(":info should have topic help")
     }
 
     fn type_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :type <binding|singleton-owner>".to_string(),
-            "Examples: :type list, :type Counter, :type pid, :type my_closure".to_string(),
-            "Worker processes are queried through PID bindings; singleton processes are queried by owner name."
-                .to_string(),
-        ]
+        repl_command_topic_help_lines("type").expect(":type should have topic help")
     }
 
     fn facet_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :facet <FacetPath|binding>".to_string(),
-            "Examples: :facet path, :facet Tuple._1, :facet BitWidth.Any".to_string(),
-            "Shows canonical path, API availability, segment details, and where the path may stop."
-                .to_string(),
-        ]
-    }
-
-    fn history_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :history [selector]".to_string(),
-            "Examples: :history, :history 3, :history 1, 3, 5, :history 2..4".to_string(),
-        ]
+        repl_command_topic_help_lines("facet").expect(":facet should have topic help")
     }
 
     fn handle_help(&self, topic: Option<&str>) -> Vec<String> {
         let Some(topic) = topic.map(str::trim).filter(|topic| !topic.is_empty()) else {
             return Self::help_lines();
         };
-        match topic.strip_prefix(':').unwrap_or(topic) {
-            "doc" => Self::doc_help_lines(),
-            "sig" => Self::sig_help_lines(),
-            "info" => Self::info_help_lines(),
-            "type" => Self::type_help_lines(),
-            "facet" => Self::facet_help_lines(),
-            "history" => Self::history_help_lines(),
-            other => {
+        match repl_command_topic_help_lines(topic) {
+            Some(lines) => lines,
+            None => {
+                let other = topic.strip_prefix(':').unwrap_or(topic);
                 let mut rendered = vec![format!("No help found for :{}", other)];
                 rendered.push("Type :help for available REPL commands.".to_string());
                 rendered
