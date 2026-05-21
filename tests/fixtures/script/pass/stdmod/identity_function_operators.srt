@@ -1,0 +1,71 @@
+defstruct Identity<$T> {
+  value: $T,
+}
+
+impl Identity {
+  def new<$T>(value: $T) -> Identity<$T> {
+    Identity { value: value }
+  }
+}
+
+impl Functor<$A, $B, Identity<$B>> for Identity<$A> {
+  def map(self: Self, f: ($A -> $B)) -> Identity<$B> {
+    Identity { value: f(self.value) }
+  }
+}
+
+impl Chainable<$A, Identity<$B>> for Identity<$A> {
+  def chain(self: Self, f: ($A -> Identity<$B>)) -> Identity<$B> {
+    f(self.value)
+  }
+}
+
+impl LiftComposable<$A, $B, $C, Identity<$C>> for ($A -> Identity<$B>) {
+  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Identity<$C>) {
+    {|value| Functor::map(self(value), rhs)}
+  }
+}
+
+impl KleisliComposable<$A, $B, Identity<$C>> for ($A -> Identity<$B>) {
+  def kleisli_compose(self: Self, rhs: ($B -> Identity<$C>)) -> ($A -> Identity<$C>) {
+    {|value| Chainable::chain(self(value), rhs)}
+  }
+}
+
+def inc(value: Int) -> Int {
+  value + 1
+}
+
+def render(value: Int) -> String {
+  to_string(value)
+}
+
+def ident_inc(value: Int) -> Identity<Int> {
+  Identity(value + 1)
+}
+
+def ident_double(value: Int) -> Identity<Int> {
+  Identity(value * 2)
+}
+
+def ident_render(value: Int) -> Identity<String> {
+  Identity(to_string(value))
+}
+
+def show_identity_int(value: Identity<Int>) -> String {
+  to_string(value.value)
+}
+
+def show_identity_string(value: Identity<String>) -> String {
+  value.value
+}
+
+mapped: Identity<Int> = Identity(1) |*> &inc
+bound: Identity<Int> = Identity(1) |>= &ident_double
+lifted = &ident_inc >* &render
+kleisli = &ident_inc >=> &ident_render
+
+print(show_identity_int(mapped))
+print(show_identity_int(bound))
+print(show_identity_string(lifted(1)))
+print(show_identity_string(kleisli(1)))

@@ -2944,7 +2944,7 @@ impl Checker {
             )
         };
         Ok(TypedNode {
-            ty: result_ty,
+            ty: self.resolve_ty(&result_ty),
             span: span.clone(),
             node: TypedInner::TraitCall {
                 trait_name,
@@ -3817,20 +3817,45 @@ impl Checker {
                     "`>*`",
                 )
             }
-            _ => Err(TypeError {
-                message: "`>*` requires Result, List, or Option on the left-hand side".into(),
-                span: span.clone(),
-                hint: Some(self.operator_rule_hint(
+            _ => {
+                let mapped_ty = self.env.fresh_tyvar();
+                let result_ty =
+                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(mapped_ty.clone()));
+                let receiver_ty = self.resolve_ty(&typed_left.ty);
+                self.flow_operator_trait_call(
+                    span,
+                    "LiftComposable",
+                    "lift_compose",
+                    &receiver_ty,
+                    vec![
+                        self.resolve_ty(&left_in),
+                        self.resolve_ty(&right_in),
+                        self.resolve_ty(&right_out),
+                        mapped_ty,
+                    ],
+                    OperatorTraitOp::LiftCompose,
+                    vec![typed_left.clone(), typed_right.clone()],
+                    result_ty,
                     "`>*`",
-                    "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    Some(format!(
-                        "The left callable returns {}, so no Result/List/Option container is available at this step. Use `>>` for plain composition; use `|*>` when you already have an evaluated contextual value and want to map a plain RHS over it.",
-                        self.ty_name(&left_out)
-                    )),
-                )),
-            }),
+                )
+                .or_else(|_| {
+                    Err(TypeError {
+                        message: "`>*` requires Result, List, or Option on the left-hand side"
+                            .into(),
+                        span: span.clone(),
+                        hint: Some(self.operator_rule_hint(
+                            "`>*`",
+                            "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some(format!(
+                                "The left callable returns {}, so no Result/List/Option container is available at this step. Use `>>` for plain composition; use `|*>` when you already have an evaluated contextual value and want to map a plain RHS over it.",
+                                self.ty_name(&left_out)
+                            )),
+                        )),
+                    })
+                })
+            }
         }
     }
 
@@ -3939,8 +3964,10 @@ impl Checker {
                     Box::new(self.resolve_ty(next_ok.as_ref())),
                     Box::new(self.resolve_ty(err.as_ref())),
                 );
-                let result_ty =
-                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(chained_ty.clone()));
+                let result_ty = Ty::Func(
+                    vec![self.resolve_ty(&left_in)],
+                    Box::new(chained_ty.clone()),
+                );
                 let receiver_ty = self.resolve_ty(&typed_left.ty);
                 self.flow_operator_trait_call(
                     span,
@@ -3978,8 +4005,10 @@ impl Checker {
                     });
                 }
                 let chained_ty = Ty::List(Box::new(self.resolve_ty(next_item.as_ref())));
-                let result_ty =
-                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(chained_ty.clone()));
+                let result_ty = Ty::Func(
+                    vec![self.resolve_ty(&left_in)],
+                    Box::new(chained_ty.clone()),
+                );
                 let receiver_ty = self.resolve_ty(&typed_left.ty);
                 self.flow_operator_trait_call(
                     span,
@@ -4022,8 +4051,10 @@ impl Checker {
                     });
                 }
                 let chained_ty = Ty::Enum(name, vec![self.resolve_ty(&next_args[0])]);
-                let result_ty =
-                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(chained_ty.clone()));
+                let result_ty = Ty::Func(
+                    vec![self.resolve_ty(&left_in)],
+                    Box::new(chained_ty.clone()),
+                );
                 let receiver_ty = self.resolve_ty(&typed_left.ty);
                 self.flow_operator_trait_call(
                     span,
@@ -4041,21 +4072,48 @@ impl Checker {
                     "`>=>`",
                 )
             }
-            _ => Err(TypeError {
-                message: "`>=>` requires matching Result, List, or Option context on both sides".into(),
-                span: span.clone(),
-                hint: Some(self.operator_rule_hint(
+            _ => {
+                let chained_ty = self.resolve_ty(&right_out);
+                let result_ty = Ty::Func(
+                    vec![self.resolve_ty(&left_in)],
+                    Box::new(chained_ty.clone()),
+                );
+                let receiver_ty = self.resolve_ty(&typed_left.ty);
+                self.flow_operator_trait_call(
+                    span,
+                    "KleisliComposable",
+                    "kleisli_compose",
+                    &receiver_ty,
+                    vec![
+                        self.resolve_ty(&left_in),
+                        self.resolve_ty(&right_in),
+                        chained_ty,
+                    ],
+                    OperatorTraitOp::KleisliCompose,
+                    vec![typed_left.clone(), typed_right.clone()],
+                    result_ty,
                     "`>=>`",
-                    "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> Result<C, E>) or (B -> List<C>) or (B -> Option<C>); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    Some(format!(
-                        "Left output is {}; right output is {}. Use `>*` when the left side is contextual but the RHS is plain; use `>>` when both sides are plain.",
-                        self.ty_name(&left_out),
-                        self.ty_name(&right_out)
-                    )),
-                )),
-            }),
+                )
+                .or_else(|_| {
+                    Err(TypeError {
+                        message:
+                            "`>=>` requires matching Result, List, or Option context on both sides"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some(self.operator_rule_hint(
+                            "`>=>`",
+                            "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> Result<C, E>) or (B -> List<C>) or (B -> Option<C>); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some(format!(
+                                "Left output is {}; right output is {}. Use `>*` when the left side is contextual but the RHS is plain; use `>>` when both sides are plain.",
+                                self.ty_name(&left_out),
+                                self.ty_name(&right_out)
+                            )),
+                        )),
+                    })
+                })
+            }
         }
     }
 

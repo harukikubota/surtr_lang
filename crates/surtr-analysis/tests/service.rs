@@ -5,9 +5,9 @@ use std::sync::Arc;
 use sindr::names::{FacetRootKind, SymbolCapabilities};
 use surtr_analysis::{
     resolve_context, AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisHost, AnalysisMode,
-    AnalysisService, CompletionKind, CompletionSymbol, ProjectRunnerInput, ProjectRunnerSourceInput,
-    ReplCompletionUseSite, RunnerContext, RunnerSelection, SelectedContext, SemanticIndex,
-    SymbolDisplayMetadata, SymbolSemanticInfo, Utf16Position,
+    AnalysisService, CompletionKind, CompletionSymbol, ProjectRunnerInput,
+    ProjectRunnerSourceInput, ReplCompletionUseSite, RunnerContext, RunnerSelection,
+    SelectedContext, SemanticIndex, SymbolDisplayMetadata, SymbolSemanticInfo, Utf16Position,
 };
 
 #[derive(Debug)]

@@ -620,7 +620,7 @@ facet = User.name
 name = Facet::view(facet, user)
 ```
 
-REPL では `:type` / `:info` に加えて `:facet <FacetPath|$binding>` が使えます。
+REPL では `:type` / `:info` に加えて `:facet <FacetPath|binding>` が使えます。
 `type` と `full path` の確認に加えて、variant selector や `Result` source を含む
 path の停止点をまとめて見たいときに使います。
 

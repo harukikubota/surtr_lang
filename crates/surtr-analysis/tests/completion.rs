@@ -905,7 +905,8 @@ fn repl_input_support_context_filters_type_command_candidates_by_use_site() {
         .map(|candidate| candidate.label)
         .collect::<Vec<_>>();
     assert!(
-        input_labels.contains(&"count".to_string()) && input_labels.contains(&"count_up".to_string()),
+        input_labels.contains(&"count".to_string())
+            && input_labels.contains(&"count_up".to_string()),
         "{input_labels:?}"
     );
 
@@ -944,7 +945,9 @@ fn repl_input_support_context_filters_type_command_candidates_by_use_site() {
         .map(|candidate| candidate.label)
         .collect::<Vec<_>>();
     assert!(
-        !special_labels.iter().any(|label| label == "true" || label == "false"),
+        !special_labels
+            .iter()
+            .any(|label| label == "true" || label == "false"),
         "{special_labels:?}"
     );
 }
@@ -986,8 +989,7 @@ fn repl_input_support_context_distinguishes_expression_sig_and_type_use_sites() 
         .map(|candidate| candidate.label)
         .collect::<Vec<_>>();
     assert!(
-        expr_labels.contains(&"count".to_string())
-            && expr_labels.contains(&"count_up".to_string()),
+        expr_labels.contains(&"count".to_string()) && expr_labels.contains(&"count_up".to_string()),
         "{expr_labels:?}"
     );
 
@@ -1002,9 +1004,38 @@ fn repl_input_support_context_distinguishes_expression_sig_and_type_use_sites() 
         .map(|candidate| candidate.label)
         .collect::<Vec<_>>();
     assert!(
-        sig_labels.contains(&"count".to_string())
-            && sig_labels.contains(&"count_up".to_string()),
+        sig_labels.contains(&"count".to_string()) && sig_labels.contains(&"count_up".to_string()),
         "{sig_labels:?}"
+    );
+
+    let doc_labels = context
+        .input_support(
+            ":doc co",
+            ":doc co".len(),
+            ReplCompletionUseSite::Command(ReplCommandUseSite::Doc),
+        )
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        doc_labels.contains(&"count".to_string()) && doc_labels.contains(&"count_up".to_string()),
+        "{doc_labels:?}"
+    );
+
+    let info_labels = context
+        .input_support(
+            ":info co",
+            ":info co".len(),
+            ReplCompletionUseSite::Command(ReplCommandUseSite::Info),
+        )
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        info_labels.contains(&"count".to_string()) && info_labels.contains(&"count_up".to_string()),
+        "{info_labels:?}"
     );
 
     let type_labels = context

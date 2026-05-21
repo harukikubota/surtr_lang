@@ -906,13 +906,11 @@ impl ReplInputSupportContext {
         };
         let completion = if let Some(context) = call_context.as_ref() {
             let expected_ty = self.expected_param_type_for_call(context);
-            if let Some(completion) =
-                complete_call_argument_with_presentation(
-                    request,
-                    CompletionPresentation::Repl,
-                    use_site,
-                )
-            {
+            if let Some(completion) = complete_call_argument_with_presentation(
+                request,
+                CompletionPresentation::Repl,
+                use_site,
+            ) {
                 completion
             } else {
                 let mut completion = complete_repl_prefix(request, CompletionScope::VariablesOnly);
@@ -944,7 +942,10 @@ impl ReplInputSupportContext {
         candidates.retain(|candidate| repl_use_site_accepts_candidate(use_site, candidate));
         if call_context.is_none()
             && operator_assist.is_none()
-            && !matches!(use_site, ReplCompletionUseSite::Command(ReplCommandUseSite::Type))
+            && !matches!(
+                use_site,
+                ReplCompletionUseSite::Command(ReplCommandUseSite::Type)
+            )
         {
             self.inject_special_repl_candidates(
                 &mut candidates,

@@ -580,11 +580,14 @@ fn repl_sig_expression_query_flows_through_cli_presentation() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("defined:"));
-    assert!(stdout.contains("Chainable::chain("));
-    assert!(stdout.contains("specialized:"));
-    assert!(stdout.contains("ret |>= up: Result<Int>"));
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(combined.contains("Unsupported command query form."));
+    assert!(combined.contains("operator target"));
+    assert!(!combined.contains("ret |>= up: Result<Int>"));
 }
 
 #[test]
@@ -714,7 +717,8 @@ fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("trait PipeApply { pipe_apply(self: Self, value: $A) -> $B }"));
+    assert!(stdout.contains("PipeApply::pipe_apply(self: Self, value: $A) -> $B"));
+    assert!(stdout.contains("impl targets:"));
     assert!(stdout.contains("specialized:"));
     assert!(stdout.contains("id(Int) -> Int"));
 }
@@ -859,13 +863,16 @@ fn repl_info_renders_styled_summary_for_queries() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\u{1b}["));
-    let plain = strip_ansi(&stdout);
-    assert!(plain.contains("kind:"), "{plain}");
-    assert!(plain.contains("defined:"), "{plain}");
-    assert!(plain.contains("specialized:"), "{plain}");
-    assert!(plain.contains("Result<Int>"), "{plain}");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(combined.contains("\u{1b}["));
+    let plain = strip_ansi(&combined);
+    assert!(plain.contains("Unsupported command query form."), "{plain}");
+    assert!(plain.contains("operator target"), "{plain}");
+    assert!(!plain.contains("ret |>= up: Result<Int>"), "{plain}");
 }
 
 #[test]
@@ -909,7 +916,7 @@ fn repl_sig_missing_symbol_prints_guidance() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(stdout.contains("No signature found for a"));
-    assert!(stdout.contains(":sig $a") || stdout.contains(":doc <symbol>"));
+    assert!(stdout.contains(":doc <symbol>"));
 }
 
 #[test]
@@ -1282,7 +1289,7 @@ supervisor_init {
             "--script",
             script_path.to_str().expect("script path must be utf-8"),
         ],
-        ":doc MyServer::pid\n:sig MyServer::pid\n:sig MyServer\nserver = MyServer::pid()\n:sig $server\n:type server\n:info server\n:quit\n",
+        ":doc MyServer::pid\n:sig MyServer::pid\n:sig MyServer\nserver = MyServer::pid()\n:sig server\n:type server\n:info server\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -1384,7 +1391,10 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     assert!(stdout.contains("Tuple._0"), "{stdout}");
     assert!(stdout.contains("Tuple._1"), "{stdout}");
-    assert!(stdout.contains("No signature found for Tuple"), "{stdout}");
+    assert!(
+        stdout.contains("(T1, T2, ..) : Tuple<T1, T2, ..>"),
+        "{stdout}"
+    );
     assert!(stdout.contains("defstruct Config"), "{stdout}");
     assert!(stdout.contains("defstruct StyledDocStyle"), "{stdout}");
     assert!(stdout.contains("StyledDocStyle::new("), "{stdout}");
@@ -1393,7 +1403,10 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     assert!(stdout.contains("No docs found for add"), "{stdout}");
     assert!(stdout.contains("Imported Add::add"), "{stdout}");
     assert!(stdout.contains("Add::add"), "{stdout}");
-    assert!(stdout.contains("pair._1: Int"), "{stdout}");
+    assert!(
+        stdout.contains("No signature found for pair._1"),
+        "{stdout}"
+    );
     assert!(
         stderr.contains("Unsupported command query argument `Tuple._0`"),
         "{stderr}"
@@ -1403,7 +1416,7 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
 #[test]
 fn repl_colorizes_closure_doc_footer_and_type_output() {
     let output =
-        run_repl_session_with_color("c = {|x: Int, y: Int| x + y}\n:doc $c\n:type c\n:quit\n");
+        run_repl_session_with_color("c = {|x: Int, y: Int| x + y}\n:doc c\n:type c\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",

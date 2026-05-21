@@ -4598,8 +4598,28 @@ impl Chainable<$A, Boxed<$B>> for Boxed<$A> {
   }
 }
 
+impl LiftComposable<$A, $B, $C, Boxed<$C>> for ($A -> Boxed<$B>) {
+  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Boxed<$C>) {
+    {|value| Functor::map(self(value), rhs)}
+  }
+}
+
+impl KleisliComposable<$A, $B, Boxed<$C>> for ($A -> Boxed<$B>) {
+  def kleisli_compose(self: Self, rhs: ($B -> Boxed<$C>)) -> ($A -> Boxed<$C>) {
+    {|value| Chainable::chain(self(value), rhs)}
+  }
+}
+
 def inc(x: Int) -> Int {
   x + 1
+}
+
+def box_inc(x: Int) -> Boxed<Int> {
+  Boxed::Box(x + 1)
+}
+
+def render(x: Int) -> String {
+  to_string(x)
 }
 
 def stringify(x: Int) -> Boxed<String> {
@@ -4607,7 +4627,9 @@ def stringify(x: Int) -> Boxed<String> {
 }
 
 mapped = Boxed::Box(1) |*> &inc
-bound = Boxed::Box(1) |>= &stringify"#,
+bound = Boxed::Box(1) |>= &stringify
+lifted = &box_inc >* &render
+kleisli = &box_inc >=> &stringify"#,
     );
 
     let boxed_results = typed
@@ -4619,6 +4641,17 @@ bound = Boxed::Box(1) |>= &stringify"#,
         .filter(|ty| matches!(ty, Ty::Enum(name, _) if name == "Boxed" || name == "Global::Boxed"))
         .count();
     assert_eq!(boxed_results, 2);
+    let boxed_function_results = typed
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(&rhs.ty),
+            _ => None,
+        })
+        .filter(|ty| {
+            matches!(ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Enum(name, _) if name == "Boxed" || name == "Global::Boxed"))
+        })
+        .count();
+    assert_eq!(boxed_function_results, 2);
 }
 
 fn result_match_wildcard_self_after_ok_can_change_ok_payload_type() {

@@ -69,7 +69,7 @@ surtr-lsp adapter   -> shared semantic service
 wasm editor adapter -> shared semantic service
 ```
 
-REPL 固有の `:` command、履歴、行番号、append-only binding、`$name` forced binding、
+REPL 固有の `:` command、履歴、行番号、append-only binding、
 `.eldr` save / restore は Xldr に残す。共有対象は、symbol lookup、doc / signature /
 completion candidate / semantic display の解決部分である。
 
@@ -458,7 +458,7 @@ REPL と共有する semantic resolver は次を担う。
 - type constructor、module owner、qualified member、function、operator/helper の候補収集
 - `@doc` と signature metadata の lookup
 - call context から active parameter と expected type を出す signature help
-- typed call / typed operator query の意味解決
+- typed call / operator target query の意味解決
 
 ### 7.1 Command Query Parser
 
@@ -482,7 +482,7 @@ CommandQuery
   | ConstructorLookup(...)
   | ExtractorLookup(...)
   | TypedCallDispatch(...)
-  | TypedOperatorDispatch(...)
+  | OperatorTargetDispatch(...)
   | FacetLookup(...)
 ```
 
@@ -503,7 +503,7 @@ REPL に残すものは次である。
 - `:` command head と command routing
 - `:v`, `:vars`, `:history`, `:reload`, `:save`, `:clear`
 - 行番号、履歴、last result、append-only binding
-- `$name` forced binding や `_1` / `&1` を含む command query surface の UX
+- `$name` / `_1` / `&1` を含む command query rejection UX
 - TTY / TUI の表示制限や pane state
 
 ---

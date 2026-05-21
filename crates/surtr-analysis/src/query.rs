@@ -2,15 +2,15 @@ use spire::ast::{Ast, AstPattern, AstTy, Span};
 use std::ops::{Deref, Range};
 
 const QUERY_OPERATORS: &[&str] = &[
-    "|>=", "|*>", "|>", ">=>", ">*", ">>", "+", "-", "*", "&&", "||", "==", "!=", "<", "<=",
-    ">", ">=", "/", "++",
+    "|>=", "|*>", "|>", ">=>", ">*", ">>", "+", "-", "*", "&&", "||", "==", "!=", "<", "<=", ">",
+    ">=", "/", "++",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandQuery {
     Symbol(SymbolQuery),
     TypedCall(ParsedTypedCallQuery),
-    TypedOperator(ParsedTypedOperatorQuery),
+    OperatorTarget(ParsedOperatorTargetQuery),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,20 +49,20 @@ impl Deref for ParsedTypedCallQuery {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct TypedOperatorQuery {
+pub struct OperatorTargetQuery {
     pub operator: &'static str,
     pub target: QueryArg,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ParsedTypedOperatorQuery {
-    pub query: TypedOperatorQuery,
+pub struct ParsedOperatorTargetQuery {
+    pub query: OperatorTargetQuery,
     pub operator_span: Span,
     pub span: Span,
 }
 
-impl Deref for ParsedTypedOperatorQuery {
-    type Target = TypedOperatorQuery;
+impl Deref for ParsedOperatorTargetQuery {
+    type Target = OperatorTargetQuery;
 
     fn deref(&self) -> &Self::Target {
         &self.query
@@ -130,8 +130,8 @@ pub fn parse_command_query(input: &str) -> Result<CommandQuery, CommandQueryPars
         }));
     }
 
-    if let Some(operator_query) = parse_typed_operator_query(&ctx)? {
-        return Ok(CommandQuery::TypedOperator(operator_query));
+    if let Some(operator_query) = parse_operator_target_query(&ctx)? {
+        return Ok(CommandQuery::OperatorTarget(operator_query));
     }
 
     if let Some(call_query) = parse_typed_call_query(&ctx)? {
@@ -139,6 +139,12 @@ pub fn parse_command_query(input: &str) -> Result<CommandQuery, CommandQueryPars
     }
 
     if trimmed.split_whitespace().count() == 1 {
+        if trimmed.starts_with('$') || trimmed.starts_with('&') || trimmed == "_1" {
+            return Err(CommandQueryParseError::new(
+                format!("Unsupported command query symbol `{trimmed}`."),
+                ctx.full_span(),
+            ));
+        }
         return Ok(CommandQuery::Symbol(SymbolQuery {
             source: trimmed.to_string(),
             span: ctx.full_span(),
@@ -146,7 +152,7 @@ pub fn parse_command_query(input: &str) -> Result<CommandQuery, CommandQueryPars
     }
 
     Err(CommandQueryParseError::new(
-        "Unsupported command query form. Use a symbol, typed call, or typed operator.",
+        "Unsupported command query form. Use a symbol, typed call, or operator target.",
         ctx.full_span(),
     ))
 }
@@ -242,9 +248,9 @@ fn parse_typed_call_query_inner(
     }))
 }
 
-fn parse_typed_operator_query(
+fn parse_operator_target_query(
     ctx: &ParseContext<'_>,
-) -> Result<Option<ParsedTypedOperatorQuery>, CommandQueryParseError> {
+) -> Result<Option<ParsedOperatorTargetQuery>, CommandQueryParseError> {
     let Some((operator, target_range, operator_range)) = split_operator_target_query(ctx.source)
     else {
         return Ok(None);
@@ -257,11 +263,8 @@ fn parse_typed_operator_query(
         ));
     }
     let target = parse_query_arg(ctx, target)?;
-    Ok(Some(ParsedTypedOperatorQuery {
-        query: TypedOperatorQuery {
-            operator,
-            target,
-        },
+    Ok(Some(ParsedOperatorTargetQuery {
+        query: OperatorTargetQuery { operator, target },
         operator_span: ctx.span_for_local_bytes(operator_range.start, operator_range.end),
         span: ctx.full_span(),
     }))
@@ -380,7 +383,9 @@ fn split_top_level_commas(
 
 fn split_operator_target_query(input: &str) -> Option<(&'static str, Range<usize>, Range<usize>)> {
     let (operator, _rest) = input.split_once(char::is_whitespace)?;
-    let operator = QUERY_OPERATORS.iter().find(|candidate| **candidate == operator)?;
+    let operator = QUERY_OPERATORS
+        .iter()
+        .find(|candidate| **candidate == operator)?;
     let operator_end = operator.len();
     let target_start = input[operator_end..]
         .char_indices()
@@ -660,10 +665,13 @@ mod tests {
         let query = parse_command_query("|*> Option").expect("query should parse");
         assert!(matches!(
             query,
-            CommandQuery::TypedOperator(ParsedTypedOperatorQuery {
-                query: TypedOperatorQuery {
+            CommandQuery::OperatorTarget(ParsedOperatorTargetQuery {
+                query: OperatorTargetQuery {
                     operator: "|*>",
-                    target: QueryArg { kind: QueryArgKind::TypeExpr(_), .. },
+                    target: QueryArg {
+                        kind: QueryArgKind::TypeExpr(_),
+                        ..
+                    },
                     ..
                 },
                 ..
@@ -727,11 +735,13 @@ mod tests {
     #[test]
     fn reject_forced_binding_query_args() {
         let err = parse_command_query("compare($left, Int)").expect_err("query should fail");
-        assert!(
-            err.message().contains("`$left`"),
-            "{}",
-            err.message()
-        );
+        assert!(err.message().contains("`$left`"), "{}", err.message());
+    }
+
+    #[test]
+    fn reject_forced_binding_query_symbol() {
+        let err = parse_command_query("$left").expect_err("query should fail");
+        assert_eq!(err.message(), "Unsupported command query symbol `$left`.");
     }
 
     #[test]
@@ -787,12 +797,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_typed_operator_query_tracks_operator_span_in_char_offsets() {
+    fn parse_operator_target_query_tracks_operator_span_in_char_offsets() {
         let query = parse_command_query("|*> Option").expect("query should parse");
         assert!(matches!(
             query,
-            CommandQuery::TypedOperator(ParsedTypedOperatorQuery {
-                query: TypedOperatorQuery {
+            CommandQuery::OperatorTarget(ParsedOperatorTargetQuery {
+                query: OperatorTargetQuery {
                     operator: "|*>",
                     ref target,
                     ..

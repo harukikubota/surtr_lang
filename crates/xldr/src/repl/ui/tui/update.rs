@@ -118,7 +118,7 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
         "type",
         ":type <binding>  — lookup binding type (annotate unresolved generics before persistence)",
     ),
-    ("facet", ":facet <FacetPath|$binding>  — inspect facet path"),
+    ("facet", ":facet <FacetPath|binding>  — inspect facet path"),
     ("save", ":save <path>  — save session to .eldr"),
     ("vars", ":vars  — list visible value bindings"),
     ("imported", ":imported  — list active imports"),

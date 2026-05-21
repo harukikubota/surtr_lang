@@ -157,7 +157,7 @@ impl Generator {
   @doc """
   Transform only the item values while preserving generator progress.
   ## REPL
-  xldr(1)> mapped = Generator::map(Generator::range(1, 3), {|n| "n=#{n}" })
+  xldr(1)> mapped = Generator::map(Generator::range(1, 3), {|n| "n=" ++ to_string(n) })
   xldr(2)> Generator::to_list(mapped)
   ["n=1", "n=2", "n=3"]
   """
