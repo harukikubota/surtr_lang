@@ -52,8 +52,6 @@ impl Deref for ParsedTypedCallQuery {
 pub struct TypedOperatorQuery {
     pub operator: &'static str,
     pub target: QueryArg,
-    pub lhs: QueryArg,
-    pub rhs: OperatorRhs,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,39 +79,7 @@ pub struct QueryArg {
 #[derive(Debug, Clone, PartialEq)]
 pub enum QueryArgKind {
     Binding(String),
-    ForcedBinding(String),
     TypeExpr(AstTy),
-    Capture(CaptureQuery),
-    PipePlaceholder,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum OperatorRhs {
-    QueryArg(QueryArg),
-    TopLevelCall(TypedCallQuery),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CaptureQuery {
-    pub source: String,
-    pub callable: String,
-    pub args: Vec<CaptureQueryArg>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CaptureQueryArg {
-    pub source: String,
-    pub span: Span,
-    pub kind: CaptureQueryArgKind,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum CaptureQueryArgKind {
-    TypeExpr(AstTy),
-    Binding(String),
-    ForcedBinding(String),
-    Slot(u32),
-    CaptureRef(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -294,9 +260,7 @@ fn parse_typed_operator_query(
     Ok(Some(ParsedTypedOperatorQuery {
         query: TypedOperatorQuery {
             operator,
-            target: target.clone(),
-            lhs: target.clone(),
-            rhs: OperatorRhs::QueryArg(target),
+            target,
         },
         operator_span: ctx.span_for_local_bytes(operator_range.start, operator_range.end),
         span: ctx.full_span(),
@@ -605,10 +569,7 @@ pub fn format_query_ty(ty: &AstTy) -> String {
 pub fn ast_ty_from_query_arg(arg: &QueryArg) -> Option<AstTy> {
     match &arg.kind {
         QueryArgKind::TypeExpr(ty) => Some(ty.clone()),
-        QueryArgKind::Binding(_)
-        | QueryArgKind::ForcedBinding(_)
-        | QueryArgKind::Capture(_)
-        | QueryArgKind::PipePlaceholder => None,
+        QueryArgKind::Binding(_) => None,
     }
 }
 

@@ -29,8 +29,8 @@ use super::output::{ReplOutput, ReplResult};
 use super::preload::PreloadCompileMode;
 use super::query::{
     ast_ty_from_query_arg, format_query_ty, parse_binding_query_type, parse_repl_query,
-    parse_signature_type, CaptureQuery, OperatorRhs, QueryArg, QueryArgKind, ReplQuery,
-    TypedCallQuery, TypedOperatorQuery,
+    parse_signature_type, QueryArg, QueryArgKind, ReplQuery, TypedCallQuery,
+    TypedOperatorQuery,
 };
 use super::{eval, render, session};
 use crate::loader::{self, StagedModule};
@@ -2611,15 +2611,9 @@ impl ReplEngine {
                 })
                 .unwrap_or_else(|| Self::plain(vec![format!("No docs found for {source_query}")]));
         }
-        if let Some(synthetic) = Self::synthetic_pipe_call_query(query) {
-            return self.handle_doc_typed_call(source_query, &synthetic);
-        }
-        let OperatorRhs::QueryArg(rhs) = &query.rhs else {
-            return Self::plain(vec![format!("No docs found for {}", source_query)]);
-        };
         let synthetic = TypedCallQuery {
             callee: Self::canonical_symbol(query.operator).to_string(),
-            args: vec![query.lhs.clone(), rhs.clone()],
+            args: vec![query.target.clone(), query.target.clone()],
         };
         self.handle_doc_typed_call(source_query, &synthetic)
     }
@@ -2744,37 +2738,6 @@ impl ReplEngine {
         })
     }
 
-    fn synthetic_pipe_call_query(query: &TypedOperatorQuery) -> Option<TypedCallQuery> {
-        if query.operator != "|>" {
-            return None;
-        }
-        let OperatorRhs::TopLevelCall(call) = &query.rhs else {
-            return None;
-        };
-
-        let mut saw_placeholder = false;
-        let mut args = Vec::with_capacity(call.args.len() + 1);
-        for arg in &call.args {
-            if matches!(arg.kind, QueryArgKind::PipePlaceholder) {
-                if saw_placeholder {
-                    return None;
-                }
-                saw_placeholder = true;
-                args.push(query.lhs.clone());
-            } else {
-                args.push(arg.clone());
-            }
-        }
-        if !saw_placeholder {
-            args.insert(0, query.lhs.clone());
-        }
-
-        Some(TypedCallQuery {
-            callee: call.callee.clone(),
-            args,
-        })
-    }
-
     fn typed_call_expression_source(query: &TypedCallQuery) -> Option<String> {
         if query.callee.ends_with('!') {
             return None;
@@ -2790,9 +2753,7 @@ impl ReplEngine {
     fn query_arg_expression_source(arg: &QueryArg) -> Option<String> {
         match &arg.kind {
             QueryArgKind::Binding(name) => Some(name.clone()),
-            QueryArgKind::ForcedBinding(name) => Some(name.clone()),
-            QueryArgKind::Capture(capture) => Some(capture.source.clone()),
-            QueryArgKind::TypeExpr(_) | QueryArgKind::PipePlaceholder => None,
+            QueryArgKind::TypeExpr(_) => None,
         }
     }
 
@@ -4771,15 +4732,6 @@ impl ReplEngine {
                 })
                 .unwrap_or_else(|| Self::plain(vec![format!("No signature found for {source_query}")]));
         }
-        if let Some(synthetic) = Self::synthetic_pipe_call_query(query) {
-            let mut result = self.handle_info_typed_call(source_query, &synthetic);
-            if let ReplOutput::StyledDoc { lines } = &mut result.output {
-                if let Some(kind) = lines.iter_mut().find(|line| line.starts_with("kind: ")) {
-                    *kind = "kind: operator query".to_string();
-                }
-            }
-            return result;
-        }
         match self.typed_operator_signature(query) {
             Ok((defined, result_ty)) => Self::styled(vec![
                 source_query.to_string(),
@@ -6013,9 +5965,6 @@ impl ReplEngine {
                 None => Self::plain(vec![format!("No signature found for {source_query}")]),
             };
         }
-        if let Some(synthetic) = Self::synthetic_pipe_call_query(query) {
-            return self.handle_sig_typed_call(source_query, &synthetic);
-        }
         match self.typed_operator_signature(query) {
             Ok((defined, result_ty)) => Self::styled(
                 format!(
@@ -6146,42 +6095,6 @@ impl ReplEngine {
         matches!(ty, AstTy::Func(_, _, _)).then_some(ty)
     }
 
-    fn capture_query_type(&self, capture: &CaptureQuery) -> Result<AstTy, String> {
-        if !capture.args.is_empty() {
-            return Err(format!(
-                "Capture query `{}` is only supported inside direct `|>` call queries.",
-                capture.source
-            ));
-        }
-
-        if let Some(binding) = self.binding_info(&capture.callable) {
-            return self.binding_callable_ty(binding).ok_or_else(|| {
-                format!(
-                    "Binding `{}` does not have a callable query type.",
-                    capture.callable
-                )
-            });
-        }
-
-        let Some((_qualified, signature)) = self.find_signature(&capture.callable) else {
-            return Err(format!(
-                "No callable signature found for capture query `{}`.",
-                capture.source
-            ));
-        };
-        let Some((params, ret)) = Self::signature_param_asts_and_return(&signature) else {
-            return Err(format!(
-                "Callable `{}` has an unsupported signature for capture queries.",
-                capture.callable
-            ));
-        };
-        Ok(AstTy::Func(
-            Span { start: 0, end: 0 },
-            params,
-            Box::new(ret),
-        ))
-    }
-
     fn callable_kind_for_typed_node(typed: &TypedNode) -> Option<forge::ReplCallableKind> {
         match &typed.node {
             TypedInner::Closure(params, _, _)
@@ -6245,12 +6158,6 @@ impl ReplEngine {
         )
     }
 
-    fn repl_operator_query_rhs_error(operator: &str) -> String {
-        format!(
-            "Unsupported operator query `{operator}`. Use a direct callable or binding on the right-hand side."
-        )
-    }
-
     fn query_arg_ast_types(&self, args: &[QueryArg]) -> Result<Vec<AstTy>, String> {
         args.iter().map(|arg| self.query_arg_ast_ty(arg)).collect()
     }
@@ -6269,22 +6176,6 @@ impl ReplEngine {
                 }
                 Ok(parsed)
             }
-            QueryArgKind::ForcedBinding(name) => {
-                let Some(ty) = self.binding_type(name) else {
-                    return Err(format!("Unknown query binding `{name}`."));
-                };
-                let parsed = parse_binding_query_type(&ty).ok_or_else(|| {
-                    format!("Binding `{name}` has unsupported query type `{ty}`.")
-                })?;
-                if ast_ty_contains_query_placeholder(&parsed) {
-                    return Err(Self::repl_operator_query_unresolved_generic_error());
-                }
-                Ok(parsed)
-            }
-            QueryArgKind::Capture(capture) => self.capture_query_type(capture),
-            QueryArgKind::PipePlaceholder => {
-                Err("Pipe placeholder `_1` is only valid inside a top-level `|>` call.".to_string())
-            }
             QueryArgKind::TypeExpr(_) => ast_ty_from_query_arg(arg)
                 .ok_or_else(|| Self::repl_typed_operator_operand_error(&arg.source)),
         }?;
@@ -6298,11 +6189,8 @@ impl ReplEngine {
         &self,
         query: &TypedOperatorQuery,
     ) -> Result<(String, AstTy), String> {
-        let OperatorRhs::QueryArg(rhs) = &query.rhs else {
-            return Err(Self::repl_operator_query_rhs_error(query.operator));
-        };
-        let lhs_ty = self.query_arg_ast_ty(&query.lhs)?;
-        let rhs_ty = self.query_arg_ast_ty(rhs)?;
+        let lhs_ty = self.query_arg_ast_ty(&query.target)?;
+        let rhs_ty = self.query_arg_ast_ty(&query.target)?;
         match query.operator {
             "|>" => {
                 let (params, ret) = Self::query_unary_func_parts(&rhs_ty, "|>")?;
