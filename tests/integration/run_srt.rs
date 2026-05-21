@@ -11,8 +11,8 @@ use crate::common::{
 };
 use crate::support;
 
-const SPEC_FIXTURE_BUCKETS: usize = 4;
-const COMPILE_ERROR_FIXTURE_BUCKETS: usize = 4;
+const SPEC_FIXTURE_BUCKETS: usize = 8;
+const COMPILE_ERROR_FIXTURE_BUCKETS: usize = 16;
 
 fn compile_surtr(source: &str) -> Result<forge::bytecode::Bytecode, String> {
     support::compile_script("fixture.srt", source)
@@ -116,25 +116,23 @@ fn run_spec_fixture_bucket(bucket: usize, bucket_count: usize) {
     }
 }
 
-#[test]
-fn spec_fixtures_bucket_0() {
-    run_spec_fixture_bucket(0, SPEC_FIXTURE_BUCKETS);
+macro_rules! spec_fixture_bucket_test {
+    ($name:ident, $bucket:expr) => {
+        #[test]
+        fn $name() {
+            run_spec_fixture_bucket($bucket, SPEC_FIXTURE_BUCKETS);
+        }
+    };
 }
 
-#[test]
-fn spec_fixtures_bucket_1() {
-    run_spec_fixture_bucket(1, SPEC_FIXTURE_BUCKETS);
-}
-
-#[test]
-fn spec_fixtures_bucket_2() {
-    run_spec_fixture_bucket(2, SPEC_FIXTURE_BUCKETS);
-}
-
-#[test]
-fn spec_fixtures_bucket_3() {
-    run_spec_fixture_bucket(3, SPEC_FIXTURE_BUCKETS);
-}
+spec_fixture_bucket_test!(spec_fixtures_bucket_0, 0);
+spec_fixture_bucket_test!(spec_fixtures_bucket_1, 1);
+spec_fixture_bucket_test!(spec_fixtures_bucket_2, 2);
+spec_fixture_bucket_test!(spec_fixtures_bucket_3, 3);
+spec_fixture_bucket_test!(spec_fixtures_bucket_4, 4);
+spec_fixture_bucket_test!(spec_fixtures_bucket_5, 5);
+spec_fixture_bucket_test!(spec_fixtures_bucket_6, 6);
+spec_fixture_bucket_test!(spec_fixtures_bucket_7, 7);
 
 fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
     let sources = compile_error_fixtures()
@@ -202,25 +200,31 @@ fn run_compile_error_fixture_bucket(bucket: usize, bucket_count: usize) {
     }
 }
 
-#[test]
-fn compile_error_fixtures_bucket_0() {
-    run_compile_error_fixture_bucket(0, COMPILE_ERROR_FIXTURE_BUCKETS);
+macro_rules! compile_error_fixture_bucket_test {
+    ($name:ident, $bucket:expr) => {
+        #[test]
+        fn $name() {
+            run_compile_error_fixture_bucket($bucket, COMPILE_ERROR_FIXTURE_BUCKETS);
+        }
+    };
 }
 
-#[test]
-fn compile_error_fixtures_bucket_1() {
-    run_compile_error_fixture_bucket(1, COMPILE_ERROR_FIXTURE_BUCKETS);
-}
-
-#[test]
-fn compile_error_fixtures_bucket_2() {
-    run_compile_error_fixture_bucket(2, COMPILE_ERROR_FIXTURE_BUCKETS);
-}
-
-#[test]
-fn compile_error_fixtures_bucket_3() {
-    run_compile_error_fixture_bucket(3, COMPILE_ERROR_FIXTURE_BUCKETS);
-}
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_0, 0);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_1, 1);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_2, 2);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_3, 3);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_4, 4);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_5, 5);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_6, 6);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_7, 7);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_8, 8);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_9, 9);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_10, 10);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_11, 11);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_12, 12);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_13, 13);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_14, 14);
+compile_error_fixture_bucket_test!(compile_error_fixtures_bucket_15, 15);
 
 #[test]
 fn script_mode_rejects_definition_after_top_level_expression_without_compatibility_fallback() {
