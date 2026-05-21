@@ -540,6 +540,33 @@ fn core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation
 fn core_command_completion_uses_command_use_sites() {
     let mut engine = engine();
 
+    let all_command_candidates = engine.completions(":", ":".len()).candidates;
+    let all_command_rendered = all_command_candidates
+        .iter()
+        .map(|candidate| {
+            format!(
+                "{}=>{}::{:?}",
+                candidate.label, candidate.replacement, candidate.detail
+            )
+        })
+        .collect::<Vec<_>>();
+    for expected in [":help", ":sig", ":quit", ":q"] {
+        assert!(
+            all_command_candidates
+                .iter()
+                .any(|candidate| candidate.label == expected && candidate.replacement == expected),
+            "command-head completion should expose {expected}: {all_command_rendered:?}"
+        );
+    }
+    let sig = all_command_candidates
+        .iter()
+        .find(|candidate| candidate.label == ":sig")
+        .expect(":sig should be present");
+    assert_eq!(
+        sig.detail.as_deref(),
+        Some(":sig <symbol|query>  Show signatures for visible callable, family, owner, or process surfaces")
+    );
+
     let head_candidates = engine.completions(":si", ":si".len()).candidates;
     let head_rendered = head_candidates
         .iter()
@@ -552,8 +579,44 @@ fn core_command_completion_uses_command_use_sites() {
         "command-head completion should expose :sig: {head_rendered:?}"
     );
 
+    let indented_candidates = engine.completions("  :si", "  :si".len()).candidates;
+    assert!(
+        indented_candidates
+            .iter()
+            .any(|candidate| candidate.label == ":sig" && candidate.replacement == ":sig"),
+        "command-head completion should allow leading whitespace: {indented_candidates:?}"
+    );
+
+    let plain_candidates = engine.completions("si", "si".len()).candidates;
+    assert!(
+        !plain_candidates
+            .iter()
+            .any(|candidate| candidate.label.starts_with(':')
+                || candidate.replacement.starts_with(':')),
+        "plain input should not expose REPL commands: {plain_candidates:?}"
+    );
+
     let bound = rendered_text(&engine.handle_line("print = \"shadowed\""));
     assert!(bound.contains("print: String = \"shadowed\""), "{bound}");
+
+    let sig_unqualified_candidates = engine.completions(":sig pri", ":sig pri".len()).candidates;
+    let sig_unqualified_rendered = sig_unqualified_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        sig_unqualified_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print" && candidate.replacement == "print"),
+        ":sig argument completion should use normal semantic candidates: {sig_unqualified_rendered:?}"
+    );
+    assert!(
+        !sig_unqualified_candidates
+            .iter()
+            .any(|candidate| candidate.label.starts_with(':')
+                || candidate.replacement.starts_with(':')),
+        ":sig argument completion should not include command heads: {sig_unqualified_rendered:?}"
+    );
 
     let type_candidates = engine
         .completions(":type pri", ":type pri".len())

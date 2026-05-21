@@ -27,6 +27,8 @@ use rustyline::validate::{ValidationContext, ValidationResult, Validator};
 use rustyline::{Context, Helper};
 
 #[cfg(feature = "line-editor")]
+use crate::repl::logic::command::repl_command_specs;
+#[cfg(feature = "line-editor")]
 use crate::repl::logic::core::{
     completion_allowed_at_cursor, completion_token, ReplCompletion, ReplCompletionCandidate,
     ReplCompletionContext, ReplCompletionKind,
@@ -228,36 +230,23 @@ impl Completer for ReplHelper {
         if !completion_allowed_at_cursor(line, pos) {
             return Ok((pos, Vec::new()));
         }
-        const COMMANDS: &[&str] = &[
-            ":help",
-            ":h",
-            ":quit",
-            ":exit",
-            ":q",
-            ":doc",
-            ":sig",
-            ":info",
-            ":type",
-            ":facet",
-            ":error",
-            ":save",
-            ":vars",
-            ":imported",
-            ":defs",
-            ":history",
-            ":reload",
-            ":clear",
-            ":v",
-        ];
         let (start, _end, word) = completion_token(line, pos);
 
         let mut matches = Vec::new();
-        for cmd in COMMANDS {
-            if cmd.starts_with(&word) {
-                matches.push(Pair {
-                    display: cmd.to_string(),
-                    replacement: cmd.to_string(),
-                });
+        if matches!(
+            surtr_analysis::repl_completion_use_site(line, pos),
+            surtr_analysis::ReplCompletionUseSite::CommandHead
+        ) {
+            for spec in repl_command_specs() {
+                for alias in spec.aliases {
+                    let cmd = format!(":{alias}");
+                    if cmd.starts_with(&word) {
+                        matches.push(Pair {
+                            display: spec.completion_detail(),
+                            replacement: cmd,
+                        });
+                    }
+                }
             }
         }
         for symbol in &self.symbols {
@@ -1561,6 +1550,60 @@ mod tests {
                 .iter()
                 .any(|candidate| candidate.replacement == "String"),
             "rustyline fallback completion should run inside interpolation"
+        );
+    }
+
+    #[test]
+    fn rustyline_helper_uses_repl_command_metadata_for_command_heads() {
+        let mut helper = super::ReplHelper::new();
+        helper.set_symbols(vec!["print".to_string()]);
+        let history = DefaultHistory::new();
+        let ctx = rustyline::Context::new(&history);
+
+        let (_start, command_matches) = helper
+            .complete("  :si", "  :si".len(), &ctx)
+            .expect("rustyline completion should succeed");
+        let sig = command_matches
+            .iter()
+            .find(|candidate| candidate.replacement == ":sig")
+            .expect(":sig should be completed from command metadata");
+        assert_eq!(
+            sig.display,
+            ":sig <symbol|query>  Show signatures for visible callable, family, owner, or process surfaces"
+        );
+
+        let (_start, plain_matches) = helper
+            .complete("si", "si".len(), &ctx)
+            .expect("rustyline completion should succeed");
+        let plain_replacements = plain_matches
+            .iter()
+            .map(|candidate| candidate.replacement.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            !plain_matches
+                .iter()
+                .any(|candidate| candidate.replacement.starts_with(':')),
+            "plain rustyline completion should not include commands: {plain_replacements:?}"
+        );
+
+        let (_start, arg_matches) = helper
+            .complete(":sig pri", ":sig pri".len(), &ctx)
+            .expect("rustyline completion should succeed");
+        let arg_replacements = arg_matches
+            .iter()
+            .map(|candidate| candidate.replacement.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            arg_matches
+                .iter()
+                .any(|candidate| candidate.replacement == "print"),
+            "command argument completion should use normal symbols: {arg_replacements:?}"
+        );
+        assert!(
+            !arg_matches
+                .iter()
+                .any(|candidate| candidate.replacement.starts_with(':')),
+            "command arguments should not include command heads: {arg_replacements:?}"
         );
     }
 

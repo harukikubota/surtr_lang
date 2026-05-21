@@ -23,7 +23,10 @@ use sindr::names::SymbolCapabilities;
 use sindr::policy::CompileUnitKind;
 use spire::ast::{Ast, AstTy, ImportSpec, Span};
 
-use super::command::{parse_repl_command, ReplCommand};
+use super::command::{
+    parse_repl_command, repl_command_help_lines, repl_command_specs, repl_command_topic_help_lines,
+    ReplCommand,
+};
 use super::output::{ReplOutput, ReplResult};
 use super::preload::PreloadCompileMode;
 use super::query::{
@@ -368,16 +371,25 @@ impl ReplCompletionContext {
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
         let started = Instant::now();
         let use_site = surtr_analysis::repl_completion_use_site(input, cursor);
-        let support = self.input_support.input_support(input, cursor, use_site);
-        let candidates = support
-            .candidates
-            .into_iter()
-            .map(ReplEngine::repl_completion_candidate_from_analysis)
-            .collect::<Vec<_>>();
-        let signature = support.signature.map(|signature| ReplSignatureHelp {
-            lines: signature.lines,
-            active_parameter: signature.active_parameter,
-        });
+        let (candidates, signature) =
+            if matches!(use_site, surtr_analysis::ReplCompletionUseSite::CommandHead) {
+                (
+                    Self::command_head_completion_candidates(input, cursor),
+                    None,
+                )
+            } else {
+                let support = self.input_support.input_support(input, cursor, use_site);
+                let candidates = support
+                    .candidates
+                    .into_iter()
+                    .map(ReplEngine::repl_completion_candidate_from_analysis)
+                    .collect::<Vec<_>>();
+                let signature = support.signature.map(|signature| ReplSignatureHelp {
+                    lines: signature.lines,
+                    active_parameter: signature.active_parameter,
+                });
+                (candidates, signature)
+            };
         let mut telemetry = CompletionTelemetry::default();
         telemetry.record_completion_compute(started.elapsed());
         ReplCompletion {
@@ -389,6 +401,35 @@ impl ReplCompletionContext {
 
     pub fn should_request(input: &str, cursor: usize) -> bool {
         surtr_analysis::ReplInputSupportContext::should_request(input, cursor)
+    }
+
+    fn command_head_completion_candidates(
+        input: &str,
+        cursor: usize,
+    ) -> Vec<ReplCompletionCandidate> {
+        if !completion_allowed_at_cursor(input, cursor) {
+            return Vec::new();
+        }
+        let (replace_start, replace_end, prefix) = completion_token(input, cursor);
+        let mut candidates = Vec::new();
+        for spec in repl_command_specs() {
+            for alias in spec.aliases {
+                let label = format!(":{alias}");
+                if !label.starts_with(&prefix) {
+                    continue;
+                }
+                candidates.push(ReplCompletionCandidate {
+                    label: label.clone(),
+                    replacement: label,
+                    kind: ReplCompletionKind::FunctionCall,
+                    detail: Some(spec.completion_detail()),
+                    documentation: None,
+                    replace_start,
+                    replace_end,
+                });
+            }
+        }
+        candidates
     }
 
     #[cfg(test)]
@@ -2318,90 +2359,37 @@ impl ReplEngine {
     }
 
     fn help_lines() -> Vec<String> {
-        vec![
-            "REPL commands:".to_string(),
-            ":help, :h [command]  Show REPL help".to_string(),
-            ":quit, :exit, :q     Exit the REPL".to_string(),
-            ":doc <symbol|query>  Show documentation for visible symbols, including process surfaces".to_string(),
-            ":sig <symbol|query>  Show signatures for visible callable, family, owner, or process surfaces".to_string(),
-            ":info <query>        Show derived information for visible symbols, retained query targets, or process handles"
-                .to_string(),
-            ":type <binding>      Show the type for a visible binding or singleton process owner".to_string(),
-            "                      Unresolved generic bindings must be annotated before persistence.".to_string(),
-            ":facet <FacetPath|binding> Inspect a FacetPath and its API boundaries".to_string(),
-            ":error [full|summary]  Show or change error display mode".to_string(),
-            ":save <path.eldr>    Save the current session as .eldr".to_string(),
-            ":vars                List visible value bindings".to_string(),
-            ":imported            List imports active in the REPL scope".to_string(),
-            ":defs                List visible top-level REPL defs".to_string(),
-            ":history [selector]  Show committed REPL input history".to_string(),
-            ":reload [all|defs]   Rebuild the REPL session from preload and defs".to_string(),
-            ":clear               Clear the screen when the host supports it".to_string(),
-            ":v <line>            Recall a previous result".to_string(),
-        ]
+        repl_command_help_lines()
     }
 
     fn doc_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :doc <symbol|query>".to_string(),
-            "Examples: :doc print, :doc formatter, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc compare(Int, Int), :doc |*> Option"
-                .to_string(),
-        ]
+        repl_command_topic_help_lines("doc").expect(":doc should have topic help")
     }
 
     fn sig_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :sig <symbol|query>".to_string(),
-            "Examples: :sig compare, :sig Compare, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig compare(Int, Int), :sig |*> Option"
-                .to_string(),
-        ]
+        repl_command_topic_help_lines("sig").expect(":sig should have topic help")
     }
 
     fn info_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :info <query>".to_string(),
-            "Accepts: symbol | singleton-owner | typed-call | operator-target".to_string(),
-            "Examples: :info print, :info Counter, :info pid, :info compare(Int, Int), :info |*> Option".to_string(),
-        ]
+        repl_command_topic_help_lines("info").expect(":info should have topic help")
     }
 
     fn type_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :type <binding|singleton-owner>".to_string(),
-            "Examples: :type list, :type Counter, :type pid, :type my_closure".to_string(),
-            "Worker processes are queried through PID bindings; singleton processes are queried by owner name."
-                .to_string(),
-        ]
+        repl_command_topic_help_lines("type").expect(":type should have topic help")
     }
 
     fn facet_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :facet <FacetPath|binding>".to_string(),
-            "Examples: :facet path, :facet Tuple._1, :facet BitWidth.Any".to_string(),
-            "Shows canonical path, API availability, segment details, and where the path may stop."
-                .to_string(),
-        ]
-    }
-
-    fn history_help_lines() -> Vec<String> {
-        vec![
-            "Usage: :history [selector]".to_string(),
-            "Examples: :history, :history 3, :history 1, 3, 5, :history 2..4".to_string(),
-        ]
+        repl_command_topic_help_lines("facet").expect(":facet should have topic help")
     }
 
     fn handle_help(&self, topic: Option<&str>) -> Vec<String> {
         let Some(topic) = topic.map(str::trim).filter(|topic| !topic.is_empty()) else {
             return Self::help_lines();
         };
-        match topic.strip_prefix(':').unwrap_or(topic) {
-            "doc" => Self::doc_help_lines(),
-            "sig" => Self::sig_help_lines(),
-            "info" => Self::info_help_lines(),
-            "type" => Self::type_help_lines(),
-            "facet" => Self::facet_help_lines(),
-            "history" => Self::history_help_lines(),
-            other => {
+        match repl_command_topic_help_lines(topic) {
+            Some(lines) => lines,
+            None => {
+                let other = topic.strip_prefix(':').unwrap_or(topic);
                 let mut rendered = vec![format!("No help found for :{}", other)];
                 rendered.push("Type :help for available REPL commands.".to_string());
                 rendered
