@@ -188,6 +188,22 @@ impl<'a> Parser<'a> {
                 self.advance();
                 Ok(sp)
             }
+            Token::GtEq => {
+                let combined = self.advance().span;
+                let gt = Span {
+                    start: combined.start,
+                    end: combined.start + 1,
+                };
+                let bind = Span {
+                    start: combined.start + 1,
+                    end: combined.end,
+                };
+                self.synthetic_tokens.push_front(Spanned {
+                    token: Token::Bind,
+                    span: bind,
+                });
+                Ok(gt)
+            }
             Token::Compose => {
                 let composed = self.advance().span;
                 let first = Span {

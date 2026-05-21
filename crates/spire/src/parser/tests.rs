@@ -3270,6 +3270,59 @@ fn test_nested_generic_type_closes_without_confusing_compose() {
 }
 
 #[test]
+fn test_generic_type_close_followed_by_bind_without_space_parses() {
+    let ast = parse("h: HashMap<Int>=HashMap::empty()")
+        .expect("generic close followed by bind without space should parse");
+    match &ast[0] {
+        Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, args)), rhs) => {
+            assert_eq!(name, "HashMap");
+            assert!(matches!(args.as_slice(), [AstTy::Named(_, inner)] if inner == "Int"));
+            assert!(matches!(rhs.as_ref(), Ast::App(_, _, _)));
+        }
+        other => panic!("Expected annotated HashMap<Int> bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_nested_generic_type_close_followed_by_bind_without_space_parses() {
+    let ast = parse("v: Option<Result<Int, ParseError>>=value")
+        .expect("nested generic close followed by bind without space should parse");
+    match &ast[0] {
+        Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, args)), rhs) => {
+            assert_eq!(name, "Option");
+            assert!(matches!(
+                args.as_slice(),
+                [AstTy::Generic(_, inner_name, inner_args)]
+                    if inner_name == "Result"
+                        && matches!(
+                            inner_args.as_slice(),
+                            [AstTy::Named(_, left), AstTy::Named(_, right)]
+                                if left == "Int" && right == "ParseError"
+                        )
+            ));
+            assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
+        }
+        other => panic!("Expected annotated nested generic bind, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_gte_expression_still_parses_as_comparison() {
+    let ast = parse("value = a >= b").expect("gte expression should still parse as comparison");
+    match &ast[0] {
+        Ast::Bind(_, _, rhs) => {
+            assert!(matches!(
+                rhs.as_ref(),
+                Ast::BinOp(_, BinOp::Gte, left, right)
+                    if matches!(left.as_ref(), Ast::Var(_, name) if name == "a")
+                        && matches!(right.as_ref(), Ast::Var(_, name) if name == "b")
+            ));
+        }
+        other => panic!("Expected bind with >= comparison, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_qualified_placeholder_capture_parses() {
     let ast = parse(r#"rename = &User::with_name("bob", &1)"#)
         .expect("qualified placeholder capture should parse");
