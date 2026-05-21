@@ -858,6 +858,7 @@ impl ReplInputSupportContext {
             source: input,
             cursor,
         };
+        let use_site = repl_completion_use_site(input, cursor);
         let completion = if let Some(context) = call_context.as_ref() {
             let expected_ty = self.expected_param_type_for_call(context);
             if let Some(completion) =
@@ -891,6 +892,7 @@ impl ReplInputSupportContext {
         };
 
         let mut candidates = completion.candidates;
+        candidates.retain(|candidate| repl_use_site_accepts_candidate(use_site, candidate));
         if call_context.is_none() && operator_assist.is_none() {
             self.inject_special_repl_candidates(
                 &mut candidates,
@@ -1677,6 +1679,18 @@ pub struct SignatureLookup {
     pub callee_end: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplCompletionUseSite {
+    Input,
+    Command(ReplCommandUseSite),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplCommandUseSite {
+    Type,
+    Other,
+}
+
 pub fn complete_prefix(request: CompletionRequest<'_>) -> CompletionResponse {
     complete_prefix_with_options(request, CompletionScope::All, CompletionPresentation::Full)
 }
@@ -1860,6 +1874,35 @@ pub fn facet_path_context_at_cursor(
 enum CompletionPresentation {
     Full,
     Repl,
+}
+
+fn repl_completion_use_site(input: &str, cursor: usize) -> ReplCompletionUseSite {
+    let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
+    let visible = &input[..cursor];
+    let trimmed = visible.trim_start();
+    if !trimmed.starts_with(':') {
+        return ReplCompletionUseSite::Input;
+    }
+    let command = trimmed[1..].split_whitespace().next().unwrap_or_default();
+    match command {
+        "type" => ReplCompletionUseSite::Command(ReplCommandUseSite::Type),
+        _ => ReplCompletionUseSite::Command(ReplCommandUseSite::Other),
+    }
+}
+
+fn repl_use_site_accepts_candidate(
+    use_site: ReplCompletionUseSite,
+    candidate: &CompletionCandidate,
+) -> bool {
+    match use_site {
+        ReplCompletionUseSite::Input | ReplCompletionUseSite::Command(ReplCommandUseSite::Other) => {
+            true
+        }
+        ReplCompletionUseSite::Command(ReplCommandUseSite::Type) => matches!(
+            candidate.kind,
+            CompletionKind::Variable | CompletionKind::TypeConstructor
+        ),
+    }
 }
 
 fn complete_prefix_with_options(

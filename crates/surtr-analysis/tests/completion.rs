@@ -858,6 +858,75 @@ fn repl_input_support_context_accepts_session_updates() {
 }
 
 #[test]
+fn repl_input_support_context_filters_type_command_candidates_by_use_site() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: vec![
+            CompletionSymbol {
+                label: "count".to_string(),
+                replacement: "count".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("Int".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+            CompletionSymbol {
+                label: "count_up".to_string(),
+                replacement: "count_up".to_string(),
+                kind: CompletionKind::FunctionCall,
+                detail: Some("count_up(value: Int) -> Int".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+            CompletionSymbol {
+                label: "Counter".to_string(),
+                replacement: "Counter".to_string(),
+                kind: CompletionKind::TypeConstructor,
+                detail: Some("Counter".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+        ],
+        callable_signatures: Vec::new(),
+    });
+
+    let input_labels = context
+        .input_support("co", 2, CompletionScope::All)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        input_labels.contains(&"count".to_string()) && input_labels.contains(&"count_up".to_string()),
+        "{input_labels:?}"
+    );
+
+    let type_labels = context
+        .input_support(":type co", ":type co".len(), CompletionScope::All)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert_eq!(type_labels, vec!["count".to_string()]);
+
+    let owner_labels = context
+        .input_support(":type Cou", ":type Cou".len(), CompletionScope::All)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert_eq!(owner_labels, vec!["Counter".to_string()]);
+}
+
+#[test]
 fn repl_input_support_context_shows_nested_call_signatures_and_inner_candidates() {
     let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
         symbols: vec![
