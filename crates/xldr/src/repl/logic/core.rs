@@ -2603,6 +2603,22 @@ impl ReplEngine {
         source_query: &str,
         query: &TypedOperatorQuery,
     ) -> ReplResult {
+        if let Some(symbol) = Self::operator_target_symbol(query) {
+            return self
+                .operator_target_doc_entry(query)
+                .map(|entry| {
+                    let signature = self
+                        .operator_target_signature_entry(query)
+                        .map(|(_, signature)| signature);
+                    ReplResult::ok(Self::doc_output_with_symbol_and_signature(
+                        entry,
+                        symbol,
+                        signature,
+                        Vec::new(),
+                    ))
+                })
+                .unwrap_or_else(|| Self::plain(vec![format!("No docs found for {source_query}")]));
+        }
         if let Some(synthetic) = Self::synthetic_pipe_call_query(query) {
             return self.handle_doc_typed_call(source_query, &synthetic);
         }
@@ -2621,6 +2637,119 @@ impl ReplEngine {
             .iter()
             .find_map(|(alias, target)| (*alias == symbol).then_some(*target))
             .unwrap_or(symbol)
+    }
+
+    fn operator_target_symbol(query: &TypedOperatorQuery) -> Option<String> {
+        let owner = Self::operator_target_owner_name(&query.target)?;
+        let member = Self::operator_target_member_name(query.operator)?;
+        Some(format!("{owner}::{member}"))
+    }
+
+    fn operator_target_signature_entry(
+        &self,
+        query: &TypedOperatorQuery,
+    ) -> Option<(String, String)> {
+        let owner = Self::operator_target_owner_name(&query.target)?;
+        let member = Self::operator_target_member_name(query.operator)?;
+        let symbol = format!("{owner}::{member}");
+        self.signatures
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.kind == DocKind::Function
+                    && Self::operator_target_entry_matches(entry.signature.as_str(), &owner, member)
+            })
+            .map(|entry| (entry.qualified_name.clone(), crate::surface_rendered_name(&entry.signature)))
+            .or_else(|| self.find_signature(&symbol))
+    }
+
+    fn operator_target_doc_entry<'a>(&'a self, query: &TypedOperatorQuery) -> Option<&'a DocEntry> {
+        let owner = Self::operator_target_owner_name(&query.target)?;
+        let member = Self::operator_target_member_name(query.operator)?;
+        self.docs
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.kind == DocKind::Function
+                    && Self::operator_target_entry_matches(
+                        Self::display_signature_for_doc_entry(entry).as_deref().unwrap_or(""),
+                        &owner,
+                        member,
+                    )
+            })
+            .or_else(|| {
+                let trait_name = Self::operator_target_trait_name(query.operator)?;
+                self.docs.iter().rev().find(|entry| {
+                    entry.doc.contains(&format!("`{trait_name}` implementation for `{owner}`"))
+                        || entry.doc.contains(&format!(
+                            "`{trait_name}` implementation for `{owner}`-returning"
+                        ))
+                })
+            })
+    }
+
+    fn operator_target_entry_matches(signature: &str, owner: &str, member: &str) -> bool {
+        (signature.starts_with(&format!("{owner}::{member}("))
+            || signature.starts_with(&format!("{owner}::{member}<"))
+            || signature.contains(&format!("::{member}("))
+            || signature.contains(&format!("::{member}<")))
+            && (signature.contains(&format!(" for {owner}::"))
+                || signature.contains(&format!(" for {owner}<"))
+                || signature.starts_with(&format!("{owner}::{member}("))
+                || signature.starts_with(&format!("{owner}::{member}<")))
+    }
+
+    fn operator_target_owner_name(target: &QueryArg) -> Option<String> {
+        let ty = ast_ty_from_query_arg(target)?;
+        Some(match ty {
+            AstTy::Named(_, name) => name,
+            AstTy::Generic(_, name, _) => name,
+            _ => return None,
+        })
+    }
+
+    fn operator_target_member_name(operator: &str) -> Option<&'static str> {
+        Some(match operator {
+            "+" => "add",
+            "-" => "sub",
+            "*" => "mul",
+            "&&" => "and",
+            "||" => "or",
+            "==" => "eq",
+            "!=" => "neq",
+            "<" => "lt",
+            "<=" => "lte",
+            ">" => "gt",
+            ">=" => "gte",
+            "/" | ">>" => "compose",
+            "++" => "concat",
+            "|>" => "pipe_apply",
+            "|*>" => "map",
+            "|>=" => "chain",
+            ">*" => "lift_compose",
+            ">=>" => "kleisli_compose",
+            _ => return None,
+        })
+    }
+
+    fn operator_target_trait_name(operator: &str) -> Option<&'static str> {
+        Some(match operator {
+            "+" => "Add",
+            "-" => "Sub",
+            "*" => "Mul",
+            "==" => "Eq",
+            "!=" => "Neq",
+            "<" | "<=" | ">" | ">=" => "Compare",
+            "/" => "Compose",
+            "++" => "Concat",
+            "|>" => "PipeApply",
+            "|*>" => "Functor",
+            "|>=" => "Chainable",
+            ">>" => "Composable",
+            ">*" => "LiftComposable",
+            ">=>" => "KleisliComposable",
+            _ => return None,
+        })
     }
 
     fn synthetic_pipe_call_query(query: &TypedOperatorQuery) -> Option<TypedCallQuery> {
@@ -4649,6 +4778,22 @@ impl ReplEngine {
         source_query: &str,
         query: &TypedOperatorQuery,
     ) -> ReplResult {
+        if Self::operator_target_symbol(query).is_some() {
+            return self
+                .operator_target_signature_entry(query)
+                .map(|(qualified_name, signature)| {
+                    Self::styled(vec![
+                        source_query.to_string(),
+                        "kind: operator".to_string(),
+                        format!("origin: {}", Self::origin_for_name(&qualified_name)),
+                        format!(
+                            "defined: {}",
+                            Self::render_signature_with_qualified_name(&qualified_name, signature)
+                        ),
+                    ])
+                })
+                .unwrap_or_else(|| Self::plain(vec![format!("No signature found for {source_query}")]));
+        }
         if let Some(synthetic) = Self::synthetic_pipe_call_query(query) {
             let mut result = self.handle_info_typed_call(source_query, &synthetic);
             if let ReplOutput::StyledDoc { lines } = &mut result.output {
@@ -5883,6 +6028,14 @@ impl ReplEngine {
         source_query: &str,
         query: &TypedOperatorQuery,
     ) -> ReplResult {
+        if Self::operator_target_symbol(query).is_some() {
+            return match self.operator_target_signature_entry(query) {
+                Some((qualified_name, signature)) => Self::styled(vec![
+                    Self::render_signature_with_qualified_name(&qualified_name, signature),
+                ]),
+                None => Self::plain(vec![format!("No signature found for {source_query}")]),
+            };
+        }
         if let Some(synthetic) = Self::synthetic_pipe_call_query(query) {
             return self.handle_sig_typed_call(source_query, &synthetic);
         }

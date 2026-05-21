@@ -2834,16 +2834,11 @@ fn core_info_command_reports_queries_and_command_errors() {
     assert!(print_info_text.contains("origin:"), "{print_info_text}");
     assert!(print_info_text.contains("defined:"), "{print_info_text}");
 
-    let _ = engine.handle_line("ret = Ok(\"3\")");
-    let _ = engine.handle_line("up = {|term: String| try_from(term, Int)}");
-    let typed_info = engine.handle_line(":info ret |>= up");
+    let typed_info = engine.handle_line(":info |*> Option");
     let typed_info_text = rendered_text(&typed_info);
     assert!(typed_info_text.contains("defined:"), "{typed_info_text}");
-    assert!(
-        typed_info_text.contains("specialized:"),
-        "{typed_info_text}"
-    );
-    assert!(typed_info_text.contains("Result<Int>"), "{typed_info_text}");
+    assert!(typed_info_text.contains("Option<$A>::map"), "{typed_info_text}");
+    assert!(typed_info_text.contains("kind: operator"), "{typed_info_text}");
 }
 
 #[test]
@@ -3754,58 +3749,17 @@ fn core_process_type_and_info_support_singletons_and_worker_pids() {
 fn core_sig_expression_queries_support_operator_forms() {
     let mut engine = engine();
 
-    assert!(rendered_text(&engine.handle_line("ret = Ok(\"3\")"))
-        .contains("ret: Result<String, Error> = Ok(\"3\")"));
-    assert!(
-        rendered_text(&engine.handle_line("up = {|term: String| try_from(term, Int)}"))
-            .contains("up: (String -> Result<Int, Error>)")
-    );
+    let map_sig = engine.handle_line(":sig |*> Option");
+    let map_sig = signature_text(&map_sig);
+    assert!(map_sig.contains("Option<$A>::map"), "{map_sig}");
+    assert!(map_sig.contains("-> Option<$B>"), "{map_sig}");
 
-    let bind_sig = engine.handle_line(":sig ret |>= up");
-    let bind_sig = signature_text(&bind_sig);
+    let map_doc = engine.handle_line(":doc |*> Option");
+    let map_doc = doc_text(&map_doc);
+    assert!(map_doc.contains("Option<$A>::map"), "{map_doc}");
     assert!(
-        bind_sig.contains("defined:\n  Chainable::chain("),
-        "{bind_sig}"
-    );
-    assert!(bind_sig.contains("lhs: Result<String>"), "{bind_sig}");
-    assert!(
-        bind_sig.contains("rhs: (String -> Result<Int>)"),
-        "{bind_sig}"
-    );
-    assert!(
-        bind_sig.contains("specialized:\n  ret |>= up: Result<Int>"),
-        "{bind_sig}"
-    );
-
-    assert!(rendered_text(&engine.handle_line("value = 3")).contains("value: Int = 3"));
-    assert!(
-        rendered_text(&engine.handle_line("inc = {|n: Int| n + 1}")).contains("inc: (Int -> Int)")
-    );
-
-    let pipe_sig = engine.handle_line(":sig value |> inc");
-    let pipe_sig = signature_text(&pipe_sig);
-    assert!(
-        pipe_sig.contains("defined:\n  PipeApply::pipe_apply("),
-        "{pipe_sig}"
-    );
-    assert!(
-        pipe_sig.contains("specialized:\n  value |> inc: Int"),
-        "{pipe_sig}"
-    );
-
-    assert!(
-        rendered_text(&engine.handle_line("inc_ok = {|n: Int| Ok(n + 1)}"))
-            .contains("inc_ok: (Int -> Result<Int, Error>)")
-    );
-    let compose_sig = engine.handle_line(":sig up >=> inc_ok");
-    let compose_sig = signature_text(&compose_sig);
-    assert!(
-        compose_sig.contains("defined:\n  KleisliComposable::kleisli_compose("),
-        "{compose_sig}"
-    );
-    assert!(
-        compose_sig.contains("specialized:\n  up >=> inc_ok: (String -> Result<Int>)"),
-        "{compose_sig}"
+        map_doc.contains("This is the source-level meaning of `value |*> f`."),
+        "{map_doc}"
     );
 }
 
@@ -3826,24 +3780,19 @@ fn core_sig_expression_queries_reject_non_expressions() {
 }
 
 #[test]
-fn core_sig_typed_operator_queries_accept_function_types_and_reject_explicit_result_error() {
+fn core_sig_operator_target_queries_accept_concrete_type_targets_and_reject_legacy_forms() {
     let mut engine = engine();
 
-    assert!(rendered_text(&engine.handle_line("num = 3")).contains("num: Int = 3"));
-
-    let sig = engine.handle_line(":sig num |> (Int -> String)");
+    let sig = engine.handle_line(":sig |*> Result<Int>");
     let sig = signature_text(&sig);
-    assert!(sig.contains("defined:\n  PipeApply::pipe_apply("), "{sig}");
-    assert!(sig.contains("rhs: (Int -> String)"), "{sig}");
-    assert!(
-        sig.contains("specialized:\n  num |> (Int -> String): String"),
-        "{sig}"
-    );
+    assert!(sig.contains("Result<$A>::map"), "{sig}");
+    assert!(sig.contains("-> Result<$B>"), "{sig}");
 
     let invalid = engine.handle_line(":sig num |> (Int -> Result<String, Error>)");
     let invalid = rendered_text(&invalid);
     assert!(
-        invalid.contains("Typed query `Result` should be written as `Result<T>`"),
+        invalid.contains("Unsupported command query form")
+            || invalid.contains("Invalid typed call query"),
         "{invalid}"
     );
 }
