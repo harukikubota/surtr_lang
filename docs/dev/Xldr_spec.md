@@ -171,10 +171,10 @@ REPL 実装は次の 3 層に分ける。
 | `:help`, `:h [command]` | REPL コマンド一覧、または指定コマンドのヘルプを表示する |
 | `:quit`, `:exit`, `:q` | REPL を終了する |
 | `:v <N>` | 行 `N` の結果を再表示する。binding value の再表示は別 surface として扱い、query command には混ぜない。 |
-| `:doc <target>` | public declaration の `@doc` を引く。定義 doc、型 doc、constructor / extractor doc、impl doc、binding 起点 doc、process surface doc を表示する。binding lookup を明示する時は `$name` を使う。typed query は `compare(Int, Int)`, `lt(Int, Int)`, `compare($left, $right)`, `ret |>= up`, `Result<Int> |>= &parse_int`, `xs |> map(&to_string)` のような command query 専用 surface に限定する。`literal` / 任意式 / generic type variable は query 引数に受けない。callable binding が closure のときは `Closure` type doc を返し、続けて binding 付属の `@doc` 本文と最小限の補足情報（signature / captures / provenance）を表示する。process surface では hidden stdlib surface (`GenServer::spawn` など) と concrete public surface (`MyServer::spawn` など) の両方を引け、concrete query は hidden stdlib doc 本文を流用しつつ表示 symbol / signature だけ concrete 名に差し替える。special form を含め、表示する signature は stdlib / user source に書かれた宣言文字列を正本とするが、`impl Type { ... }` / `impl Trait for Type { ... }` 由来の user-facing signature では `Self` を concrete owner type へ正規化する。trait 定義 surface では source-written `Self` を保持する。private declaration は undocumented 扱いにせず、private surface であることを明示して拒否する。 |
-| `:sig <target>` | public declaration の signature を表示する。関数、operator、constructor、extractor、enum 定義 surface、callable binding、impl specialization、process surface を表示対象に含む。bare `:sig Ty` は constructor signature、`Ty(args...)` は constructor 照合、`Ty!()` は extractor signature、`StringEncoding` のような enum は variant constructor surface 一覧を返す。enum variant 単体は query target にしない。typed query は concrete type、visible binding、`$binding`、`CaptureQuery` のみを引数に受ける。process surface では hidden stdlib 名と concrete public 名の両方を受け、表示名は query 側に揃える。process owner への bare query (`:sig MyServer`, `:sig MyWorker`) は process summary surface として扱い、PID binding query (`:sig $server`) はその handle の messaging summary を返す。special form を含め、表示する signature は stdlib / user source に書かれた宣言文字列を正本とし、completion candidate の `detail` も同じ authored signature surface を使う。`impl Type { ... }` / `impl Trait for Type { ... }` 由来の user-facing signature では `Self` を concrete owner type へ正規化する。trait 定義 surface では source-written `Self` を保持する。source-written signature が取得できない場合だけ synthesized / inferred fallback を許可する。private declaration は generic な not-found に落とさず、private surface であることを明示して拒否する。 |
-| `:info <target>` | 定義、binding、dispatch、operator application query、singleton process owner、PID binding の解決情報を表示する。`$name` による binding 強制、typed call / typed operator の正規化結果、選択 impl、関連 command を出せることを契約に含める。process runtime lookup は singleton を owner 名、worker を PID binding で引く。PID binding の `:info` は raw inspect 表示や数値 PID を出さず、型と process metadata を返す。 |
-| `:type <binding>` | REPL binding の型と `RuntimeTypeDisplay` を表示する。これは runtime 表示カテゴリであり compile-space `TypeIdentity` ではない。`$name` による binding 強制を許可する。通常の値は binding のみを対象とし、定義名、typed query、任意式は受けない。process runtime lookup では singleton process owner 名を追加で受け、worker process は PID binding 経由のみを受ける。 |
+| `:doc <target>` | public declaration の `@doc` を引く。command input は通常の REPL scope で名前解決し、local binding は関数名や trait family を shadow する。binding lookup 強制用の `$name` surface は持たない。値 binding は bare name で引き、callable binding が closure のときは `Closure` type doc と binding 付属の最小補足情報（signature / captures / provenance）を表示する。non-callable value binding は型側 doc へ fallback し、`ret = Ok(1)` のあと `:doc ret` は `Result` 側 doc を返す。retained query surface は trait / 関数 target query (`:doc compare(Int, Int)`)、trait target fallback (`:doc Compare(Int, Int)`)、operator family / target (`:doc |*>`, `:doc |*> Option`)、owner routing (`:doc User`, `:doc User()`, `:doc User!`, `:doc User!()`) である。struct deconstruct doc は source-backed doc を返し、record / error constructor surface は現状の undocumented 出力を維持する。process surface では hidden stdlib surface (`GenServer::spawn` など) と concrete public surface (`MyServer::spawn` など) の両方を引け、concrete query は hidden stdlib doc 本文を流用しつつ表示 symbol / signature だけ concrete 名に差し替える。special form を含め、表示する signature は stdlib / user source に書かれた宣言文字列を正本とするが、`impl Type { ... }` / `impl Trait for Type { ... }` 由来の user-facing signature では `Self` を concrete owner type へ正規化する。trait 定義 surface では source-written `Self` を保持する。private declaration は undocumented 扱いにせず、private surface であることを明示して拒否する。 |
+| `:sig <target>` | public declaration の signature を表示する。command input は通常の REPL scope で名前解決し、local binding は関数名や trait family を shadow する。qualified 名は shadowing を避ける escape hatch として使う。関数、trait family、operator family、constructor、extractor、enum 定義 surface、callable binding、impl specialization、process surface を表示対象に含む。bare `:sig Ty` は constructor signature、`Ty!` / `Ty!()` は extractor signature、`StringEncoding` のような enum は variant constructor surface 一覧を返す。enum variant 単体は query target にしない。retained query surface は trait family (`:sig Compare`)、trait method family (`:sig compare`)、trait / 関数 target (`:sig compare(Int, Int)`, `:sig Compare(Int, Int)`)、operator family / target (`:sig |*>`, `:sig |*> Option`) である。`impl Type { ... }` / `impl Trait for Type { ... }` 由来の user-facing signature では `Self` を concrete owner type へ正規化する。trait 定義 surface では source-written `Self` を保持する。non-callable value binding は拒否し、facet path / facet API lookup は `:sig` では扱わず completion と `:facet` に委譲する。process surface では hidden stdlib 名と concrete public 名の両方を受け、表示名は query 側に揃える。process owner への bare query (`:sig MyServer`, `:sig MyWorker`) は process summary surface として扱い、PID binding query (`:sig server`) はその handle の messaging summary を返す。special form を含め、表示する signature は stdlib / user source に書かれた宣言文字列を正本とし、completion candidate の `detail` も同じ authored signature surface を使う。source-written signature が取得できない場合だけ synthesized / inferred fallback を許可する。private declaration は generic な not-found に落とさず、private surface であることを明示して拒否する。 |
+| `:info <target>` | 定義、binding、dispatch、operator family / target、singleton process owner、PID binding の解決情報を表示する。command input は通常の REPL scope で名前解決し、local binding は callable family を shadow する。qualified 名は shadowing を避ける escape hatch として使う。一般式 evaluation や旧 command-query 専用 surface には広げず、symbol / family / target / process / binding inspection に留める。process runtime lookup は singleton を owner 名、worker を PID binding で引く。PID binding の `:info` は raw inspect 表示や数値 PID を出さず、型と process metadata を返す。 |
+| `:type <binding>` | REPL binding の型と `RuntimeTypeDisplay` を表示する。これは runtime 表示カテゴリであり compile-space `TypeIdentity` ではない。command input は通常の REPL scope で名前解決し、local binding は callable 名を shadow する。通常の値は visible binding lookup のみを対象とし、定義名、trait target query、任意式は受けない。process runtime lookup では singleton process owner 名を追加で受け、worker process は PID binding 経由のみを受ける。struct / record owner は field definition 寄りの出力を返す。 |
 | `:facet <facet-target>` | FacetPath 定義または `$facet_binding` の canonical path、segment 一覧、停止点を表示する。値 access 式や一般の callable / plain value は受けず、Facet query surface は command query 専用の制限された対象に限る。 |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
 | `:save <path>` | 現在の REPL session を `.eldr` に保存する |
@@ -195,13 +195,14 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - `:reload defs` は REPL 中の top-level `def` を再投入せず、起動時引数で確定した preload 条件だけで再構築する
 - `:reload` は両モードとも value binding を破棄する
 
-- 共通引数 surface は `ConcreteTypeKey | BindingKey | ForcedBindingKey | CaptureQuery` に限定する
-- `ConcreteTypeKey` は `Int`, `Result<Int>`, `(Int -> String)` のような具象型のみを受け、`$T`, `List<$T>`, `impl Show` は受けない
-- `ForcedBindingKey` は `$name` で表し、binding lookup を明示する
-- `CaptureQuery` は `&to_string`, `&add(Int, &1)`, `&replace($from, &1, $to)` のような command query 専用 pattern とし、literal、任意式、placeholder 付き capture の再帰を禁止する
-- operator query は `lhs OP rhs` (`|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`) を取り、RHS は実コードの引数注入規則に沿う限定 surface のみ許可する
-- `_1` は pipe RHS の注入位置を示す query token であり closure 生成記法ではない
-- `to_string()`, `to_string(_1)`, `1 + 2`, `pair._1` のような任意式 surface は command query としては受けない
+- command query は通常の REPL scope で名前解決し、local binding が関数名や trait family を shadow する
+- 共通 query surface は bare symbol / family query、具象 target を伴う function / trait query、operator family / target query、owner constructor / deconstruct query に限定する
+- 具象 target は `Int`, `Result<Int>`, `(Int -> String)` のような concrete type、または現在 visible な binding 名だけを受ける。未解決 generic type variable や任意式は受けない
+- `$binding`、capture query、`lhs OP rhs` 形式の旧 operator query は command query surface から除外する
+- `:doc` は value binding で型 doc fallback を行う。`ret = Ok(1)` のあと `:doc ret` は `Result` 側 doc を返す
+- `:sig` は callable / family / owner / process surface を対象にし、non-callable value binding を拒否する
+- retained operator forms は bare operator token (`:sig |*>`, `:doc |*>`) と operator + target (`:sig |*> Option`, `:doc |*> Option`, `:info |*> Option`) だけである
+- facet path / facet API lookup は `:sig` に含めず、completion と `:facet` に委譲する
 - 多相関数の `:sig` は定義 signature を保持したまま、specialized 節で concrete type / binding 解決後の置換結果を表示する
 - `:doc` / `:sig` は public declaration を主 query surface とし、private hit を認識できた場合は private-surface guidance を返す
 - 具象 process の REPL 公開面は annotation 由来で決まり、annotation 付き関数だけが public surface になる。annotation なし関数は `defp` 相当として `:doc` / `:sig` / 補完対象に含めない
@@ -209,10 +210,24 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - compiler-managed hidden process surface は completion / import 対象には含めないが、`:doc` / `:sig` の process query では `Agent::pid` や `GenServer::spawn` のような hidden lower symbol を明示名で引ける
 - concrete singleton process query (`Counter::pid`, `MyServer::pid`) は hidden lower doc 本文を流用してよいが、表示 symbol / signature は query した concrete 名に揃える
 - `:sig ProcName` は process owner summary query として扱い、heading (`GenServer MyServer`, `Agent MyWorker` など) に加えて `@init` と public messaging surface を複数行で返す。singleton の場合だけ `@pid` を含める
-- `:sig $pid` は binding が `PID<T>` のとき process-handle messaging summary query として扱い、`PID<T> messaging` heading と public messaging surface を返す。`@init` と `@pid` は含めない
+- `:sig pid` は binding が `PID<T>` のとき process-handle messaging summary query として扱い、`PID<T> messaging` heading と public messaging surface を返す。`@init` と `@pid` は含めない
 - `:info` は singleton owner 名と PID binding の両方を process-handle lookup として受ける
 - `:type` は singleton owner 名と PID binding を受けるが、任意式や typed query までは広げない
 - `@call` / `@cast` / `@get` / `@set` などの annotation 名そのものは query target にしない。annotation により公開された concrete 関数名だけを query surface とする
+- 例:
+  - `:sig Compare`
+  - `:sig compare`
+  - `:sig compare(Int, Int)`
+  - `:sig Compare(Int, Int)`
+  - `:sig |*>`
+  - `:sig |*> Option`
+  - `:doc Compare`
+  - `:doc compare`
+  - `:doc Compare(Int, Int)`
+  - `:doc User`
+  - `:doc User()`
+  - `:doc User!`
+  - `:doc ret`
 
 ### 5.2 予約済み
 

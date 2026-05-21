@@ -2317,8 +2317,8 @@ impl ReplEngine {
             ":help, :h [command]  Show REPL help".to_string(),
             ":quit, :exit, :q     Exit the REPL".to_string(),
             ":doc <symbol|query>  Show documentation for visible symbols, including process surfaces".to_string(),
-            ":sig <function|query> Show the signature for visible functions, including process surfaces".to_string(),
-            ":info <query>        Show derived information for visible symbols, queries, or process handles"
+            ":sig <symbol|query>  Show signatures for visible callable, family, owner, or process surfaces".to_string(),
+            ":info <query>        Show derived information for visible symbols, retained query targets, or process handles"
                 .to_string(),
             ":type <binding>      Show the type for a visible binding or singleton process owner".to_string(),
             "                      Unresolved generic bindings must be annotated before persistence.".to_string(),
@@ -2345,8 +2345,8 @@ impl ReplEngine {
 
     fn sig_help_lines() -> Vec<String> {
         vec![
-            "Usage: :sig <function|query>".to_string(),
-            "Examples: :sig print, :sig formatter, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig compare(Int, Int), :sig |*> Option"
+            "Usage: :sig <symbol|query>".to_string(),
+            "Examples: :sig compare, :sig Compare, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig compare(Int, Int), :sig |*> Option"
                 .to_string(),
         ]
     }
@@ -2354,7 +2354,7 @@ impl ReplEngine {
     fn info_help_lines() -> Vec<String> {
         vec![
             "Usage: :info <query>".to_string(),
-            "Accepts: symbol | singleton-owner | typed-call | typed-operator".to_string(),
+            "Accepts: symbol | singleton-owner | typed-call | operator-target".to_string(),
             "Examples: :info print, :info Counter, :info pid, :info compare(Int, Int), :info |*> Option".to_string(),
         ]
     }
@@ -2455,6 +2455,9 @@ impl ReplEngine {
         let trimmed = symbol.trim();
         if trimmed.is_empty() {
             return Self::plain(Self::doc_help_lines());
+        }
+        if let Some(binding_name) = Self::legacy_forced_binding_name(trimmed) {
+            return self.legacy_forced_binding_diagnostic("doc", trimmed, binding_name);
         }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => self.handle_doc_symbol(trimmed, &symbol),
@@ -4259,6 +4262,9 @@ impl ReplEngine {
         if trimmed.is_empty() {
             return Self::plain(Self::sig_help_lines());
         }
+        if let Some(binding_name) = Self::legacy_forced_binding_name(trimmed) {
+            return self.legacy_forced_binding_diagnostic("sig", trimmed, binding_name);
+        }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => {
                 if let Some(result) = self.handle_sig_binding(symbol.source.as_str()) {
@@ -4331,6 +4337,9 @@ impl ReplEngine {
         if trimmed.is_empty() {
             return Self::plain(Self::type_help_lines());
         }
+        if let Some(binding_name) = Self::legacy_forced_binding_name(trimmed) {
+            return self.legacy_forced_binding_diagnostic("type", trimmed, binding_name);
+        }
         if !Self::is_type_lookup_symbol(trimmed) {
             return self.repl_command_diagnostic(
                 &format!(":type {trimmed}"),
@@ -4385,6 +4394,9 @@ impl ReplEngine {
         let trimmed = query.trim();
         if trimmed.is_empty() {
             return Self::plain(Self::info_help_lines());
+        }
+        if let Some(binding_name) = Self::legacy_forced_binding_name(trimmed) {
+            return self.legacy_forced_binding_diagnostic("info", trimmed, binding_name);
         }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => self.handle_info_symbol(trimmed, &symbol),
@@ -7282,6 +7294,30 @@ impl ReplEngine {
             return false;
         }
         chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    }
+
+    fn legacy_forced_binding_name(symbol: &str) -> Option<&str> {
+        let binding = symbol.strip_prefix('$')?;
+        Self::is_type_lookup_symbol(binding).then_some(binding)
+    }
+
+    fn legacy_forced_binding_diagnostic(
+        &self,
+        command: &str,
+        source: &str,
+        binding_name: &str,
+    ) -> ReplResult {
+        let rendered = format!(":{command} {source}");
+        self.repl_command_diagnostic(
+            &rendered,
+            format!("Legacy binding query `{source}` is not supported."),
+            Span {
+                start: format!(":{command} ").chars().count(),
+                end: rendered.chars().count(),
+            },
+            Some(format!("Use `{binding_name}` instead.")),
+            Vec::new(),
+        )
     }
 
     fn render_type_identity(&self, binding: &forge::BindingInfo, value: Option<&Value>) -> String {

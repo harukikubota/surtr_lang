@@ -2746,6 +2746,14 @@ fn core_type_command_looks_up_visible_bindings_only() {
             "{text}"
         );
     }
+
+    let legacy_type = engine.handle_line(":type $list");
+    let legacy_type = rendered_text(&legacy_type);
+    assert!(
+        legacy_type.contains("Legacy binding query `$list` is not supported."),
+        "{legacy_type}"
+    );
+    assert!(legacy_type.contains("Use `list` instead."), "{legacy_type}");
 }
 
 #[test]
@@ -2799,10 +2807,14 @@ fn core_help_and_error_commands_return_structured_command_output() {
     assert!(help_text.contains(":clear"));
 
     let sig_help = engine.handle_line(":h sig");
-    assert!(rendered_text(&sig_help).contains("Usage: :sig <function|query>"));
+    let sig_help_text = rendered_text(&sig_help);
+    assert!(sig_help_text.contains("Usage: :sig <symbol|query>"));
+    assert!(sig_help_text.contains(":sig Compare"));
 
     let info_help = engine.handle_line(":help info");
-    assert!(rendered_text(&info_help).contains("Usage: :info <query>"));
+    let info_help_text = rendered_text(&info_help);
+    assert!(info_help_text.contains("Usage: :info <query>"));
+    assert!(info_help_text.contains("Accepts: symbol | singleton-owner | typed-call | operator-target"));
 
     let history_help = engine.handle_line(":help history");
     assert!(rendered_text(&history_help).contains("Usage: :history [selector]"));
@@ -2839,6 +2851,26 @@ fn core_info_command_reports_queries_and_command_errors() {
     assert!(typed_info_text.contains("defined:"), "{typed_info_text}");
     assert!(typed_info_text.contains("Option<$A>::map"), "{typed_info_text}");
     assert!(typed_info_text.contains("kind: operator"), "{typed_info_text}");
+
+    let legacy_info = engine.handle_line(":info num |> (Int -> Result<String, Error>)");
+    let legacy_info = rendered_text(&legacy_info);
+    assert!(
+        legacy_info.contains("Unsupported command query form")
+            || legacy_info.contains("query parse error")
+            || legacy_info.contains("Accepted forms: symbol, typed call, or typed operator."),
+        "{legacy_info}"
+    );
+
+    let legacy_binding_info = engine.handle_line(":info $print");
+    let legacy_binding_info = rendered_text(&legacy_binding_info);
+    assert!(
+        legacy_binding_info.contains("Legacy binding query `$print` is not supported."),
+        "{legacy_binding_info}"
+    );
+    assert!(
+        legacy_binding_info.contains("Use `print` instead."),
+        "{legacy_binding_info}"
+    );
 }
 
 #[test]
@@ -3761,6 +3793,26 @@ fn core_sig_expression_queries_support_operator_forms() {
         map_doc.contains("This is the source-level meaning of `value |*> f`."),
         "{map_doc}"
     );
+
+    let legacy_doc = engine.handle_line(":doc num |> (Int -> Result<String, Error>)");
+    let legacy_doc = doc_text(&legacy_doc);
+    assert!(
+        legacy_doc.contains("Unsupported command query form")
+            || legacy_doc.contains("query parse error")
+            || legacy_doc.contains("Accepted forms: symbol, typed call, or typed operator."),
+        "{legacy_doc}"
+    );
+
+    let legacy_binding_doc = engine.handle_line(":doc $formatter");
+    let legacy_binding_doc = rendered_text(&legacy_binding_doc);
+    assert!(
+        legacy_binding_doc.contains("Legacy binding query `$formatter` is not supported."),
+        "{legacy_binding_doc}"
+    );
+    assert!(
+        legacy_binding_doc.contains("Use `formatter` instead."),
+        "{legacy_binding_doc}"
+    );
 }
 
 #[test]
@@ -3793,6 +3845,17 @@ fn core_sig_operator_target_queries_accept_concrete_type_targets_and_reject_lega
     assert!(
         invalid.contains("Unsupported command query form"),
         "{invalid}"
+    );
+
+    let legacy_binding_sig = engine.handle_line(":sig $print");
+    let legacy_binding_sig = rendered_text(&legacy_binding_sig);
+    assert!(
+        legacy_binding_sig.contains("Legacy binding query `$print` is not supported."),
+        "{legacy_binding_sig}"
+    );
+    assert!(
+        legacy_binding_sig.contains("Use `print` instead."),
+        "{legacy_binding_sig}"
     );
 }
 
