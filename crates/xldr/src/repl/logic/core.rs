@@ -2255,18 +2255,27 @@ impl ReplEngine {
         let mut path_is_variant = false;
         let mut path_is_fallible = false;
         for segment in &context.completed_segments {
+            if let Some(inner) = Self::result_inner_ast_ty(&focus_ty) {
+                focus_ty = inner.clone();
+                path_is_fallible = true;
+            }
             let step = self.facet_next_ast_ty(&focus_ty, segment)?;
             path_is_variant |= step.variant;
             path_is_fallible |= step.fallible;
             focus_ty = step.ty;
         }
-        let placeholder = if matches!(focus_ty, AstTy::Tuple(_, _)) {
+        let candidate_focus_ty = Self::result_inner_ast_ty(&focus_ty).unwrap_or(&focus_ty);
+        let placeholder = if matches!(candidate_focus_ty, AstTy::Tuple(_, _)) {
             "[segment]"
         } else {
             "[field]"
         };
         let candidates = self
-            .facet_candidate_segments(&focus_ty, context.replace_start, context.replace_end)
+            .facet_candidate_segments(
+                candidate_focus_ty,
+                context.replace_start,
+                context.replace_end,
+            )
             .unwrap_or_default()
             .into_iter()
             .filter(|candidate| candidate.label.starts_with(&context.prefix))
@@ -2341,6 +2350,20 @@ impl ReplEngine {
     ) -> Option<Vec<ReplCompletionCandidate>> {
         match ty {
             AstTy::Named(_, name) => {
+                if name.rsplit("::").next().unwrap_or(name) == "Tuple" {
+                    return Some(vec![ReplCompletionCandidate {
+                        label: "_".to_string(),
+                        replacement: "_".to_string(),
+                        kind: ReplCompletionKind::TypePath,
+                        detail: Some("pass _N: N requires UnsignedInt".to_string()),
+                        documentation: None,
+                        replace_start,
+                        replace_end,
+                    }]);
+                }
+                if name.rsplit("::").next().unwrap_or(name) == "Result" {
+                    return Some(Vec::new());
+                }
                 if let Some(def) = self.scar_session.lookup_type_def(name) {
                     let mut candidates = def
                         .fields
@@ -2350,7 +2373,11 @@ impl ReplEngine {
                             label: field.clone(),
                             replacement: field.clone(),
                             kind: ReplCompletionKind::TypePath,
-                            detail: Some(format!("{}: {}", field, Self::ty_to_string(field_ty))),
+                            detail: Some(Self::field_completion_detail(
+                                field,
+                                field_ty,
+                                def.readonly_fields.contains(field),
+                            )),
                             documentation: None,
                             replace_start,
                             replace_end,
@@ -2411,8 +2438,71 @@ impl ReplEngine {
                     })
                     .collect(),
             ),
+            AstTy::Generic(_, name, args) if name == "List" && args.len() == 1 => {
+                let item = Self::facet_help_ty_display(&args[0]);
+                Some(vec![
+                    ReplCompletionCandidate {
+                        label: "[idx]".to_string(),
+                        replacement: "[idx]".to_string(),
+                        kind: ReplCompletionKind::TypePath,
+                        detail: Some(format!("[idx: Int] -> {item}")),
+                        documentation: None,
+                        replace_start,
+                        replace_end,
+                    },
+                    ReplCompletionCandidate {
+                        label: "[idx + 1]".to_string(),
+                        replacement: "[idx + 1]".to_string(),
+                        kind: ReplCompletionKind::TypePath,
+                        detail: Some(format!("[idx + 1: Int] -> {item}")),
+                        documentation: None,
+                        replace_start,
+                        replace_end,
+                    },
+                    ReplCompletionCandidate {
+                        label: "[start..end]".to_string(),
+                        replacement: "[start..end]".to_string(),
+                        kind: ReplCompletionKind::TypePath,
+                        detail: Some(format!("[start..end: Int] -> List<{item}>")),
+                        documentation: None,
+                        replace_start,
+                        replace_end,
+                    },
+                ])
+            }
+            AstTy::Generic(_, name, args) if name == "HashMap" && args.len() == 1 => {
+                let value = Self::facet_help_ty_display(&args[0]);
+                Some(vec![
+                    ReplCompletionCandidate {
+                        label: "[key]".to_string(),
+                        replacement: "[key]".to_string(),
+                        kind: ReplCompletionKind::TypePath,
+                        detail: Some(format!("[key: String] -> {value}")),
+                        documentation: None,
+                        replace_start,
+                        replace_end,
+                    },
+                    ReplCompletionCandidate {
+                        label: "[\"key\"]".to_string(),
+                        replacement: "[\"key\"]".to_string(),
+                        kind: ReplCompletionKind::TypePath,
+                        detail: Some(format!("[\"key\": String] -> {value}")),
+                        documentation: None,
+                        replace_start,
+                        replace_end,
+                    },
+                ])
+            }
             _ => None,
         }
+    }
+
+    fn field_completion_detail(field: &str, field_ty: &Ty, readonly: bool) -> String {
+        let mut detail = format!("{}: {}", field, Self::ty_to_string(field_ty));
+        if readonly {
+            detail.push_str(" readonly");
+        }
+        detail
     }
 
     fn facet_next_ast_ty(&self, ty: &AstTy, segment: &str) -> Option<FacetStep> {
@@ -2480,7 +2570,15 @@ impl ReplEngine {
             AstTy::Generic(_, name, args) if segment.starts_with('[') && segment.ends_with(']') => {
                 match name.as_str() {
                     "List" if args.len() == 1 => Some(FacetStep {
-                        ty: args[0].clone(),
+                        ty: if segment.contains("..") {
+                            AstTy::Generic(
+                                Span { start: 0, end: 0 },
+                                "List".to_string(),
+                                vec![args[0].clone()],
+                            )
+                        } else {
+                            args[0].clone()
+                        },
                         fallible: true,
                         variant: false,
                     }),
@@ -2492,24 +2590,16 @@ impl ReplEngine {
                     _ => None,
                 }
             }
-            AstTy::Generic(_, name, args) => match (name.as_str(), segment.trim_end_matches('?')) {
-                ("Option", "Some") if args.len() == 1 => Some(FacetStep {
-                    ty: args[0].clone(),
-                    fallible: true,
-                    variant: true,
-                }),
-                ("Result", "Ok") if args.len() == 1 => Some(FacetStep {
-                    ty: args[0].clone(),
-                    fallible: true,
-                    variant: true,
-                }),
-                ("Result", "Err") => Some(FacetStep {
-                    ty: AstTy::Named(Span { start: 0, end: 0 }, "Error".to_string()),
-                    fallible: true,
-                    variant: true,
-                }),
-                _ => None,
-            },
+            AstTy::Generic(_, name, args) if name != "Result" => {
+                match (name.as_str(), segment.trim_end_matches('?')) {
+                    ("Option", "Some") if args.len() == 1 => Some(FacetStep {
+                        ty: args[0].clone(),
+                        fallible: true,
+                        variant: true,
+                    }),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }

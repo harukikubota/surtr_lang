@@ -4674,6 +4674,10 @@ impl Checker {
         let mut may_fail = false;
         let mut segments = Vec::with_capacity(path.segments.len());
         for pending_segment in path.segments {
+            if let Ty::Result(ok, _) = self.resolve_ty(&current_source) {
+                current_source = ok.as_ref().clone();
+                may_fail = true;
+            }
             let (segment, focus_ty, segment_may_fail) = self.resolve_facet_segment_for_source_ty(
                 &current_source,
                 &pending_segment,
@@ -8987,8 +8991,12 @@ impl Checker {
 
         if matches!(typed_expr.ty, Ty::Facet(_, _)) {
             let path = self.resolve_facet_path_from_node(typed_expr, span, None)?;
+            let (segment_source_ty, result_transparent) = match self.resolve_ty(&path.focus_ty) {
+                Ty::Result(ok, _) => (ok.as_ref().clone(), true),
+                other => (other, false),
+            };
             let (segment, focus_ty, may_fail) = self.resolve_facet_segment_for_source_ty(
-                &path.focus_ty,
+                &segment_source_ty,
                 &pending_segment,
                 span,
                 true,
@@ -9001,7 +9009,7 @@ impl Checker {
                 source_ty: source_ty.clone(),
                 focus_ty: focus_ty.clone(),
                 path_kind: Self::facet_path_kind_for_segments(&segments),
-                may_fail: path.may_fail || may_fail,
+                may_fail: path.may_fail || may_fail || result_transparent,
                 source_readonly_root: path.source_readonly_root,
                 segments,
             };

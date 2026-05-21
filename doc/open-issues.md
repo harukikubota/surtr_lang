@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない未解決事項だけを追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、開発者向け spec は `docs/dev/` 配下を正本とする。`doc/` は draft / input / tmp 置き場として扱う。cleanup で解消済みの項目は本ファイルに残さない。
 
-最終更新日: 2026-05-17
+最終更新日: 2026-05-22
 
 ---
 
@@ -305,6 +305,28 @@
   - `integration/rune` で `check` / `run` / `build` / `test` / REPL の human / JSON 出力と exit code を固定する。
   - LSP 接続時は `docs/dev/Surtr_LSP_spec.md` と連動し、warning severity / range / source mapping を protocol DTO test で固定する。
   - 追加 warning 候補は一括導入せず、warning kind ごとに最小 fixture と誤検出しない negative case を追加する。
+
+### OI-034 FacetAPI 引数間推論による FacetPath 補完
+
+- 背景:
+  - REPL FacetPath 補完では、型 root / 値 root / Facet binding focus / `Result` 透過 / Tuple / List / HashMap の候補表示を強化した。
+  - `over(&Us` のような capture sugar は FacetPath を値として返せないため候補を出さない方針にした。
+  - `over(_.` のように source 型が未確定な placeholder path も、単独では候補を出さない方針にした。
+  - 一方で、FacetAPI の後続引数から source 型が確定する場合は、第一引数が `_` root でも候補を出せる可能性がある。
+- 未確定点:
+  - `over(_.//, user, )` のような FacetAPI 入力中に、後続引数または既存引数から第一引数 `_` の source 型を逆算するか。
+  - FacetPath 専用補完と関数入力ヘルプの責務境界を、`surtr-analysis` と Xldr REPL のどちらで固定するか。
+  - チルダ展開で第一引数が埋め込み済み扱いになる場合、第二引数の completion / signature help 表示をどのタイミングで切り替えるか。
+  - LSP completion / REPL completion / signature help で同じ推論結果を共有する API 形状をどうするか。
+- 受け入れ条件:
+  - source 型が文脈から一意に決まる場合だけ、`_` root の FacetPath segment 候補を表示する。
+  - source 型が未確定または複数候補に分岐する場合は、現行どおり候補を出さず、誤った root 候補を表示しない。
+  - `over(&...)` capture sugar には引き続き FacetPath root 候補を出さない。
+  - FacetPath 補完の表示は FacetAPI 内外で一貫し、API 自体の説明は function input help 側に留める。
+- テスト方針:
+  - `cargo nextest run -p xldr --test repl_core` に、後続引数から `User` 型を推論できる FacetAPI 入力と、推論不能な `_` root 入力の両方を追加する。
+  - `cargo nextest run -p surtr-analysis --test completion` に、FacetPath context と call argument context の境界テストを追加する。
+  - LSP 側へ共有する場合は `surtr-lsp` の completion / signatureHelp DTO 変換テストも追加する。
 
 ## 更新ルール
 

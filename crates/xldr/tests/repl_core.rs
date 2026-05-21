@@ -1737,7 +1737,17 @@ fn core_completion_shows_facet_path_candidates_for_type_root() {
     let engine = ReplEngine::from_script_source(
         "tmp/user.srt",
         r#"
-defrecord User(name: String, age: Int)
+defstruct User {
+  readonly name: String,
+  private password: String,
+  age: Int
+}
+
+impl User {
+  def new(name: String, password: String, age: Int) -> Self {
+    User { name: name, password: password, age: age }
+  }
+}
 "#,
     )
     .expect("script preload should bootstrap");
@@ -1756,6 +1766,21 @@ defrecord User(name: String, age: Int)
         labels.contains(&"age"),
         "type-root facet completion should include record fields: {labels:?}"
     );
+    assert!(
+        !labels.contains(&"password"),
+        "REPL facet completion should hide private fields outside owner scope: {labels:?}"
+    );
+    let name = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "name")
+        .expect("readonly field should be present");
+    assert!(
+        name.detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("readonly")),
+        "readonly field detail should show readonly policy: {name:?}"
+    );
     let signature = completion
         .signature
         .as_ref()
@@ -1764,6 +1789,181 @@ defrecord User(name: String, age: Int)
     assert!(
         rendered.contains("User.[field] -> Facet<User, _>"),
         "unexpected facet signature help: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_record_enum_and_tuple_facet_segments() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord Profile(first: String, last: String)
+defrecord User(pair: (String, Int), profile: Profile)
+defenum Slot { Taken(Profile), Empty }
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let tuple_completion = engine.completions("User.pair.", "User.pair.".len());
+    let tuple_labels = tuple_completion
+        .candidates
+        .iter()
+        .map(|candidate| (candidate.label.as_str(), candidate.detail.as_deref()))
+        .collect::<Vec<_>>();
+    assert!(
+        tuple_labels
+            .iter()
+            .any(|(label, detail)| *label == "_0" && detail == &Some("_0: String")),
+        "tuple focus should expose typed tuple indexes: {tuple_labels:?}"
+    );
+    assert!(
+        tuple_labels
+            .iter()
+            .any(|(label, detail)| *label == "_1" && detail == &Some("_1: Int")),
+        "tuple focus should expose typed tuple indexes: {tuple_labels:?}"
+    );
+
+    let record_completion = engine.completions("User.profile.", "User.profile.".len());
+    let record_labels = record_completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        record_labels.contains(&"first") && record_labels.contains(&"last"),
+        "record focus should expose record fields: {record_labels:?}"
+    );
+
+    let enum_completion = engine.completions("Slot.", "Slot.".len());
+    let enum_labels = enum_completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        enum_labels.contains(&"Taken") && enum_labels.contains(&"Empty"),
+        "enum root should expose variants: {enum_labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_treats_result_focus_as_ok_value_for_next_facet_segment() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord Profile(first: String, last: String)
+defrecord User(profile: Result<Profile>)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User.profile.", "User.profile.".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"first") && labels.contains(&"last"),
+        "Result focus should be transparent for Ok payload segment completion: {labels:?}"
+    );
+
+    let path = rendered_text(&engine.handle_line("path = User.profile.first"));
+    assert!(
+        path.contains("path: Facet<User, String>"),
+        "completion should match the compiled transparent Result path: {path}"
+    );
+}
+
+#[test]
+fn core_completion_suggests_tuple_root_placeholder_only_until_index_is_finished() {
+    let engine = engine();
+
+    let root_completion = engine.completions("Tuple.", "Tuple.".len());
+    let root_labels = root_completion
+        .candidates
+        .iter()
+        .map(|candidate| (candidate.label.as_str(), candidate.detail.as_deref()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        root_labels,
+        vec![("_", Some("pass _N: N requires UnsignedInt"))],
+        "Tuple. should only suggest the tuple index placeholder: {root_labels:?}"
+    );
+
+    let numeric_completion = engine.completions("Tuple._0", "Tuple._0".len());
+    assert!(
+        numeric_completion.candidates.is_empty(),
+        "Tuple._N should not suggest more until the next dot: {:?}",
+        numeric_completion.candidates
+    );
+}
+
+#[test]
+fn core_completion_suggests_list_and_hashmap_facet_patterns_and_nests_dynamic_segments() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord Profile(first: String)
+defrecord User(scores: List<Profile>, by_name: HashMap<Profile>)
+"#,
+    )
+    .expect("script preload should bootstrap");
+    assert!(rendered_text(&engine.handle_line("idx = 0")).contains("idx: Int"));
+    assert!(rendered_text(&engine.handle_line(r#"key = "alice""#)).contains("key: String"));
+
+    let list_completion = engine.completions("User.scores.", "User.scores.".len());
+    let list_labels = list_completion
+        .candidates
+        .iter()
+        .map(|candidate| (candidate.label.as_str(), candidate.detail.as_deref()))
+        .collect::<Vec<_>>();
+    assert!(
+        list_labels.iter().any(|(label, detail)| {
+            *label == "[idx]" && detail == &Some("[idx: Int] -> Profile")
+        }),
+        "List focus should suggest index pattern: {list_labels:?}"
+    );
+    assert!(
+        list_labels.iter().any(|(label, detail)| {
+            *label == "[start..end]" && detail == &Some("[start..end: Int] -> List<Profile>")
+        }),
+        "List focus should suggest range pattern: {list_labels:?}"
+    );
+
+    let nested_list = engine.completions("User.scores.[idx + 1].", "User.scores.[idx + 1].".len());
+    let nested_list_labels = nested_list
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        nested_list_labels.contains(&"first"),
+        "dynamic list segment should advance to element focus: {nested_list_labels:?}"
+    );
+
+    let map_completion = engine.completions("User.by_name.", "User.by_name.".len());
+    let map_labels = map_completion
+        .candidates
+        .iter()
+        .map(|candidate| (candidate.label.as_str(), candidate.detail.as_deref()))
+        .collect::<Vec<_>>();
+    assert!(
+        map_labels.iter().any(|(label, detail)| {
+            *label == "[key]" && detail == &Some("[key: String] -> Profile")
+        }),
+        "HashMap focus should suggest key pattern: {map_labels:?}"
+    );
+
+    let nested_map = engine.completions("User.by_name.[key].", "User.by_name.[key].".len());
+    let nested_map_labels = nested_map
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        nested_map_labels.contains(&"first"),
+        "dynamic map segment should advance to value focus: {nested_map_labels:?}"
     );
 }
 
@@ -1981,6 +2181,26 @@ defenum Slot { Some(String), None }
         assert!(
             !labels.contains(&"String"),
             "{api} short-form first argument should not suggest primitive roots: {labels:?}"
+        );
+    }
+}
+
+#[test]
+fn core_completion_suppresses_facet_api_roots_for_invalid_capture_path_argument() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String, age: Int)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    for input in ["over(&Us", "Facet::over(&Us", "over(_."] {
+        let completion = engine.completions(input, input.len());
+        assert!(
+            completion.candidates.is_empty(),
+            "invalid FacetPath argument context should not suggest roots for {input:?}: {:?}",
+            completion.candidates
         );
     }
 }

@@ -1874,6 +1874,30 @@ pub fn complete_facet_path_arg(
 
     let cursor = clamp_to_char_boundary(request.source, request.cursor);
     let (replace_start, replace_end, prefix) = completion_token(request.source, cursor);
+    let before_cursor = &request.source[..cursor];
+    if request.source[..replace_start].ends_with('&') {
+        return Some(CompletionResponse {
+            candidates: Vec::new(),
+            replace_start,
+            replace_end,
+        });
+    }
+    if before_cursor.ends_with("_.") {
+        return Some(CompletionResponse {
+            candidates: Vec::new(),
+            replace_start,
+            replace_end,
+        });
+    }
+    if facet_path_context_at_cursor(request.source, cursor)
+        .is_some_and(|context| context.root == "_")
+    {
+        return Some(CompletionResponse {
+            candidates: Vec::new(),
+            replace_start,
+            replace_end,
+        });
+    }
     let mut candidates = Vec::new();
     for symbol in request.index.symbols() {
         if !facet_path_arg_candidate_matches_prefix(symbol, &prefix) {
@@ -2365,7 +2389,11 @@ fn completion_token_char(ch: char) -> bool {
 }
 
 fn facet_path_token_char(ch: char) -> bool {
-    completion_token_char(ch) || matches!(ch, '.' | '&' | '[' | ']' | '"' | '?' | '-' | '+')
+    completion_token_char(ch)
+        || matches!(
+            ch,
+            '.' | '&' | '[' | ']' | '"' | '?' | '-' | '+' | '(' | ')' | ',' | ' '
+        )
 }
 
 fn facet_type_root_name(name: &str) -> bool {
