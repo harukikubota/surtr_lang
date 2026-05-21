@@ -157,7 +157,7 @@ impl Generator {
   @doc """
   Transform only the item values while preserving generator progress.
   ## REPL
-  xldr(1)> mapped = Generator::map(Generator::range(1, 3), {|n| "n=" ++ to_string(n) })
+  xldr(1)> mapped = Generator::map(Generator::range(1, 3), {|n| "n=#{n}" })
   xldr(2)> Generator::to_list(mapped)
   ["n=1", "n=2", "n=3"]
   """
@@ -226,6 +226,8 @@ impl Generator {
   Ok((0, [1, 3, 5]))
   xldr(2)> Generator::range_step(5, 1, -2)
   Ok((0, [5, 3, 1]))
+  xldr(3)> Generator::range_step(1, 5, 0)
+  Err(InvalidRangeStep(message: "step must not be 0"))
   """
   def range_step(start: Int, stop: Int, step: Int) -> Result<Generator<Int, Int>, Error> {
     if(
@@ -249,6 +251,8 @@ impl Generator {
   ## REPL
   xldr(1)> Generator::range_char("a", "c")
   Ok((0, ["a", "b", "c"]))
+  xldr(2)> Generator::range_char("ab", "d")
+  Err(InvalidCharRange(message: "start must be a single char"))
   """
   def range_char(start: String, stop: String) -> Result<Generator<String, String>, Error> {
     range_char_step(start, stop, 1)
