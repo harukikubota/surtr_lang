@@ -2412,7 +2412,7 @@ fn core_commands_do_not_require_a_cli_process() {
     let missing_sig = engine.handle_line(":sig a");
     let missing_sig = rendered_text(&missing_sig);
     assert!(missing_sig.contains("No signature found for a"));
-    assert!(missing_sig.contains(":doc <symbol>") || missing_sig.contains(":sig $a"));
+    assert!(missing_sig.contains(":doc <symbol>"));
 
     let unknown = engine.handle_line(":nope");
     assert!(!unknown.should_exit);
@@ -2742,7 +2742,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
         let result = engine.handle_line(invalid);
         let text = rendered_text(&result);
         assert!(
-            text.contains("Usage: :type <binding|singleton-owner> or :type $<binding>"),
+            text.contains("Usage: :type <binding|singleton-owner>"),
             "{text}"
         );
     }
@@ -3474,7 +3474,7 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
 
     let closure_binding = engine.handle_line("adder = {|n: Int| n + 1}");
     assert!(rendered_text(&closure_binding).contains("adder: (Int -> Int)"));
-    let closure_binding_doc = engine.handle_line(":doc $adder");
+    let closure_binding_doc = engine.handle_line(":doc adder");
     let closure_binding_doc = doc_text(&closure_binding_doc);
     assert!(
         closure_binding_doc.contains("Compiler-reserved callable category marker"),
@@ -3495,7 +3495,7 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
 
     let capture_binding = engine.handle_line("printer = &print");
     assert!(rendered_text(&capture_binding).contains("FnCapture(module: Kernel, name: print"));
-    let capture_binding_doc = engine.handle_line(":doc $printer");
+    let capture_binding_doc = engine.handle_line(":doc printer");
     let capture_binding_doc = doc_text(&capture_binding_doc);
     assert!(
         capture_binding_doc.contains("Kernel::print"),
@@ -3672,7 +3672,7 @@ fn core_process_sig_pid_binding_lists_available_messages() {
     let bind = engine.handle_line("server = MyServer::pid()");
     assert!(rendered_text(&bind).contains("server: PID<MyServer>"));
 
-    let pid_sig = signature_text(&engine.handle_line(":sig $server"));
+    let pid_sig = signature_text(&engine.handle_line(":sig server"));
     assert!(pid_sig.contains("PID<MyServer> messaging"), "{pid_sig}");
     assert!(
         pid_sig.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
@@ -3788,11 +3788,10 @@ fn core_sig_operator_target_queries_accept_concrete_type_targets_and_reject_lega
     assert!(sig.contains("Result<$A>::map"), "{sig}");
     assert!(sig.contains("-> Result<$B>"), "{sig}");
 
-    let invalid = engine.handle_line(":sig num |> (Int -> Result<String, Error>)");
+    let invalid = engine.handle_line(":sig ret |>= up");
     let invalid = rendered_text(&invalid);
     assert!(
-        invalid.contains("Unsupported command query form")
-            || invalid.contains("Invalid typed call query"),
+        invalid.contains("Unsupported command query form"),
         "{invalid}"
     );
 }
@@ -3821,7 +3820,7 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
         "{closure_text}"
     );
 
-    let closure_sig = engine.handle_line(":sig $a");
+    let closure_sig = engine.handle_line(":sig a");
     assert_eq!(
         signature_text(&closure_sig),
         "a: (Int, Int -> Int) :: Closure"
@@ -3848,7 +3847,7 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
         "{recaptured_text}"
     );
 
-    let recaptured_sig = engine.handle_line(":sig $b");
+    let recaptured_sig = engine.handle_line(":sig b");
     assert_eq!(
         signature_text(&recaptured_sig),
         "b: (Int -> Int) :: Capture"

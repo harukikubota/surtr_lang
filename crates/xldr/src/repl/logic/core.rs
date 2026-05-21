@@ -2338,8 +2338,7 @@ impl ReplEngine {
     fn doc_help_lines() -> Vec<String> {
         vec![
             "Usage: :doc <symbol|query>".to_string(),
-            "Also: :doc $<binding>".to_string(),
-            "Examples: :doc print, :doc Closure, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc compare(Int, Int), :doc $formatter"
+            "Examples: :doc print, :doc formatter, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc compare(Int, Int), :doc |*> Option"
                 .to_string(),
         ]
     }
@@ -2347,8 +2346,7 @@ impl ReplEngine {
     fn sig_help_lines() -> Vec<String> {
         vec![
             "Usage: :sig <function|query>".to_string(),
-            "Also: :sig $<binding>".to_string(),
-            "Examples: :sig print, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig compare(Int, Int), :sig ret |>= up, :sig $formatter"
+            "Examples: :sig print, :sig formatter, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig compare(Int, Int), :sig |*> Option"
                 .to_string(),
         ]
     }
@@ -2356,16 +2354,15 @@ impl ReplEngine {
     fn info_help_lines() -> Vec<String> {
         vec![
             "Usage: :info <query>".to_string(),
-            "Accepts: symbol | singleton-owner | $binding | typed-call | typed-operator".to_string(),
-            "Examples: :info print, :info Counter, :info pid, :info $value, :info compare(Int, Int), :info ret |>= up".to_string(),
+            "Accepts: symbol | singleton-owner | typed-call | typed-operator".to_string(),
+            "Examples: :info print, :info Counter, :info pid, :info compare(Int, Int), :info |*> Option".to_string(),
         ]
     }
 
     fn type_help_lines() -> Vec<String> {
         vec![
             "Usage: :type <binding|singleton-owner>".to_string(),
-            "Also: :type $<binding>".to_string(),
-            "Examples: :type list, :type Counter, :type pid, :type $my_closure".to_string(),
+            "Examples: :type list, :type Counter, :type pid, :type my_closure".to_string(),
             "Worker processes are queried through PID bindings; singleton processes are queried by owner name."
                 .to_string(),
         ]
@@ -2459,11 +2456,6 @@ impl ReplEngine {
         if trimmed.is_empty() {
             return Self::plain(Self::doc_help_lines());
         }
-        if let Some(binding_name) = trimmed.strip_prefix('$') {
-            return self
-                .handle_doc_binding(binding_name)
-                .unwrap_or_else(|| Self::plain(vec![format!("No binding found for {}", trimmed)]));
-        }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => self.handle_doc_symbol(trimmed, &symbol),
             Ok(ReplQuery::TypedCall(query)) => self.handle_doc_typed_call(trimmed, &query),
@@ -2546,16 +2538,13 @@ impl ReplEngine {
                 .map(|output| ReplResult::ok(output))
                 .unwrap_or_else(|| {
                     if let Some(binding) = self.binding_info(source_symbol) {
-                        Self::plain(vec![
-                            format!("No docs found for symbol `{}`.", source_symbol),
-                            String::new(),
-                            format!(
-                                "A REPL binding named `{}` exists:\n  {} : {}",
-                                source_symbol, source_symbol, binding.ty
-                            ),
-                            String::new(),
-                            format!("Try:\n  :doc ${source_symbol}"),
-                        ])
+                        if let Some(result) = self.handle_doc_binding(source_symbol) {
+                            result
+                        } else if let Some(type_symbol) = Self::binding_doc_type_symbol(binding) {
+                            self.handle_doc_symbol(&type_symbol, &type_symbol)
+                        } else {
+                            Self::plain(vec![format!("No docs found for {}", source_symbol)])
+                        }
                     } else {
                         Self::plain(vec![format!("No docs found for {}", source_symbol)])
                     }
@@ -3549,6 +3538,15 @@ impl ReplEngine {
         )))
     }
 
+    fn binding_doc_type_symbol(binding: &forge::BindingInfo) -> Option<String> {
+        let ty = parse_binding_query_type(&binding.ty)?;
+        match ty {
+            AstTy::Named(_, name) => Some(name),
+            AstTy::Generic(_, name, _) => Some(name),
+            _ => None,
+        }
+    }
+
     fn closure_doc_entry(&self) -> Option<&DocEntry> {
         self.matching_doc_entries("Closure", Some(DocKind::Type))
             .into_iter()
@@ -4261,31 +4259,11 @@ impl ReplEngine {
         if trimmed.is_empty() {
             return Self::plain(Self::sig_help_lines());
         }
-        if let Some(binding_name) = trimmed.strip_prefix('$') {
-            let Some(binding) = self.binding_info(binding_name) else {
-                return Self::plain(vec![format!("No binding found for {}", trimmed)]);
-            };
-            if let Some(value) = self.vm.get_local(binding.slot_id) {
-                if let Some((owner, metadata)) = self.process_metadata_for_pid_value(&value) {
-                    if let Some(lines) = self.process_pid_binding_sig_summary_lines(owner, metadata)
-                    {
-                        return Self::styled(lines);
-                    }
-                }
-            }
-            if let Some((owner, metadata)) = self.process_metadata_for_pid_type(binding.ty.as_str())
-            {
-                if let Some(lines) = self.process_pid_binding_sig_summary_lines(owner, metadata) {
-                    return Self::styled(lines);
-                }
-            }
-            if let Some(rendered) = self.binding_callable_sig_summary(binding_name) {
-                return Self::styled(vec![rendered]);
-            }
-            return Self::plain(vec![format!("No signature found for {}", trimmed)]);
-        }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => {
+                if let Some(result) = self.handle_sig_binding(symbol.source.as_str()) {
+                    return result;
+                }
                 if matches!(self.parse_sig_symbol_as_expression(&symbol), Some(_)) {
                     return self.handle_sig_expression(trimmed);
                 }
@@ -4324,17 +4302,10 @@ impl ReplEngine {
                         if let Some(entry) = self.private_declaration(trimmed) {
                             return ReplResult::ok(Self::private_sig_output(entry));
                         }
-                        if self.binding_info(trimmed).is_some() {
-                            Self::plain(vec![
-                                format!("No signature found for {}", trimmed),
-                                format!("Try `:sig ${trimmed}` for a callable binding."),
-                            ])
-                        } else {
-                            Self::plain(vec![
-                                format!("No signature found for {}", trimmed),
-                                "Try `:doc <symbol>` for docs.".to_string(),
-                            ])
-                        }
+                        Self::plain(vec![
+                            format!("No signature found for {}", trimmed),
+                            "Try `:doc <symbol>` for docs.".to_string(),
+                        ])
                     }
                 }
             }
@@ -4368,11 +4339,11 @@ impl ReplEngine {
                     start: ":type ".chars().count(),
                     end: format!(":type {trimmed}").chars().count(),
                 },
-                Some("Usage: :type <binding|singleton-owner> or :type $<binding>".to_string()),
+                Some("Usage: :type <binding|singleton-owner>".to_string()),
                 Vec::new(),
             );
         }
-        let binding_name = trimmed.strip_prefix('$').unwrap_or(trimmed);
+        let binding_name = trimmed;
 
         let Some(binding) = self.binding_info(binding_name) else {
             if let Some((owner, metadata)) = self.process_metadata_for_singleton_owner(binding_name)
@@ -4634,14 +4605,8 @@ impl ReplEngine {
     }
 
     fn handle_info_symbol(&self, source_query: &str, symbol: &str) -> ReplResult {
-        let binding_lookup = symbol.strip_prefix('$').unwrap_or(symbol);
         if let Some(binding) = self.binding_info(symbol) {
             return self.render_info_binding(symbol, binding);
-        }
-        if binding_lookup != symbol {
-            if let Some(binding) = self.binding_info(binding_lookup) {
-                return self.render_info_binding(binding_lookup, binding);
-            }
         }
 
         if let Some((owner, metadata)) = self.process_metadata_for_singleton_owner(symbol) {
@@ -6057,6 +6022,25 @@ impl ReplEngine {
         self.query_arg_ast_ty(arg).map(|ty| format_query_ty(&ty))
     }
 
+    fn handle_sig_binding(&self, symbol: &str) -> Option<ReplResult> {
+        let binding = self.binding_info(symbol)?;
+        if let Some(value) = self.vm.get_local(binding.slot_id) {
+            if let Some((owner, metadata)) = self.process_metadata_for_pid_value(&value) {
+                if let Some(lines) = self.process_pid_binding_sig_summary_lines(owner, metadata) {
+                    return Some(Self::styled(lines));
+                }
+            }
+        }
+        if let Some((owner, metadata)) = self.process_metadata_for_pid_type(binding.ty.as_str()) {
+            if let Some(lines) = self.process_pid_binding_sig_summary_lines(owner, metadata) {
+                return Some(Self::styled(lines));
+            }
+        }
+        self.binding_callable_sig_summary(symbol)
+            .map(|rendered| Self::styled(vec![rendered]))
+            .or_else(|| Some(Self::plain(vec![format!("No signature found for {}", symbol)])))
+    }
+
     fn binding_callable_sig_summary(&self, symbol: &str) -> Option<String> {
         let binding = self.binding_info(symbol)?;
         let kind = self.binding_callable_kind(binding)?;
@@ -7258,7 +7242,6 @@ impl ReplEngine {
         if symbol.is_empty() {
             return false;
         }
-        let symbol = symbol.strip_prefix('$').unwrap_or(symbol);
         if matches!(
             symbol,
             "True"
