@@ -555,7 +555,9 @@ fn core_command_completion_uses_command_use_sites() {
     let bound = rendered_text(&engine.handle_line("print = \"shadowed\""));
     assert!(bound.contains("print: String = \"shadowed\""), "{bound}");
 
-    let type_candidates = engine.completions(":type pri", ":type pri".len()).candidates;
+    let type_candidates = engine
+        .completions(":type pri", ":type pri".len())
+        .candidates;
     let type_rendered = type_candidates
         .iter()
         .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
@@ -567,7 +569,9 @@ fn core_command_completion_uses_command_use_sites() {
         ":type completion should keep the binding candidate: {type_rendered:?}"
     );
     assert!(
-        !type_candidates.iter().any(|candidate| candidate.replacement == "Kernel::print"),
+        !type_candidates
+            .iter()
+            .any(|candidate| candidate.replacement == "Kernel::print"),
         ":type completion should not surface callable families: {type_rendered:?}"
     );
 
@@ -585,6 +589,35 @@ fn core_command_completion_uses_command_use_sites() {
                 && candidate.replacement == "Kernel::print"),
         "qualified command completion should preserve callable escape hatches: {sig_rendered:?}"
     );
+}
+
+#[test]
+fn core_command_outputs_use_repl_scope_before_callable_families() {
+    let mut engine = engine();
+
+    let bound = rendered_text(&engine.handle_line("compare = Ok(1)"));
+    assert!(bound.contains("compare: Result<Int, Error>"), "{bound}");
+
+    let sig = rendered_text(&engine.handle_line(":sig compare"));
+    assert!(sig.contains("No signature found for compare"), "{sig}");
+
+    let doc = doc_text(&engine.handle_line(":doc compare"));
+    assert!(doc.contains("Standard `Result` type declaration."), "{doc}");
+    assert!(!doc.contains("Return the three-way ordering"), "{doc}");
+
+    let escaped_doc = doc_text(&engine.handle_line(":doc Compare::compare"));
+    assert!(escaped_doc.contains("Compare::compare"), "{escaped_doc}");
+    assert!(
+        escaped_doc.contains("Standard `Compare` trait declaration."),
+        "{escaped_doc}"
+    );
+
+    let info = rendered_text(&engine.handle_line(":info compare"));
+    assert!(info.contains("kind: binding"), "{info}");
+    assert!(info.contains("type: Result<Int, Error>"), "{info}");
+
+    let ty = rendered_text(&engine.handle_line(":type compare"));
+    assert!(ty.contains("type: Result<Int, Error>"), "{ty}");
 }
 
 #[test]
@@ -2801,10 +2834,13 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let legacy_type = engine.handle_line(":type $list");
     let legacy_type = rendered_text(&legacy_type);
     assert!(
-        legacy_type.contains("Legacy binding query `$list` is not supported."),
+        legacy_type.contains("Invalid binding lookup target `$list`."),
         "{legacy_type}"
     );
-    assert!(legacy_type.contains("Use `list` instead."), "{legacy_type}");
+    assert!(
+        !legacy_type.contains("Use `list` instead."),
+        "{legacy_type}"
+    );
 }
 
 #[test]
@@ -2865,7 +2901,9 @@ fn core_help_and_error_commands_return_structured_command_output() {
     let info_help = engine.handle_line(":help info");
     let info_help_text = rendered_text(&info_help);
     assert!(info_help_text.contains("Usage: :info <query>"));
-    assert!(info_help_text.contains("Accepts: symbol | singleton-owner | typed-call | operator-target"));
+    assert!(
+        info_help_text.contains("Accepts: symbol | singleton-owner | typed-call | operator-target")
+    );
 
     let history_help = engine.handle_line(":help history");
     assert!(rendered_text(&history_help).contains("Usage: :history [selector]"));
@@ -2900,26 +2938,32 @@ fn core_info_command_reports_queries_and_command_errors() {
     let typed_info = engine.handle_line(":info |*> Option");
     let typed_info_text = rendered_text(&typed_info);
     assert!(typed_info_text.contains("defined:"), "{typed_info_text}");
-    assert!(typed_info_text.contains("Option<$A>::map"), "{typed_info_text}");
-    assert!(typed_info_text.contains("kind: operator"), "{typed_info_text}");
+    assert!(
+        typed_info_text.contains("Option<$A>::map"),
+        "{typed_info_text}"
+    );
+    assert!(
+        typed_info_text.contains("kind: operator"),
+        "{typed_info_text}"
+    );
 
     let legacy_info = engine.handle_line(":info num |> (Int -> Result<String, Error>)");
     let legacy_info = rendered_text(&legacy_info);
     assert!(
         legacy_info.contains("Unsupported command query form")
             || legacy_info.contains("query parse error")
-            || legacy_info.contains("Accepted forms: symbol, typed call, or typed operator."),
+            || legacy_info.contains("Accepted forms: symbol, typed call, or operator target."),
         "{legacy_info}"
     );
 
     let legacy_binding_info = engine.handle_line(":info $print");
     let legacy_binding_info = rendered_text(&legacy_binding_info);
     assert!(
-        legacy_binding_info.contains("Legacy binding query `$print` is not supported."),
+        legacy_binding_info.contains("Unsupported command query symbol `$print`."),
         "{legacy_binding_info}"
     );
     assert!(
-        legacy_binding_info.contains("Use `print` instead."),
+        !legacy_binding_info.contains("Use `print` instead."),
         "{legacy_binding_info}"
     );
 }
@@ -3104,8 +3148,13 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let alias_doc = engine.handle_line(":doc +");
     let alias_doc = doc_text(&alias_doc);
-    assert!(alias_doc.contains("trait Add { add(self: Self, rhs: Self) -> Self }"));
+    let qualified_add_doc = doc_text(&engine.handle_line(":doc Add::add"));
+    assert_eq!(alias_doc, qualified_add_doc);
+    assert!(alias_doc.contains("Add::add(self: Self, rhs: Self) -> Self"));
     assert!(alias_doc.contains("Standard `Add` operator trait declaration."));
+
+    let typed_add_doc = doc_text(&engine.handle_line(":doc Add::add(Int, Int)"));
+    assert!(typed_add_doc.contains("Add::add(self: Self, rhs: Self) -> Self"));
 
     let and_doc = engine.handle_line(":doc &&");
     let and_doc = doc_text(&and_doc);
@@ -3153,15 +3202,67 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{safe_bind_doc}"
     );
 
+    let compare_doc = doc_text(&engine.handle_line(":doc Compare"));
+    assert!(compare_doc.contains("Standard `Compare` trait declaration."));
+    assert!(!compare_doc.contains("trait Compare {"), "{compare_doc}");
+    assert!(
+        !compare_doc.contains("compare(self: Self, rhs: Self)"),
+        "{compare_doc}"
+    );
+
+    let compare_target_doc = doc_text(&engine.handle_line(":doc Compare(Int, Int)"));
+    assert!(compare_target_doc.contains("Standard `Compare` trait declaration."));
+    assert!(
+        compare_target_doc.contains("target: Int, Int"),
+        "{compare_target_doc}"
+    );
+    assert!(
+        compare_target_doc.contains("impl docs are not synthesized"),
+        "{compare_target_doc}"
+    );
+
     let typed_sig = engine.handle_line(":sig compare(Int, Int)");
     let typed_sig = signature_text(&typed_sig);
     assert!(typed_sig.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"));
 
+    let trait_family_sig = signature_text(&engine.handle_line(":sig Compare"));
+    assert!(
+        trait_family_sig.contains("trait Compare {"),
+        "{trait_family_sig}"
+    );
+    assert!(
+        trait_family_sig.contains("compare(self: Self, rhs: Self) -> Ordering"),
+        "{trait_family_sig}"
+    );
+    assert!(
+        trait_family_sig.contains("impl targets:"),
+        "{trait_family_sig}"
+    );
+    assert!(trait_family_sig.contains("Int"), "{trait_family_sig}");
+    assert!(trait_family_sig.contains("TupleN"), "{trait_family_sig}");
+    assert!(!trait_family_sig.contains("Tuple2"), "{trait_family_sig}");
+    assert!(!trait_family_sig.contains("Tuple8"), "{trait_family_sig}");
+
     let helper_sig = engine.handle_line(":sig compare");
     let helper_sig = signature_text(&helper_sig);
-    assert_eq!(
-        helper_sig.trim(),
-        "Compare::compare(self: Self, rhs: Self) -> Ordering"
+    assert!(
+        helper_sig.contains("Compare::compare(self: Self, rhs: Self) -> Ordering"),
+        "{helper_sig}"
+    );
+    assert!(helper_sig.contains("impl targets:"), "{helper_sig}");
+    assert!(
+        helper_sig.contains("try: :sig compare(Int, Int)"),
+        "{helper_sig}"
+    );
+
+    let trait_target_sig = signature_text(&engine.handle_line(":sig Compare(Int, Int)"));
+    assert!(
+        trait_target_sig.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"),
+        "{trait_target_sig}"
+    );
+    assert!(
+        trait_target_sig.contains("impl Compare for Int::lt(self: Int, rhs: Int) -> Boolean"),
+        "{trait_target_sig}"
     );
 
     let less_than_sig = engine.handle_line(":sig <");
@@ -3210,11 +3311,40 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let operator_sig = engine.handle_line(":sig |>");
     let operator_sig = signature_text(&operator_sig);
-    assert!(operator_sig.contains("trait PipeApply { pipe_apply(self: Self, value: $A) -> $B }"));
+    assert!(operator_sig.contains("PipeApply::pipe_apply(self: Self, value: $A) -> $B"));
+    assert!(operator_sig.contains("impl targets:"), "{operator_sig}");
+
+    let functor_sig = signature_text(&engine.handle_line(":sig |*>"));
+    assert!(functor_sig.contains("Functor::map(self: Self, f: ($A -> $B)) -> $Mapped"));
+    assert!(functor_sig.contains("impl targets:"), "{functor_sig}");
+
+    let chainable_sig = signature_text(&engine.handle_line(":sig |>="));
+    assert!(
+        chainable_sig.contains("impl Chainable<$A, Result<$B>> for Result<$A>::chain"),
+        "{chainable_sig}"
+    );
+    assert!(
+        chainable_sig.contains("impl Chainable<$A, Option<$B>> for Option<$A>::chain"),
+        "{chainable_sig}"
+    );
+    assert!(
+        chainable_sig.contains("impl Chainable<$A, List<$B>> for List<$A>::chain"),
+        "{chainable_sig}"
+    );
+    assert!(
+        !chainable_sig.contains("Chainable::chain(self: Self"),
+        "{chainable_sig}"
+    );
+
+    let result_chain_sig = signature_text(&engine.handle_line(":sig |>= Result"));
+    assert_eq!(
+        result_chain_sig.trim(),
+        "impl Chainable<$A, Result<$B>> for Result<$A>::chain(self: Result<$A>, f: ($A -> Result<$B>)) -> Result<$B>"
+    );
 
     let slash_doc = engine.handle_line(":doc /");
     let slash_doc = doc_text(&slash_doc);
-    assert!(slash_doc.contains("trait Compose"), "{slash_doc}");
+    assert!(slash_doc.contains("Compose::compose"), "{slash_doc}");
     assert!(slash_doc.contains("models the `/` operator"), "{slash_doc}");
 
     let bind_sig = engine.handle_line(":sig =");
@@ -3260,7 +3390,11 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let neq_helper_doc = engine.handle_line(":doc neq");
     let neq_helper_doc = doc_text(&neq_helper_doc);
-    assert!(neq_helper_doc.contains("trait Neq { neq(self: Self, rhs: Self) -> Boolean }"));
+    assert!(!neq_helper_doc.contains("trait Neq {"), "{neq_helper_doc}");
+    assert!(
+        !neq_helper_doc.contains("neq(self: Self, rhs: Self)"),
+        "{neq_helper_doc}"
+    );
     assert!(neq_helper_doc.contains("Standard `Neq` operator trait declaration."));
 
     let operator_doc = engine.handle_line(":doc <");
@@ -3373,6 +3507,61 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         rendered_text(&unsupported).contains("Unsupported command query argument `make_value()`"),
         "{}",
         rendered_text(&unsupported)
+    );
+}
+
+#[test]
+fn core_sig_chainable_operator_lists_user_defined_identity_impl() {
+    let mut engine = ReplEngine::from_script_source(
+        "identity_operator_impls.srt",
+        r#"defstruct Identity<$T> {
+  value: $T,
+}
+
+impl Identity {
+  def new<$T>(value: $T) -> Identity<$T> {
+    Identity { value: value }
+  }
+}
+
+impl Functor<$A, $B, Identity<$B>> for Identity<$A> {
+  def map(self: Self, f: ($A -> $B)) -> Identity<$B> {
+    Identity { value: f(self.value) }
+  }
+}
+
+impl Chainable<$A, Identity<$B>> for Identity<$A> {
+  def chain(self: Self, f: ($A -> Identity<$B>)) -> Identity<$B> {
+    f(self.value)
+  }
+}
+
+impl LiftComposable<$A, $B, $C, Identity<$C>> for ($A -> Identity<$B>) {
+  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Identity<$C>) {
+    {|value| Functor::map(self(value), rhs)}
+  }
+}
+
+impl KleisliComposable<$A, $B, Identity<$C>> for ($A -> Identity<$B>) {
+  def kleisli_compose(self: Self, rhs: ($B -> Identity<$C>)) -> ($A -> Identity<$C>) {
+    {|value| Chainable::chain(self(value), rhs)}
+  }
+}"#,
+    )
+    .expect("identity preload should load");
+
+    let chainable_sig = signature_text(&engine.handle_line(":sig |>="));
+    assert!(
+        chainable_sig.contains(
+            "impl Chainable<$A, Identity<$B>> for Identity<$A>::chain(self: Identity<$A>, f: ($A -> Identity<$B>)) -> Identity<$B>"
+        ),
+        "{chainable_sig}"
+    );
+
+    let identity_chain_sig = signature_text(&engine.handle_line(":sig |>= Identity"));
+    assert_eq!(
+        identity_chain_sig.trim(),
+        "impl Chainable<$A, Identity<$B>> for Identity<$A>::chain(self: Identity<$A>, f: ($A -> Identity<$B>)) -> Identity<$B>"
     );
 }
 
@@ -3591,6 +3780,14 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
     assert!(
         capture_binding_doc.contains("derived from: Kernel::print"),
         "{capture_binding_doc}"
+    );
+
+    let result_binding = engine.handle_line("ret = Ok(1)");
+    assert!(rendered_text(&result_binding).contains("ret: Result<Int, Error>"));
+    let result_binding_doc = doc_text(&engine.handle_line(":doc ret"));
+    assert!(
+        result_binding_doc.contains("Standard `Result` type declaration."),
+        "{result_binding_doc}"
     );
 }
 
@@ -3850,18 +4047,18 @@ fn core_sig_expression_queries_support_operator_forms() {
     assert!(
         legacy_doc.contains("Unsupported command query form")
             || legacy_doc.contains("query parse error")
-            || legacy_doc.contains("Accepted forms: symbol, typed call, or typed operator."),
+            || legacy_doc.contains("Accepted forms: symbol, typed call, or operator target."),
         "{legacy_doc}"
     );
 
     let legacy_binding_doc = engine.handle_line(":doc $formatter");
     let legacy_binding_doc = rendered_text(&legacy_binding_doc);
     assert!(
-        legacy_binding_doc.contains("Legacy binding query `$formatter` is not supported."),
+        legacy_binding_doc.contains("Unsupported command query symbol `$formatter`."),
         "{legacy_binding_doc}"
     );
     assert!(
-        legacy_binding_doc.contains("Use `formatter` instead."),
+        !legacy_binding_doc.contains("Use `formatter` instead."),
         "{legacy_binding_doc}"
     );
 }
@@ -3901,11 +4098,11 @@ fn core_sig_operator_target_queries_accept_concrete_type_targets_and_reject_lega
     let legacy_binding_sig = engine.handle_line(":sig $print");
     let legacy_binding_sig = rendered_text(&legacy_binding_sig);
     assert!(
-        legacy_binding_sig.contains("Legacy binding query `$print` is not supported."),
+        legacy_binding_sig.contains("Unsupported command query symbol `$print`."),
         "{legacy_binding_sig}"
     );
     assert!(
-        legacy_binding_sig.contains("Use `print` instead."),
+        !legacy_binding_sig.contains("Use `print` instead."),
         "{legacy_binding_sig}"
     );
 }
@@ -4220,11 +4417,39 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
         "{tuple_doc}"
     );
 
-    let tuple_sig = engine.handle_line(":sig Tuple");
-    let tuple_sig = rendered_text(&tuple_sig);
+    let tuple_sig = signature_text(&engine.handle_line(":sig Tuple"));
     assert!(
-        tuple_sig.contains("No signature found for Tuple"),
+        tuple_sig.contains("(T1, T2, ..) : Tuple<T1, T2, ..>"),
         "{tuple_sig}"
+    );
+
+    let list_sig = signature_text(&engine.handle_line(":sig List"));
+    assert!(list_sig.contains("[T1, ..] : List<T>"), "{list_sig}");
+
+    let hash_map_sig = signature_text(&engine.handle_line(":sig HashMap"));
+    assert!(
+        hash_map_sig.contains("hash![String => V1, ..] : HashMap<V>"),
+        "{hash_map_sig}"
+    );
+
+    let boolean_sig = signature_text(&engine.handle_line(":sig Boolean"));
+    assert!(boolean_sig.contains("* Boolean::True"), "{boolean_sig}");
+    assert!(boolean_sig.contains("* Boolean::False"), "{boolean_sig}");
+
+    let result_sig = signature_text(&engine.handle_line(":sig Result"));
+    assert!(result_sig.contains("* Result::Ok($T)"), "{result_sig}");
+    assert!(result_sig.contains("* Result::Err(Error)"), "{result_sig}");
+
+    let true_sig = signature_text(&engine.handle_line(":sig True"));
+    assert!(
+        true_sig.contains("Boolean::True() -> Boolean"),
+        "{true_sig}"
+    );
+
+    let ok_sig = signature_text(&engine.handle_line(":sig Ok"));
+    assert!(
+        ok_sig.contains("Result::Ok($T) -> Result<$T, Error>"),
+        "{ok_sig}"
     );
 
     let config_doc = engine.handle_line(":doc Config");
@@ -4290,11 +4515,17 @@ fn core_sig_rejects_tuple_field_and_facet_expression_queries() {
 
     let field_sig = engine.handle_line(":sig pair._1");
     let field_sig = rendered_text(&field_sig);
-    assert!(field_sig.contains("No signature found for pair._1"), "{field_sig}");
+    assert!(
+        field_sig.contains("No signature found for pair._1"),
+        "{field_sig}"
+    );
 
     let view_sig = engine.handle_line(":sig pair._1");
     let view_sig = rendered_text(&view_sig);
-    assert!(view_sig.contains("No signature found for pair._1"), "{view_sig}");
+    assert!(
+        view_sig.contains("No signature found for pair._1"),
+        "{view_sig}"
+    );
 
     let result_pair = engine.handle_line("result_pair = (Ok(2), \"ok\")");
     let result_pair_text = rendered_text(&result_pair);
@@ -4318,7 +4549,8 @@ fn core_sig_rejects_tuple_field_and_facet_expression_queries() {
     let over_result_sig = rendered_text(&over_result_sig);
     assert!(
         over_result_sig.contains("Unsupported command query argument `Tuple._0`")
-            || over_result_sig.contains("Unsupported command query argument `{|value: Result<Int>| Ok(value)}`")
+            || over_result_sig
+                .contains("Unsupported command query argument `{|value: Result<Int>| Ok(value)}`")
             || over_result_sig.contains("No signature found for Facet::over_result"),
         "{over_result_sig}"
     );
