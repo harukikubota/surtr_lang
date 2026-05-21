@@ -22,6 +22,24 @@ pub enum CompletionScope {
     VariablesOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplCompletionUseSite {
+    Input,
+    CommandHead,
+    Command(ReplCommandUseSite),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplCommandUseSite {
+    Help,
+    Doc,
+    Sig,
+    Info,
+    Type,
+    Facet,
+    Other,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionSymbol {
     pub label: String,
@@ -758,6 +776,16 @@ pub struct ReplInputSupport {
     pub signature: Option<InputSignatureHelp>,
 }
 
+impl ReplInputSupport {
+    fn into_completion_response(self) -> CompletionResponse {
+        CompletionResponse {
+            candidates: self.candidates,
+            replace_start: self.replace_start,
+            replace_end: self.replace_end,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputSignatureHelp {
     pub lines: Vec<String>,
@@ -817,7 +845,7 @@ impl ReplInputSupportContext {
         &self,
         input: &str,
         cursor: usize,
-        scope: CompletionScope,
+        use_site: ReplCompletionUseSite,
     ) -> ReplInputSupport {
         let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
         if !completion_allowed_at_cursor(input, cursor) {
@@ -825,6 +853,20 @@ impl ReplInputSupportContext {
         }
 
         let (replace_start, replace_end, prefix) = completion_token(input, cursor);
+        let use_site = match use_site {
+            ReplCompletionUseSite::Input if input.trim_start().starts_with(':') => {
+                repl_completion_use_site(input, cursor)
+            }
+            other => other,
+        };
+        if matches!(use_site, ReplCompletionUseSite::CommandHead) {
+            return ReplInputSupport {
+                candidates: repl_command_completion_candidates(&prefix, replace_start, replace_end),
+                replace_start,
+                replace_end,
+                signature: None,
+            };
+        }
         let call_contexts = call_context_stack_at_cursor(input, cursor);
         let call_context = call_contexts.last();
         let operator_assist = if call_context.is_none() {
@@ -844,7 +886,11 @@ impl ReplInputSupportContext {
                 .map(|assist| assist.signature.clone())
         });
 
-        if call_context.is_none() && operator_assist.is_none() && prefix.is_empty() {
+        if call_context.is_none()
+            && operator_assist.is_none()
+            && prefix.is_empty()
+            && matches!(use_site, ReplCompletionUseSite::Input)
+        {
             return ReplInputSupport {
                 candidates: Vec::new(),
                 replace_start,
@@ -858,11 +904,14 @@ impl ReplInputSupportContext {
             source: input,
             cursor,
         };
-        let use_site = repl_completion_use_site(input, cursor);
         let completion = if let Some(context) = call_context.as_ref() {
             let expected_ty = self.expected_param_type_for_call(context);
             if let Some(completion) =
-                complete_call_argument_with_presentation(request, CompletionPresentation::Repl)
+                complete_call_argument_with_presentation(
+                    request,
+                    CompletionPresentation::Repl,
+                    use_site,
+                )
             {
                 completion
             } else {
@@ -873,7 +922,7 @@ impl ReplInputSupportContext {
                     parameter_type_accepts_arg_type,
                 );
                 if completion.candidates.is_empty() && !prefix.is_empty() {
-                    complete_repl_prefix(request, scope)
+                    complete_repl_prefix(request, CompletionScope::All)
                 } else {
                     completion
                 }
@@ -888,12 +937,15 @@ impl ReplInputSupportContext {
                 assist.expected_callable_return_context.as_deref(),
             )
         } else {
-            complete_repl_prefix(request, scope)
+            complete_repl_prefix(request, CompletionScope::All)
         };
 
         let mut candidates = completion.candidates;
         candidates.retain(|candidate| repl_use_site_accepts_candidate(use_site, candidate));
-        if call_context.is_none() && operator_assist.is_none() {
+        if call_context.is_none()
+            && operator_assist.is_none()
+            && !matches!(use_site, ReplCompletionUseSite::Command(ReplCommandUseSite::Type))
+        {
             self.inject_special_repl_candidates(
                 &mut candidates,
                 &prefix,
@@ -914,6 +966,13 @@ impl ReplInputSupportContext {
         let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
         if !completion_allowed_at_cursor(input, cursor) {
             return false;
+        }
+        let use_site = repl_completion_use_site(input, cursor);
+        if matches!(
+            use_site,
+            ReplCompletionUseSite::CommandHead | ReplCompletionUseSite::Command(_)
+        ) {
+            return true;
         }
         let (_, _, prefix) = completion_token(input, cursor);
         facet_path_context_at_cursor(input, cursor).is_some()
@@ -1679,18 +1738,6 @@ pub struct SignatureLookup {
     pub callee_end: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReplCompletionUseSite {
-    Input,
-    Command(ReplCommandUseSite),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReplCommandUseSite {
-    Type,
-    Other,
-}
-
 pub fn complete_prefix(request: CompletionRequest<'_>) -> CompletionResponse {
     complete_prefix_with_options(request, CompletionScope::All, CompletionPresentation::Full)
 }
@@ -1702,8 +1749,13 @@ pub fn complete_repl_prefix(
     complete_prefix_with_options(request, scope, CompletionPresentation::Repl)
 }
 
-pub fn repl_assist_at_cursor(request: CompletionRequest<'_>, scope: CompletionScope) -> ReplAssist {
-    let completion = complete_repl_prefix(request, scope);
+pub fn repl_assist_at_cursor(
+    request: CompletionRequest<'_>,
+    use_site: ReplCompletionUseSite,
+) -> ReplAssist {
+    let completion = ReplInputSupportContext::from_parts(request.index.clone(), BTreeMap::new())
+        .input_support(request.source, request.cursor, use_site)
+        .into_completion_response();
     let signature = signature_help_at_cursor(request.index, request.source, request.cursor);
     let active_parameter = signature
         .as_ref()
@@ -1719,12 +1771,17 @@ pub fn repl_assist_at_cursor(request: CompletionRequest<'_>, scope: CompletionSc
 }
 
 pub fn complete_call_argument(request: CompletionRequest<'_>) -> Option<CompletionResponse> {
-    complete_call_argument_with_presentation(request, CompletionPresentation::Full)
+    complete_call_argument_with_presentation(
+        request,
+        CompletionPresentation::Full,
+        ReplCompletionUseSite::Input,
+    )
 }
 
 fn complete_call_argument_with_presentation(
     request: CompletionRequest<'_>,
     presentation: CompletionPresentation,
+    use_site: ReplCompletionUseSite,
 ) -> Option<CompletionResponse> {
     let signature = signature_help_at_cursor(request.index, request.source, request.cursor)?;
     let cursor = clamp_to_char_boundary(request.source, request.cursor);
@@ -1740,6 +1797,16 @@ fn complete_call_argument_with_presentation(
     if let Some(trait_name) =
         signature_trait_constraint_for_param(&signature.signature, signature.active_parameter)
     {
+        if !matches!(use_site, ReplCompletionUseSite::Input) {
+            let mut completion =
+                complete_prefix_with_options(request, CompletionScope::All, presentation);
+            completion.candidates = rank_completion_candidates_by_trait_constraint(
+                request.index,
+                completion.candidates,
+                &trait_name,
+            );
+            return Some(completion);
+        }
         let mut completion =
             complete_prefix_with_options(request, CompletionScope::VariablesOnly, presentation);
         if completion.candidates.is_empty() {
@@ -1768,6 +1835,16 @@ fn complete_call_argument_with_presentation(
         }
         Some(completion)
     } else {
+        if !matches!(use_site, ReplCompletionUseSite::Input) {
+            let mut completion =
+                complete_prefix_with_options(request, CompletionScope::All, presentation);
+            completion.candidates = rank_completion_candidates_by_expected_type(
+                completion.candidates,
+                Some(&expected_ty_src),
+                parameter_type_accepts_arg_type,
+            );
+            return Some(completion);
+        }
         let mut completion =
             complete_prefix_with_options(request, CompletionScope::VariablesOnly, presentation);
         completion.candidates = rank_completion_candidates_by_expected_type(
@@ -1876,16 +1953,25 @@ enum CompletionPresentation {
     Repl,
 }
 
-fn repl_completion_use_site(input: &str, cursor: usize) -> ReplCompletionUseSite {
+pub fn repl_completion_use_site(input: &str, cursor: usize) -> ReplCompletionUseSite {
     let cursor = clamp_to_char_boundary(input, cursor.min(input.len()));
     let visible = &input[..cursor];
     let trimmed = visible.trim_start();
     if !trimmed.starts_with(':') {
         return ReplCompletionUseSite::Input;
     }
-    let command = trimmed[1..].split_whitespace().next().unwrap_or_default();
+    let body = &trimmed[1..];
+    if body.is_empty() || !body.chars().any(char::is_whitespace) {
+        return ReplCompletionUseSite::CommandHead;
+    }
+    let command = body.split_whitespace().next().unwrap_or_default();
     match command {
+        "help" | "h" => ReplCompletionUseSite::Command(ReplCommandUseSite::Help),
+        "doc" => ReplCompletionUseSite::Command(ReplCommandUseSite::Doc),
+        "sig" => ReplCompletionUseSite::Command(ReplCommandUseSite::Sig),
+        "info" => ReplCompletionUseSite::Command(ReplCommandUseSite::Info),
         "type" => ReplCompletionUseSite::Command(ReplCommandUseSite::Type),
+        "facet" => ReplCompletionUseSite::Command(ReplCommandUseSite::Facet),
         _ => ReplCompletionUseSite::Command(ReplCommandUseSite::Other),
     }
 }
@@ -1895,14 +1981,67 @@ fn repl_use_site_accepts_candidate(
     candidate: &CompletionCandidate,
 ) -> bool {
     match use_site {
-        ReplCompletionUseSite::Input | ReplCompletionUseSite::Command(ReplCommandUseSite::Other) => {
-            true
-        }
+        ReplCompletionUseSite::Input
+        | ReplCompletionUseSite::CommandHead
+        | ReplCompletionUseSite::Command(ReplCommandUseSite::Help)
+        | ReplCompletionUseSite::Command(ReplCommandUseSite::Doc)
+        | ReplCompletionUseSite::Command(ReplCommandUseSite::Sig)
+        | ReplCompletionUseSite::Command(ReplCommandUseSite::Info)
+        | ReplCompletionUseSite::Command(ReplCommandUseSite::Facet)
+        | ReplCompletionUseSite::Command(ReplCommandUseSite::Other) => true,
         ReplCompletionUseSite::Command(ReplCommandUseSite::Type) => matches!(
             candidate.kind,
             CompletionKind::Variable | CompletionKind::TypeConstructor
         ),
     }
+}
+
+fn repl_command_completion_candidates(
+    prefix: &str,
+    replace_start: usize,
+    replace_end: usize,
+) -> Vec<CompletionCandidate> {
+    const COMMANDS: &[(&str, &str)] = &[
+        (":help", "Show REPL help"),
+        (":h", "Show REPL help"),
+        (":quit", "Exit the REPL"),
+        (":exit", "Exit the REPL"),
+        (":q", "Exit the REPL"),
+        (":doc", "Show documentation"),
+        (":sig", "Show signatures"),
+        (":info", "Show derived information"),
+        (":type", "Show binding or owner types"),
+        (":facet", "Inspect FacetPath values"),
+        (":error", "Show or change error display mode"),
+        (":v", "Recall a previous result"),
+        (":save", "Save the session"),
+        (":vars", "List visible value bindings"),
+        (":imported", "List active imports"),
+        (":defs", "List visible defs"),
+        (":history", "Show command history"),
+        (":reload", "Rebuild the session"),
+        (":clear", "Clear the screen"),
+    ];
+
+    let mut candidates = Vec::new();
+    for (label, detail) in COMMANDS {
+        if !label.starts_with(prefix) {
+            continue;
+        }
+        candidates.push(CompletionCandidate {
+            label: (*label).to_string(),
+            replacement: (*label).to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: Some((*detail).to_string()),
+            documentation: None,
+            sort_text: Some(format!("0-{label}")),
+            origin: None,
+            capabilities: None,
+            replace_start,
+            replace_end,
+        });
+    }
+    candidates
 }
 
 fn complete_prefix_with_options(
@@ -1912,8 +2051,14 @@ fn complete_prefix_with_options(
 ) -> CompletionResponse {
     let cursor = clamp_to_char_boundary(request.source, request.cursor);
     let (replace_start, replace_end, prefix) = completion_token(request.source, cursor);
-    let allow_empty_prefix =
-        presentation == CompletionPresentation::Repl && scope == CompletionScope::VariablesOnly;
+    let use_site = if presentation == CompletionPresentation::Repl {
+        repl_completion_use_site(request.source, cursor)
+    } else {
+        ReplCompletionUseSite::Input
+    };
+    let allow_empty_prefix = presentation == CompletionPresentation::Repl
+        && (scope == CompletionScope::VariablesOnly
+            || matches!(use_site, ReplCompletionUseSite::Command(_)));
     if prefix.is_empty() && !allow_empty_prefix {
         return CompletionResponse {
             candidates: Vec::new(),

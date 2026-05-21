@@ -369,9 +369,10 @@ pub struct ReplCompletionContext {
 impl ReplCompletionContext {
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
         let started = Instant::now();
+        let use_site = surtr_analysis::repl_completion_use_site(input, cursor);
         let support =
             self.input_support
-                .input_support(input, cursor, surtr_analysis::CompletionScope::All);
+                .input_support(input, cursor, use_site);
         let candidates = support
             .candidates
             .into_iter()
@@ -1759,12 +1760,21 @@ impl ReplEngine {
     }
 
     pub fn completions(&self, input: &str, cursor: usize) -> ReplCompletion {
-        if let Some(assist) = self.facet_completion_assist(input, cursor) {
-            return ReplCompletion {
-                candidates: assist.candidates,
-                signature: Some(assist.signature),
-                telemetry: CompletionTelemetry::default(),
-            };
+        let use_site = surtr_analysis::repl_completion_use_site(input, cursor);
+        if matches!(
+            use_site,
+            surtr_analysis::ReplCompletionUseSite::Input
+                | surtr_analysis::ReplCompletionUseSite::Command(
+                    surtr_analysis::ReplCommandUseSite::Facet
+                )
+        ) {
+            if let Some(assist) = self.facet_completion_assist(input, cursor) {
+                return ReplCompletion {
+                    candidates: assist.candidates,
+                    signature: Some(assist.signature),
+                    telemetry: CompletionTelemetry::default(),
+                };
+            }
         }
         self.completion_context().completions(input, cursor)
     }

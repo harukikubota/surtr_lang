@@ -5,8 +5,8 @@ use std::sync::Arc;
 use sindr::names::{FacetRootKind, SymbolCapabilities};
 use surtr_analysis::{
     resolve_context, AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisHost, AnalysisMode,
-    AnalysisService, CompletionKind, CompletionScope, CompletionSymbol, ProjectRunnerInput,
-    ProjectRunnerSourceInput, RunnerContext, RunnerSelection, SelectedContext, SemanticIndex,
+    AnalysisService, CompletionKind, CompletionSymbol, ProjectRunnerInput, ProjectRunnerSourceInput,
+    ReplCompletionUseSite, RunnerContext, RunnerSelection, SelectedContext, SemanticIndex,
     SymbolDisplayMetadata, SymbolSemanticInfo, Utf16Position,
 };
 
@@ -1403,7 +1403,7 @@ fn analysis_service_repl_assist_uses_repl_scope_and_signature_help() {
             line: 0,
             character: "print(".len() as u32,
         },
-        CompletionScope::VariablesOnly,
+        ReplCompletionUseSite::Input,
     );
 
     assert_eq!(

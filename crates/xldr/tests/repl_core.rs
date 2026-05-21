@@ -537,6 +537,57 @@ fn core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation
 }
 
 #[test]
+fn core_command_completion_uses_command_use_sites() {
+    let mut engine = engine();
+
+    let head_candidates = engine.completions(":si", ":si".len()).candidates;
+    let head_rendered = head_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        head_candidates
+            .iter()
+            .any(|candidate| candidate.label == ":sig" && candidate.replacement == ":sig"),
+        "command-head completion should expose :sig: {head_rendered:?}"
+    );
+
+    let bound = rendered_text(&engine.handle_line("print = \"shadowed\""));
+    assert!(bound.contains("print: String = \"shadowed\""), "{bound}");
+
+    let type_candidates = engine.completions(":type pri", ":type pri".len()).candidates;
+    let type_rendered = type_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        type_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print" && candidate.replacement == "print"),
+        ":type completion should keep the binding candidate: {type_rendered:?}"
+    );
+    assert!(
+        !type_candidates.iter().any(|candidate| candidate.replacement == "Kernel::print"),
+        ":type completion should not surface callable families: {type_rendered:?}"
+    );
+
+    let sig_candidates = engine
+        .completions(":sig Kernel::pr", ":sig Kernel::pr".len())
+        .candidates;
+    let sig_rendered = sig_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        sig_candidates
+            .iter()
+            .any(|candidate| candidate.label == "Kernel::print"
+                && candidate.replacement == "Kernel::print"),
+        "qualified command completion should preserve callable escape hatches: {sig_rendered:?}"
+    );
+}
+
+#[test]
 fn core_completion_returns_type_constructors_and_type_paths() {
     let engine = engine();
 
