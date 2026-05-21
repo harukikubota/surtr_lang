@@ -240,6 +240,7 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 - 演算子 RHS 位置では演算子そのものを補完候補に出さず、シグネチャ表示行に現在位置で期待される型を表示する。例: `1 + ` は `Int + [Int]`、`x |> ` は `Int |> [(Int -> _)]` を表示する
 - `|>` / `|*>` / `|>=` / `>>` / `>*` / `>=>` のような関数演算子は、左から右へ段階的に推論できた型を次段に渡す。未確定の型は `_` として表示し、後続段の部分推論を妨げない
 - 演算子 RHS 位置の候補は、期待型が分かる場合に一致候補を優先表示する。関数演算子では RHS として使える callable surface を候補に含める
+- call-site 補完はカーソルが属する最内 call を候補・期待型の基準にする。ネストした call 内では signature help を最大 2 段表示し、外側から内側へ 0 / 2 spaces でインデントする。3 段以上のネストでは最外側から省略し、最内側 2 段だけを表示する。例: `if(String::contains(w` では `if(...)` と `String::contains(...)` を表示し、候補は `w` prefix の `String::contains` 第1引数候補にする。`if(String::contains(word, needle), ` のように inner call を閉じた後は `if(...)` だけを表示する
 
 ---
 

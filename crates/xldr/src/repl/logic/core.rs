@@ -1450,7 +1450,7 @@ impl ReplEngine {
         &self,
         symbol: &surtr_analysis::CompletionSymbol,
     ) -> bool {
-        if symbol.label.contains("::impl ") {
+        if symbol.label.starts_with("impl ") || symbol.label.contains("::impl ") {
             return false;
         }
         if let Some((owner, _)) = symbol.label.split_once("::") {

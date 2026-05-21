@@ -825,21 +825,24 @@ impl ReplInputSupportContext {
         }
 
         let (replace_start, replace_end, prefix) = completion_token(input, cursor);
-        let call_context = call_context_at_cursor(input, cursor);
+        let call_contexts = call_context_stack_at_cursor(input, cursor);
+        let call_context = call_contexts.last();
         let operator_assist = if call_context.is_none() {
             spire::parse_operator_completion_context(input, cursor)
                 .and_then(|context| self.operator_completion_assist(input, &context))
         } else {
             None
         };
-        let signature = call_context
-            .as_ref()
-            .and_then(|context| self.signature_help_for_call(context))
-            .or_else(|| {
-                operator_assist
-                    .as_ref()
-                    .map(|assist| assist.signature.clone())
-            });
+        let signature = if call_contexts.is_empty() {
+            None
+        } else {
+            self.signature_help_for_call_stack(&call_contexts)
+        }
+        .or_else(|| {
+            operator_assist
+                .as_ref()
+                .map(|assist| assist.signature.clone())
+        });
 
         if call_context.is_none() && operator_assist.is_none() && prefix.is_empty() {
             return ReplInputSupport {
@@ -868,7 +871,7 @@ impl ReplInputSupportContext {
                     expected_ty.as_deref(),
                     parameter_type_accepts_arg_type,
                 );
-                if completion.candidates.is_empty() && expected_ty.is_none() && !prefix.is_empty() {
+                if completion.candidates.is_empty() && !prefix.is_empty() {
                     complete_repl_prefix(request, scope)
                 } else {
                     completion
@@ -912,7 +915,7 @@ impl ReplInputSupportContext {
         }
         let (_, _, prefix) = completion_token(input, cursor);
         facet_path_context_at_cursor(input, cursor).is_some()
-            || call_context_at_cursor(input, cursor).is_some()
+            || call_context_stack_at_cursor(input, cursor).last().is_some()
             || spire::parse_operator_completion_context(input, cursor).is_some()
             || !prefix.is_empty()
     }
@@ -934,19 +937,36 @@ impl ReplInputSupportContext {
         }
     }
 
-    fn signature_help_for_call(
+    fn signature_help_for_call_stack(
         &self,
-        context: &CompletionCallContext,
+        contexts: &[CompletionCallContext],
     ) -> Option<InputSignatureHelp> {
-        let (qualified_name, signature) =
-            self.display_signature_for_call_completion(&context.callee)?;
-        let rendered = render_signature_with_qualified_name(&qualified_name, signature);
+        let visible_contexts = contexts.iter().rev().take(2).collect::<Vec<_>>();
+        let mut lines = Vec::new();
+
+        for context in visible_contexts.into_iter().rev() {
+            if let Some((qualified_name, signature)) =
+                self.display_signature_for_call_completion(&context.callee)
+            {
+                let rendered = render_signature_with_qualified_name(&qualified_name, signature);
+                let highlighted =
+                    highlight_signature_parameter(&rendered, context.active_parameter);
+                if lines.is_empty() {
+                    lines.push(highlighted);
+                } else {
+                    lines.push(format!("  {highlighted}"));
+                }
+            }
+        }
+
+        if lines.is_empty() {
+            return None;
+        }
+
+        let active_parameter = contexts.last().map(|context| context.active_parameter);
         Some(InputSignatureHelp {
-            lines: vec![highlight_signature_parameter(
-                &rendered,
-                context.active_parameter,
-            )],
-            active_parameter: Some(context.active_parameter),
+            lines,
+            active_parameter,
         })
     }
 
@@ -1693,6 +1713,8 @@ fn complete_call_argument_with_presentation(
     presentation: CompletionPresentation,
 ) -> Option<CompletionResponse> {
     let signature = signature_help_at_cursor(request.index, request.source, request.cursor)?;
+    let cursor = clamp_to_char_boundary(request.source, request.cursor);
+    let (_, _, prefix) = completion_token(request.source, cursor);
     let expected_ty_src =
         signature_expected_param_type(&signature.signature, signature.active_parameter)?;
     if let Some(expected_ty) = parse_signature_type(&expected_ty_src) {
@@ -1723,6 +1745,13 @@ fn complete_call_argument_with_presentation(
             completion.candidates,
             &trait_name,
         );
+        if completion.candidates.is_empty() && !prefix.is_empty() {
+            return Some(complete_prefix_with_options(
+                request,
+                CompletionScope::All,
+                presentation,
+            ));
+        }
         Some(completion)
     } else {
         let mut completion =
@@ -1732,6 +1761,13 @@ fn complete_call_argument_with_presentation(
             Some(&expected_ty_src),
             parameter_type_accepts_arg_type,
         );
+        if completion.candidates.is_empty() && !prefix.is_empty() {
+            return Some(complete_prefix_with_options(
+                request,
+                CompletionScope::All,
+                presentation,
+            ));
+        }
         Some(completion)
     }
 }
@@ -2073,25 +2109,33 @@ struct CompletionCallContext {
 }
 
 fn call_context_at_cursor(source: &str, cursor: usize) -> Option<CompletionCallContext> {
-    let before = &source[..cursor];
-    let open = innermost_unclosed_lparen(before)?;
-    let callee_end = before[..open].trim_end().len();
-    let callee_start = before[..callee_end]
-        .char_indices()
-        .rev()
-        .find_map(|(idx, ch)| (!completion_token_char(ch)).then_some(idx + ch.len_utf8()))
-        .unwrap_or(0);
-    let callee = before[callee_start..callee_end].trim();
-    if callee.is_empty() {
-        return None;
-    }
+    call_context_stack_at_cursor(source, cursor).pop()
+}
 
-    Some(CompletionCallContext {
-        callee: callee.to_string(),
-        active_parameter: active_call_parameter(&before[open + 1..]),
-        callee_start,
-        callee_end,
-    })
+fn call_context_stack_at_cursor(source: &str, cursor: usize) -> Vec<CompletionCallContext> {
+    let before = &source[..cursor];
+    unclosed_lparen_stack(before)
+        .into_iter()
+        .filter_map(|open| {
+            let callee_end = before[..open].trim_end().len();
+            let callee_start = before[..callee_end]
+                .char_indices()
+                .rev()
+                .find_map(|(idx, ch)| (!completion_token_char(ch)).then_some(idx + ch.len_utf8()))
+                .unwrap_or(0);
+            let callee = before[callee_start..callee_end].trim();
+            if callee.is_empty() {
+                return None;
+            }
+
+            Some(CompletionCallContext {
+                callee: callee.to_string(),
+                active_parameter: active_call_parameter(&before[open + 1..]),
+                callee_start,
+                callee_end,
+            })
+        })
+        .collect()
 }
 
 fn clamp_to_char_boundary(input: &str, mut cursor: usize) -> usize {
@@ -2196,7 +2240,7 @@ fn split_facet_path_segments(input: &str) -> Option<Vec<String>> {
     Some(out)
 }
 
-fn innermost_unclosed_lparen(input: &str) -> Option<usize> {
+fn unclosed_lparen_stack(input: &str) -> Vec<usize> {
     let mut stack = Vec::new();
     let mut in_string = false;
     let mut escaped = false;
@@ -2223,7 +2267,7 @@ fn innermost_unclosed_lparen(input: &str) -> Option<usize> {
         }
     }
 
-    stack.pop()
+    stack
 }
 
 fn active_call_parameter(args: &str) -> usize {

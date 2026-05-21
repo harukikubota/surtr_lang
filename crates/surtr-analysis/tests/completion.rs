@@ -858,6 +858,191 @@ fn repl_input_support_context_accepts_session_updates() {
 }
 
 #[test]
+fn repl_input_support_context_shows_nested_call_signatures_and_inner_candidates() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: vec![
+            CompletionSymbol {
+                label: "word".to_string(),
+                replacement: "word".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("String".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+            CompletionSymbol {
+                label: "width".to_string(),
+                replacement: "width".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("Int".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+        ],
+        callable_signatures: vec![
+            CallableSignature {
+                label: "if".to_string(),
+                qualified_name: "if".to_string(),
+                signature: "if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A"
+                    .to_string(),
+            },
+            CallableSignature {
+                label: "String::contains".to_string(),
+                qualified_name: "String::contains".to_string(),
+                signature: "contains(value: String, needle: String) -> Boolean".to_string(),
+            },
+        ],
+    });
+
+    let support = context.input_support(
+        "if(String::contains(w",
+        "if(String::contains(w".len(),
+        CompletionScope::All,
+    );
+    let signature = support
+        .signature
+        .expect("nested call signature help should be produced");
+    assert_eq!(
+        signature.lines,
+        vec![
+            "if(flag: [Boolean], then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A".to_string(),
+            "  String::contains(value: [String], needle: String) -> Boolean".to_string(),
+        ]
+    );
+    assert_eq!(signature.active_parameter, Some(0));
+
+    let labels = support
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec!["word", "width"]);
+}
+
+#[test]
+fn repl_input_support_context_drops_inner_signature_after_inner_call_closes() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: Vec::new(),
+        callable_signatures: vec![
+            CallableSignature {
+                label: "if".to_string(),
+                qualified_name: "if".to_string(),
+                signature: "if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A"
+                    .to_string(),
+            },
+            CallableSignature {
+                label: "String::contains".to_string(),
+                qualified_name: "String::contains".to_string(),
+                signature: "contains(value: String, needle: String) -> Boolean".to_string(),
+            },
+        ],
+    });
+
+    let input = "if(String::contains(word, needle), ";
+    let support = context.input_support(input, input.len(), CompletionScope::All);
+    let signature = support
+        .signature
+        .expect("outer call signature help should remain after inner call closes");
+    assert_eq!(
+        signature.lines,
+        vec!["if(flag: Boolean, then_branch: [Lazy<$A>], else_branch: Lazy<$A>) -> $A".to_string()]
+    );
+    assert_eq!(signature.active_parameter, Some(1));
+}
+
+#[test]
+fn repl_input_support_context_keeps_path_candidates_inside_outer_call_arguments() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: vec![CompletionSymbol {
+            label: "String::contains".to_string(),
+            replacement: "String::contains".to_string(),
+            kind: CompletionKind::TypePath,
+            detail: Some("String::contains(value: String, needle: String) -> Boolean".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        }],
+        callable_signatures: vec![
+            CallableSignature {
+                label: "if".to_string(),
+                qualified_name: "if".to_string(),
+                signature: "if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A"
+                    .to_string(),
+            },
+            CallableSignature {
+                label: "String::contains".to_string(),
+                qualified_name: "String::contains".to_string(),
+                signature: "contains(value: String, needle: String) -> Boolean".to_string(),
+            },
+        ],
+    });
+
+    let input = "if(String::c";
+    let support = context.input_support(input, input.len(), CompletionScope::All);
+    assert_eq!(
+        support
+            .signature
+            .as_ref()
+            .expect("outer call signature should remain visible")
+            .lines,
+        vec!["if(flag: [Boolean], then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A".to_string()]
+    );
+    assert!(
+        support
+            .candidates
+            .iter()
+            .any(|candidate| candidate.label == "String::contains"),
+        "path candidates should remain available inside call arguments: {:?}",
+        support.candidates
+    );
+}
+
+#[test]
+fn repl_input_support_context_limits_nested_signature_display_to_two_levels() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: Vec::new(),
+        callable_signatures: vec![
+            CallableSignature {
+                label: "if".to_string(),
+                qualified_name: "if".to_string(),
+                signature: "if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A"
+                    .to_string(),
+            },
+            CallableSignature {
+                label: "wrap".to_string(),
+                qualified_name: "wrap".to_string(),
+                signature: "wrap(value: Boolean) -> Boolean".to_string(),
+            },
+            CallableSignature {
+                label: "String::contains".to_string(),
+                qualified_name: "String::contains".to_string(),
+                signature: "contains(value: String, needle: String) -> Boolean".to_string(),
+            },
+        ],
+    });
+
+    let input = "if(wrap(String::contains(w";
+    let support = context.input_support(input, input.len(), CompletionScope::All);
+    let signature = support
+        .signature
+        .expect("nested call signature help should be produced");
+    assert_eq!(
+        signature.lines,
+        vec![
+            "wrap(value: [Boolean]) -> Boolean".to_string(),
+            "  String::contains(value: [String], needle: String) -> Boolean".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn repl_input_support_context_produces_operator_assist_and_ranked_candidates() {
     let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
         symbols: vec![

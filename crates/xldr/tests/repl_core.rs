@@ -1453,6 +1453,22 @@ fn core_completion_hides_trait_impl_members_from_qualified_type_paths() {
 }
 
 #[test]
+fn core_completion_hides_trait_impl_roots_from_expression_candidates() {
+    let engine = engine();
+    let labels = engine
+        .completions("i", "i".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+
+    assert!(
+        labels.iter().all(|label| !label.starts_with("impl ")),
+        "trait impl roots should not be suggested as expression candidates: {labels:?}"
+    );
+}
+
+#[test]
 fn core_completion_shows_facet_path_candidates_for_type_root() {
     let engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -1807,6 +1823,106 @@ fn core_completion_uses_argument_position_for_variable_candidates_and_signature_
         labels.iter().position(|label| label == &"n")
             < labels.iter().position(|label| label == &"s"),
         "Int binding should rank before String binding for Int argument: {labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_nested_if_and_string_contains_signatures() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line(r#"word = "Hello""#)).contains("word: String"));
+    assert!(rendered_text(&engine.handle_line(r#"needle = "ll""#)).contains("needle: String"));
+    assert!(rendered_text(&engine.handle_line("width = 2")).contains("width: Int"));
+
+    let input = "if(String::contains(w";
+    let completion = engine.completions(input, input.len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("nested call signature help should be visible");
+    assert_eq!(signature.active_parameter, Some(0));
+    assert_eq!(signature.lines.len(), 2, "{signature:?}");
+    assert!(
+        signature.lines[0].contains("if(flag: [Boolean]"),
+        "{signature:?}"
+    );
+    assert!(
+        signature.lines[1].contains("  String::contains(value: [String], needle: String)"),
+        "{signature:?}"
+    );
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"word"),
+        "inner prefix should suggest word: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"width"),
+        "nonmatching w-prefix candidates should remain visible after ranked String candidates: {labels:?}"
+    );
+    assert!(
+        labels.iter().position(|label| label == &"word")
+            < labels.iter().position(|label| label == &"width"),
+        "String candidates should rank before nonmatching w-prefix candidates: {labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_keeps_path_candidates_while_typing_if_condition_call() {
+    let engine = engine();
+    let input = "if(String::c";
+    let completion = engine.completions(input, input.len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("if signature help should stay visible while typing condition");
+    assert!(
+        signature
+            .lines
+            .iter()
+            .any(|line| line.contains("if(flag: [Boolean]")),
+        "{signature:?}"
+    );
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"String::contains"),
+        "String path candidates should be visible inside if condition: {labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_keeps_type_candidates_while_typing_if_condition_prefix() {
+    let engine = engine();
+    let input = "if(S";
+    let completion = engine.completions(input, input.len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("if signature help should stay visible while typing condition");
+    assert!(
+        signature
+            .lines
+            .iter()
+            .any(|line| line.contains("if(flag: [Boolean]")),
+        "{signature:?}"
+    );
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"String"),
+        "String type candidate should be visible inside if condition: {labels:?}"
     );
 }
 
