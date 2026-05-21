@@ -1842,9 +1842,25 @@ impl Parser<'_> {
         &mut self,
         target: &str,
         start: usize,
-        attrs: DeclAttrs,
+        mut attrs: DeclAttrs,
     ) -> Result<Ast, ParseError> {
-        self.expect(&Token::Def)?;
+        attrs.builtin = true;
+        attrs.visibility = match self.peek() {
+            Token::Def => {
+                self.advance();
+                Visibility::Public
+            }
+            Token::Defp => {
+                self.advance();
+                Visibility::Private
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    "Expected `def` or `defp`",
+                    self.peek_span(),
+                ));
+            }
+        };
         let (name, _) = self.expect_builtin_decl_name()?;
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
@@ -2119,6 +2135,9 @@ impl Parser<'_> {
                     self.parse_builtin_impl_method_decl(target, start, attrs)
                 }
                 Token::Def => self.parse_builtin_decl(start, attrs),
+                Token::Defp if !trait_impl_only => {
+                    self.parse_builtin_impl_method_decl(target, start, attrs)
+                }
                 Token::Defextractor if !trait_impl_only => {
                     self.parse_builtin_extractor_decl(start, attrs)
                 }

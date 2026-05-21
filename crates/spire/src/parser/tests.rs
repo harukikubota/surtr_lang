@@ -1711,6 +1711,38 @@ fn test_hidden_builtin_impl_member_parses() {
 }
 
 #[test]
+fn test_private_builtin_impl_member_parses() {
+    let ast = parse_with_context(
+        r#"impl Generator {
+  @builtin defp gen_make(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
+}"#,
+        ParserContext::module(1, Some("Generator".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect("private builtin impl member should parse");
+
+    match &ast[0] {
+        Ast::ImplDef(_, target, body, _) => {
+            assert_eq!(target, "Global::Generator");
+            assert!(matches!(
+                &body[0],
+                Ast::BuiltinDecl(
+                    _,
+                    name,
+                    _,
+                    _,
+                    DeclAttrs {
+                        builtin: true,
+                        visibility: Visibility::Private,
+                        ..
+                    },
+                ) if name == "gen_make"
+            ));
+        }
+        other => panic!("expected impl, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_duration_literal_lowers_to_internal_struct_lit() {
     let ast = parse("100ms").expect("duration literal should parse");
     assert!(matches!(

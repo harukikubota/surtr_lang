@@ -679,7 +679,10 @@ fn lower_impl_member_name(
     target: &str,
     method_name: &str,
 ) -> String {
-    if current_module_path == Some(target) {
+    if current_module_path
+        .map(surface_path_name)
+        .is_some_and(|module_path| module_path == surface_path_name(target))
+    {
         method_name.to_string()
     } else {
         normalize_impl_method_name(target, method_name)
@@ -1550,7 +1553,7 @@ pub fn precollect_declaration_index(
                             span,
                             name.as_str(),
                             DeclarationKind::Def,
-                            Visibility::Public,
+                            entry_visibility(attrs),
                             attrs.hidden,
                             entry_user_importable(attrs),
                             entry_user_callable(attrs),

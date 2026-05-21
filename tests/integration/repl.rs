@@ -626,6 +626,46 @@ fn repl_rejects_persisting_unresolved_result_value_binding() {
 }
 
 #[test]
+fn repl_rejects_direct_generator_bridge_builtin_call() {
+    let output = run_repl_session("Generator::gen_make(3, [1, 2])\n:quit\n");
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert!(combined.contains("Generator::gen_make/2"), "{combined}");
+    assert!(combined.contains("is private"), "{combined}");
+    assert!(
+        !combined.contains("Cannot persist binding with unresolved type variable."),
+        "{combined}"
+    );
+}
+
+#[test]
+fn repl_persists_public_generator_bindings() {
+    let output = run_repl_session(
+        "g = Generator::range(1, 3)\n:type g\nGenerator::idx(g)\nGenerator::to_list(g)\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("g: Generator<Int, Int> = (0, [1, 2, 3])"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("type: Generator<Int, Int>"), "{stdout}");
+    assert!(
+        stdout.contains("\n0\n") || stdout.contains("> 0"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("[1, 2, 3]"), "{stdout}");
+}
+
+#[test]
 fn repl_accepts_explicitly_constrained_result_binding() {
     let output = run_repl_session("todo: (-> Result<Int>) = {|| Err(NoneError)}\nret: Result<Int> = todo()\n:type ret\n:quit\n");
     assert!(

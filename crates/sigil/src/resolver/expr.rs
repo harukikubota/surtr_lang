@@ -6,6 +6,7 @@ use super::scope_init::{
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
+use sindr::names::surface_path_name;
 use spire::ast::{
     AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, BulkUpdatePath, DbgArg, FacetPathSegment,
     HashMapLiteralEntry, InterpolatedPart,
@@ -1631,6 +1632,18 @@ impl Resolver {
         format!("Function `{fq_name}/{arity}` cannot be called from user code")
     }
 
+    fn private_callable_error_for_candidate(&self, fq_name: &str, arity: usize) -> Option<String> {
+        let mut candidates = vec![fq_name.to_string()];
+        if !fq_name.starts_with("Global::") {
+            candidates.push(format!("Global::{fq_name}"));
+        }
+        candidates.into_iter().find_map(|candidate| {
+            self.callable_entry_for_name(&candidate)
+                .is_some_and(|entry| entry.visibility == Visibility::Private)
+                .then(|| self.private_callable_error_message(surface_path_name(&candidate), arity))
+        })
+    }
+
     fn declaration_entry_for_uid(&self, uid: u32) -> Option<&DeclarationEntry> {
         self.declaration_uids
             .iter()
@@ -1686,14 +1699,20 @@ impl Resolver {
         func: &Ast,
         arity: usize,
     ) -> ResolveError {
+        if let Ast::Var(_, name) = func {
+            if let Some(message) = self.private_callable_error_for_candidate(name, arity) {
+                return ResolveError {
+                    message,
+                    span: err.span,
+                    related_labels: Vec::new(),
+                };
+            }
+        }
         if let Ast::Path(_, path) = func {
             let fq_name = path.segments.join("::");
-            if self
-                .callable_entry_for_name(&fq_name)
-                .is_some_and(|entry| entry.visibility == Visibility::Private)
-            {
+            if let Some(message) = self.private_callable_error_for_candidate(&fq_name, arity) {
                 return ResolveError {
-                    message: self.private_callable_error_message(&fq_name, arity),
+                    message,
                     span: err.span,
                     related_labels: Vec::new(),
                 };

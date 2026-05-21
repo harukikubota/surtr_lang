@@ -1517,6 +1517,60 @@ fn test_hidden_builtin_decl_resolution_preserves_hidden_attr() {
 }
 
 #[test]
+fn test_private_builtin_impl_member_is_private_surface() {
+    let module_stages = vec![vec![staged_module(
+        "Generator",
+        parse_module_ast(
+            r#"@builtin type Generator<$State, $Item>
+impl Generator {
+  @builtin defp gen_make(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
+  def from_list(items: List<$Item>) -> Generator<Unit, $Item> {
+    gen_make(0, items)
+  }
+}"#,
+            "Generator",
+        ),
+    )]];
+
+    resolve_user_with_modules("g = Generator::from_list([1, 2])", &module_stages)
+        .expect("public wrapper should resolve private builtin within the same impl");
+
+    let err = resolve_user_with_modules("g = Generator::gen_make(0, [1, 2])", &module_stages)
+        .expect_err("private builtin direct call should fail");
+
+    assert!(err.message.contains("Generator::gen_make/2"));
+    assert!(
+        err.message.contains("is private"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_private_builtin_impl_member_import_is_rejected() {
+    let module_stages = vec![vec![staged_module(
+        "Generator",
+        parse_module_ast(
+            r#"@builtin type Generator<$State, $Item>
+impl Generator {
+  @builtin defp gen_make(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
+}"#,
+            "Generator",
+        ),
+    )]];
+
+    let err = resolve_user_with_modules("import Generator::gen_make", &module_stages)
+        .expect_err("private builtin import should fail");
+
+    assert!(
+        err.message
+            .contains("Import target `Generator::gen_make` is private"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
 fn test_duration_literal_resolves_as_compiler_generated_struct_lit() {
     let ast = spire::parse_with_context(
         r#"defstruct Duration { private millis: Int }
