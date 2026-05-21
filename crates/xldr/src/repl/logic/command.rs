@@ -40,12 +40,26 @@ pub enum ReplCommandKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplCommandArgCompletion {
+    None,
+    Semantic,
+    CommandTopic,
+    Fixed(&'static [&'static str]),
+    ResultLine,
+    HistorySelector,
+    SavePath,
+    TypeTarget,
+    FacetTarget,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReplCommandSpec {
     pub kind: ReplCommandKind,
     pub aliases: &'static [&'static str],
     pub usage: &'static str,
     pub summary: &'static str,
     pub detail_help: &'static [&'static str],
+    pub arg_completion: ReplCommandArgCompletion,
 }
 
 impl ReplCommandSpec {
@@ -65,6 +79,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         usage: ":help, :h [command]",
         summary: "Show REPL help",
         detail_help: &[],
+        arg_completion: ReplCommandArgCompletion::CommandTopic,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Quit,
@@ -72,6 +87,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         usage: ":quit, :exit, :q",
         summary: "Exit the REPL",
         detail_help: &[],
+        arg_completion: ReplCommandArgCompletion::None,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Doc,
@@ -82,6 +98,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
             "Usage: :doc <symbol|query>",
             "Examples: :doc print, :doc formatter, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc compare(Int, Int), :doc |*> Option",
         ],
+        arg_completion: ReplCommandArgCompletion::Semantic,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Sig,
@@ -92,6 +109,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
             "Usage: :sig <symbol|query>",
             "Examples: :sig compare, :sig Compare, :sig User, :sig GenServer::spawn, :sig MyServer::pid, :sig compare(Int, Int), :sig |*> Option",
         ],
+        arg_completion: ReplCommandArgCompletion::Semantic,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Info,
@@ -103,6 +121,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
             "Accepts: symbol | singleton-owner | typed-call | operator-target",
             "Examples: :info print, :info Counter, :info pid, :info compare(Int, Int), :info |*> Option",
         ],
+        arg_completion: ReplCommandArgCompletion::Semantic,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Type,
@@ -114,6 +133,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
             "Examples: :type list, :type Counter, :type pid, :type my_closure",
             "Worker processes are queried through PID bindings; singleton processes are queried by owner name.",
         ],
+        arg_completion: ReplCommandArgCompletion::TypeTarget,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Facet,
@@ -125,6 +145,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
             "Examples: :facet path, :facet Tuple._1, :facet BitWidth.Any",
             "Shows canonical path, API availability, segment details, and where the path may stop.",
         ],
+        arg_completion: ReplCommandArgCompletion::FacetTarget,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Error,
@@ -132,6 +153,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         usage: ":error [full|summary]",
         summary: "Show or change error display mode",
         detail_help: &[],
+        arg_completion: ReplCommandArgCompletion::Fixed(&["full", "summary"]),
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Save,
@@ -139,6 +161,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         usage: ":save <path.eldr>",
         summary: "Save the current session as .eldr",
         detail_help: &[],
+        arg_completion: ReplCommandArgCompletion::SavePath,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Vars,
@@ -146,6 +169,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         usage: ":vars",
         summary: "List visible value bindings",
         detail_help: &[],
+        arg_completion: ReplCommandArgCompletion::None,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Imported,
@@ -153,6 +177,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         usage: ":imported",
         summary: "List imports active in the REPL scope",
         detail_help: &[],
+        arg_completion: ReplCommandArgCompletion::None,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Defs,
@@ -160,6 +185,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         usage: ":defs",
         summary: "List visible top-level REPL defs",
         detail_help: &[],
+        arg_completion: ReplCommandArgCompletion::None,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::History,
@@ -170,6 +196,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
             "Usage: :history [selector]",
             "Examples: :history, :history 3, :history 1, 3, 5, :history 2..4",
         ],
+        arg_completion: ReplCommandArgCompletion::HistorySelector,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Reload,
@@ -177,6 +204,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         usage: ":reload [all|defs]",
         summary: "Rebuild the REPL session from preload and defs",
         detail_help: &[],
+        arg_completion: ReplCommandArgCompletion::Fixed(&["all", "defs"]),
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Clear,
@@ -184,6 +212,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         usage: ":clear",
         summary: "Clear the screen when the host supports it",
         detail_help: &[],
+        arg_completion: ReplCommandArgCompletion::None,
     },
     ReplCommandSpec {
         kind: ReplCommandKind::ValueRecall,
@@ -191,11 +220,20 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         usage: ":v <line>",
         summary: "Recall a previous result",
         detail_help: &[],
+        arg_completion: ReplCommandArgCompletion::ResultLine,
     },
 ];
 
 pub fn repl_command_specs() -> &'static [ReplCommandSpec] {
     REPL_COMMAND_SPECS
+}
+
+pub fn repl_command_spec_for_alias(alias: &str) -> Option<ReplCommandSpec> {
+    let alias = alias.strip_prefix(':').unwrap_or(alias);
+    REPL_COMMAND_SPECS
+        .iter()
+        .find(|spec| spec.aliases.contains(&alias))
+        .copied()
 }
 
 pub fn repl_command_help_lines() -> Vec<String> {
