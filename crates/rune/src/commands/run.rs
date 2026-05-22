@@ -985,7 +985,7 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
                 "status": process.status,
                 "mailbox_len": process.mailbox_len,
                 "owner": process.owner,
-                "lazy_state_pending": process.lazy_state_pending,
+                "standby_state_pending": process.standby_state_pending,
                 "state_value": process.state_value,
                 "execution_context": process.execution_context.as_ref().map(|context| json!({
                     "pc": context.pc,

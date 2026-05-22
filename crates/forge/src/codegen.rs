@@ -1187,17 +1187,17 @@ fn init_state_ty(ret_ty: &Ty, lazy: bool, process_name: &str) -> Result<Ty, Code
         return Ok(ok_ty.clone());
     }
     match ok_ty {
-        Ty::Enum(name, args) if name == "ProcessInit" || name.ends_with("::ProcessInit") => {
+        Ty::Enum(name, args) if name == "StandbyInit" || name.ends_with("::StandbyInit") => {
             args.first().cloned().ok_or_else(|| CodegenError {
                 message: format!(
-                    "Lazy @init for process `{process_name}` must return Result<ProcessInit<State>>"
+                    "Standby @init for process `{process_name}` must return Result<StandbyInit<State>>"
                 ),
                 span: Span { start: 0, end: 0 },
             })
         }
         _ => Err(CodegenError {
             message: format!(
-                "Lazy @init for process `{process_name}` must return Result<ProcessInit<State>>"
+                "Standby @init for process `{process_name}` must return Result<StandbyInit<State>>"
             ),
             span: Span { start: 0, end: 0 },
         }),
@@ -1481,16 +1481,16 @@ fn build_runtime_process_specs(
                 ),
                 span: Span { start: 0, end: 0 },
             })?;
-        let _state_ty = init_state_ty(init_ret_ty, spec.spec.lazy, &spec.process_name)?;
+        let _state_ty = init_state_ty(init_ret_ty, spec.spec.standby, &spec.process_name)?;
         let state_type = runtime_type_ref_from_ast(&spec.spec.state);
         let result_type = runtime_type_ref(init_ret_ty);
-        let init_policy = if spec.spec.lazy {
-            RuntimeInitPolicy::Lazy
+        let init_policy = if spec.spec.standby {
+            RuntimeInitPolicy::Standby
         } else {
             RuntimeInitPolicy::Eager
         };
-        let result_shape = if spec.spec.lazy {
-            RuntimeInitResultShape::LazyProcessInit {
+        let result_shape = if spec.spec.standby {
+            RuntimeInitResultShape::StandbyProcessInit {
                 result_type: result_type.clone(),
             }
         } else {
@@ -2495,7 +2495,7 @@ mod tests {
                 state: AstTy::Named(span(0, 0), "Int".into()),
                 boot: false,
                 registry: false,
-                lazy: false,
+                standby: false,
                 handlers: Vec::new(),
                 handler_specs: Vec::<ProcessRuntimeHandlerSpec>::new(),
                 supervisor_policy: None,
@@ -10683,7 +10683,7 @@ mod process_runtime_v2_tests {
                 state: AstTy::Named(span(0, 0), "Int".to_string()),
                 boot: false,
                 registry: false,
-                lazy: false,
+                standby: false,
                 handlers: Vec::new(),
                 handler_specs: vec![
                     ProcessRuntimeHandlerSpec {
@@ -10736,7 +10736,7 @@ mod process_runtime_v2_tests {
                 state: AstTy::Named(span(0, 0), "Unit".to_string()),
                 boot: false,
                 registry: false,
-                lazy: false,
+                standby: false,
                 handlers: Vec::new(),
                 handler_specs: Vec::new(),
                 supervisor_policy: Some(supervisor_policy()),

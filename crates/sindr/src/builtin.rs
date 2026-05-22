@@ -730,17 +730,17 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "Pending",
         arity: 0,
-        sig_str: "() -> ProcessInit<$T>",
+        sig_str: "() -> StandbyInit<$T>",
     },
     BuiltinMeta {
         name: "PendingAfter",
         arity: 1,
-        sig_str: "(Duration) -> ProcessInit<$T>",
+        sig_str: "(Duration) -> StandbyInit<$T>",
     },
     BuiltinMeta {
         name: "Ready",
         arity: 1,
-        sig_str: "($T) -> ProcessInit<$T>",
+        sig_str: "($T) -> StandbyInit<$T>",
     },
     BuiltinMeta {
         name: "__task_call",
@@ -1129,7 +1129,7 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &["$T"],
     },
     BuiltinTypeMeta {
-        name: TypeName::ProcessInit.as_str(),
+        name: TypeName::StandbyInit.as_str(),
         params: &["$T"],
     },
     BuiltinTypeMeta {
@@ -1315,7 +1315,7 @@ mod tests {
         assert_eq!(BUILTIN_TYPE_HEAD_METAS.len(), BUILTIN_TYPE_METAS.len());
         assert!(BUILTIN_TYPE_HEAD_METAS
             .iter()
-            .any(|meta| meta.name == "ProcessInit"));
+            .any(|meta| meta.name == "StandbyInit"));
     }
 
     #[test]
@@ -1323,7 +1323,7 @@ mod tests {
         assert_eq!(builtin_function_metas()[0].name, "print");
         assert!(builtin_type_head_metas()
             .iter()
-            .any(|meta| meta.name == "ProcessInit"));
+            .any(|meta| meta.name == "StandbyInit"));
     }
 
     #[test]

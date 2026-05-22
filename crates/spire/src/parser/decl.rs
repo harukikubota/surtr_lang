@@ -54,7 +54,7 @@ impl AgentMeta {
             state: self.state,
             boot: self.boot,
             registry: self.registry,
-            lazy: self.lazy,
+            standby: self.lazy,
             handlers: self.handlers,
             handler_specs: Vec::new(),
             supervisor_policy: None,
@@ -146,7 +146,7 @@ enum AgentHandlerKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InitPolicy {
     Eager,
-    Lazy,
+    Standby,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3825,7 +3825,7 @@ impl Parser<'_> {
             state: AstTy::Named(span.clone(), "Unit".to_string()),
             boot: false,
             registry: true,
-            lazy: false,
+            standby: false,
             handlers: Vec::new(),
             handler_specs: Vec::new(),
             supervisor_policy: Some(supervisor_meta.policy),
@@ -4002,10 +4002,10 @@ impl Parser<'_> {
                     let (value, value_span) = self.expect_ident()?;
                     init_policy = Some(match value.as_str() {
                         "Eager" => InitPolicy::Eager,
-                        "Lazy" => InitPolicy::Lazy,
+                        "Standby" => InitPolicy::Standby,
                         _ => {
                             return Err(ParseError::syntax(
-                                "init_policy must be Eager or Lazy",
+                                "init_policy must be Eager or Standby",
                                 value_span,
                             ))
                         }
@@ -4210,7 +4210,7 @@ impl Parser<'_> {
                     state: process_meta.state,
                     boot: false,
                     registry: process_meta.instance == AgentInstance::Singleton,
-                    lazy: process_meta.init_policy == InitPolicy::Lazy,
+                    lazy: process_meta.init_policy == InitPolicy::Standby,
                     handlers: process_meta.handlers,
                 }
             }
@@ -4319,11 +4319,11 @@ impl Parser<'_> {
             start,
             end: end.end,
         };
-        if process_meta.init_policy == InitPolicy::Lazy
+        if process_meta.init_policy == InitPolicy::Standby
             && process_meta.instance != AgentInstance::Singleton
         {
             return Err(ParseError::syntax(
-                "init_policy: Lazy is only allowed for Singleton GenServer",
+                "init_policy: Standby is only allowed for Singleton GenServer",
                 span,
             ));
         }
@@ -4423,7 +4423,7 @@ impl Parser<'_> {
                 state: process_meta.state,
                 boot: false,
                 registry: process_meta.instance == AgentInstance::Singleton,
-                lazy: process_meta.init_policy == InitPolicy::Lazy,
+                standby: process_meta.init_policy == InitPolicy::Standby,
                 handlers: process_meta.handlers,
                 handler_specs: {
                     let mut specs = vec![ProcessRuntimeHandlerSpec {
@@ -4482,6 +4482,13 @@ impl Parser<'_> {
         set: Option<&AgentHandler>,
         span: Span,
     ) -> Result<(), ParseError> {
+        if meta.lazy && meta.instance != AgentInstance::Singleton {
+            return Err(ParseError::syntax(
+                "init_policy: Standby is only allowed for Singleton Agent",
+                span,
+            ));
+        }
+
         match meta.kind {
             AgentKind::ReadOnly => {
                 if set.is_some() {
@@ -4495,12 +4502,6 @@ impl Parser<'_> {
                 if set.is_none() {
                     return Err(ParseError::syntax(
                         "State agents must define an @set handler",
-                        span,
-                    ));
-                }
-                if meta.lazy && meta.instance != AgentInstance::Singleton {
-                    return Err(ParseError::syntax(
-                        "init_policy: Lazy is only allowed for Singleton Agent",
                         span,
                     ));
                 }

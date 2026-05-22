@@ -282,7 +282,7 @@ pub enum TypeName {
     Generator,
     Result,
     Duration,
-    ProcessInit,
+    StandbyInit,
     Lazy,
     TypeRef,
     Hole,
@@ -316,7 +316,7 @@ impl TypeName {
             Self::Generator => "Generator",
             Self::Result => "Result",
             Self::Duration => "Duration",
-            Self::ProcessInit => "ProcessInit",
+            Self::StandbyInit => "StandbyInit",
             Self::Lazy => "Lazy",
             Self::TypeRef => "TypeRef",
             Self::Hole => "Hole",
@@ -342,7 +342,7 @@ impl TypeName {
                 | Self::MatchArms
                 | Self::CondClauses
                 | Self::BulkUpdateEntries
-                | Self::ProcessInit
+                | Self::StandbyInit
                 | Self::Lazy
                 | Self::Pid
                 | Self::FileHandle
@@ -354,7 +354,7 @@ impl TypeName {
             Self::TypeRef => {
                 BuiltinTypeUsagePolicy::new(false, false, false, true, false, false, false, false)
             }
-            Self::ProcessInit => {
+            Self::StandbyInit => {
                 BuiltinTypeUsagePolicy::new(false, false, false, false, true, false, false, false)
             }
             Self::Lazy => BuiltinTypeUsagePolicy::lazy_signature_surface_only(),
@@ -394,7 +394,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "Generator" => Some(TypeName::Generator),
         "Result" => Some(TypeName::Result),
         "Duration" => Some(TypeName::Duration),
-        "ProcessInit" => Some(TypeName::ProcessInit),
+        "StandbyInit" => Some(TypeName::StandbyInit),
         "Lazy" => Some(TypeName::Lazy),
         "TypeRef" => Some(TypeName::TypeRef),
         "Hole" => Some(TypeName::Hole),
@@ -430,7 +430,7 @@ pub const fn canonical_builtin_type_has_surface_declaration(type_name: TypeName)
             | TypeName::HashMap
             | TypeName::Generator
             | TypeName::Result
-            | TypeName::ProcessInit
+            | TypeName::StandbyInit
             | TypeName::Lazy
             | TypeName::TypeRef
             | TypeName::Hole
@@ -481,7 +481,7 @@ pub fn reserved_owner_surface_name_constraint(
     }
 
     let type_name = builtin_type_name(surface_name)?;
-    if surface_name != TypeName::ProcessInit.as_str()
+    if surface_name != TypeName::StandbyInit.as_str()
         && canonical_builtin_type_has_surface_declaration(type_name)
     {
         return Some(ReservedOwnerSurfaceNameConstraint {
@@ -687,8 +687,8 @@ mod tests {
         );
 
         assert!(
-            reserved_owner_surface_name_constraint("ProcessInit").is_none(),
-            "ProcessInit owner remains allowed for runtime init lowering"
+            reserved_owner_surface_name_constraint("StandbyInit").is_none(),
+            "StandbyInit owner remains allowed for runtime init lowering"
         );
     }
 
@@ -706,7 +706,7 @@ mod tests {
         assert!(type_ref.type_ref_witness_allowed);
 
         let process_init =
-            builtin_type_usage_policy("ProcessInit").expect("ProcessInit should be known");
+            builtin_type_usage_policy("StandbyInit").expect("StandbyInit should be known");
         assert!(!process_init.type_annotation_allowed);
         assert!(process_init.process_boundary_allowed);
 

@@ -71,7 +71,7 @@ pub struct ProcessSpec {
     pub state: AstTy,
     pub boot: bool,
     pub registry: bool,
-    pub lazy: bool,
+    pub standby: bool,
     pub handlers: Vec<ProcessHandlerDependency>,
     pub handler_specs: Vec<ProcessRuntimeHandlerSpec>,
     #[serde(default)]

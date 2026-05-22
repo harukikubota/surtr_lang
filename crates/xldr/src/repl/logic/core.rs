@@ -3415,7 +3415,7 @@ impl ReplEngine {
                 | "Hole"
                 | "Lazy"
                 | "TypeRef"
-                | "ProcessInit"
+                | "StandbyInit"
                 | "Closure"
         )
     }

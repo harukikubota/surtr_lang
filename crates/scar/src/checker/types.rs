@@ -587,7 +587,7 @@ impl Checker {
                                 | TypeName::Generator
                                 | TypeName::Result
                                 | TypeName::Duration
-                                | TypeName::ProcessInit
+                                | TypeName::StandbyInit
                                 | TypeName::Lazy
                                 | TypeName::TypeRef
                                 | TypeName::Hole
@@ -686,16 +686,16 @@ impl Checker {
                         self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
                     Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
                 }
-                "ProcessInit" => {
+                "StandbyInit" => {
                     let args = self.require_type_arg_count(
                         span,
                         args,
                         1,
-                        "ProcessInit<T> requires exactly 1 type argument",
+                        "StandbyInit<T> requires exactly 1 type argument",
                     )?;
                     let inner_ty =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
-                    Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
+                    Ok(Ty::Enum("StandbyInit".into(), vec![inner_ty]))
                 }
                 "Facet" => {
                     let args = self.require_type_arg_count(
@@ -1111,12 +1111,12 @@ impl Checker {
                     )?;
                     Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
                 }
-                "ProcessInit" => {
+                "StandbyInit" => {
                     let args = self.require_type_arg_count(
                         span,
                         args,
                         1,
-                        "ProcessInit<T> requires exactly 1 type argument",
+                        "StandbyInit<T> requires exactly 1 type argument",
                     )?;
                     let inner_ty = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
@@ -1124,7 +1124,7 @@ impl Checker {
                         tyvars,
                         mode,
                     )?;
-                    Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
+                    Ok(Ty::Enum("StandbyInit".into(), vec![inner_ty]))
                 }
                 "Facet" => {
                     let args = self.require_type_arg_count(
@@ -2608,7 +2608,7 @@ mod tests {
             "String"
         ));
         assert!(!Checker::builtin_type_is_clause_block_surface_only(
-            "ProcessInit"
+            "StandbyInit"
         ));
         assert!(!Checker::builtin_type_is_clause_block_surface_only("Lazy"));
     }

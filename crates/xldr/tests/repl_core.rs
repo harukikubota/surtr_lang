@@ -524,8 +524,8 @@ fn core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation
     let process_init = surtr_analysis::complete_repl_prefix(
         surtr_analysis::CompletionRequest {
             index: &index,
-            source: "ProcessInit",
-            cursor: "ProcessInit".len(),
+            source: "StandbyInit",
+            cursor: "StandbyInit".len(),
         },
         surtr_analysis::CompletionScope::All,
     );
@@ -1193,7 +1193,7 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
         "Hole",
         "Lazy",
         "TypeRef",
-        "ProcessInit",
+        "StandbyInit",
         "Closure",
     ];
     for name in excluded {

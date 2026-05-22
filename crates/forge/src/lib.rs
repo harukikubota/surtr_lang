@@ -1651,17 +1651,17 @@ supervisor_init {
     }
 
     #[test]
-    fn codegen_typed_program_emits_v2_process_spec_for_lazy_process_init() {
+    fn codegen_typed_program_emits_v2_process_spec_for_standby_process_init() {
         let typed = typed_module_program_with_builtin_prelude(
-            r#"defgenserver LazyCache {
+            r#"defgenserver StandbyCache {
   meta {
     instance: Singleton
-    init_policy: Lazy
+    init_policy: Standby
     state: Int
   }
 
   @init
-  def init() -> Result<ProcessInit<Int>> {
+  def init() -> Result<StandbyInit<Int>> {
     Ok(Ready(0))
   }
 
@@ -1678,14 +1678,14 @@ supervisor_init {
             .runtime_process_specs
             .entries
             .iter()
-            .find(|entry| entry.type_name == "Global::LazyCache")
-            .expect("LazyCache runtime process spec");
-        assert_eq!(spec.type_name, "Global::LazyCache");
+            .find(|entry| entry.type_name == "Global::StandbyCache")
+            .expect("StandbyCache runtime process spec");
+        assert_eq!(spec.type_name, "Global::StandbyCache");
         assert_eq!(spec.state.state_type.name, "Int");
-        assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Lazy);
+        assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Standby);
         assert!(matches!(
             spec.init.result_shape,
-            sindr::ir::RuntimeInitResultShape::LazyProcessInit { .. }
+            sindr::ir::RuntimeInitResultShape::StandbyProcessInit { .. }
         ));
         assert_eq!(spec.dependencies.handlers.len(), 0);
         assert!(spec.lifecycle.owner.is_none());

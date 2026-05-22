@@ -1,2 +1,0 @@
-phase: parse
-contains: init_policy: Lazy is only allowed for Singleton Agent

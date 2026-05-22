@@ -1,7 +1,7 @@
 defagent Counter {
   meta {
     instance: Worker
-    init_policy: Lazy
+    init_policy: Standby
     state: Int
   }
 

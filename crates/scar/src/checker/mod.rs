@@ -59,10 +59,10 @@ mod process_boundary_policy_tests {
     #[test]
     fn process_boundary_only_type_query_uses_builtin_usage_policy() {
         assert!(Checker::builtin_type_is_process_boundary_only(
-            "ProcessInit"
+            "StandbyInit"
         ));
         assert!(Checker::builtin_type_is_process_boundary_only(
-            "Global::ProcessInit"
+            "Global::StandbyInit"
         ));
         assert!(!Checker::builtin_type_is_process_boundary_only("PID"));
         assert!(!Checker::builtin_type_is_process_boundary_only("String"));
@@ -2347,7 +2347,7 @@ impl Checker {
 
     fn is_lazy_init_function_symbol(&self, symbol: &str) -> bool {
         self.process_specs.iter().any(|spec| {
-            spec.spec.lazy
+            spec.spec.standby
                 && self
                     .function_ids_by_name
                     .get(symbol)
@@ -2582,11 +2582,11 @@ impl Checker {
                 Ty::Result(ok, _) => ok.as_ref().clone(),
                 other => other,
             };
-            let init_state_ty = if process.spec.lazy {
+            let init_state_ty = if process.spec.standby {
                 self.process_init_state_ty(&init_ok_ty)
                     .ok_or_else(|| TypeError {
                         message: format!(
-                            "Lazy @init for process `{}` must return Result<ProcessInit<State>>",
+                            "Standby @init for process `{}` must return Result<StandbyInit<State>>",
                             process.process_name
                         ),
                         span: Span { start: 0, end: 0 },
@@ -2595,7 +2595,8 @@ impl Checker {
             } else {
                 if self.ty_contains_process_init(&init_ok_ty) {
                     return Err(TypeError {
-                        message: "ProcessInit<T> is only allowed as Lazy @init return type".into(),
+                        message: "StandbyInit<T> is only allowed as Standby @init return type"
+                            .into(),
                         span: Span { start: 0, end: 0 },
                         hint: None,
                     });

@@ -5176,7 +5176,7 @@ defagent Counter {
                 crate::ast::ProcessInstance::Singleton
             );
             assert!(!process_spec.boot);
-            assert!(!process_spec.lazy);
+            assert!(!process_spec.standby);
             assert!(process_spec.registry);
 
             let pid_wrapper = body
@@ -5270,6 +5270,84 @@ fn test_defagent_parses_as_dedicated_process_ast_node() {
         }
         other => panic!("Expected Defagent, got {other:?}"),
     }
+}
+
+#[test]
+fn test_defagent_accepts_standby_init_policy() {
+    let ast = parse_with_context(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Standby
+    state: Int
+  }
+
+  @init
+  def init() -> Result<StandbyInit<Int>> { Ok(Ready(0)) }
+
+  @get
+  def fetch(state: Int, _field: String) -> Result<Int> { Ok(state) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect("standby singleton agent should parse");
+
+    match &ast[0] {
+        Ast::Defagent(_, _, _, process_spec, _) => {
+            assert!(process_spec.standby);
+        }
+        other => panic!("Expected Defagent, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_defagent_rejects_legacy_lazy_init_policy() {
+    let err = parse_with_context(
+        r#"defagent Counter {
+  meta {
+    instance: Singleton
+    init_policy: Lazy
+    state: Int
+  }
+
+  @init
+  def init() -> Result<StandbyInit<Int>> { Ok(Ready(0)) }
+
+  @get
+  def fetch(state: Int, _field: String) -> Result<Int> { Ok(state) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("legacy lazy init policy should be rejected");
+
+    assert!(err
+        .message()
+        .contains("init_policy must be Eager or Standby"));
+}
+
+#[test]
+fn test_defagent_rejects_standby_readonly_worker_agent() {
+    let err = parse_with_context(
+        r#"defagent CacheReader {
+  meta {
+    instance: Worker
+    init_policy: Standby
+    state: Int
+  }
+
+  @init
+  def init() -> Result<StandbyInit<Int>> { Ok(Ready(0)) }
+
+  @get
+  def fetch(state: Int) -> Result<Int> { Ok(state) }
+}"#,
+        ParserContext::module(1, None),
+    )
+    .expect_err("standby read-only worker agent should be rejected");
+
+    assert!(err
+        .message()
+        .contains("init_policy: Standby is only allowed for Singleton Agent"));
 }
 
 #[test]

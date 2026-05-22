@@ -665,7 +665,7 @@ impl Checker {
             )?;
             if self.ty_contains_process_init(&param_ty) {
                 return Err(TypeError {
-                    message: "ProcessInit<T> is only allowed as Lazy @init return type".into(),
+                    message: "StandbyInit<T> is only allowed as Standby @init return type".into(),
                     span: param.id.span.clone(),
                     hint: None,
                 });

@@ -1,9 +1,9 @@
 defstruct BoxedInit {
-  value: ProcessInit<Int>,
+  value: StandbyInit<Int>,
 }
 
 impl BoxedInit {
-  def new(value: ProcessInit<Int>) -> BoxedInit {
+  def new(value: StandbyInit<Int>) -> BoxedInit {
     BoxedInit { value: value }
   }
 }

@@ -1,0 +1,5 @@
+defmod Api {
+  def consume(value: StandbyInit<Int>) -> Int {
+    1
+  }
+}

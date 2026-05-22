@@ -286,7 +286,7 @@ pub struct VmProcessInstanceSnapshot {
     pub status: String,
     pub mailbox_len: usize,
     pub owner: Option<u64>,
-    pub lazy_state_pending: bool,
+    pub standby_state_pending: bool,
     pub state_value: Option<String>,
     pub execution_context: Option<VmExecutionContextSnapshot>,
 }
@@ -495,7 +495,7 @@ struct ProcessInstance {
     state_value: Option<Value>,
     owner: Option<u64>,
     lifecycle_sink: Option<LifecycleSink>,
-    lazy_state_pending: bool,
+    standby_state_pending: bool,
 }
 
 #[allow(dead_code)]
@@ -595,8 +595,8 @@ fn parse_handler_target_identity(identity: &str) -> (&str, Vec<(String, String)>
     (name, args)
 }
 
-fn runtime_spec_is_lazy(spec: &RuntimeProcessSpec) -> bool {
-    matches!(spec.init.policy, RuntimeInitPolicy::Lazy)
+fn runtime_spec_is_standby(spec: &RuntimeProcessSpec) -> bool {
+    matches!(spec.init.policy, RuntimeInitPolicy::Standby)
 }
 
 #[allow(dead_code)]
@@ -1826,6 +1826,52 @@ impl VM {
         RuntimeError::new(format!("process `{process_name}` failed to boot: {detail}"))
     }
 
+    fn with_vm_init_process_context(
+        mut err: RuntimeError,
+        process_name: &str,
+        init_policy: &str,
+        trigger: &str,
+    ) -> RuntimeError {
+        err.context.details.push("phase=VM::Init".into());
+        err.context
+            .details
+            .push(format!("process_name={process_name}"));
+        err.context
+            .details
+            .push(format!("init_policy={init_policy}"));
+        err.context.details.push(format!("trigger={trigger}"));
+        err
+    }
+
+    fn duration_millis(&self, value: &Value, context: &str) -> Result<u64, RuntimeError> {
+        let Value::Tagged { tag, fields } = value else {
+            return Err(RuntimeError::process_init_failed(format!(
+                "{context} expects Duration, got {value:?}"
+            )));
+        };
+        let Some(entry) = self.type_registry().lookup(*tag) else {
+            return Err(RuntimeError::process_init_failed(format!(
+                "{context} references unknown Duration tag {tag}"
+            )));
+        };
+        if !entry.name.ends_with("Duration") {
+            return Err(RuntimeError::process_init_failed(format!(
+                "{context} expects Duration, got {}",
+                entry.name
+            )));
+        }
+        let Some(Value::Int(ms)) = fields.first() else {
+            return Err(RuntimeError::process_init_failed(format!(
+                "{context} expects Duration milliseconds payload, got {fields:?}"
+            )));
+        };
+        ms.to_u64().ok_or_else(|| {
+            RuntimeError::process_init_failed(format!(
+                "{context} duration is out of range for u64 milliseconds: {ms}"
+            ))
+        })
+    }
+
     fn ensure_root_supervisor_booted(&mut self) -> Result<(), RuntimeError> {
         if self.process_runtime.root_supervisor.boot_completed {
             return Ok(());
@@ -1911,7 +1957,7 @@ impl VM {
                     .root_supervisor
                     .boot_failures
                     .insert(spec.type_name.clone(), detail.clone());
-                return Err(self.boot_failure_error(&spec.type_name, &detail));
+                return Err(err);
             }
         }
 
@@ -2015,44 +2061,100 @@ impl VM {
         }
 
         let init_started = Instant::now();
-        let init_result = self.invoke_callable_isolated_sync(
-            self.callable_for_function(spec.init.callable.fun_idx),
-            Vec::new(),
-        )?;
-        if let Some(timeout_ms) = timeout_ms {
+        let timeout_ms = timeout_ms.unwrap_or(
+            self.bytecode
+                .runtime_boot_plan
+                .runtime_limits
+                .default_init_timeout_ms,
+        );
+        let mut retry_ms = self
+            .bytecode
+            .runtime_boot_plan
+            .runtime_limits
+            .pending_initial_retry_ms;
+        let max_retry_ms = self
+            .bytecode
+            .runtime_boot_plan
+            .runtime_limits
+            .pending_max_retry_ms;
+        let init_policy = if runtime_spec_is_standby(&spec) {
+            "Standby"
+        } else {
+            "Eager"
+        };
+        let mut trigger = "boot";
+
+        let state = loop {
             if init_started.elapsed().as_millis() > u128::from(timeout_ms) {
                 let detail = format!("init timed out after {timeout_ms}ms");
                 self.process_runtime
                     .root_supervisor
                     .boot_failures
                     .insert(canonical_name.clone(), detail.clone());
-                return Err(self.boot_failure_error(process_name, &detail));
+                return Err(Self::with_vm_init_process_context(
+                    RuntimeError::process_init_timeout(format!(
+                        "process `{process_name}` failed to boot: {detail}"
+                    )),
+                    process_name,
+                    init_policy,
+                    trigger,
+                ));
             }
-        }
-        let state = match decode_vm_result(init_result, "__root_boot", "init")? {
-            Ok(value) if runtime_spec_is_lazy(&spec) => match decode_process_init(value)? {
-                ProcessInitOutcome::Ready(state) => state,
-                ProcessInitOutcome::Pending | ProcessInitOutcome::PendingAfter(_) => {
-                    let detail = "lazy init remained pending during boot".to_string();
+
+            let init_result = self
+                .invoke_callable_isolated_sync(
+                    self.callable_for_function(spec.init.callable.fun_idx),
+                    Vec::new(),
+                )
+                .map_err(|err| {
+                    Self::with_vm_init_process_context(err, process_name, init_policy, trigger)
+                })?;
+            match decode_vm_result(init_result, "__root_boot", "init").map_err(|err| {
+                Self::with_vm_init_process_context(err, process_name, init_policy, trigger)
+            })? {
+                Ok(value) if runtime_spec_is_standby(&spec) => {
+                    match decode_standby_init(value).map_err(|err| {
+                        Self::with_vm_init_process_context(err, process_name, init_policy, trigger)
+                    })? {
+                        StandbyInitOutcome::Ready(state) => break state,
+                        StandbyInitOutcome::Pending => {
+                            let sleep_ms = retry_ms.min(max_retry_ms).min(timeout_ms);
+                            retry_ms = retry_ms.saturating_mul(2).min(max_retry_ms);
+                            std::thread::sleep(Duration::from_millis(sleep_ms));
+                            trigger = "standby_retry";
+                        }
+                        StandbyInitOutcome::PendingAfter(duration) => {
+                            let requested_ms = self
+                                .duration_millis(&duration, "StandbyInit::PendingAfter")
+                                .map_err(|err| {
+                                    Self::with_vm_init_process_context(
+                                        err,
+                                        process_name,
+                                        init_policy,
+                                        trigger,
+                                    )
+                                })?;
+                            std::thread::sleep(Duration::from_millis(requested_ms.min(timeout_ms)));
+                            trigger = "standby_retry";
+                        }
+                    }
+                }
+                Ok(state) => break state,
+                Err(err) => {
+                    let detail = err.visible_message().to_string();
                     self.process_runtime
                         .root_supervisor
                         .boot_failures
                         .insert(canonical_name.clone(), detail.clone());
-                    return Err(RuntimeError::process_init_timeout(format!(
-                        "process `{process_name}` failed to boot: {detail}"
-                    )));
+                    return Err(Self::with_vm_init_process_context(
+                        RuntimeError::process_init_failed(format!(
+                            "process `{process_name}` failed to boot: {detail}"
+                        )),
+                        process_name,
+                        init_policy,
+                        trigger,
+                    ));
                 }
-            },
-            Ok(state) => state,
-            Err(err) => {
-                let detail = err.visible_message().to_string();
-                self.process_runtime
-                    .root_supervisor
-                    .boot_failures
-                    .insert(canonical_name.clone(), detail.clone());
-                return Err(RuntimeError::process_init_failed(format!(
-                    "process `{process_name}` failed to boot: {detail}"
-                )));
             }
         };
 
@@ -2061,46 +2163,6 @@ impl VM {
             .singleton_by_name
             .insert(canonical_name, pid);
         Ok(pid)
-    }
-
-    fn materialize_lazy_process_state(&mut self, pid: u64) -> Result<Option<Value>, RuntimeError> {
-        let Some(entry) = self.process_runtime.processes.get(&pid).cloned() else {
-            return Err(RuntimeError::new(format!(
-                "process {} disappeared while materializing state",
-                pid
-            )));
-        };
-
-        if !entry.lazy_state_pending {
-            return Ok(entry.state_value);
-        }
-
-        let Some(spec) = self.process_runtime.spec_for_id(entry.spec_id).cloned() else {
-            return Err(RuntimeError::new(format!(
-                "process {} references unknown spec {}",
-                pid, entry.spec_id
-            )));
-        };
-
-        let init_result = self.invoke_callable_isolated_sync(
-            self.callable_for_function(spec.init.callable.fun_idx),
-            Vec::new(),
-        )?;
-        let state = match decode_vm_result(init_result, "__process_state", "init")? {
-            Ok(state) => state,
-            Err(err) => return Ok(Some(err_vm_result(err))),
-        };
-
-        let Some(entry) = self.process_runtime.processes.get_mut(&pid) else {
-            return Err(RuntimeError::new(format!(
-                "process {} disappeared after lazy init",
-                pid
-            )));
-        };
-        entry.state_value = Some(state.clone());
-        entry.lazy_state_pending = false;
-        entry.status = ProcessStatus::Runnable;
-        Ok(Some(ok_vm_result(state)))
     }
 
     pub(crate) fn process_singleton_pid(
@@ -2582,10 +2644,11 @@ impl VM {
         if let Some(state) = entry.state_value.clone() {
             return Ok(ok_vm_result(state));
         }
-        if entry.lazy_state_pending {
-            return self
-                .materialize_lazy_process_state(pid.id)?
-                .ok_or_else(|| RuntimeError::new(format!("lazy process {} lost state", pid.id)));
+        if entry.standby_state_pending {
+            return Err(RuntimeError::process_init_failed(format!(
+                "standby process {} reached runtime before init completed",
+                pid.id
+            )));
         }
         Ok(err_vm_result(self.process_error(
             "ProcessStateUnavailable",
@@ -2632,7 +2695,7 @@ impl VM {
             )));
         };
         entry.state_value = Some(next_state);
-        entry.lazy_state_pending = false;
+        entry.standby_state_pending = false;
         Ok(ok_vm_result(Value::Unit))
     }
 
@@ -2856,7 +2919,7 @@ impl VM {
             entry.mailbox.clear();
             entry.execution_context = None;
             entry.state_value = None;
-            entry.lazy_state_pending = false;
+            entry.standby_state_pending = false;
         }
         resumed
     }
@@ -3215,10 +3278,10 @@ impl VM {
         };
         let pid = self.process_runtime.next_pid;
         self.process_runtime.next_pid += 1;
-        let lazy_state_pending = self
+        let standby_state_pending = self
             .process_runtime
             .spec_for_id(spec_id)
-            .is_some_and(runtime_spec_is_lazy)
+            .is_some_and(runtime_spec_is_standby)
             && state.is_none();
         self.process_runtime.processes.insert(
             pid,
@@ -3231,7 +3294,7 @@ impl VM {
                 state_value: state,
                 owner,
                 lifecycle_sink,
-                lazy_state_pending,
+                standby_state_pending,
             },
         );
         Ok(pid)
@@ -3481,7 +3544,7 @@ impl VM {
                         status: process.status.label().into(),
                         mailbox_len: process.mailbox.len(),
                         owner: process.owner,
-                        lazy_state_pending: process.lazy_state_pending,
+                        standby_state_pending: process.standby_state_pending,
                         state_value: process
                             .state_value
                             .as_ref()
@@ -7062,31 +7125,31 @@ fn decode_ok_pid_result(value: Value) -> Option<PidHandle> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ProcessInitOutcome {
+enum StandbyInitOutcome {
     Pending,
     PendingAfter(Value),
     Ready(Value),
 }
 
-fn decode_process_init(value: Value) -> Result<ProcessInitOutcome, RuntimeError> {
+fn decode_standby_init(value: Value) -> Result<StandbyInitOutcome, RuntimeError> {
     match value {
-        Value::Tagged { tag: 0, fields } if fields.is_empty() => Ok(ProcessInitOutcome::Pending),
+        Value::Tagged { tag: 0, fields } if fields.is_empty() => Ok(StandbyInitOutcome::Pending),
         Value::Tagged { tag: 1, fields } => match fields.as_slice() {
-            [duration] => Ok(ProcessInitOutcome::PendingAfter(duration.clone())),
+            [duration] => Ok(StandbyInitOutcome::PendingAfter(duration.clone())),
             other => Err(RuntimeError::process_init_failed(format!(
-                "ProcessInit::PendingAfter expects one Duration field, got {}",
+                "StandbyInit::PendingAfter expects one Duration field, got {}",
                 other.len()
             ))),
         },
         Value::Tagged { tag: 2, fields } => match fields.as_slice() {
-            [state] => Ok(ProcessInitOutcome::Ready(state.clone())),
+            [state] => Ok(StandbyInitOutcome::Ready(state.clone())),
             other => Err(RuntimeError::process_init_failed(format!(
-                "ProcessInit::Ready expects one state field, got {}",
+                "StandbyInit::Ready expects one state field, got {}",
                 other.len()
             ))),
         },
         other => Err(RuntimeError::process_init_failed(format!(
-            "lazy init expects ProcessInit value, got {:?}",
+            "standby init expects StandbyInit value, got {:?}",
             other
         ))),
     }
@@ -7112,6 +7175,7 @@ mod tests {
         ProcessRunOutcome, ProcessStatus, ProcessWaitReason, RuntimeOutputEvent, StepOutcome,
         TaskMode, VmFileError, VmFileMode, VmObservationOptions, VmRuntimeOutputEventSnapshot, VM,
     };
+    use crate::error::RuntimeErrorKind;
     use sindr::ir::{
         BootEntrySource, Bytecode, BytecodeChunk, CallableTemplate, CallableTemplateArg,
         CallableTemplateComposeFlavor, CallableTemplateDirectTarget, CallableTemplateKind,
@@ -7167,7 +7231,7 @@ mod tests {
         let state_type = RuntimeTypeRef { name: "Int".into() };
         let result_type = RuntimeTypeRef {
             name: if lazy {
-                "Result<ProcessInit<Int>, Error>".into()
+                "Result<StandbyInit<Int>, Error>".into()
             } else {
                 "Result<Int, Error>".into()
             },
@@ -7218,12 +7282,12 @@ mod tests {
                     fun_idx: init_fun_idx,
                 },
                 policy: if lazy {
-                    RuntimeInitPolicy::Lazy
+                    RuntimeInitPolicy::Standby
                 } else {
                     RuntimeInitPolicy::Eager
                 },
                 result_shape: if lazy {
-                    RuntimeInitResultShape::LazyProcessInit {
+                    RuntimeInitResultShape::StandbyProcessInit {
                         result_type: result_type.clone(),
                     }
                 } else {
@@ -8294,7 +8358,7 @@ mod tests {
         assert!(instance.execution_context.is_none());
         assert_eq!(instance.state_value, Some(Value::Int(int(41))));
         assert_eq!(instance.owner, None);
-        assert!(!instance.lazy_state_pending);
+        assert!(!instance.standby_state_pending);
     }
 
     #[test]
@@ -9408,7 +9472,7 @@ mod tests {
             .get(&pid)
             .expect("booted singleton process should exist");
         assert_eq!(instance.state_value, Some(Value::Int(int(41))));
-        assert!(!instance.lazy_state_pending);
+        assert!(!instance.standby_state_pending);
     }
 
     #[test]
@@ -9502,7 +9566,7 @@ mod tests {
     }
 
     #[test]
-    fn lazy_singleton_decodes_ready_state_during_boot() {
+    fn standby_singleton_decodes_ready_state_during_boot() {
         let bytecode = singleton_boot_bytecode(
             "Env",
             RuntimeProcessKind::Agent,
@@ -9539,7 +9603,50 @@ mod tests {
             .get(&pid)
             .expect("lazy singleton process should exist after boot");
         assert_eq!(instance.state_value, Some(Value::Str("ready".into())));
-        assert!(!instance.lazy_state_pending);
+        assert!(!instance.standby_state_pending);
+    }
+
+    #[test]
+    fn standby_singleton_pending_times_out_during_boot() {
+        let mut bytecode = singleton_boot_bytecode(
+            "Env",
+            RuntimeProcessKind::Agent,
+            true,
+            true,
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 0 },
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            vec![Constant::Tag(0), Constant::Tag(0)],
+        );
+        bytecode.runtime_boot_plan.singletons[0].init_timeout_ms = 1;
+        bytecode
+            .runtime_boot_plan
+            .runtime_limits
+            .pending_initial_retry_ms = 1;
+        bytecode
+            .runtime_boot_plan
+            .runtime_limits
+            .pending_max_retry_ms = 1;
+        let mut vm = VM::new(bytecode);
+
+        let err = vm
+            .ensure_root_supervisor_booted()
+            .expect_err("pending standby singleton should time out during VM init");
+
+        assert_eq!(err.kind(), RuntimeErrorKind::ProcessInitTimeout);
+        assert!(err.message.contains("Env"));
+        assert!(err.context.details.contains(&"phase=VM::Init".into()));
+        assert!(err.context.details.contains(&"process_name=Env".into()));
+        assert!(err.context.details.contains(&"init_policy=Standby".into()));
+        assert!(err
+            .context
+            .details
+            .contains(&"trigger=standby_retry".into()));
+        assert!(!vm.process_runtime.singleton_by_name.contains_key("Env"));
     }
 
     #[test]
@@ -9571,6 +9678,10 @@ mod tests {
             .expect_err("boot should fail");
         assert!(err.message.contains("Broken"));
         assert!(err.message.contains("bad boot"));
+        assert!(err.context.details.contains(&"phase=VM::Init".into()));
+        assert!(err.context.details.contains(&"process_name=Broken".into()));
+        assert!(err.context.details.contains(&"init_policy=Eager".into()));
+        assert!(err.context.details.contains(&"trigger=boot".into()));
         assert!(!vm.process_runtime.singleton_by_name.contains_key("Broken"));
         assert_eq!(
             vm.process_runtime

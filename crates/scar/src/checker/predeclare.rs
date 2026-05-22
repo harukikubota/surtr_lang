@@ -310,7 +310,7 @@ impl Checker {
                             if self.ty_contains_process_init(&field_ty) {
                                 return Err(TypeError {
                                     message:
-                                        "ProcessInit<T> is only allowed as Lazy @init return type"
+                                        "StandbyInit<T> is only allowed as Standby @init return type"
                                             .into(),
                                     span: f.span.clone(),
                                     hint: None,
@@ -363,7 +363,7 @@ impl Checker {
                             if self.ty_contains_process_init(&field_ty) {
                                 return Err(TypeError {
                                     message:
-                                        "ProcessInit<T> is only allowed as Lazy @init return type"
+                                        "StandbyInit<T> is only allowed as Standby @init return type"
                                             .into(),
                                     span: f.span.clone(),
                                     hint: None,
@@ -503,7 +503,7 @@ impl Checker {
                                 if self.ty_contains_process_init(&payload_ty) {
                                     return Err(TypeError {
                                         message:
-                                            "ProcessInit<T> is only allowed as Lazy @init return type"
+                                            "StandbyInit<T> is only allowed as Standby @init return type"
                                                 .into(),
                                         span: Self::ast_ty_span(ty).clone(),
                                         hint: None,
@@ -1938,7 +1938,7 @@ impl Checker {
                         && !self.is_lazy_init_function_symbol(function_symbol)
                     {
                         return Err(TypeError {
-                            message: "ProcessInit<T> is only allowed as Lazy @init return type"
+                            message: "StandbyInit<T> is only allowed as Standby @init return type"
                                 .into(),
                             span: ret_ty
                                 .as_ref()
@@ -2143,7 +2143,7 @@ mod policy_tests {
             "TypeRef"
         ));
         assert!(!Checker::builtin_type_has_public_trait_target_surface(
-            "ProcessInit"
+            "StandbyInit"
         ));
     }
 }

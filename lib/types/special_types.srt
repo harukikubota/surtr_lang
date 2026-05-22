@@ -72,20 +72,20 @@ types.
 
 @doc """
 Compiler-reserved process initialization protocol marker.
-`ProcessInit<$T>` may only appear as the successful value inside a Lazy process
-`@init` return type: `Result<ProcessInit<State>>`.
+`StandbyInit<$T>` may only appear as the successful value inside a Standby process
+`@init` return type: `Result<StandbyInit<State>>`.
 It is not an ordinary public API or data transport type.
 """
-@builtin type ProcessInit<$T>
+@builtin type StandbyInit<$T>
 
 @hidden
-@builtin def Pending() -> ProcessInit<$T>
+@builtin def Pending() -> StandbyInit<$T>
 
 @hidden
-@builtin def PendingAfter(duration: Duration) -> ProcessInit<$T>
+@builtin def PendingAfter(duration: Duration) -> StandbyInit<$T>
 
 @hidden
-@builtin def Ready(value: $T) -> ProcessInit<$T>
+@builtin def Ready(value: $T) -> StandbyInit<$T>
 
 impl Show for Unit {
   @doc """
