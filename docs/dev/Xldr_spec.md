@@ -75,7 +75,7 @@ aggregate であり、Eldr の runtime append policy とは別責務である。
 - セッション開始時に標準 definition source を `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test]` の順で読み込む
 - この標準ロード順と stage 分割の実装正本は [crates/xldr/src/loader.rs](/Users/haruca/work/rust/surtr/crates/xldr/src/loader.rs:137) の `STDLIB_MODULE_SPECS` とし、本書の列挙はその要約として扱う
 - `Bootstrap` source は auto-import アンカーとして先頭に置き、標準 concrete error もここで登録する
-- `SpecialTypes` source では `Unit`, `TypeRef<$T>`, `Hole`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ProcessInit<$T>` の canonical builtin type head を登録する
+- `SpecialTypes` source では `Unit`, `TypeRef<$T>`, `Hole`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `StandbyInit<$T>` の canonical builtin type head を登録する
 - `Kernel` source では `defmod Kernel` 配下の cross-cutting builtin を登録する
 - 各 type file の top-level では対応する canonical builtin type head を登録する
 - 現行実装の事前ロードファイルは `lib/bootstrap.srt` の後に、`lib/types/special_types.srt`, `lib/function.srt`, `lib/kernel.srt`, `lib/traits/operator/*.srt`, `lib/traits/*.srt`, type modules, `lib/facet.srt`, `lib/Config.srt`, `lib/Project.srt`, `lib/Random.srt`, `lib/file.srt`, `lib/FileSystem.srt`, `lib/IO.srt`, `lib/Shell.srt`, `lib/styled_doc.srt`, `lib/test.srt` を同一段として読み込む

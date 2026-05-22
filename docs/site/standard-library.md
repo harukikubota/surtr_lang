@@ -57,7 +57,7 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 ### `SpecialTypes`
 
 - `special_types.srt` に compiler-special builtin type を集約する
-- 現在は `Unit`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ProcessInit<$T>`, `TypeRef<$T>`, `Hole` をここへ置く
+- 現在は `Unit`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `StandbyInit<$T>`, `TypeRef<$T>`, `Hole` をここへ置く
 - `defmod` は持たず、top-level canonical type declaration だけを持つ
 - user-facing な振る舞いは各 trait / callable / module surface 側から現れる
 

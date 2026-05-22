@@ -131,7 +131,7 @@ VM 側の責務は次の通り。
 - `RuntimeProcessSpec` に基づく process instance / singleton slot の管理
 - `RuntimeBootPlan` に基づく standard singleton と user singleton の boot
 - `RuntimeHandlerSpec` に基づく Agent / GenServer / Supervisor / Task handler dispatch
-- Lazy init の retry、deadline、Ready 待ち caller の管理
+- Standby init の retry、deadline、Ready 待ち caller の管理
 - `Process::sleep`、Task、call timeout の scheduler-backed waiting / wakeup
 - process-local handler dependency (`ctx.<slot>`) の runtime context 解決
 - `StdIn` / `StdOut` / `StdErr` builtin handler と handler override の適用

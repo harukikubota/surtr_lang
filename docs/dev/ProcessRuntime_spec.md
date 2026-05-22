@@ -38,7 +38,7 @@
 | boundary layer 本実装 | process 基盤安定後の課題 |
 | Task.Supervisor | 初期フェーズでは対象外 |
 | Task と DynamicSupervisor の link | 初期フェーズでは対象外 |
-| Worker lazy init | 後回し。非同期 call API で吸収予定 |
+| Worker standby init | 後回し。非同期 call API で吸収予定 |
 
 ---
 
@@ -56,7 +56,7 @@
 | Agent kind | metadata の `kind` 明示 | `@set` の有無から導出 |
 | boot / registry / lazy | process 定義 metadata に混在 | `init_policy` は定義側、起動対象・timeout・override は Boot / supervisor 側。`boot: Required` などの policy 指定は使わない |
 | VM 入力 | Agent lowering 由来の metadata | immutable `RuntimeProcessSpec` + `RuntimeBootPlan` |
-| Lazy | 初回 state access で materialize する実装がある | VM boot 時に process instance を起動し、Ready まで scheduler 管理 |
+| Standby | 初回 state access で materialize する実装がある | VM boot 時に process instance を起動し、Ready まで scheduler 管理 |
 | Process state | hidden builtin `__process_state` がある | `meta { state: StateTy }` で process state を宣言する |
 | GenServer | 未実装 | `defgenserver` / `@call` / `@cast` を追加 |
 | Supervisor | Root 足場中心 | Root / Runtime / Dynamic の概念を spec / runtime に反映 |
@@ -74,12 +74,12 @@
 
 | 入力範囲 | 変わる仕様 |
 |---|---|
-| parser / AST | `meta {}`、`meta.state`、`meta.handlers`、`ctx.<slot>`、`supervisor_init`、`defgenserver`、`ProcessInit<T>` の出現制限を扱う |
-| semantic check | Agent kind 導出、process state 契約一致、Lazy 許可 kind 検査、Boot timeout 範囲検査、handler capability / override 検査を行う |
+| parser / AST | `meta {}`、`meta.state`、`meta.handlers`、`ctx.<slot>`、`supervisor_init`、`defgenserver`、`StandbyInit<T>` の出現制限を扱う |
+| semantic check | Agent kind 導出、process state 契約一致、Standby 許可 kind 検査、Boot timeout 範囲検査、handler capability / override 検査を行う |
 | IR / runtime metadata | `RuntimeProcessSpec`、`RuntimeHandlerSpec`、`RuntimeInitSpec`、`RuntimeBootPlan` へ正規化する |
 | codegen | surface syntax ではなく、正規化済み spec と dispatch 情報を VM に渡す |
 | VM / scheduler | `Initializing`、`Ready`、`Waiting`、`deadline_queue`、`waiting_table`、`init_waiters`、process context の handler slot を扱う |
-| standard library | `ProcessInit<T>`、`TimeOutError`、`Process::sleep`、`Task::async`、singleton PID API、`InHandler` / `OutHandler` capability を整理する |
+| standard library | `StandbyInit<T>`、`TimeOutError`、`Process::sleep`、`Task::async`、singleton PID API、`InHandler` / `OutHandler` capability を整理する |
 | diagnostics | 定義、Boot、呼び出し、VM spec 境界の各エラーを分ける |
 
 ---
@@ -118,7 +118,7 @@ defagent Counter {
 | key | 意味 |
 |---|---|
 | `instance` | `Singleton` または `Worker` |
-| `init_policy` | `Eager` または `Lazy` |
+| `init_policy` | `Eager` または `Standby` |
 | `state` | process handler が扱う state 型。primitive / container / user-defined のいずれも明記必須 |
 | `handlers` | process-local readonly handler dependency と default target |
 
@@ -140,16 +140,16 @@ defagent Counter {
 | policy | `@init` 戻り値 | 意味 |
 |---|---|---|
 | `Eager` | `Result<State>` | 1 回の init 実行で state を確定する |
-| `Lazy` | `Result<ProcessInit<State>>` | Ready まで scheduler 管理で init を再実行する |
+| `Standby` | `Result<StandbyInit<State>>` | Ready まで scheduler 管理で init を再実行する |
 
-`Lazy` は Rust の lazy loading のような初回参照時 materialize ではない。VM boot 時に process instance / PID / singleton slot は確保される。state value は `ProcessInit::Ready(state)` が返るまで未確定である。
+`Standby` は Rust の lazy loading のような初回参照時 materialize ではない。VM boot 時に process instance / PID / singleton slot は確保される。state value は `StandbyInit::Ready(state)` が返るまで未確定である。
 
-### 3.4 `ProcessInit<T>`
+### 3.4 `StandbyInit<T>`
 
-`Lazy` の `@init` だけが runtime protocol として `ProcessInit<T>` を返せる。
+`Standby` の `@init` だけが runtime protocol として `StandbyInit<T>` を返せる。
 
 ```surtr
-defenum ProcessInit<T> {
+defenum StandbyInit<T> {
   Pending,
   PendingAfter(Duration),
   Ready(T),
@@ -162,9 +162,9 @@ defenum ProcessInit<T> {
 | `PendingAfter(Duration)` | 指定 duration 後に同じ init route を再実行 |
 | `Ready(T)` | 初期化完了。`T` を live state として設定 |
 
-`ProcessInit<T>` は Lazy `@init` の戻り値以外に出現してはならない。
+`StandbyInit<T>` は Standby `@init` の戻り値以外に出現してはならない。
 
-### 3.5 Lazy retry policy
+### 3.5 Standby retry policy
 
 `Pending` の runtime default retry policy は次の暫定値とする。
 
@@ -200,13 +200,13 @@ BootPlan の init timeout は、process 起動から `Ready(state)` 到達まで
 
 Boot timeout 超過は `RuntimeError::ProcessInitTimeout` とする。
 
-Lazy `@init` が `Err(error)` を返した場合は、ユーザによる回復対象にしない。`RuntimeError::ProcessInitFailed` として扱う。これは VM 実装バグではなく、process init failure を表す runtime error である。
+Standby `@init` が `Err(error)` を返した場合は、ユーザによる回復対象にしない。`RuntimeError::ProcessInitFailed` として扱う。これは VM 実装バグではなく、process init failure を表す runtime error である。
 
-### 3.7 Lazy 許可範囲
+### 3.7 Standby 許可範囲
 
-`init_policy: Lazy` を許可する範囲は次に限定する。
+`init_policy: Standby` を許可する範囲は次に限定する。
 
-| process | Lazy |
+| process | Standby |
 |---|---|
 | Singleton Agent | 許可 |
 | Singleton GenServer | 許可 |
@@ -217,7 +217,7 @@ Lazy `@init` が `Err(error)` を返した場合は、ユーザによる回復�
 | DynamicSupervisor | 禁止 |
 | Task | 禁止 |
 
-Supervisor は state を持たないため Lazy init の概念を持たない。Worker の Lazy は将来課題とし、当面は同期 API 実装を優先する。
+Supervisor は state を持たないため Standby init の概念を持たない。Worker の Standby は将来課題とし、当面は同期 API 実装を優先する。
 
 ### 3.8 process state declaration
 
@@ -339,7 +339,7 @@ _ = Counter::set(1)
 
 `@set` の `Err` では state を更新しない。外部 surface の戻り値は `Result<()>` とする。
 
-Lazy Agent:
+Standby Agent:
 
 ```surtr
 defstruct CacheState {
@@ -349,17 +349,17 @@ defstruct CacheState {
 defagent CacheClient {
   meta {
     instance: Singleton
-    init_policy: Lazy
+    init_policy: Standby
     state: CacheState
   }
 
   @init
-  def init() -> Result<ProcessInit<CacheState>> {
+  def init() -> Result<StandbyInit<CacheState>> {
     if(CacheService::ready?()) {
       client = CacheService::connect()
-      Ok(ProcessInit::Ready(CacheState { client: client }))
+      Ok(StandbyInit::Ready(CacheState { client: client }))
     } else {
-      Ok(ProcessInit::PendingAfter(100ms))
+      Ok(StandbyInit::PendingAfter(100ms))
     }
   }
 
@@ -473,7 +473,7 @@ Handler 契約:
 |---|---|---|
 | singleton `pid` | hidden lower helper | `Type::pid() -> PID<Type>` |
 | `@init` Eager | `(...) -> Result<State>` | なし |
-| `@init` Lazy | `(...) -> Result<ProcessInit<State>>` | なし |
+| `@init` Standby | `(...) -> Result<StandbyInit<State>>` | なし |
 | `@call` | `(State, Input...) -> Result<CallResult<Reply, State>>` | `Type::name(...Input) -> Result<Reply>` |
 | `@cast` | `(State, Input...) -> Result<CastResult<State>>` | `Type::name(...Input) -> Result<()>` |
 
@@ -515,11 +515,11 @@ Supervisor は次の層で整理する。
 | RuntimeSupervisor | singleton 群、standard singleton、runtime / bridge singleton を管理 |
 | DynamicSupervisor | 動的に増減する worker を管理。restart / cleanup を行う |
 
-初期フェーズでは、restart policy の主対象は Worker とする。Lazy singleton と worker restart は分離する。
+初期フェーズでは、restart policy の主対象は Worker とする。Standby singleton と worker restart は分離する。
 
 ```text
 restart = Worker lifecycle の話
-Lazy singleton = init 完了保証の話
+Standby singleton = init 完了保証の話
 ```
 
 DynamicSupervisor は singleton process として扱い、user-facing API に `sup: PID<_>` を出さない。
@@ -874,7 +874,7 @@ supervisor 親は固定で、DSL `parent` override は受理しない。
 | プロセス呼び出しあり、かつ available singleton に含まれない | compile-time singleton 利用検査で error |
 | custom supervisor surface 呼び出しあり、かつ登録なし | compile-time supervisor surface 依存検査で error |
 
-`init_policy` は定義側にあるため、Boot 側は Lazy の採否を決めない。Boot 側は起動対象、timeout、handler override、supervisor policy override を指定する。
+`init_policy` は定義側にあるため、Boot 側は Standby の採否を決めない。Boot 側は起動対象、timeout、handler override、supervisor policy override を指定する。
 
 ### 3.18 I/O handler dependency
 
@@ -1166,7 +1166,7 @@ struct RuntimeInitSpec {
 ```rust
 enum InitPolicy {
     Eager,
-    Lazy,
+    Standby,
 }
 ```
 
@@ -1175,8 +1175,8 @@ enum InitResultShape {
     EagerState {
         result_type: TypeRef, // Result<State>
     },
-    LazyProcessInit {
-        result_type: TypeRef, // Result<ProcessInit<State>>
+    StandbyProcessInit {
+        result_type: TypeRef, // Result<StandbyInit<State>>
     },
 }
 ```
@@ -1189,10 +1189,10 @@ match init_spec.policy {
         // Ok(state) -> Ready(state)
         // Err(error) -> RuntimeError::ProcessInitFailed
     }
-    InitPolicy::Lazy => {
-        // Ok(ProcessInit::Ready(state)) -> Ready(state)
-        // Ok(ProcessInit::Pending) -> retry by runtime default policy
-        // Ok(ProcessInit::PendingAfter(d)) -> retry after d
+    InitPolicy::Standby => {
+        // Ok(StandbyInit::Ready(state)) -> Ready(state)
+        // Ok(StandbyInit::Pending) -> retry by runtime default policy
+        // Ok(StandbyInit::PendingAfter(d)) -> retry after d
         // Err(error) -> RuntimeError::ProcessInitFailed
     }
 }
@@ -1424,14 +1424,14 @@ enum ProcessRunOutcome {
 などの意味づけは process runtime 側の table / status に保持し、VM engine は
 surface DSL や supervisor boot state を `ExecutionContext` へ持ち込まない。
 
-### 4.14 Lazy Ready 前 call の扱い
+### 4.14 Standby Ready 前 call の扱い
 
-Lazy singleton が Ready になる前に到着した message call は、通常 mailbox ではなく `init_waiters` に FIFO で保存する。
+Standby singleton が Ready になる前に到着した message call は、通常 mailbox ではなく `init_waiters` に FIFO で保存する。
 
 Ready 到達時の処理:
 
 ```text
-1. Lazy init が Ready(state) を返す
+1. Standby init が Ready(state) を返す
 2. runtime が state slot に state をセットする
 3. process status を Ready に変更する
 4. init_waiters を到着順に通常 mailbox の front 側へ移す
@@ -1481,8 +1481,8 @@ runtime global state であり、process-local `ExecutionContext` には入れ�
 | `meta` | `@agent(...)` を使っている | `process-meta-deprecated` | `@agent(...)` metadata is no longer supported. | Use `meta { instance, init_policy, state }` inside the process definition. |
 | `meta` | `boot` を定義側に置いた | `process-meta-boot-not-allowed` | boot settings must be declared in `supervisor_init`. | Move boot policy and timeout to Boot configuration. |
 | `meta` | `registry` を定義側に置いた | `process-meta-registry-not-allowed` | registry settings are runtime / boot concerns. | Remove registry from process meta. |
-| `meta` | `init_policy: Lazy` を Worker に付けた | `process-lazy-not-allowed` | Lazy init is only allowed for Singleton Agent / Singleton GenServer. | Use `Eager`, or define an async call API. |
-| `meta` | `init_policy: Lazy` を Supervisor に付けた | `process-lazy-supervisor` | Supervisor does not support Lazy init. | Remove `init_policy: Lazy`. |
+| `meta` | `init_policy: Standby` を Worker に付けた | `process-standby-not-allowed` | Standby init is only allowed for Singleton Agent / Singleton GenServer. | Use `Eager`, or define an async call API. |
+| `meta` | `init_policy: Standby` を Supervisor に付けた | `process-standby-supervisor` | Supervisor does not support Standby init. | Remove `init_policy: Standby`. |
 | `defagent` | `@init` がない | `agent-init-missing` | Agent requires exactly one `@init` handler. | Add one `@init` handler. |
 | `defagent` | `@get` がない | `agent-get-missing` | Agent requires exactly one `@get` handler. | Add one `@get` handler. |
 | `defagent` | `@set` が複数ある | `agent-set-duplicate` | Agent allows at most one `@set` handler. | Use GenServer for multiple write protocols. |
@@ -1495,17 +1495,17 @@ runtime global state であり、process-local `ExecutionContext` には入れ�
 | process body | `ctx.<slot>` に代入した | `process-context-readonly` | process context handler is readonly. | Override it from `supervisor_init`. |
 | public API | `ctx.<slot>` / handler PID を返した | `process-context-leak` | handler dependency cannot be returned from public API. | Keep handler access inside the process. |
 
-### 5.2 init / ProcessInit
+### 5.2 init / StandbyInit
 
 | 発生箇所 | 条件 | error id | 簡易メッセージ | help |
 |---|---|---|---|---|
-| `@init` | Eager なのに `Result<ProcessInit<State>>` | `process-init-return-mismatch` | Eager init must return `Result<State>`. | Change `init_policy` to `Lazy`, or return `Result<State>`. |
-| `@init` | Lazy なのに `Result<State>` | `process-init-return-mismatch` | Lazy init must return `Result<ProcessInit<State>>`. | Wrap the initialized state with `ProcessInit::Ready(state)`. |
-| `@init` | `ProcessInit::Ready<T>` の `T` が state と違う | `process-init-ready-type-mismatch` | `ProcessInit::Ready` value must match the process state type. | Return `ProcessInit::Ready` with the declared state type. |
+| `@init` | Eager なのに `Result<StandbyInit<State>>` | `process-init-return-mismatch` | Eager init must return `Result<State>`. | Change `init_policy` to `Standby`, or return `Result<State>`. |
+| `@init` | Standby なのに `Result<State>` | `process-init-return-mismatch` | Standby init must return `Result<StandbyInit<State>>`. | Wrap the initialized state with `StandbyInit::Ready(state)`. |
+| `@init` | `StandbyInit::Ready<T>` の `T` が state と違う | `process-init-ready-type-mismatch` | `StandbyInit::Ready` value must match the process state type. | Return `StandbyInit::Ready` with the declared state type. |
 | `@init` | `PendingAfter` に `Duration` 以外を渡した | `process-init-pending-after-type` | `PendingAfter` requires `Duration`. | Pass a `Duration` value, for example `100ms`. |
-| 通常関数 | `ProcessInit<T>` を戻り値に使った | `process-init-type-position` | `ProcessInit<T>` is only allowed as Lazy `@init` return type. | Use a domain enum instead. |
-| struct field | `ProcessInit<T>` を field に使った | `process-init-type-position` | `ProcessInit<T>` cannot appear in data types. | Store a domain-specific status enum instead. |
-| `@call` / `@get` | `ProcessInit<T>` を返した | `process-init-type-position` | `ProcessInit<T>` must not leak into process public API. | Return a View / Reply type. |
+| 通常関数 | `StandbyInit<T>` を戻り値に使った | `process-init-type-position` | `StandbyInit<T>` is only allowed as Standby `@init` return type. | Use a domain enum instead. |
+| struct field | `StandbyInit<T>` を field に使った | `process-init-type-position` | `StandbyInit<T>` cannot appear in data types. | Store a domain-specific status enum instead. |
+| `@call` / `@get` | `StandbyInit<T>` を返した | `process-init-type-position` | `StandbyInit<T>` must not leak into process public API. | Return a View / Reply type. |
 
 ### 5.3 process state contracts
 
@@ -1549,8 +1549,8 @@ runtime global state であり、process-local `ExecutionContext` には入れ�
 
 | 発生箇所 | 条件 | error id | 簡易メッセージ | help |
 |---|---|---|---|---|
-| runtime init | Lazy init deadline 超過 | `runtime-process-init-timeout` | process did not reach `Ready` before init timeout. | Increase Boot timeout or reduce init wait. |
-| runtime init | Lazy/Eager init が `Err` | `runtime-process-init-failed` | process init failed. | Check init dependencies and process definition. |
+| runtime init | Standby init deadline 超過 | `runtime-process-init-timeout` | process did not reach `Ready` before init timeout. | Increase Boot timeout or reduce init wait. |
+| runtime init | Standby/Eager init が `Err` | `runtime-process-init-failed` | process init failed. | Check init dependencies and process definition. |
 | runtime dispatch | handler table に存在しない handler | `runtime-handler-not-found` | runtime process handler was not found. | This indicates compiler / VM spec mismatch. |
 | runtime dispatch | singleton slot が空 | `runtime-singleton-slot-missing` | singleton slot is missing for a required process. | This indicates BootPlan / VM state mismatch. |
 | scheduler | Pending が scheduler に登録できない | `runtime-pending-registration-failed` | process pending state could not be registered. | This indicates runtime scheduler inconsistency. |
@@ -1566,8 +1566,8 @@ runtime global state であり、process-local `ExecutionContext` には入れ�
 | 項目 | 扱い |
 |---|---|
 | boundary layer | process 基盤安定後に domain/runtime/boot error の変換層として設計 |
-| Lazy init / scheduler convergence | `Pending` / `PendingAfter` retry、`init_waiters`、Ready 前 call、runtime status 表示は OI-030 で扱う |
-| Worker async / lazy init | 非同期 call API と合わせて検討。v2 では public surface にしない |
+| Standby init / scheduler convergence | `Pending` / `PendingAfter` retry、`init_waiters`、Ready 前 call、runtime status 表示は OI-030 で扱う |
+| Worker async / standby init | 非同期 call API と合わせて検討。v2 では public surface にしない |
 | Task.Supervisor / Task link / cancel / restart | Task を使い捨て process として安定させた後に検討 |
 | Task-DynamicSupervisor link | 初期フェーズでは扱わず、Task supervision 設計時に再検討 |
 | DynamicSupervisor restart details | 初期は OneForOne 最小。`max_restarts`, `max_seconds` は後続 |
