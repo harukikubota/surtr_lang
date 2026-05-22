@@ -11,8 +11,9 @@ use sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
-    Location, PidHandle, RichError, RuntimeCallKind, RuntimeExecutionPhase, RuntimeStackFrame,
-    TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
+    Location, PidHandle, RichError, RuntimeCallKind, RuntimeExecutionPhase,
+    RuntimeProcessTraceContext, RuntimeStackFrame, TypeRegistry, Value, WorkerLeaseHandle,
+    WorkersHandle,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
@@ -120,6 +121,7 @@ struct CallFrame {
     stack_base: usize,
     call_site: Option<(u32, u32)>,
     trace_frame: Option<RuntimeStackFrame>,
+    tail_call_breadcrumb_base_len: usize,
     locals: Vec<Value>,
 }
 
@@ -880,6 +882,7 @@ impl VM {
                 stack_base: 0,
                 call_site: None,
                 trace_frame: None,
+                tail_call_breadcrumb_base_len: 0,
                 locals: vec![Value::Unit; num_locals],
             }],
             tail_call_breadcrumbs: VecDeque::new(),
@@ -1406,12 +1409,22 @@ impl VM {
     }
 
     pub(crate) fn current_stack_trace_snapshot(&self) -> Vec<RuntimeStackFrame> {
-        self.frames
-            .iter()
-            .rev()
-            .filter_map(|frame| frame.trace_frame.clone())
-            .chain(self.tail_call_breadcrumbs.iter().rev().cloned())
-            .collect()
+        let mut stack_trace = Vec::new();
+        let mut breadcrumb_upper = self.tail_call_breadcrumbs.len();
+        for frame in self.frames.iter().rev() {
+            if let Some(trace_frame) = frame.trace_frame.clone() {
+                stack_trace.push(trace_frame);
+            }
+            let breadcrumb_start = frame.tail_call_breadcrumb_base_len.min(breadcrumb_upper);
+            stack_trace.extend(
+                self.tail_call_breadcrumbs
+                    .range(breadcrumb_start..breadcrumb_upper)
+                    .rev()
+                    .cloned(),
+            );
+            breadcrumb_upper = breadcrumb_start;
+        }
+        stack_trace
     }
 
     fn stack_trace_snapshot_without_head_function(&self, function: &str) -> Vec<RuntimeStackFrame> {
@@ -1471,6 +1484,28 @@ impl VM {
             fun_idx: None,
             call_kind: RuntimeCallKind::Builtin,
             location: self.location_for_span(span_start, span_end, builtin_name),
+            process: None,
+            tco: false,
+        }
+    }
+
+    fn trace_frame_for_callable_template(
+        &self,
+        template_id: u32,
+        span_start: u32,
+        span_end: u32,
+    ) -> RuntimeStackFrame {
+        let function = self
+            .callable_template(template_id)
+            .ok()
+            .and_then(|template| template.metadata.name.clone())
+            .unwrap_or_else(|| format!("template#{}", template_id));
+        RuntimeStackFrame {
+            phase: RuntimeExecutionPhase::Runtime,
+            function: Some(function.clone()),
+            fun_idx: None,
+            call_kind: RuntimeCallKind::CallableTemplate,
+            location: self.location_for_span(span_start, span_end, function),
             process: None,
             tco: false,
         }
@@ -3418,7 +3453,24 @@ impl VM {
             span_start: 0,
             span_end: 0,
         });
-        RichError::new(kind, message, location, None)
+        let mut stack_trace = self.current_stack_trace_snapshot();
+        stack_trace.insert(
+            0,
+            RuntimeStackFrame {
+                phase: RuntimeExecutionPhase::Runtime,
+                function: Some("<process>".into()),
+                fun_idx: None,
+                call_kind: RuntimeCallKind::ProcessMessage,
+                location: Some(location.clone()),
+                process: Some(RuntimeProcessTraceContext {
+                    pid: None,
+                    process_name: None,
+                    trigger: Some(kind.to_string()),
+                }),
+                tco: false,
+            },
+        );
+        RichError::new(kind, message, location, None).with_stack_trace(stack_trace)
     }
 
     #[allow(dead_code)]
@@ -4734,6 +4786,7 @@ impl VM {
                     stack_base,
                     call_site,
                     trace_frame,
+                    tail_call_breadcrumb_base_len: self.tail_call_breadcrumbs.len(),
                     locals,
                 });
 
@@ -5061,6 +5114,8 @@ impl VM {
             .frames
             .pop()
             .ok_or_else(|| RuntimeError::new("Return with empty frame stack"))?;
+        self.tail_call_breadcrumbs
+            .truncate(frame.tail_call_breadcrumb_base_len);
         self.stack.truncate(frame.stack_base);
         self.stack.push(ret);
         *pc = frame.return_pc;
@@ -6192,6 +6247,7 @@ impl VM {
                         stack_base,
                         call_site: Some((span_start, span_end)),
                         trace_frame: Some(trace_frame),
+                        tail_call_breadcrumb_base_len: self.tail_call_breadcrumbs.len(),
                         locals,
                     });
                 }
@@ -6448,6 +6504,7 @@ impl VM {
                                 stack_base,
                                 call_site: Some((span_start, span_end)),
                                 trace_frame: Some(trace_frame),
+                                tail_call_breadcrumb_base_len: self.tail_call_breadcrumbs.len(),
                                 locals,
                             });
                         }
@@ -6465,14 +6522,22 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
-                        let result =
-                            self.with_call_site(Some((span_start, span_end)), None, |vm| {
+                        let trace_frame = self.trace_frame_for_callable_template(
+                            template_id,
+                            span_start,
+                            span_end,
+                        );
+                        let result = self.with_call_site(
+                            Some((span_start, span_end)),
+                            Some(trace_frame),
+                            |vm| {
                                 vm.invoke_callable_template_sync(
                                     template_id,
                                     lexical_captures.clone(),
                                     args.clone(),
                                 )
-                            })?;
+                            },
+                        )?;
                         let pending_future = match result {
                             Value::PendingFuture(future_id) => Some(future_id),
                             _ => None,
@@ -6599,14 +6664,22 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
-                        let result =
-                            self.with_call_site(Some((span_start, span_end)), None, |vm| {
+                        let trace_frame = self.trace_frame_for_callable_template(
+                            template_id,
+                            span_start,
+                            span_end,
+                        );
+                        let result = self.with_call_site(
+                            Some((span_start, span_end)),
+                            Some(trace_frame),
+                            |vm| {
                                 vm.invoke_callable_template_sync(
                                     template_id,
                                     lexical_captures.clone(),
                                     args.clone(),
                                 )
-                            })?;
+                            },
+                        )?;
                         let pending_future = match result {
                             Value::PendingFuture(future_id) => Some(future_id),
                             _ => None,
@@ -6862,6 +6935,9 @@ impl VM {
         let result = result.map_err(|mut err| {
             if err.context.call_site.is_none() {
                 err.context.call_site = self.runtime_error_location();
+            }
+            if err.context.stack_trace.is_empty() {
+                err.context.stack_trace = self.current_stack_trace_snapshot();
             }
             err
         });
@@ -7377,8 +7453,8 @@ mod tests {
     };
     use sindr::primitives::int;
     use sindr::runtime::{
-        Callable, CallableMetadata, CallableTarget, Location, PidHandle, RichError, TypeEntry,
-        TypeKind, TypeRegistry, Value,
+        Callable, CallableMetadata, CallableTarget, Location, PidHandle, RichError,
+        RuntimeCallKind, TypeEntry, TypeKind, TypeRegistry, Value,
     };
     use std::collections::VecDeque;
     use std::fs;
@@ -7543,6 +7619,7 @@ mod tests {
             stack_base: 0,
             call_site: None,
             trace_frame: None,
+            tail_call_breadcrumb_base_len: 0,
             locals: vec![Value::Unit; num_locals],
         }
     }
@@ -8013,6 +8090,7 @@ mod tests {
                     stack_base: 0,
                     call_site: None,
                     trace_frame: None,
+                    tail_call_breadcrumb_base_len: 0,
                     locals: Vec::new(),
                 },
             ],
@@ -10983,6 +11061,43 @@ mod tests {
         assert_eq!(err.context.stack_trace.len(), 1);
         let frame = &err.context.stack_trace[0];
         assert_eq!(frame.function.as_deref(), Some("inner"));
+        assert_eq!(
+            frame.location.as_ref().map(|location| {
+                (
+                    location.file.as_str(),
+                    location.line,
+                    location.column,
+                    location.span_start,
+                    location.span_end,
+                )
+            }),
+            Some(("sample.srt", 1, 1, 0, 7))
+        );
+    }
+
+    #[test]
+    fn builtin_runtime_error_context_includes_builtin_stack_trace() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::CallBuiltin {
+                builtin_id: builtin_id("len"),
+                arity: 1,
+                span_start: 0,
+                span_end: 7,
+            },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(1))];
+        let err = VM::new(bytecode)
+            .with_source("len([])\n".into(), "sample.srt".into())
+            .run()
+            .expect_err("must fail");
+
+        assert!(err.message.contains("len expects List"));
+        assert_eq!(err.context.stack_trace.len(), 1);
+        let frame = &err.context.stack_trace[0];
+        assert_eq!(frame.function.as_deref(), Some("len"));
+        assert_eq!(frame.call_kind, RuntimeCallKind::Builtin);
         assert_eq!(
             frame.location.as_ref().map(|location| {
                 (

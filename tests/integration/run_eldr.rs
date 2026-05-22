@@ -727,6 +727,52 @@ fn run_error_context_verbose_adds_stack_trace_for_builtin_err() {
 }
 
 #[test]
+fn run_error_context_verbose_does_not_reuse_completed_tail_call_trace() {
+    let temp = unique_temp_dir("surtr_error_context_no_stale_tco_trace");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def spin(n: Int) -> Result<Int> {
+  if(n == 0, Ok(0), spin(n - 1))
+}
+
+def fail_later() -> Result<Int> {
+  Err(NoneError)
+}
+
+spin(3)
+fail_later()
+"#,
+    );
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--error-context",
+            "verbose",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail for Err result\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Stack trace:"), "{stderr}");
+    assert!(stderr.contains("fail_later at"), "{stderr}");
+    assert!(
+        !stderr.contains("spin at"),
+        "completed tail-recursive call must not leak into later error trace:\n{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn run_error_context_verbose_adds_stack_trace_for_closure_function_err() {
     let temp = unique_temp_dir("surtr_error_context_closure_trace");
     let source_path = temp.join("sample.srt");
