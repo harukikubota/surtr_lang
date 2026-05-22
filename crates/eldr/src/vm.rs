@@ -25,6 +25,8 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+const MAX_TAIL_CALL_TRACE_BREADCRUMBS: usize = 32;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmTestEventKind {
     Passed,
@@ -125,6 +127,7 @@ struct CallFrame {
 struct VmCheckpoint {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
+    tail_call_breadcrumbs: VecDeque<RuntimeStackFrame>,
     pc: usize,
     exit_code: i32,
     last_result: Option<Value>,
@@ -543,6 +546,7 @@ enum ProcessMailboxMessage {
 struct ExecutionContext {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
+    tail_call_breadcrumbs: VecDeque<RuntimeStackFrame>,
     pc: usize,
     target: ExecutionTarget,
 }
@@ -820,6 +824,8 @@ pub struct VM {
     stack: Vec<Value>,
     /// Call stack / locals frames
     frames: Vec<CallFrame>,
+    /// Logical caller frames overwritten by TCO, newest at the back.
+    tail_call_breadcrumbs: VecDeque<RuntimeStackFrame>,
     /// Program counter (used by full-program `run`)
     pc: usize,
     /// Source code (for eprint / ariadne)
@@ -876,6 +882,7 @@ impl VM {
                 trace_frame: None,
                 locals: vec![Value::Unit; num_locals],
             }],
+            tail_call_breadcrumbs: VecDeque::new(),
             pc: 0,
             source: None,
             source_file: None,
@@ -1403,7 +1410,23 @@ impl VM {
             .iter()
             .rev()
             .filter_map(|frame| frame.trace_frame.clone())
+            .chain(self.tail_call_breadcrumbs.iter().rev().cloned())
             .collect()
+    }
+
+    fn stack_trace_snapshot_without_head_function(&self, function: &str) -> Vec<RuntimeStackFrame> {
+        let mut stack_trace = self.current_stack_trace_snapshot();
+        let function_tail = function.rsplit("::").next();
+        if stack_trace.first().is_some_and(|frame| {
+            frame
+                .function
+                .as_deref()
+                .and_then(|name| name.rsplit("::").next())
+                == function_tail
+        }) {
+            stack_trace.remove(0);
+        }
+        stack_trace
     }
 
     fn function_trace_name(&self, entry: &FunctionEntry) -> String {
@@ -1434,6 +1457,38 @@ impl VM {
             process: None,
             tco,
         }
+    }
+
+    fn trace_frame_for_builtin(
+        &self,
+        builtin_name: &str,
+        span_start: u32,
+        span_end: u32,
+    ) -> RuntimeStackFrame {
+        RuntimeStackFrame {
+            phase: RuntimeExecutionPhase::Runtime,
+            function: Some(builtin_name.to_string()),
+            fun_idx: None,
+            call_kind: RuntimeCallKind::Builtin,
+            location: self.location_for_span(span_start, span_end, builtin_name),
+            process: None,
+            tco: false,
+        }
+    }
+
+    fn record_tail_call_breadcrumb(&mut self) {
+        let Some(mut frame) = self
+            .current_frame()
+            .ok()
+            .and_then(|frame| frame.trace_frame.clone())
+        else {
+            return;
+        };
+        frame.tco = true;
+        if self.tail_call_breadcrumbs.len() >= MAX_TAIL_CALL_TRACE_BREADCRUMBS {
+            self.tail_call_breadcrumbs.pop_front();
+        }
+        self.tail_call_breadcrumbs.push_back(frame);
     }
 
     fn runtime_error_context(&self, pc: usize, opcode: &Opcode) -> RuntimeErrorContext {
@@ -3920,6 +3975,7 @@ impl VM {
         VmCheckpoint {
             stack: self.stack.clone(),
             frames: self.frames.clone(),
+            tail_call_breadcrumbs: self.tail_call_breadcrumbs.clone(),
             pc: self.pc,
             exit_code: self.exit_code,
             last_result: self.last_result.clone(),
@@ -3954,6 +4010,7 @@ impl VM {
     fn rollback_to_checkpoint(&mut self, checkpoint: VmCheckpoint) {
         self.stack = checkpoint.stack;
         self.frames = checkpoint.frames;
+        self.tail_call_breadcrumbs = checkpoint.tail_call_breadcrumbs;
         self.pc = checkpoint.pc;
         self.exit_code = checkpoint.exit_code;
         self.last_result = checkpoint.last_result;
@@ -4106,6 +4163,7 @@ impl VM {
         ProcessExecutionContext {
             stack: self.stack.clone(),
             frames: self.frames.clone(),
+            tail_call_breadcrumbs: self.tail_call_breadcrumbs.clone(),
             pc,
             target,
         }
@@ -4115,6 +4173,7 @@ impl VM {
     fn restore_execution_context(&mut self, context: ProcessExecutionContext) {
         self.stack = context.stack;
         self.frames = context.frames;
+        self.tail_call_breadcrumbs = context.tail_call_breadcrumbs;
         self.pc = context.pc;
     }
 
@@ -6043,9 +6102,11 @@ impl VM {
                         self.frames.len()
                     ),
                 );
-                let result = self.with_call_site(Some((span_start, span_end)), |vm| {
-                    call_builtin(vm, builtin_id, args)
-                })?;
+                let trace_frame = self.trace_frame_for_builtin(builtin_name, span_start, span_end);
+                let result =
+                    self.with_call_site(Some((span_start, span_end)), Some(trace_frame), |vm| {
+                        call_builtin(vm, builtin_id, args)
+                    })?;
                 let pending_future = match result {
                     Value::PendingFuture(future_id) => Some(future_id),
                     _ => None,
@@ -6112,6 +6173,7 @@ impl VM {
                         span_end,
                         true,
                     );
+                    self.record_tail_call_breadcrumb();
                     self.reuse_current_frame_for_call(locals, Some((span_start, span_end)))?;
                     self.current_frame_mut()?.trace_frame = Some(trace_frame);
                     self.observe_tail_call_optimized();
@@ -6176,7 +6238,9 @@ impl VM {
                 };
                 self.stack.push(Value::Error(Box::new(
                     RichError::new(template.kind.clone(), message, location, None)
-                        .with_stack_trace(self.current_stack_trace_snapshot()),
+                        .with_stack_trace(
+                            self.stack_trace_snapshot_without_head_function(&template.kind),
+                        ),
                 )));
             }
             Opcode::MakeErrorLiteral {
@@ -6217,6 +6281,7 @@ impl VM {
                     .source()
                     .map(|source| line_column_for_offset(source, 0))
                     .unwrap_or((0, 0));
+                let stack_trace = self.stack_trace_snapshot_without_head_function(&kind);
                 self.stack.push(Value::Error(Box::new(
                     RichError::new(
                         kind,
@@ -6234,7 +6299,7 @@ impl VM {
                         },
                         None,
                     )
-                    .with_stack_trace(self.current_stack_trace_snapshot()),
+                    .with_stack_trace(stack_trace),
                 )));
             }
 
@@ -6299,9 +6364,13 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
-                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
-                            call_builtin(vm, builtin_id, full_args)
-                        })?;
+                        let trace_frame =
+                            self.trace_frame_for_builtin(builtin_name, span_start, span_end);
+                        let result = self.with_call_site(
+                            Some((span_start, span_end)),
+                            Some(trace_frame),
+                            |vm| call_builtin(vm, builtin_id, full_args),
+                        )?;
                         let pending_future = match result {
                             Value::PendingFuture(future_id) => Some(future_id),
                             _ => None,
@@ -6357,6 +6426,7 @@ impl VM {
                                 span_end,
                                 true,
                             );
+                            self.record_tail_call_breadcrumb();
                             self.reuse_current_frame_for_call(
                                 locals,
                                 Some((span_start, span_end)),
@@ -6395,13 +6465,14 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
-                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
-                            vm.invoke_callable_template_sync(
-                                template_id,
-                                lexical_captures.clone(),
-                                args.clone(),
-                            )
-                        })?;
+                        let result =
+                            self.with_call_site(Some((span_start, span_end)), None, |vm| {
+                                vm.invoke_callable_template_sync(
+                                    template_id,
+                                    lexical_captures.clone(),
+                                    args.clone(),
+                                )
+                            })?;
                         let pending_future = match result {
                             Value::PendingFuture(future_id) => Some(future_id),
                             _ => None,
@@ -6455,9 +6526,13 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
-                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
-                            call_builtin(vm, builtin_id, full_args)
-                        })?;
+                        let trace_frame =
+                            self.trace_frame_for_builtin(builtin_name, span_start, span_end);
+                        let result = self.with_call_site(
+                            Some((span_start, span_end)),
+                            Some(trace_frame),
+                            |vm| call_builtin(vm, builtin_id, full_args),
+                        )?;
                         let pending_future = match result {
                             Value::PendingFuture(future_id) => Some(future_id),
                             _ => None,
@@ -6506,6 +6581,7 @@ impl VM {
                             span_end,
                             true,
                         );
+                        self.record_tail_call_breadcrumb();
                         self.reuse_current_frame_for_call(locals, Some((span_start, span_end)))?;
                         self.current_frame_mut()?.trace_frame = Some(trace_frame);
                         self.observe_tail_call_optimized();
@@ -6523,13 +6599,14 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
-                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
-                            vm.invoke_callable_template_sync(
-                                template_id,
-                                lexical_captures.clone(),
-                                args.clone(),
-                            )
-                        })?;
+                        let result =
+                            self.with_call_site(Some((span_start, span_end)), None, |vm| {
+                                vm.invoke_callable_template_sync(
+                                    template_id,
+                                    lexical_captures.clone(),
+                                    args.clone(),
+                                )
+                            })?;
                         let pending_future = match result {
                             Value::PendingFuture(future_id) => Some(future_id),
                             _ => None,
@@ -6767,6 +6844,7 @@ impl VM {
     fn with_call_site<T>(
         &mut self,
         call_site: Option<(u32, u32)>,
+        trace_frame: Option<RuntimeStackFrame>,
         f: impl FnOnce(&mut Self) -> Result<T, RuntimeError>,
     ) -> Result<T, RuntimeError> {
         let frame_idx = self
@@ -6775,7 +6853,11 @@ impl VM {
             .checked_sub(1)
             .ok_or_else(|| RuntimeError::new("Frame stack underflow"))?;
         let previous = self.frames[frame_idx].call_site;
+        let previous_trace_frame = self.frames[frame_idx].trace_frame.clone();
         self.frames[frame_idx].call_site = call_site;
+        if trace_frame.is_some() {
+            self.frames[frame_idx].trace_frame = trace_frame;
+        }
         let result = f(self);
         let result = result.map_err(|mut err| {
             if err.context.call_site.is_none() {
@@ -6784,6 +6866,7 @@ impl VM {
             err
         });
         self.frames[frame_idx].call_site = previous;
+        self.frames[frame_idx].trace_frame = previous_trace_frame;
         result
     }
 
@@ -7297,6 +7380,7 @@ mod tests {
         Callable, CallableMetadata, CallableTarget, Location, PidHandle, RichError, TypeEntry,
         TypeKind, TypeRegistry, Value,
     };
+    use std::collections::VecDeque;
     use std::fs;
     use std::path::PathBuf;
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
@@ -7467,6 +7551,7 @@ mod tests {
         ExecutionContext {
             stack: Vec::new(),
             frames: vec![root_frame(num_locals)],
+            tail_call_breadcrumbs: VecDeque::new(),
             pc,
             target: ExecutionTarget::TopLevel,
         }
@@ -7931,6 +8016,7 @@ mod tests {
                     locals: Vec::new(),
                 },
             ],
+            tail_call_breadcrumbs: VecDeque::new(),
             pc: 1,
             target: ExecutionTarget::FrameDepth(1),
         };
