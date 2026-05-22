@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use eldr::value::Value;
 use serde_json::{json, Value as JsonValue};
+use sindr::runtime::{RichError, RuntimeStackFrame};
 
 use crate::compile::{
     collect_default_script_compile_sources, compile_source, prepare_script_compile_plan,
@@ -727,6 +728,7 @@ fn emit_verbose_runtime_context(vm: &eldr::VM, error: &eldr::RuntimeError) {
             eprintln!("    {detail}");
         }
     }
+    emit_stack_trace(&error.context.stack_trace);
 }
 
 fn emit_verbose_vm_context(vm: &eldr::VM) {
@@ -750,6 +752,33 @@ fn emit_verbose_vm_context(vm: &eldr::VM) {
     );
     eprintln!("  stack_depth: {}", vm.stack_depth());
     eprintln!("  frame_depth: {}", vm.frame_depth());
+    if let Some(error) = final_rich_error(vm) {
+        emit_stack_trace(&error.stack_trace);
+    }
+}
+
+fn emit_stack_trace(stack_trace: &[RuntimeStackFrame]) {
+    if stack_trace.is_empty() {
+        return;
+    }
+    eprintln!("Stack trace:");
+    for (idx, frame) in stack_trace.iter().take(32).enumerate() {
+        eprintln!("  {}: {}", idx, eldr::format_stack_frame(frame));
+    }
+    if stack_trace.len() > 32 {
+        eprintln!("  ... {} frame(s) omitted", stack_trace.len() - 32);
+    }
+}
+
+fn final_rich_error(vm: &eldr::VM) -> Option<&RichError> {
+    match vm.last_value()? {
+        Value::Error(rich) => Some(rich),
+        Value::Tagged { tag: 1, fields } => match fields.as_slice() {
+            [Value::Error(rich)] => Some(rich),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn function_name_for_pc(bytecode: &forge::bytecode::Bytecode, pc: usize) -> Option<String> {

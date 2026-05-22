@@ -4716,6 +4716,7 @@ fn err_result(vm: &VM, kind: &str, message: &str) -> Value {
         location,
         diagnostic: None,
         cause: None,
+        stack_trace: vm.current_stack_trace_snapshot(),
     })
 }
 
@@ -4784,6 +4785,7 @@ mod tests {
             },
             diagnostic: None,
             cause: None,
+            stack_trace: Vec::new(),
         }
     }
 
@@ -6726,7 +6728,9 @@ mod tests {
                 },
                 diagnostic: None,
                 cause: None,
+                stack_trace: Vec::new(),
             })),
+            stack_trace: Vec::new(),
         }));
         let result = call_builtin(&mut vm, 5, vec![value]).expect("eprint should succeed");
         assert_eq!(result, Value::Unit);

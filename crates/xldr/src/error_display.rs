@@ -431,6 +431,7 @@ fn error_spec_from_value_error_with_source(
     value: &sindr::runtime::RichError,
     source: &str,
 ) -> DiagnosticSpec {
+    let location = value.primary_location();
     let message = match value.diagnostic.as_ref() {
         Some(sindr::runtime::RuntimeErrorDiagnostic::LiteralPatternMismatch { lhs, rhs }) => {
             format!("{}\t@@lhs={lhs}\t@@rhs={rhs}", value.visible_message())
@@ -441,8 +442,8 @@ fn error_spec_from_value_error_with_source(
         source,
         crate::surface_path_name(&value.kind).to_string(),
         message,
-        value.location.span_start as usize,
-        value.location.span_end as usize,
+        location.span_start as usize,
+        location.span_end as usize,
         runtime_value_cause_help(value),
     )
 }
@@ -625,7 +626,9 @@ mod tests {
                 },
                 diagnostic: None,
                 cause: None,
+                stack_trace: Vec::new(),
             })),
+            stack_trace: Vec::new(),
         }));
 
         let text = runtime_value_error_text_from_vm(&vm, &value);
@@ -650,6 +653,7 @@ mod tests {
             },
             diagnostic: None,
             cause: None,
+            stack_trace: Vec::new(),
         }));
 
         let text = runtime_value_error_text_from_vm(&vm, &value);
@@ -677,6 +681,7 @@ mod tests {
             },
             diagnostic: None,
             cause: None,
+            stack_trace: Vec::new(),
         }));
 
         let text = runtime_value_error_text_from_vm(&vm, &value);
@@ -702,6 +707,7 @@ mod tests {
             },
             diagnostic: None,
             cause: None,
+            stack_trace: Vec::new(),
         }));
 
         let text = runtime_value_error_text_from_vm(&vm, &value);

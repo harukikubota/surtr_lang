@@ -11,7 +11,8 @@ use sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
-    Location, PidHandle, RichError, TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
+    Location, PidHandle, RichError, RuntimeCallKind, RuntimeExecutionPhase, RuntimeStackFrame,
+    TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
@@ -116,6 +117,7 @@ struct CallFrame {
     return_pc: usize,
     stack_base: usize,
     call_site: Option<(u32, u32)>,
+    trace_frame: Option<RuntimeStackFrame>,
     locals: Vec<Value>,
 }
 
@@ -871,6 +873,7 @@ impl VM {
                 return_pc: 0,
                 stack_base: 0,
                 call_site: None,
+                trace_frame: None,
                 locals: vec![Value::Unit; num_locals],
             }],
             pc: 0,
@@ -1368,6 +1371,15 @@ impl VM {
 
     pub fn runtime_error_location(&self) -> Option<Location> {
         let (span_start, span_end) = self.current_frame().ok()?.call_site?;
+        self.location_for_span(span_start, span_end, "<runtime>")
+    }
+
+    fn location_for_span(
+        &self,
+        span_start: u32,
+        span_end: u32,
+        func: impl Into<String>,
+    ) -> Option<Location> {
         let file = self
             .source_file()
             .map(str::to_string)
@@ -1378,12 +1390,50 @@ impl VM {
             .unwrap_or((0, 0));
         Some(Location {
             file,
-            func: "<runtime>".into(),
+            func: func.into(),
             line,
             column,
             span_start,
             span_end,
         })
+    }
+
+    pub(crate) fn current_stack_trace_snapshot(&self) -> Vec<RuntimeStackFrame> {
+        self.frames
+            .iter()
+            .rev()
+            .filter_map(|frame| frame.trace_frame.clone())
+            .collect()
+    }
+
+    fn function_trace_name(&self, entry: &FunctionEntry) -> String {
+        entry
+            .qualified_name
+            .as_deref()
+            .and_then(|name| name.rsplit("::").next())
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("fun#{}", entry.fun_idx))
+    }
+
+    fn trace_frame_for_call(
+        &self,
+        entry: &FunctionEntry,
+        call_kind: RuntimeCallKind,
+        span_start: u32,
+        span_end: u32,
+        tco: bool,
+    ) -> RuntimeStackFrame {
+        let function = self.function_trace_name(entry);
+        RuntimeStackFrame {
+            phase: RuntimeExecutionPhase::Runtime,
+            function: Some(function.clone()),
+            fun_idx: Some(entry.fun_idx),
+            call_kind,
+            location: self.location_for_span(span_start, span_end, function),
+            process: None,
+            tco,
+        }
     }
 
     fn runtime_error_context(&self, pc: usize, opcode: &Opcode) -> RuntimeErrorContext {
@@ -1414,6 +1464,7 @@ impl VM {
             function: current_function,
             call_site: self.runtime_error_location(),
             details,
+            stack_trace: self.current_stack_trace_snapshot(),
         }
     }
 
@@ -1434,6 +1485,9 @@ impl VM {
         }
         if err_context.call_site.is_some() {
             context.call_site = err_context.call_site;
+        }
+        if !err_context.stack_trace.is_empty() {
+            context.stack_trace = err_context.stack_trace;
         }
         context.details.extend(err_context.details);
         RuntimeError {
@@ -4606,10 +4660,21 @@ impl VM {
                     Err(err) => return StepOutcome::RuntimeError(err),
                 };
                 let stack_base = self.stack.len();
+                let call_site = self.current_frame().ok().and_then(|frame| frame.call_site);
+                let trace_frame = call_site.map(|(span_start, span_end)| {
+                    self.trace_frame_for_call(
+                        &entry,
+                        RuntimeCallKind::ClosureFunction,
+                        span_start,
+                        span_end,
+                        false,
+                    )
+                });
                 self.frames.push(CallFrame {
                     return_pc: usize::MAX,
                     stack_base,
-                    call_site: self.current_frame().ok().and_then(|frame| frame.call_site),
+                    call_site,
+                    trace_frame,
                     locals,
                 });
 
@@ -6040,15 +6105,31 @@ impl VM {
                     ),
                 );
                 if tail_call {
+                    let trace_frame = self.trace_frame_for_call(
+                        &entry,
+                        RuntimeCallKind::DirectFunction,
+                        span_start,
+                        span_end,
+                        true,
+                    );
                     self.reuse_current_frame_for_call(locals, Some((span_start, span_end)))?;
+                    self.current_frame_mut()?.trace_frame = Some(trace_frame);
                     self.observe_tail_call_optimized();
                 } else {
                     let return_pc = *pc;
                     let stack_base = self.stack.len();
+                    let trace_frame = self.trace_frame_for_call(
+                        &entry,
+                        RuntimeCallKind::DirectFunction,
+                        span_start,
+                        span_end,
+                        false,
+                    );
                     self.frames.push(CallFrame {
                         return_pc,
                         stack_base,
                         call_site: Some((span_start, span_end)),
+                        trace_frame: Some(trace_frame),
                         locals,
                     });
                 }
@@ -6093,12 +6174,10 @@ impl VM {
                     span_start,
                     span_end,
                 };
-                self.stack.push(Value::Error(Box::new(RichError::new(
-                    template.kind.clone(),
-                    message,
-                    location,
-                    None,
-                ))));
+                self.stack.push(Value::Error(Box::new(
+                    RichError::new(template.kind.clone(), message, location, None)
+                        .with_stack_trace(self.current_stack_trace_snapshot()),
+                )));
             }
             Opcode::MakeErrorLiteral {
                 kind_const_idx,
@@ -6138,22 +6217,25 @@ impl VM {
                     .source()
                     .map(|source| line_column_for_offset(source, 0))
                     .unwrap_or((0, 0));
-                self.stack.push(Value::Error(Box::new(RichError::new(
-                    kind,
-                    message,
-                    Location {
-                        file: self
-                            .source_file()
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| "<repl>".to_string()),
-                        func: "<pattern>".into(),
-                        line,
-                        column,
-                        span_start: 0,
-                        span_end: 0,
-                    },
-                    None,
-                ))));
+                self.stack.push(Value::Error(Box::new(
+                    RichError::new(
+                        kind,
+                        message,
+                        Location {
+                            file: self
+                                .source_file()
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| "<repl>".to_string()),
+                            func: "<pattern>".into(),
+                            line,
+                            column,
+                            span_start: 0,
+                            span_end: 0,
+                        },
+                        None,
+                    )
+                    .with_stack_trace(self.current_stack_trace_snapshot()),
+                )));
             }
 
             Opcode::CaptureClosure(num_captured) => {
@@ -6268,18 +6350,34 @@ impl VM {
                             ),
                         );
                         if tail_call {
+                            let trace_frame = self.trace_frame_for_call(
+                                &entry,
+                                RuntimeCallKind::ClosureFunction,
+                                span_start,
+                                span_end,
+                                true,
+                            );
                             self.reuse_current_frame_for_call(
                                 locals,
                                 Some((span_start, span_end)),
                             )?;
+                            self.current_frame_mut()?.trace_frame = Some(trace_frame);
                             self.observe_tail_call_optimized();
                         } else {
                             let return_pc = *pc;
                             let stack_base = self.stack.len();
+                            let trace_frame = self.trace_frame_for_call(
+                                &entry,
+                                RuntimeCallKind::ClosureFunction,
+                                span_start,
+                                span_end,
+                                false,
+                            );
                             self.frames.push(CallFrame {
                                 return_pc,
                                 stack_base,
                                 call_site: Some((span_start, span_end)),
+                                trace_frame: Some(trace_frame),
                                 locals,
                             });
                         }
@@ -6401,7 +6499,15 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
+                        let trace_frame = self.trace_frame_for_call(
+                            &entry,
+                            RuntimeCallKind::ClosureFunction,
+                            span_start,
+                            span_end,
+                            true,
+                        );
                         self.reuse_current_frame_for_call(locals, Some((span_start, span_end)))?;
+                        self.current_frame_mut()?.trace_frame = Some(trace_frame);
                         self.observe_tail_call_optimized();
                         *pc = entry.entry_pc as usize;
                     }

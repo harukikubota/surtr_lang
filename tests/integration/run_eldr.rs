@@ -601,6 +601,51 @@ main()
 }
 
 #[test]
+fn run_error_context_verbose_adds_stack_trace_for_err_result() {
+    let temp = unique_temp_dir("surtr_error_context_verbose_err_trace");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def inner() -> Result<Int> {
+  Err(NoneError)
+}
+
+def outer() -> Result<Int> {
+  inner()
+}
+
+outer()
+"#,
+    );
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--error-context",
+            "verbose",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail for Err result\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Stack trace:"), "{stderr}");
+    assert!(stderr.contains("inner"), "{stderr}");
+    assert!(
+        stderr.contains("sample.srt:6:"),
+        "expected stack trace to target inner() call inside outer:\n{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn run_trace_opcode_filter_writes_matching_trace_to_stderr() {
     let temp = unique_temp_dir("surtr_trace_opcode_filter");
     let source_path = temp.join("sample.srt");

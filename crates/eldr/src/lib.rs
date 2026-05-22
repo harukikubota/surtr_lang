@@ -7,7 +7,7 @@ pub mod vm;
 
 pub use error::{
     format_runtime_error, format_runtime_error_verbose, format_runtime_error_with_location,
-    RuntimeError, RuntimeErrorContext,
+    format_stack_frame, RuntimeError, RuntimeErrorContext,
 };
 pub use interactive::{ChunkExecution, InteractiveVm};
 pub use vm::VM;

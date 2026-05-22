@@ -740,6 +740,42 @@ pub enum RuntimeErrorDiagnostic {
     LiteralPatternMismatch { lhs: String, rhs: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeExecutionPhase {
+    VmInit,
+    Runtime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeCallKind {
+    DirectFunction,
+    ClosureFunction,
+    Builtin,
+    CallableTemplate,
+    ProcessMessage,
+    Task,
+    StandbyInit,
+    EagerInit,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RuntimeProcessTraceContext {
+    pub pid: Option<u64>,
+    pub process_name: Option<String>,
+    pub trigger: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeStackFrame {
+    pub phase: RuntimeExecutionPhase,
+    pub function: Option<String>,
+    pub fun_idx: Option<u32>,
+    pub call_kind: RuntimeCallKind,
+    pub location: Option<Location>,
+    pub process: Option<RuntimeProcessTraceContext>,
+    pub tco: bool,
+}
+
 /// Rich error value produced by `deferror`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RichError {
@@ -748,6 +784,7 @@ pub struct RichError {
     pub location: Location,
     pub cause: Option<Box<RichError>>,
     pub diagnostic: Option<RuntimeErrorDiagnostic>,
+    pub stack_trace: Vec<RuntimeStackFrame>,
 }
 
 impl RichError {
@@ -765,7 +802,20 @@ impl RichError {
             location,
             cause,
             diagnostic,
+            stack_trace: Vec::new(),
         }
+    }
+
+    pub fn with_stack_trace(mut self, stack_trace: Vec<RuntimeStackFrame>) -> Self {
+        self.stack_trace = stack_trace;
+        self
+    }
+
+    pub fn primary_location(&self) -> &Location {
+        self.stack_trace
+            .iter()
+            .find_map(|frame| frame.location.as_ref())
+            .unwrap_or(&self.location)
     }
 
     pub fn visible_message(&self) -> &str {
@@ -939,6 +989,7 @@ mod tests {
             },
             cause: None,
             diagnostic: None,
+            stack_trace: Vec::new(),
         }));
         assert_eq!(value.to_display_string(&registry), "TestError(\"boom\")");
     }
@@ -959,6 +1010,7 @@ mod tests {
             },
             cause: None,
             diagnostic: None,
+            stack_trace: Vec::new(),
         };
         value.append_cause_tail(RichError {
             kind: "Inner".into(),
@@ -973,6 +1025,7 @@ mod tests {
             },
             cause: None,
             diagnostic: None,
+            stack_trace: Vec::new(),
         });
         value.append_cause_tail(RichError {
             kind: "Leaf".into(),
@@ -987,6 +1040,7 @@ mod tests {
             },
             cause: None,
             diagnostic: None,
+            stack_trace: Vec::new(),
         });
 
         let rendered = Value::Error(Box::new(value));
@@ -1278,6 +1332,7 @@ mod tests {
                 },
                 cause: None,
                 diagnostic: None,
+                stack_trace: Vec::new(),
             }))],
         };
         assert_eq!(
@@ -1302,6 +1357,7 @@ mod tests {
             },
             cause: None,
             diagnostic: None,
+            stack_trace: Vec::new(),
         };
         rich.append_cause_tail(RichError {
             kind: "Lower".into(),
@@ -1316,6 +1372,7 @@ mod tests {
             },
             cause: None,
             diagnostic: None,
+            stack_trace: Vec::new(),
         });
 
         let value = Value::Tagged {
@@ -1343,6 +1400,7 @@ mod tests {
             },
             cause: None,
             diagnostic: None,
+            stack_trace: Vec::new(),
         };
         rich.append_cause_tail(RichError {
             kind: "Lower".into(),
@@ -1357,6 +1415,7 @@ mod tests {
             },
             cause: None,
             diagnostic: None,
+            stack_trace: Vec::new(),
         });
 
         assert_eq!(
@@ -1383,6 +1442,7 @@ mod tests {
             },
             cause: None,
             diagnostic: None,
+            stack_trace: Vec::new(),
         };
 
         assert_eq!(
