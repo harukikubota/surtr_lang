@@ -7458,6 +7458,7 @@ mod tests {
             return_pc: 0,
             stack_base: 0,
             call_site: None,
+            trace_frame: None,
             locals: vec![Value::Unit; num_locals],
         }
     }
@@ -7926,6 +7927,7 @@ mod tests {
                     return_pc: usize::MAX,
                     stack_base: 0,
                     call_site: None,
+                    trace_frame: None,
                     locals: Vec::new(),
                 },
             ],
@@ -10869,6 +10871,44 @@ mod tests {
         let bytecode = base_bytecode(vec![Opcode::ListEmpty, Opcode::ListHead, Opcode::Halt]);
         let err = VM::new(bytecode).run().expect_err("must fail");
         assert!(err.message.contains("ListHead on empty list"));
+    }
+
+    #[test]
+    fn runtime_error_context_includes_stack_trace_for_direct_call() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 0,
+                span_start: 0,
+                span_end: 7,
+            },
+            Opcode::Halt,
+            Opcode::ListEmpty,
+            Opcode::ListHead,
+            Opcode::Return,
+        ]);
+        bytecode.functions = vec![function_entry(0, 2, 0, 0, Some("Main::inner"))];
+        let err = VM::new(bytecode)
+            .with_source("inner()\n".into(), "sample.srt".into())
+            .run()
+            .expect_err("must fail");
+
+        assert!(err.message.contains("ListHead on empty list"));
+        assert_eq!(err.context.stack_trace.len(), 1);
+        let frame = &err.context.stack_trace[0];
+        assert_eq!(frame.function.as_deref(), Some("inner"));
+        assert_eq!(
+            frame.location.as_ref().map(|location| {
+                (
+                    location.file.as_str(),
+                    location.line,
+                    location.column,
+                    location.span_start,
+                    location.span_end,
+                )
+            }),
+            Some(("sample.srt", 1, 1, 0, 7))
+        );
     }
 
     #[test]

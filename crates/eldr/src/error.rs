@@ -277,6 +277,7 @@ mod tests {
             function: None,
             call_site: None,
             details: vec!["task_id=7".into()],
+            stack_trace: Vec::new(),
         });
 
         assert_eq!(err.kind(), RuntimeErrorKind::TaskTimeout);
@@ -319,6 +320,7 @@ mod tests {
                 span_end: 24,
             }),
             details: vec!["stack_depth=2".into(), "locals_len=1".into()],
+            stack_trace: Vec::new(),
         });
 
         let formatted = format_runtime_error_verbose(&err);
