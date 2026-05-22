@@ -8,6 +8,7 @@ pub enum ReplCommand {
     Type { symbol: String },
     Facet { query: String },
     Error { mode: Option<String> },
+    StackTrace { mode: Option<String> },
     ValueRecall { arg: String },
     Save { path: String },
     Vars,
@@ -29,6 +30,7 @@ pub enum ReplCommandKind {
     Type,
     Facet,
     Error,
+    StackTrace,
     ValueRecall,
     Save,
     Vars,
@@ -154,6 +156,18 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         summary: "Show or change error display mode",
         detail_help: &[],
         arg_completion: ReplCommandArgCompletion::Fixed(&["full", "summary"]),
+    },
+    ReplCommandSpec {
+        kind: ReplCommandKind::StackTrace,
+        aliases: &["stacktrace"],
+        usage: ":stacktrace [off|verbose|full]",
+        summary: "Show or change stacktrace display mode",
+        detail_help: &[
+            "Usage: :stacktrace [off|verbose|full]",
+            "`off` hides stack traces. `verbose` prints text stack traces after the error message.",
+            "`full` is reserved for future HTMLViewer support and is not available yet.",
+        ],
+        arg_completion: ReplCommandArgCompletion::Fixed(&["off", "verbose", "full"]),
     },
     ReplCommandSpec {
         kind: ReplCommandKind::Save,
@@ -323,6 +337,13 @@ pub fn parse_repl_command(trimmed: &str) -> Option<ReplCommand> {
                 Some(rest.to_string())
             },
         },
+        ReplCommandKind::StackTrace => ReplCommand::StackTrace {
+            mode: if rest.is_empty() {
+                None
+            } else {
+                Some(rest.to_string())
+            },
+        },
         ReplCommandKind::ValueRecall => ReplCommand::ValueRecall {
             arg: rest.to_string(),
         },
@@ -367,6 +388,15 @@ mod tests {
         assert!(matches!(
             parsed,
             ReplCommand::Error { mode: Some(mode) } if mode == "summary"
+        ));
+    }
+
+    #[test]
+    fn parse_stacktrace_command_with_mode() {
+        let parsed = parse_repl_command(":stacktrace verbose").expect("command should parse");
+        assert!(matches!(
+            parsed,
+            ReplCommand::StackTrace { mode: Some(mode) } if mode == "verbose"
         ));
     }
 

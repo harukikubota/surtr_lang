@@ -177,6 +177,7 @@ REPL 実装は次の 3 層に分ける。
 | `:type <binding>` | REPL binding の型と `RuntimeTypeDisplay` を表示する。これは runtime 表示カテゴリであり compile-space `TypeIdentity` ではない。command input は通常の REPL scope で名前解決し、local binding は callable 名を shadow する。通常の値は visible binding lookup のみを対象とし、定義名、trait target query、任意式は受けない。process runtime lookup では singleton process owner 名を追加で受け、worker process は PID binding 経由のみを受ける。struct / record owner への field-oriented lookup はこの変更では追加しない。 |
 | `:facet <facet-target>` | FacetPath 定義または facet binding の canonical path、segment 一覧、停止点を表示する。値 access 式や一般の callable / plain value は受けず、Facet query surface は command query 専用の制限された対象に限る。 |
 | `:error [full|summary]` | エラー表示モードを切り替える（省略時は現在値表示） |
+| `:stacktrace [off|verbose|full]` | stack trace 表示モードを切り替える（省略時は現在値表示）。既定値は `off`。`verbose` はエラーメッセージの後に text stack trace を表示する。`full` は HTMLViewer 経由の将来モードとして予約し、現時点では未対応メッセージを返して状態を変えない。`:error` とは分離し、診断密度と stack trace 表示は独立に扱う。 |
 | `:save <path>` | 現在の REPL session を `.eldr` に保存する |
 | `:vars` | visible な top-level value binding の索引を表示する。値自体は出さず、`line` / `name` / `type` に相当する簡易一覧を返す。preload script 由来の binding も同じ行番号体系に含める。 |
 | `:imported` | 現在の REPL compile unit に効いている import 面を表示する。`src` / `item` / `via` に相当する簡易一覧を返し、`@autoimport defmod` / `import Ty` は module 名だけ、`@autoimport impl Type` / `@autoimport deftrait` / `import Ty::fun` / `import Ty::{a, b}` は導入された member 名まで表示する。 |

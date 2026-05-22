@@ -35,6 +35,7 @@ use super::query::{
     parse_signature_type, OperatorTargetQuery, QueryArg, QueryArgKind, ReplQuery, TypedCallQuery,
 };
 use super::{eval, render, session};
+use crate::error_display::StackTraceDisplayMode;
 use crate::loader::{self, StagedModule};
 use crate::ErrorDisplayMode;
 use crate::{
@@ -505,6 +506,7 @@ pub struct ReplEngine {
     completion_context_builds: Cell<usize>,
     startup_results: Vec<ReplResult>,
     error_display_mode: ErrorDisplayMode,
+    stack_trace_display_mode: StackTraceDisplayMode,
 }
 
 impl ReplEngine {
@@ -563,6 +565,7 @@ impl ReplEngine {
             #[cfg(test)]
             completion_context_builds: Cell::new(0),
             error_display_mode: ErrorDisplayMode::Full,
+            stack_trace_display_mode: StackTraceDisplayMode::Off,
         };
         engine.bootstrap_std_modules()?;
         Ok(engine)
@@ -654,6 +657,7 @@ impl ReplEngine {
             completion_context_builds: Cell::new(0),
             startup_results: vec![Self::eldr_partial_semantic_restore_notice()],
             error_display_mode: ErrorDisplayMode::Full,
+            stack_trace_display_mode: StackTraceDisplayMode::Off,
         };
         // Set up sigil / scar scope for stdlib without re-executing bytecode.
         engine
@@ -806,6 +810,7 @@ impl ReplEngine {
             completion_context_builds: Cell::new(0),
             startup_results: Vec::new(),
             error_display_mode: ErrorDisplayMode::Full,
+            stack_trace_display_mode: StackTraceDisplayMode::Off,
         })
         .map(|mut engine| {
             engine.append_docs(state.script_preload_docs.clone());
@@ -2827,12 +2832,13 @@ impl ReplEngine {
     }
 
     fn report_error_value(&self, value: &Value) -> Vec<String> {
-        error_display::runtime_value_error_lines_with_registry(
+        error_display::runtime_value_error_lines_with_registry_and_stack_trace(
             self.vm.as_vm(),
             value,
             &self.sources,
             self.repl_source_id,
             self.error_display_mode,
+            self.stack_trace_display_mode,
         )
     }
 
@@ -7330,6 +7336,7 @@ impl ReplEngine {
         };
         engine.reload_seed = self.reload_seed.clone();
         engine.error_display_mode = self.error_display_mode;
+        engine.stack_trace_display_mode = self.stack_trace_display_mode;
         if keep_session_defs {
             for input in &self.replay_inputs {
                 let result = engine.handle_line(input);
@@ -7497,6 +7504,50 @@ impl ReplEngine {
         }
     }
 
+    fn handle_stacktrace_mode(&mut self, mode: Option<&str>) -> ReplResult {
+        let Some(mode) = mode else {
+            return Self::plain(vec![format!(
+                "stacktrace display mode: {}",
+                self.stack_trace_display_mode.as_str()
+            )]);
+        };
+        let mode = mode.trim();
+
+        if mode == "full" {
+            return Self::plain(vec![
+                "stacktrace display mode `full` is not supported yet.".to_string(),
+                "Full stacktrace rendering is reserved for future HTMLViewer support.".to_string(),
+                format!(
+                    "stacktrace display mode: {}",
+                    self.stack_trace_display_mode.as_str()
+                ),
+            ]);
+        }
+
+        match StackTraceDisplayMode::parse(mode) {
+            Some(parsed) => {
+                self.stack_trace_display_mode = parsed;
+                Self::plain(vec![format!(
+                    "stacktrace display mode: {}",
+                    parsed.as_str()
+                )])
+            }
+            None => self.repl_command_diagnostic(
+                &format!(":stacktrace {}", mode),
+                format!("Invalid stacktrace display mode `{}`.", mode),
+                Span {
+                    start: ":stacktrace ".chars().count(),
+                    end: format!(":stacktrace {}", mode).chars().count(),
+                },
+                Some("Usage: :stacktrace [off|verbose|full]".to_string()),
+                vec![
+                    "Use `:stacktrace off` or `:stacktrace verbose`.".to_string(),
+                    "`:stacktrace full` is reserved for future HTMLViewer support.".to_string(),
+                ],
+            ),
+        }
+    }
+
     fn append_docs(&mut self, docs: Vec<DocEntry>) {
         for doc in docs {
             let exists = self.docs.iter().any(|existing| {
@@ -7558,6 +7609,9 @@ impl ReplEngine {
                     }
                     ReplCommand::Error { mode } => {
                         return self.handle_error_mode(mode.as_deref());
+                    }
+                    ReplCommand::StackTrace { mode } => {
+                        return self.handle_stacktrace_mode(mode.as_deref());
                     }
                     ReplCommand::ValueRecall { arg } => {
                         return self.handle_value_recall(&arg);
@@ -7908,12 +7962,13 @@ impl ReplEngine {
                     .call_site
                     .clone()
                     .or_else(|| self.vm.runtime_error_location());
-                let rendered = error_display::runtime_error_lines_with_registry(
+                let rendered = error_display::runtime_error_lines_with_registry_and_stack_trace(
                     &e,
                     &self.sources,
                     self.repl_source_id,
                     location.clone(),
                     self.error_display_mode,
+                    self.stack_trace_display_mode,
                 );
                 let (stdout, stderr) = self.take_repl_host_io_lines();
                 self.history_entries.push(ReplHistoryEntry {
@@ -7953,12 +8008,13 @@ impl ReplEngine {
                     .call_site
                     .clone()
                     .or_else(|| self.vm.runtime_error_location());
-                let rendered = error_display::runtime_error_lines(
+                let rendered = error_display::runtime_error_lines_with_stack_trace(
                     &err,
                     self.vm.source(),
                     self.vm.source_file(),
                     location,
                     self.error_display_mode,
+                    self.stack_trace_display_mode,
                 );
                 let (stdout, stderr) = self.take_repl_host_io_lines();
                 ReplResult::ok(ReplOutput::EvalError {
@@ -7984,12 +8040,13 @@ impl ReplEngine {
                     .call_site
                     .clone()
                     .or_else(|| self.vm.runtime_error_location());
-                let rendered = error_display::runtime_error_lines(
+                let rendered = error_display::runtime_error_lines_with_stack_trace(
                     &err,
                     self.vm.source(),
                     self.vm.source_file(),
                     location,
                     self.error_display_mode,
+                    self.stack_trace_display_mode,
                 );
                 let (stdout, stderr) = self.take_repl_host_io_lines();
                 ReplResult::ok(ReplOutput::EvalError {
@@ -8012,12 +8069,13 @@ impl ReplEngine {
                     .call_site
                     .clone()
                     .or_else(|| self.vm.runtime_error_location());
-                let rendered = error_display::runtime_error_lines(
+                let rendered = error_display::runtime_error_lines_with_stack_trace(
                     &err,
                     self.vm.source(),
                     self.vm.source_file(),
                     location,
                     self.error_display_mode,
+                    self.stack_trace_display_mode,
                 );
                 let (stdout, stderr) = self.take_repl_host_io_lines();
                 ReplResult::ok(ReplOutput::EvalError {
@@ -9579,6 +9637,7 @@ mod tests {
             #[cfg(test)]
             completion_context_builds: Cell::new(0),
             error_display_mode: ErrorDisplayMode::Full,
+            stack_trace_display_mode: StackTraceDisplayMode::Off,
         }
     }
 

@@ -676,6 +676,22 @@ fn core_command_argument_completion_uses_command_policies() {
         ":error should not fall through to semantic symbols: {error_candidates:?}"
     );
 
+    let stacktrace_candidates = engine
+        .completions(":stacktrace v", ":stacktrace v".len())
+        .candidates;
+    assert!(
+        stacktrace_candidates
+            .iter()
+            .any(|candidate| candidate.label == "verbose" && candidate.replacement == "verbose"),
+        ":stacktrace should complete verbose: {stacktrace_candidates:?}"
+    );
+    assert!(
+        !stacktrace_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":stacktrace should not fall through to semantic symbols: {stacktrace_candidates:?}"
+    );
+
     let reload_candidates = engine
         .completions(":reload d", ":reload d".len())
         .candidates;
@@ -3513,6 +3529,113 @@ fn core_result_error_reports_diagnostic_without_exiting() {
     assert!(!safe_mod.should_exit);
     assert!(matches!(safe_mod.output, ReplOutput::EvalError { .. }));
     assert!(rendered_text(&safe_mod).contains("division by zero"));
+}
+
+#[test]
+fn core_stacktrace_command_controls_result_error_trace_display() {
+    let mut engine = engine();
+
+    let default_mode = engine.handle_line(":stacktrace");
+    assert_eq!(rendered_text(&default_mode), "stacktrace display mode: off");
+
+    let hidden = engine.handle_line("def fail() -> Result<Int> { Err(NoneError) }\nfail()");
+    assert!(matches!(hidden.output, ReplOutput::EvalError { .. }));
+    let hidden_text = rendered_text(&hidden);
+    assert!(hidden_text.contains("None Value."));
+    assert!(
+        !hidden_text.contains("Stack trace:"),
+        "stacktrace must default to off:\n{hidden_text}"
+    );
+
+    let hidden_runtime = engine.handle_line("safe_mod(10, 0)");
+    assert!(matches!(
+        hidden_runtime.output,
+        ReplOutput::EvalError { .. }
+    ));
+    let hidden_runtime_text = rendered_text(&hidden_runtime);
+    assert!(hidden_runtime_text.contains("division by zero"));
+    assert!(
+        !hidden_runtime_text.contains("Stack trace:"),
+        "runtime stacktrace must default to off:\n{hidden_runtime_text}"
+    );
+
+    let enabled = engine.handle_line(":stacktrace verbose");
+    assert_eq!(rendered_text(&enabled), "stacktrace display mode: verbose");
+
+    let shown = engine.handle_line("fail()");
+    assert!(matches!(shown.output, ReplOutput::EvalError { .. }));
+    let shown_text = rendered_text(&shown);
+    let message_idx = shown_text
+        .find("None Value.")
+        .expect("error message should render");
+    let trace_idx = shown_text
+        .find("Stack trace:")
+        .expect("stacktrace should render after enabling verbose mode");
+    assert!(
+        message_idx < trace_idx,
+        "error message must render before stacktrace:\n{shown_text}"
+    );
+    assert!(shown_text.contains("fail at"), "{shown_text}");
+
+    let shown_runtime = engine.handle_line("safe_mod(10, 0)");
+    assert!(matches!(shown_runtime.output, ReplOutput::EvalError { .. }));
+    let shown_runtime_text = rendered_text(&shown_runtime);
+    let runtime_message_idx = shown_runtime_text
+        .find("division by zero")
+        .expect("runtime error message should render");
+    let runtime_trace_idx = shown_runtime_text
+        .find("Stack trace:")
+        .expect("runtime stacktrace should render after enabling verbose mode");
+    assert!(
+        runtime_message_idx < runtime_trace_idx,
+        "runtime error message must render before stacktrace:\n{shown_runtime_text}"
+    );
+
+    let disabled = engine.handle_line(":stacktrace off");
+    assert_eq!(rendered_text(&disabled), "stacktrace display mode: off");
+    let hidden_again = engine.handle_line("fail()");
+    assert!(!rendered_text(&hidden_again).contains("Stack trace:"));
+}
+
+#[test]
+fn core_stacktrace_display_is_independent_from_error_display_mode() {
+    let mut engine = engine();
+
+    let error_summary = engine.handle_line(":error summary");
+    assert_eq!(rendered_text(&error_summary), "error display mode: summary");
+
+    let stacktrace_verbose = engine.handle_line(":stacktrace verbose");
+    assert_eq!(
+        rendered_text(&stacktrace_verbose),
+        "stacktrace display mode: verbose"
+    );
+
+    let result = engine.handle_line("def fail() -> Result<Int> { Err(NoneError) }\nfail()");
+    assert!(matches!(result.output, ReplOutput::EvalError { .. }));
+    let text = rendered_text(&result);
+    let message_idx = text
+        .find("None Value.")
+        .expect("summary error message should render");
+    let trace_idx = text
+        .find("Stack trace:")
+        .expect("stacktrace should render while error mode is summary");
+    assert!(
+        message_idx < trace_idx,
+        "summary error message must render before stacktrace:\n{text}"
+    );
+}
+
+#[test]
+fn core_stacktrace_full_is_reserved_until_html_viewer_exists() {
+    let mut engine = engine();
+
+    let result = engine.handle_line(":stacktrace full");
+    let text = rendered_text(&result);
+    assert!(text.contains("not supported yet"), "{text}");
+    assert!(text.contains("HTMLViewer"), "{text}");
+
+    let current = engine.handle_line(":stacktrace");
+    assert_eq!(rendered_text(&current), "stacktrace display mode: off");
 }
 
 #[test]

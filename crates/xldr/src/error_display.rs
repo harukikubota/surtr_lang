@@ -27,6 +27,30 @@ impl ErrorDisplayMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StackTraceDisplayMode {
+    #[default]
+    Off,
+    Verbose,
+}
+
+impl StackTraceDisplayMode {
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "off" => Some(Self::Off),
+            "verbose" => Some(Self::Verbose),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Verbose => "verbose",
+        }
+    }
+}
+
 fn first_visible_line(text: &str) -> String {
     text.lines()
         .find(|line| !line.trim().is_empty())
@@ -46,6 +70,24 @@ pub fn lines_for_mode(text: &str, mode: ErrorDisplayMode) -> Vec<String> {
         .lines()
         .map(|line| line.to_string())
         .collect()
+}
+
+fn append_stack_trace_lines(
+    lines: &mut Vec<String>,
+    stack_trace: &[sindr::runtime::RuntimeStackFrame],
+    mode: StackTraceDisplayMode,
+) {
+    if !matches!(mode, StackTraceDisplayMode::Verbose) || stack_trace.is_empty() {
+        return;
+    }
+
+    lines.push("Stack trace:".to_string());
+    for (idx, frame) in stack_trace.iter().take(32).enumerate() {
+        lines.push(format!("  {}: {}", idx, eldr::format_stack_frame(frame)));
+    }
+    if stack_trace.len() > 32 {
+        lines.push(format!("  ... {} frame(s) omitted", stack_trace.len() - 32));
+    }
 }
 
 pub fn emit_text(text: &str, mode: ErrorDisplayMode) {
@@ -339,10 +381,30 @@ pub fn runtime_error_lines(
     location: Option<sindr::runtime::Location>,
     mode: ErrorDisplayMode,
 ) -> Vec<String> {
-    lines_for_mode(
+    runtime_error_lines_with_stack_trace(
+        err,
+        source,
+        fallback_file,
+        location,
+        mode,
+        StackTraceDisplayMode::Off,
+    )
+}
+
+pub fn runtime_error_lines_with_stack_trace(
+    err: &eldr::RuntimeError,
+    source: Option<&str>,
+    fallback_file: Option<&str>,
+    location: Option<sindr::runtime::Location>,
+    mode: ErrorDisplayMode,
+    stack_trace_mode: StackTraceDisplayMode,
+) -> Vec<String> {
+    let mut lines = lines_for_mode(
         &runtime_error_text(err, source, fallback_file, location),
         mode,
-    )
+    );
+    append_stack_trace_lines(&mut lines, &err.context.stack_trace, stack_trace_mode);
+    lines
 }
 
 pub fn runtime_error_lines_with_registry(
@@ -352,10 +414,30 @@ pub fn runtime_error_lines_with_registry(
     location: Option<sindr::runtime::Location>,
     mode: ErrorDisplayMode,
 ) -> Vec<String> {
-    lines_for_mode(
+    runtime_error_lines_with_registry_and_stack_trace(
+        err,
+        sources,
+        source_id,
+        location,
+        mode,
+        StackTraceDisplayMode::Off,
+    )
+}
+
+pub fn runtime_error_lines_with_registry_and_stack_trace(
+    err: &eldr::RuntimeError,
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    location: Option<sindr::runtime::Location>,
+    mode: ErrorDisplayMode,
+    stack_trace_mode: StackTraceDisplayMode,
+) -> Vec<String> {
+    let mut lines = lines_for_mode(
         &runtime_error_text_with_registry(err, sources, source_id, location),
         mode,
-    )
+    );
+    append_stack_trace_lines(&mut lines, &err.context.stack_trace, stack_trace_mode);
+    lines
 }
 
 pub fn emit_runtime_error(
@@ -487,7 +569,20 @@ pub fn runtime_value_error_lines_from_vm(
     value: &Value,
     mode: ErrorDisplayMode,
 ) -> Vec<String> {
-    lines_for_mode(&runtime_value_error_text_from_vm(vm, value), mode)
+    runtime_value_error_lines_from_vm_with_stack_trace(vm, value, mode, StackTraceDisplayMode::Off)
+}
+
+pub fn runtime_value_error_lines_from_vm_with_stack_trace(
+    vm: &eldr::VM,
+    value: &Value,
+    mode: ErrorDisplayMode,
+    stack_trace_mode: StackTraceDisplayMode,
+) -> Vec<String> {
+    let mut lines = lines_for_mode(&runtime_value_error_text_from_vm(vm, value), mode);
+    if let Value::Error(rich) = value {
+        append_stack_trace_lines(&mut lines, &rich.stack_trace, stack_trace_mode);
+    }
+    lines
 }
 
 pub fn runtime_value_error_lines_with_registry(
@@ -497,10 +592,32 @@ pub fn runtime_value_error_lines_with_registry(
     source_id: SourceId,
     mode: ErrorDisplayMode,
 ) -> Vec<String> {
-    lines_for_mode(
+    runtime_value_error_lines_with_registry_and_stack_trace(
+        vm,
+        value,
+        sources,
+        source_id,
+        mode,
+        StackTraceDisplayMode::Off,
+    )
+}
+
+pub fn runtime_value_error_lines_with_registry_and_stack_trace(
+    vm: &eldr::VM,
+    value: &Value,
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    mode: ErrorDisplayMode,
+    stack_trace_mode: StackTraceDisplayMode,
+) -> Vec<String> {
+    let mut lines = lines_for_mode(
         &runtime_value_error_text_with_registry(vm, value, sources, source_id),
         mode,
-    )
+    );
+    if let Value::Error(rich) = value {
+        append_stack_trace_lines(&mut lines, &rich.stack_trace, stack_trace_mode);
+    }
+    lines
 }
 
 pub fn emit_runtime_value_error_from_vm(vm: &eldr::VM, value: &Value, mode: ErrorDisplayMode) {
