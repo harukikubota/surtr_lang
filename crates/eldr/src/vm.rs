@@ -1511,6 +1511,33 @@ impl VM {
         }
     }
 
+    fn trace_frame_for_task(
+        &self,
+        function: impl Into<String>,
+        span_start: u32,
+        span_end: u32,
+    ) -> RuntimeStackFrame {
+        let function = function.into();
+        RuntimeStackFrame {
+            phase: RuntimeExecutionPhase::Runtime,
+            function: Some(function.clone()),
+            fun_idx: None,
+            call_kind: RuntimeCallKind::Task,
+            location: self.location_for_span(span_start, span_end, function),
+            process: None,
+            tco: false,
+        }
+    }
+
+    fn task_mode_trace_name(mode: TaskMode) -> &'static str {
+        match mode {
+            TaskMode::Call => "Task::call",
+            TaskMode::Async => "Task::async",
+            TaskMode::Launch => "Task::launch",
+            TaskMode::Cast => "Task::cast",
+        }
+    }
+
     fn record_tail_call_breadcrumb(&mut self) {
         let Some(mut frame) = self
             .current_frame()
@@ -4913,6 +4940,11 @@ impl VM {
         value: &Value,
         timeout_ms: Option<u64>,
     ) -> Result<Value, RuntimeError> {
+        let await_trace_label = if timeout_ms.is_some() {
+            "Task::await_timeout"
+        } else {
+            "Task::await"
+        };
         match value {
             Value::TaskHandle(future_id) => {
                 let completion_future = match timeout_ms {
@@ -4921,10 +4953,11 @@ impl VM {
                         .allocate_future_after(None, timeout_ms, true),
                     None => self.process_runtime.allocate_future(None, None, false),
                 };
-                self.await_task_completion(
+                let value = self.await_task_completion(
                     completion_future,
                     StepOutcome::Halt(Value::PendingFuture(*future_id)),
-                )
+                )?;
+                Ok(self.prepend_task_trace_to_err_result(value, await_trace_label))
             }
             Value::PendingFuture(future_id) => {
                 let completion_future = match timeout_ms {
@@ -4933,13 +4966,32 @@ impl VM {
                         .allocate_future_after(None, timeout_ms, true),
                     None => self.process_runtime.allocate_future(None, None, false),
                 };
-                self.await_task_completion(
+                let value = self.await_task_completion(
                     completion_future,
                     StepOutcome::Halt(Value::PendingFuture(*future_id)),
-                )
+                )?;
+                Ok(self.prepend_task_trace_to_err_result(value, await_trace_label))
             }
             other => Ok(other.clone()),
         }
+    }
+
+    fn prepend_task_trace_to_err_result(&self, value: Value, function: &str) -> Value {
+        let Value::Tagged { tag: 1, fields } = value else {
+            return value;
+        };
+        let [Value::Error(rich)] = fields.as_slice() else {
+            return Value::Tagged { tag: 1, fields };
+        };
+        let Some((span_start, span_end)) =
+            self.current_frame().ok().and_then(|frame| frame.call_site)
+        else {
+            return Value::Tagged { tag: 1, fields };
+        };
+        let mut rich = (**rich).clone();
+        rich.stack_trace
+            .insert(0, self.trace_frame_for_task(function, span_start, span_end));
+        err_vm_result(rich)
     }
 
     fn ready_future_value(&self, future_id: FutureId) -> Option<Value> {
@@ -5006,6 +5058,30 @@ impl VM {
     }
 
     pub(crate) fn invoke_task_with_timeout(
+        &mut self,
+        callable: Callable,
+        mode: TaskMode,
+        timeout_ms: Option<u64>,
+    ) -> Result<Value, RuntimeError> {
+        let frame_idx = self
+            .frames
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| RuntimeError::new("Frame stack underflow"))?;
+        let previous_trace_frame = self.frames[frame_idx].trace_frame.clone();
+        if let Some((span_start, span_end)) = self.frames[frame_idx].call_site {
+            self.frames[frame_idx].trace_frame = Some(self.trace_frame_for_task(
+                Self::task_mode_trace_name(mode),
+                span_start,
+                span_end,
+            ));
+        }
+        let result = self.invoke_task_with_timeout_inner(callable, mode, timeout_ms);
+        self.frames[frame_idx].trace_frame = previous_trace_frame;
+        result
+    }
+
+    fn invoke_task_with_timeout_inner(
         &mut self,
         callable: Callable,
         mode: TaskMode,
@@ -9455,6 +9531,61 @@ mod tests {
             .expect("awaiting task handle should finish");
         assert_eq!(value, ok_vm_result(Value::Unit));
         assert_eq!(vm.process_runtime.current_tick_ms, 20);
+    }
+
+    #[test]
+    fn task_awaited_err_keeps_task_body_and_await_trace() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::LoadConst(0),
+            Opcode::MakeErrorLiteral {
+                kind_const_idx: 1,
+                message_const_idx: 2,
+            },
+            Opcode::StructNew { field_count: 1 },
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![
+            Constant::Tag(1),
+            Constant::Str("Boom".into()),
+            Constant::Str("task failed".into()),
+        ];
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Main::task_body"))];
+        let mut vm =
+            VM::new(bytecode).with_source("Task::async(body)\n".into(), "sample.srt".into());
+        vm.frames[0].call_site = Some((0, 17));
+        let callable = vm.callable_for_function(0);
+
+        let task = vm
+            .invoke_task(callable, TaskMode::Async)
+            .expect("task async should return a handle");
+        let value = vm
+            .await_task_handle(&task, None)
+            .expect("awaiting task handle should finish");
+
+        let Value::Tagged { tag: 1, fields } = value else {
+            panic!("task should resolve Err(Error)");
+        };
+        let Some(Value::Error(rich)) = fields.first() else {
+            panic!("task Err should contain RichError");
+        };
+        let frame_names: Vec<_> = rich
+            .stack_trace
+            .iter()
+            .filter_map(|frame| frame.function.as_deref())
+            .collect();
+        assert_eq!(frame_names, vec!["Task::await", "task_body", "Task::async"]);
+        assert_eq!(
+            rich.stack_trace
+                .iter()
+                .map(|frame| frame.call_kind.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                RuntimeCallKind::Task,
+                RuntimeCallKind::ClosureFunction,
+                RuntimeCallKind::Task
+            ]
+        );
     }
 
     #[test]
