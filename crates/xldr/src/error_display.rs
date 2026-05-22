@@ -579,6 +579,7 @@ mod tests {
                 function: Some("fun#1".into()),
                 call_site: None,
                 details: Vec::new(),
+                stack_trace: Vec::new(),
             },
         );
         let text = runtime_error_text(
@@ -737,6 +738,7 @@ mod tests {
                 span_end: 5,
             }),
             details: vec!["stack_depth=1".into()],
+            stack_trace: Vec::new(),
         });
         let text = runtime_error_text(&err, None, None, None);
         assert!(text.contains("RuntimeError: boom"));
