@@ -211,6 +211,13 @@ fn collect_missing_singleton_calls(
         | TypedInner::BuiltinExtractorDecl(_, _, _)
         | TypedInner::StructDef(_, _, _, _, _)
         | TypedInner::RecordDef(_, _, _, _, _) => {}
+        TypedInner::EagerBoundary(inner) => collect_missing_singleton_calls(
+            inner,
+            surface_to_process,
+            available_singletons,
+            available_supervisors,
+            first_missing,
+        ),
         TypedInner::SupervisorSpawn {
             supervisor_process,
             init,
@@ -5105,9 +5112,10 @@ impl Codegen {
                 .ok()
                 .flatten()
                 .or_else(|| self.direct_callable_target_for_id(id)),
-            TypedInner::App(func, _) | TypedInner::Capture(func, _) | TypedInner::Semi(func) => {
-                self.direct_callable_target_for_marker_node(func)
-            }
+            TypedInner::App(func, _)
+            | TypedInner::Capture(func, _)
+            | TypedInner::Semi(func)
+            | TypedInner::EagerBoundary(func) => self.direct_callable_target_for_marker_node(func),
             _ => None,
         }
     }
@@ -6260,6 +6268,8 @@ impl Codegen {
                 let slot = self.alloc_slot(id.unique_id);
                 self.emit(Opcode::LoadLocal(slot));
             }
+
+            TypedInner::EagerBoundary(inner) => self.emit_node(inner)?,
 
             TypedInner::Bind(pat, rhs) => {
                 if matches!(rhs.ty, Ty::Facet(_, _)) {
@@ -9529,17 +9539,52 @@ impl Codegen {
 
     // ── If ──
 
+    /// Materialize an explicit eager lazy argument exactly once. The returned
+    /// slot is deliberately consumed by the enclosing special form; ordinary
+    /// `EagerBoundary` emission simply evaluates its inner expression.
+    fn materialize_eager_boundary(
+        &mut self,
+        node: &TypedNode,
+    ) -> Result<Option<u32>, CodegenError> {
+        let TypedInner::EagerBoundary(inner) = &node.node else {
+            return Ok(None);
+        };
+        self.emit_node(inner)?;
+        let slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(slot));
+        Ok(Some(slot))
+    }
+
+    fn emit_lazy_argument(
+        &mut self,
+        node: &TypedNode,
+        eager_slot: Option<u32>,
+    ) -> Result<(), CodegenError> {
+        if let Some(slot) = eager_slot {
+            self.emit(Opcode::LoadLocal(slot));
+        } else {
+            self.emit_node(node)?;
+        }
+        Ok(())
+    }
+
     fn emit_if(
         &mut self,
         cond: &TypedNode,
         then: &TypedNode,
         else_opt: &Option<Box<TypedNode>>,
     ) -> Result<(), CodegenError> {
+        let then_eager = self.materialize_eager_boundary(then)?;
+        let else_eager = match else_opt {
+            Some(branch) => self.materialize_eager_boundary(branch)?,
+            None => None,
+        };
         if let Some(cond_value) = Self::literal_bool_value(cond) {
             if cond_value {
-                self.emit_node(then)?;
+                self.emit_lazy_argument(then, then_eager)?;
             } else if let Some(else_branch) = else_opt {
-                self.emit_node(else_branch)?;
+                self.emit_lazy_argument(else_branch, else_eager)?;
             } else {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
@@ -9555,19 +9600,19 @@ impl Codegen {
                 let end_label = self.fresh_label();
 
                 self.emit_jump_if_false(else_label);
-                self.emit_node(then)?;
+                self.emit_lazy_argument(then, then_eager)?;
                 self.emit_jump(end_label);
 
                 // Patch else label to current position
                 self.patch_label(else_label);
-                self.emit_node(else_branch)?;
+                self.emit_lazy_argument(else_branch, else_eager)?;
 
                 self.patch_label(end_label);
             }
             None => {
                 let end_label = self.fresh_label();
                 self.emit_jump_if_false(end_label);
-                self.emit_node(then)?;
+                self.emit_lazy_argument(then, then_eager)?;
                 self.emit(Opcode::Pop); // discard then result for if_then/2
                 self.patch_label(end_label);
                 // Push Unit
@@ -9584,11 +9629,13 @@ impl Codegen {
         cond: &TypedNode,
         err: &TypedNode,
     ) -> Result<(), CodegenError> {
+        let err_eager = self.materialize_eager_boundary(err)?;
         if let Some(cond_value) = Self::literal_bool_value(cond) {
             if cond_value {
                 self.emit_ok_unit_result()?;
             } else {
-                self.emit_err_result_value(err)?;
+                self.emit_lazy_argument(err, err_eager)?;
+                self.emit(Opcode::MakeErr);
             }
             return Ok(());
         }
@@ -9601,7 +9648,8 @@ impl Codegen {
         self.emit_jump(end_label);
 
         self.patch_label(fail_label);
-        self.emit_err_result_value(err)?;
+        self.emit_lazy_argument(err, err_eager)?;
+        self.emit(Opcode::MakeErr);
 
         self.patch_label(end_label);
         Ok(())
@@ -9619,6 +9667,8 @@ impl Codegen {
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(value_slot));
 
+        let err_eager = self.materialize_eager_boundary(err)?;
+
         self.emit(Opcode::LoadLocal(value_slot));
         self.emit_callable_invoke(pred, 1, &node.span)?;
 
@@ -9629,7 +9679,8 @@ impl Codegen {
         self.emit_jump(end_label);
 
         self.patch_label(fail_label);
-        self.emit_err_result_value(err)?;
+        self.emit_lazy_argument(err, err_eager)?;
+        self.emit(Opcode::MakeErr);
 
         self.patch_label(end_label);
         Ok(())
@@ -9642,6 +9693,7 @@ impl Codegen {
         marker: &TypedNode,
         handler: &TypedNode,
     ) -> Result<(), CodegenError> {
+        let marker_eager = self.materialize_eager_boundary(marker)?;
         self.emit_node(value)?;
         let result_slot = self.state.next_slot;
         self.state.next_slot += 1;
@@ -9661,6 +9713,10 @@ impl Codegen {
 
         self.patch_label(err_path);
         self.emit(Opcode::LoadLocal(result_slot));
+        // The eager value is deliberately materialized before the result tag
+        // check, but recover_kind's runtime ABI still consumes the static
+        // constructor reference used as its kind marker.
+        let _ = marker_eager;
         self.emit_recover_kind_marker_ref(marker)?;
         self.emit_callable_ref(handler)?;
         let builtin_id = Self::builtin_id("__recover_kind").ok_or_else(|| CodegenError {
@@ -9691,6 +9747,8 @@ impl Codegen {
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(result_slot));
 
+        let err_eager = self.materialize_eager_boundary(err)?;
+
         self.emit(Opcode::LoadLocal(result_slot));
         self.emit(Opcode::GetTag);
         let err_tag = self.add_constant(Constant::Tag(1));
@@ -9705,7 +9763,7 @@ impl Codegen {
 
         self.patch_label(err_path);
         self.emit(Opcode::LoadLocal(result_slot));
-        self.emit_node(err)?;
+        self.emit_lazy_argument(err, err_eager)?;
         let builtin_id = Self::builtin_id(builtin_name).ok_or_else(|| CodegenError {
             message: format!("Unknown builtin: {}", builtin_name),
             span: node.span.clone(),
@@ -9755,12 +9813,6 @@ impl Codegen {
     fn emit_ok_result_local(&mut self, slot: u32) -> Result<(), CodegenError> {
         self.emit(Opcode::LoadLocal(slot));
         self.emit(Opcode::MakeOk);
-        Ok(())
-    }
-
-    fn emit_err_result_value(&mut self, err: &TypedNode) -> Result<(), CodegenError> {
-        self.emit_node(err)?;
-        self.emit(Opcode::MakeErr);
         Ok(())
     }
 

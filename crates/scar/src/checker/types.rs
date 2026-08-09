@@ -2192,6 +2192,9 @@ impl Checker {
                     })
                     .collect(),
             ),
+            TypedInner::EagerBoundary(inner) => {
+                TypedInner::EagerBoundary(Box::new(self.resolve_typed_node(*inner)))
+            }
             TypedInner::If(cond, then, else_opt) => TypedInner::If(
                 Box::new(self.resolve_typed_node(*cond)),
                 Box::new(self.resolve_typed_node(*then)),

@@ -534,6 +534,16 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
+            TypedInner::EagerBoundary(inner) => {
+                TypedInner::EagerBoundary(Box::new(self.rewrite_specializations_in_node(
+                    *inner,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?))
+            }
             TypedInner::If(cond, then_branch, else_branch) => TypedInner::If(
                 Box::new(self.rewrite_specializations_in_node(
                     *cond,
@@ -1360,6 +1370,9 @@ impl Checker {
                     self.collect_bound_tyvars_in_node(&arg.expr, ordered, seen);
                 }
             }
+            TypedInner::EagerBoundary(inner) => {
+                self.collect_bound_tyvars_in_node(inner, ordered, seen)
+            }
             TypedInner::If(cond, then_branch, else_branch) => {
                 self.collect_bound_tyvars_in_node(cond, ordered, seen);
                 self.collect_bound_tyvars_in_node(then_branch, ordered, seen);
@@ -1674,6 +1687,9 @@ impl Checker {
                     })
                     .collect(),
             ),
+            TypedInner::EagerBoundary(inner) => TypedInner::EagerBoundary(Box::new(
+                self.substitute_typed_node_with_mapping(*inner, mapping),
+            )),
             TypedInner::If(cond, then_branch, else_branch) => TypedInner::If(
                 Box::new(self.substitute_typed_node_with_mapping(*cond, mapping)),
                 Box::new(self.substitute_typed_node_with_mapping(*then_branch, mapping)),
@@ -2217,6 +2233,7 @@ impl Checker {
             TypedInner::Dbg(args) => args
                 .iter()
                 .any(|arg| Self::typed_node_has_pending_trait_call(&arg.expr)),
+            TypedInner::EagerBoundary(inner) => Self::typed_node_has_pending_trait_call(inner),
             TypedInner::If(cond, then_branch, else_branch) => {
                 Self::typed_node_has_pending_trait_call(cond)
                     || Self::typed_node_has_pending_trait_call(then_branch)

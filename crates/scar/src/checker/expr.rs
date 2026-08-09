@@ -164,6 +164,7 @@ impl Checker {
             TypedInner::Dbg(args) => args
                 .iter()
                 .find_map(|arg| self.first_pending_trait_helper(&arg.expr)),
+            TypedInner::EagerBoundary(inner) => self.first_pending_trait_helper(inner),
             TypedInner::Def(_, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body) => self.first_pending_trait_helper(body),
@@ -334,6 +335,9 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, TypeError>>()?,
             ),
+            TypedInner::EagerBoundary(inner) => {
+                TypedInner::EagerBoundary(Box::new(self.concretize_pending_trait_calls(*inner)?))
+            }
             TypedInner::If(cond, then_branch, else_branch) => TypedInner::If(
                 Box::new(self.concretize_pending_trait_calls(*cond)?),
                 Box::new(self.concretize_pending_trait_calls(*then_branch)?),
@@ -2756,6 +2760,17 @@ impl Checker {
                 ),
                 span: span.clone(),
                 hint: None,
+            });
+        }
+
+        if matches!(self.resolve_ty(&params[0]), Ty::Lazy(_)) {
+            return Err(TypeError {
+                message: "pipe injection into a Lazy parameter is not allowed".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Lazy parameters are evaluated under the callee's control. Bind the value first, then pass that binding explicitly, or use a closure to make the evaluation order explicit."
+                        .into(),
+                ),
             });
         }
 
@@ -7987,6 +8002,47 @@ impl Checker {
         })
     }
 
+    /// Typecheck a `Lazy<T>` argument while preserving a source-level pair of
+    /// parentheses as an explicit eager boundary.  An ungrouped argument keeps
+    /// the historical branch convention: a zero-argument callable is invoked
+    /// only if its lazy path is selected.
+    fn check_lazy_argument(
+        &mut self,
+        arg: &Resolved,
+        call_span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        // Sigil lowers a RHS `_1` slot into a synthetic closure parameter.
+        // Detect that parameter here, after the special form's parameter role
+        // is known, so the diagnostic remains a TypeError rather than a
+        // resolver error.
+        if let Resolved::Var(span, id) = arg {
+            if id.name.starts_with("__pipe_slot_") {
+                return Err(TypeError {
+                    message: "pipe injection into a Lazy parameter is not allowed".into(),
+                    span: span.clone(),
+                    hint: Some(
+                        "Lazy parameters are evaluated under the callee's control. Bind the value first, then pass that binding explicitly, or use a closure to make the evaluation order explicit."
+                            .into(),
+                    ),
+                });
+            }
+        }
+        match arg {
+            Resolved::Grouped(span, inner) => {
+                let inner = self.check_node(inner)?;
+                Ok(TypedNode {
+                    ty: inner.ty.clone(),
+                    span: span.clone(),
+                    node: TypedInner::EagerBoundary(Box::new(inner)),
+                })
+            }
+            _ => {
+                let raw = self.check_node(arg)?;
+                Ok(self.maybe_call_zero_arg_function(raw, call_span.clone()))
+            }
+        }
+    }
+
     pub(super) fn check_if(
         &mut self,
         span: &Span,
@@ -8006,13 +8062,11 @@ impl Checker {
             });
         }
 
-        let raw_then = self.check_node(then)?;
-        let typed_then = self.maybe_call_zero_arg_function(raw_then, span.clone());
+        let typed_then = self.check_lazy_argument(then, span)?;
 
         match else_opt {
             Some(else_branch) => {
-                let raw_else = self.check_node(else_branch)?;
-                let typed_else = self.maybe_call_zero_arg_function(raw_else, span.clone());
+                let typed_else = self.check_lazy_argument(else_branch, span)?;
                 if !self.types_compatible(&typed_then.ty, &typed_else.ty) {
                     return Err(TypeError {
                         message: format!(
@@ -8085,8 +8139,7 @@ impl Checker {
             });
         }
 
-        let raw_err = self.check_node(err)?;
-        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        let typed_err = self.check_lazy_argument(err, span)?;
         self.ensure_guard_error_value(&typed_err, "assert")?;
 
         Ok(TypedNode {
@@ -8136,8 +8189,7 @@ impl Checker {
             });
         }
 
-        let raw_err = self.check_node(err)?;
-        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        let typed_err = self.check_lazy_argument(err, span)?;
         self.ensure_guard_error_value(&typed_err, "ensure")?;
 
         Ok(TypedNode {
@@ -8161,8 +8213,7 @@ impl Checker {
         err: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_value = self.check_result_value(value, "map_err")?;
-        let raw_err = self.check_node(err)?;
-        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        let typed_err = self.check_lazy_argument(err, span)?;
         self.ensure_result_error_arg(&typed_err, "map_err")?;
 
         Ok(TypedNode {
@@ -8179,8 +8230,7 @@ impl Checker {
         err: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_value = self.check_result_value(value, "cause")?;
-        let raw_err = self.check_node(err)?;
-        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        let typed_err = self.check_lazy_argument(err, span)?;
         self.ensure_result_error_arg(&typed_err, "cause")?;
 
         Ok(TypedNode {
@@ -8210,8 +8260,7 @@ impl Checker {
             });
         };
         let ok_ty = ok_ty.as_ref().clone();
-        let typed_marker = self.check_node(marker)?;
-        let typed_marker = self.maybe_call_zero_arg_function(typed_marker, span.clone());
+        let typed_marker = self.check_lazy_argument(marker, span)?;
         self.ensure_recover_kind_marker(&typed_marker)?;
         let expected_handler = Ty::Func(
             vec![Ty::Error],

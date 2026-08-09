@@ -1,0 +1,5 @@
+def make_closure() -> (Int -> Int) {
+  {|value| value + 1}
+}
+
+print(to_string(41 |> (make_closure())))

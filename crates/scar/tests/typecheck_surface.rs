@@ -5367,6 +5367,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::SafeBind(_, rhs)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+            TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
@@ -5480,6 +5481,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             | TypedInner::SafeBind(_, rhs)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+            TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),

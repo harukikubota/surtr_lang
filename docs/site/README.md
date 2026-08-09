@@ -18,6 +18,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [Float](./float.md)
 - [Facet](./facet.md)
 - [Kernel](./kernel.md)
+- [Lazy evaluation と括弧](./lazy-evaluation.md)
 - [JSON](./json.md)
 - [File I/O](./file-io.md)
 - [FS and Shell](./shell.md)

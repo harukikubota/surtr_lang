@@ -318,6 +318,8 @@ pub enum TypedInner {
     TupleLiteral(Vec<TypedNode>),
     InterpolatedStr(Vec<TypedInterpolatedPart>),
     Dbg(Vec<TypedDbgArg>),
+    /// An explicit parenthesized eager boundary at a `Lazy<T>` argument site.
+    EagerBoundary(Box<TypedNode>),
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
     Assert(Box<TypedNode>, Box<TypedNode>),
     Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),

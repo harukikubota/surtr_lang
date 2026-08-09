@@ -1,0 +1,2 @@
+phase: typecheck
+contains: pipe injection into a Lazy parameter is not allowed
