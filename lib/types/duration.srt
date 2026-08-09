@@ -63,8 +63,8 @@ impl Duration {
   xldr(1)> match 20ms { Duration(ms) => ms }
   20
   """
-  defextractor deconstruct(self: Self) -> MatchResult<Int, Error> {
-    MatchResult::Success(self.millis)
+  defextractor deconstruct(self: Self) -> Option<Int> {
+    Option::Some(self.millis)
   }
 }
 

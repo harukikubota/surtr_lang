@@ -18,10 +18,10 @@ defmod MahjongExtractor {
   ExtractedMeld を順子として分解する pattern-side API。
   `match meld { sequence(tile_id, suit, rank) => ... }` の形で使う。
   """
-  defextractor sequence(meld: ExtractedMeld) -> MatchResult<(Int, Int, Int), Error> {
+  defextractor sequence(meld: ExtractedMeld) -> Option<(Int, Int, Int)> {
     match meld.kind {
-      ExtractMeldKind::Sequence => MatchResult::Success((meld.tile_id, meld.suit_index, meld.rank)),
-      _ => MatchResult::NoMatch,
+      ExtractMeldKind::Sequence => Option::Some((meld.tile_id, meld.suit_index, meld.rank)),
+      _ => Option::None,
     }
   }
 
@@ -29,10 +29,10 @@ defmod MahjongExtractor {
   ExtractedMeld を刻子として分解する pattern-side API。
   `match meld { triplet(tile_id, suit, rank) => ... }` の形で使う。
   """
-  defextractor triplet(meld: ExtractedMeld) -> MatchResult<(Int, Int, Int), Error> {
+  defextractor triplet(meld: ExtractedMeld) -> Option<(Int, Int, Int)> {
     match meld.kind {
-      ExtractMeldKind::Triplet => MatchResult::Success((meld.tile_id, meld.suit_index, meld.rank)),
-      _ => MatchResult::NoMatch,
+      ExtractMeldKind::Triplet => Option::Some((meld.tile_id, meld.suit_index, meld.rank)),
+      _ => Option::None,
     }
   }
 

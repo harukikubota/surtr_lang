@@ -17,8 +17,8 @@ pattern の `[head, ..tail]` はこの alias です。
 
 ```surtr
 defmod Matchers {
-  defextractor never(self: Int) -> MatchResult<Int, Error> {
-    MatchResult::NoMatch
+  defextractor never(self: Int) -> Option<Int> {
+    Option::None
   }
 }
 ```
@@ -58,5 +58,5 @@ print(match 1 {
 
 ## 躓きやすいポイント
 
-- extractor は普通の `def` ではなく、`MatchResult` を返す pattern-side contract として読む必要があります。
+- extractor は普通の `def` ではなく、`Option` を返す pattern-side contract として読む必要があります。
 - extractor の入力型と scrutinee 型、成功 payload の arity がずれると分かりにくい type error になりやすいです。

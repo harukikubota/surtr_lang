@@ -3049,8 +3049,8 @@ impl Single {
 Single { value: value }
   }
 
-  defextractor deconstruct(self: Self) -> MatchResult<Int, Error> {
-MatchResult::Success(self.value)
+  defextractor deconstruct(self: Self) -> Option<Int> {
+Option::Some(self.value)
   }
 }
 
@@ -3074,8 +3074,8 @@ impl User {
   def new(name: String, age: Int) -> Self {
 User { name: name, age: age }
   }
-  defextractor deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
-MatchResult::NoMatch
+  defextractor deconstruct(self: Self) -> Option<(String, Int)> {
+Option::None
   }
 }
 user = User("alice", 30)
@@ -3117,10 +3117,10 @@ fn enum_impl_extractor_can_be_used_in_matchblock() {
   Green,
 }
 impl Light {
-  defextractor stop_code(self: Self) -> MatchResult<Int, Error> {
+  defextractor stop_code(self: Self) -> Option<Int> {
 match self {
-  Light::Red => MatchResult::Success(1),
-  _ => MatchResult::NoMatch,
+  Light::Red => Option::Some(1),
+  _ => Option::None,
 }
   }
 }

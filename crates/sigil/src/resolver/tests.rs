@@ -735,8 +735,8 @@ impl User {
     self
   }
 
-  defextractor deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
-    MatchResult::NoMatch
+  defextractor deconstruct(self: Self) -> Option<(String, Int)> {
+    Option::None
   }
 }"#,
             "",
@@ -777,8 +777,8 @@ fn test_precollect_impl_extractors_for_enum_types() {
 }
 
 impl Light {
-  defextractor stop_code(self: Self) -> MatchResult<Int, Error> {
-    MatchResult::NoMatch
+  defextractor stop_code(self: Self) -> Option<Int> {
+    Option::None
   }
 }"#,
             "",

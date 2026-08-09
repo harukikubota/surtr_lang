@@ -1713,8 +1713,8 @@ impl User {
   }
 
   @doc """Deconstruct a user value for pattern matching."""
-  defextractor deconstruct(self: Self) -> MatchResult<String, Error> {
-    MatchResult::Success(self.name)
+  defextractor deconstruct(self: Self) -> Option<String> {
+    Option::Some(self.name)
   }
 }
 
@@ -1753,7 +1753,7 @@ impl Show for Int {
             entry.qualified_name == "User::deconstruct"
                 && entry.kind == DocKind::Function
                 && entry.signature.as_deref()
-                    == Some("User::deconstruct(self: User) -> MatchResult<String, Error>")
+                    == Some("User::deconstruct(self: User) -> Option<String>")
                 && entry.doc == "Deconstruct a user value for pattern matching."
         }));
         assert!(docs.iter().any(|entry| {

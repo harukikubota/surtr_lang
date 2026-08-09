@@ -68,25 +68,12 @@ impl Checker {
         matches!(ty, Ty::Struct(name, _) if Self::surface_name(name) == "Duration")
     }
 
-    fn match_result_not_allowed_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            message: "MatchResult is extractor-only and can only be used in extractor definitions"
-                .into(),
-            span: span.clone(),
-            hint: Some(
-                "Use MatchResult only as a defextractor / @builtin defextractor return type or inside an extractor body. Ordinary APIs should return Result, Option, or a user-defined enum explicitly."
-                    .into(),
-            ),
-        }
-    }
-
     fn seq_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             message: "Seq is not a surface type in this version of Surtr".into(),
             span: span.clone(),
             hint: Some(
-                "Use tuple payloads for extractor success values, such as MatchResult<(A, B), Error>."
-                    .into(),
+                "Use tuple payloads for extractor success values, such as Option<(A, B)>.".into(),
             ),
         }
     }
@@ -181,13 +168,6 @@ impl Checker {
             Self::surface_qualified_name(id.qualified_name.as_deref()),
             Some("Result::tap_err") | Some("Result::_tap_err_value") | Some("Test::_finish_it_err")
         )
-    }
-
-    fn match_result_type_allowed(&self, context: TypeSyntaxContext) -> bool {
-        matches!(
-            context,
-            TypeSyntaxContext::ExtractorReturn | TypeSyntaxContext::ExtractorBody
-        ) || self.in_extractor_body
     }
 
     pub(super) fn local_type_syntax_context(&self) -> TypeSyntaxContext {
@@ -629,32 +609,6 @@ impl Checker {
                 Err(self.seq_not_allowed_error(span))
             }
             AstTy::Generic(span, name, args) => match Self::surface_name(name) {
-                "MatchResult" => {
-                    if !self.match_result_type_allowed(context) {
-                        return Err(self.match_result_not_allowed_error(span));
-                    }
-                    if args.is_empty() || args.len() > 2 {
-                        return Err(TypeError {
-                            message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let value =
-                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
-                    if args.len() == 2 {
-                        let err =
-                            self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
-                        if !matches!(err, Ty::Error) {
-                            return Err(TypeError {
-                                message: "MatchResult<$Value, Error> requires Error as the second argument".into(),
-                                span: span.clone(),
-                                hint: None,
-                            });
-                        }
-                    }
-                    Ok(Ty::Enum("MatchResult".into(), vec![value]))
-                }
                 "List" => {
                     let args =
                         self.require_type_arg_count(span, args, 1, "List<T> requires exactly 1 type argument")?;
@@ -1026,39 +980,25 @@ impl Checker {
                 Err(self.seq_not_allowed_error(span))
             }
             AstTy::Generic(span, name, args) => match Self::surface_name(name) {
-                "MatchResult" => {
-                    if !self.match_result_type_allowed(context) {
-                        return Err(self.match_result_not_allowed_error(span));
-                    }
-                    if args.is_empty() || args.len() > 2 {
-                        return Err(TypeError {
-                            message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let value = self.resolve_signature_like_ast_ty_in_context(
+                "Option" => {
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        1,
+                        "Option<T> requires exactly 1 type argument",
+                    )?;
+                    let inner_ty = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
                         TypeSyntaxContext::General,
                         tyvars,
                         mode,
                     )?;
-                    if args.len() == 2 {
-                        let err = self.resolve_signature_like_ast_ty_in_context(
-                            &args[1],
-                            TypeSyntaxContext::General,
-                            tyvars,
-                            mode,
-                        )?;
-                        if !matches!(err, Ty::Error) {
-                            return Err(TypeError {
-                                message: "MatchResult<$Value, Error> requires Error as the second argument".into(),
-                                span: span.clone(),
-                                hint: None,
-                            });
-                        }
-                    }
-                    Ok(Ty::Enum("MatchResult".into(), vec![value]))
+                    let enum_name = self
+                        .env
+                        .lookup_type_def(name)
+                        .map(|def| def.name.clone())
+                        .unwrap_or_else(|| name.clone());
+                    Ok(Ty::Enum(enum_name, vec![inner_ty]))
                 }
                 "List" => {
                     let args = self.require_type_arg_count(

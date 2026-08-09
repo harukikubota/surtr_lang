@@ -4648,7 +4648,7 @@ fn test_module_compile_unit_rejects_top_level_def() {
 #[test]
 fn test_module_compile_unit_rejects_top_level_defextractor() {
     let err = parse_with_context(
-        "defextractor never(self: Int) -> MatchResult<Int, Error> { MatchResult::NoMatch }",
+        "defextractor never(self: Int) -> Option<Int> { Option::None }",
         ParserContext::module(1, None),
     )
     .expect_err("module compile unit should require defmod wrappers for extractors");
@@ -4785,8 +4785,8 @@ fn test_impl_accepts_qualified_type_target() {
 fn test_defmod_body_accepts_defextractor() {
     let ast = parse_with_context(
         r#"defmod Matchers {
-  defextractor never(self: Int) -> MatchResult<Int, Error> {
-    MatchResult::NoMatch
+  defextractor never(self: Int) -> Option<Int> {
+    Option::None
   }
 }"#,
         ParserContext::module(1, None),
@@ -5091,7 +5091,7 @@ fn test_project_compile_unit_accepts_top_level_expression() {
 #[test]
 fn test_project_compile_unit_rejects_top_level_defextractor() {
     let err = parse_with_context(
-        "defextractor never(self: Int) -> MatchResult<Int, Error> { MatchResult::NoMatch }",
+        "defextractor never(self: Int) -> Option<Int> { Option::None }",
         ParserContext::project(1),
     )
     .expect_err("project compile unit should reject top-level extractor declarations");

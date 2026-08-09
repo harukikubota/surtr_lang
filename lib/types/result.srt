@@ -13,20 +13,6 @@ defenum Result<$T> {
   Err(Error),
 }
 
-@doc """
-Internal control result returned from extractor evaluation inside MatchBlock.
-The canonical surface type position is `MatchResult<$Value, Error>`, with the
-error side fixed to the abstract `Error` type.
-`MatchResult` is only valid as the return type of `defextractor` /
-`@builtin defextractor` and inside extractor bodies. Ordinary APIs should
-return `Result`, `Option`, or a user-defined enum instead.
-"""
-defenum MatchResult<$Value> {
-  Success($Value),
-  NoMatch,
-  Err(Error),
-}
-
 @autoimport
 impl Result {
   defp _all_go(values: List<Result<$A>>, acc_rev: List<$A>) -> Result<List<$A>> {

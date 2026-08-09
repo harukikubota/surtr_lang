@@ -1,5 +1,5 @@
 defmod Matchers {
-  defextractor User(self: Int) -> MatchResult<Int, Error> {
-    MatchResult::NoMatch
+  defextractor User(self: Int) -> Option<Int> {
+    Option::None
   }
 }

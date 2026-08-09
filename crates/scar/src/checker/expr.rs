@@ -45,18 +45,6 @@ struct ExpectedCallableContract {
 }
 
 impl Checker {
-    pub(super) fn match_result_value_not_allowed_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            message: "MatchResult values are extractor-only and can only be constructed inside extractor definitions"
-                .into(),
-            span: span.clone(),
-            hint: Some(
-                "Use MatchResult::Success, MatchResult::NoMatch, or MatchResult::Err only in a defextractor body. Ordinary APIs should return Result, Option, or a user-defined enum explicitly."
-                    .into(),
-            ),
-        }
-    }
-
     fn parse_tuple_index_name(name: &str) -> Option<usize> {
         let suffix = name.strip_prefix('_')?;
         if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
@@ -637,11 +625,6 @@ impl Checker {
                             span: span.clone(),
                             node: TypedInner::Lit(Lit::Bool(value)),
                         });
-                    }
-                    if Self::surface_name(&variant.enum_name) == "MatchResult"
-                        && !self.in_extractor_body
-                    {
-                        return Err(self.match_result_value_not_allowed_error(span));
                     }
                     if matches!(
                         Self::surface_name(&variant.enum_name),
@@ -4132,32 +4115,27 @@ impl Checker {
         }
     }
 
-    pub(super) fn match_result_variant_tags(
-        &self,
-        span: &Span,
-    ) -> Result<(u32, u32, u32), TypeError> {
+    pub(super) fn option_variant_tags(&self, span: &Span) -> Result<(u32, u32, u32), TypeError> {
         let variants = self
-            .lookup_enum_variants_of("MatchResult")
+            .lookup_enum_variants_of("Option")
             .ok_or_else(|| TypeError {
-                message: "MatchResult enum is not available in the current environment".into(),
+                message: "Option enum is not available in the current environment".into(),
                 span: span.clone(),
                 hint: None,
             })?;
-        let mut success_tag = None;
-        let mut no_match_tag = None;
-        let mut err_tag = None;
+        let mut some_tag = None;
+        let mut none_tag = None;
         for variant in variants {
             match variant.short_name.as_str() {
-                "Success" => success_tag = Some(variant.tag),
-                "NoMatch" => no_match_tag = Some(variant.tag),
-                "Err" => err_tag = Some(variant.tag),
+                "Some" => some_tag = Some(variant.tag),
+                "None" => none_tag = Some(variant.tag),
                 _ => {}
             }
         }
-        match (success_tag, no_match_tag, err_tag) {
-            (Some(success), Some(no_match), Some(err)) => Ok((success, no_match, err)),
+        match (some_tag, none_tag) {
+            (Some(some), Some(none)) => Ok((some, none, 0)),
             _ => Err(TypeError {
-                message: "MatchResult enum must define Success, NoMatch, and Err variants".into(),
+                message: "Option enum must define Some and None variants".into(),
                 span: span.clone(),
                 hint: None,
             }),
@@ -4207,9 +4185,12 @@ impl Checker {
             });
         }
         let input_ty = params[0].clone();
-        let seq_tys =
-            self.require_match_result_seq_ty(&self.resolve_ty(&ret), span, &extractor_id.name)?;
-        let (success_tag, no_match_tag, err_tag) = self.match_result_variant_tags(span)?;
+        let seq_tys = self.require_extractor_option_payload_ty(
+            &self.resolve_ty(&ret),
+            span,
+            &extractor_id.name,
+        )?;
+        let (success_tag, no_match_tag, err_tag) = self.option_variant_tags(span)?;
         Ok((input_ty, seq_tys, success_tag, no_match_tag, err_tag))
     }
 
@@ -4280,7 +4261,7 @@ impl Checker {
         let (input_ty, seq_tys, success_tag, no_match_tag, err_tag) = if matches!(&extractor_ty, Ty::BuiltinFunc { name, .. } if name == "uncons")
         {
             let (input_ty, seq_tys) = self.uncons_contract_for_input(observed_ty, span)?;
-            let (success_tag, no_match_tag, err_tag) = self.match_result_variant_tags(span)?;
+            let (success_tag, no_match_tag, err_tag) = self.option_variant_tags(span)?;
             (input_ty, seq_tys, success_tag, no_match_tag, err_tag)
         } else {
             self.extractor_contract(extractor_id, span)?
@@ -4295,20 +4276,22 @@ impl Checker {
         ))
     }
 
-    pub(super) fn require_match_result_seq_ty(
+    pub(super) fn require_extractor_option_payload_ty(
         &self,
         ty: &Ty,
         span: &Span,
         context: &str,
     ) -> Result<Vec<Ty>, TypeError> {
         match self.resolve_ty(ty) {
-            Ty::Enum(name, args) if name == "MatchResult" && args.len() == 1 => match &args[0] {
-                Ty::Tuple(items) => Ok(items.clone()),
-                other => Ok(vec![other.clone()]),
-            },
+            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
+                match &args[0] {
+                    Ty::Tuple(items) => Ok(items.clone()),
+                    other => Ok(vec![other.clone()]),
+                }
+            }
             other => Err(TypeError {
                 message: format!(
-                    "{} must return MatchResult<T> or MatchResult<(...)>, got {}",
+                    "{} must return Option<T> or Option<(...)>, got {}",
                     context,
                     self.ty_name(&other)
                 ),

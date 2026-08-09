@@ -3414,8 +3414,7 @@ impl ReplEngine {
     fn completion_visible_owner_name(label: &str) -> bool {
         !matches!(
             crate::surface_path_name(label),
-            "MatchResult"
-                | "MatchArms"
+            "MatchArms"
                 | "CondClauses"
                 | "BulkUpdateEntries"
                 | "Hole"

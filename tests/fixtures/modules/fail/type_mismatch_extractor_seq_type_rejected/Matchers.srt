@@ -1,5 +1,5 @@
 defmod Matchers {
-  defextractor bad(self: Int) -> MatchResult<Seq<Int, String>, Error> {
-    MatchResult::NoMatch
+  defextractor bad(self: Int) -> Option<Seq<Int, String>> {
+    Option::None
   }
 }

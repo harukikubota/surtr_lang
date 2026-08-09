@@ -71,8 +71,8 @@ impl Range {
   xldr(1)> match Range(1, 3) { Range(min, max) => (min, max) }
   (1, 3)
   """
-  defextractor deconstruct<$A>(self: Range<$A>) -> MatchResult<($A, $A), Error> {
-    MatchResult::Success((self.min, self.max))
+  defextractor deconstruct<$A>(self: Range<$A>) -> Option<($A, $A)> {
+    Option::Some((self.min, self.max))
   }
 }
 

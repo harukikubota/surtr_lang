@@ -130,7 +130,7 @@ fn type_error_spec_by_id_adds_extractor_context_blocks() {
     let main_id = sources.register("main.srt", main_source);
     let kernel_id = sources.register(
         "lib/kernel.srt",
-        "@builtin defextractor uncons(term) -> MatchResult<($Head, $Tail), Error>",
+        "@builtin defextractor uncons(term) -> Option<($Head, $Tail)>",
     );
     let err = TypeError {
         message: "Extractor uncons expects List<...> or String, got Boolean".into(),

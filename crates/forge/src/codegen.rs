@@ -9019,40 +9019,6 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_propagate_error_from_local(
-        &mut self,
-        error_slot: u32,
-        span: Span,
-    ) -> Result<(), CodegenError> {
-        if self.in_function {
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit(Opcode::LoadLocal(error_slot));
-            self.emit(Opcode::StructNew { field_count: 1 });
-            self.emit(Opcode::Return);
-        } else if self.top_level_returns_result {
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit(Opcode::LoadLocal(error_slot));
-            self.emit(Opcode::StructNew { field_count: 1 });
-            self.emit(Opcode::Halt);
-        } else {
-            self.emit(Opcode::LoadLocal(error_slot));
-            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
-                message: "Unknown builtin: eprint".into(),
-                span: span.clone(),
-            })?;
-            self.emit(Opcode::CallBuiltin {
-                builtin_id: eprint_id,
-                arity: 1,
-                span_start: span.start as u32,
-                span_end: span.end as u32,
-            });
-            self.emit(Opcode::Halt);
-        }
-        Ok(())
-    }
-
     fn emit_unpack_seq_payload_from_local(
         &mut self,
         tuple_slot: u32,
@@ -9086,7 +9052,7 @@ impl Codegen {
         extractor_ty: &Ty,
         success_tag: u32,
         no_match_tag: u32,
-        err_tag: u32,
+        _err_tag: u32,
         seq_len: usize,
         input_slot: u32,
         no_match_label: Label,
@@ -9227,7 +9193,6 @@ impl Codegen {
 
         let success_label = self.fresh_label();
         let check_no_match_label = self.fresh_label();
-        let check_err_label = self.fresh_label();
         let end_label = self.fresh_label();
 
         self.emit(Opcode::LoadLocal(result_slot));
@@ -9252,29 +9217,14 @@ impl Codegen {
         let no_match_tag_const = self.add_constant(Constant::Tag(no_match_tag));
         self.emit(Opcode::LoadConst(no_match_tag_const));
         self.emit(Opcode::EqTag);
-        self.emit_jump_if_false(check_err_label);
-        self.emit_jump(no_match_label);
-
-        self.patch_label(check_err_label);
-        self.emit(Opcode::LoadLocal(result_slot));
-        self.emit(Opcode::GetTag);
-        let err_tag_const = self.add_constant(Constant::Tag(err_tag));
-        self.emit(Opcode::LoadConst(err_tag_const));
-        self.emit(Opcode::EqTag);
         let invalid_outcome_label = self.fresh_label();
         self.emit_jump_if_false(invalid_outcome_label);
-
-        let error_slot = self.state.next_slot;
-        self.state.next_slot += 1;
-        self.emit(Opcode::LoadLocal(result_slot));
-        self.emit(Opcode::GetField { field_index: 1 });
-        self.emit(Opcode::StoreLocal(error_slot));
-        self.emit_propagate_error_from_local(error_slot, span.clone())?;
+        self.emit_jump(no_match_label);
 
         self.patch_label(invalid_outcome_label);
         self.emit_pattern_failure(
             "InvalidMatchResult",
-            "Extractor returned an unknown MatchResult tag.",
+            "Extractor returned an unknown Option tag.",
             span.clone(),
         )?;
 

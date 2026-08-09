@@ -238,7 +238,6 @@ value: Int =? try_from("1", Int)
 SafeBind の流れは次です。
 
 - RHS が `Err(...)` ならその `Err(...)` を早期リターンします
-- LHS の MatchBlock / Extractor の途中で `Err(...)` が出た場合も早期リターンします
 - LHS のマッチ結果が `NoMatch` なら error 化して早期リターンします
 - LHS には `uncons`、literal match、Extractor を再帰的に書けます
 - 上のチェックが全部成功したときだけ変数が束縛されて続行します

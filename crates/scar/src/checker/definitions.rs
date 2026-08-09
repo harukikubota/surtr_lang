@@ -331,7 +331,11 @@ impl Checker {
             TypeSyntaxContext::ExtractorReturn,
             &mut tyvars,
         )?;
-        self.require_match_result_seq_ty(&ret, &param.id.span, &format!("Extractor {}", id.name))?;
+        self.require_extractor_option_payload_ty(
+            &ret,
+            &param.id.span,
+            &format!("Extractor {}", id.name),
+        )?;
 
         self.env.bind_var(
             id.unique_id,
@@ -910,7 +914,7 @@ impl Checker {
                 hint: None,
             });
         }
-        self.require_match_result_seq_ty(
+        self.require_extractor_option_payload_ty(
             &expected_ret,
             &param.id.span,
             &format!("Extractor {}", id.name),
@@ -1724,9 +1728,6 @@ impl Checker {
                     span: span.clone(),
                     node: TypedInner::ConstructorCall(variant.tag, vec![inner]),
                 });
-            }
-            if Self::surface_name(&variant.enum_name) == "MatchResult" && !self.in_extractor_body {
-                return Err(self.match_result_value_not_allowed_error(span));
             }
             if matches!(
                 Self::surface_name(&variant.enum_name),
