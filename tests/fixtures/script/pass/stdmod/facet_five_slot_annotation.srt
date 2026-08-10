@@ -1,0 +1,4 @@
+defrecord User(age: Int)
+path: Facet<InfallibleStructural, User, Int, _, _> = User.age
+user = User(1)
+print(to_string(Facet::view(path, user)))

@@ -724,7 +724,7 @@ fn lens_result_helpers_support_set_over_and_over_result() {
         r#"defrecord User(score: Result<Int>)
 
 user1 = User(Err(NoneError))
-user2 =? Facet::set(User.score, user1, 3)
+user2 =? Facet::set(User.score, user1, Ok(3))
 print("set:" ++ inspect(user2.score))
 
 user3 =? Facet::over(User.score, user2, {|score| Ok(score + 1)})
@@ -768,7 +768,7 @@ print(updated.address.country)
 
 account = Account(user, Ok(10), ("left", 2))
 account2 =? Facet::bulk_update(account) {
-  score <- set(30)
+  score <- set(Ok(30))
   pair._1 <- over({|n| Ok(n + 5)})
   user {
     address.zip <- over({|zip| Ok(zip + 1)})
@@ -820,7 +820,7 @@ boxed = Boxed(Ok(4), ("x", 1))
 print("view payload:" ++ inspect(Facet::view(Boxed.payload, boxed)))
 print("view tuple:" ++ inspect(Facet::view(Boxed.pair._1, boxed)))
 
-boxed2 =? Facet::set(Boxed.payload, boxed, 9)
+boxed2 =? Facet::set(Boxed.payload, boxed, Ok(9))
 print("set payload:" ++ inspect(boxed2.payload))
 
 boxed3 =? Facet::over(Boxed.pair._1, boxed2, {|n| Ok(n + 2)})

@@ -7186,7 +7186,7 @@ impl Codegen {
         } else {
             FacetUpdateLeaf::Set {
                 value_slot,
-                wrap_plain_result: matches!(mode, TypedFacetSetMode::WrapPlainResult),
+                wrap_plain_result: false,
             }
         };
 

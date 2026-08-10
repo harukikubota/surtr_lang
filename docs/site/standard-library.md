@@ -426,7 +426,7 @@ user.nickname
 path capability です。
 
 ```surtr
-@builtin type Facet<$S, $A>
+@builtin type Facet<$K, $S, $A, $T, $B>
 ```
 
 読み方は次です。

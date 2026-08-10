@@ -398,6 +398,7 @@ enum TypeSyntaxContext {
     BindingAnnotation,
     FunctionReturn,
     HoleClosureParam,
+    FacetDeferredSlot,
     ExtractorReturn,
     ExtractorBody,
     ErrorMarker,
@@ -843,8 +844,8 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                 Ty::Lazy(Box::new(inner.clone()))
             }
             "Facet" => {
-                let [source, focus] = args.as_slice() else {
-                    return Err("Facet requires exactly 2 type arguments".into());
+                let [_kind, source, focus, _update_source, _update_focus] = args.as_slice() else {
+                    return Err("Facet requires exactly 5 type arguments".into());
                 };
                 Ty::Facet(Box::new(source.clone()), Box::new(focus.clone()))
             }

@@ -299,13 +299,23 @@ impl Checker {
         }
     }
 
+    fn reserved_hole_type_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "`Hole` is compiler-reserved; write `_` only in a callable input type or Facet deferred slots.".into(),
+            span: span.clone(),
+            hint: Some("`Hole` has no user-facing type spelling.".into()),
+        }
+    }
+
     fn resolve_hole_surface_ty(
         &self,
         span: &Span,
         context: TypeSyntaxContext,
     ) -> Result<Ty, TypeError> {
         match context {
-            TypeSyntaxContext::HoleClosureParam => Ok(Ty::Hole),
+            TypeSyntaxContext::HoleClosureParam | TypeSyntaxContext::FacetDeferredSlot => {
+                Ok(Ty::Hole)
+            }
             _ => Err(self.hole_not_allowed_error(span)),
         }
     }
@@ -486,7 +496,8 @@ impl Checker {
                                     .into(),
                             ),
                         }),
-                    "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
+                    "_" => self.resolve_hole_surface_ty(span, context),
+                    "Hole" => Err(self.reserved_hole_type_error(span)),
                     builtin_name if Self::builtin_type_is_clause_block_surface_only(builtin_name) => {
                         Err(self.clause_block_type_not_allowed_error(
                             span,
@@ -655,14 +666,33 @@ impl Checker {
                     let args = self.require_type_arg_count(
                         span,
                         args,
-                        2,
-                        "Facet<S, A> requires exactly 2 type arguments",
+                        5,
+                        "Facet<K, S, A, T, B> requires exactly 5 type arguments",
                     )?;
+                    // K is a compile-only declaration name.  The currently
+                    // runtime-free capability representation stores S/A; T/B
+                    // are validated here and instantiated by the intrinsic.
+                    // Kind names are compiler declarations, not ordinary
+                    // runtime types. Their validity is checked by Facet path
+                    // specialization, so do not resolve them through the
+                    // value-type namespace here.
                     let source =
-                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
-                    let focus =
                         self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
-                    Ok(Ty::Facet(Box::new(source), Box::new(focus)))
+                    let focus =
+                        self.resolve_ast_ty_in_context(&args[2], TypeSyntaxContext::General)?;
+                    let update_source = self.resolve_ast_ty_in_context(&args[3], TypeSyntaxContext::FacetDeferredSlot)?;
+                    let update_focus = self.resolve_ast_ty_in_context(&args[4], TypeSyntaxContext::FacetDeferredSlot)?;
+                    if matches!((&update_source, &update_focus), (Ty::Hole, Ty::Hole))
+                        || (!matches!(update_source, Ty::Hole) && !matches!(update_focus, Ty::Hole))
+                    {
+                        Ok(Ty::Facet(Box::new(source), Box::new(focus)))
+                    } else {
+                        Err(TypeError {
+                            message: "Facet update slots T and B must both be `_` or both be concrete types".into(),
+                            span: span.clone(),
+                            hint: None,
+                        })
+                    }
                 }
                 "PID" => self.resolve_pid_surface_ty(span, args),
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
@@ -920,8 +950,11 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
-            AstTy::Named(span, name) if matches!(Self::surface_name(name), "_" | "Hole") => {
+            AstTy::Named(span, name) if Self::surface_name(name) == "_" => {
                 self.resolve_hole_surface_ty(span, context)
+            }
+            AstTy::Named(span, name) if Self::surface_name(name) == "Hole" => {
+                Err(self.reserved_hole_type_error(span))
             }
             AstTy::Named(span, name) if Self::builtin_type_is_clause_block_surface_only(name) => {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
@@ -1070,21 +1103,43 @@ impl Checker {
                     let args = self.require_type_arg_count(
                         span,
                         args,
-                        2,
-                        "Facet<S, A> requires exactly 2 type arguments",
+                        5,
+                        "Facet<K, S, A, T, B> requires exactly 5 type arguments",
                     )?;
+                    // See the surface-type resolver above: K is compile-only.
                     let source = self.resolve_signature_like_ast_ty_in_context(
-                        &args[0],
-                        TypeSyntaxContext::General,
-                        tyvars,
-                        mode,
-                    )?;
-                    let focus = self.resolve_signature_like_ast_ty_in_context(
                         &args[1],
                         TypeSyntaxContext::General,
                         tyvars,
                         mode,
                     )?;
+                    let focus = self.resolve_signature_like_ast_ty_in_context(
+                        &args[2],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                        mode,
+                    )?;
+                    let update_source = self.resolve_signature_like_ast_ty_in_context(
+                        &args[3],
+                        TypeSyntaxContext::FacetDeferredSlot,
+                        tyvars,
+                        mode,
+                    )?;
+                    let update_focus = self.resolve_signature_like_ast_ty_in_context(
+                        &args[4],
+                        TypeSyntaxContext::FacetDeferredSlot,
+                        tyvars,
+                        mode,
+                    )?;
+                    if !matches!((&update_source, &update_focus), (Ty::Hole, Ty::Hole))
+                        && (matches!(update_source, Ty::Hole) || matches!(update_focus, Ty::Hole))
+                    {
+                        return Err(TypeError {
+                            message: "Facet update slots T and B must both be `_` or both be concrete types".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
                     Ok(Ty::Facet(Box::new(source), Box::new(focus)))
                 }
                 "PID" => self.resolve_pid_surface_ty(span, args),

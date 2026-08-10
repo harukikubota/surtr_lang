@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Facet<K, S, A, T, B> requires exactly 5 type arguments

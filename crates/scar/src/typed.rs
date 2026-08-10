@@ -201,14 +201,6 @@ pub enum TypedFacetPathKind {
 }
 
 impl TypedFacetPathKind {
-    pub fn from_may_fail(may_fail: bool) -> Self {
-        if may_fail {
-            Self::Variant
-        } else {
-            Self::Structural
-        }
-    }
-
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Structural => "structural",
@@ -278,7 +270,6 @@ pub enum PendingFacetSegment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypedFacetSetMode {
     Exact,
-    WrapPlainResult,
     CaseSet,
 }
 

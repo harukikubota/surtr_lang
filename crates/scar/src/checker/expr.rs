@@ -5190,40 +5190,18 @@ impl Checker {
         } = self.prepare_facet_input(span, "Facet::set", &source_expr, path_input)?;
         self.check_mutating_facet_path_permissions("Facet::set", &path, span)?;
 
-        let resolved_focus_ty = self.resolve_ty(&path.focus_ty);
-        let (typed_value, mode) = if let Ty::Result(ok, _) = &resolved_focus_ty {
-            let typed_value = self.check_node(value_expr)?;
-            if self.types_compatible(&path.focus_ty, &typed_value.ty) {
-                (typed_value, TypedFacetSetMode::Exact)
-            } else if self.types_compatible(ok.as_ref(), &typed_value.ty) {
-                (typed_value, TypedFacetSetMode::WrapPlainResult)
-            } else {
-                return Err(TypeError {
-                    message: format!(
-                        "Facet::set value type mismatch: expected {} or {}, got {}",
-                        self.ty_name(&path.focus_ty),
-                        self.ty_name(ok.as_ref()),
-                        self.ty_name(&typed_value.ty)
-                    ),
-                    span: typed_value.span.clone(),
-                    hint: None,
-                });
-            }
-        } else {
-            let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
-            if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
-                return Err(TypeError {
-                    message: format!(
-                        "Facet::set value type mismatch: expected {}, got {}",
-                        self.ty_name(&path.focus_ty),
-                        self.ty_name(&typed_value.ty)
-                    ),
-                    span: typed_value.span.clone(),
-                    hint: None,
-                });
-            }
-            (typed_value, TypedFacetSetMode::Exact)
-        };
+        let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
+        if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "Facet::set value type mismatch: expected {}, got {}",
+                    self.ty_name(&path.focus_ty),
+                    self.ty_name(&typed_value.ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: None,
+            });
+        }
 
         Ok(TypedNode {
             ty: Ty::Result(
@@ -5236,7 +5214,7 @@ impl Checker {
                 path,
                 value: Box::new(typed_value),
                 source_is_result,
-                mode,
+                mode: TypedFacetSetMode::Exact,
             },
         })
     }
