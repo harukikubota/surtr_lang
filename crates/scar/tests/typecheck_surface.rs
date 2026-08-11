@@ -461,8 +461,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         generic_user_function_calls_typecheck_inside_script_module_scope as fn(),
     ),
     (
-        "concrete_body_rejects_redundant_generic_return_type",
-        concrete_body_rejects_redundant_generic_return_type as fn(),
+        "rigid_generic_return_rejects_concrete_body",
+        rigid_generic_return_rejects_concrete_body as fn(),
     ),
     (
         "signature_generics_are_rigid_while_definition_body_is_checked",
@@ -3462,23 +3462,17 @@ print(right)"#,
     );
 }
 
-fn concrete_body_rejects_redundant_generic_return_type() {
+fn rigid_generic_return_rejects_concrete_body() {
     let err = typecheck_with_rules(
         r#"def nil() -> $A {
   ""
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("a concrete body must reject a redundant generic return type");
+    .expect_err("a concrete body must not satisfy a rigid generic return type");
     assert!(
-        err.message
-            .contains("generic return type `$A` is unnecessary"),
+        err.message.contains("expected $") && err.message.contains("got String"),
         "unexpected error: {}",
-        err.message
-    );
-    assert!(
-        err.message.contains("String"),
-        "error should report the concrete return type: {}",
         err.message
     );
 
