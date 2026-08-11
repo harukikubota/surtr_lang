@@ -284,6 +284,7 @@ fn cached_std_prelude() -> &'static CachedStdPrelude {
                     runtime_policy: RuntimeSourcePolicy::std_module(),
                     enforce_builtin_type_contracts: true,
                     allow_error_function_params: true,
+                    allow_private_facet_inspection: false,
                 },
             )
             .expect("std modules should typecheck");
@@ -613,6 +614,7 @@ pub(crate) fn typecheck_with_rules(
             runtime_policy,
             enforce_builtin_type_contracts: false,
             allow_error_function_params: false,
+            allow_private_facet_inspection: false,
         },
     )
 }
@@ -660,6 +662,7 @@ pub(crate) fn typecheck_std_modules_with_overrides(
             runtime_policy: RuntimeSourcePolicy::std_module(),
             enforce_builtin_type_contracts: true,
             allow_error_function_params: true,
+            allow_private_facet_inspection: false,
         },
     )
 }

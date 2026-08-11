@@ -24,7 +24,8 @@ use spire::ast::{Ast, AstTy, ImportSpec, Span};
 
 use super::command::{
     parse_repl_command, repl_command_help_lines, repl_command_spec_for_alias, repl_command_specs,
-    repl_command_topic_help_lines, ReplCommand, ReplCommandArgCompletion, ReplCommandSpec,
+    repl_command_topic_help_lines, ReplCommand, ReplCommandArgCompletion, ReplCommandKind,
+    ReplCommandSpec,
 };
 use super::output::{ReplOutput, ReplResult};
 use super::preload::PreloadCompileMode;
@@ -2253,7 +2254,30 @@ impl ReplEngine {
         if !completion_allowed_at_cursor(input, cursor) {
             return None;
         }
-        let context = surtr_analysis::facet_path_context_at_cursor(input, cursor)?;
+        // `:facet` is definition inspection. It can traverse private segments so
+        // that the REPL can describe a path which is valid in its owner scope,
+        // while ordinary source completion keeps those members hidden.
+        let command_context = Self::repl_command_arg_context(input, cursor);
+        let include_private = command_context
+            .as_ref()
+            .is_some_and(|context| context.spec.kind == ReplCommandKind::Facet);
+        let (facet_input, facet_cursor, offset) = if let Some(context) = &command_context {
+            if include_private {
+                (
+                    &input[context.arg_start..],
+                    cursor.saturating_sub(context.arg_start),
+                    context.arg_start,
+                )
+            } else {
+                (input, cursor, 0)
+            }
+        } else {
+            (input, cursor, 0)
+        };
+        let mut context = surtr_analysis::facet_path_context_at_cursor(facet_input, facet_cursor)?;
+        context.replace_start += offset;
+        context.replace_end += offset;
+        context.token_start += offset;
         let (root_ty, mut focus_ty, source_is_result) = self.facet_root_ast_ty(&context)?;
         let mut path_is_variant = false;
         let mut path_is_fallible = false;
@@ -2262,7 +2286,7 @@ impl ReplEngine {
                 focus_ty = inner.clone();
                 path_is_fallible = true;
             }
-            let step = self.facet_next_ast_ty(&focus_ty, segment)?;
+            let step = self.facet_next_ast_ty(&focus_ty, segment, include_private)?;
             path_is_variant |= step.variant;
             path_is_fallible |= step.fallible;
             focus_ty = step.ty;
@@ -2278,6 +2302,7 @@ impl ReplEngine {
                 candidate_focus_ty,
                 context.replace_start,
                 context.replace_end,
+                include_private,
             )
             .unwrap_or_default()
             .into_iter()
@@ -2350,6 +2375,7 @@ impl ReplEngine {
         ty: &AstTy,
         replace_start: usize,
         replace_end: usize,
+        include_private: bool,
     ) -> Option<Vec<ReplCompletionCandidate>> {
         match ty {
             AstTy::Named(_, name) => {
@@ -2371,7 +2397,7 @@ impl ReplEngine {
                     let mut candidates = def
                         .fields
                         .iter()
-                        .filter(|(field, _)| !def.private_fields.contains(field))
+                        .filter(|(field, _)| include_private || !def.private_fields.contains(field))
                         .map(|(field, field_ty)| ReplCompletionCandidate {
                             label: field.clone(),
                             replacement: field.clone(),
@@ -2379,6 +2405,7 @@ impl ReplEngine {
                             detail: Some(Self::field_completion_detail(
                                 field,
                                 field_ty,
+                                def.private_fields.contains(field),
                                 def.readonly_fields.contains(field),
                             )),
                             documentation: None,
@@ -2500,23 +2527,34 @@ impl ReplEngine {
         }
     }
 
-    fn field_completion_detail(field: &str, field_ty: &Ty, readonly: bool) -> String {
+    fn field_completion_detail(
+        field: &str,
+        field_ty: &Ty,
+        private: bool,
+        readonly: bool,
+    ) -> String {
         let mut detail = format!("{}: {}", field, Self::ty_to_string(field_ty));
+        if private {
+            detail.push_str(" private");
+        }
         if readonly {
             detail.push_str(" readonly");
         }
         detail
     }
 
-    fn facet_next_ast_ty(&self, ty: &AstTy, segment: &str) -> Option<FacetStep> {
+    fn facet_next_ast_ty(
+        &self,
+        ty: &AstTy,
+        segment: &str,
+        include_private: bool,
+    ) -> Option<FacetStep> {
         match ty {
             AstTy::Named(_, name) => {
                 let def = self.scar_session.lookup_type_def(name)?;
-                if let Some((_, field_ty)) = def
-                    .fields
-                    .iter()
-                    .find(|(field, _)| field == segment && !def.private_fields.contains(field))
-                {
+                if let Some((_, field_ty)) = def.fields.iter().find(|(field, _)| {
+                    field == segment && (include_private || !def.private_fields.contains(field))
+                }) {
                     return parse_signature_type(&Self::ty_to_string(field_ty)).map(|ty| {
                         FacetStep {
                             ty,
@@ -4848,7 +4886,8 @@ impl ReplEngine {
                 }
             }
             Ok(ReplQuery::FacetRootDoc(symbol)) => Self::plain(vec![format!(
-                "`Facet.{}` has no constructor signature. Use `:doc Facet.{}`.", symbol.source, symbol.source
+                "`Facet.{}` has no constructor signature. Use `:doc Facet.{}`.",
+                symbol.source, symbol.source
             )]),
             Ok(ReplQuery::FieldPath(symbol)) => Self::plain(vec![format!(
                 "`{}` has no field signature. Use `:info {}` or `:facet {}`.",
@@ -4931,7 +4970,8 @@ impl ReplEngine {
             Ok(ReplQuery::Symbol(symbol)) => self.handle_info_symbol(trimmed, &symbol),
             Ok(ReplQuery::FacetRootDoc(symbol)) => self.handle_info_symbol(trimmed, &symbol),
             Ok(ReplQuery::FieldPath(symbol)) => Self::plain(vec![format!(
-                "`{}` is a Facet path. Use `:facet {}`.", symbol.source, symbol.source
+                "`{}` is a Facet path. Use `:facet {}`.",
+                symbol.source, symbol.source
             )]),
             Ok(ReplQuery::TypedCall(query)) => self.handle_info_typed_call(trimmed, &query),
             Ok(ReplQuery::OperatorTarget(query)) => {
@@ -4979,7 +5019,11 @@ impl ReplEngine {
             format!("facet root: {}", info.root_policy),
             format!(
                 "availability in this REPL: {}",
-                if info.available_in_current_scope { "available" } else { "unavailable (private path)" }
+                if info.available_in_current_scope {
+                    "available"
+                } else {
+                    "unavailable (private path)"
+                }
             ),
             "## API eligibility".to_string(),
             "## Flow".to_string(),
@@ -5265,7 +5309,11 @@ impl ReplEngine {
             format!("kind: {kind}"),
             format!(
                 "facet root: {}",
-                if def.readonly_root { "readonly" } else { "public" }
+                if def.readonly_root {
+                    "readonly"
+                } else {
+                    "public"
+                }
             ),
             "fields:".to_string(),
         ];

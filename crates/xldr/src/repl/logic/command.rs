@@ -98,7 +98,7 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         summary: "Show documentation for visible symbols, including process surfaces",
         detail_help: &[
             "Usage: :doc <symbol|query>",
-            "Examples: :doc print, :doc formatter, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc compare(Int, Int), :doc |*> Option",
+            "Examples: :doc print, :doc Facet.User, :doc formatter, :doc Kernel::if, :doc GenServer::spawn, :doc MyServer::pid, :doc User(), :doc compare(Int, Int), :doc |*> Option",
         ],
         arg_completion: ReplCommandArgCompletion::Semantic,
     },
@@ -120,8 +120,8 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         summary: "Show derived information for visible symbols, retained query targets, or process handles",
         detail_help: &[
             "Usage: :info <query>",
-            "Accepts: symbol | singleton-owner | typed-call | operator-target",
-            "Examples: :info print, :info Counter, :info pid, :info compare(Int, Int), :info |*> Option",
+            "Accepts: symbol | type-definition | singleton-owner | typed-call | operator-target",
+            "Examples: :info User, :info print, :info Counter, :info pid, :info compare(Int, Int), :info |*> Option",
         ],
         arg_completion: ReplCommandArgCompletion::Semantic,
     },
@@ -144,8 +144,8 @@ const REPL_COMMAND_SPECS: &[ReplCommandSpec] = &[
         summary: "Inspect a FacetPath and its API boundaries",
         detail_help: &[
             "Usage: :facet <FacetPath|binding>",
-            "Examples: :facet path, :facet Tuple._1, :facet BitWidth.Any",
-            "Shows canonical path, API availability, segment details, and where the path may stop.",
+            "Examples: :facet path, :facet Tuple._1, :facet User.password, :facet BitWidth.Any",
+            "Shows canonical path, API availability, segment policies, and where the path may stop. Private paths are inspectable but remain unavailable to ordinary REPL source.",
         ],
         arg_completion: ReplCommandArgCompletion::FacetTarget,
     },

@@ -81,6 +81,18 @@ decided by the consuming `Facet` operation.
 It cannot be passed as a function argument, returned, captured by a closure, or
 stored inside containers such as `List`, tuples, `Ok(...)`, or `Err(...)`.
 
+## REPL inspection
+
+`:doc Ty` shows the declaration documentation for a type. Use `:doc Facet.Ty`
+for the generic Facet-root explanation, `:info Ty` for its field policies, and
+`:facet Ty.path` for one path's structural details.
+
+`:info Ty` is definition inspection and includes private fields. `:facet` can
+inspect a private path such as `User.password` and reports that it is unavailable
+to the current REPL scope; this does not make the path usable in ordinary source.
+Fields are not standalone documentation or signature targets, so `:doc Ty.field`
+and `:sig Ty.field` guide to `:info Ty` or `:facet Ty.field`.
+
 Private field paths are validated when a facet path segment is formed.
 Outside the owning `impl Type` / `impl Trait for Type`, both `User.secret` and
 `value.secret` are compile errors.

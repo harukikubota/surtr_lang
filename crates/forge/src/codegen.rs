@@ -4295,8 +4295,12 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                     _ => prefix.push_str(&label),
                 }
                 let (kind, fallible, reason, policy) = match segment {
-                    TypedFacetSegment::Field { readonly, private, .. } => (
-                        "field", false, "field access",
+                    TypedFacetSegment::Field {
+                        readonly, private, ..
+                    } => (
+                        "field",
+                        false,
+                        "field access",
                         match (*private, *readonly) {
                             (true, true) => "private readonly",
                             (true, false) => "private",
@@ -4304,7 +4308,9 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                             (false, false) => "public",
                         },
                     ),
-                    TypedFacetSegment::Tuple { .. } => ("tuple", false, "tuple index access", "public"),
+                    TypedFacetSegment::Tuple { .. } => {
+                        ("tuple", false, "tuple index access", "public")
+                    }
                     TypedFacetSegment::Variant { .. } => {
                         path_is_fallible = true;
                         ("variant", true, "variant mismatch returns Result", "public")
@@ -4351,8 +4357,15 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                 segments,
                 stop_points,
                 operation: None,
-                root_policy: if path.source_readonly_root { "readonly" } else { "public" }.to_string(),
-                available_in_current_scope: !path.segments.iter().any(|segment| matches!(segment, TypedFacetSegment::Field { private: true, .. })),
+                root_policy: if path.source_readonly_root {
+                    "readonly"
+                } else {
+                    "public"
+                }
+                .to_string(),
+                available_in_current_scope: !path.segments.iter().any(|segment| {
+                    matches!(segment, TypedFacetSegment::Field { private: true, .. })
+                }),
             })
         }
         TypedInner::PendingFacetPath(path) => Some(ReplFacetInfo {
@@ -4435,7 +4448,10 @@ fn facet_api_eligibility(path: &TypedFacetPath) -> Vec<String> {
         apis.push("preview: unavailable (concrete update slots)".to_string());
     }
     let readonly_boundary = path.source_readonly_root
-        || path.segments.iter().any(|segment| matches!(segment, TypedFacetSegment::Field { readonly: true, .. }));
+        || path
+            .segments
+            .iter()
+            .any(|segment| matches!(segment, TypedFacetSegment::Field { readonly: true, .. }));
     if path.is_infallible_structural() && !readonly_boundary {
         apis.push("put: available when replacement B derives T".to_string());
     }

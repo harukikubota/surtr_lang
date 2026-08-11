@@ -3093,14 +3093,19 @@ fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
 fn core_facet_command_inspects_operations_and_kind_queries() {
     let mut engine = engine();
 
-    let operation = rendered_text(&engine.handle_line(
-        ":facet Facet::set(Tuple._0, (1, True), \"one\")",
-    ));
+    let operation =
+        rendered_text(&engine.handle_line(":facet Facet::set(Tuple._0, (1, True), \"one\")"));
     assert!(operation.contains("## FacetOperation"), "{operation}");
     assert!(operation.contains("operation: Facet::set"), "{operation}");
-    assert!(operation.contains("kind constraint: WritablePath"), "{operation}");
+    assert!(
+        operation.contains("kind constraint: WritablePath"),
+        "{operation}"
+    );
     assert!(operation.contains("replacement: String"), "{operation}");
-    assert!(operation.contains("result: Result<(String, Boolean), Error>"), "{operation}");
+    assert!(
+        operation.contains("result: Result<(String, Boolean), Error>"),
+        "{operation}"
+    );
 
     let kind = rendered_text(&engine.handle_line(":info ReadablePath"));
     assert!(kind.contains("@FacetPathKind Type ReadablePath"), "{kind}");
@@ -3337,9 +3342,9 @@ fn core_help_and_error_commands_return_structured_command_output() {
     let info_help = engine.handle_line(":help info");
     let info_help_text = rendered_text(&info_help);
     assert!(info_help_text.contains("Usage: :info <query>"));
-    assert!(
-        info_help_text.contains("Accepts: symbol | singleton-owner | typed-call | operator-target")
-    );
+    assert!(info_help_text.contains(
+        "Accepts: symbol | type-definition | singleton-owner | typed-call | operator-target"
+    ));
 
     let history_help = engine.handle_line(":help history");
     assert!(rendered_text(&history_help).contains("Usage: :history [selector]"));
@@ -5115,6 +5120,73 @@ fn core_sig_rejects_tuple_field_and_facet_expression_queries() {
         slash_sig.contains("Unsupported command query form")
             || slash_sig.contains("Unsupported command query argument"),
         "{slash_sig}"
+    );
+}
+
+#[test]
+fn core_inspects_facet_roots_and_private_paths_without_exposing_them_to_source() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+@readonly
+defstruct User {
+  private password: String,
+  readonly age: Int,
+  name: String
+}
+
+impl User {
+  def new(password: String, age: Int, name: String) -> Self {
+    User { password: password, age: age, name: name }
+  }
+}
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let doc = doc_text(&engine.handle_line(":doc Facet.User"));
+    assert!(doc.contains("Facet root for User"), "{doc}");
+
+    let field_doc = rendered_text(&engine.handle_line(":doc User.password"));
+    assert!(
+        field_doc.contains("not a documentation target"),
+        "{field_doc}"
+    );
+
+    let info = rendered_text(&engine.handle_line(":info User"));
+    assert!(info.contains("facet root: readonly"), "{info}");
+    assert!(info.contains("private         password: String"), "{info}");
+    assert!(info.contains("public readonly age"), "{info}");
+
+    let facet = rendered_text(&engine.handle_line(":facet User.password"));
+    assert!(facet.contains("full path: User.password"), "{facet}");
+    assert!(facet.contains("policy: private"), "{facet}");
+    assert!(
+        facet.contains("availability in this REPL: unavailable (private path)"),
+        "{facet}"
+    );
+
+    let source_completion = engine.completions("User.p", "User.p".len());
+    assert!(
+        source_completion
+            .candidates
+            .iter()
+            .all(|candidate| candidate.label != "password"),
+        "ordinary source completion must hide private fields: {:?}",
+        source_completion.candidates
+    );
+    let inspection_completion = engine.completions(":facet User.p", ":facet User.p".len());
+    let password = inspection_completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "password")
+        .expect(":facet completion should expose inspectable private path");
+    assert!(
+        password
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("private")),
+        "private completion should be labelled: {password:?}"
     );
 }
 

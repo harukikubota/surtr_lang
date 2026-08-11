@@ -609,7 +609,10 @@ fn is_type_ref(input: &str) -> bool {
     input
         .split("::")
         .all(|segment| !segment.is_empty() && is_simple_name(segment))
-        && input.chars().next().is_some_and(|ch| ch.is_ascii_uppercase())
+        && input
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_ascii_uppercase())
 }
 
 fn is_field_path_ref(input: &str) -> bool {
@@ -806,6 +809,23 @@ mod tests {
             query,
             CommandQuery::Symbol(SymbolQuery { ref source, span })
             if source == "value" && span == Span { start: 2, end: 7 }
+        ));
+    }
+
+    #[test]
+    fn parse_facet_root_and_field_path_queries() {
+        let facet_root = parse_command_query("  Facet.User  ").expect("query should parse");
+        assert!(matches!(
+            facet_root,
+            CommandQuery::FacetRootDoc(SymbolQuery { ref source, span })
+                if source == "User" && span == Span { start: 2, end: 12 }
+        ));
+
+        let field_path = parse_command_query("User.password").expect("query should parse");
+        assert!(matches!(
+            field_path,
+            CommandQuery::FieldPath(SymbolQuery { ref source, span })
+                if source == "User.password" && span == Span { start: 0, end: 13 }
         ));
     }
 

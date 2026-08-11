@@ -9963,6 +9963,7 @@ mod tests {
             field_index,
             container_field_count: 1,
             container_type_name: container_type_name.into(),
+            private: false,
             readonly,
             focus_readonly_root,
             focus_type_name: focus_type_name.map(str::to_string),
