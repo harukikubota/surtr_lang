@@ -4858,6 +4858,7 @@ impl Checker {
         right_expr: &Resolved,
         operator_name: &str,
     ) -> Result<TypedNode, TypeError> {
+        self.ensure_deferred_facet_slots(operator_name, &left_path, span)?;
         let expected_right_focus = self.env.fresh_tyvar();
         let expected_right_ty = Ty::Facet(
             crate::types::FacetKind::ReadablePath,
@@ -4869,6 +4870,7 @@ impl Checker {
         let right = self.check_node_with_expected(right_expr, Some(&expected_right_ty))?;
         let right_path =
             self.resolve_facet_path_from_node(right, span, Some(&left_path.focus_ty))?;
+        self.ensure_deferred_facet_slots(operator_name, &right_path, span)?;
 
         if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
             return Err(TypeError {

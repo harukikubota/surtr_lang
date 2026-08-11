@@ -276,8 +276,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_over_accepts_success_updater_for_result_focus as fn(),
     ),
     (
-        "facet_over_rejects_result_container_updater_for_result_focus",
-        facet_over_rejects_result_container_updater_for_result_focus as fn(),
+        "facet_over_allows_result_typed_payload_replacement",
+        facet_over_allows_result_typed_payload_replacement as fn(),
     ),
     (
         "facet_over_result_requires_result_container_updater",
@@ -2494,17 +2494,14 @@ Facet::over(User.score, user, {|score| Ok(score + 1)})"#,
     assert!(matches!(last.node, TypedInner::FacetOver { .. }));
 }
 
-fn facet_over_rejects_result_container_updater_for_result_focus() {
-    let err = typecheck_with_rules(
+fn facet_over_allows_result_typed_payload_replacement() {
+    typecheck_with_rules(
         r#"defrecord User(score: Result<Int>)
 user = User(Ok(1))
 Facet::over(User.score, user, {|score| Ok(Ok(score))})"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("Result container updater should fail for Facet::over");
-    assert!(err
-        .message
-        .contains("Facet::over update function output mismatch"));
+    .expect("Facet::over should permit changing a Result payload to a Result value");
 }
 
 fn facet_over_result_requires_result_container_updater() {
