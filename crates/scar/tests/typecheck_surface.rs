@@ -3664,6 +3664,110 @@ where
     assert!(err.message.contains("mapped more than once"), "{err:?}");
 }
 
+#[test]
+fn parent_trait_constraints_require_matching_impls_and_inherit_slots() {
+    let declarations = r#"deftrait Parent
+where
+  Self: Type<$A>
+{
+  def keep(self: Self<$A>) -> Self<$A>
+}
+
+deftrait Child
+where
+  Self: Parent
+{
+  def child_keep(self: Self<$A>) -> Self<$A>
+}
+
+defenum Identity<$T> {
+  Identity($T),
+}
+"#;
+    let child_impl = r#"impl Child for Identity<$T> {
+  def child_keep(self: Identity<$A>) -> Identity<$A> { self }
+}"#;
+    let err = typecheck_with_rules(
+        &format!("{declarations}\n{child_impl}"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("a child impl cannot omit its parent impl");
+    assert!(
+        err.message.contains("requires parent impl Parent"),
+        "{err:?}"
+    );
+
+    typecheck_with_rules(
+        &format!(
+            r#"{declarations}
+impl Parent for Identity<$T> {{
+  def keep(self: Identity<$A>) -> Identity<$A> {{ self }}
+}}
+{child_impl}"#
+        ),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("the child should inherit the parent's unary constructor slot");
+}
+
+#[test]
+fn parent_trait_cycles_and_slot_mapping_mismatches_are_rejected() {
+    let cycle = r#"deftrait Left
+where
+  Self: Right
+{
+  def left(self: Self) -> Self
+}
+
+deftrait Right
+where
+  Self: Left
+{
+  def right(self: Self) -> Self
+}"#;
+    let err = typecheck_with_rules(cycle, RuntimeSourcePolicy::script())
+        .expect_err("parent trait cycles must be rejected");
+    assert!(err.message.contains("constraint cycle"), "{err:?}");
+
+    let mismatch = r#"deftrait Parent
+where
+  Self: Type<$A>
+{
+  def keep(self: Self<$A>) -> Self<$A>
+}
+
+deftrait Child
+where
+  Self: Parent
+{
+  def child_keep(self: Self<$A>) -> Self<$A>
+}
+
+defenum Pair<$L, $R> {
+  Pair($L, $R),
+}
+
+impl Parent for Pair<$L, $R>
+where
+  $R: Parent.$A
+{
+  def keep(self: Pair<$L, $A>) -> Pair<$L, $A> { self }
+}
+
+impl Child for Pair<$L, $R>
+where
+  $L: Child.$A
+{
+  def child_keep(self: Pair<$A, $R>) -> Pair<$A, $R> { self }
+}"#;
+    let err = typecheck_with_rules(mismatch, RuntimeSourcePolicy::script())
+        .expect_err("a child must preserve its parent's slot mapping");
+    assert!(
+        err.message.contains("same constructor slot mapping"),
+        "{err:?}"
+    );
+}
+
 fn rigid_generic_return_rejects_concrete_body() {
     let err = typecheck_with_rules(
         r#"def nil() -> $A {

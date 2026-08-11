@@ -1136,6 +1136,92 @@ impl Checker {
         Ok(slots.unwrap_or_default())
     }
 
+    fn trait_parents(where_clause: Option<&ResolvedWhereClause>) -> Vec<ResolvedId> {
+        let Some(clause) = where_clause else {
+            return Vec::new();
+        };
+        clause
+            .constraints
+            .iter()
+            .filter(|constraint| {
+                matches!(&constraint.subject, AstTy::Named(_, subject) if subject == "Self")
+            })
+            .flat_map(|constraint| constraint.bounds.iter())
+            .filter_map(|bound| match bound {
+                ResolvedWhereConstraintRhs::Trait(parent) => Some(parent.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn resolve_trait_constraint_closure(&mut self) -> Result<(), TypeError> {
+        fn visit(
+            key: &str,
+            traits: &HashMap<String, TraitInfo>,
+            visiting: &mut Vec<String>,
+            resolved: &mut HashMap<String, Vec<String>>,
+        ) -> Result<Vec<String>, TypeError> {
+            if let Some(slots) = resolved.get(key) {
+                return Ok(slots.clone());
+            }
+            if let Some(start) = visiting.iter().position(|item| item == key) {
+                let mut cycle = visiting[start..].to_vec();
+                cycle.push(key.to_string());
+                let info = traits.get(key).expect("visited trait must exist");
+                return Err(TypeError {
+                    message: format!("Parent trait constraint cycle: {}", cycle.join(" -> ")),
+                    span: info.id.span.clone(),
+                    hint: None,
+                });
+            }
+            let info = traits.get(key).ok_or_else(|| TypeError {
+                message: format!("Unknown parent trait: {key}"),
+                span: Span { start: 0, end: 0 },
+                hint: None,
+            })?;
+            visiting.push(key.to_string());
+            let mut slots = info.constructor_slots.clone();
+            for parent in &info.parents {
+                let parent_key = parent
+                    .qualified_name
+                    .clone()
+                    .unwrap_or_else(|| parent.name.clone());
+                let parent_slots = visit(&parent_key, traits, visiting, resolved)?;
+                if slots.is_empty() {
+                    slots = parent_slots;
+                } else if !parent_slots.is_empty() && slots.len() != parent_slots.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait {} exposes {} constructor slot(s), but parent {} exposes {}",
+                            info.id.name,
+                            slots.len(),
+                            parent.name,
+                            parent_slots.len()
+                        ),
+                        span: info.id.span.clone(),
+                        hint: None,
+                    });
+                }
+            }
+            visiting.pop();
+            resolved.insert(key.to_string(), slots.clone());
+            Ok(slots)
+        }
+
+        let keys = self.traits.keys().cloned().collect::<Vec<_>>();
+        let snapshot = self.traits.clone();
+        let mut resolved = HashMap::new();
+        for key in &keys {
+            visit(key, &snapshot, &mut Vec::new(), &mut resolved)?;
+        }
+        for (key, slots) in resolved {
+            if let Some(info) = self.traits.get_mut(&key) {
+                info.constructor_slots = slots;
+            }
+        }
+        Ok(())
+    }
+
     fn target_top_level_type_params(target_ast_ty: &AstTy) -> Vec<String> {
         let AstTy::Generic(_, _, args) = target_ast_ty else {
             return Vec::new();
@@ -1155,7 +1241,7 @@ impl Checker {
         where_clause: Option<&ResolvedWhereClause>,
         target_param_vars: &HashMap<String, u32>,
         span: &Span,
-    ) -> Result<Vec<u32>, TypeError> {
+    ) -> Result<(Vec<u32>, Vec<usize>), TypeError> {
         let target_params = Self::target_top_level_type_params(target_ast_ty);
         let mut mapped_slots = vec![None; trait_info.constructor_slots.len()];
         let mut mapped_params = HashSet::new();
@@ -1246,7 +1332,17 @@ impl Checker {
             });
         }
 
-        Ok(mapped_slots.into_iter().flatten().collect())
+        let vars = mapped_slots.into_iter().flatten().collect::<Vec<_>>();
+        let positions = vars
+            .iter()
+            .map(|var| {
+                target_params
+                    .iter()
+                    .position(|param| target_param_vars.get(param) == Some(var))
+                    .expect("mapped constructor variable must belong to target parameters")
+            })
+            .collect();
+        Ok((vars, positions))
     }
 
     pub(super) fn resolve_trait_impl_head_tys(
@@ -1857,6 +1953,7 @@ impl Checker {
             };
             let trait_key = self.trait_key(id);
             let constructor_slots = self.trait_constructor_slots(id, where_clause.as_ref())?;
+            let parents = Self::trait_parents(where_clause.as_ref());
             let mut method_map = HashMap::new();
             for method in methods {
                 if let Some(qualified_name) = &method.id.qualified_name {
@@ -1886,11 +1983,14 @@ impl Checker {
                     type_params: type_params.clone(),
                     where_clause: where_clause.as_ref().map(TypedWhereClause::from),
                     constructor_slots,
+                    parents,
                     methods: method_map,
                 },
             );
             let _ = span;
         }
+
+        self.resolve_trait_constraint_closure()?;
 
         for stmt in stmts {
             let Resolved::TraitImplDef(
@@ -1935,13 +2035,14 @@ impl Checker {
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: Some("Use `impl Trait for Int` / `impl Trait for UserType` / `impl Trait for (Int, String)` / `impl Trait for ($A -> $B)`.".into()),
             })?;
-            let constructor_slot_vars = self.constructor_slot_vars_for_impl(
-                &trait_info,
-                target_ast_ty,
-                where_clause.as_ref(),
-                &target_param_vars,
-                span,
-            )?;
+            let (constructor_slot_vars, constructor_slot_positions) = self
+                .constructor_slot_vars_for_impl(
+                    &trait_info,
+                    target_ast_ty,
+                    where_clause.as_ref(),
+                    &target_param_vars,
+                    span,
+                )?;
 
             let mut method_map = HashMap::new();
             for method in methods {
@@ -2176,10 +2277,59 @@ impl Checker {
                     where_clause: where_clause.as_ref().map(TypedWhereClause::from),
                     type_param_vars,
                     constructor_slot_vars,
+                    constructor_slot_positions,
                     methods: method_map,
                 },
             );
             self.index_trait_impl(impl_key);
+        }
+
+        let impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
+        for child_impl in &impls {
+            let child_trait_key = self.trait_key(&child_impl.trait_id);
+            let Some(child_trait) = self.traits.get(&child_trait_key) else {
+                continue;
+            };
+            for parent in &child_trait.parents {
+                let parent_key = self.trait_key(parent);
+                let parent_trait = self.traits.get(&parent_key).ok_or_else(|| TypeError {
+                    message: format!("Unknown parent trait: {}", parent.name),
+                    span: parent.span.clone(),
+                    hint: None,
+                })?;
+                if !parent_trait.type_params.is_empty() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Parent trait {} requires type arguments and cannot be used as a bare parent constraint",
+                            parent.name
+                        ),
+                        span: parent.span.clone(),
+                        hint: None,
+                    });
+                }
+                let parent_impl_key = (parent_key.clone(), child_impl.target_name.clone());
+                let parent_impl =
+                    self.trait_impls
+                        .get(&parent_impl_key)
+                        .ok_or_else(|| TypeError {
+                            message: format!(
+                                "Trait impl {} for {} requires parent impl {} for the same target",
+                                child_impl.trait_id.name, child_impl.target_name, parent.name
+                            ),
+                            span: child_impl.trait_id.span.clone(),
+                            hint: None,
+                        })?;
+                if child_impl.constructor_slot_positions != parent_impl.constructor_slot_positions {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait impl {} for {} must use the same constructor slot mapping as parent {}",
+                            child_impl.trait_id.name, child_impl.target_name, parent.name
+                        ),
+                        span: child_impl.trait_id.span.clone(),
+                        hint: None,
+                    });
+                }
+            }
         }
 
         Ok(())

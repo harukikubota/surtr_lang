@@ -2106,6 +2106,7 @@ impl Resolver {
         self.explicit_module_imports = Self::collect_explicit_module_imports(&stmts);
         self.validate_auto_import_conflicts(&stmts)?;
         self.predeclare_functions(&stmts)?;
+        self.inherit_trait_constructor_slots(&stmts);
         let mut resolved = Vec::new();
         for stmt in stmts {
             if matches!(stmt, Ast::Import(_, _, _))
@@ -2122,6 +2123,46 @@ impl Resolver {
         validate_trait_impl_pairs_in_nodes(&resolved)?;
         self.predeclared_ids.clear();
         Ok(resolved)
+    }
+
+    fn inherit_trait_constructor_slots(&mut self, stmts: &[Ast]) {
+        let mut parents = Vec::new();
+        for stmt in stmts {
+            let Ast::TraitDef(_, name, _, Some(clause), _, _) = stmt else {
+                continue;
+            };
+            let Some(child_uid) = self.scope.lookup(name) else {
+                continue;
+            };
+            for constraint in &clause.constraints {
+                if !matches!(&constraint.subject, AstTy::Named(_, subject) if subject == "Self") {
+                    continue;
+                }
+                for bound in &constraint.bounds {
+                    let spire::ast::WhereConstraintRhs::Trait(_, parent_name) = bound else {
+                        continue;
+                    };
+                    if let Some(parent_uid) = self.scope.lookup(parent_name) {
+                        parents.push((child_uid, parent_uid));
+                    }
+                }
+            }
+        }
+        loop {
+            let mut changed = false;
+            for (child, parent) in &parents {
+                if self.trait_constructor_slots.contains_key(child) {
+                    continue;
+                }
+                if let Some(slots) = self.trait_constructor_slots.get(parent).cloned() {
+                    self.trait_constructor_slots.insert(*child, slots);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
     }
 
     fn collect_explicit_module_imports(stmts: &[Ast]) -> HashSet<String> {

@@ -119,6 +119,22 @@ fn collect_staged_trait_constructor_slots(
     declaration_uids: &HashMap<String, u32>,
 ) -> HashMap<u32, Vec<String>> {
     let mut result = HashMap::new();
+    let mut parents = Vec::new();
+    let lookup_uid = |name: &str, module_path: &str| {
+        declaration_uids
+            .get(name)
+            .or_else(|| declaration_uids.get(&format!("{}::{}", module_path, name)))
+            .copied()
+            .or_else(|| {
+                let suffix = format!("::{name}");
+                let mut matches = declaration_uids
+                    .iter()
+                    .filter(|(fq_name, _)| fq_name.ends_with(&suffix))
+                    .map(|(_, uid)| *uid);
+                let first = matches.next()?;
+                matches.next().is_none().then_some(first)
+            })
+    };
     for module in module_stages.iter().flatten() {
         for stmt in &module.ast {
             let Ast::TraitDef(_, name, _, Some(clause), _, _) = stmt else {
@@ -141,20 +157,43 @@ fn collect_staged_trait_constructor_slots(
                     continue;
                 }
                 for bound in &constraint.bounds {
-                    if let spire::ast::WhereConstraintRhs::TypeConstructor(_, slots) = bound {
-                        result.insert(
-                            uid,
-                            slots
-                                .iter()
-                                .filter_map(|slot| match slot {
-                                    AstTy::Named(_, name) => Some(name.clone()),
-                                    _ => None,
-                                })
-                                .collect(),
-                        );
+                    match bound {
+                        spire::ast::WhereConstraintRhs::TypeConstructor(_, slots) => {
+                            result.insert(
+                                uid,
+                                slots
+                                    .iter()
+                                    .filter_map(|slot| match slot {
+                                        AstTy::Named(_, name) => Some(name.clone()),
+                                        _ => None,
+                                    })
+                                    .collect(),
+                            );
+                        }
+                        spire::ast::WhereConstraintRhs::Trait(_, parent_name) => {
+                            if let Some(parent_uid) = lookup_uid(parent_name, &module.module_path) {
+                                parents.push((uid, parent_uid));
+                            }
+                        }
+                        spire::ast::WhereConstraintRhs::TraitSlot(..) => {}
                     }
                 }
             }
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (child, parent) in &parents {
+            if result.contains_key(child) {
+                continue;
+            }
+            if let Some(slots) = result.get(parent).cloned() {
+                result.insert(*child, slots);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
         }
     }
     result

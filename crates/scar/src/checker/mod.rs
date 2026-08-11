@@ -424,6 +424,7 @@ struct TraitInfo {
     type_params: Vec<ResolvedTypeParam>,
     where_clause: Option<TypedWhereClause>,
     constructor_slots: Vec<String>,
+    parents: Vec<ResolvedId>,
     methods: HashMap<String, TraitMethodInfo>,
 }
 
@@ -456,6 +457,7 @@ struct TraitImplInfo {
     where_clause: Option<TypedWhereClause>,
     type_param_vars: Vec<u32>,
     constructor_slot_vars: Vec<u32>,
+    constructor_slot_positions: Vec<usize>,
     methods: HashMap<String, TraitImplMethodInfo>,
 }
 
