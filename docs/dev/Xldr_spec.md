@@ -186,6 +186,21 @@ REPL 実装は次の 3 層に分ける。
 | `:reload [all|defs]` | preload 条件と top-level `def` から session を再構築する。`all` は起動時 preload に加えて REPL 中の top-level `def` も再投入し、`defs` は起動時 preload だけで再構築する。どちらも value binding は破棄する。 |
 | `:clear` | セッション状態を変えずに画面表示だけをクリアする。TTY または host 制約で clear が使えない場合は短い非対応メッセージを返す。 |
 
+### 5.2 Facet root と definition inspection
+
+- `:doc Ty` は canonical type doc を表示する。`:doc Facet.Ty` は PathConstructable `Ty` の
+  Facet root doc を表示する。`Ty.prop` は standalone declaration ではないため doc target とせず、
+  `:info Ty` または `:facet Ty.prop` へ誘導する
+- `:sig Ty` は既存どおり constructor / owner signature を表示する。`Facet.Ty` と `Ty.prop` は
+  constructor signature を持たないため、それぞれ `:doc Facet.Ty` と `:info Ty` / `:facet Ty.prop`
+  へ誘導する
+- `:info Ty` は definition inspection として、`facet root: public | readonly` と全 field の
+  policy (`public` / `readonly` / `private` / `private readonly`) を表示する。private field は
+  通常 source での capability visibility を保ったまま、この表示には含める
+- `:facet Path` は Path inspection である。private segment を含む structurally valid Path を
+  inspection でき、current REPL scope で binding または Facet API consumption が可能かを
+  availability として補足する。通常 source の private capability 規則は変更しない
+
 REPL command query は Surtr 式 parser ではなく、command query parser と semantic resolver の組で扱う。
 
 - `:v <N>` は visible binding table を引き直さず、評価時に commit された値を履歴から再表示する。後続の同名再束縛は過去行の再表示結果を変えない

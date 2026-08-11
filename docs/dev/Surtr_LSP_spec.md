@@ -484,11 +484,18 @@ CommandQuery
   | TypedCallDispatch(...)
   | OperatorTargetDispatch(...)
   | FacetLookup(...)
+  | FacetRootDocLookup(TypeRef)
+  | FieldPathLookup(TypeRef, segment+)
 ```
 
 この parser は、`literal`、任意式、generic type variable、nested function call as value、
 pipe placeholder の式利用を受けない。受けないものを明確にすることで、LSP / REPL の
 doc / signature / info query が Surtr 本体 grammar と独立して安定する。
+
+`Facet.Ty` は `:doc` 用の Facet root doc target であり、通常 source の field access ではない。
+`Ty.prop` は `:facet` の Path inspection でだけ field-path target として使える。`:doc` と
+`:sig` は field が standalone declaration ではないことを説明して拒否し、`:info Ty` は
+definition metadata として全 field policy を表示する。
 
 置き場は `surtr-analysis::query` とする。Xldr の `:doc` / `:sig` / `:info` /
 `:type` / `:facet` はこの parser を共有する。semantic resolver は `surtr-analysis`
