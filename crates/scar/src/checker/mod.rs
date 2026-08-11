@@ -587,6 +587,9 @@ pub struct TypecheckContext {
     pub runtime_policy: RuntimeSourcePolicy,
     pub enforce_builtin_type_contracts: bool,
     pub allow_error_function_params: bool,
+    /// REPL `:facet` inspects structurally valid paths even when a private
+    /// segment is not consumable from the current source scope.
+    pub allow_private_facet_inspection: bool,
 }
 
 impl Default for TypecheckContext {
@@ -595,6 +598,7 @@ impl Default for TypecheckContext {
             runtime_policy: RuntimeSourcePolicy::script(),
             enforce_builtin_type_contracts: false,
             allow_error_function_params: false,
+            allow_private_facet_inspection: false,
         }
     }
 }
@@ -605,6 +609,7 @@ impl TypecheckContext {
             runtime_policy: policy.runtime_policy,
             enforce_builtin_type_contracts: false,
             allow_error_function_params: false,
+            allow_private_facet_inspection: false,
         }
     }
 }
@@ -1942,6 +1947,7 @@ struct Checker {
     runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
     allow_error_function_params: bool,
+    allow_private_facet_inspection: bool,
     allow_error_observer_value_use: usize,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
     facet_path_kind_decls: HashMap<String, Vec<String>>,
@@ -2022,6 +2028,7 @@ impl Checker {
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             allow_error_function_params: context.allow_error_function_params,
+            allow_private_facet_inspection: context.allow_private_facet_inspection,
             allow_error_observer_value_use: 0,
             seen_builtin_type_decls: HashMap::new(),
             facet_path_kind_decls: HashMap::new(),
@@ -2047,6 +2054,7 @@ impl Checker {
                 runtime_policy: self.runtime_policy.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
                 allow_error_function_params: self.allow_error_function_params,
+                allow_private_facet_inspection: self.allow_private_facet_inspection,
             },
         );
         checker.function_return_ty = self.function_return_ty.clone();

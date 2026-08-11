@@ -144,6 +144,7 @@ pub enum TypedFacetSegment {
         container_field_count: u32,
         container_type_name: String,
         readonly: bool,
+        private: bool,
         focus_readonly_root: bool,
         focus_type_name: Option<String>,
     },

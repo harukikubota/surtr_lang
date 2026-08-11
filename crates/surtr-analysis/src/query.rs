@@ -9,6 +9,8 @@ const QUERY_OPERATORS: &[&str] = &[
 #[derive(Debug, Clone, PartialEq)]
 pub enum CommandQuery {
     Symbol(SymbolQuery),
+    FacetRootDoc(SymbolQuery),
+    FieldPath(SymbolQuery),
     TypedCall(ParsedTypedCallQuery),
     OperatorTarget(ParsedOperatorTargetQuery),
 }
@@ -136,6 +138,22 @@ pub fn parse_command_query(input: &str) -> Result<CommandQuery, CommandQueryPars
 
     if let Some(call_query) = parse_typed_call_query(&ctx)? {
         return Ok(CommandQuery::TypedCall(call_query));
+    }
+
+    if let Some(type_ref) = trimmed.strip_prefix("Facet.") {
+        if is_type_ref(type_ref) {
+            return Ok(CommandQuery::FacetRootDoc(SymbolQuery {
+                source: type_ref.to_string(),
+                span: ctx.full_span(),
+            }));
+        }
+    }
+
+    if is_field_path_ref(trimmed) {
+        return Ok(CommandQuery::FieldPath(SymbolQuery {
+            source: trimmed.to_string(),
+            span: ctx.full_span(),
+        }));
     }
 
     if trimmed.split_whitespace().count() == 1 {
@@ -585,6 +603,23 @@ fn is_simple_name(input: &str) -> bool {
     };
     (first == '_' || first.is_ascii_alphabetic())
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+}
+
+fn is_type_ref(input: &str) -> bool {
+    input
+        .split("::")
+        .all(|segment| !segment.is_empty() && is_simple_name(segment))
+        && input.chars().next().is_some_and(|ch| ch.is_ascii_uppercase())
+}
+
+fn is_field_path_ref(input: &str) -> bool {
+    let Some((root, segments)) = input.split_once('.') else {
+        return false;
+    };
+    is_type_ref(root)
+        && segments
+            .split('.')
+            .all(|segment| !segment.is_empty() && is_simple_name(segment))
 }
 
 fn looks_like_type_expr(input: &str) -> bool {

@@ -2942,6 +2942,13 @@ impl ReplEngine {
         }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => self.handle_doc_symbol(trimmed, &symbol),
+            Ok(ReplQuery::FacetRootDoc(symbol)) => self.handle_facet_root_doc(&symbol),
+            Ok(ReplQuery::FieldPath(symbol)) => Self::plain(vec![format!(
+                "`{}` is not a documentation target. Fields do not have standalone declaration documentation. Use `:info {}` or `:facet {}`.",
+                symbol.source,
+                symbol.source.split('.').next().unwrap_or(&symbol.source),
+                symbol.source
+            )]),
             Ok(ReplQuery::TypedCall(query)) => self.handle_doc_typed_call(trimmed, &query),
             Ok(ReplQuery::OperatorTarget(query)) => self.handle_doc_typed_operator(trimmed, &query),
             Err(err) => self.repl_query_diagnostic(
@@ -2951,6 +2958,35 @@ impl ReplEngine {
                 Some("Accepted forms: symbol, typed call, or operator target.".to_string()),
             ),
         }
+    }
+
+    fn handle_facet_root_doc(&self, ty: &str) -> ReplResult {
+        let kind = self
+            .visible_declaration(ty)
+            .and_then(|decl| sigil::declaration_symbol_identity_info(&decl.fq_name, &decl.kind))
+            .and_then(|info| info.capabilities.facet_root_path)
+            .or_else(|| {
+                sindr::names::builtin_symbol_identity_info(ty)
+                    .and_then(|info| info.capabilities.facet_root_path)
+            });
+        let Some(kind) = kind else {
+            return Self::plain(vec![format!("{ty} is not a Facet path root.")]);
+        };
+        let root_form = match kind {
+            sindr::names::FacetRootKind::Tuple => "Tuple._N",
+            sindr::names::FacetRootKind::List => "List.[index]",
+            sindr::names::FacetRootKind::HashMap => "HashMap.[key]",
+            sindr::names::FacetRootKind::TypeRoot => "Ty.segment",
+        };
+        ReplResult::ok(ReplOutput::DocResolved {
+            symbol: format!("Facet.{ty}"),
+            signature: None,
+            summary: Some(format!("Facet root for {ty}.")),
+            source_snippet: Some(format!(
+                "`{ty}` is a Facet path root. Use `{root_form}` to build a path.\nUse `:info {ty}` for field policies and `:facet {ty}.segment` for path inspection."
+            )),
+            details: Vec::new(),
+        })
     }
 
     fn handle_doc_symbol(&self, source_symbol: &str, symbol: &str) -> ReplResult {
@@ -4811,6 +4847,15 @@ impl ReplEngine {
                     }
                 }
             }
+            Ok(ReplQuery::FacetRootDoc(symbol)) => Self::plain(vec![format!(
+                "`Facet.{}` has no constructor signature. Use `:doc Facet.{}`.", symbol.source, symbol.source
+            )]),
+            Ok(ReplQuery::FieldPath(symbol)) => Self::plain(vec![format!(
+                "`{}` has no field signature. Use `:info {}` or `:facet {}`.",
+                symbol.source,
+                symbol.source.split('.').next().unwrap_or(&symbol.source),
+                symbol.source
+            )]),
             Ok(ReplQuery::TypedCall(query)) => self.handle_sig_typed_call(trimmed, &query),
             Ok(ReplQuery::OperatorTarget(query)) => self.handle_sig_typed_operator(trimmed, &query),
             Err(err) => self.repl_query_diagnostic(
@@ -4884,6 +4929,10 @@ impl ReplEngine {
         }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => self.handle_info_symbol(trimmed, &symbol),
+            Ok(ReplQuery::FacetRootDoc(symbol)) => self.handle_info_symbol(trimmed, &symbol),
+            Ok(ReplQuery::FieldPath(symbol)) => Self::plain(vec![format!(
+                "`{}` is a Facet path. Use `:facet {}`.", symbol.source, symbol.source
+            )]),
             Ok(ReplQuery::TypedCall(query)) => self.handle_info_typed_call(trimmed, &query),
             Ok(ReplQuery::OperatorTarget(query)) => {
                 self.handle_info_typed_operator(trimmed, &query)
@@ -4926,6 +4975,11 @@ impl ReplEngine {
             format!(
                 "full path: {}",
                 crate::surface_rendered_name(&info.full_path)
+            ),
+            format!("facet root: {}", info.root_policy),
+            format!(
+                "availability in this REPL: {}",
+                if info.available_in_current_scope { "available" } else { "unavailable (private path)" }
             ),
             "## API eligibility".to_string(),
             "## Flow".to_string(),
@@ -4976,6 +5030,7 @@ impl ReplEngine {
                 if segment.fallible { "yes" } else { "no" }
             ));
             lines.push(format!("reason: {}", segment.reason));
+            lines.push(format!("policy: {}", segment.policy));
             previous_terminal = Some(terminal);
         }
         lines.push("## Stops".to_string());
@@ -5101,10 +5156,9 @@ impl ReplEngine {
             }
         };
 
-        let typed = match self.scar_session.typecheck_with_context(
-            resolved,
-            Self::typecheck_context_for_source(SourceKind::ReplChunk),
-        ) {
+        let mut context = Self::typecheck_context_for_source(SourceKind::ReplChunk);
+        context.allow_private_facet_inspection = true;
+        let typed = match self.scar_session.typecheck_with_context(resolved, context) {
             Ok(t) => t,
             Err(e) => {
                 let error = diagnostics::TypeErrorDiagnostic::new(e.message, e.span, e.hint);
@@ -5140,6 +5194,9 @@ impl ReplEngine {
         if let Some(lines) = Self::facet_path_kind_info(symbol) {
             return Self::styled(lines);
         }
+        if let Some(lines) = self.type_definition_info_lines(symbol) {
+            return Self::styled(lines);
+        }
         if let Some(binding) = self.binding_info(symbol) {
             return self.render_info_binding(symbol, binding);
         }
@@ -5172,6 +5229,50 @@ impl ReplEngine {
         }
 
         Self::plain(vec![format!("No signature found for {}", source_query)])
+    }
+
+    fn type_definition_info_lines(&self, symbol: &str) -> Option<Vec<String>> {
+        let decl = self.visible_declaration(symbol)?;
+        let kind = match decl.kind {
+            sigil::DeclarationKind::Struct => "struct",
+            sigil::DeclarationKind::Record => "record",
+            _ => return None,
+        };
+        let def = self
+            .scar_session
+            .lookup_type_def(&decl.fq_name)
+            .or_else(|| self.scar_session.lookup_type_def(symbol))?;
+        let mut rows = def
+            .fields
+            .iter()
+            .map(|(field, ty)| {
+                let mut policy = if def.private_fields.contains(field) {
+                    "private".to_string()
+                } else {
+                    "public".to_string()
+                };
+                if def.readonly_fields.contains(field) {
+                    policy.push_str(" readonly");
+                }
+                (policy, field.clone(), Self::ty_to_string(ty))
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| left.1.cmp(&right.1));
+        let policy_width = rows.iter().map(|row| row.0.len()).max().unwrap_or(0);
+        let field_width = rows.iter().map(|row| row.1.len()).max().unwrap_or(0);
+        let mut lines = vec![
+            crate::surface_path_name(&decl.fq_name).to_string(),
+            format!("kind: {kind}"),
+            format!(
+                "facet root: {}",
+                if def.readonly_root { "readonly" } else { "public" }
+            ),
+            "fields:".to_string(),
+        ];
+        lines.extend(rows.into_iter().map(|(policy, field, ty)| {
+            format!("- {policy:policy_width$} {field:field_width$}: {ty}")
+        }));
+        Some(lines)
     }
 
     fn facet_path_kind_info(symbol: &str) -> Option<Vec<String>> {

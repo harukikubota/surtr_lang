@@ -9278,7 +9278,7 @@ impl Checker {
                     let display_name = Self::surface_name(&name);
                     let outside_impl =
                         self.current_impl_struct_target.as_deref() != Some(display_name);
-                    if outside_impl {
+                    if outside_impl && !self.allow_private_facet_inspection {
                         return Err(TypeError {
                             message: format!("Field '{}.{}' is private", display_name, field),
                             span: span.clone(),
@@ -9306,6 +9306,7 @@ impl Checker {
                         container_field_count: fields.len() as u32,
                         container_type_name: Self::surface_name(&name).to_string(),
                         readonly: field_policy.is_some_and(|policy| policy.readonly),
+                        private: field_policy.is_some_and(|policy| policy.private),
                         focus_readonly_root: self.ty_is_readonly_root(&field_ty),
                         focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
                             .map(str::to_string),

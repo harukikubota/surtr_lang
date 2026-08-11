@@ -1793,6 +1793,7 @@ pub struct ReplFacetSegmentInfo {
     pub focus_ty: String,
     pub fallible: bool,
     pub reason: String,
+    pub policy: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1810,6 +1811,8 @@ pub struct ReplFacetInfo {
     pub segments: Vec<ReplFacetSegmentInfo>,
     pub stop_points: Vec<String>,
     pub operation: Option<ReplFacetOperation>,
+    pub root_policy: String,
+    pub available_in_current_scope: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4291,24 +4294,32 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                     }
                     _ => prefix.push_str(&label),
                 }
-                let (kind, fallible, reason) = match segment {
-                    TypedFacetSegment::Field { .. } => ("field", false, "field access"),
-                    TypedFacetSegment::Tuple { .. } => ("tuple", false, "tuple index access"),
+                let (kind, fallible, reason, policy) = match segment {
+                    TypedFacetSegment::Field { readonly, private, .. } => (
+                        "field", false, "field access",
+                        match (*private, *readonly) {
+                            (true, true) => "private readonly",
+                            (true, false) => "private",
+                            (false, true) => "readonly",
+                            (false, false) => "public",
+                        },
+                    ),
+                    TypedFacetSegment::Tuple { .. } => ("tuple", false, "tuple index access", "public"),
                     TypedFacetSegment::Variant { .. } => {
                         path_is_fallible = true;
-                        ("variant", true, "variant mismatch returns Result")
+                        ("variant", true, "variant mismatch returns Result", "public")
                     }
                     TypedFacetSegment::ListIndex { .. } => {
                         path_is_fallible = true;
-                        ("list index", true, "index miss returns Result")
+                        ("list index", true, "index miss returns Result", "public")
                     }
                     TypedFacetSegment::ListRange { .. } => {
                         path_is_fallible = true;
-                        ("list range", true, "range miss returns Result")
+                        ("list range", true, "range miss returns Result", "public")
                     }
                     TypedFacetSegment::MapKey { .. } => {
                         path_is_fallible = true;
-                        ("map key", true, "key miss returns Result")
+                        ("map key", true, "key miss returns Result", "public")
                     }
                 };
                 segments.push(ReplFacetSegmentInfo {
@@ -4318,6 +4329,7 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                     focus_ty: ty_to_string(&focus_ty),
                     fallible,
                     reason: reason.to_string(),
+                    policy: policy.to_string(),
                 });
                 current_source = focus_ty;
             }
@@ -4339,6 +4351,8 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                 segments,
                 stop_points,
                 operation: None,
+                root_policy: if path.source_readonly_root { "readonly" } else { "public" }.to_string(),
+                available_in_current_scope: !path.segments.iter().any(|segment| matches!(segment, TypedFacetSegment::Field { private: true, .. })),
             })
         }
         TypedInner::PendingFacetPath(path) => Some(ReplFacetInfo {
@@ -4393,10 +4407,13 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                             | PendingFacetSegment::RangeBracket { .. }
                     ),
                     reason: "requires Facet context to specialize".to_string(),
+                    policy: "pending".to_string(),
                 })
                 .collect(),
             stop_points: Vec::new(),
             operation: None,
+            root_policy: "public".to_string(),
+            available_in_current_scope: true,
         }),
         _ => None,
     }
@@ -4417,11 +4434,18 @@ fn facet_api_eligibility(path: &TypedFacetPath) -> Vec<String> {
         apis.push("view: unavailable (concrete update slots)".to_string());
         apis.push("preview: unavailable (concrete update slots)".to_string());
     }
-    if path.is_infallible_structural() {
+    let readonly_boundary = path.source_readonly_root
+        || path.segments.iter().any(|segment| matches!(segment, TypedFacetSegment::Field { readonly: true, .. }));
+    if path.is_infallible_structural() && !readonly_boundary {
         apis.push("put: available when replacement B derives T".to_string());
     }
-    apis.push("set: available".to_string());
-    apis.push("over: available".to_string());
+    if readonly_boundary {
+        apis.push("set: unavailable (readonly boundary)".to_string());
+        apis.push("over: unavailable (readonly boundary)".to_string());
+    } else {
+        apis.push("set: available".to_string());
+        apis.push("over: available".to_string());
+    }
     if matches!(path.focus_ty, Ty::Result(_, _)) {
         apis.push("over_result: available".to_string());
     }
