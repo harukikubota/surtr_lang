@@ -3768,6 +3768,41 @@ where
     );
 }
 
+#[test]
+fn trait_impl_signature_validation_preserves_generic_relationships() {
+    let err = typecheck_with_rules(
+        r#"deftrait Pick {
+  def pick(left: $A, right: $B) -> $A
+}
+
+impl Pick for Int {
+  def pick(left: $A, right: $B) -> $B { right }
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("an impl cannot permute independent method generics");
+    assert!(err.message.contains("incompatible signature"), "{err:?}");
+}
+
+#[test]
+fn trait_impl_method_generics_are_rigid_while_checking_the_body() {
+    let err = typecheck_with_rules(
+        r#"deftrait Keep {
+  def keep(value: $A) -> $A
+}
+
+impl Keep for Int {
+  def keep(value: $A) -> $A { "wrong" }
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("an impl body cannot specialize its method generic to String");
+    assert!(
+        err.message.contains("expected $") && err.message.contains("got String"),
+        "{err:?}"
+    );
+}
+
 fn rigid_generic_return_rejects_concrete_body() {
     let err = typecheck_with_rules(
         r#"def nil() -> $A {

@@ -1856,6 +1856,26 @@ impl Checker {
         })
     }
 
+    fn alpha_normalized_signature(&self, params: &[Ty], ret: &Ty) -> (Vec<Ty>, Ty) {
+        let mut vars = Vec::new();
+        for param in params {
+            Self::collect_ty_vars(param, &mut vars);
+        }
+        Self::collect_ty_vars(ret, &mut vars);
+        let mapping = vars
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, var)| (var, Ty::Var(ordinal as u32)))
+            .collect::<HashMap<_, _>>();
+        (
+            params
+                .iter()
+                .map(|param| self.substitute_ty_with_mapping(param, &mapping))
+                .collect(),
+            self.substitute_ty_with_mapping(ret, &mapping),
+        )
+    }
+
     pub(super) fn resolve_trait_impl_method_signature(
         &mut self,
         trait_info: &TraitInfo,
@@ -2152,14 +2172,24 @@ impl Checker {
                     });
                 }
 
-                let (trait_params, trait_ret, _) =
+                let (trait_params, trait_ret, trait_head_vars) =
                     self.resolve_trait_method_signature(&trait_info, trait_method, &target_ty)?;
+                let trait_head_mapping = trait_head_vars
+                    .into_iter()
+                    .zip(trait_arg_tys.iter().cloned())
+                    .filter_map(|(from, to)| match from {
+                        Ty::Var(var) => Some((var, to)),
+                        _ => None,
+                    })
+                    .collect::<HashMap<_, _>>();
                 let trait_params = trait_params
                     .into_iter()
                     .map(|param| {
+                        let param = self.substitute_ty_with_mapping(&param, &trait_head_mapping);
                         self.expand_trait_self_apps(param, &target_ty, &constructor_slot_vars)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let trait_ret = self.substitute_ty_with_mapping(&trait_ret, &trait_head_mapping);
                 let trait_ret =
                     self.expand_trait_self_apps(trait_ret, &target_ty, &constructor_slot_vars)?;
                 let (impl_params, impl_ret, _) = self.resolve_trait_impl_method_signature(
@@ -2181,39 +2211,30 @@ impl Checker {
                     });
                 }
 
-                for (expected, got) in trait_params.iter().zip(&impl_params) {
-                    let before = self.substitutions.clone();
-                    let compatible = self.types_compatible(expected, got);
-                    self.substitutions = before;
-                    if !compatible {
-                        return Err(TypeError {
-                            message: format!(
-                                "Trait impl method {}::{} has incompatible parameter type: expected {}, got {}",
-                                trait_id.name,
-                                method_name,
-                                self.ty_name(expected),
-                                self.ty_name(got)
-                            ),
-                            span: impl_method.span.clone(),
-                            hint: None,
-                        });
-                    }
-                }
-
-                let before = self.substitutions.clone();
-                let ret_compatible = self.types_compatible(&trait_ret, &impl_ret);
-                self.substitutions = before;
-                if !ret_compatible {
+                let expected_signature = self.alpha_normalized_signature(&trait_params, &trait_ret);
+                let impl_signature = self.alpha_normalized_signature(&impl_params, &impl_ret);
+                if expected_signature != impl_signature {
                     return Err(TypeError {
                         message: format!(
-                            "Trait impl method {}::{} has incompatible return type: expected {}, got {}",
-                            trait_id.name,
-                            method_name,
-                            self.ty_name(&trait_ret),
-                            self.ty_name(&impl_ret)
+                            "Trait impl method {}::{} has an incompatible signature",
+                            trait_id.name, method_name
                         ),
                         span: impl_method.span.clone(),
-                        hint: None,
+                        hint: Some(format!(
+                            "Expected ({}) -> {}, got ({}) -> {}",
+                            trait_params
+                                .iter()
+                                .map(|ty| self.ty_name(ty))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            self.ty_name(&trait_ret),
+                            impl_params
+                                .iter()
+                                .map(|ty| self.ty_name(ty))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            self.ty_name(&impl_ret)
+                        )),
                     });
                 }
             }

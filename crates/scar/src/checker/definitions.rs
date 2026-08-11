@@ -1167,7 +1167,7 @@ impl Checker {
             let typed_body = self.check_body_in_isolated_scope(
                 &local_bindings,
                 HashMap::new(),
-                HashSet::new(),
+                type_params.iter().copied().collect(),
                 expected_ret.clone(),
                 method.function_id.name.clone(),
                 impl_target,
@@ -1183,7 +1183,8 @@ impl Checker {
             ) {
                 return Err(err);
             }
-            if !self.types_compatible(&expected_ret, &typed_body.ty) {
+            let rigid_tyvars = type_params.iter().copied().collect::<HashSet<_>>();
+            if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars) {
                 if let Some(err) = self.facet_replace_result_context_error(
                     &typed_body,
                     &expected_ret,

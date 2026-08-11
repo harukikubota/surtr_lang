@@ -2160,6 +2160,10 @@ impl Checker {
                 .cloned()
                 .unwrap_or_else(|| self.resolve_ty(ty)),
             Ty::List(inner) => Ty::List(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
+            Ty::TypeRef(inner) => {
+                Ty::TypeRef(Box::new(self.substitute_ty_with_mapping(inner, mapping)))
+            }
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
                 *kind,
                 Box::new(self.substitute_ty_with_mapping(source, mapping)),
