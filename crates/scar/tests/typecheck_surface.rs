@@ -3505,7 +3505,7 @@ kept: Boxed<Int> = keep(Boxed::Box(1))
 marked: Boxed<Int> = Marker::mark(Boxed::Box(1))"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect("Step 4 records constraints without applying their later semantics");
+    .expect("constraint kinds should survive after semantic validation");
 
     let where_clause = typed
         .iter()

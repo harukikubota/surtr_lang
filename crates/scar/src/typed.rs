@@ -24,8 +24,8 @@ pub struct TypedProgram {
 }
 
 /// A declaration-level constraint clause preserved by Scar. Constructor
-/// arity and slot mappings are validated while trait impls are predeclared;
-/// parent-trait closure remains a later validation phase.
+/// arity, slot mappings, parent-trait closure, and signature trait bounds are
+/// validated while declarations are predeclared and checked.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedWhereClause {
     pub constraints: Vec<TypedWhereConstraint>,
