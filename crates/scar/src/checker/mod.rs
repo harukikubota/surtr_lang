@@ -1330,12 +1330,7 @@ impl ScarSession {
                 *stored_fun_idx = fun_idx;
             }
         }
-        for (old_fun_idx, new_fun_idx) in specializable_rekeys {
-            if let Some(mut def) = self.state.specializable_defs.remove(&old_fun_idx) {
-                Self::set_def_fun_idx(&mut def, new_fun_idx);
-                self.state.specializable_defs.insert(new_fun_idx, def);
-            }
-        }
+        self.rekey_specializable_defs(specializable_rekeys);
         for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
@@ -1373,12 +1368,7 @@ impl ScarSession {
             }
         }
 
-        for (old_fun_idx, new_fun_idx) in specializable_rekeys {
-            if let Some(mut def) = self.state.specializable_defs.remove(&old_fun_idx) {
-                Self::set_def_fun_idx(&mut def, new_fun_idx);
-                self.state.specializable_defs.insert(new_fun_idx, def);
-            }
-        }
+        self.rekey_specializable_defs(specializable_rekeys);
         for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
@@ -1387,6 +1377,28 @@ impl ScarSession {
             &fun_idx_rewrites,
         );
         self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
+    }
+
+    fn rekey_specializable_defs(&mut self, rekeys: Vec<(u32, u32)>) {
+        // Remove every old key before inserting any new key. A new index may
+        // be another definition's old index (for example 451 -> 452 and
+        // 452 -> 453); moving entries one at a time would overwrite the
+        // first entry before it gets moved.
+        let moved = rekeys
+            .into_iter()
+            .filter_map(|(old_fun_idx, new_fun_idx)| {
+                self.state
+                    .specializable_defs
+                    .remove(&old_fun_idx)
+                    .map(|mut def| {
+                        Self::set_def_fun_idx(&mut def, new_fun_idx);
+                        (new_fun_idx, def)
+                    })
+            })
+            .collect::<Vec<_>>();
+        for (new_fun_idx, def) in moved {
+            self.state.specializable_defs.insert(new_fun_idx, def);
+        }
     }
 
     fn rewrite_specialization_fun_indices(
@@ -1867,6 +1879,31 @@ mod specialization_state_tests {
         }
     }
 
+    fn specializable_def(fun_idx: u32, name: &str, uid: u32) -> TypedNode {
+        let id = resolved_id(name, &format!("Global::{name}"), uid);
+        TypedNode {
+            ty: user_func_ty(fun_idx),
+            span: test_span(),
+            node: TypedInner::Def(
+                fun_idx,
+                id.clone(),
+                Vec::new(),
+                vec![TypedFunParam {
+                    id: resolved_id("value", "", uid + 1000),
+                    ty: Ty::Int,
+                }],
+                Ty::Int,
+                None,
+                Box::new(TypedNode {
+                    ty: Ty::Int,
+                    span: test_span(),
+                    node: TypedInner::Lit(Lit::Int(1.into())),
+                }),
+                spire::ast::Visibility::Public,
+            ),
+        }
+    }
+
     fn specialization_key() -> SpecializationKey {
         SpecializationKey {
             function_name: "Global::helper".to_string(),
@@ -1922,6 +1959,58 @@ mod specialization_state_tests {
                 .get(&specialization_key())
                 .copied(),
             Some(77)
+        );
+    }
+
+    #[test]
+    fn reconcile_function_indices_moves_colliding_specializable_defs_without_overwrite() {
+        let mut session = ScarSession::new();
+        let eq_id = resolved_id("a_eq", "Global::a_eq", 10);
+        let compare_id = resolved_id("b_compare", "Global::b_compare", 11);
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::a_eq".to_string(), eq_id.clone());
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::b_compare".to_string(), compare_id.clone());
+        session
+            .state
+            .env
+            .vars
+            .insert(eq_id.unique_id, user_func_ty(451));
+        session
+            .state
+            .env
+            .vars
+            .insert(compare_id.unique_id, user_func_ty(452));
+        session
+            .state
+            .specializable_defs
+            .insert(451, specializable_def(451, "a_eq", 10));
+        session
+            .state
+            .specializable_defs
+            .insert(452, specializable_def(452, "b_compare", 11));
+
+        session.reconcile_function_indices([("Global::other", 451)]);
+
+        let names_by_index = session
+            .state
+            .specializable_defs
+            .iter()
+            .map(|(fun_idx, def)| {
+                let TypedInner::Def(_, id, ..) = &def.node else {
+                    panic!("expected function definition");
+                };
+                (*fun_idx, id.qualified_name.clone().unwrap())
+            })
+            .collect::<HashMap<_, _>>();
+        assert_eq!(names_by_index.get(&452), Some(&"Global::a_eq".to_string()));
+        assert_eq!(
+            names_by_index.get(&453),
+            Some(&"Global::b_compare".to_string())
         );
     }
 }

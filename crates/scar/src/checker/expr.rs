@@ -3247,8 +3247,7 @@ impl Checker {
             };
             if !self.types_compatible(&expected_mapper, &typed_mapper.ty) {
                 return Err(TypeError {
-                    message: "Applicative::ap requires mapper and value in the same context"
-                        .into(),
+                    message: "Applicative::ap requires mapper and value in the same context".into(),
                     span: span.clone(),
                     hint: None,
                 });

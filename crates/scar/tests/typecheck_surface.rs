@@ -5117,6 +5117,8 @@ impl Applicative for Boxed<$T> {
 }
 
 impl Monad for Boxed<$T> {
+  def return(value: $A) -> Boxed<$A> { Boxed::Box(value) }
+
   def bind(self: Boxed<$A>, mapper: ($A -> Boxed<$B>)) -> Boxed<$B> {
     match self {
       Boxed::Box(value) => mapper(value),

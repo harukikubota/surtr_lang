@@ -4123,6 +4123,10 @@ impl Applicative for Identity<$T> {
 }
 
 impl Monad for Identity<$T> {
+  def return(value: $A) -> Identity<$A> {
+    Identity { value: value }
+  }
+
   def bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
     mapper(self.value)
   }
