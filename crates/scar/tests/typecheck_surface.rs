@@ -3469,7 +3469,7 @@ print(right)"#,
 #[test]
 fn where_constraint_kinds_survive_in_typed_metadata() {
     let typed = typecheck_with_rules(
-        r#"deftrait Marker<$Slot>
+        r#"deftrait Marker
 where
   Self: Type<$Slot>
 {
@@ -3482,7 +3482,7 @@ defenum Boxed<$T> {
   Box($T),
 }
 
-impl Marker<$T> for Boxed<$T>
+impl Marker for Boxed<$T>
 where
   $T: Marker.$Slot
 {
@@ -3499,7 +3499,10 @@ where
   $A: Marker + Type<$B> + Marker.$Slot
 {
   value
-}"#,
+}
+
+kept: Boxed<Int> = keep(Boxed::Box(1))
+marked: Boxed<Int> = Marker::mark(Boxed::Box(1))"#,
         RuntimeSourcePolicy::script(),
     )
     .expect("Step 4 records constraints without applying their later semantics");
@@ -3542,6 +3545,69 @@ where
         TypedInner::Def(_, id, _, _, _, Some(_), _, _) => id.name.contains("mark"),
         _ => false,
     }));
+}
+
+#[test]
+fn function_where_bounds_propagate_to_generic_call_sites() {
+    let source = r#"deftrait Default {
+  def default() -> Self
+}
+
+impl Default for String {
+  def default() -> String {
+    ""
+  }
+}
+
+def make() -> $A
+where
+  $A: Default
+{
+  Default::default()
+}
+"#;
+
+    typecheck_with_rules(
+        &format!("{source}\nvalue: String = make()"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("a call target with the declared where-bound implementation should typecheck");
+
+    let err = typecheck_with_rules(
+        &format!("{source}\nvalue: Int = make()"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("the generic call must retain and enforce its where bound");
+    assert!(
+        err.message.contains("expected Int") || err.message.contains("Default"),
+        "unexpected diagnostic: {err:?}"
+    );
+}
+
+#[test]
+fn where_clause_does_not_declare_a_new_type_variable() {
+    let err = typecheck_with_rules(
+        r#"deftrait Default {
+  def default() -> Self
+}
+
+def id(value: $A) -> $A
+where
+  $B: Default
+{
+  value
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("a where-only type variable must not be introduced implicitly");
+
+    assert!(err
+        .message
+        .contains("does not appear in the declaration signature"));
+    assert!(err
+        .hint
+        .as_deref()
+        .is_some_and(|hint| hint.contains("do not declare type variables")));
 }
 
 #[test]

@@ -6,6 +6,113 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 static SYNTHETIC_DEFAULT_METHOD_UID: AtomicU32 = AtomicU32::new(0x6000_0000);
 
 impl Checker {
+    fn where_constraint_subject_ty(
+        &self,
+        subject: &AstTy,
+        tyvars: &HashMap<String, Ty>,
+        self_ty: Option<&Ty>,
+        span: &Span,
+    ) -> Result<Ty, TypeError> {
+        let AstTy::Named(_, name) = subject else {
+            return Err(TypeError {
+                message: "where constraint subjects must be `Self` or a signature type variable"
+                    .into(),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        if name == "Self" {
+            return self_ty.cloned().ok_or_else(|| TypeError {
+                message: "`Self` is only available in trait and trait impl where clauses".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if !name.starts_with('$') {
+            return Err(TypeError {
+                message: "where constraint subjects must be `Self` or a signature type variable"
+                    .into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        tyvars.get(name).cloned().ok_or_else(|| TypeError {
+            message: format!(
+                "where clause constraint `{name}` does not appear in the declaration signature"
+            ),
+            span: span.clone(),
+            hint: Some("where clauses add constraints; they do not declare type variables".into()),
+        })
+    }
+
+    fn apply_where_trait_bound(
+        &mut self,
+        subject: &Ty,
+        trait_id: &ResolvedId,
+    ) -> Result<(), TypeError> {
+        let trait_key = self.trait_key(trait_id);
+        match self.resolve_ty(subject) {
+            Ty::Var(var) => {
+                self.register_tyvar_bound(var, &trait_key);
+                Ok(())
+            }
+            // A concrete `Self` is already guarded by trait dispatch/impl
+            // validation. Signature where clauses primarily add bounds to
+            // variables that must survive instantiation at call sites.
+            _ => Ok(()),
+        }
+    }
+
+    pub(super) fn apply_resolved_where_trait_bounds(
+        &mut self,
+        where_clause: Option<&ResolvedWhereClause>,
+        tyvars: &HashMap<String, Ty>,
+        self_ty: Option<&Ty>,
+    ) -> Result<(), TypeError> {
+        let Some(where_clause) = where_clause else {
+            return Ok(());
+        };
+        for constraint in &where_clause.constraints {
+            let subject = self.where_constraint_subject_ty(
+                &constraint.subject,
+                tyvars,
+                self_ty,
+                &constraint.span,
+            )?;
+            for bound in &constraint.bounds {
+                if let ResolvedWhereConstraintRhs::Trait(trait_id) = bound {
+                    self.apply_where_trait_bound(&subject, trait_id)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_typed_where_trait_bounds(
+        &mut self,
+        where_clause: Option<&TypedWhereClause>,
+        tyvars: &HashMap<String, Ty>,
+        self_ty: Option<&Ty>,
+    ) -> Result<(), TypeError> {
+        let Some(where_clause) = where_clause else {
+            return Ok(());
+        };
+        for constraint in &where_clause.constraints {
+            let subject = self.where_constraint_subject_ty(
+                &constraint.subject,
+                tyvars,
+                self_ty,
+                &constraint.span,
+            )?;
+            for bound in &constraint.bounds {
+                if let TypedWhereConstraintRhs::Trait(trait_id) = bound {
+                    self.apply_where_trait_bound(&subject, trait_id)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn next_synthetic_default_method_uid() -> u32 {
         SYNTHETIC_DEFAULT_METHOD_UID.fetch_add(1, AtomicOrdering::Relaxed)
     }
@@ -1693,6 +1800,7 @@ impl Checker {
             self_ty,
             &mut tyvars,
         )?;
+        self.apply_typed_where_trait_bounds(method.where_clause.as_ref(), &tyvars, Some(self_ty))?;
         let trait_args = trait_info
             .type_params
             .iter()
@@ -1926,6 +2034,7 @@ impl Checker {
             &self_ty,
             &mut tyvars,
         )?;
+        self.apply_typed_where_trait_bounds(method.where_clause.as_ref(), &tyvars, Some(&self_ty))?;
         let mut type_params = Vec::new();
         for ty in tyvars.values() {
             Self::collect_ty_vars(ty, &mut type_params);
@@ -2420,7 +2529,7 @@ impl Checker {
                         },
                     );
                 }
-                Resolved::Def(_, id, type_params, params, ret_ty, _, _, _) => {
+                Resolved::Def(_, id, type_params, params, ret_ty, where_clause, _, _) => {
                     self.register_function_id(id);
                     let mut tyvars = HashMap::new();
                     self.seed_signature_type_params(type_params, &mut tyvars);
@@ -2455,6 +2564,7 @@ impl Checker {
                         )?,
                         None => Ty::Unit,
                     };
+                    self.apply_resolved_where_trait_bounds(where_clause.as_ref(), &tyvars, None)?;
                     let function_symbol = id.qualified_name.as_deref().unwrap_or(&id.name);
                     if self.ty_contains_process_init(&ret)
                         && !self.is_lazy_init_function_symbol(function_symbol)

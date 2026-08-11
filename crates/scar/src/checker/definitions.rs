@@ -776,6 +776,7 @@ impl Checker {
             )?,
             None => Ty::Unit,
         };
+        self.apply_resolved_where_trait_bounds(where_clause, &tyvars, None)?;
         if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
                 message:
