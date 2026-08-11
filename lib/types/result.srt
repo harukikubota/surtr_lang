@@ -429,6 +429,10 @@ impl Applicative for Result<$T> {
 This is the source-level meaning of `value |>= mapper`.
 """
 impl Monad for Result<$T> {
+  def return(value: $A) -> Result<$A> {
+    Ok(value)
+  }
+
   def bind(self: Result<$A>, mapper: ($A -> Result<$B>)) -> Result<$B> {
     match self {
       Ok(value) => mapper(value),

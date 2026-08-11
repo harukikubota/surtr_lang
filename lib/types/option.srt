@@ -98,6 +98,10 @@ impl Applicative for Option<$T> {
 This is the source-level meaning of `value |>= mapper`.
 """
 impl Monad for Option<$T> {
+  def return(value: $A) -> Option<$A> {
+    Option::Some(value)
+  }
+
   def bind(self: Option<$A>, mapper: ($A -> Option<$B>)) -> Option<$B> {
     match self {
       Option::Some(value) => mapper(value),

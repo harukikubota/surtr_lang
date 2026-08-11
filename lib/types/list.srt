@@ -671,6 +671,10 @@ impl Applicative for List<$T> {
 This is the source-level meaning of `values |>= mapper`.
 """
 impl Monad for List<$T> {
+  def return(value: $A) -> List<$A> {
+    [value]
+  }
+
   def bind(self: List<$A>, mapper: ($A -> List<$B>)) -> List<$B> {
     List::flat_map(self, mapper)
   }

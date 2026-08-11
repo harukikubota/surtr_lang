@@ -2726,6 +2726,74 @@ impl Checker {
         None
     }
 
+    /// Resolve a constructor-style trait method whose receiver (`Self`) only
+    /// appears in the result type.  The method-specific checks are performed
+    /// by the caller; this common part selects the concrete impl target and
+    /// its static dispatch target from the expected result type.
+    fn constructor_target_dispatch(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        expected_ty: &Ty,
+    ) -> Option<TraitDispatch> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                continue;
+            };
+            let Some(method) = impl_info.methods.get(method_name) else {
+                continue;
+            };
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if self.types_compatible(&target, expected_ty) {
+                if let Some(dispatch) = self.constructor_trait_method_dispatch(method) {
+                    return Some(dispatch);
+                }
+            }
+            self.substitutions = before;
+        }
+        None
+    }
+
+    fn constructor_slot_value_dispatch(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        expected_ty: &Ty,
+        value_ty: &Ty,
+    ) -> Option<TraitDispatch> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                continue;
+            };
+            let Some(method) = impl_info.methods.get(method_name) else {
+                continue;
+            };
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, expected_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let slot = impl_info.constructor_slot_vars[0];
+            let Some(slot_ty) = fresh.get(&slot).cloned() else {
+                self.substitutions = before;
+                continue;
+            };
+            if !self.types_compatible(&slot_ty, value_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            return self.constructor_trait_method_dispatch(method);
+        }
+        None
+    }
+
     fn constructor_slot_type_for(&mut self, trait_name: &str, container_ty: &Ty) -> Option<Ty> {
         for impl_key in self.trait_impl_candidate_keys(trait_name) {
             let impl_info = self.trait_impls.get(&impl_key).cloned()?;
@@ -2793,6 +2861,44 @@ impl Checker {
             return Some(context_ty);
         }
         None
+    }
+
+    /// Enumerate the concrete constructor contexts which can carry `slot_ty`.
+    /// This is used when a constructor helper appears on the opposite side of
+    /// an operator and the other operand must provide the missing `Self`.
+    fn constructor_context_candidates(&mut self, trait_name: &str, slot_ty: &Ty) -> Vec<Ty> {
+        let mut candidates = Vec::new();
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                continue;
+            };
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let _target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let slot = impl_info.constructor_slot_vars[0];
+            let mapping = impl_info
+                .type_param_vars
+                .iter()
+                .copied()
+                .map(|var| {
+                    let replacement = if var == slot {
+                        slot_ty.clone()
+                    } else {
+                        fresh
+                            .get(&var)
+                            .map(|ty| self.resolve_ty(ty))
+                            .unwrap_or(Ty::Var(var))
+                    };
+                    (var, replacement)
+                })
+                .collect::<HashMap<_, _>>();
+            candidates.push(
+                self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping)),
+            );
+        }
+        candidates
     }
 
     fn constructor_monad_dispatch(
@@ -3015,6 +3121,83 @@ impl Checker {
                     args: vec![typed_value],
                 },
             });
+        }
+        if self.trait_matches_short_name(trait_name, "Monad")
+            && method_name == "return"
+            && positional_args.len() == 1
+        {
+            let expected = expected_ret_ty.ok_or_else(|| TypeError {
+                message: "Monad::return requires an expected return type".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Add a result annotation, for example `value: Result<Int> = Monad::return(1)`, or use it in a typed operator context.".into(),
+                ),
+            })?;
+            let typed_value = self.check_node(positional_args[0])?;
+            let dispatch = self
+                .constructor_slot_value_dispatch(trait_name, "return", expected, &typed_value.ty)
+                .ok_or_else(|| TypeError {
+                    message: format!("Monad::return cannot construct {}", self.ty_name(expected)),
+                    span: span.clone(),
+                    hint: Some(self.trait_implementation_summary("Monad")),
+                })?;
+            return Ok(TypedNode {
+                ty: self.resolve_ty(expected),
+                span: span.clone(),
+                node: TypedInner::TraitCall {
+                    trait_name: trait_name.to_string(),
+                    method_name: "return".into(),
+                    receiver_ty: self.resolve_ty(expected),
+                    dispatch,
+                    origin: TraitCallOrigin::Explicit,
+                    args: vec![typed_value],
+                },
+            });
+        }
+        // Generic zero-argument constructor helpers (for example
+        // `Monoid::mempty()`) use the same expected-result dispatch.  Keep
+        // this signature-driven rather than growing another trait-name list.
+        if positional_args.is_empty() {
+            let probe_self = self.env.fresh_tyvar();
+            let (_, probe_ret, _, _) =
+                self.resolve_trait_method_signature(&trait_info, &method, &probe_self)?;
+            if matches!(probe_ret, Ty::SelfApp(_)) {
+                let expected = expected_ret_ty.ok_or_else(|| TypeError {
+                    message: format!(
+                        "{}::{} requires an expected return type",
+                        trait_name, method_name
+                    ),
+                    span: span.clone(),
+                    hint: Some(format!(
+                        "Add a type annotation so {}::{} can select a concrete implementation.",
+                        trait_name, method_name
+                    )),
+                })?;
+                let dispatch = self
+                    .constructor_target_dispatch(trait_name, method_name, expected)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "{}::{} cannot construct {}",
+                            trait_name,
+                            method_name,
+                            self.ty_name(expected)
+                        ),
+                        span: span.clone(),
+                        hint: Some(self.trait_implementation_summary(trait_name)),
+                    })?;
+                return Ok(TypedNode {
+                    ty: self.resolve_ty(expected),
+                    span: span.clone(),
+                    node: TypedInner::TraitCall {
+                        trait_name: trait_name.to_string(),
+                        method_name: method_name.to_string(),
+                        receiver_ty: self.resolve_ty(expected),
+                        dispatch,
+                        origin: TraitCallOrigin::Explicit,
+                        args: Vec::new(),
+                    },
+                });
+            }
         }
         if self.trait_matches_short_name(trait_name, "Applicative")
             && method_name == "apply"
@@ -3994,6 +4177,141 @@ impl Checker {
         self.check_context_bind_with_expected(span, left, right, None)
     }
 
+    /// Try the reverse direction for a constructor helper such as
+    /// `Monad::return(1)`.  The helper has no concrete receiver argument, so
+    /// its `Self` can only be selected after the contextual RHS is inspected.
+    /// Candidate probing is deliberately generic over Monad impl targets; the
+    /// same pattern can later be reused by other contextual operators.
+    fn try_check_context_bind_from_constructor(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Resolved::App(_, func, args) = left else {
+            return Ok(None);
+        };
+        let Some((_, trait_name, method_name)) = self.trait_method_ref(func) else {
+            return Ok(None);
+        };
+        if !self.trait_matches_short_name(&trait_name, "Monad") || method_name != "return" {
+            return Ok(None);
+        }
+        let [ResolvedRecordLitArg::Positional(value)] = args.as_slice() else {
+            return Ok(None);
+        };
+        let typed_value = self.check_node(value)?;
+        let monad_trait = self
+            .trait_key_by_short_name("Monad")
+            .ok_or_else(|| TypeError {
+                message: "Unknown trait: Monad".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let value_ty = self.resolve_ty(&typed_value.ty);
+
+        for context in self.constructor_context_candidates(&monad_trait, &value_ty) {
+            let checkpoint = self.substitutions.clone();
+            let Some(input_ty) = self.constructor_slot_type_for(&monad_trait, &context) else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            let next_ty = self.env.fresh_tyvar();
+            let Some(ret_ty) = self.constructor_context_type_for(&monad_trait, &context, &next_ty)
+            else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            let contract = self.callable_contract(
+                &input_ty,
+                Some(ret_ty.clone()),
+                ExpectedCallableSlot::Contextual,
+            );
+            let typed_right = match right {
+                Resolved::InferredFacetCapture(_, _)
+                | Resolved::Capture(_, _, _)
+                | Resolved::Closure(_, _, _, _)
+                | Resolved::Grouped(_, _) => {
+                    self.check_apply_callable_with_contract(right, &contract, "`|>=`")
+                }
+                Resolved::App(call_span, rhs_func, rhs_args) => {
+                    if let Some(typed) = self.check_trait_helper_pipe_callable(
+                        call_span,
+                        rhs_func,
+                        rhs_args,
+                        contract.input.clone(),
+                        contract.ret.clone(),
+                        "`|>=`",
+                    )? {
+                        Ok(typed)
+                    } else {
+                        let expected_callable = self.expected_callable_ty(&contract);
+                        self.check_node_with_expected(right, Some(&expected_callable))
+                            .or_else(|_| self.check_apply_callable(right, "`|>=`"))
+                    }
+                }
+                Resolved::TypeApply(call_span, _, _) => self
+                    .check_trait_helper_pipe_callable(
+                        call_span,
+                        right,
+                        &[],
+                        contract.input.clone(),
+                        contract.ret.clone(),
+                        "`|>=`",
+                    )?
+                    .ok_or_else(|| TypeError {
+                        message: "`|>=` requires a specialized trait helper on the right".into(),
+                        span: call_span.clone(),
+                        hint: None,
+                    }),
+                _ => self.check_apply_callable(right, "`|>=`"),
+            };
+            let Ok(typed_right) = typed_right else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            let Ok((rhs_in, rhs_ret)) =
+                self.unary_function_parts(&typed_right.ty, "`|>=`", &typed_right.span)
+            else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            if !self.callable_accepts_input(&rhs_in, &input_ty)
+                || !self.types_compatible(&rhs_ret, &ret_ty)
+            {
+                self.substitutions = checkpoint;
+                continue;
+            }
+            let Ok(typed_left) = self.check_node_with_expected(left, Some(&context)) else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            let Some((dispatch, result_ty)) =
+                self.constructor_monad_dispatch(&monad_trait, &context, &rhs_in, &rhs_ret)
+            else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            return Ok(Some(TypedNode {
+                ty: result_ty,
+                span: span.clone(),
+                node: TypedInner::TraitCall {
+                    trait_name: monad_trait,
+                    method_name: "bind".into(),
+                    receiver_ty: self.resolve_ty(&context),
+                    dispatch,
+                    origin: TraitCallOrigin::Operator {
+                        op: OperatorTraitOp::PipeBind,
+                        lhs_ty: self.resolve_ty(&typed_left.ty),
+                        rhs_ty: self.resolve_ty(&typed_right.ty),
+                    },
+                    args: vec![typed_left, typed_right],
+                },
+            }));
+        }
+        Ok(None)
+    }
+
     fn check_context_bind_with_expected(
         &mut self,
         span: &Span,
@@ -4001,6 +4319,9 @@ impl Checker {
         right: &Resolved,
         _expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
+        if let Some(typed) = self.try_check_context_bind_from_constructor(span, left, right)? {
+            return Ok(typed);
+        }
         let typed_left = self.check_node(left)?;
         let receiver_ty = self.resolve_ty(&typed_left.ty);
         let trait_helper_contract = match &receiver_ty {
@@ -8618,8 +8939,28 @@ impl Checker {
             return self.check_slash_compose(span, left, right);
         }
 
-        let typed_left = self.check_node(left)?;
-        let typed_right = self.check_node(right)?;
+        let mut typed_left = self.check_node(left)?;
+        let mut typed_right = self.check_node(right)?;
+        // Constructor-style helpers such as `Monad::return` can leave a
+        // `SelfApp` result until another operand supplies the concrete type.
+        // Operators are compile-time constraints, so either operand may be
+        // used as that expected type without changing runtime evaluation order.
+        if matches!(self.resolve_ty(&typed_left.ty), Ty::SelfApp(_))
+            && !matches!(self.resolve_ty(&typed_right.ty), Ty::SelfApp(_))
+        {
+            if let Ok(candidate) = self.check_node_with_expected(right, Some(&typed_left.ty)) {
+                typed_right = candidate;
+            }
+            if let Ok(candidate) = self.check_node_with_expected(left, Some(&typed_right.ty)) {
+                typed_left = candidate;
+            }
+        } else if matches!(self.resolve_ty(&typed_right.ty), Ty::SelfApp(_))
+            && !matches!(self.resolve_ty(&typed_left.ty), Ty::SelfApp(_))
+        {
+            if let Ok(candidate) = self.check_node_with_expected(right, Some(&typed_left.ty)) {
+                typed_right = candidate;
+            }
+        }
         let lt = self.resolve_ty(&typed_left.ty);
         let rt = self.resolve_ty(&typed_right.ty);
         let compatibility_checkpoint = self.substitutions.clone();

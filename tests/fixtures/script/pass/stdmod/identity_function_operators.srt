@@ -26,6 +26,10 @@ impl Applicative for Identity<$T> {
 }
 
 impl Monad for Identity<$T> {
+  def return(value: $A) -> Identity<$A> {
+    Identity { value: value }
+  }
+
   def bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
     mapper(self.value)
   }
@@ -75,6 +79,7 @@ mapped: Identity<Int> = Identity(1) |*> &inc
 bound: Identity<Int> = Identity(1) |>= &ident_double
 pure: Identity<Int> = Applicative::pure(2)
 mapper_identity: Identity<(Int -> Int)> = Identity(&inc)
+returned: Identity<Int> = Monad::return(3)
 value_identity: Identity<Int> = Identity(1)
 applied: Identity<Int> = Applicative::apply(mapper_identity, value_identity)
 lifted = &ident_inc >* &render
@@ -84,5 +89,6 @@ print(show_identity_int(mapped))
 print(show_identity_int(bound))
 print(show_identity_int(pure))
 print(show_identity_int(applied))
+print(show_identity_int(returned))
 print(show_identity_string(lifted(1)))
 print(show_identity_string(kleisli(1)))

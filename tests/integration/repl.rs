@@ -1551,6 +1551,28 @@ fn repl_propagates_apply_context_into_nested_pure() {
 }
 
 #[test]
+fn repl_infers_monad_return_context_from_bind_rhs() {
+    let output = run_repl_session("Monad::return(1) |>= {|n| Ok(10 + n)}\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = strip_ansi(&format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ));
+    assert!(combined.contains("Ok(11)"), "got:\n{}", combined);
+    assert!(
+        !combined.contains("requires an expected return type"),
+        "constructor helper lost RHS context:\n{}",
+        combined
+    );
+}
+
+#[test]
 fn repl_allows_trait_helper_capture_with_expected_callable_annotation() {
     let output = run_repl_session(
         "cmp: (Int, Int -> Ordering) = &compare\njoin: (String, String -> String) = &concat\ncmp(1, 2)\njoin(\"sur\", \"tr\")\n:quit\n",
