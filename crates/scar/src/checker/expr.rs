@@ -5525,7 +5525,12 @@ impl Checker {
             (Ty::List(template), Ty::List(replacement))
             | (Ty::TypeRef(template), Ty::TypeRef(replacement))
             | (Ty::Lazy(template), Ty::Lazy(replacement)) => self
-                .collect_facet_rebuild_tyvar_replacements(template, replacement, replacements, span),
+                .collect_facet_rebuild_tyvar_replacements(
+                    template,
+                    replacement,
+                    replacements,
+                    span,
+                ),
             (Ty::Tuple(templates), Ty::Tuple(replacements_ty))
             | (Ty::Enum(_, templates), Ty::Enum(_, replacements_ty)) => {
                 if templates.len() != replacements_ty.len() {
@@ -5541,9 +5546,15 @@ impl Checker {
                 }
                 Ok(())
             }
-            (Ty::Struct(template_name, template_fields), Ty::Struct(replacement_name, replacement_fields))
-            | (Ty::Record(template_name, template_fields), Ty::Record(replacement_name, replacement_fields))
-                if template_name == replacement_name && template_fields.len() == replacement_fields.len() =>
+            (
+                Ty::Struct(template_name, template_fields),
+                Ty::Struct(replacement_name, replacement_fields),
+            )
+            | (
+                Ty::Record(template_name, template_fields),
+                Ty::Record(replacement_name, replacement_fields),
+            ) if template_name == replacement_name
+                && template_fields.len() == replacement_fields.len() =>
             {
                 for ((template_name, template), (replacement_name, replacement)) in
                     template_fields.iter().zip(replacement_fields)
@@ -5560,7 +5571,10 @@ impl Checker {
                 }
                 Ok(())
             }
-            (Ty::Result(template_ok, template_err), Ty::Result(replacement_ok, replacement_err)) => {
+            (
+                Ty::Result(template_ok, template_err),
+                Ty::Result(replacement_ok, replacement_err),
+            ) => {
                 self.collect_facet_rebuild_tyvar_replacements(
                     template_ok,
                     replacement_ok,
@@ -5606,7 +5620,10 @@ impl Checker {
                 hint: None,
             })?;
         for changed_var in replacements.keys() {
-            let Some(index) = enum_args.iter().position(|arg| matches!(arg, Ty::Var(var) if *var == *changed_var)) else {
+            let Some(index) = enum_args
+                .iter()
+                .position(|arg| matches!(arg, Ty::Var(var) if *var == *changed_var))
+            else {
                 return self.facet_rebuild_not_generic_error(span);
             };
             let Some(original_var) = variants
@@ -5648,12 +5665,26 @@ impl Checker {
                 .get(var)
                 .cloned()
                 .unwrap_or_else(|| self.resolve_ty(ty)),
-            Ty::List(inner) => Ty::List(Box::new(self.replace_facet_rebuild_tyvars(inner, replacements))),
-            Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.replace_facet_rebuild_tyvars(inner, replacements))),
-            Ty::Lazy(inner) => Ty::Lazy(Box::new(self.replace_facet_rebuild_tyvars(inner, replacements))),
-            Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.replace_facet_rebuild_tyvars(item, replacements)).collect()),
+            Ty::List(inner) => Ty::List(Box::new(
+                self.replace_facet_rebuild_tyvars(inner, replacements),
+            )),
+            Ty::TypeRef(inner) => Ty::TypeRef(Box::new(
+                self.replace_facet_rebuild_tyvars(inner, replacements),
+            )),
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(
+                self.replace_facet_rebuild_tyvars(inner, replacements),
+            )),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.replace_facet_rebuild_tyvars(item, replacements))
+                    .collect(),
+            ),
             Ty::Func(params, ret) => Ty::Func(
-                params.iter().map(|param| self.replace_facet_rebuild_tyvars(param, replacements)).collect(),
+                params
+                    .iter()
+                    .map(|param| self.replace_facet_rebuild_tyvars(param, replacements))
+                    .collect(),
                 Box::new(self.replace_facet_rebuild_tyvars(ret, replacements)),
             ),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
@@ -5669,25 +5700,54 @@ impl Checker {
             ),
             Ty::Enum(name, args) => Ty::Enum(
                 name.clone(),
-                args.iter().map(|arg| self.replace_facet_rebuild_tyvars(arg, replacements)).collect(),
+                args.iter()
+                    .map(|arg| self.replace_facet_rebuild_tyvars(arg, replacements))
+                    .collect(),
             ),
             Ty::Struct(name, fields) => Ty::Struct(
                 name.clone(),
-                fields.iter().map(|(field, ty)| (field.clone(), self.replace_facet_rebuild_tyvars(ty, replacements))).collect(),
+                fields
+                    .iter()
+                    .map(|(field, ty)| {
+                        (
+                            field.clone(),
+                            self.replace_facet_rebuild_tyvars(ty, replacements),
+                        )
+                    })
+                    .collect(),
             ),
             Ty::Record(name, fields) => Ty::Record(
                 name.clone(),
-                fields.iter().map(|(field, ty)| (field.clone(), self.replace_facet_rebuild_tyvars(ty, replacements))).collect(),
+                fields
+                    .iter()
+                    .map(|(field, ty)| {
+                        (
+                            field.clone(),
+                            self.replace_facet_rebuild_tyvars(ty, replacements),
+                        )
+                    })
+                    .collect(),
             ),
             Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
                 name: name.clone(),
-                params: params.iter().map(|param| self.replace_facet_rebuild_tyvars(param, replacements)).collect(),
+                params: params
+                    .iter()
+                    .map(|param| self.replace_facet_rebuild_tyvars(param, replacements))
+                    .collect(),
                 ret: Box::new(self.replace_facet_rebuild_tyvars(ret, replacements)),
             },
-            Ty::UserFunc { fun_idx, type_params, params, ret } => Ty::UserFunc {
+            Ty::UserFunc {
+                fun_idx,
+                type_params,
+                params,
+                ret,
+            } => Ty::UserFunc {
                 fun_idx: *fun_idx,
                 type_params: type_params.clone(),
-                params: params.iter().map(|param| self.replace_facet_rebuild_tyvars(param, replacements)).collect(),
+                params: params
+                    .iter()
+                    .map(|param| self.replace_facet_rebuild_tyvars(param, replacements))
+                    .collect(),
                 ret: Box::new(self.replace_facet_rebuild_tyvars(ret, replacements)),
             },
             _ => ty.clone(),
@@ -5707,7 +5767,10 @@ impl Checker {
         }
         let Some(def) = self.env.lookup_type_def(type_name) else {
             return Err(TypeError {
-                message: format!("Facet cannot derive a rebuilt type for {}", Self::surface_name(type_name)),
+                message: format!(
+                    "Facet cannot derive a rebuilt type for {}",
+                    Self::surface_name(type_name)
+                ),
                 span: span.clone(),
                 hint: None,
             });
@@ -9175,15 +9238,6 @@ impl Checker {
         }
         match self.resolve_ty(source_ty) {
             Ty::Tuple(items) => {
-                if *optional {
-                    return Err(TypeError {
-                        message: "optional Facet segment requires an enum variant".into(),
-                        span: span.clone(),
-                        hint: Some(
-                            "Use `?` only on enum case segments such as Option.Some?.".into(),
-                        ),
-                    });
-                }
                 let index = field
                     .strip_prefix('_')
                     .ok_or_else(|| TypeError {
@@ -9219,15 +9273,6 @@ impl Checker {
                 ))
             }
             Ty::Struct(name, fields) | Ty::Record(name, fields) => {
-                if *optional {
-                    return Err(TypeError {
-                        message: "optional Facet segment requires an enum variant".into(),
-                        span: span.clone(),
-                        hint: Some(
-                            "Use `?` only on enum case segments such as Option.Some?.".into(),
-                        ),
-                    });
-                }
                 let field_policy = self.env.field_policy(&name, field);
                 if field_policy.is_some_and(|policy| policy.private) {
                     let display_name = Self::surface_name(&name);
