@@ -34,6 +34,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 }
             }
         }
+        Resolved::TypeApply(_, target, _) => collect_captures_inner(target, bound, free),
         Resolved::Block(_, stmts) => {
             let mut local_bound = bound.clone();
             for stmt in stmts {

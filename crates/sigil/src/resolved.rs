@@ -95,6 +95,9 @@ pub enum Resolved {
     /// Function application
     App(Span, Box<Resolved>, Vec<ResolvedRecordLitArg>),
 
+    /// Explicit generic-slot application.
+    TypeApply(Span, Box<Resolved>, Vec<AstTy>),
+
     /// Block of statements
     Block(Span, Vec<Resolved>),
 

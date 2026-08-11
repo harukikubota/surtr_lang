@@ -1762,6 +1762,13 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|a| shift_record_lit_arg(a, delta))
                 .collect(),
         ),
+        Ast::TypeApply(span, target, args) => Ast::TypeApply(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*target, delta)),
+            args.into_iter()
+                .map(|arg| shift_ast_ty(arg, delta))
+                .collect(),
+        ),
         Ast::Block(span, stmts) => Ast::Block(
             shift_span(span, delta),
             stmts
@@ -2336,6 +2343,7 @@ impl Ast {
             | Ast::Path(s, _)
             | Ast::FuncLiteralRef(s, _)
             | Ast::App(s, _, _)
+            | Ast::TypeApply(s, _, _)
             | Ast::Block(s, _)
             | Ast::Bind(s, _, _)
             | Ast::SafeBind(s, _, _)

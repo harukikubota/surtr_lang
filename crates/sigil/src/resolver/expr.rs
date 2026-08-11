@@ -540,6 +540,12 @@ impl Resolver {
                 }
                 Ok(())
             }
+            Ast::TypeApply(_, target, _) => self.collect_capture_placeholders(
+                target,
+                allow_placeholders,
+                inside_placeholder_capture,
+                used,
+            ),
             Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
                 for stmt in stmts {
                     self.collect_capture_placeholders(
@@ -2458,6 +2464,20 @@ impl Resolver {
                 span,
                 related_labels: Vec::new(),
             }),
+
+            Ast::TypeApply(span, target, args) => {
+                let resolved_target = self.resolve_node(*target)?;
+                self.ensure_user_callable_surface(&resolved_target, &span, 0)?;
+                let resolved_args = args
+                    .into_iter()
+                    .map(|arg| self.resolve_type_annotation(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Resolved::TypeApply(
+                    span,
+                    Box::new(resolved_target),
+                    resolved_args,
+                ))
+            }
 
             Ast::App(span, func, args) => {
                 if let Ast::Var(_, ref name) = *func {

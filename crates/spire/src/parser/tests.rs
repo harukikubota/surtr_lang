@@ -6220,3 +6220,41 @@ fn test_task_await_timeout_literal_parses_in_project_context() {
     .expect("task await timeout literal should parse");
     assert!(!ast.is_empty());
 }
+
+#[test]
+fn test_explicit_type_arguments_parse_on_calls_and_captures() {
+    let ast = parse(
+        r#"value = TryFrom::try_from::<Int>("1")
+fn = &TryFrom::try_from::<Int>"#,
+    )
+    .expect("explicit type arguments should parse");
+
+    assert!(matches!(
+        &ast[0],
+        Ast::Bind(_, _, rhs)
+            if matches!(rhs.as_ref(), Ast::App(_, callee, _)
+                if matches!(callee.as_ref(), Ast::TypeApply(_, target, args)
+                    if matches!(target.as_ref(), Ast::Path(_, _))
+                        && matches!(args.as_slice(), [AstTy::Named(_, name)] if name == "Int")))
+    ));
+    assert!(matches!(
+        &ast[1],
+        Ast::Bind(_, _, rhs)
+            if matches!(rhs.as_ref(), Ast::Capture(_, target, args)
+                if args.is_empty()
+                    && matches!(target.as_ref(), Ast::TypeApply(_, _, type_args)
+                        if type_args.len() == 1))
+    ));
+}
+
+#[test]
+fn test_explicit_type_arguments_reject_empty_self_constructor_and_repetition() {
+    for source in [
+        "id::<>()",
+        "id::<Self>()",
+        "List::<Int>(1)",
+        "id::<Int>::<String>(1)",
+    ] {
+        assert!(parse(source).is_err(), "{source} should fail");
+    }
+}

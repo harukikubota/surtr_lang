@@ -609,6 +609,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_record_arg(arg, base, offset);
             }
         }
+        Resolved::TypeApply(_, target, _) => rebase_resolved_node(target, base, offset),
         Resolved::Block(_, nodes)
         | Resolved::ListLiteral(_, nodes)
         | Resolved::TupleLiteral(_, nodes) => {

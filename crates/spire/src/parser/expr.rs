@@ -458,6 +458,46 @@ impl Parser<'_> {
         Ok(expr)
     }
 
+    fn explicit_type_args_start(&self) -> bool {
+        self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Lt))
+    }
+
+    fn parse_explicit_type_apply(&mut self, target: Ast) -> Result<Ast, ParseError> {
+        let start = target.span().start;
+        self.consume_path_separator()?;
+        self.expect(&Token::Lt)?;
+        self.skip_newlines();
+        if matches!(self.peek(), Token::Gt) {
+            return Err(ParseError::syntax(
+                "Explicit type arguments cannot be empty",
+                self.peek_span(),
+            ));
+        }
+        let mut args = vec![self.parse_type_in_impl_context(None)?];
+        self.skip_newlines();
+        while matches!(self.peek(), Token::Comma) {
+            self.advance();
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Gt) {
+                return Err(ParseError::syntax(
+                    "Explicit type arguments cannot end with a comma",
+                    self.peek_span(),
+                ));
+            }
+            args.push(self.parse_type_in_impl_context(None)?);
+            self.skip_newlines();
+        }
+        let end = self.expect_type_gt()?;
+        Ok(Ast::TypeApply(
+            Span {
+                start,
+                end: end.end,
+            },
+            Box::new(target),
+            args,
+        ))
+    }
+
     fn parse_facet_path_segment_after_dot(
         &mut self,
     ) -> Result<(FacetPathSegment, Span), ParseError> {
@@ -937,13 +977,22 @@ impl Parser<'_> {
             None
         };
 
-        if let Some(path_expr) = path_ast {
+        if let Some(mut path_expr) = path_ast {
             let path_name = path_segments.join("::");
             let path_last_is_uppercase = path_segments
                 .last()
                 .and_then(|segment| segment.chars().next())
                 .map(|ch| ch.is_uppercase())
                 .unwrap_or(false);
+            if self.explicit_type_args_start() {
+                if path_last_is_uppercase {
+                    return Err(ParseError::syntax(
+                        "Explicit type arguments apply to callables, not constructors",
+                        self.peek_span(),
+                    ));
+                }
+                path_expr = self.parse_explicit_type_apply(path_expr)?;
+            }
             if matches!(self.peek(), Token::LParen) {
                 self.advance();
                 let args = if path_name == "Kernel::is_match" {
@@ -1050,6 +1099,46 @@ impl Parser<'_> {
             .next()
             .map(|c| c.is_uppercase())
             .unwrap_or(false);
+
+        if self.explicit_type_args_start() {
+            if is_uppercase {
+                return Err(ParseError::syntax(
+                    "Explicit type arguments apply to callables, not constructors",
+                    self.peek_span(),
+                ));
+            }
+            let func = self
+                .parse_explicit_type_apply(self.std_hidden_ref(name_span.clone(), name.clone()))?;
+            if matches!(self.peek(), Token::LParen) {
+                self.advance();
+                let args = self.parse_call_args()?;
+                self.skip_newlines();
+                let end_span = self.expect(&Token::RParen)?;
+                let (args, call_end) = self.attach_trailing_block_arg(&func, args, end_span.end)?;
+                return Ok(Ast::App(
+                    Span {
+                        start: name_span.start,
+                        end: call_end,
+                    },
+                    Box::new(func),
+                    args,
+                ));
+            }
+            if matches!(self.peek(), Token::Unit) {
+                let end_span = self.advance().span.clone();
+                let (args, call_end) =
+                    self.attach_trailing_block_arg(&func, Vec::new(), end_span.end)?;
+                return Ok(Ast::App(
+                    Span {
+                        start: name_span.start,
+                        end: call_end,
+                    },
+                    Box::new(func),
+                    args,
+                ));
+            }
+            return Ok(func);
+        }
 
         // Regex generated literal sugar:
         //   re"pattern" / re'pattern'  => Regex::compile("pattern")
@@ -1898,6 +1987,11 @@ impl Parser<'_> {
             };
         }
 
+        if self.explicit_type_args_start() {
+            target = self.parse_explicit_type_apply(target)?;
+            end = target.span().end;
+        }
+
         let mut parsed_args = Vec::new();
         if matches!(self.peek(), Token::LParen) {
             self.advance();
@@ -2424,6 +2518,7 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
                     }
                 })
         }
+        Ast::TypeApply(_, target, _) => bulk_update_proc_contains_operation_call(target),
         Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
             stmts.iter().any(bulk_update_proc_contains_operation_call)
         }

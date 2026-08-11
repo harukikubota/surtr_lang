@@ -6027,3 +6027,34 @@ fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_parameter() 
         ),
     }
 }
+
+#[test]
+fn explicit_type_apply_resolves_callable_identity_and_type_arguments() {
+    let resolved = parse_and_resolve(
+        r#"def identity(value: $A) -> $A { value }
+value = identity::<Int>(1)
+fn = &identity::<Int>"#,
+    )
+    .expect("explicit type application should resolve");
+
+    let def_id = match &resolved[0] {
+        Resolved::Def(_, id, ..) => id.unique_id,
+        other => panic!("expected definition, got {other:?}"),
+    };
+    for node in [&resolved[1], &resolved[2]] {
+        let Resolved::Bind(_, _, rhs) = node else {
+            panic!("expected binding, got {node:?}");
+        };
+        let applied = match rhs.as_ref() {
+            Resolved::App(_, callee, _) => callee.as_ref(),
+            Resolved::Capture(_, target, _) => target.as_ref(),
+            other => panic!("expected call or capture, got {other:?}"),
+        };
+        assert!(matches!(
+            applied,
+            Resolved::TypeApply(_, target, args)
+                if matches!(target.as_ref(), Resolved::Var(_, id) if id.unique_id == def_id)
+                    && matches!(args.as_slice(), [AstTy::Named(_, name)] if name == "Int")
+        ));
+    }
+}

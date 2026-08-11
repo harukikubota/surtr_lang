@@ -1664,7 +1664,7 @@ impl Checker {
         trait_info: &TraitInfo,
         method: &TraitMethodInfo,
         self_ty: &Ty,
-    ) -> Result<(Vec<Ty>, Ty, Vec<Ty>), TypeError> {
+    ) -> Result<(Vec<Ty>, Ty, Vec<Ty>, Vec<Ty>), TypeError> {
         let mut trait_head_bindings = HashMap::new();
         for param in &trait_info.type_params {
             let fresh = self.env.fresh_tyvar();
@@ -1710,7 +1710,13 @@ impl Checker {
             .iter()
             .filter_map(|param| trait_head_bindings.get(&param.name).cloned())
             .collect::<Vec<_>>();
-        Ok((params, ret, trait_args))
+        let explicit_slots = trait_info
+            .type_params
+            .iter()
+            .chain(method.type_params.iter())
+            .filter_map(|param| tyvars.get(&param.name).cloned())
+            .collect::<Vec<_>>();
+        Ok((params, ret, trait_args, explicit_slots))
     }
 
     fn expand_trait_self_apps(
@@ -2172,7 +2178,7 @@ impl Checker {
                     });
                 }
 
-                let (trait_params, trait_ret, trait_head_vars) =
+                let (trait_params, trait_ret, trait_head_vars, _) =
                     self.resolve_trait_method_signature(&trait_info, trait_method, &target_ty)?;
                 let trait_head_mapping = trait_head_vars
                     .into_iter()

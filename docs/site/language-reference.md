@@ -108,6 +108,8 @@ match expr {
 - trait 宣言は `deftrait Name<$T, ...> { ... }` のように型引数を取ってよい
 - trait 実装は `impl Trait for Type { ... }`
 - trait 実装は `impl Trait<Concrete, ...> for Type { ... }` の形も取れる
+- generic callable は `identity::<Int>(1)` のように型引数を明示でき、capture は `&identity::<Int>` と書ける
+- trait helper の明示型引数は trait/function generic のみを対象とし、`Self` は値引数または期待 callable 型から推論する
 - trait は method のみを持つ
 - `impl Trait` は parameter 位置のみで使える
 - `-> impl Trait` は未対応

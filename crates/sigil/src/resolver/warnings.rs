@@ -127,6 +127,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 collect_record_arg_usage(arg, usage);
             }
         }
+        Resolved::TypeApply(_, target, _) => collect_node_usage(target, usage),
         Resolved::Block(_, nodes)
         | Resolved::ListLiteral(_, nodes)
         | Resolved::TupleLiteral(_, nodes)

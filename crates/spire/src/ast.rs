@@ -558,6 +558,9 @@ pub enum Ast {
     /// Function application: `print("hello")`, `to_string(42)`, `add(y: 2, x: 1)`
     App(Span, Box<Ast>, Vec<RecordLitArg>),
 
+    /// Explicit generic-slot application: `identity::<Int>`, `Trait::method::<Int>`
+    TypeApply(Span, Box<Ast>, Vec<AstTy>),
+
     /// Statement sequence used by declaration bodies and lowered closure bodies.
     Block(Span, Vec<Ast>),
 

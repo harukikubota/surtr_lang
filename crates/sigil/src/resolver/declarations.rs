@@ -1224,6 +1224,13 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .map(|arg| rewrite_self_ast(arg, target))
                 .collect(),
         ),
+        Ast::TypeApply(span, target_expr, args) => Ast::TypeApply(
+            span,
+            Box::new(rewrite_self_ast(*target_expr, target)),
+            args.into_iter()
+                .map(|arg| rewrite_self_type(arg, target))
+                .collect(),
+        ),
         Ast::FuncLiteralRef(span, func) => Ast::FuncLiteralRef(span, func),
         Ast::CapturePlaceholder(span, index) => Ast::CapturePlaceholder(span, index),
         Ast::Grouped(span, inner) => Ast::Grouped(span, Box::new(rewrite_self_ast(*inner, target))),

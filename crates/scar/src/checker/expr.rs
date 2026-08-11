@@ -705,6 +705,10 @@ impl Checker {
                 })
             }
 
+            Resolved::TypeApply(span, target, args) => {
+                self.check_explicit_type_apply(span, target, args)
+            }
+
             Resolved::Bind(span, pat, rhs) => {
                 if !Self::is_total_bind_pattern(pat) {
                     return Err(TypeError {
@@ -929,7 +933,7 @@ impl Checker {
                             hint: None,
                         }
                     })?;
-                    let (params, ret_ty, _) = self.resolve_trait_method_signature(
+                    let (params, ret_ty, _, _) = self.resolve_trait_method_signature(
                         &trait_info,
                         method_info,
                         &deferred_self,
@@ -990,6 +994,87 @@ impl Checker {
         }
     }
 
+    fn check_explicit_type_apply(
+        &mut self,
+        span: &Span,
+        target: &Resolved,
+        args: &[AstTy],
+    ) -> Result<TypedNode, TypeError> {
+        if self.trait_method_ref(target).is_some() {
+            return Err(TypeError {
+                message: "A specialized trait helper needs call or capture context".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Call it with arguments or capture it with an expected callable type.".into(),
+                ),
+            });
+        }
+        let Resolved::Var(_, id) = target else {
+            return Err(TypeError {
+                message: "Explicit type arguments require a named callable".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        let raw_ty = self
+            .env
+            .lookup_var(id.unique_id)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                message: format!("Undefined callable: {}", id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let Ty::UserFunc {
+            fun_idx,
+            type_params,
+            params,
+            ret,
+        } = raw_ty
+        else {
+            return Err(TypeError {
+                message: format!("{} does not accept explicit type arguments", id.name),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        if args.len() != type_params.len() {
+            return Err(TypeError {
+                message: format!(
+                    "{} expects {} explicit type argument(s), got {}",
+                    id.name,
+                    type_params.len(),
+                    args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let explicit_tys = args
+            .iter()
+            .map(|arg| self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mapping = type_params
+            .iter()
+            .copied()
+            .zip(explicit_tys)
+            .collect::<HashMap<_, _>>();
+        let specialized = Ty::UserFunc {
+            fun_idx,
+            type_params: Vec::new(),
+            params: params
+                .iter()
+                .map(|param| self.substitute_ty_with_mapping(param, &mapping))
+                .collect(),
+            ret: Box::new(self.substitute_ty_with_mapping(ret.as_ref(), &mapping)),
+        };
+        Ok(TypedNode {
+            ty: specialized,
+            span: span.clone(),
+            node: TypedInner::Var(id.clone()),
+        })
+    }
+
     pub(super) fn check_node_with_expected(
         &mut self,
         node: &Resolved,
@@ -1040,6 +1125,7 @@ impl Checker {
                     args,
                     receiver_owner_hint,
                     Some(expected_ty),
+                    Self::explicit_type_args(func),
                 )
             }
             (Resolved::App(span, func, args), Some(expected_ty))
@@ -1962,6 +2048,7 @@ impl Checker {
             Resolved::Lit(span, _)
             | Resolved::Var(span, _)
             | Resolved::App(span, _, _)
+            | Resolved::TypeApply(span, _, _)
             | Resolved::Block(span, _)
             | Resolved::Bind(span, _, _)
             | Resolved::SafeBind(span, _, _)
@@ -2236,6 +2323,10 @@ impl Checker {
         &self,
         func: &'a Resolved,
     ) -> Option<(&'a ResolvedId, String, String)> {
+        let func = match func {
+            Resolved::TypeApply(_, target, _) => target.as_ref(),
+            other => other,
+        };
         let Resolved::Var(_, id) = func else {
             return None;
         };
@@ -2245,6 +2336,13 @@ impl Checker {
             .get(qualified_name)?
             .clone();
         Some((id, trait_name, method_name))
+    }
+
+    fn explicit_type_args(func: &Resolved) -> Option<&[AstTy]> {
+        match func {
+            Resolved::TypeApply(_, _, args) => Some(args),
+            _ => None,
+        }
     }
 
     pub(super) fn trait_dispatch_target(
@@ -2785,6 +2883,7 @@ impl Checker {
         args: &[ResolvedRecordLitArg],
         receiver_owner_hint: Option<&str>,
         expected_ret_ty: Option<&Ty>,
+        explicit_type_args: Option<&[AstTy]>,
     ) -> Result<TypedNode, TypeError> {
         if args
             .iter()
@@ -2944,8 +3043,39 @@ impl Checker {
         }
 
         let self_ty = self.env.fresh_tyvar();
-        let (param_tys, ret_ty, trait_arg_tys) =
+        let (param_tys, ret_ty, trait_arg_tys, explicit_slots) =
             self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
+
+        if let Some(explicit_args) = explicit_type_args {
+            if explicit_args.len() != explicit_slots.len() {
+                return Err(TypeError {
+                    message: format!(
+                        "{}::{} expects {} explicit type argument(s), got {}",
+                        trait_name,
+                        method_name,
+                        explicit_slots.len(),
+                        explicit_args.len()
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            for (slot, arg) in explicit_slots.iter().zip(explicit_args) {
+                let explicit_ty =
+                    self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?;
+                if !self.types_compatible(slot, &explicit_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Explicit type argument {} does not match generic slot {}",
+                            self.ty_name(&explicit_ty),
+                            self.ty_name(slot)
+                        ),
+                        span: Self::ast_ty_span(arg).clone(),
+                        hint: None,
+                    });
+                }
+            }
+        }
 
         let trait_display_name = self.trait_display_name(trait_name);
         let trait_impl_summary = self.trait_implementation_summary(trait_name);
@@ -6942,6 +7072,7 @@ impl Checker {
                 args,
                 receiver_owner_hint,
                 None,
+                Self::explicit_type_args(func),
             );
         }
 

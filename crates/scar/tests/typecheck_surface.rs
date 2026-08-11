@@ -7475,3 +7475,32 @@ value = Result::tap_err(Err(NoneError), id(handler))"#,
     let err = typecheck(resolved).expect_err("Error observer binding must be a direct argument");
     assert!(err.message.contains("Error observer closure cannot escape"));
 }
+
+#[test]
+fn explicit_type_arguments_specialize_functions_trait_calls_and_captures() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def identity(value: $A) -> $A { value }
+
+deftrait Convert<$To> {
+  def convert(self: Self) -> $To
+}
+
+impl Convert<Int> for String {
+  def convert(self: String) -> Int { 1 }
+}
+
+number: Int = identity::<Int>(1)
+identity_fn: (Int -> Int) = &identity::<Int>
+converted: Int = Convert::convert::<Int>("")
+convert_fn: (String -> Int) = &Convert::convert::<Int>
+again: Int = convert_fn("")"#,
+    );
+    assert!(!typed.is_empty());
+
+    let resolved = resolve_with_builtin_prelude(
+        r#"def identity(value: $A) -> $A { value }
+bad: String = identity::<Int>(1)"#,
+    );
+    let err = typecheck(resolved).expect_err("explicit Int must not satisfy String");
+    assert!(err.message.contains("expected String, got Int"), "{err:?}");
+}
