@@ -449,6 +449,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         generic_user_function_calls_typecheck_inside_script_module_scope as fn(),
     ),
     (
+        "concrete_body_rejects_redundant_generic_return_type",
+        concrete_body_rejects_redundant_generic_return_type as fn(),
+    ),
+    (
         "named_args_user_function_calls_typecheck_inside_script_module_scope",
         named_args_user_function_calls_typecheck_inside_script_module_scope as fn(),
     ),
@@ -3393,6 +3397,29 @@ print(id("ok"))"#,
             >= 2,
         "expected both generic function call sites to typecheck"
     );
+}
+
+fn concrete_body_rejects_redundant_generic_return_type() {
+    let err = typecheck_with_rules(
+        r#"def nil() -> $A {
+  ""
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("a concrete body must reject a redundant generic return type");
+    assert!(
+        err.message
+            .contains("generic return type `$A` is unnecessary"),
+        "unexpected error: {}",
+        err.message
+    );
+    assert!(
+        err.message.contains("String"),
+        "error should report the concrete return type: {}",
+        err.message
+    );
+
+    typecheck_with_builtin_prelude(r#"def id(value: $A) -> $A { value }"#);
 }
 
 fn named_args_user_function_calls_typecheck_inside_script_module_scope() {

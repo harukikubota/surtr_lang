@@ -125,6 +125,34 @@ impl Checker {
         }
     }
 
+    fn concrete_body_satisfies_bare_generic_return(
+        &self,
+        return_annotation: &AstTy,
+        actual_ret: &Ty,
+        span: &Span,
+    ) -> Option<TypeError> {
+        let AstTy::Named(_, name) = return_annotation else {
+            return None;
+        };
+        if !name.starts_with('$') || type_contains_unresolved_vars(actual_ret) {
+            return None;
+        }
+
+        Some(TypeError {
+            message: format!(
+                "generic return type `{}` is unnecessary; the function body returns {}",
+                name,
+                self.ty_name(actual_ret)
+            ),
+            span: span.clone(),
+            hint: Some(format!(
+                "Declare the concrete return type `{}` instead of `{}`.",
+                self.ty_name(actual_ret),
+                name
+            )),
+        })
+    }
+
     pub(super) fn check_builtin_decl(
         &mut self,
         span: &Span,
@@ -782,6 +810,15 @@ impl Checker {
         )?;
 
         let actual_ret = self.resolve_ty(&typed_body.ty);
+        if let Some(ty) = ret_ty.as_ref().and_then(|return_annotation| {
+            self.concrete_body_satisfies_bare_generic_return(
+                return_annotation,
+                &actual_ret,
+                Self::ast_ty_span(return_annotation),
+            )
+        }) {
+            return Err(ty);
+        }
         if let Some(err) = self.bare_return_typevar_result_mismatch(
             &expected_ret,
             &actual_ret,
