@@ -3083,6 +3083,8 @@ mod tests {
         let path = TypedFacetPath {
             source_ty: Ty::List(Box::new(Ty::Int)),
             focus_ty: Ty::Int,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,
