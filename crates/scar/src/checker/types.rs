@@ -1806,7 +1806,10 @@ impl Checker {
         result
     }
 
-    pub(super) fn instantiate_builtin_ty(&mut self, ty: &Ty) -> Ty {
+    /// Instantiates declaration-owned callable generics for one use site.
+    /// Every lookup gets an independent fresh map so substitutions cannot
+    /// leak between calls to the same function.
+    pub(super) fn instantiate_callable_ty(&mut self, ty: &Ty) -> Ty {
         let mut fresh = HashMap::new();
         self.instantiate_ty_with_fresh(ty, &mut fresh)
     }

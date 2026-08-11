@@ -538,7 +538,7 @@ impl Checker {
                 if let Some(stored_ty) = self.env.lookup_var(id.unique_id).cloned() {
                     let ty = match &stored_ty {
                         Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
-                            self.instantiate_builtin_ty(&stored_ty)
+                            self.instantiate_callable_ty(&stored_ty)
                         }
                         _ => self.resolve_ty(&stored_ty),
                     };
@@ -4231,7 +4231,7 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        let extractor_ty = self.instantiate_builtin_ty(&extractor_ty);
+        let extractor_ty = self.instantiate_callable_ty(&extractor_ty);
         let (params, ret) = match &extractor_ty {
             Ty::BuiltinFunc { params, ret, .. }
             | Ty::UserFunc { params, ret, .. }
@@ -4283,7 +4283,7 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        Ok(self.instantiate_builtin_ty(&extractor_ty))
+        Ok(self.instantiate_callable_ty(&extractor_ty))
     }
 
     pub(super) fn kernel_uncons_id(&self, span: &Span) -> Result<ResolvedId, TypeError> {

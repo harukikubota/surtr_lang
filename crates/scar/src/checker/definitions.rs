@@ -2111,7 +2111,7 @@ impl Checker {
                 })?;
             let new_ty = match new_ty {
                 Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
-                    self.instantiate_builtin_ty(&new_ty)
+                    self.instantiate_callable_ty(&new_ty)
                 }
                 other => other,
             };

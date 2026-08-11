@@ -1,0 +1,9 @@
+def identity(value: $A) -> $A {
+  value
+}
+
+left: Int = identity(1)
+right: String = identity("ok")
+
+print(to_string(left))
+print(right)

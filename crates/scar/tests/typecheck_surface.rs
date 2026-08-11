@@ -3445,9 +3445,13 @@ fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }
 
-print(to_string(id(1)))
-print(id("ok"))"#,
+left: Int = id(1)
+right: String = id("ok")
+print(to_string(left))
+print(right)"#,
     );
+    assert!(matches!(typed_bind_rhs(&typed, "left").ty, Ty::Int));
+    assert!(matches!(typed_bind_rhs(&typed, "right").ty, Ty::Str));
     assert!(
         typed
             .iter()
