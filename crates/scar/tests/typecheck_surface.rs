@@ -7590,3 +7590,26 @@ fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
         "{err:?}"
     );
 }
+
+#[test]
+fn explicit_function_type_arguments_follow_signature_order() {
+    typecheck_with_rules(
+        r#"def pair(left: $A, right: $B) -> ($A, $B) {
+  (left, right)
+}
+
+value: (Int, String) = pair::<Int, String>(1, "ok")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("implicit generic slots should follow their first signature appearance");
+
+    typecheck_with_rules(
+        r#"def reversed<$B, $A>(left: $A, right: $B) -> ($A, $B) {
+  (left, right)
+}
+
+value: (String, Int) = reversed::<Int, String>("ok", 1)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("declared generic slots should follow their declaration order");
+}

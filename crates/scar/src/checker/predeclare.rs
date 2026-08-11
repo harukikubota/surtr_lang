@@ -1169,6 +1169,25 @@ impl Checker {
         }
     }
 
+    fn signature_type_param_vars(
+        declared: &[ResolvedTypeParam],
+        tyvars: &HashMap<String, Ty>,
+        params: &[Ty],
+        ret: &Ty,
+    ) -> Vec<u32> {
+        let mut vars = Vec::new();
+        for param in declared {
+            if let Some(ty) = tyvars.get(&param.name) {
+                Self::collect_ty_vars(ty, &mut vars);
+            }
+        }
+        for param in params {
+            Self::collect_ty_vars(param, &mut vars);
+        }
+        Self::collect_ty_vars(ret, &mut vars);
+        vars
+    }
+
     fn trait_constructor_slots(
         &self,
         trait_id: &ResolvedId,
@@ -2580,13 +2599,8 @@ impl Checker {
                             hint: None,
                         });
                     }
-                    let type_params = tyvars
-                        .values()
-                        .filter_map(|ty| match ty {
-                            Ty::Var(var) => Some(*var),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
+                    let type_params =
+                        Self::signature_type_param_vars(type_params, &tyvars, &param_tys, &ret);
                     self.env.bind_var(
                         id.unique_id,
                         Ty::UserFunc {
@@ -2622,13 +2636,12 @@ impl Checker {
                         TypeSyntaxContext::ExtractorReturn,
                         &mut tyvars,
                     )?;
-                    let type_params = tyvars
-                        .values()
-                        .filter_map(|ty| match ty {
-                            Ty::Var(var) => Some(*var),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
+                    let type_params = Self::signature_type_param_vars(
+                        type_params,
+                        &tyvars,
+                        std::slice::from_ref(&param_ty),
+                        &ret,
+                    );
                     self.env.bind_var(
                         id.unique_id,
                         Ty::UserFunc {
