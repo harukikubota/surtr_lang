@@ -290,8 +290,73 @@ impl Checker {
         span: &Span,
         id: &ResolvedId,
         params: &[String],
-        _attrs: &ResolvedDeclAttrs,
+        attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
+        if let Some(members) = &attrs.facet_path_kind {
+            if attrs.builtin {
+                return Err(TypeError {
+                    message: "@FacetPathKind Type declarations are only allowed in canonical lib/facet.srt".into(),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            if !params.is_empty() {
+                return Err(TypeError {
+                    message: "Facet path kind types cannot have generic parameters".into(),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            let atomic = matches!(
+                id.name.as_str(),
+                "InfallibleStructural" | "FallibleStructural" | "VariantPath"
+            );
+            if members.is_empty() {
+                if !atomic {
+                    return Err(TypeError {
+                        message: format!("Facet path kind `{}` must be an alias or one of the compiler-derived atomic kinds", id.name),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            } else {
+                if atomic {
+                    return Err(TypeError {
+                        message: format!(
+                            "Atomic Facet path kind `{}` cannot declare an alias RHS",
+                            id.name
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                for member in members {
+                    if !self.facet_path_kind_decls.contains_key(member) {
+                        return Err(TypeError {
+                            message: format!("Facet path kind alias `{}` must reference a previously declared kind; `{member}` is not available", id.name),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+            }
+            if self
+                .facet_path_kind_decls
+                .insert(id.name.clone(), members.clone())
+                .is_some()
+            {
+                return Err(TypeError {
+                    message: format!("Duplicate Facet path kind declaration: {}", id.name),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            return Ok(TypedNode {
+                ty: Ty::Unit,
+                span: span.clone(),
+                node: TypedInner::Lit(Lit::Unit),
+            });
+        }
         let Some(meta) = builtin_type_meta_by_name(Self::surface_name(&id.name)) else {
             return Err(TypeError {
                 message: format!("Unknown builtin type declaration: {}", id.name),

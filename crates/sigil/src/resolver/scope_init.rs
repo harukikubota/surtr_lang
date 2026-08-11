@@ -44,6 +44,7 @@ pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
     ResolvedDeclAttrs {
         doc: attrs.doc.clone(),
         builtin: attrs.builtin,
+        facet_path_kind: attrs.facet_path_kind.clone(),
         hidden: attrs.hidden,
         readonly: attrs.readonly,
         visibility: attrs.visibility,

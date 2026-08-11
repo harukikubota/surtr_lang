@@ -256,8 +256,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         optional_type_annotation_rejects_result_value as fn(),
     ),
     (
-        "facet_set_accepts_plain_value_for_result_focus",
-        facet_set_accepts_plain_value_for_result_focus as fn(),
+        "facet_set_rejects_plain_value_for_result_focus",
+        facet_set_rejects_plain_value_for_result_focus as fn(),
     ),
     (
         "facet_shorthand_view_and_mutation_forms_typecheck",
@@ -2411,19 +2411,18 @@ boxed = Boxed(Ok(1))"#,
     );
 }
 
-fn facet_set_accepts_plain_value_for_result_focus() {
-    let typed = typecheck_with_builtin_prelude(
+fn facet_set_rejects_plain_value_for_result_focus() {
+    let resolved = resolve_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
 user = User(Err(NoneError))
 Facet::set(User.score, user, 3)"#,
     );
-    let last = typed.last().expect("typed program should not be empty");
-    assert!(matches!(
-        &last.ty,
-        scar::types::Ty::Result(ok, err)
-            if matches!(ok.as_ref(), scar::types::Ty::Record(name, _) if name == "User")
-                && matches!(err.as_ref(), scar::types::Ty::Error)
-    ));
+    let err = typecheck(resolved).expect_err("set must not implicitly wrap a Result focus");
+    assert!(
+        err.message.contains("expected Result<Int>, got Int"),
+        "{}",
+        err.message
+    );
 }
 
 fn facet_shorthand_view_and_mutation_forms_typecheck() {
@@ -2755,9 +2754,9 @@ fn facet_const_slash_compose_allows_facet_consts() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
-const USER_PROFILE: Facet<User, Profile> = User.profile
-const PROFILE_NAME: Facet<Profile, String> = Profile.name
-const FULL_NAME: Facet<User, String> = USER_PROFILE / PROFILE_NAME
+const USER_PROFILE: Facet<InfallibleStructural, User, Profile, _, _> = User.profile
+const PROFILE_NAME: Facet<InfallibleStructural, Profile, String, _, _> = Profile.name
+const FULL_NAME: Facet<InfallibleStructural, User, String, _, _> = USER_PROFILE / PROFILE_NAME
 user = User(Profile("alice"))
 Facet::view(FULL_NAME, user)"#,
     );
@@ -2854,7 +2853,7 @@ Ok(User.name)"#,
 fn nested_facet_types_are_rejected_in_function_signatures() {
     let param_err = typecheck_with_rules(
         r#"defrecord User(name: String)
-def bad(values: List<Facet<User, String>>) -> Unit { () }"#,
+def bad(values: List<Facet<InfallibleStructural, User, String, _, _>>) -> Unit { () }"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("nested facet in parameter type should fail");
@@ -2864,7 +2863,7 @@ def bad(values: List<Facet<User, String>>) -> Unit { () }"#,
 
     let ret_err = typecheck_with_rules(
         r#"defrecord User(name: String)
-def bad() -> List<Facet<User, String>> { [] }"#,
+def bad() -> List<Facet<InfallibleStructural, User, String, _, _>> { [] }"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("nested facet in return type should fail");
@@ -3016,7 +3015,7 @@ print(to_string(User.name))"#,
 
     let return_err = typecheck_with_rules(
         r#"defrecord User(name: String)
-def bad() -> Facet<User, String> {
+def bad() -> Facet<InfallibleStructural, User, String, _, _> {
   User.name
 }"#,
         RuntimeSourcePolicy::script(),

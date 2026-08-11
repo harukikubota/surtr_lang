@@ -285,7 +285,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "public" => Token::Public,
                 "readonly" => Token::Readonly,
                 "const" => Token::Const,
-                "type" => Token::Type,
+                "type" | "Type" => Token::Type,
                 "where" => Token::Where,
                 _ => Token::Ident(text),
             };

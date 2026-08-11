@@ -1660,6 +1660,38 @@ fn test_builtin_type_decl() {
 }
 
 #[test]
+fn facet_path_kind_declarations_are_std_only_and_preserve_alias_members() {
+    let ast = parse_with_context(
+        "@FacetPathKind Type ReadablePath = InfallibleStructural | VariantPath",
+        ParserContext::module(1, Some("Facet".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect("std Facet kind declaration should parse");
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::BuiltinTypeDecl(_, BuiltinTypeHead { name, params, .. }, DeclAttrs { facet_path_kind: Some(members), builtin: false, .. })]
+            if name == "ReadablePath"
+                && params.is_empty()
+                && members == &vec!["InfallibleStructural".to_string(), "VariantPath".to_string()]
+    ));
+
+    let err = parse_with_context(
+        "@FacetPathKind Type ReadablePath = InfallibleStructural",
+        ParserContext::module(1, Some("User".into())),
+    )
+    .expect_err("user source must not declare Facet path kinds");
+    assert!(err
+        .message()
+        .contains("only allowed in canonical standard library source"));
+
+    let err = parse_with_context(
+        "@builtin @FacetPathKind Type ReadablePath = InfallibleStructural",
+        ParserContext::module(1, Some("Facet".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect_err("Facet path kind declarations cannot be builtin declarations");
+    assert!(err.message().contains("cannot be combined with @builtin"));
+}
+
+#[test]
 fn test_hidden_annotates_builtin_decl() {
     let ast = parse_with_context(
         "@hidden\n@builtin def __process_sleep(duration: Duration) -> Result<Unit>",

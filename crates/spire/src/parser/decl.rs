@@ -1820,6 +1820,7 @@ impl Parser<'_> {
             DeclAttrs {
                 doc: attrs.doc,
                 builtin: attrs.builtin,
+                facet_path_kind: attrs.facet_path_kind,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
                 readonly: attrs.readonly,
@@ -3131,6 +3132,7 @@ impl Parser<'_> {
         let mut attrs = DeclAttrs::default();
         let mut saw_builtin = false;
         let mut saw_intrinsic = false;
+        let mut saw_facet_path_kind = false;
         let mut start_span: Option<Span> = None;
         let mut intrinsic_start_span: Option<Span> = None;
 
@@ -3150,6 +3152,16 @@ impl Parser<'_> {
                         ));
                     }
                     saw_builtin = true;
+                }
+                "FacetPathKind" => {
+                    if saw_facet_path_kind {
+                        return Err(ParseError::syntax(
+                            "@FacetPathKind may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    saw_facet_path_kind = true;
+                    attrs.facet_path_kind = Some(Vec::new());
                 }
                 "intrinsic" => {
                     if saw_intrinsic {
@@ -3266,7 +3278,32 @@ impl Parser<'_> {
             .map(|span| span.start)
             .unwrap_or_else(|| self.peek_span().start);
 
-        if saw_intrinsic {
+        if saw_facet_path_kind {
+            if saw_builtin || saw_intrinsic {
+                return Err(ParseError::syntax(
+                    "@FacetPathKind cannot be combined with @builtin or @intrinsic",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
+            if !self
+                .context
+                .parse_rules
+                .allowed_top_level_decl_kinds
+                .allows(super::context::TopLevelDeclKind::BuiltinTypeDecl)
+            {
+                return Err(ParseError::syntax(
+                    "@FacetPathKind Type declarations are only allowed in canonical standard library source",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
+            if !matches!(self.peek(), Token::Type) {
+                return Err(ParseError::syntax(
+                    "Expected `Type` after @FacetPathKind",
+                    self.peek_span(),
+                ));
+            }
+            self.parse_facet_path_kind_decl(start, attrs)
+        } else if saw_intrinsic {
             let intrinsic_start = intrinsic_start_span
                 .as_ref()
                 .map(|span| span.start)
@@ -4873,6 +4910,66 @@ impl Parser<'_> {
                 span: Span { start, end },
                 name,
                 params,
+            },
+            attrs,
+        ))
+    }
+
+    /// Parse the compiler-only `@FacetPathKind Type Name (= A | B)?`
+    /// declaration.  It deliberately reuses the builtin type declaration AST
+    /// shape: the attribute keeps it out of the runtime type namespace.
+    fn parse_facet_path_kind_decl(
+        &mut self,
+        start: usize,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Type)?;
+        self.skip_newlines();
+        let (name, name_span) = self.expect_ident()?;
+        if !name.chars().next().is_some_and(char::is_uppercase) {
+            return Err(ParseError::syntax(
+                "@FacetPathKind Type requires a PascalCase type name",
+                name_span,
+            ));
+        }
+
+        let mut members = Vec::new();
+        if matches!(self.peek(), Token::Bind) {
+            self.advance();
+            self.skip_newlines();
+            loop {
+                let (member, member_span) = self.expect_ident()?;
+                if !member.chars().next().is_some_and(char::is_uppercase) {
+                    return Err(ParseError::syntax(
+                        "Facet path kind aliases may contain only PascalCase kind names",
+                        member_span,
+                    ));
+                }
+                members.push(member);
+                if matches!(self.peek(), Token::Pipe) {
+                    self.advance();
+                    self.skip_newlines();
+                    continue;
+                }
+                break;
+            }
+        }
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            start
+        };
+        let mut attrs = attrs;
+        attrs.facet_path_kind = Some(members);
+        Ok(Ast::BuiltinTypeDecl(
+            Span { start, end },
+            BuiltinTypeHead {
+                span: Span {
+                    start: name_span.start,
+                    end,
+                },
+                name,
+                params: Vec::new(),
             },
             attrs,
         ))

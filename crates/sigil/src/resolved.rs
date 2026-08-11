@@ -7,6 +7,7 @@ use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
 pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
     pub builtin: bool,
+    pub facet_path_kind: Option<Vec<String>>,
     pub hidden: bool,
     pub readonly: bool,
     pub visibility: Visibility,
@@ -19,6 +20,7 @@ impl Default for ResolvedDeclAttrs {
         Self {
             doc: None,
             builtin: false,
+            facet_path_kind: None,
             hidden: false,
             readonly: false,
             visibility: Visibility::Public,

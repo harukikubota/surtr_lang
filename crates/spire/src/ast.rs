@@ -23,6 +23,9 @@ pub enum Visibility {
 pub struct DeclAttrs {
     pub doc: Option<String>,
     pub builtin: bool,
+    /// Compiler declaration for a Facet path kind. These declarations are
+    /// accepted only from the canonical standard-library Facet source.
+    pub facet_path_kind: Option<Vec<Symbol>>,
     pub auto_import: bool,
     pub hidden: bool,
     pub readonly: bool,
@@ -36,6 +39,7 @@ impl Default for DeclAttrs {
         Self {
             doc: None,
             builtin: false,
+            facet_path_kind: None,
             auto_import: false,
             hidden: false,
             readonly: false,

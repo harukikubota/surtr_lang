@@ -1917,6 +1917,7 @@ struct Checker {
     allow_error_function_params: bool,
     allow_error_observer_value_use: usize,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
+    facet_path_kind_decls: HashMap<String, Vec<String>>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
@@ -1996,6 +1997,7 @@ impl Checker {
             allow_error_function_params: context.allow_error_function_params,
             allow_error_observer_value_use: 0,
             seen_builtin_type_decls: HashMap::new(),
+            facet_path_kind_decls: HashMap::new(),
             traits: state.traits,
             trait_impls: state.trait_impls,
             trait_impl_index_by_base_trait: state.trait_impl_index_by_base_trait,
@@ -2030,6 +2032,7 @@ impl Checker {
         checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
+        checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();
         checker.process_specs = self.process_specs.clone();
         checker.profiler = self.profiler.clone();
