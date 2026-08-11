@@ -1684,6 +1684,15 @@ fn facet_path_kind_declarations_are_std_only_and_preserve_alias_members() {
         .contains("only allowed in canonical standard library source"));
 
     let err = parse_with_context(
+        "@FacetPathKind Type ReadablePath = InfallibleStructural",
+        ParserContext::module(1, Some("Process".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect_err("only the canonical Facet standard source may declare path kinds");
+    assert!(err
+        .message()
+        .contains("only allowed in canonical standard library source"));
+
+    let err = parse_with_context(
         "@builtin @FacetPathKind Type ReadablePath = InfallibleStructural",
         ParserContext::module(1, Some("Facet".into())).with_rules(ParseRules::std_module()),
     )

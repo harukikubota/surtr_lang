@@ -3290,6 +3290,7 @@ impl Parser<'_> {
                 .parse_rules
                 .allowed_top_level_decl_kinds
                 .allows(super::context::TopLevelDeclKind::BuiltinTypeDecl)
+                || self.context.module_path.as_deref() != Some("Facet")
             {
                 return Err(ParseError::syntax(
                     "@FacetPathKind Type declarations are only allowed in canonical standard library source",

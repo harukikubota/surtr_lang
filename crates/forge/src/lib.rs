@@ -79,13 +79,17 @@ mod tests {
 
     fn parse_std_module_stage(
         source: &str,
-        _fallback_module_path: &str,
+        fallback_module_path: &str,
     ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
             source,
-            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+            spire::ParserContext::module(
+                0,
+                (fallback_module_path == "Facet").then(|| fallback_module_path.into()),
+            )
+            .with_rules(spire::ParseRules::std_module()),
         )
-        .unwrap_or_else(|err| panic!("std module {_fallback_module_path} should parse: {err:?}"));
+        .unwrap_or_else(|err| panic!("std module {fallback_module_path} should parse: {err:?}"));
 
         let shared_imports = ast
             .iter()

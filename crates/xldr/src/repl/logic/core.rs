@@ -9383,7 +9383,7 @@ fn parse_stage_modules_parallel(
                                 module.source_id.0,
                                 module.source_kind,
                                 compile_unit_kind,
-                                None,
+                                (module.module_path == "Facet").then(|| "Facet".into()),
                             ),
                         )
                         .map_err(|e| ModuleStageParseError {

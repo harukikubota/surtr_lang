@@ -78,13 +78,14 @@ pub(crate) fn typecheck_with_context(
     session.typecheck_with_context(resolved, context)
 }
 
-fn parse_std_module_stage(
-    source: &str,
-    _fallback_module_path: &str,
-) -> Vec<sigil::StagedModuleAst> {
+fn parse_std_module_stage(source: &str, fallback_module_path: &str) -> Vec<sigil::StagedModuleAst> {
     let ast = spire::parse_with_context(
         source,
-        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+        spire::ParserContext::module(
+            0,
+            (fallback_module_path == "Facet").then(|| fallback_module_path.into()),
+        )
+        .with_rules(spire::ParseRules::std_module()),
     )
     .expect("std module should parse");
 
