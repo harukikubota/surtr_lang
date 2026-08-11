@@ -431,6 +431,7 @@ pub enum ResolvedWhereConstraintRhs {
     TraitSlot {
         trait_id: ResolvedId,
         slot_name: Symbol,
+        slot_ordinal: u32,
         span: Span,
     },
 }

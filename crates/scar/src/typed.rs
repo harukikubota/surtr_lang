@@ -23,9 +23,9 @@ pub struct TypedProgram {
     pub boot_plan: SupervisorInitSpec,
 }
 
-/// A declaration-level constraint clause preserved by Scar for later trait
-/// validation phases. Step 4 records the resolved constraint kinds without
-/// interpreting constructor arity, parent traits, or slot mappings.
+/// A declaration-level constraint clause preserved by Scar. Constructor
+/// arity and slot mappings are validated while trait impls are predeclared;
+/// parent-trait closure remains a later validation phase.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TypedWhereClause {
     pub constraints: Vec<TypedWhereConstraint>,
@@ -49,6 +49,7 @@ pub enum TypedWhereConstraintRhs {
     TraitSlot {
         trait_id: ResolvedId,
         slot_name: String,
+        slot_ordinal: u32,
         span: Span,
     },
 }
@@ -77,10 +78,12 @@ impl From<&ResolvedWhereClause> for TypedWhereClause {
                             ResolvedWhereConstraintRhs::TraitSlot {
                                 trait_id,
                                 slot_name,
+                                slot_ordinal,
                                 span,
                             } => TypedWhereConstraintRhs::TraitSlot {
                                 trait_id: trait_id.clone(),
                                 slot_name: slot_name.clone(),
+                                slot_ordinal: *slot_ordinal,
                                 span: span.clone(),
                             },
                         })

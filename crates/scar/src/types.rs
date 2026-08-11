@@ -126,9 +126,9 @@ pub enum Ty {
     /// Type variable (for polymorphism): `$A`
     Var(u32),
 
-    /// Deferred higher-kinded trait receiver application such as `Self<$A>`.
-    /// Step 4 preserves this shape; impl-slot substitution is performed by
-    /// the later trait validation phases.
+    /// Higher-kinded trait receiver application such as `Self<$A>`.
+    /// It remains deferred in trait metadata and is expanded against the
+    /// selected impl's constructor-slot mapping during validation/dispatch.
     SelfApp(Vec<Ty>),
 
     /// Named struct: `User { name: String, age: Int }`

@@ -1064,11 +1064,196 @@ impl Checker {
         }
     }
 
+    fn trait_constructor_slots(
+        &self,
+        trait_id: &ResolvedId,
+        where_clause: Option<&ResolvedWhereClause>,
+    ) -> Result<Vec<String>, TypeError> {
+        let mut slots = None;
+        let Some(clause) = where_clause else {
+            return Ok(Vec::new());
+        };
+        for constraint in &clause.constraints {
+            if !matches!(&constraint.subject, AstTy::Named(_, name) if name == "Self") {
+                continue;
+            }
+            for bound in &constraint.bounds {
+                let ResolvedWhereConstraintRhs::TypeConstructor {
+                    span,
+                    slots: declared_slots,
+                } = bound
+                else {
+                    continue;
+                };
+                if slots.is_some() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait {} declares more than one Self type-constructor constraint",
+                            trait_id.name
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                if declared_slots.is_empty() {
+                    return Err(TypeError {
+                        message: "Type constructor constraints require at least one slot".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let mut names = Vec::with_capacity(declared_slots.len());
+                let mut seen = HashSet::new();
+                for slot in declared_slots {
+                    let AstTy::Named(slot_span, name) = slot else {
+                        return Err(TypeError {
+                            message: "Type constructor slots must be type variables such as `$A`"
+                                .into(),
+                            span: Self::ast_ty_span(slot).clone(),
+                            hint: None,
+                        });
+                    };
+                    if !name.starts_with('$') {
+                        return Err(TypeError {
+                            message: "Type constructor slots must be type variables such as `$A`"
+                                .into(),
+                            span: slot_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    if !seen.insert(name.clone()) {
+                        return Err(TypeError {
+                            message: format!("Duplicate type constructor slot: {}", name),
+                            span: slot_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    names.push(name.clone());
+                }
+                slots = Some(names);
+            }
+        }
+        Ok(slots.unwrap_or_default())
+    }
+
+    fn target_top_level_type_params(target_ast_ty: &AstTy) -> Vec<String> {
+        let AstTy::Generic(_, _, args) = target_ast_ty else {
+            return Vec::new();
+        };
+        args.iter()
+            .filter_map(|arg| match arg {
+                AstTy::Named(_, name) if name.starts_with('$') => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn constructor_slot_vars_for_impl(
+        &self,
+        trait_info: &TraitInfo,
+        target_ast_ty: &AstTy,
+        where_clause: Option<&ResolvedWhereClause>,
+        target_param_vars: &HashMap<String, u32>,
+        span: &Span,
+    ) -> Result<Vec<u32>, TypeError> {
+        let target_params = Self::target_top_level_type_params(target_ast_ty);
+        let mut mapped_slots = vec![None; trait_info.constructor_slots.len()];
+        let mut mapped_params = HashSet::new();
+        if let Some(clause) = where_clause {
+            for constraint in &clause.constraints {
+                let AstTy::Named(subject_span, subject) = &constraint.subject else {
+                    continue;
+                };
+                for bound in &constraint.bounds {
+                    let ResolvedWhereConstraintRhs::TraitSlot {
+                        trait_id,
+                        slot_name,
+                        slot_ordinal,
+                        span: bound_span,
+                    } = bound
+                    else {
+                        continue;
+                    };
+                    if trait_id.unique_id != trait_info.id.unique_id {
+                        continue;
+                    }
+                    if !target_params.contains(subject) {
+                        return Err(TypeError {
+                            message: format!(
+                                "{} is not a top-level type parameter of the impl target",
+                                subject
+                            ),
+                            span: subject_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let slot_ordinal = *slot_ordinal as usize;
+                    if slot_ordinal >= trait_info.constructor_slots.len() {
+                        return Err(TypeError {
+                            message: format!(
+                                "Trait {} has no constructor slot {}",
+                                trait_info.id.name, slot_name
+                            ),
+                            span: bound_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    if mapped_slots[slot_ordinal].is_some() {
+                        return Err(TypeError {
+                            message: format!(
+                                "Trait constructor slot {} is mapped more than once",
+                                slot_name
+                            ),
+                            span: bound_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    if !mapped_params.insert(subject.clone()) {
+                        return Err(TypeError {
+                            message: format!(
+                                "Impl target parameter {} is mapped to more than one constructor slot",
+                                subject
+                            ),
+                            span: bound_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    mapped_slots[slot_ordinal] = target_param_vars.get(subject).copied();
+                }
+            }
+        }
+
+        if mapped_slots.iter().all(Option::is_none)
+            && trait_info.constructor_slots.len() == 1
+            && target_params.len() == 1
+        {
+            mapped_slots[0] = target_param_vars.get(&target_params[0]).copied();
+        }
+
+        if mapped_slots.iter().any(Option::is_none) {
+            return Err(TypeError {
+                message: format!(
+                    "{} does not satisfy Type<{}>: map every constructor slot in the impl where clause",
+                    Self::surface_ast_ty_key(target_ast_ty),
+                    trait_info.constructor_slots.join(", ")
+                ),
+                span: span.clone(),
+                hint: Some(format!(
+                    "Use `where $T: {}.{}` for each public constructor slot.",
+                    trait_info.id.name,
+                    trait_info.constructor_slots[0]
+                )),
+            });
+        }
+
+        Ok(mapped_slots.into_iter().flatten().collect())
+    }
+
     pub(super) fn resolve_trait_impl_head_tys(
         &mut self,
         trait_args: &[AstTy],
         target_ast_ty: &AstTy,
-    ) -> Result<(Vec<Ty>, Ty, Vec<u32>), TypeError> {
+    ) -> Result<(Vec<Ty>, Ty, Vec<u32>, HashMap<String, u32>), TypeError> {
         let mut tyvars = HashMap::new();
         let target_ty = self.resolve_signature_ast_ty_in_context(
             target_ast_ty,
@@ -1091,7 +1276,14 @@ impl Checker {
             Self::collect_ty_vars(ty, &mut type_param_vars);
         }
         Self::collect_ty_vars(&target_ty, &mut type_param_vars);
-        Ok((trait_arg_tys, target_ty, type_param_vars))
+        let target_param_vars = tyvars
+            .into_iter()
+            .filter_map(|(name, ty)| match ty {
+                Ty::Var(var) if name.starts_with('$') => Some((name, var)),
+                _ => None,
+            })
+            .collect();
+        Ok((trait_arg_tys, target_ty, type_param_vars, target_param_vars))
     }
 
     fn compiler_trait_target_names(&self, trait_name: &str) -> &'static [&'static str] {
@@ -1425,6 +1617,149 @@ impl Checker {
         Ok((params, ret, trait_args))
     }
 
+    fn expand_trait_self_apps(
+        &self,
+        ty: Ty,
+        target_ty: &Ty,
+        constructor_slot_vars: &[u32],
+    ) -> Result<Ty, TypeError> {
+        Ok(match ty {
+            Ty::SelfApp(args) => {
+                if args.len() != constructor_slot_vars.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Self requires {} constructor argument(s), got {}",
+                            constructor_slot_vars.len(),
+                            args.len()
+                        ),
+                        span: Span { start: 0, end: 0 },
+                        hint: None,
+                    });
+                }
+                let mapping = constructor_slot_vars
+                    .iter()
+                    .copied()
+                    .zip(args)
+                    .collect::<HashMap<_, _>>();
+                self.substitute_ty_with_mapping(target_ty, &mapping)
+            }
+            Ty::List(inner) => Ty::List(Box::new(self.expand_trait_self_apps(
+                *inner,
+                target_ty,
+                constructor_slot_vars,
+            )?)),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| self.expand_trait_self_apps(item, target_ty, constructor_slot_vars))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Ty::Func(params, ret) => Ty::Func(
+                params
+                    .into_iter()
+                    .map(|param| {
+                        self.expand_trait_self_apps(param, target_ty, constructor_slot_vars)
+                    })
+                    .collect::<Result<_, _>>()?,
+                Box::new(self.expand_trait_self_apps(*ret, target_ty, constructor_slot_vars)?),
+            ),
+            Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.expand_trait_self_apps(
+                *inner,
+                target_ty,
+                constructor_slot_vars,
+            )?)),
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(self.expand_trait_self_apps(
+                *inner,
+                target_ty,
+                constructor_slot_vars,
+            )?)),
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                kind,
+                Box::new(self.expand_trait_self_apps(*source, target_ty, constructor_slot_vars)?),
+                Box::new(self.expand_trait_self_apps(*focus, target_ty, constructor_slot_vars)?),
+                Box::new(self.expand_trait_self_apps(
+                    *update_source,
+                    target_ty,
+                    constructor_slot_vars,
+                )?),
+                Box::new(self.expand_trait_self_apps(
+                    *update_focus,
+                    target_ty,
+                    constructor_slot_vars,
+                )?),
+            ),
+            Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
+                name,
+                params: params
+                    .into_iter()
+                    .map(|param| {
+                        self.expand_trait_self_apps(param, target_ty, constructor_slot_vars)
+                    })
+                    .collect::<Result<_, _>>()?,
+                ret: Box::new(self.expand_trait_self_apps(
+                    *ret,
+                    target_ty,
+                    constructor_slot_vars,
+                )?),
+            },
+            Ty::UserFunc {
+                fun_idx,
+                type_params,
+                params,
+                ret,
+            } => Ty::UserFunc {
+                fun_idx,
+                type_params,
+                params: params
+                    .into_iter()
+                    .map(|param| {
+                        self.expand_trait_self_apps(param, target_ty, constructor_slot_vars)
+                    })
+                    .collect::<Result<_, _>>()?,
+                ret: Box::new(self.expand_trait_self_apps(
+                    *ret,
+                    target_ty,
+                    constructor_slot_vars,
+                )?),
+            },
+            Ty::Struct(name, fields) => Ty::Struct(
+                name,
+                fields
+                    .into_iter()
+                    .map(|(name, field)| {
+                        Ok((
+                            name,
+                            self.expand_trait_self_apps(field, target_ty, constructor_slot_vars)?,
+                        ))
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+            ),
+            Ty::Record(name, fields) => Ty::Record(
+                name,
+                fields
+                    .into_iter()
+                    .map(|(name, field)| {
+                        Ok((
+                            name,
+                            self.expand_trait_self_apps(field, target_ty, constructor_slot_vars)?,
+                        ))
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+            ),
+            Ty::Enum(name, args) => Ty::Enum(
+                name,
+                args.into_iter()
+                    .map(|arg| self.expand_trait_self_apps(arg, target_ty, constructor_slot_vars))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(self.expand_trait_self_apps(*ok, target_ty, constructor_slot_vars)?),
+                Box::new(self.expand_trait_self_apps(*err, target_ty, constructor_slot_vars)?),
+            ),
+            other => other,
+        })
+    }
+
     pub(super) fn resolve_trait_impl_method_signature(
         &mut self,
         trait_info: &TraitInfo,
@@ -1521,6 +1856,7 @@ impl Checker {
                 continue;
             };
             let trait_key = self.trait_key(id);
+            let constructor_slots = self.trait_constructor_slots(id, where_clause.as_ref())?;
             let mut method_map = HashMap::new();
             for method in methods {
                 if let Some(qualified_name) = &method.id.qualified_name {
@@ -1549,6 +1885,7 @@ impl Checker {
                     id: id.clone(),
                     type_params: type_params.clone(),
                     where_clause: where_clause.as_ref().map(TypedWhereClause::from),
+                    constructor_slots,
                     methods: method_map,
                 },
             );
@@ -1591,13 +1928,20 @@ impl Checker {
                 });
             }
             let trait_instance_key = self.trait_instance_key(trait_id, trait_args);
-            let (trait_arg_tys, target_ty, type_param_vars) =
+            let (trait_arg_tys, target_ty, type_param_vars, target_param_vars) =
                 self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
                 message: "trait impl target must be a concrete named type, tuple type, or function type".into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: Some("Use `impl Trait for Int` / `impl Trait for UserType` / `impl Trait for (Int, String)` / `impl Trait for ($A -> $B)`.".into()),
             })?;
+            let constructor_slot_vars = self.constructor_slot_vars_for_impl(
+                &trait_info,
+                target_ast_ty,
+                where_clause.as_ref(),
+                &target_param_vars,
+                span,
+            )?;
 
             let mut method_map = HashMap::new();
             for method in methods {
@@ -1709,6 +2053,14 @@ impl Checker {
 
                 let (trait_params, trait_ret, _) =
                     self.resolve_trait_method_signature(&trait_info, trait_method, &target_ty)?;
+                let trait_params = trait_params
+                    .into_iter()
+                    .map(|param| {
+                        self.expand_trait_self_apps(param, &target_ty, &constructor_slot_vars)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let trait_ret =
+                    self.expand_trait_self_apps(trait_ret, &target_ty, &constructor_slot_vars)?;
                 let (impl_params, impl_ret, _) = self.resolve_trait_impl_method_signature(
                     &trait_info,
                     trait_args,
@@ -1823,6 +2175,7 @@ impl Checker {
                     target_ty,
                     where_clause: where_clause.as_ref().map(TypedWhereClause::from),
                     type_param_vars,
+                    constructor_slot_vars,
                     methods: method_map,
                 },
             );
@@ -1840,7 +2193,8 @@ impl Checker {
             let Resolved::TraitImplDef(_, trait_id, trait_args, target_ast_ty, _, _) = stmt else {
                 continue;
             };
-            let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
+            let (_, target_ty, _, _) =
+                self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
             let target_name =
                 self.trait_target_name(&target_ty).ok_or_else(|| {
                     TypeError {

@@ -1421,8 +1421,9 @@ where
         [ResolvedWhereConstraintRhs::TraitSlot {
             trait_id,
             slot_name,
+            slot_ordinal,
             ..
-        }] if trait_id.unique_id == functor_id.unique_id && slot_name == "$A"
+        }] if trait_id.unique_id == functor_id.unique_id && slot_name == "$A" && *slot_ordinal == 0
     ));
 
     let impl_method_clause = resolved
@@ -1441,6 +1442,32 @@ where
         [ResolvedWhereConstraintRhs::Trait(bound_id)]
             if bound_id.unique_id == equal_id.unique_id
     ));
+}
+
+#[test]
+fn test_resolve_rejects_unknown_trait_constructor_slot() {
+    let ast = parse_module_ast(
+        r#"deftrait Functor
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}
+
+defenum Boxed<$T> {
+  Box($T),
+}
+
+impl Functor for Boxed<$T>
+where
+  $T: Functor.$Missing
+{
+  def fmap(self: Self, mapper: ($A -> $B)) -> Boxed<$B> { self }
+}"#,
+        "UnknownTraitSlot",
+    );
+    let err = resolve(ast).expect_err("unknown constructor slots must fail during resolution");
+    assert!(err.message.contains("has no constructor slot $Missing"));
 }
 
 #[test]

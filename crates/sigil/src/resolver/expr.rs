@@ -1806,6 +1806,7 @@ impl Resolver {
                 (1, DeclarationKind::ResultCtor),
             ]),
             declaration_hidden_by_uid: HashMap::new(),
+            trait_constructor_slots: HashMap::new(),
             explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
@@ -1826,6 +1827,7 @@ impl Resolver {
                 (1, DeclarationKind::ResultCtor),
             ]),
             declaration_hidden_by_uid: HashMap::new(),
+            trait_constructor_slots: HashMap::new(),
             explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
@@ -3802,6 +3804,18 @@ impl Resolver {
                         spire::ast::WhereConstraintRhs::TraitSlot(span, owner, slot_name) => {
                             let (unique_id, qualified_name) =
                                 self.resolve_trait_reference(&owner, &span)?;
+                            let slot_ordinal = self
+                                .trait_constructor_slots
+                                .get(&unique_id)
+                                .and_then(|slots| slots.iter().position(|slot| slot == &slot_name))
+                                .ok_or_else(|| ResolveError {
+                                    message: format!(
+                                        "Trait {} has no constructor slot {}",
+                                        owner, slot_name
+                                    ),
+                                    span: span.clone(),
+                                    related_labels: Vec::new(),
+                                })? as u32;
                             Ok(ResolvedWhereConstraintRhs::TraitSlot {
                                 trait_id: ResolvedId {
                                     name: owner,
@@ -3812,6 +3826,7 @@ impl Resolver {
                                     span: span.clone(),
                                 },
                                 slot_name,
+                                slot_ordinal,
                                 span,
                             })
                         }

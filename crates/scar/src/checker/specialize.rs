@@ -2153,7 +2153,7 @@ impl Checker {
         }
     }
 
-    fn substitute_ty_with_mapping(&self, ty: &Ty, mapping: &HashMap<u32, Ty>) -> Ty {
+    pub(super) fn substitute_ty_with_mapping(&self, ty: &Ty, mapping: &HashMap<u32, Ty>) -> Ty {
         match ty {
             Ty::Var(var) => mapping
                 .get(var)

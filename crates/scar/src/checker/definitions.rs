@@ -1078,7 +1078,7 @@ impl Checker {
         where_clause: Option<&ResolvedWhereClause>,
         _methods: &[ResolvedTraitImplMethod],
     ) -> Result<Vec<TypedNode>, TypeError> {
-        let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
+        let (_, target_ty, _, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
@@ -1262,7 +1262,7 @@ impl Checker {
         where_clause: Option<&ResolvedWhereClause>,
         _methods: &[ResolvedTraitImplMethod],
     ) -> Result<TypedNode, TypeError> {
-        let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
+        let (_, target_ty, _, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {

@@ -1772,9 +1772,9 @@ impl Parser<'_> {
                             self.advance();
                             self.skip_newlines();
                             let ty = self.parse_type_in_impl_context(Some(target.to_string()))?;
-                            if !Self::is_self_type(&ty) {
+                            if !Self::is_impl_receiver_type(&ty, target) {
                                 return Err(ParseError::syntax(
-                                    "`self` receiver type must be `Self`",
+                                    "`self` receiver type must be `Self` or the impl target type",
                                     ast_ty_span(&ty).clone(),
                                 ));
                             }
@@ -1928,9 +1928,9 @@ impl Parser<'_> {
                             self.advance();
                             self.skip_newlines();
                             let ty = self.parse_type_in_impl_context(Some(target.to_string()))?;
-                            if !Self::is_self_type(&ty) {
+                            if !Self::is_impl_receiver_type(&ty, target) {
                                 return Err(ParseError::syntax(
-                                    "`self` receiver type must be `Self`",
+                                    "`self` receiver type must be `Self` or the impl target type",
                                     ast_ty_span(&ty).clone(),
                                 ));
                             }

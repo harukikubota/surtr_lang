@@ -114,6 +114,52 @@ fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<Strin
     names
 }
 
+fn collect_staged_trait_constructor_slots(
+    module_stages: &[Vec<StagedModuleAst>],
+    declaration_uids: &HashMap<String, u32>,
+) -> HashMap<u32, Vec<String>> {
+    let mut result = HashMap::new();
+    for module in module_stages.iter().flatten() {
+        for stmt in &module.ast {
+            let Ast::TraitDef(_, name, _, Some(clause), _, _) = stmt else {
+                continue;
+            };
+            let fq_name = if module.module_path.is_empty() {
+                name.clone()
+            } else {
+                format!("{}::{}", module.module_path, name)
+            };
+            let Some(uid) = declaration_uids
+                .get(&fq_name)
+                .or_else(|| declaration_uids.get(name))
+                .copied()
+            else {
+                continue;
+            };
+            for constraint in &clause.constraints {
+                if !matches!(&constraint.subject, AstTy::Named(_, subject) if subject == "Self") {
+                    continue;
+                }
+                for bound in &constraint.bounds {
+                    if let spire::ast::WhereConstraintRhs::TypeConstructor(_, slots) = bound {
+                        result.insert(
+                            uid,
+                            slots
+                                .iter()
+                                .filter_map(|slot| match slot {
+                                    AstTy::Named(_, name) => Some(name.clone()),
+                                    _ => None,
+                                })
+                                .collect(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
 /// Resolve all identifiers in the AST to unique references.
 pub fn resolve(ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
     resolve_with_warnings(ast).map(|output| output.value)
@@ -248,6 +294,8 @@ pub fn resolve_staged_program_from_state_with_warnings(
 ) -> Result<PhaseOutput<ResolvedStagedProgram>, ResolveError> {
     let declaration_uids = assign_declaration_uids(declaration_index);
     let declaration_uid_kinds = declaration_uid_kind_map(declaration_index, &declaration_uids);
+    let trait_constructor_slots =
+        collect_staged_trait_constructor_slots(module_stages, &declaration_uids);
     let declaration_hidden_by_uid = declaration_index
         .iter()
         .filter_map(|(fq_name, entry)| {
@@ -285,6 +333,7 @@ pub fn resolve_staged_program_from_state_with_warnings(
             &declaration_uids,
             &declaration_uid_kinds,
             &declaration_hidden_by_uid,
+            &trait_constructor_slots,
             &stage_impl_targets,
         );
 
@@ -371,6 +420,7 @@ pub fn resolve_staged_program_from_state_with_warnings(
         user_resolver.declaration_uids = declaration_uids;
         user_resolver.declaration_uid_kinds = declaration_uid_kinds;
         user_resolver.declaration_hidden_by_uid = declaration_hidden_by_uid;
+        user_resolver.trait_constructor_slots = trait_constructor_slots;
         user_resolver.current_module_path = user_module_path;
         user_resolver.allow_top_level_shadowing = true;
         resolved.extend(user_resolver.resolve_program(user_ast)?);
@@ -423,6 +473,7 @@ fn resolve_stage_modules_parallel(
     declaration_uids: &HashMap<String, u32>,
     declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
     declaration_hidden_by_uid: &HashMap<u32, bool>,
+    trait_constructor_slots: &HashMap<u32, Vec<String>>,
     stage_impl_targets: &HashMap<String, declarations::ImplTargetResolution>,
 ) -> Vec<Result<StageModuleResolveResult, ResolveError>> {
     std::thread::scope(|scope| {
@@ -449,6 +500,7 @@ fn resolve_stage_modules_parallel(
                     resolver.declaration_uids = declaration_uids.clone();
                     resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
                     resolver.declaration_hidden_by_uid = declaration_hidden_by_uid.clone();
+                    resolver.trait_constructor_slots = trait_constructor_slots.clone();
                     resolver.current_stage_impl_targets = Some(stage_impl_targets.clone());
                     resolver.allow_top_level_shadowing = true;
                     let resolved = resolver.resolve_program(module.ast.clone())?;
@@ -930,6 +982,7 @@ struct Resolver {
     declaration_uids: HashMap<String, u32>,
     declaration_uid_kinds: HashMap<u32, DeclarationKind>,
     declaration_hidden_by_uid: HashMap<u32, bool>,
+    trait_constructor_slots: HashMap<u32, Vec<String>>,
     explicit_module_imports: HashSet<String>,
     current_module_path: Option<String>,
     current_stage_impl_targets: Option<HashMap<String, declarations::ImplTargetResolution>>,

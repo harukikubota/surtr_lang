@@ -2125,7 +2125,7 @@ impl Resolver {
                     self.record_predeclared_uid(name, uid, DeclarationKind::Const);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
-                Ast::TraitDef(span, name, _type_params, _, methods, _) => {
+                Ast::TraitDef(span, name, _type_params, where_clause, methods, _) => {
                     reject_reserved_owner_name("Owner name", name, span, false)?;
                     self.reject_duplicate_top_level_declaration(
                         &mut declared_in_batch,
@@ -2137,6 +2137,30 @@ impl Resolver {
                     let uid = self.reserve_declaration_uid(&qualified_trait);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Trait);
                     self.predeclare_scope_binding(name, uid, None);
+                    if let Some(clause) = where_clause {
+                        for constraint in &clause.constraints {
+                            if !matches!(&constraint.subject, AstTy::Named(_, subject) if subject == "Self")
+                            {
+                                continue;
+                            }
+                            for bound in &constraint.bounds {
+                                if let spire::ast::WhereConstraintRhs::TypeConstructor(_, slots) =
+                                    bound
+                                {
+                                    self.trait_constructor_slots.insert(
+                                        uid,
+                                        slots
+                                            .iter()
+                                            .filter_map(|slot| match slot {
+                                                AstTy::Named(_, name) => Some(name.clone()),
+                                                _ => None,
+                                            })
+                                            .collect(),
+                                    );
+                                }
+                            }
+                        }
+                    }
 
                     for method in methods {
                         let method_alias = trait_method_qualified_name(name, &method.name);

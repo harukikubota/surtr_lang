@@ -3570,6 +3570,100 @@ where
     assert!(matches!(method.ret_ty, Ty::SelfApp(ref args) if args.len() == 1));
 }
 
+#[test]
+fn unary_type_constructor_slot_is_inferred_for_trait_impl() {
+    typecheck_with_rules(
+        r#"deftrait FunctorShape
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}
+
+defenum Identity<$T> {
+  Identity($T),
+}
+
+impl FunctorShape for Identity<$T> {
+  def fmap(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
+    match self {
+      Identity::Identity(value) => Identity::Identity(mapper(value)),
+    }
+  }
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("a unary impl target should map its only parameter to the trait slot");
+}
+
+#[test]
+fn multi_parameter_type_constructor_requires_explicit_slot_mapping() {
+    let source = r#"deftrait FunctorShape
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}
+
+defenum Pair<$L, $R> {
+  Pair($L, $R),
+}
+
+impl FunctorShape for Pair<$L, $R> {
+  def fmap(self: Pair<$L, $A>, mapper: ($A -> $B)) -> Pair<$L, $B> {
+    match self {
+      Pair::Pair(left, right) => Pair::Pair(left, mapper(right)),
+    }
+  }
+}"#;
+    let err = typecheck_with_rules(source, RuntimeSourcePolicy::script())
+        .expect_err("a multi-parameter target must name the public constructor slot");
+    assert!(err.message.contains("does not satisfy Type<$A>"), "{err:?}");
+
+    typecheck_with_rules(
+        &source.replace(
+            "impl FunctorShape for Pair<$L, $R> {",
+            "impl FunctorShape for Pair<$L, $R>\nwhere\n  $R: FunctorShape.$A\n{",
+        ),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("an explicit slot mapping should preserve the left capture parameter");
+}
+
+#[test]
+fn type_constructor_constraint_rejects_concrete_and_duplicate_slot_targets() {
+    let trait_source = r#"deftrait FunctorShape
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}
+"#;
+    let concrete = format!(
+        "{trait_source}\nimpl FunctorShape for Int {{\n  def fmap(self: Int, mapper: (Int -> Int)) -> Int {{ self }}\n}}"
+    );
+    let err = typecheck_with_rules(&concrete, RuntimeSourcePolicy::script())
+        .expect_err("a concrete type is not a unary type constructor");
+    assert!(err.message.contains("does not satisfy Type<$A>"), "{err:?}");
+
+    let duplicate = format!(
+        r#"{trait_source}
+defenum Pair<$L, $R> {{
+  Pair($L, $R),
+}}
+impl FunctorShape for Pair<$L, $R>
+where
+  $L: FunctorShape.$A
+  $R: FunctorShape.$A
+{{
+  def fmap(self: Pair<$L, $A>, mapper: ($A -> $B)) -> Pair<$L, $B> {{ self }}
+}}"#
+    );
+    let err = typecheck_with_rules(&duplicate, RuntimeSourcePolicy::script())
+        .expect_err("one constructor slot cannot map to two target parameters");
+    assert!(err.message.contains("mapped more than once"), "{err:?}");
+}
+
 fn rigid_generic_return_rejects_concrete_body() {
     let err = typecheck_with_rules(
         r#"def nil() -> $A {

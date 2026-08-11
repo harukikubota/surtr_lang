@@ -230,4 +230,14 @@ impl Parser<'_> {
     pub(super) fn is_self_type(ty: &AstTy) -> bool {
         matches!(ty, AstTy::Named(_, name) | AstTy::Generic(_, name, _) if name == "Self")
     }
+
+    pub(super) fn is_impl_receiver_type(ty: &AstTy, target: &str) -> bool {
+        let same_target = |name: &str| {
+            name == target
+                || name.rsplit("::").next().unwrap_or(name)
+                    == target.rsplit("::").next().unwrap_or(target)
+        };
+        Self::is_self_type(ty)
+            || matches!(ty, AstTy::Named(_, name) | AstTy::Generic(_, name, _) if same_target(name))
+    }
 }
