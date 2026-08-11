@@ -1438,97 +1438,114 @@ impl Checker {
         let profile = self.profiler.start();
         let expected = self.resolve_ty(expected);
         let got = self.resolve_ty(got);
-        let result = match (&expected, &got) {
-            (Ty::Hole, Ty::Hole) => true,
-            (Ty::Var(left), Ty::Var(right)) => match (
-                self.rigid_tyvars.contains(left),
-                self.rigid_tyvars.contains(right),
-            ) {
-                (true, true) => left == right,
-                (true, false) => self.bind_tyvar(*right, &Ty::Var(*left)),
-                (false, true) => self.bind_tyvar(*left, &Ty::Var(*right)),
-                (false, false) => self.bind_tyvar(*left, &Ty::Var(*right)),
-            },
-            (Ty::Var(var), _) if self.rigid_tyvars.contains(var) => false,
-            (_, Ty::Var(var)) if self.rigid_tyvars.contains(var) => false,
-            (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
-            (Ty::Int, Ty::Int)
-            | (Ty::Float, Ty::Float)
-            | (Ty::Str, Ty::Str)
-            | (Ty::Bool, Ty::Bool)
-            | (Ty::Unit, Ty::Unit)
-            | (Ty::Error, Ty::Error) => true,
-            (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
-            (Ty::TypeRef(a), Ty::TypeRef(b)) | (Ty::Lazy(a), Ty::Lazy(b)) => {
-                self.types_compatible(a, b)
-            }
-            (Ty::Pid(a), Ty::Pid(b)) => {
-                Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
-                    || a.starts_with('$')
-                    || b.starts_with('$')
-            }
-            (Ty::Pid(expected_process), Ty::Enum(name, args))
-                if name == "WorkerLease" && args.len() == 1 =>
-            {
-                match args.first() {
-                    Some(Ty::Pid(actual_process)) => {
-                        Self::canonical_user_type_name(expected_process)
-                            == Self::canonical_user_type_name(actual_process)
-                            || expected_process.starts_with('$')
-                            || actual_process.starts_with('$')
-                    }
-                    _ => false,
+        let result =
+            match (&expected, &got) {
+                (Ty::Hole, Ty::Hole) => true,
+                (Ty::Var(left), Ty::Var(right)) => match (
+                    self.rigid_tyvars.contains(left),
+                    self.rigid_tyvars.contains(right),
+                ) {
+                    (true, true) => left == right,
+                    (true, false) => self.bind_tyvar(*right, &Ty::Var(*left)),
+                    (false, true) => self.bind_tyvar(*left, &Ty::Var(*right)),
+                    (false, false) => self.bind_tyvar(*left, &Ty::Var(*right)),
+                },
+                (Ty::Var(var), _) if self.rigid_tyvars.contains(var) => false,
+                (_, Ty::Var(var)) if self.rigid_tyvars.contains(var) => false,
+                (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
+                (Ty::Int, Ty::Int)
+                | (Ty::Float, Ty::Float)
+                | (Ty::Str, Ty::Str)
+                | (Ty::Bool, Ty::Bool)
+                | (Ty::Unit, Ty::Unit)
+                | (Ty::Error, Ty::Error) => true,
+                (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
+                (Ty::TypeRef(a), Ty::TypeRef(b)) | (Ty::Lazy(a), Ty::Lazy(b)) => {
+                    self.types_compatible(a, b)
                 }
-            }
-            (
-                Ty::Facet(kind_a, src_a, focus_a, update_src_a, update_focus_a),
-                Ty::Facet(kind_b, src_b, focus_b, update_src_b, update_focus_b),
-            ) => {
-                kind_a.accepts(*kind_b)
-                    && self.types_compatible(src_a, src_b)
-                    && self.types_compatible(focus_a, focus_b)
-                    && self.types_compatible(update_src_a, update_src_b)
-                    && self.types_compatible(update_focus_a, update_focus_b)
-            }
-            (Ty::Tuple(a), Ty::Tuple(b)) => {
-                a.len() == b.len()
-                    && a.iter()
-                        .zip(b.iter())
-                        .all(|(left, right)| self.types_compatible(left, right))
-            }
-            (Ty::SelfApp(a), Ty::SelfApp(b)) => {
-                a.len() == b.len()
-                    && a.iter()
-                        .zip(b.iter())
-                        .all(|(left, right)| self.types_compatible(left, right))
-            }
-            (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
-                a_params.len() == b_params.len()
-                    && a_params
-                        .iter()
-                        .zip(b_params.iter())
-                        .all(|(a, b)| self.types_compatible(a, b))
-                    && self.types_compatible(a_ret, b_ret)
-            }
-            (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
-                self.types_compatible(ok1, ok2) && self.types_compatible(err1, err2)
-            }
-            (Ty::Struct(n1, _), Ty::Struct(n2, _)) => {
-                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-            }
-            (Ty::Record(n1, _), Ty::Record(n2, _)) => {
-                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-            }
-            (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
-                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                    && args1.len() == args2.len()
-                    && args1
-                        .iter()
-                        .zip(args2.iter())
-                        .all(|(left, right)| self.types_compatible(left, right))
-            }
-            _ => false,
-        };
+                (Ty::Pid(a), Ty::Pid(b)) => {
+                    Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
+                        || a.starts_with('$')
+                        || b.starts_with('$')
+                }
+                (Ty::Pid(expected_process), Ty::Enum(name, args))
+                    if name == "WorkerLease" && args.len() == 1 =>
+                {
+                    match args.first() {
+                        Some(Ty::Pid(actual_process)) => {
+                            Self::canonical_user_type_name(expected_process)
+                                == Self::canonical_user_type_name(actual_process)
+                                || expected_process.starts_with('$')
+                                || actual_process.starts_with('$')
+                        }
+                        _ => false,
+                    }
+                }
+                (
+                    Ty::Facet(kind_a, src_a, focus_a, update_src_a, update_focus_a),
+                    Ty::Facet(kind_b, src_b, focus_b, update_src_b, update_focus_b),
+                ) => {
+                    kind_a.accepts(*kind_b)
+                        && self.types_compatible(src_a, src_b)
+                        && self.types_compatible(focus_a, focus_b)
+                        && self.types_compatible(update_src_a, update_src_b)
+                        && self.types_compatible(update_focus_a, update_focus_b)
+                }
+                (Ty::Tuple(a), Ty::Tuple(b)) => {
+                    a.len() == b.len()
+                        && a.iter()
+                            .zip(b.iter())
+                            .all(|(left, right)| self.types_compatible(left, right))
+                }
+                (Ty::SelfApp(a), Ty::SelfApp(b)) => {
+                    a.len() == b.len()
+                        && a.iter()
+                            .zip(b.iter())
+                            .all(|(left, right)| self.types_compatible(left, right))
+                }
+                (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
+                    a_params.len() == b_params.len()
+                        && a_params
+                            .iter()
+                            .zip(b_params.iter())
+                            .all(|(a, b)| self.types_compatible(a, b))
+                        && self.types_compatible(a_ret, b_ret)
+                }
+                (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
+                    self.types_compatible(ok1, ok2) && self.types_compatible(err1, err2)
+                }
+                (Ty::Struct(n1, fields1), Ty::Struct(n2, fields2)) => {
+                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                        && (fields1.is_empty()
+                            || fields2.is_empty()
+                            || (fields1.len() == fields2.len()
+                                && fields1.iter().zip(fields2).all(
+                                    |((name1, ty1), (name2, ty2))| {
+                                        name1 == name2 && self.types_compatible(ty1, ty2)
+                                    },
+                                )))
+                }
+                (Ty::Record(n1, fields1), Ty::Record(n2, fields2)) => {
+                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                        && (fields1.is_empty()
+                            || fields2.is_empty()
+                            || (fields1.len() == fields2.len()
+                                && fields1.iter().zip(fields2).all(
+                                    |((name1, ty1), (name2, ty2))| {
+                                        name1 == name2 && self.types_compatible(ty1, ty2)
+                                    },
+                                )))
+                }
+                (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
+                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                        && args1.len() == args2.len()
+                        && args1
+                            .iter()
+                            .zip(args2.iter())
+                            .all(|(left, right)| self.types_compatible(left, right))
+                }
+                _ => false,
+            };
         self.profiler.finish(ProfileEvent::TypesCompatible, profile);
         result
     }

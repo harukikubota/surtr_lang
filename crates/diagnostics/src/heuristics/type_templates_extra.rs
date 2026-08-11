@@ -464,11 +464,11 @@ pub(crate) fn flow_operator_reason(
         }
         "|>=" => {
             if let Some(got) = message
-                .strip_prefix("`|>=` requires Chainable implementation on the left, got ")
+                .strip_prefix("`|>=` requires Monad implementation on the left, got ")
                 .or_else(|| message.strip_prefix("`|>=` requires Result or List on the left, got "))
             {
                 format!(
-                    "Reason: LHS is {}, but `|>=` requires a Chainable such as Result<A>, List<A>, or Option<A>.",
+                    "Reason: LHS is {}, but `|>=` requires a Monad such as Result<A>, List<A>, or Option<A>.",
                     got
                 )
             } else if let Some(got) =
@@ -581,7 +581,7 @@ pub(crate) fn flow_operator_help(
             "Use `|>=` to bind a function that already returns Result/List/Option.".into()
         }
         "|*>" => "Keep the RHS plain, or switch to `|>=` if it already returns Result/List/Option.".into(),
-        "|>=" if message.contains("requires Chainable implementation")
+        "|>=" if message.contains("requires Monad implementation")
             || message.contains("requires Result or List on the left") =>
         {
             "Use `|>` for a plain value, or make the LHS Result/List/Option.".into()
@@ -622,4 +622,3 @@ pub(crate) fn flow_operator_help(
         _ => extra.unwrap_or("Check the operator rule against the LHS and RHS types.").into(),
     }
 }
-

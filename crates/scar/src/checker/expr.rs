@@ -1024,6 +1024,25 @@ impl Checker {
                 self.check_kleisli_compose_with_expected(span, left, right, Some(expected_ty))
             }
             (Resolved::App(span, func, args), Some(expected_ty))
+                if self.trait_method_ref(func).is_some() =>
+            {
+                let (id, trait_name, method_name) = self
+                    .trait_method_ref(func)
+                    .expect("guard established a trait method reference");
+                let receiver_owner_hint = id
+                    .name
+                    .strip_suffix(&format!("::{}", method_name))
+                    .filter(|owner| *owner == "JsonValue");
+                self.check_trait_method_call(
+                    span,
+                    &trait_name,
+                    &method_name,
+                    args,
+                    receiver_owner_hint,
+                    Some(expected_ty),
+                )
+            }
+            (Resolved::App(span, func, args), Some(expected_ty))
                 if self.is_function_on_callee(func) =>
             {
                 self.check_function_on_with_expected(span, func, args, expected_ty)
@@ -2501,6 +2520,203 @@ impl Checker {
         result
     }
 
+    fn constructor_trait_method_dispatch(
+        &self,
+        method: &TraitImplMethodInfo,
+    ) -> Option<TraitDispatch> {
+        if let Some(dispatch_override) = &method.dispatch_override {
+            return Some(TraitDispatch::Static(dispatch_override.clone()));
+        }
+        let function_key = method
+            .function_id
+            .qualified_name
+            .as_ref()
+            .unwrap_or(&method.function_id.name);
+        let function_id = self.function_ids_by_name.get(function_key)?;
+        let Ty::UserFunc { fun_idx, .. } = self.env.lookup_var(function_id.unique_id)? else {
+            return None;
+        };
+        let display_name = method
+            .function_id
+            .qualified_name
+            .as_deref()
+            .map(|qualified_name| {
+                callable_definition_display_name(qualified_name, &method.function_id.name)
+            })
+            .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
+        Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+            name: display_name,
+            fun_idx: *fun_idx,
+        }))
+    }
+
+    fn constructor_functor_dispatch(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        receiver_ty: &Ty,
+        input_ty: &Ty,
+        output_ty: &Ty,
+    ) -> Option<(TraitDispatch, Ty)> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
+            let method = impl_info.methods.get(method_name)?;
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, receiver_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let slot = impl_info.constructor_slot_vars[0];
+            let Some(fresh_slot) = fresh.get(&slot).cloned() else {
+                self.substitutions = before;
+                continue;
+            };
+            if !self.operator_trait_arg_compatible(&fresh_slot, input_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let mapping = impl_info
+                .type_param_vars
+                .iter()
+                .copied()
+                .map(|var| {
+                    let replacement = if var == slot {
+                        output_ty.clone()
+                    } else {
+                        fresh
+                            .get(&var)
+                            .map(|ty| self.resolve_ty(ty))
+                            .unwrap_or(Ty::Var(var))
+                    };
+                    (var, replacement)
+                })
+                .collect::<HashMap<_, _>>();
+            let result_ty = self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping);
+            let dispatch = self.constructor_trait_method_dispatch(method)?;
+            return Some((dispatch, self.resolve_ty(&result_ty)));
+        }
+        None
+    }
+
+    fn constructor_pure_dispatch(
+        &mut self,
+        trait_name: &str,
+        expected_ty: &Ty,
+        value_ty: &Ty,
+    ) -> Option<TraitDispatch> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
+            let method = impl_info.methods.get("pure")?;
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, expected_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let slot = impl_info.constructor_slot_vars[0];
+            let Some(fresh_slot) = fresh.get(&slot).cloned() else {
+                self.substitutions = before;
+                continue;
+            };
+            if !self.types_compatible(&fresh_slot, value_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            return self.constructor_trait_method_dispatch(method);
+        }
+        None
+    }
+
+    fn constructor_slot_type_for(&mut self, trait_name: &str, container_ty: &Ty) -> Option<Ty> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, container_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let slot = impl_info.constructor_slot_vars[0];
+            let slot_ty = fresh.get(&slot).map(|ty| self.resolve_ty(ty));
+            if slot_ty.is_some() {
+                self.substitutions = before;
+                return slot_ty;
+            }
+            self.substitutions = before;
+        }
+        None
+    }
+
+    fn constructor_monad_dispatch(
+        &mut self,
+        trait_name: &str,
+        receiver_ty: &Ty,
+        input_ty: &Ty,
+        contextual_output_ty: &Ty,
+    ) -> Option<(TraitDispatch, Ty)> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
+            let method = impl_info.methods.get("bind")?;
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, receiver_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let slot = impl_info.constructor_slot_vars[0];
+            let Some(fresh_slot) = fresh.get(&slot).cloned() else {
+                self.substitutions = before;
+                continue;
+            };
+            if !self.operator_trait_arg_compatible(&fresh_slot, input_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let output_slot = self.env.fresh_tyvar();
+            let mapping = impl_info
+                .type_param_vars
+                .iter()
+                .copied()
+                .map(|var| {
+                    let replacement = if var == slot {
+                        output_slot.clone()
+                    } else {
+                        fresh
+                            .get(&var)
+                            .map(|ty| self.resolve_ty(ty))
+                            .unwrap_or(Ty::Var(var))
+                    };
+                    (var, replacement)
+                })
+                .collect::<HashMap<_, _>>();
+            let expected_output = self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping);
+            if !self.types_compatible(&expected_output, contextual_output_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let dispatch = self.constructor_trait_method_dispatch(method)?;
+            return Some((dispatch, self.resolve_ty(contextual_output_ty)));
+        }
+        None
+    }
+
     fn opposite_conversion_hint(
         &self,
         trait_name: &str,
@@ -2568,6 +2784,7 @@ impl Checker {
         method_name: &str,
         args: &[ResolvedRecordLitArg],
         receiver_owner_hint: Option<&str>,
+        expected_ret_ty: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         if args
             .iter()
@@ -2601,6 +2818,130 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
+
+        let positional_args = args
+            .iter()
+            .filter_map(|arg| match arg {
+                ResolvedRecordLitArg::Positional(expr) => Some(expr),
+                ResolvedRecordLitArg::Named(_, _) => None,
+            })
+            .collect::<Vec<_>>();
+        if self.trait_matches_short_name(trait_name, "Functor")
+            && method_name == "fmap"
+            && positional_args.len() == 2
+        {
+            let mut typed = self.check_context_map(span, positional_args[0], positional_args[1])?;
+            if let TypedInner::TraitCall { origin, .. } = &mut typed.node {
+                *origin = TraitCallOrigin::Explicit;
+            }
+            return Ok(typed);
+        }
+        if self.trait_matches_short_name(trait_name, "Monad")
+            && method_name == "bind"
+            && positional_args.len() == 2
+        {
+            let mut typed =
+                self.check_context_bind(span, positional_args[0], positional_args[1])?;
+            if let TypedInner::TraitCall { origin, .. } = &mut typed.node {
+                *origin = TraitCallOrigin::Explicit;
+            }
+            return Ok(typed);
+        }
+        if self.trait_matches_short_name(trait_name, "Applicative")
+            && method_name == "pure"
+            && positional_args.len() == 1
+        {
+            let expected = expected_ret_ty.ok_or_else(|| TypeError {
+                message: "Applicative::pure requires an expected return type".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Add a result annotation, for example `value: Option<Int> = Applicative::pure(1)`."
+                        .into(),
+                ),
+            })?;
+            let typed_value = self.check_node(positional_args[0])?;
+            let dispatch = self
+                .constructor_pure_dispatch(trait_name, expected, &typed_value.ty)
+                .ok_or_else(|| TypeError {
+                    message: format!(
+                        "Applicative::pure cannot construct {}",
+                        self.ty_name(expected)
+                    ),
+                    span: span.clone(),
+                    hint: Some(self.trait_implementation_summary("Applicative")),
+                })?;
+            return Ok(TypedNode {
+                ty: self.resolve_ty(expected),
+                span: span.clone(),
+                node: TypedInner::TraitCall {
+                    trait_name: trait_name.to_string(),
+                    method_name: "pure".into(),
+                    receiver_ty: self.resolve_ty(expected),
+                    dispatch,
+                    origin: TraitCallOrigin::Explicit,
+                    args: vec![typed_value],
+                },
+            });
+        }
+        if self.trait_matches_short_name(trait_name, "Applicative")
+            && method_name == "apply"
+            && positional_args.len() == 2
+        {
+            let typed_mapper = self.check_node(positional_args[0])?;
+            let typed_value = self.check_node(positional_args[1])?;
+            let mapper_inner = self
+                .constructor_slot_type_for(trait_name, &typed_mapper.ty)
+                .ok_or_else(|| TypeError {
+                    message: format!(
+                        "Applicative::apply requires a contextual callable, got {}",
+                        self.ty_name(&typed_mapper.ty)
+                    ),
+                    span: typed_mapper.span.clone(),
+                    hint: None,
+                })?;
+            let (input, output) =
+                self.unary_function_parts(&mapper_inner, "Applicative::apply", span)?;
+            let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
+            let Some((dispatch, expected_mapper)) = self.constructor_functor_dispatch(
+                trait_name,
+                "apply",
+                &typed_value.ty,
+                &input,
+                &callable_ty,
+            ) else {
+                return Err(TypeError {
+                    message: format!(
+                        "Applicative::apply requires Applicative implementation for {}",
+                        self.ty_name(&typed_value.ty)
+                    ),
+                    span: typed_value.span.clone(),
+                    hint: Some(self.trait_implementation_summary("Applicative")),
+                });
+            };
+            if !self.types_compatible(&expected_mapper, &typed_mapper.ty) {
+                return Err(TypeError {
+                    message: "Applicative::apply requires mapper and value in the same context"
+                        .into(),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            let (_, result_ty) = self
+                .constructor_functor_dispatch(trait_name, "apply", &typed_value.ty, &input, &output)
+                .expect("the same Applicative impl already matched");
+            return Ok(TypedNode {
+                ty: result_ty,
+                span: span.clone(),
+                node: TypedInner::TraitCall {
+                    trait_name: trait_name.to_string(),
+                    method_name: "apply".into(),
+                    receiver_ty: self.resolve_ty(&typed_value.ty),
+                    dispatch,
+                    origin: TraitCallOrigin::Explicit,
+                    args: vec![typed_mapper, typed_value],
+                },
+            });
+        }
 
         let self_ty = self.env.fresh_tyvar();
         let (param_tys, ret_ty, trait_arg_tys) =
@@ -3307,13 +3648,12 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        let result_ty = self.env.fresh_tyvar();
-        let requested_trait_args = vec![rhs_in.clone(), rhs_out.clone(), result_ty.clone()];
-        let Some((dispatch, resolved_trait_args)) = self.operator_trait_dispatch_for_args(
+        let Some((dispatch, result_ty)) = self.constructor_functor_dispatch(
             &functor_trait,
-            "map",
+            "fmap",
             &receiver_ty,
-            &requested_trait_args,
+            &rhs_in,
+            &rhs_out,
         ) else {
             let functor_summary = self.trait_implementation_summary("Functor");
             return Err(TypeError {
@@ -3335,17 +3675,12 @@ impl Checker {
                 )),
             });
         };
-        let result_ty = resolved_trait_args
-            .get(2)
-            .cloned()
-            .unwrap_or_else(|| self.resolve_ty(&result_ty));
-        let trait_name = self.trait_instance_key_from_tys(&functor_trait, &resolved_trait_args);
         Ok(TypedNode {
             ty: result_ty,
             span: span.clone(),
             node: TypedInner::TraitCall {
-                trait_name,
-                method_name: "map".into(),
+                trait_name: functor_trait,
+                method_name: "fmap".into(),
                 receiver_ty: receiver_ty.clone(),
                 dispatch,
                 origin: TraitCallOrigin::Operator {
@@ -3445,7 +3780,7 @@ impl Checker {
                         span: span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|>=`",
-                            "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
+                            "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                             &typed_left.ty,
                             &typed_right.ty,
                             Some(format!(
@@ -3469,7 +3804,7 @@ impl Checker {
                         span: typed_right.span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|>=`",
-                            "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
+                            "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                             &typed_left.ty,
                             &typed_right.ty,
                             Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List/Option.".into()),
@@ -3492,7 +3827,7 @@ impl Checker {
                         span: typed_right.span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|>=`",
-                            "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
+                            "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                             &typed_left.ty,
                             &typed_right.ty,
                             Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List/Option.".into()),
@@ -3546,7 +3881,7 @@ impl Checker {
                 span: span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`|>=`",
-                    "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
+                    "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                     &typed_left.ty,
                     &typed_right.ty,
                     Some("Result, List, and Option containers cannot be mixed in one bind operator.".into()),
@@ -3613,51 +3948,42 @@ impl Checker {
             _ => {}
         }
 
-        let chainable_trait =
-            self.trait_key_by_short_name("Chainable")
-                .ok_or_else(|| TypeError {
-                    message: "Unknown trait: Chainable".into(),
-                    span: span.clone(),
-                    hint: None,
-                })?;
-        let requested_trait_args = vec![rhs_in.clone(), self.resolve_ty(&rhs_ret)];
-        let Some((dispatch, resolved_trait_args)) = self.operator_trait_dispatch_for_args(
-            &chainable_trait,
-            "chain",
-            &receiver_ty,
-            &requested_trait_args,
-        ) else {
-            let chainable_summary = self.trait_implementation_summary("Chainable");
+        let monad_trait = self
+            .trait_key_by_short_name("Monad")
+            .ok_or_else(|| TypeError {
+                message: "Unknown trait: Monad".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let Some((dispatch, result_ty)) =
+            self.constructor_monad_dispatch(&monad_trait, &receiver_ty, &rhs_in, &rhs_ret)
+        else {
+            let monad_summary = self.trait_implementation_summary("Monad");
             return Err(TypeError {
                 message: format!(
-                    "`|>=` requires Chainable implementation on the left, got {}",
+                    "`|>=` requires Monad implementation on the left, got {}",
                     self.ty_name(&receiver_ty)
                 ),
                 span: typed_left.span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`|>=`",
-                    "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
+                    "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                     &typed_left.ty,
                     &typed_right.ty,
                     Some(format!(
                         "{} The evaluated LHS is {}. Use `|*>` after a contextual value when the RHS is plain.",
-                        chainable_summary,
+                        monad_summary,
                         self.ty_name(&receiver_ty)
                     )),
                 )),
             });
         };
-        let result_ty = resolved_trait_args
-            .get(1)
-            .cloned()
-            .unwrap_or_else(|| self.resolve_ty(&rhs_ret));
-        let trait_name = self.trait_instance_key_from_tys(&chainable_trait, &resolved_trait_args);
         Ok(TypedNode {
             ty: result_ty,
             span: span.clone(),
             node: TypedInner::TraitCall {
-                trait_name,
-                method_name: "compose".into(),
+                trait_name: monad_trait,
+                method_name: "bind".into(),
                 receiver_ty: receiver_ty.clone(),
                 dispatch,
                 origin: TraitCallOrigin::Operator {
@@ -6615,6 +6941,7 @@ impl Checker {
                 &method_name,
                 args,
                 receiver_owner_hint,
+                None,
             );
         }
 

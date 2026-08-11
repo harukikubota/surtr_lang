@@ -3380,7 +3380,7 @@ fn core_info_command_reports_queries_and_command_errors() {
     let typed_info_text = rendered_text(&typed_info);
     assert!(typed_info_text.contains("defined:"), "{typed_info_text}");
     assert!(
-        typed_info_text.contains("Option<$A>::map"),
+        typed_info_text.contains("Option<$T>::fmap"),
         "{typed_info_text}"
     );
     assert!(
@@ -3879,31 +3879,28 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     assert!(operator_sig.contains("impl targets:"), "{operator_sig}");
 
     let functor_sig = signature_text(&engine.handle_line(":sig |*>"));
-    assert!(functor_sig.contains("Functor::map(self: Self, f: ($A -> $B)) -> $Mapped"));
+    assert!(functor_sig.contains("Functor::fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>"));
     assert!(functor_sig.contains("impl targets:"), "{functor_sig}");
 
-    let chainable_sig = signature_text(&engine.handle_line(":sig |>="));
+    let monad_sig = signature_text(&engine.handle_line(":sig |>="));
     assert!(
-        chainable_sig.contains("impl Chainable<$A, Result<$B>> for Result<$A>::chain"),
-        "{chainable_sig}"
+        monad_sig.contains("impl Monad for Result<$T>::bind"),
+        "{monad_sig}"
     );
     assert!(
-        chainable_sig.contains("impl Chainable<$A, Option<$B>> for Option<$A>::chain"),
-        "{chainable_sig}"
+        monad_sig.contains("impl Monad for Option<$T>::bind"),
+        "{monad_sig}"
     );
     assert!(
-        chainable_sig.contains("impl Chainable<$A, List<$B>> for List<$A>::chain"),
-        "{chainable_sig}"
+        monad_sig.contains("impl Monad for List<$T>::bind"),
+        "{monad_sig}"
     );
-    assert!(
-        !chainable_sig.contains("Chainable::chain(self: Self"),
-        "{chainable_sig}"
-    );
+    assert!(!monad_sig.contains("Monad::bind(self: Self"), "{monad_sig}");
 
-    let result_chain_sig = signature_text(&engine.handle_line(":sig |>= Result"));
+    let result_bind_sig = signature_text(&engine.handle_line(":sig |>= Result"));
     assert_eq!(
-        result_chain_sig.trim(),
-        "impl Chainable<$A, Result<$B>> for Result<$A>::chain(self: Result<$A>, f: ($A -> Result<$B>)) -> Result<$B>"
+        result_bind_sig.trim(),
+        "impl Monad for Result<$T>::bind(self: Result<$A>, mapper: ($A -> Result<$B>)) -> Result<$B>"
     );
 
     let slash_doc = engine.handle_line(":doc /");
@@ -4071,7 +4068,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 }
 
 #[test]
-fn core_sig_chainable_operator_lists_user_defined_identity_impl() {
+fn core_sig_monad_operator_lists_user_defined_identity_impl() {
     let mut engine = ReplEngine::from_script_source(
         "identity_operator_impls.srt",
         r#"defstruct Identity<$T> {
@@ -4084,44 +4081,55 @@ impl Identity {
   }
 }
 
-impl Functor<$A, $B, Identity<$B>> for Identity<$A> {
-  def map(self: Self, f: ($A -> $B)) -> Identity<$B> {
-    Identity { value: f(self.value) }
+impl Functor for Identity<$T> {
+  def fmap(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
+    Identity { value: mapper(self.value) }
   }
 }
 
-impl Chainable<$A, Identity<$B>> for Identity<$A> {
-  def chain(self: Self, f: ($A -> Identity<$B>)) -> Identity<$B> {
-    f(self.value)
+impl Applicative for Identity<$T> {
+  def pure(value: $A) -> Identity<$A> {
+    Identity { value: value }
+  }
+
+  def apply(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
+    f = mapper.value
+    Identity { value: f(value.value) }
+  }
+}
+
+impl Monad for Identity<$T> {
+  def bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
+    mapper(self.value)
   }
 }
 
 impl LiftComposable<$A, $B, $C, Identity<$C>> for ($A -> Identity<$B>) {
   def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Identity<$C>) {
-    {|value| Functor::map(self(value), rhs)}
+    {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
 impl KleisliComposable<$A, $B, Identity<$C>> for ($A -> Identity<$B>) {
   def kleisli_compose(self: Self, rhs: ($B -> Identity<$C>)) -> ($A -> Identity<$C>) {
-    {|value| Chainable::chain(self(value), rhs)}
+    {|value| Monad::bind(self(value), rhs)}
   }
 }"#,
     )
     .expect("identity preload should load");
 
-    let chainable_sig = signature_text(&engine.handle_line(":sig |>="));
+    let monad_sig = signature_text(&engine.handle_line(":sig |>="));
     assert!(
-        chainable_sig.contains(
-            "impl Chainable<$A, Identity<$B>> for Identity<$A>::chain(self: Identity<$A>, f: ($A -> Identity<$B>)) -> Identity<$B>"
+        monad_sig.contains(
+            "impl Monad for Identity<$T>::bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B>"
         ),
-        "{chainable_sig}"
+        "{monad_sig}"
     );
 
-    let identity_chain_sig = signature_text(&engine.handle_line(":sig |>= Identity"));
+    let identity_bind_sig = signature_text(&engine.handle_line(":sig |>= Identity"));
     assert_eq!(
-        identity_chain_sig.trim(),
-        "impl Chainable<$A, Identity<$B>> for Identity<$A>::chain(self: Identity<$A>, f: ($A -> Identity<$B>)) -> Identity<$B>"
+        identity_bind_sig.trim(),
+        "impl Monad for Identity<$T>::bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B>"
     );
 }
 
@@ -4590,12 +4598,12 @@ fn core_sig_expression_queries_support_operator_forms() {
 
     let map_sig = engine.handle_line(":sig |*> Option");
     let map_sig = signature_text(&map_sig);
-    assert!(map_sig.contains("Option<$A>::map"), "{map_sig}");
+    assert!(map_sig.contains("Option<$T>::fmap"), "{map_sig}");
     assert!(map_sig.contains("-> Option<$B>"), "{map_sig}");
 
     let map_doc = engine.handle_line(":doc |*> Option");
     let map_doc = doc_text(&map_doc);
-    assert!(map_doc.contains("Option<$A>::map"), "{map_doc}");
+    assert!(map_doc.contains("Option<$T>::fmap"), "{map_doc}");
     assert!(
         map_doc.contains("This is the source-level meaning of `value |*> f`."),
         "{map_doc}"
@@ -4644,7 +4652,7 @@ fn core_sig_operator_target_queries_accept_concrete_type_targets_and_reject_lega
 
     let sig = engine.handle_line(":sig |*> Result<Int>");
     let sig = signature_text(&sig);
-    assert!(sig.contains("Result<$A>::map"), "{sig}");
+    assert!(sig.contains("Result<$T>::fmap"), "{sig}");
     assert!(sig.contains("-> Result<$B>"), "{sig}");
 
     let invalid = engine.handle_line(":sig ret |>= up");

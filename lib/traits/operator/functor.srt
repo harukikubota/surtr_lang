@@ -1,9 +1,12 @@
 @doc """
 Standard `Functor` trait declaration.
-`Functor<$A, $B, $Mapped>` models mapping a plain unary callable over a
-contextual value. The `|*>` operator lowers through this trait.
+`Functor` models mapping a plain unary callable over a unary type constructor.
+The `|*>` operator lowers through this trait.
 """
-deftrait Functor<$A, $B, $Mapped> {
+deftrait Functor
+where
+  Self: Type<$A>
+{
   # Map a plain callable over the contextual receiver.
-  def map(self: Self, f: ($A -> $B)) -> $Mapped
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
 }

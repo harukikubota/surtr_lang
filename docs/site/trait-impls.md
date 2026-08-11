@@ -11,7 +11,7 @@ Surtr の trait system は V1 です。
   - `Show`, `Compare`, `From`, `TryFrom`
 - operator dispatch trait
   - `Add`, `Sub`, `Mul`, `Eq`, `Neq`, `Concat`
-  - `Functor`, `Chainable`, `PipeApply`, `Compose`, `Composable`, `LiftComposable`, `KleisliComposable`
+  - `Functor`, `Applicative`, `Monad`, `PipeApply`, `Compose`, `Composable`, `LiftComposable`, `KleisliComposable`
 
 `Compare` は新しい API が三値比較を要求するときの正本です。`< <= > >=` も公開 surface では `Compare` によって意味づけられます。  
 数値 helper は generic trait ではなく、`Int::abs` / `Float::safe_div` のような concrete type owner surface として提供します。

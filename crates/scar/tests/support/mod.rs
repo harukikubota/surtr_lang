@@ -25,7 +25,9 @@ const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/try_fr
 const ENCODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/encode.srt");
 const DECODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/decode.srt");
 const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/functor.srt");
-const CHAINABLE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/chainable.srt");
+const APPLICATIVE_MODULE_SOURCE: &str =
+    include_str!("../../../../lib/traits/operator/applicative.srt");
+const MONAD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/monad.srt");
 const PIPE_APPLY_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/pipe_apply.srt");
 const COMPOSE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/compose.srt");
@@ -453,8 +455,12 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
                 pick_override("Functor", FUNCTOR_MODULE_SOURCE, overrides),
             ),
             (
-                "Chainable",
-                pick_override("Chainable", CHAINABLE_MODULE_SOURCE, overrides),
+                "Applicative",
+                pick_override("Applicative", APPLICATIVE_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Monad",
+                pick_override("Monad", MONAD_MODULE_SOURCE, overrides),
             ),
             (
                 "PipeApply",

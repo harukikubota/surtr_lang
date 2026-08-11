@@ -4825,13 +4825,13 @@ bound = parse(1) |>= &stringify"#,
 
     assert!(trait_calls.iter().any(
         |(trait_name, method_name, dispatch, origin, args, result_ty)| {
-            trait_name.starts_with("Functor<")
-                && *method_name == "map"
+            trait_name.ends_with("Functor")
+                && *method_name == "fmap"
                 && matches!(
                     dispatch,
                     scar::typed::TraitDispatch::Static(
                         scar::typed::TraitDispatchTarget::UserFunction { name, .. }
-                    ) if name.ends_with("::map") || name == "map"
+                    ) if name.ends_with("::fmap") || name == "fmap"
                 )
                 && matches!(
                     origin,
@@ -4866,7 +4866,7 @@ fn explicit_functor_call_has_explicit_origin() {
   x + 1
 }
 
-mapped = Functor::map(Ok(1), &inc)"#,
+mapped = Functor::fmap(Ok(1), &inc)"#,
     );
     let rhs = typed
         .iter()
@@ -4881,7 +4881,7 @@ mapped = Functor::map(Ok(1), &inc)"#,
             origin,
             ..
         } => {
-            assert_eq!(method_name, "map");
+            assert_eq!(method_name, "fmap");
             assert_eq!(origin, &TraitCallOrigin::Explicit);
             assert!(matches!(rhs.ty, Ty::Result(_, _)));
         }
@@ -5030,31 +5030,43 @@ fn user_defined_container_can_use_context_operators_via_traits() {
   Box($T),
 }
 
-impl Functor<$A, $B, Boxed<$B>> for Boxed<$A> {
-  def map(self: Self, f: ($A -> $B)) -> Boxed<$B> {
+impl Functor for Boxed<$T> {
+  def fmap(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
     match self {
-      Boxed::Box(value) => Boxed::Box(f(value)),
+      Boxed::Box(value) => Boxed::Box(mapper(value)),
     }
   }
 }
 
-impl Chainable<$A, Boxed<$B>> for Boxed<$A> {
-  def chain(self: Self, f: ($A -> Boxed<$B>)) -> Boxed<$B> {
+impl Applicative for Boxed<$T> {
+  def pure(value: $A) -> Boxed<$A> { Boxed::Box(value) }
+
+  def apply(mapper: Boxed<($A -> $B)>, value: Boxed<$A>) -> Boxed<$B> {
+    match mapper {
+      Boxed::Box(f) => match value {
+        Boxed::Box(inner) => Boxed::Box(f(inner)),
+      },
+    }
+  }
+}
+
+impl Monad for Boxed<$T> {
+  def bind(self: Boxed<$A>, mapper: ($A -> Boxed<$B>)) -> Boxed<$B> {
     match self {
-      Boxed::Box(value) => f(value),
+      Boxed::Box(value) => mapper(value),
     }
   }
 }
 
 impl LiftComposable<$A, $B, $C, Boxed<$C>> for ($A -> Boxed<$B>) {
   def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Boxed<$C>) {
-    {|value| Functor::map(self(value), rhs)}
+    {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
 impl KleisliComposable<$A, $B, Boxed<$C>> for ($A -> Boxed<$B>) {
   def kleisli_compose(self: Self, rhs: ($B -> Boxed<$C>)) -> ($A -> Boxed<$C>) {
-    {|value| Chainable::chain(self(value), rhs)}
+    {|value| Monad::bind(self(value), rhs)}
   }
 }
 
@@ -6225,12 +6237,12 @@ fn bind_operator_missing_impl_lists_available_implementations_in_hint() {
     let err = typecheck(resolved).expect_err("plain lhs bind must fail");
     assert!(err
         .message
-        .contains("`|>=` requires Chainable implementation on the left, got Int"));
+        .contains("`|>=` requires Monad implementation on the left, got Int"));
     let hint = err.hint.as_deref().expect("bind hint");
-    assert!(hint.contains("Chainable is implemented for:"));
-    assert!(hint.contains("List<$A>"));
-    assert!(hint.contains("Option<$A>"));
-    assert!(hint.contains("Result<$A>"));
+    assert!(hint.contains("Monad is implemented for:"));
+    assert!(hint.contains("List<$T>"));
+    assert!(hint.contains("Option<$T>"));
+    assert!(hint.contains("Result<$T>"));
 }
 
 fn from_helper_typechecks_as_generic_trait_call() {

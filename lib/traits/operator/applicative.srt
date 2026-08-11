@@ -1,0 +1,15 @@
+@doc """
+Standard `Applicative` trait declaration.
+`Applicative` extends `Functor` with contextual value construction and
+contextual function application.
+"""
+deftrait Applicative
+where
+  Self: Functor
+{
+  # Lift a plain value into the context.
+  def pure(value: $A) -> Self<$A>
+
+  # Apply a contextual callable to a contextual value.
+  def apply(mapper: Self<($A -> $B)>, value: Self<$A>) -> Self<$B>
+}

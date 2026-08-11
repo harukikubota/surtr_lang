@@ -65,23 +65,42 @@ impl Option {
 `Functor` implementation for `Option`.
 This is the source-level meaning of `value |*> f`.
 """
-impl Functor<$A, $B, Option<$B>> for Option<$A> {
-  def map(self: Self, f: ($A -> $B)) -> Option<$B> {
+impl Functor for Option<$T> {
+  def fmap(self: Option<$A>, mapper: ($A -> $B)) -> Option<$B> {
     match self {
-      Option::Some(value) => Option::Some(f(value)),
+      Option::Some(value) => Option::Some(mapper(value)),
       Option::None => Option::None,
     }
   }
 }
 
 @doc """
-`Chainable` implementation for `Option`.
-This is the source-level meaning of `value |>= f`.
+`Applicative` implementation for `Option`.
 """
-impl Chainable<$A, Option<$B>> for Option<$A> {
-  def chain(self: Self, f: ($A -> Option<$B>)) -> Option<$B> {
+impl Applicative for Option<$T> {
+  def pure(value: $A) -> Option<$A> {
+    Option::Some(value)
+  }
+
+  def apply(mapper: Option<($A -> $B)>, value: Option<$A>) -> Option<$B> {
+    match mapper {
+      Option::Some(f) => match value {
+        Option::Some(inner) => Option::Some(f(inner)),
+        Option::None => Option::None,
+      },
+      Option::None => Option::None,
+    }
+  }
+}
+
+@doc """
+`Monad` implementation for `Option`.
+This is the source-level meaning of `value |>= mapper`.
+"""
+impl Monad for Option<$T> {
+  def bind(self: Option<$A>, mapper: ($A -> Option<$B>)) -> Option<$B> {
     match self {
-      Option::Some(value) => f(value),
+      Option::Some(value) => mapper(value),
       Option::None => Option::None,
     }
   }
@@ -93,7 +112,7 @@ This is the source-level meaning of `left >* right` for `Option`.
 """
 impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
   def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
-    {|value| Functor::map(self(value), rhs)}
+    {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
@@ -103,7 +122,7 @@ This is the source-level meaning of `left >=> right` for `Option`.
 """
 impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
   def kleisli_compose(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
-    {|value| Chainable::chain(self(value), rhs)}
+    {|value| Monad::bind(self(value), rhs)}
   }
 }
 

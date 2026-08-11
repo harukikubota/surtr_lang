@@ -8,27 +8,38 @@ impl Identity {
   }
 }
 
-impl Functor<$A, $B, Identity<$B>> for Identity<$A> {
-  def map(self: Self, f: ($A -> $B)) -> Identity<$B> {
-    Identity { value: f(self.value) }
+impl Functor for Identity<$T> {
+  def fmap(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
+    Identity { value: mapper(self.value) }
   }
 }
 
-impl Chainable<$A, Identity<$B>> for Identity<$A> {
-  def chain(self: Self, f: ($A -> Identity<$B>)) -> Identity<$B> {
-    f(self.value)
+impl Applicative for Identity<$T> {
+  def pure(value: $A) -> Identity<$A> {
+    Identity { value: value }
+  }
+
+  def apply(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
+    f = mapper.value
+    Identity { value: f(value.value) }
+  }
+}
+
+impl Monad for Identity<$T> {
+  def bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
+    mapper(self.value)
   }
 }
 
 impl LiftComposable<$A, $B, $C, Identity<$C>> for ($A -> Identity<$B>) {
   def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Identity<$C>) {
-    {|value| Functor::map(self(value), rhs)}
+    {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
 impl KleisliComposable<$A, $B, Identity<$C>> for ($A -> Identity<$B>) {
   def kleisli_compose(self: Self, rhs: ($B -> Identity<$C>)) -> ($A -> Identity<$C>) {
-    {|value| Chainable::chain(self(value), rhs)}
+    {|value| Monad::bind(self(value), rhs)}
   }
 }
 
@@ -62,10 +73,16 @@ def show_identity_string(value: Identity<String>) -> String {
 
 mapped: Identity<Int> = Identity(1) |*> &inc
 bound: Identity<Int> = Identity(1) |>= &ident_double
+pure: Identity<Int> = Applicative::pure(2)
+mapper_identity: Identity<(Int -> Int)> = Identity(&inc)
+value_identity: Identity<Int> = Identity(1)
+applied: Identity<Int> = Applicative::apply(mapper_identity, value_identity)
 lifted = &ident_inc >* &render
 kleisli = &ident_inc >=> &ident_render
 
 print(show_identity_int(mapped))
 print(show_identity_int(bound))
+print(show_identity_int(pure))
+print(show_identity_int(applied))
 print(show_identity_string(lifted(1)))
 print(show_identity_string(kleisli(1)))

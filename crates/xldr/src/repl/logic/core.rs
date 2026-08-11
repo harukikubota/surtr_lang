@@ -58,8 +58,8 @@ const OPERATOR_DOC_TARGETS: &[(&str, &str)] = &[
     ("/", "Compose::compose"),
     ("++", "Concat::concat"),
     ("|>", "PipeApply::pipe_apply"),
-    ("|*>", "Functor::map"),
-    ("|>=", "Chainable::chain"),
+    ("|*>", "Functor::fmap"),
+    ("|>=", "Monad::bind"),
     (">>", "Composable::compose"),
     (">*", "LiftComposable::lift_compose"),
     (">=>", "KleisliComposable::kleisli_compose"),
@@ -80,7 +80,7 @@ const OPERATOR_DOC_TRAIT_ALIASES: &[(&str, &str)] = &[
     ("++", "Concat"),
     ("|>", "PipeApply"),
     ("|*>", "Functor"),
-    ("|>=", "Chainable"),
+    ("|>=", "Monad"),
     (">>", "Composable"),
     (">*", "LiftComposable"),
     (">=>", "KleisliComposable"),
@@ -3287,8 +3287,8 @@ impl ReplEngine {
             "/" | ">>" => "compose",
             "++" => "concat",
             "|>" => "pipe_apply",
-            "|*>" => "map",
-            "|>=" => "chain",
+            "|*>" => "fmap",
+            "|>=" => "bind",
             ">*" => "lift_compose",
             ">=>" => "kleisli_compose",
             _ => return None,
@@ -3307,7 +3307,7 @@ impl ReplEngine {
             "++" => "Concat",
             "|>" => "PipeApply",
             "|*>" => "Functor",
-            "|>=" => "Chainable",
+            "|>=" => "Monad",
             ">>" => "Composable",
             ">*" => "LiftComposable",
             ">=>" => "KleisliComposable",
@@ -5766,7 +5766,7 @@ impl ReplEngine {
         let (trait_name, member) = match symbol {
             "compare" => ("Compare", "compare"),
             "|>" => ("PipeApply", "pipe_apply"),
-            "|*>" => ("Functor", "map"),
+            "|*>" => ("Functor", "fmap"),
             _ => return None,
         };
         let (_, signature) = self.trait_signature_entry(trait_name)?;
@@ -6392,7 +6392,7 @@ impl ReplEngine {
                 let (ctx_arg, _inner_ty, result_ty) = Self::query_map_result(&lhs_ty, &rhs_ty)?;
                 Ok((
                     format!(
-                        "Functor::map(lhs: {}, rhs: {}) -> {}",
+                        "Functor::fmap(lhs: {}, rhs: {}) -> {}",
                         format_query_ty(&ctx_arg),
                         format_query_ty(&rhs_ty),
                         format_query_ty(&result_ty)
@@ -6404,7 +6404,7 @@ impl ReplEngine {
                 let result_ty = Self::query_bind_result(&lhs_ty, &rhs_ty)?;
                 Ok((
                     format!(
-                        "Chainable::chain(lhs: {}, rhs: {}) -> {}",
+                        "Monad::bind(lhs: {}, rhs: {}) -> {}",
                         format_query_ty(&lhs_ty),
                         format_query_ty(&rhs_ty),
                         format_query_ty(&result_ty)
