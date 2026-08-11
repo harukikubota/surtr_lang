@@ -1930,6 +1930,11 @@ struct Checker {
     env: TypeEnv,
     function_return_ty: Option<Ty>,
     local_annotation_tyvars: HashMap<String, Ty>,
+    /// Declaration-owned generic variables are rigid while their body is
+    /// checked. Inference variables may bind to them, but they never bind to a
+    /// concrete type (or to a different signature generic) at the definition
+    /// site.
+    rigid_tyvars: HashSet<u32>,
     current_function_symbol: Option<String>,
     current_impl_struct_target: Option<String>,
     in_extractor_body: bool,
@@ -2011,6 +2016,7 @@ impl Checker {
             env: state.env,
             function_return_ty: None,
             local_annotation_tyvars: HashMap::new(),
+            rigid_tyvars: HashSet::new(),
             current_function_symbol: None,
             current_impl_struct_target: None,
             in_extractor_body: false,
@@ -2059,6 +2065,7 @@ impl Checker {
         );
         checker.function_return_ty = self.function_return_ty.clone();
         checker.local_annotation_tyvars = self.local_annotation_tyvars.clone();
+        checker.rigid_tyvars = self.rigid_tyvars.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
         checker.in_extractor_body = self.in_extractor_body;

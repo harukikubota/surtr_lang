@@ -695,6 +695,7 @@ impl Checker {
         &mut self,
         local_bindings: &[(u32, Ty)],
         local_annotation_tyvars: HashMap<String, Ty>,
+        rigid_tyvars: HashSet<u32>,
         function_return_ty: Ty,
         function_symbol: String,
         impl_target: Option<String>,
@@ -703,6 +704,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let saved_function_return_ty = self.function_return_ty.clone();
         let saved_local_annotation_tyvars = self.local_annotation_tyvars.clone();
+        let saved_rigid_tyvars = self.rigid_tyvars.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
         let saved_in_extractor_body = self.in_extractor_body;
@@ -712,6 +714,7 @@ impl Checker {
         self.env.push_var_scope();
         self.function_return_ty = Some(function_return_ty);
         self.local_annotation_tyvars = local_annotation_tyvars;
+        self.rigid_tyvars = rigid_tyvars;
         self.current_function_symbol = Some(function_symbol);
         self.current_impl_struct_target = impl_target;
         self.in_extractor_body = in_extractor_body;
@@ -730,6 +733,7 @@ impl Checker {
         self.env.pop_var_scope();
         self.function_return_ty = saved_function_return_ty;
         self.local_annotation_tyvars = saved_local_annotation_tyvars;
+        self.rigid_tyvars = saved_rigid_tyvars;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
         self.in_extractor_body = saved_in_extractor_body;
@@ -867,6 +871,7 @@ impl Checker {
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
             tyvars.clone(),
+            Self::signature_tyvar_ids(&tyvars),
             expected_ret.clone(),
             current_symbol,
             impl_target,
@@ -891,7 +896,8 @@ impl Checker {
         ) {
             return Err(err);
         }
-        if !self.types_compatible(&expected_ret, &typed_body.ty) {
+        let rigid_tyvars = Self::signature_tyvar_ids(&tyvars);
+        if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars) {
             if let Some(err) = self.facet_replace_result_context_error(
                 &typed_body,
                 &expected_ret,
@@ -1032,6 +1038,7 @@ impl Checker {
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
             tyvars.clone(),
+            Self::signature_tyvar_ids(&tyvars),
             expected_ret.clone(),
             current_symbol,
             impl_target,
@@ -1039,7 +1046,8 @@ impl Checker {
             body,
         )?;
 
-        if !self.types_compatible(&expected_ret, &typed_body.ty) {
+        let rigid_tyvars = Self::signature_tyvar_ids(&tyvars);
+        if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars) {
             let actual_ret = self.resolve_ty(&typed_body.ty);
             let hint = if matches!(actual_ret, Ty::Unit) {
                 self.describe_unit_return_hint(&typed_body)
@@ -1192,6 +1200,7 @@ impl Checker {
             let typed_body = self.check_body_in_isolated_scope(
                 &local_bindings,
                 HashMap::new(),
+                HashSet::new(),
                 expected_ret.clone(),
                 method.function_id.name.clone(),
                 impl_target,

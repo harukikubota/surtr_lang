@@ -465,6 +465,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         concrete_body_rejects_redundant_generic_return_type as fn(),
     ),
     (
+        "signature_generics_are_rigid_while_definition_body_is_checked",
+        signature_generics_are_rigid_while_definition_body_is_checked as fn(),
+    ),
+    (
         "named_args_user_function_calls_typecheck_inside_script_module_scope",
         named_args_user_function_calls_typecheck_inside_script_module_scope as fn(),
     ),
@@ -3475,6 +3479,29 @@ fn concrete_body_rejects_redundant_generic_return_type() {
     );
 
     typecheck_with_builtin_prelude(r#"def id(value: $A) -> $A { value }"#);
+}
+
+fn signature_generics_are_rigid_while_definition_body_is_checked() {
+    let err = typecheck_with_rules(
+        r#"def wrong(value: $A) -> $B {
+  value
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("independent signature generics must not unify in the definition body");
+    assert!(
+        err.message.contains("expected $") && err.message.contains(", got $"),
+        "unexpected error: {}",
+        err.message
+    );
+
+    typecheck_with_rules(
+        r#"def identity(value: $A) -> $A { value }
+
+def gen_nil() -> List<$A> { [] }"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("matching rigid generics and generic container slots remain valid");
 }
 
 fn named_args_user_function_calls_typecheck_inside_script_module_scope() {

@@ -1424,6 +1424,17 @@ impl Checker {
         let got = self.resolve_ty(got);
         let result = match (&expected, &got) {
             (Ty::Hole, Ty::Hole) => true,
+            (Ty::Var(left), Ty::Var(right)) => match (
+                self.rigid_tyvars.contains(left),
+                self.rigid_tyvars.contains(right),
+            ) {
+                (true, true) => left == right,
+                (true, false) => self.bind_tyvar(*right, &Ty::Var(*left)),
+                (false, true) => self.bind_tyvar(*left, &Ty::Var(*right)),
+                (false, false) => self.bind_tyvar(*left, &Ty::Var(*right)),
+            },
+            (Ty::Var(var), _) if self.rigid_tyvars.contains(var) => false,
+            (_, Ty::Var(var)) if self.rigid_tyvars.contains(var) => false,
             (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
             (Ty::Int, Ty::Int)
             | (Ty::Float, Ty::Float)
@@ -1498,6 +1509,28 @@ impl Checker {
         };
         self.profiler.finish(ProfileEvent::TypesCompatible, profile);
         result
+    }
+
+    pub(super) fn signature_tyvar_ids(tyvars: &HashMap<String, Ty>) -> HashSet<u32> {
+        tyvars
+            .values()
+            .filter_map(|ty| match ty {
+                Ty::Var(var) => Some(*var),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub(super) fn types_compatible_with_rigid(
+        &mut self,
+        expected: &Ty,
+        got: &Ty,
+        rigid_tyvars: &HashSet<u32>,
+    ) -> bool {
+        let saved = std::mem::replace(&mut self.rigid_tyvars, rigid_tyvars.clone());
+        let compatible = self.types_compatible(expected, got);
+        self.rigid_tyvars = saved;
+        compatible
     }
 
     /// Checks whether a callable parameter can consume an argument. `Hole` is
