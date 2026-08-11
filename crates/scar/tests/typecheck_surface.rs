@@ -7570,3 +7570,23 @@ bad: String = identity::<Int>(1)"#,
     let err = typecheck(resolved).expect_err("explicit Int must not satisfy String");
     assert!(err.message.contains("expected String, got Int"), "{err:?}");
 }
+
+#[test]
+fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
+    let resolved =
+        resolve_with_builtin_prelude(r#"value = Concat::concat::<String>("left", "right")"#);
+    let err = typecheck(resolved).expect_err("Self must not be supplied as an explicit type input");
+    assert!(
+        err.message
+            .contains("Concat::concat expects 0 explicit type argument(s), got 1"),
+        "{err:?}"
+    );
+
+    let resolved = resolve_with_builtin_prelude(r#"value = TryFrom::try_from::<Int, String>("1")"#);
+    let err = typecheck(resolved).expect_err("trait generics must use their declared arity");
+    assert!(
+        err.message
+            .contains("TryFrom::try_from expects 1 explicit type argument(s), got 2"),
+        "{err:?}"
+    );
+}
