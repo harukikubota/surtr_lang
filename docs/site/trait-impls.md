@@ -45,6 +45,20 @@ xldr(1)> print(to_string(Int::abs(-4)))
 xldr(2)>
 ```
 
+### `Functor`, `Applicative`, `Monad`
+
+この3つは文脈付き計算を段階的に扱う標準 trait です。
+
+- `Functor::fmap` / `|*>` は文脈の中身だけを変換します。
+- `Applicative::pure` は値を文脈へ持ち上げ、`Applicative::apply` / `|*|` は文脈内の callable と文脈内の値を組み合わせます。
+- `Monad::bind` / `|>=` は文脈内の値を次の文脈付き計算へ渡します。
+
+複数引数の mapper は `curry()` で明示的にカリー化します。
+
+```surtr
+Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2) # => Ok(3)
+```
+
 変換系は `From` / `TryFrom` trait が裏側の coherence を担います。
 
 ```text
@@ -83,4 +97,6 @@ xldr(2)>
 - `impl Trait` は parameter 位置だけで、`-> impl Trait` はまだ使えません。
 - `where` clause と multi-trait bound はまだ使えません。
 - `+`, `-`, `*` は `Add` / `Sub` / `Mul` の dispatch です。
+- `|*>`, `|*|`, `|>=` はそれぞれ `Functor::fmap`, `Applicative::apply`, `Monad::bind` の dispatch です。
+- `|*|` は未カリー化 callable を暗黙変換しません。複数引数では `curry()` を明示します。
 - `From` / `TryFrom` の呼び出し surface は簡潔でも、coherence 自体は trait 実装側で管理されています。

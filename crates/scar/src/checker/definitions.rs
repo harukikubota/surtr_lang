@@ -1649,6 +1649,7 @@ impl Checker {
         span: &Span,
         id: &ResolvedId,
         args: &[ResolvedRecordLitArg],
+        expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         if id.name == "Ok" || id.name == "Err" {
             if args.len() != 1 {
@@ -1660,7 +1661,12 @@ impl Checker {
             }
             let inner = match &args[0] {
                 ResolvedRecordLitArg::Positional(expr) => {
-                    let typed = self.check_node(expr)?;
+                    let inner_expected =
+                        expected.and_then(|expected| match self.resolve_ty(expected) {
+                            Ty::Result(ok, _) => Some(ok.as_ref().clone()),
+                            _ => None,
+                        });
+                    let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
                     if self.ty_contains_facet(&typed.ty) {
                         return Err(TypeError {
                             message:

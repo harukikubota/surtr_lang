@@ -148,6 +148,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         Resolved::BinOp(_, _, left, right)
         | Resolved::Pipe(_, left, right)
         | Resolved::ContextMap(_, left, right)
+        | Resolved::ContextApply(_, left, right)
         | Resolved::ContextBind(_, left, right)
         | Resolved::Compose(_, left, right)
         | Resolved::LiftedCompose(_, left, right)

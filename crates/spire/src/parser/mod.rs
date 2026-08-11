@@ -1802,6 +1802,11 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             Box::new(shift_ast_span(*left, delta)),
             Box::new(shift_ast_span(*right, delta)),
         ),
+        Ast::ContextApply(span, left, right) => Ast::ContextApply(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*left, delta)),
+            Box::new(shift_ast_span(*right, delta)),
+        ),
         Ast::ContextBind(span, left, right) => Ast::ContextBind(
             shift_span(span, delta),
             Box::new(shift_ast_span(*left, delta)),
@@ -2350,6 +2355,7 @@ impl Ast {
             | Ast::BinOp(s, _, _, _)
             | Ast::Pipe(s, _, _)
             | Ast::ContextMap(s, _, _)
+            | Ast::ContextApply(s, _, _)
             | Ast::ContextBind(s, _, _)
             | Ast::Compose(s, _, _)
             | Ast::LiftedCompose(s, _, _)

@@ -116,6 +116,9 @@ pub enum Resolved {
     /// Context map
     ContextMap(Span, Box<Resolved>, Box<Resolved>),
 
+    /// Applicative application
+    ContextApply(Span, Box<Resolved>, Box<Resolved>),
+
     /// Context bind
     ContextBind(Span, Box<Resolved>, Box<Resolved>),
 

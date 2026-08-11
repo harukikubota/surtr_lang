@@ -352,7 +352,7 @@ ret = List::reverse(acc)
 @builtin type Err(Error) -> Result<$T>
 ```
 
-現時点でも中心は `Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|>=`, `>*`, `>=>` の言語構文と型規則ですが、
+現時点でも中心は `Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|*|`, `|>=`, `>*`, `>=>` の言語構文と型規則ですが、
 `Result::is_ok(...)` / `Result::is_err(...)` で variant 判定だけを簡潔に書けます。
 
 ## 11. `Option` module の位置づけ
@@ -367,7 +367,7 @@ defenum Option<$T> {
 }
 ```
 
-`Option` は `=?` の対象ではありませんが、`|*>`、`|>=`、`>*`、`>=>` には `Option` 文脈の標準実装があります。
+`Option` は `=?` の対象ではありませんが、`|*>`、`|*|`、`|>=`、`>*`、`>=>` には `Option` 文脈の標準実装があります。
 失敗伝播へ載せたい場合は `from::<Result>(value)`、値として分岐したい場合は `match` を使います。
 `from::<Option>(value)` は `Err(_)` を `None` に畳み込む明示変換です。
 
@@ -624,6 +624,7 @@ path の停止点をまとめて見たいときに使います。
 |---|---|
 | `x |> f(1)` | call 式への第一引数注入 |
 | `list |*> f()` | `List::map` と同じ方向の変換 |
+| `mapper |*| value` | `Applicative::apply` による文脈内 callable の適用 |
 | `list |>= f()` | `List` の bind 方向の変換 |
 | `&f >* &g` | 文脈付き関数の後ろに pure function をつなぐ lifted compose |
 | `&f >=> &g` | `List` または `Result` を返す関数どうしの Kleisli 合成 |

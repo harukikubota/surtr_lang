@@ -1,15 +1,34 @@
 @doc """
 Standard `Applicative` trait declaration.
-`Applicative` extends `Functor` with contextual value construction and
-contextual function application.
+
+`Applicative` extends `Functor` with two operations:
+
+- `pure` lifts an ordinary value into the context.
+- `apply` applies a function already in the context to a value in the same
+  context.
+
+The `|*|` operator is the surface form of `Applicative::apply`:
+`mapper |*| value`. The mapper must be explicitly curried when it has more
+than one argument, so each `|*|` step consumes one contextual argument.
+
+For example, `Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2)` evaluates to
+`Ok(3)`. `Applicative` preserves the container's failure or short-circuit
+behavior while combining successful values.
+
+## REPL
+
+xldr(1)> Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2)
+Ok(3)
 """
 deftrait Applicative
 where
   Self: Functor
 {
-  # Lift a plain value into the context.
+  # Lift a plain value into the context. This is the applicative identity
+  # used when a computation needs a contextual value without effects.
   def pure(value: $A) -> Self<$A>
 
-  # Apply a contextual callable to a contextual value.
+  # Apply a contextual callable to a contextual value. With a curried mapper,
+  # repeated calls consume arguments from left to right.
   def apply(mapper: Self<($A -> $B)>, value: Self<$A>) -> Self<$B>
 }

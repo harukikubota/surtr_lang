@@ -1,13 +1,14 @@
 # パイプ演算子
 
 Surtr には、値や文脈付きの値を左から右へ流すためのパイプ演算子があります。
-このページでは `|>`, `|*>`, `|>=` と、右辺で使える `_1` placeholder をまとめます。
+このページでは `|>`, `|*>`, `|*|`, `|>=` と、右辺で使える `_1` placeholder をまとめます。
 
 ## 先に覚えるルール
 
 - `|>` は plain apply です
 - `|*>` は map です
 - `|>=` は bind です
+- `|*|` は Applicative apply です
 - 右辺が call 式なら、左辺値は第 1 引数へ注入されます
 - `_1` は右辺 call の direct positional argument に 1 回だけ置けます
 - `_1` は pipe の外では使えません
@@ -72,6 +73,18 @@ Ok(" 42 ") |*> String::trim() |>= try_from(Int)
 - `List<A> |>= (A -> List<B>) -> List<B>`
 
 `Result` なら `Err` を伝播し、`List` なら返ってきた `List` をつなげます。
+
+## `|*|` Applicative apply
+
+`|*|` は文脈内の function を文脈内の value に適用します。
+
+```surtr
+Ok(&inc) |*| Ok(1)                       # => Ok(2)
+Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2)  # => Ok(3)
+```
+
+演算子は左結合です。複数引数の function は `curry()` を明示してから、
+各 `|*|` で1引数ずつ適用します。
 
 ## `_1` pipe placeholder
 

@@ -47,12 +47,14 @@ pipeline = trim() >> render() # NG
 ## apply 系での call 式
 
 `|>`, `|*>`, `|>=` の右辺では、call 式に左辺値が第 1 引数として注入されます。
+`|*|` は call 式への注入ではなく、文脈内 callable と文脈内 value の適用です。
 
 ```surtr
 value |> add(1)               # => add(value, 1)
 user |> User::get_name()      # => User::get_name(user)
 Ok("42") |*> String::trim()   # => Ok(String::trim("42"))
 Ok(11) |>= require_at_least(10)
+Ok(&inc) |*| Ok(1)
 ```
 
 複数引数でも同じです。

@@ -210,6 +210,7 @@ False
 
 - `|>`
 - `|*>`
+- `|*|`
 - `|>=`
 - `>>`
 - `>*`
@@ -275,6 +276,22 @@ Ok(11) |>= require_at_least(10)
 ```surtr
 Ok(11) |>= require_at_least(10)   # => require_at_least(11, 10)
 ```
+
+#### `|*|` Applicative apply
+
+`|*|` は `Applicative::apply` の surface syntax です。
+
+- `Result<(A -> B)> |*| Result<A> -> Result<B>`
+- `List<(A -> B)> |*| List<A> -> List<B>`
+- `Option<(A -> B)> |*| Option<A> -> Option<B>`
+
+```surtr
+Ok(&inc) |*| Ok(1)
+Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2)
+```
+
+複数引数の function は `curry()` で明示的にカリー化します。`|*|` は
+左結合で、各段階が callable の次の引数を消費します。
 
 #### `>>` 通常関数合成
 
@@ -366,8 +383,8 @@ value: Int =? parse_int("1")
 - `&`op`(args...)`` は placeholder capture 規約で lower される
 - bare capture を `inspect` / `to_string` すると、metadata があれば
   `FnCapture(module: M, name: f, signature: sig)` 形式で表示する
-- `Result` と `List` を `|*>`, `|>=`, `>*`, `>=>` で混在させない
-- `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
+- `Result` と `List` を `|*>`, `|*|`, `|>=`, `>*`, `>=>` で混在させない
+- `|>`, `|*>`, `|*|`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
 - unqualified infix `` `on` `` と `` `Function::on` `` は flow より低優先度
 - 結合優先度は `Bind < StdOn < Apply=Compose < Logical < Expr`
 - `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合

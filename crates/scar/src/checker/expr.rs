@@ -772,6 +772,9 @@ impl Checker {
             Resolved::BinOp(span, op, left, right) => self.check_binop(span, op, left, right),
             Resolved::Pipe(span, left, right) => self.check_pipe(span, left, right),
             Resolved::ContextMap(span, left, right) => self.check_context_map(span, left, right),
+            Resolved::ContextApply(span, left, right) => {
+                self.check_context_apply(span, left, right)
+            }
             Resolved::ContextBind(span, left, right) => self.check_context_bind(span, left, right),
             Resolved::Compose(span, left, right) => self.check_compose(span, left, right),
             Resolved::LiftedCompose(span, left, right) => {
@@ -874,7 +877,7 @@ impl Checker {
                 self.check_struct_lit(span, id, field_vals)
             }
             Resolved::ConstructorCall(span, id, args) => {
-                self.check_constructor_call(span, id, args)
+                self.check_constructor_call(span, id, args, None)
             }
             Resolved::DeferrorDef(span, id, fields, show_expr) => {
                 self.check_deferror_def(span, id, fields, show_expr)
@@ -1079,6 +1082,9 @@ impl Checker {
             (Resolved::ContextMap(span, left, right), Some(expected_ty)) => {
                 self.check_context_map_with_expected(span, left, right, Some(expected_ty))
             }
+            (Resolved::ContextApply(span, left, right), Some(expected_ty)) => {
+                self.check_context_apply_with_expected(span, left, right, Some(expected_ty))
+            }
             (Resolved::ContextBind(span, left, right), Some(expected_ty)) => {
                 self.check_context_bind_with_expected(span, left, right, Some(expected_ty))
             }
@@ -1115,6 +1121,9 @@ impl Checker {
                 if self.is_function_on_callee(func) =>
             {
                 self.check_function_on_with_expected(span, func, args, expected_ty)
+            }
+            (Resolved::ConstructorCall(span, id, args), Some(expected_ty)) => {
+                self.check_constructor_call(span, id, args, Some(expected_ty))
             }
             (Resolved::FieldAccess(span, expr, field), expected_ty) => {
                 self.check_field_access_with_expected(span, expr, field, expected_ty)
@@ -2038,6 +2047,7 @@ impl Checker {
             | Resolved::BinOp(span, _, _, _)
             | Resolved::Pipe(span, _, _)
             | Resolved::ContextMap(span, _, _)
+            | Resolved::ContextApply(span, _, _)
             | Resolved::ContextBind(span, _, _)
             | Resolved::Compose(span, _, _)
             | Resolved::LiftedCompose(span, _, _)
@@ -3689,6 +3699,109 @@ impl Checker {
             ret,
             "`|>`",
         )
+    }
+
+    pub(super) fn check_context_apply(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        self.check_context_apply_with_expected(span, left, right, None)
+    }
+
+    fn check_context_apply_with_expected(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+        _expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        // The value determines the applicative context and mapper input.  Check it
+        // first so contextual trait helpers such as `&Add::add` receive the
+        // expected callable type while being resolved.
+        let typed_value = self.check_node(right)?;
+        let value_inner = self
+            .constructor_slot_type_for("Applicative", &typed_value.ty)
+            .ok_or_else(|| TypeError {
+                message: format!(
+                    "`|*|` requires an Applicative value on the right, got {}",
+                    self.ty_name(&typed_value.ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: Some(self.trait_implementation_summary("Applicative")),
+            })?;
+        let output_hint = self.env.fresh_tyvar();
+        let callable_hint = Ty::Func(vec![value_inner.clone()], Box::new(output_hint));
+        let expected_mapper_ty = self
+            .constructor_context_type_for("Applicative", &typed_value.ty, &callable_hint)
+            .ok_or_else(|| TypeError {
+                message: "`|*|` cannot infer mapper context from the value".into(),
+                span: typed_value.span.clone(),
+                hint: None,
+            })?;
+        let typed_mapper = self.check_node_with_expected(left, Some(&expected_mapper_ty))?;
+        let mapper_inner = self
+            .constructor_slot_type_for("Applicative", &typed_mapper.ty)
+            .ok_or_else(|| TypeError {
+                message: format!(
+                    "`|*|` requires a contextual callable on the left, got {}",
+                    self.ty_name(&typed_mapper.ty)
+                ),
+                span: typed_mapper.span.clone(),
+                hint: Some(self.trait_implementation_summary("Applicative")),
+            })?;
+        let (input, output) = self.unary_function_parts(&mapper_inner, "`|*|`", span)?;
+        if !self.types_compatible(&input, &value_inner) {
+            return Err(TypeError {
+                message: "`|*|` mapper input and value type do not match".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
+        let Some((dispatch, expected_mapper)) = self.constructor_functor_dispatch(
+            "Applicative",
+            "apply",
+            &typed_value.ty,
+            &input,
+            &callable_ty,
+        ) else {
+            return Err(TypeError {
+                message: format!(
+                    "`|*|` requires Applicative implementation for {}",
+                    self.ty_name(&typed_value.ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: Some(self.trait_implementation_summary("Applicative")),
+            });
+        };
+        if !self.types_compatible(&expected_mapper, &typed_mapper.ty) {
+            return Err(TypeError {
+                message: "`|*|` requires mapper and value in the same context".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let (_, result_ty) = self
+            .constructor_functor_dispatch("Applicative", "apply", &typed_value.ty, &input, &output)
+            .expect("the same Applicative impl already matched");
+        Ok(TypedNode {
+            ty: result_ty,
+            span: span.clone(),
+            node: TypedInner::TraitCall {
+                trait_name: "Applicative".into(),
+                method_name: "apply".into(),
+                receiver_ty: self.resolve_ty(&typed_value.ty),
+                dispatch,
+                origin: TraitCallOrigin::Operator {
+                    op: OperatorTraitOp::ContextApply,
+                    lhs_ty: self.resolve_ty(&typed_mapper.ty),
+                    rhs_ty: self.resolve_ty(&typed_value.ty),
+                },
+                args: vec![typed_mapper, typed_value],
+            },
+        })
     }
 
     pub(super) fn check_context_map(

@@ -8527,6 +8527,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::BinOp(span, _, _, _)
         | Ast::Pipe(span, _, _)
         | Ast::ContextMap(span, _, _)
+        | Ast::ContextApply(span, _, _)
         | Ast::ContextBind(span, _, _)
         | Ast::Compose(span, _, _)
         | Ast::LiftedCompose(span, _, _)

@@ -91,6 +91,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::Pipe(_, left, right)
         | Resolved::ContextMap(_, left, right)
+        | Resolved::ContextApply(_, left, right)
         | Resolved::ContextBind(_, left, right)
         | Resolved::Compose(_, left, right)
         | Resolved::LiftedCompose(_, left, right)

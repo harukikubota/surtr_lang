@@ -205,6 +205,7 @@ pub enum TraitCallOrigin {
 pub enum OperatorTraitOp {
     PipeApply,
     PipeMap,
+    ContextApply,
     PipeBind,
     SlashCompose,
     Compose,

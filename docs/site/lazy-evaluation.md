@@ -24,7 +24,7 @@ Lazy parameter + (expr)
 - `Lazy<T>` 引数の `(expr)` は、選択・短絡判定より前に一度だけ評価される
 - eager boundary は closure 値を自動で `()` 呼び出ししない
 - pipe RHS の `(make_closure())` は別の規則であり、式を評価して得た callable を pipe に使う
-- `|>`, `|*>`, `|>=` は `Lazy<T>` parameter へ値を注入できない
+- `|>`, `|*>`, `|*|`, `|>=` は `Lazy<T>` parameter へ値を注入できない
 
 ## `if` と `if_then`
 
@@ -159,11 +159,12 @@ print(to_string(41 |> (make_closure())))
 
 ## pipe による Lazy parameter への注入は禁止
 
-`|>`、`|*>`、`|>=` は、Lazy parameter を注入先に選べません。次をすべて含みます。
+`|>`、`|*>`、`|*|`、`|>=` は、Lazy parameter を注入先に選べません。次をすべて含みます。
 
 - RHS call への implicit first-argument injection
 - `_1` placeholder による明示的な注入
 - `|*>` / `|>=` の context value 注入
+- `|*|` の contextual mapper / value の適用
 - trait helper や partial call を経由する注入
 
 Lazy parameter は callee が評価時点を制御します。pipe が値を注入すると、その制御境界が曖昧になるためです。

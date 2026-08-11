@@ -418,6 +418,46 @@ test("Result") {
     }
   }
 
+  describe("applicative laws") {
+    # pure(id) <*> v == v
+    it("identity holds for Ok") {
+      value: Result<Int> = Ok(2)
+      identity = Ok({|x| x}) |*| value
+      assert_eq(value, identity)
+    }
+
+    it("identity preserves Err") {
+      value: Result<Int> = Err(NoneError)
+      identity = Ok({|x| x}) |*| value
+      assert_eq(value, identity)
+    }
+
+    # pure(f) <*> pure(x) == pure(f(x))
+    it("homomorphism holds") {
+      lifted = Ok({|x| x + 1}) |*| Ok(2)
+      direct: Result<Int> = Ok(3)
+      assert_eq(direct, lifted)
+    }
+
+    # u <*> pure(y) == pure(\f -> f(y)) <*> u
+    it("interchange holds") {
+      u: Result<(Int -> Int)> = Ok(&safe_inc)
+      left = u |*| Ok(2)
+      right = Ok({|f| f(2)}) |*| u
+      assert_eq(left, right)
+    }
+
+    # pure(.) <*> u <*> v <*> w == u <*> (v <*> w)
+    it("composition holds") {
+      u: Result<(Int -> Int)> = Ok(&safe_inc)
+      v: Result<(Int -> Int)> = Ok(&safe_double_under_limit)
+      w: Result<Int> = Ok(2)
+      left = Ok({|f| {|g| {|x| f(g(x))}}}) |*| u |*| v |*| w
+      right = u |*| (v |*| w)
+      assert_eq(left, right)
+    }
+  }
+
   describe("trait integration") {
     it("supports realistic user pipelines through result operators") {
       lookup = &parse_user_id >=> &load_user

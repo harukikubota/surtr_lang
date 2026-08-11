@@ -1,0 +1,12 @@
+def inc(value: Int) -> Int {
+  value + 1
+}
+
+mapper: Result<(Int -> Int)> = Ok(&inc)
+value: Result<Int> = Ok(1)
+applied: Result<Int> = mapper |*| value
+
+print(inspect(applied))
+
+add_applied: Result<Int> = Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2)
+print(inspect(add_applied))

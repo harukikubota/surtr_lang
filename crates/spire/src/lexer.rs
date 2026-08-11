@@ -302,6 +302,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             let tok = match three.as_str() {
                 "|*>" => Some(Token::PipeMap),
                 "|>=" => Some(Token::PipeBind),
+                "|*|" => Some(Token::PipeApplyContext),
                 ">=>" => Some(Token::KleisliCompose),
                 _ => None,
             };
@@ -795,7 +796,8 @@ mod tests {
 
     #[test]
     fn test_two_char_ops() {
-        let tokens = tokenize("/ ++ =? == != <= >= <- && || => -> |> >> >* |*> |>= >=>").unwrap();
+        let tokens =
+            tokenize("/ ++ =? == != <= >= <- && || => -> |> >> >* |*> |*| |>= >=>").unwrap();
         assert!(matches!(tokens[0].token, Token::Slash));
         assert!(matches!(tokens[1].token, Token::Concat));
         assert!(matches!(tokens[2].token, Token::SafeBind));
@@ -812,8 +814,9 @@ mod tests {
         assert!(matches!(tokens[13].token, Token::Compose));
         assert!(matches!(tokens[14].token, Token::LiftCompose));
         assert!(matches!(tokens[15].token, Token::PipeMap));
-        assert!(matches!(tokens[16].token, Token::PipeBind));
-        assert!(matches!(tokens[17].token, Token::KleisliCompose));
+        assert!(matches!(tokens[16].token, Token::PipeApplyContext));
+        assert!(matches!(tokens[17].token, Token::PipeBind));
+        assert!(matches!(tokens[18].token, Token::KleisliCompose));
     }
 
     #[test]

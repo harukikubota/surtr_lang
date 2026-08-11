@@ -182,6 +182,16 @@ match mapped {
 }
 ```
 
+### `|*|` Applicative apply
+
+`Result` では、成功値を保持した function と成功値を保持した引数を
+組み合わせます。`Err` が含まれる場合は `Result` の失敗伝播規則に従います。
+
+```surtr
+Ok(&inc) |*| Ok(1)
+Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2)
+```
+
 ### `|>=` bind
 
 成功値を次の `Result` 返却関数へ渡します。
@@ -284,7 +294,7 @@ def require_port(text: String) -> Result<Int> {
 
 - 分岐を明示したいときは `match`
 - 失敗をそのまま流したいときは `=?`
-- 直線的な pipeline は `|*>`, `|>=`, `>*`, `>=>`
+- 直線的な pipeline は `|*>`, `|*|`, `|>=`, `>*`, `>=>`
 - recover したいときは `Err(...)` branch を明示的に書く
 
 ## 関連ページ

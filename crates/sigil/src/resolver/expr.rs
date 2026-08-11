@@ -537,6 +537,7 @@ impl Resolver {
             Ast::BinOp(_, _, left, right)
             | Ast::Pipe(_, left, right)
             | Ast::ContextMap(_, left, right)
+            | Ast::ContextApply(_, left, right)
             | Ast::ContextBind(_, left, right)
             | Ast::Compose(_, left, right)
             | Ast::LiftedCompose(_, left, right)
@@ -2364,6 +2365,13 @@ impl Resolver {
                 let rhs = self.prepare_pipe_rhs(*right)?;
                 let r = self.resolve_node(rhs)?;
                 Ok(Resolved::ContextMap(span, Box::new(l), Box::new(r)))
+            }
+
+            Ast::ContextApply(span, left, right) => {
+                let l = self.resolve_node(*left)?;
+                let rhs = self.prepare_pipe_rhs(*right)?;
+                let r = self.resolve_node(rhs)?;
+                Ok(Resolved::ContextApply(span, Box::new(l), Box::new(r)))
             }
 
             Ast::ContextBind(span, left, right) => {

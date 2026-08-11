@@ -579,6 +579,9 @@ pub enum Ast {
     /// Context-preserving map: `value |*> f`
     ContextMap(Span, Box<Ast>, Box<Ast>),
 
+    /// Applicative application: `mapper |*| value`
+    ContextApply(Span, Box<Ast>, Box<Ast>),
+
     /// Context-preserving bind: `value |>= f`
     ContextBind(Span, Box<Ast>, Box<Ast>),
 

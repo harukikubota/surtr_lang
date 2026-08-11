@@ -19,6 +19,7 @@ enum FuncLiteralBodyKind {
 enum FlowOpKind {
     PipeApply,
     PipeMap,
+    PipeApplyContext,
     PipeBind,
     Compose,
     LiftCompose,
@@ -91,6 +92,7 @@ impl Parser<'_> {
         match tok {
             Token::PipeApply => Some(FlowOpKind::PipeApply),
             Token::PipeMap => Some(FlowOpKind::PipeMap),
+            Token::PipeApplyContext => Some(FlowOpKind::PipeApplyContext),
             Token::PipeBind => Some(FlowOpKind::PipeBind),
             Token::Compose => Some(FlowOpKind::Compose),
             Token::LiftCompose => Some(FlowOpKind::LiftCompose),
@@ -155,6 +157,9 @@ impl Parser<'_> {
             left = match next {
                 FlowOpKind::PipeApply => Ast::Pipe(span, Box::new(left), Box::new(right)),
                 FlowOpKind::PipeMap => Ast::ContextMap(span, Box::new(left), Box::new(right)),
+                FlowOpKind::PipeApplyContext => {
+                    Ast::ContextApply(span, Box::new(left), Box::new(right))
+                }
                 FlowOpKind::PipeBind => Ast::ContextBind(span, Box::new(left), Box::new(right)),
                 FlowOpKind::Compose => Ast::Compose(span, Box::new(left), Box::new(right)),
                 FlowOpKind::LiftCompose => {
@@ -2534,6 +2539,7 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
         Ast::BinOp(_, _, lhs, rhs)
         | Ast::Pipe(_, lhs, rhs)
         | Ast::ContextMap(_, lhs, rhs)
+        | Ast::ContextApply(_, lhs, rhs)
         | Ast::ContextBind(_, lhs, rhs)
         | Ast::Compose(_, lhs, rhs)
         | Ast::LiftedCompose(_, lhs, rhs)
