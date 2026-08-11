@@ -7,6 +7,10 @@ default-filter = 'not (test(/^run_eldr::/) | test(/^build_roundtrip::/) | test(/
 
 [profile.ci]
 default-filter = 'all()'
+# A clean, fully parallel build can take longer than nextest's 100ms default
+# to close a just-finished test process's stdout/stderr on macOS. Keep leak
+# detection enabled, but allow a bounded shutdown window before reporting it.
+leak-timeout = "1s"
 
 [profile.cold]
 default-filter = 'test(/^run_eldr::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
