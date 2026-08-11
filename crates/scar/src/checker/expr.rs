@@ -2740,6 +2740,51 @@ impl Checker {
         None
     }
 
+    fn constructor_context_type_for(
+        &mut self,
+        trait_name: &str,
+        container_ty: &Ty,
+        slot_ty: &Ty,
+    ) -> Option<Ty> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, container_ty) {
+                self.substitutions = before;
+                continue;
+            }
+
+            let slot = impl_info.constructor_slot_vars[0];
+            let mapping = impl_info
+                .type_param_vars
+                .iter()
+                .copied()
+                .map(|var| {
+                    let replacement = if var == slot {
+                        slot_ty.clone()
+                    } else {
+                        fresh
+                            .get(&var)
+                            .map(|ty| self.resolve_ty(ty))
+                            .unwrap_or(Ty::Var(var))
+                    };
+                    (var, replacement)
+                })
+                .collect::<HashMap<_, _>>();
+            let context_ty =
+                self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping));
+            self.substitutions = before;
+            return Some(context_ty);
+        }
+        None
+    }
+
     fn constructor_monad_dispatch(
         &mut self,
         trait_name: &str,
@@ -2966,7 +3011,6 @@ impl Checker {
             && positional_args.len() == 2
         {
             let typed_mapper = self.check_node(positional_args[0])?;
-            let typed_value = self.check_node(positional_args[1])?;
             let mapper_inner = self
                 .constructor_slot_type_for(trait_name, &typed_mapper.ty)
                 .ok_or_else(|| TypeError {
@@ -2979,6 +3023,18 @@ impl Checker {
                 })?;
             let (input, output) =
                 self.unary_function_parts(&mapper_inner, "Applicative::apply", span)?;
+            let expected_value_ty = self
+                .constructor_context_type_for(trait_name, &typed_mapper.ty, &input)
+                .ok_or_else(|| TypeError {
+                    message: format!(
+                        "Applicative::apply cannot infer value context from {}",
+                        self.ty_name(&typed_mapper.ty)
+                    ),
+                    span: typed_mapper.span.clone(),
+                    hint: None,
+                })?;
+            let typed_value =
+                self.check_node_with_expected(positional_args[1], Some(&expected_value_ty))?;
             let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
             let Some((dispatch, expected_mapper)) = self.constructor_functor_dispatch(
                 trait_name,

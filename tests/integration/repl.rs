@@ -1521,6 +1521,36 @@ fn repl_reports_return_mismatch_for_concretized_trait_helper_closure() {
 }
 
 #[test]
+fn repl_propagates_apply_context_into_nested_pure() {
+    let output = run_repl_session(
+        "l: Result<(Int -> Int)> = Applicative::pure({|n| n + 10})\nApplicative::apply(l, Applicative::pure(10))\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = strip_ansi(&combined);
+    assert!(
+        combined.contains("Ok(20)"),
+        "nested pure should inherit apply context, got:\n{}",
+        combined
+    );
+    assert!(
+        !combined.contains("Applicative::pure requires an expected return type"),
+        "nested pure unexpectedly lost its expected type:\n{}",
+        combined
+    );
+}
+
+#[test]
 fn repl_allows_trait_helper_capture_with_expected_callable_annotation() {
     let output = run_repl_session(
         "cmp: (Int, Int -> Ordering) = &compare\njoin: (String, String -> String) = &concat\ncmp(1, 2)\njoin(\"sur\", \"tr\")\n:quit\n",
