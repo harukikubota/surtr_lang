@@ -196,15 +196,17 @@ pub struct TypedFieldPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypedFacetPathKind {
-    Structural,
-    Variant,
+    InfallibleStructural,
+    FallibleStructural,
+    VariantPath,
 }
 
 impl TypedFacetPathKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Structural => "structural",
-            Self::Variant => "variant",
+            Self::InfallibleStructural => "InfallibleStructural",
+            Self::FallibleStructural => "FallibleStructural",
+            Self::VariantPath => "VariantPath",
         }
     }
 }

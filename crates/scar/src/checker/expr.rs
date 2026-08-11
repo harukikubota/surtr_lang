@@ -4571,9 +4571,18 @@ impl Checker {
             .iter()
             .any(|segment| matches!(segment, TypedFacetSegment::Variant { .. }))
         {
-            TypedFacetPathKind::Variant
+            TypedFacetPathKind::VariantPath
+        } else if segments.iter().any(|segment| {
+            matches!(
+                segment,
+                TypedFacetSegment::ListIndex { .. }
+                    | TypedFacetSegment::ListRange { .. }
+                    | TypedFacetSegment::MapKey { .. }
+            )
+        }) {
+            TypedFacetPathKind::FallibleStructural
         } else {
-            TypedFacetPathKind::Structural
+            TypedFacetPathKind::InfallibleStructural
         }
     }
 
@@ -4768,12 +4777,16 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
-            path_kind: if left_path.path_kind == TypedFacetPathKind::Variant
-                || right_path.path_kind == TypedFacetPathKind::Variant
+            path_kind: if left_path.path_kind == TypedFacetPathKind::VariantPath
+                || right_path.path_kind == TypedFacetPathKind::VariantPath
             {
-                TypedFacetPathKind::Variant
+                TypedFacetPathKind::VariantPath
+            } else if left_path.path_kind == TypedFacetPathKind::FallibleStructural
+                || right_path.path_kind == TypedFacetPathKind::FallibleStructural
+            {
+                TypedFacetPathKind::FallibleStructural
             } else {
-                TypedFacetPathKind::Structural
+                TypedFacetPathKind::InfallibleStructural
             },
             may_fail: left_path.may_fail || right_path.may_fail,
             source_readonly_root: left_path.source_readonly_root,
@@ -8742,7 +8755,7 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
-            path_kind: TypedFacetPathKind::Structural,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![TypedFacetSegment::Tuple {
@@ -9236,7 +9249,7 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Str,
-            path_kind: TypedFacetPathKind::Structural,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,
             segments: vec![
@@ -9277,7 +9290,7 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
-            path_kind: TypedFacetPathKind::Structural,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,
             segments: vec![field_segment(
@@ -9314,7 +9327,7 @@ mod tests {
         let readonly_root_path = TypedFacetPath {
             source_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
             focus_ty: Ty::Str,
-            path_kind: TypedFacetPathKind::Structural,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: true,
             segments: vec![field_segment(
@@ -9340,7 +9353,7 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Str,
-            path_kind: TypedFacetPathKind::Structural,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,
             segments: vec![

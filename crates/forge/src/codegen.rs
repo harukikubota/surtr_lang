@@ -3071,7 +3071,7 @@ mod tests {
         let path = TypedFacetPath {
             source_ty: Ty::List(Box::new(Ty::Int)),
             focus_ty: Ty::Int,
-            path_kind: TypedFacetPathKind::Structural,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,
             segments: vec![TypedFacetSegment::ListIndex {

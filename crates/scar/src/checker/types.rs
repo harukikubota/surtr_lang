@@ -30,6 +30,43 @@ impl<'a> SignatureTyMode<'a> {
 }
 
 impl Checker {
+    fn validate_facet_kind_annotation(
+        &self,
+        ast: &AstTy,
+        allow_alias: bool,
+    ) -> Result<(), TypeError> {
+        let AstTy::Named(span, name) = ast else {
+            return Err(TypeError {
+                message: "Facet kind slot K must be a compiler-managed path kind name".into(),
+                span: Self::ast_ty_span(ast).clone(),
+                hint: None,
+            });
+        };
+        let atomic = matches!(
+            Self::surface_name(name),
+            "InfallibleStructural" | "FallibleStructural" | "VariantPath"
+        );
+        let alias = matches!(
+            Self::surface_name(name),
+            "ReadablePath" | "WritablePath" | "PutPath" | "PreviewPath" | "CasePath"
+        );
+        if atomic || Self::surface_name(name).starts_with('$') || (allow_alias && alias) {
+            Ok(())
+        } else if alias {
+            Err(TypeError {
+                message: "Facet kind-set aliases are only valid in compiler intrinsic constraints, not user Facet annotations".into(),
+                span: span.clone(),
+                hint: Some("Use the derived atomic kind InfallibleStructural, FallibleStructural, or VariantPath.".into()),
+            })
+        } else {
+            Err(TypeError {
+                message: format!("Unknown Facet path kind `{}`", Self::surface_name(name)),
+                span: span.clone(),
+                hint: None,
+            })
+        }
+    }
+
     fn canonical_user_type_name(name: &str) -> String {
         if name.contains("::") {
             name.to_string()
@@ -669,6 +706,7 @@ impl Checker {
                         5,
                         "Facet<K, S, A, T, B> requires exactly 5 type arguments",
                     )?;
+                    self.validate_facet_kind_annotation(&args[0], false)?;
                     // K is a compile-only declaration name.  The currently
                     // runtime-free capability representation stores S/A; T/B
                     // are validated here and instantiated by the intrinsic.
@@ -1105,6 +1143,10 @@ impl Checker {
                         args,
                         5,
                         "Facet<K, S, A, T, B> requires exactly 5 type arguments",
+                    )?;
+                    self.validate_facet_kind_annotation(
+                        &args[0],
+                        matches!(mode, SignatureTyMode::Builtin),
                     )?;
                     // See the surface-type resolver above: K is compile-only.
                     let source = self.resolve_signature_like_ast_ty_in_context(

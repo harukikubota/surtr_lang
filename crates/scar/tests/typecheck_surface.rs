@@ -1719,7 +1719,7 @@ Facet::preview(Expr.Add / Tuple._0, expr)"#,
     let TypedInner::FacetView { path, .. } = &last.node else {
         panic!("expected Facet::preview to lower as a view");
     };
-    assert_eq!(path.path_kind, TypedFacetPathKind::Variant);
+    assert_eq!(path.path_kind, TypedFacetPathKind::VariantPath);
     assert!(matches!(
         &last.ty,
         scar::types::Ty::Result(ok, err)
@@ -1748,7 +1748,7 @@ Facet::preview(Option.Some, value)"#,
     let TypedInner::FacetView { path, .. } = &last.node else {
         panic!("expected Facet::preview to lower as a view");
     };
-    assert_eq!(path.path_kind, TypedFacetPathKind::Variant);
+    assert_eq!(path.path_kind, TypedFacetPathKind::VariantPath);
     assert!(matches!(
         &last.ty,
         scar::types::Ty::Result(ok, err)
@@ -1767,7 +1767,7 @@ Facet::preview(Boolean.True, flag)"#,
     let TypedInner::FacetView { path, .. } = &last.node else {
         panic!("expected Boolean.True to lower as a variant Facet view");
     };
-    assert_eq!(path.path_kind, TypedFacetPathKind::Variant);
+    assert_eq!(path.path_kind, TypedFacetPathKind::VariantPath);
     assert!(matches!(
         &last.ty,
         scar::types::Ty::Result(ok, err)
@@ -1812,7 +1812,7 @@ map_value = score_map.["talk"]"#,
         let TypedInner::FacetView { path, .. } = &rhs.node else {
             panic!("{name} should lower to FacetView, got {:?}", rhs.node);
         };
-        assert_eq!(path.path_kind, TypedFacetPathKind::Structural);
+        assert_eq!(path.path_kind, TypedFacetPathKind::FallibleStructural);
         assert!(path.may_fail, "{name} should be fallible");
     }
 
