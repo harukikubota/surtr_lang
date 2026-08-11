@@ -206,8 +206,8 @@ fn collect_missing_singleton_calls(
         | TypedInner::FacetPath(_)
         | TypedInner::PendingFacetPath(_)
         | TypedInner::EnumDef(_, _)
-        | TypedInner::TraitDef(_, _)
-        | TypedInner::TraitImplDef(_, _)
+        | TypedInner::TraitDef(..)
+        | TypedInner::TraitImplDef(..)
         | TypedInner::BuiltinExtractorDecl(_, _, _)
         | TypedInner::StructDef(_, _, _, _, _)
         | TypedInner::RecordDef(_, _, _, _, _) => {}
@@ -521,7 +521,7 @@ fn collect_missing_singleton_calls(
         }
         TypedInner::DeferrorDef(_, _, _, _, body)
         | TypedInner::Closure(_, _, body)
-        | TypedInner::Def(_, _, _, _, _, body, _)
+        | TypedInner::Def(_, _, _, _, _, _, body, _)
         | TypedInner::ExtractorDef(_, _, _, _, _, body, _) => collect_missing_singleton_calls(
             body,
             surface_to_process,
@@ -1180,7 +1180,7 @@ fn validate_runtime_handler_target(
 
 fn typed_def_return_ty(nodes: &[TypedNode], uid: u32) -> Option<&Ty> {
     nodes.iter().find_map(|node| match &node.node {
-        TypedInner::Def(_, id, _, _, ret_ty, _, _) if id.unique_id == uid => Some(ret_ty),
+        TypedInner::Def(_, id, _, _, ret_ty, _, _, _) if id.unique_id == uid => Some(ret_ty),
         _ => None,
     })
 }
@@ -1265,7 +1265,7 @@ fn build_runtime_process_specs(
     let qualified_names = nodes
         .iter()
         .filter_map(|node| match &node.node {
-            TypedInner::Def(_, id, _, _, _, _, _)
+            TypedInner::Def(_, id, _, _, _, _, _, _)
             | TypedInner::ExtractorDef(_, id, _, _, _, _, _) => Some((
                 id.unique_id,
                 id.qualified_name.clone().unwrap_or_else(|| id.name.clone()),
@@ -2555,6 +2555,7 @@ mod tests {
                         Vec::new(),
                         Vec::new(),
                         result_ty.clone(),
+                        None,
                         Box::new(lit_node(Ty::Int, Lit::Int(0.into()), span(0, 0))),
                         Visibility::Public,
                     ),
@@ -2568,6 +2569,7 @@ mod tests {
                         Vec::new(),
                         vec![typed_fun_param("state", 201, Ty::Int)],
                         result_ty,
+                        None,
                         Box::new(lit_node(Ty::Int, Lit::Int(1.into()), span(0, 0))),
                         Visibility::Public,
                     ),
@@ -4532,7 +4534,7 @@ fn collect_stmt_meta(
                     .collect(),
             });
         }
-        TypedInner::Def(_, id, _, _, _, _, _) => {
+        TypedInner::Def(_, id, _, _, _, _, _, _) => {
             function_defs.push(id.name.clone());
         }
         TypedInner::ExtractorDef(_, id, _, _, _, _, _) => {
@@ -4794,6 +4796,13 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Ty::SelfApp(args) => format!(
+            "Self<{}>",
+            args.iter()
+                .map(|arg| ty_to_string_with_type_params(arg, type_params))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Ty::Result(ok, err) => format!(
             "Result<{}, {}>",
             ty_to_string_with_type_params(ok, type_params),
@@ -4862,7 +4871,9 @@ fn ty_contains_var(ty: &Ty, needle: u32) -> bool {
     match ty {
         Ty::Var(var) => *var == needle,
         Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => ty_contains_var(inner, needle),
-        Ty::Tuple(items) => items.iter().any(|item| ty_contains_var(item, needle)),
+        Ty::Tuple(items) | Ty::SelfApp(items) => {
+            items.iter().any(|item| ty_contains_var(item, needle))
+        }
         Ty::Func(params, ret) => {
             params.iter().any(|param| ty_contains_var(param, needle))
                 || ty_contains_var(ret, needle)
@@ -6176,7 +6187,7 @@ impl Codegen {
         let max_def_fun_idx = stmts
             .iter()
             .filter_map(|stmt| match &stmt.node {
-                TypedInner::Def(fun_idx, _, _, _, _, _, _) => Some(*fun_idx),
+                TypedInner::Def(fun_idx, _, _, _, _, _, _, _) => Some(*fun_idx),
                 TypedInner::ExtractorDef(fun_idx, _, _, _, _, _, _) => Some(*fun_idx),
                 TypedInner::DeferrorDef(_, fun_idx, _, _, _) => Some(*fun_idx),
                 _ => None,
@@ -6227,7 +6238,7 @@ impl Codegen {
             }
         }
         defs.sort_by_key(|stmt| match &stmt.node {
-            TypedInner::Def(fun_idx, _, _, _, _, _, _) => *fun_idx,
+            TypedInner::Def(fun_idx, _, _, _, _, _, _, _) => *fun_idx,
             TypedInner::ExtractorDef(fun_idx, _, _, _, _, _, _) => *fun_idx,
             TypedInner::DeferrorDef(_, fun_idx, _, _, _) => *fun_idx,
             _ => u32::MAX,
@@ -6270,9 +6281,16 @@ impl Codegen {
 
     fn emit_function_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
         let (fun_idx, id, type_params, params, ret_ty, body, visibility) = match &node.node {
-            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, visibility) => {
-                (fun_idx, id, type_params, params, ret_ty, body, visibility)
-            }
+            TypedInner::Def(
+                fun_idx,
+                id,
+                type_params,
+                params,
+                ret_ty,
+                _where_clause,
+                body,
+                visibility,
+            ) => (fun_idx, id, type_params, params, ret_ty, body, visibility),
             _ => {
                 return Err(CodegenError {
                     message: "expected function definition".into(),
@@ -7010,7 +7028,16 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::Def(_fun_idx, _id, _type_params, _params, _ret_ty, _body, _) => {
+            TypedInner::Def(
+                _fun_idx,
+                _id,
+                _type_params,
+                _params,
+                _ret_ty,
+                _where_clause,
+                _body,
+                _,
+            ) => {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }

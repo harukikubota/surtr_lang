@@ -152,7 +152,7 @@ impl Checker {
                 .iter()
                 .find_map(|arg| self.first_pending_trait_helper(&arg.expr)),
             TypedInner::EagerBoundary(inner) => self.first_pending_trait_helper(inner),
-            TypedInner::Def(_, _, _, _, _, body, _)
+            TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body) => self.first_pending_trait_helper(body),
             TypedInner::SupervisorSpawn { init, .. } => self.first_pending_trait_helper(init),
@@ -467,17 +467,25 @@ impl Checker {
                 params,
                 Box::new(self.concretize_pending_trait_calls(*body)?),
             ),
-            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, attrs) => {
-                TypedInner::Def(
-                    fun_idx,
-                    id,
-                    type_params,
-                    params,
-                    ret_ty,
-                    Box::new(self.concretize_pending_trait_calls(*body)?),
-                    attrs,
-                )
-            }
+            TypedInner::Def(
+                fun_idx,
+                id,
+                type_params,
+                params,
+                ret_ty,
+                where_clause,
+                body,
+                attrs,
+            ) => TypedInner::Def(
+                fun_idx,
+                id,
+                type_params,
+                params,
+                ret_ty,
+                where_clause,
+                Box::new(self.concretize_pending_trait_calls(*body)?),
+                attrs,
+            ),
             TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, attrs) => {
                 TypedInner::ExtractorDef(
                     fun_idx,
@@ -884,8 +892,17 @@ impl Checker {
             Resolved::DeferrorDef(span, id, fields, show_expr) => {
                 self.check_deferror_def(span, id, fields, show_expr)
             }
-            Resolved::Def(span, id, type_params, params, ret_ty, body, attrs) => {
-                self.check_def(span, id, type_params, params, ret_ty, body, attrs)
+            Resolved::Def(span, id, type_params, params, ret_ty, where_clause, body, attrs) => {
+                self.check_def(
+                    span,
+                    id,
+                    type_params,
+                    params,
+                    ret_ty,
+                    where_clause.as_ref(),
+                    body,
+                    attrs,
+                )
             }
             Resolved::ConstDef(span, _id, _ast_ty, _value, _) => Ok(TypedNode {
                 ty: Ty::Unit,
@@ -895,19 +912,64 @@ impl Checker {
             Resolved::ExtractorDef(span, id, type_params, param, ret_ty, body, attrs) => {
                 self.check_extractor_def(span, id, type_params, param, ret_ty, body, attrs)
             }
-            Resolved::TraitDef(span, id, _, methods, _) => Ok(TypedNode {
-                ty: Ty::Unit,
-                span: span.clone(),
-                node: TypedInner::TraitDef(
-                    self.trait_key(id),
-                    methods
-                        .iter()
-                        .map(|method| method.id.name.clone())
-                        .collect(),
-                ),
-            }),
-            Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, methods) => {
-                self.check_trait_impl_def(span, trait_id, trait_args, target_ty, methods)
+            Resolved::TraitDef(span, id, _, where_clause, methods, _) => {
+                let trait_key = self.trait_key(id);
+                let trait_info = self.traits.get(&trait_key).cloned().ok_or_else(|| TypeError {
+                    message: format!("Unknown trait: {}", id.name),
+                    span: span.clone(),
+                    hint: None,
+                })?;
+                let deferred_self = self.env.fresh_tyvar();
+                let mut typed_methods = Vec::with_capacity(methods.len());
+                for method in methods {
+                    let method_info = trait_info.methods.get(&method.id.name).ok_or_else(|| {
+                        TypeError {
+                            message: format!("Unknown trait method: {}::{}", id.name, method.id.name),
+                            span: method.span.clone(),
+                            hint: None,
+                        }
+                    })?;
+                    let (params, ret_ty, _) = self.resolve_trait_method_signature(
+                        &trait_info,
+                        method_info,
+                        &deferred_self,
+                    )?;
+                    typed_methods.push(TypedTraitMethodInfo {
+                        name: method.id.name.clone(),
+                        params,
+                        ret_ty,
+                        where_clause: method
+                            .where_clause
+                            .as_ref()
+                            .map(TypedWhereClause::from),
+                    });
+                }
+                Ok(TypedNode {
+                    ty: Ty::Unit,
+                    span: span.clone(),
+                    node: TypedInner::TraitDef(
+                        trait_key,
+                        where_clause.as_ref().map(TypedWhereClause::from),
+                        typed_methods,
+                    ),
+                })
+            }
+            Resolved::TraitImplDef(
+                span,
+                trait_id,
+                trait_args,
+                target_ty,
+                where_clause,
+                methods,
+            ) => {
+                self.check_trait_impl_def(
+                    span,
+                    trait_id,
+                    trait_args,
+                    target_ty,
+                    where_clause.as_ref(),
+                    methods,
+                )
             }
             Resolved::BuiltinDecl(span, id, params, ret_ty, _) => {
                 self.check_builtin_decl(span, id, params, ret_ty)
@@ -1919,15 +1981,15 @@ impl Checker {
             | Resolved::RecordDef(span, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
             | Resolved::EnumDef(span, _, _, _, _)
-            | Resolved::Def(span, _, _, _, _, _, _)
+            | Resolved::Def(span, _, _, _, _, _, _, _)
             | Resolved::ConstDef(span, _, _, _, _)
             | Resolved::ExtractorDef(span, _, _, _, _, _, _)
             | Resolved::BuiltinDecl(span, _, _, _, _)
             | Resolved::BuiltinExtractorDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
             | Resolved::ResultCtorDecl(span, _, _, _, _)
-            | Resolved::TraitDef(span, _, _, _, _)
-            | Resolved::TraitImplDef(span, _, _, _, _)
+            | Resolved::TraitDef(span, _, _, _, _, _)
+            | Resolved::TraitImplDef(span, _, _, _, _, _)
             | Resolved::Closure(span, _, _, _)
             | Resolved::Capture(span, _, _)
             | Resolved::Semi(span, _) => span,
@@ -5451,7 +5513,7 @@ impl Checker {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 self.count_tyvar_occurrences(inner, needle)
             }
-            Ty::Tuple(items) => items
+            Ty::Tuple(items) | Ty::SelfApp(items) => items
                 .iter()
                 .map(|item| self.count_tyvar_occurrences(item, needle))
                 .sum(),
@@ -5676,6 +5738,12 @@ impl Checker {
                 self.replace_facet_rebuild_tyvars(inner, replacements),
             )),
             Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.replace_facet_rebuild_tyvars(item, replacements))
+                    .collect(),
+            ),
+            Ty::SelfApp(items) => Ty::SelfApp(
                 items
                     .iter()
                     .map(|item| self.replace_facet_rebuild_tyvars(item, replacements))

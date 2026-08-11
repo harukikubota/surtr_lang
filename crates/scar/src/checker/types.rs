@@ -170,7 +170,9 @@ impl Checker {
                     || Self::ty_exposes_error_value(update_source)
                     || Self::ty_exposes_error_value(update_focus)
             }
-            Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(Self::ty_exposes_error_value),
+            Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
+                items.iter().any(Self::ty_exposes_error_value)
+            }
             Ty::Func(params, ret) => {
                 params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
             }
@@ -1053,6 +1055,20 @@ impl Checker {
             AstTy::Generic(span, name, _) if Self::builtin_type_ref_witness_allowed(name) => {
                 Err(self.type_ref_not_allowed_error(span))
             }
+            AstTy::Generic(_, name, args) if name == "Self" && mode.self_ty().is_some() => {
+                let args = args
+                    .iter()
+                    .map(|arg| {
+                        self.resolve_signature_like_ast_ty_in_context(
+                            arg,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                            mode,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::SelfApp(args))
+            }
             AstTy::Generic(span, name, _)
                 if Self::builtin_type_is_clause_block_surface_only(name) =>
             {
@@ -1480,6 +1496,12 @@ impl Checker {
                         .zip(b.iter())
                         .all(|(left, right)| self.types_compatible(left, right))
             }
+            (Ty::SelfApp(a), Ty::SelfApp(b)) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|(left, right)| self.types_compatible(left, right))
+            }
             (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
                 a_params.len() == b_params.len()
                     && a_params
@@ -1609,7 +1631,9 @@ impl Checker {
                     || self.ty_contains_var(&update_source, needle)
                     || self.ty_contains_var(&update_focus, needle)
             }
-            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_var(item, needle)),
+            Ty::Tuple(items) | Ty::SelfApp(items) => {
+                items.iter().any(|item| self.ty_contains_var(item, needle))
+            }
             Ty::Func(params, ret) => {
                 params
                     .iter()
@@ -1652,6 +1676,9 @@ impl Checker {
                 Box::new(self.resolve_ty(update_focus)),
             ),
             Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.resolve_ty(item)).collect()),
+            Ty::SelfApp(items) => {
+                Ty::SelfApp(items.iter().map(|item| self.resolve_ty(item)).collect())
+            }
             Ty::Func(params, ret) => Ty::Func(
                 params.iter().map(|param| self.resolve_ty(param)).collect(),
                 Box::new(self.resolve_ty(ret)),
@@ -1731,6 +1758,12 @@ impl Checker {
                 Box::new(self.instantiate_ty_with_fresh(update_focus, fresh)),
             ),
             Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.instantiate_ty_with_fresh(item, fresh))
+                    .collect(),
+            ),
+            Ty::SelfApp(items) => Ty::SelfApp(
                 items
                     .iter()
                     .map(|item| self.instantiate_ty_with_fresh(item, fresh))
@@ -1832,6 +1865,12 @@ impl Checker {
                 Box::new(self.substitute_type_def_ty(update_focus, bindings)),
             ),
             Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.substitute_type_def_ty(item, bindings))
+                    .collect(),
+            ),
+            Ty::SelfApp(items) => Ty::SelfApp(
                 items
                     .iter()
                     .map(|item| self.substitute_type_def_ty(item, bindings))
@@ -1978,6 +2017,13 @@ impl Checker {
             Ty::Unit => "Unit".into(),
             Ty::Error => "Error".into(),
             Ty::Hole => "_".into(),
+            Ty::SelfApp(args) => format!(
+                "Self<{}>",
+                args.iter()
+                    .map(|arg| self.diagnostic_ty_name_with_state(arg, tyvars, next_tyvar_index))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Ty::List(inner) => format!(
                 "List<{}>",
                 self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
@@ -2086,6 +2132,13 @@ impl Checker {
             Ty::Unit => "Unit".into(),
             Ty::Error => "Error".into(),
             Ty::Hole => "_".into(),
+            Ty::SelfApp(args) => format!(
+                "Self<{}>",
+                args.iter()
+                    .map(|arg| self.ty_name(arg))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
@@ -2148,7 +2201,9 @@ impl Checker {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 self.ty_contains_facet(inner.as_ref())
             }
-            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_facet(item)),
+            Ty::Tuple(items) | Ty::SelfApp(items) => {
+                items.iter().any(|item| self.ty_contains_facet(item))
+            }
             Ty::Func(params, ret) => {
                 params.iter().any(|param| self.ty_contains_facet(param))
                     || self.ty_contains_facet(ret.as_ref())
@@ -2462,30 +2517,38 @@ impl Checker {
                     .collect(),
                 Box::new(self.resolve_typed_node(*show)),
             ),
-            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, visibility) => {
-                TypedInner::Def(
-                    fun_idx,
-                    id,
-                    type_params
-                        .into_iter()
-                        .map(|param| TypedTypeParam {
-                            name: param.name,
-                            ty_var: param.ty_var,
-                            bound: param.bound,
-                        })
-                        .collect(),
-                    params
-                        .into_iter()
-                        .map(|param| TypedFunParam {
-                            id: param.id,
-                            ty: self.resolve_ty(&param.ty),
-                        })
-                        .collect(),
-                    self.resolve_ty(&ret_ty),
-                    Box::new(self.resolve_typed_node(*body)),
-                    visibility,
-                )
-            }
+            TypedInner::Def(
+                fun_idx,
+                id,
+                type_params,
+                params,
+                ret_ty,
+                where_clause,
+                body,
+                visibility,
+            ) => TypedInner::Def(
+                fun_idx,
+                id,
+                type_params
+                    .into_iter()
+                    .map(|param| TypedTypeParam {
+                        name: param.name,
+                        ty_var: param.ty_var,
+                        bound: param.bound,
+                    })
+                    .collect(),
+                params
+                    .into_iter()
+                    .map(|param| TypedFunParam {
+                        id: param.id,
+                        ty: self.resolve_ty(&param.ty),
+                    })
+                    .collect(),
+                self.resolve_ty(&ret_ty),
+                where_clause,
+                Box::new(self.resolve_typed_node(*body)),
+                visibility,
+            ),
             TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, visibility) => {
                 TypedInner::ExtractorDef(
                     fun_idx,
@@ -2538,9 +2601,11 @@ impl Checker {
                 TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
-            TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),
-            TypedInner::TraitImplDef(trait_name, target_name) => {
-                TypedInner::TraitImplDef(trait_name, target_name)
+            TypedInner::TraitDef(name, where_clause, methods) => {
+                TypedInner::TraitDef(name, where_clause, methods)
+            }
+            TypedInner::TraitImplDef(trait_name, target_name, where_clause) => {
+                TypedInner::TraitImplDef(trait_name, target_name, where_clause)
             }
             TypedInner::Semi(inner) => TypedInner::Semi(Box::new(self.resolve_typed_node(*inner))),
         };

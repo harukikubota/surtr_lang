@@ -745,7 +745,7 @@ impl Resolver {
             | Ast::RecordDef(..)
             | Ast::DeferrorDef(_, _, _, _, _)
             | Ast::EnumDef(_, _, _, _, _)
-            | Ast::Def(_, _, _, _, _, _, _)
+            | Ast::Def(..)
             | Ast::ConstDef(_, _, _, _, _)
             | Ast::SupervisorInit(_, _)
             | Ast::ExtractorDef(_, _, _, _, _, _, _)
@@ -761,8 +761,8 @@ impl Resolver {
             | Ast::DefdynamicSupervisor(_, _, _, _, _)
             | Ast::Namespace(_, _, _)
             | Ast::ImplDef(_, _, _, _)
-            | Ast::TraitDef(_, _, _, _, _)
-            | Ast::TraitImplDef(_, _, _, _, _, _)
+            | Ast::TraitDef(..)
+            | Ast::TraitImplDef(..)
             | Ast::Import(_, _, _)
             | Ast::Include(_, _) => Ok(()),
         }
@@ -2902,7 +2902,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => {
+            Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, attrs) => {
                 let fun_uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -2949,6 +2949,9 @@ impl Resolver {
                     resolved_params,
                     ret_ty
                         .map(|ty| self.resolve_type_annotation(ty))
+                        .transpose()?,
+                    where_clause
+                        .map(|clause| self.resolve_where_clause(clause))
                         .transpose()?,
                     Box::new(resolved_body),
                     resolve_decl_attrs(&attrs),
@@ -3025,7 +3028,7 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
-            Ast::TraitDef(span, name, type_params, methods, attrs) => {
+            Ast::TraitDef(span, name, type_params, where_clause, methods, attrs) => {
                 let qualified_trait_name = self.qualify_current_declaration_name(&name);
                 let trait_uid = self
                     .take_predeclared_id(&name)
@@ -3068,6 +3071,7 @@ impl Resolver {
                         type_params,
                         params,
                         ret_ty,
+                        where_clause,
                         body,
                         attrs,
                         span: method_span,
@@ -3100,6 +3104,9 @@ impl Resolver {
                         type_params: self.resolve_type_params(type_params)?,
                         params: resolved_params,
                         ret_ty: self.resolve_type_annotation(ret_ty)?,
+                        where_clause: where_clause
+                            .map(|clause| self.resolve_where_clause(clause))
+                            .transpose()?,
                         body: resolved_body,
                         attrs: resolve_decl_attrs(&attrs),
                         span: method_span,
@@ -3109,11 +3116,22 @@ impl Resolver {
                     span,
                     rid,
                     resolved_type_params,
+                    where_clause
+                        .map(|clause| self.resolve_where_clause(clause))
+                        .transpose()?,
                     resolved_methods,
                     resolve_decl_attrs(&attrs),
                 ))
             }
-            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, _attrs) => {
+            Ast::TraitImplDef(
+                span,
+                trait_name,
+                trait_args,
+                target_ty,
+                where_clause,
+                methods,
+                _attrs,
+            ) => {
                 let (trait_uid, qualified_trait_name) =
                     self.resolve_trait_reference(&trait_name, &span)?;
                 let trait_id = ResolvedId {
@@ -3134,6 +3152,7 @@ impl Resolver {
                         type_params,
                         params,
                         ret_ty,
+                        method_where_clause,
                         body,
                         attrs,
                         is_builtin,
@@ -3144,6 +3163,7 @@ impl Resolver {
                             type_params,
                             params,
                             ret_ty,
+                            method_where_clause,
                             body,
                             attrs,
                         ) => (
@@ -3152,6 +3172,7 @@ impl Resolver {
                             type_params,
                             params,
                             ret_ty,
+                            method_where_clause,
                             Some(body),
                             attrs,
                             false,
@@ -3162,6 +3183,7 @@ impl Resolver {
                             Vec::new(),
                             params,
                             ret_ty,
+                            None,
                             None,
                             attrs,
                             true,
@@ -3235,6 +3257,9 @@ impl Resolver {
                         ret_ty: ret_ty
                             .map(|ty| self.resolve_type_annotation(ty))
                             .transpose()?,
+                        where_clause: method_where_clause
+                            .map(|clause| method_resolver.resolve_where_clause(clause))
+                            .transpose()?,
                         body: Box::new(resolved_body),
                         attrs: resolve_decl_attrs(&attrs),
                         span: method_span,
@@ -3250,6 +3275,9 @@ impl Resolver {
                         .map(|arg| self.resolve_type_annotation(arg))
                         .collect::<Result<Vec<_>, _>>()?,
                     resolved_target_ty,
+                    where_clause
+                        .map(|clause| self.resolve_where_clause(clause))
+                        .transpose()?,
                     resolved_methods,
                 ))
             }
@@ -3737,6 +3765,71 @@ impl Resolver {
         }
     }
 
+    fn resolve_where_clause(
+        &self,
+        clause: spire::ast::WhereClause,
+    ) -> Result<ResolvedWhereClause, ResolveError> {
+        let constraints = clause
+            .constraints
+            .into_iter()
+            .map(|constraint| {
+                let subject = self.resolve_type_annotation(constraint.subject)?;
+                let bounds = constraint
+                    .bounds
+                    .into_iter()
+                    .map(|bound| match bound {
+                        spire::ast::WhereConstraintRhs::Trait(span, name) => {
+                            let (unique_id, qualified_name) =
+                                self.resolve_trait_reference(&name, &span)?;
+                            Ok(ResolvedWhereConstraintRhs::Trait(ResolvedId {
+                                name,
+                                qualified_name: Some(qualified_name),
+                                unique_id,
+                                compiler_generated: false,
+                                symbol_info: None,
+                                span,
+                            }))
+                        }
+                        spire::ast::WhereConstraintRhs::TypeConstructor(span, slots) => {
+                            Ok(ResolvedWhereConstraintRhs::TypeConstructor {
+                                span,
+                                slots: slots
+                                    .into_iter()
+                                    .map(|slot| self.resolve_type_annotation(slot))
+                                    .collect::<Result<Vec<_>, _>>()?,
+                            })
+                        }
+                        spire::ast::WhereConstraintRhs::TraitSlot(span, owner, slot_name) => {
+                            let (unique_id, qualified_name) =
+                                self.resolve_trait_reference(&owner, &span)?;
+                            Ok(ResolvedWhereConstraintRhs::TraitSlot {
+                                trait_id: ResolvedId {
+                                    name: owner,
+                                    qualified_name: Some(qualified_name),
+                                    unique_id,
+                                    compiler_generated: false,
+                                    symbol_info: None,
+                                    span: span.clone(),
+                                },
+                                slot_name,
+                                span,
+                            })
+                        }
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                Ok(ResolvedWhereConstraint {
+                    subject,
+                    bounds,
+                    span: constraint.span,
+                })
+            })
+            .collect::<Result<Vec<_>, ResolveError>>()?;
+        Ok(ResolvedWhereClause {
+            constraints,
+            span: clause.span,
+        })
+    }
+
     fn resolve_trait_reference(
         &self,
         trait_name: &str,
@@ -3778,7 +3871,7 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
 ) -> Result<(), ResolveError> {
     let mut seen_pairs: HashMap<String, Span> = HashMap::new();
     for node in resolved {
-        let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, _) = node else {
+        let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, _, _) = node else {
             continue;
         };
         let trait_name = trait_instance_key(

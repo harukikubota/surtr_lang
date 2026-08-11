@@ -170,7 +170,15 @@ pub fn lower_module_source_ast(
                     process_spec: None,
                 });
             }
-            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+            Ast::TraitImplDef(
+                span,
+                trait_name,
+                trait_args,
+                target_ty,
+                where_clause,
+                methods,
+                attrs,
+            ) => {
                 let declared_span = span.clone();
                 let module_path = match &target_ty {
                     AstTy::Named(_, name)
@@ -186,6 +194,7 @@ pub fn lower_module_source_ast(
                     trait_name,
                     trait_args,
                     target_ty,
+                    where_clause,
                     methods,
                     attrs.clone(),
                 ));
@@ -350,7 +359,7 @@ pub fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
             .ast
             .iter()
             .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _))
+        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(..))
     )
 }
 
@@ -360,7 +369,7 @@ fn staged_module_is_impl_owner(module: &StagedModuleAst) -> bool {
             .ast
             .iter()
             .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _))
+        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(..))
     )
 }
 
@@ -858,6 +867,44 @@ fn rewrite_self_type(ty: AstTy, target: &str) -> AstTy {
     }
 }
 
+fn rewrite_self_where_clause(
+    clause: spire::ast::WhereClause,
+    target: &str,
+) -> spire::ast::WhereClause {
+    spire::ast::WhereClause {
+        constraints: clause
+            .constraints
+            .into_iter()
+            .map(|constraint| spire::ast::WhereConstraint {
+                subject: rewrite_self_type(constraint.subject, target),
+                bounds: constraint
+                    .bounds
+                    .into_iter()
+                    .map(|bound| match bound {
+                        spire::ast::WhereConstraintRhs::Trait(span, name) => {
+                            spire::ast::WhereConstraintRhs::Trait(span, name)
+                        }
+                        spire::ast::WhereConstraintRhs::TypeConstructor(span, slots) => {
+                            spire::ast::WhereConstraintRhs::TypeConstructor(
+                                span,
+                                slots
+                                    .into_iter()
+                                    .map(|slot| rewrite_self_type(slot, target))
+                                    .collect(),
+                            )
+                        }
+                        spire::ast::WhereConstraintRhs::TraitSlot(span, owner, slot) => {
+                            spire::ast::WhereConstraintRhs::TraitSlot(span, owner, slot)
+                        }
+                    })
+                    .collect(),
+                span: constraint.span,
+            })
+            .collect(),
+        span: clause.span,
+    }
+}
+
 fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
     match pat {
         AstPattern::Annotated(span, name, ty) => {
@@ -1075,7 +1122,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .collect(),
             attrs,
         ),
-        Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => Ast::Def(
+        Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, attrs) => Ast::Def(
             span,
             name,
             type_params,
@@ -1088,6 +1135,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 })
                 .collect(),
             ret_ty.map(|ret| rewrite_self_type(ret, target)),
+            where_clause.map(|clause| rewrite_self_where_clause(clause, target)),
             Box::new(rewrite_self_ast(*body, target)),
             attrs,
         ),
@@ -1313,7 +1361,7 @@ pub fn precollect_declaration_index(
                     let method_module_path = impl_owner_module_path(target);
                     for method in methods {
                         let (method_span, method_name, kind, attrs) = match method {
-                            Ast::Def(method_span, method_name, _, _, _, _, attrs) => {
+                            Ast::Def(method_span, method_name, _, _, _, _, _, attrs) => {
                                 let kind = if method_name == "new" {
                                     if !matches!(target_kind, DeclarationKind::Struct) {
                                         return Err(ResolveError {
@@ -1373,7 +1421,7 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::TraitDef(span, name, _type_params, methods, attrs) = stmt {
+                if let Ast::TraitDef(span, name, _type_params, _, methods, attrs) = stmt {
                     reject_reserved_owner_name("Owner name", name, span, false)?;
                     let fq_name = if module.module_path.is_empty() {
                         name.clone()
@@ -1426,12 +1474,19 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::TraitImplDef(span, _trait_name, _trait_args, _target_ty, methods, _) =
-                    stmt
+                if let Ast::TraitImplDef(
+                    span,
+                    _trait_name,
+                    _trait_args,
+                    _target_ty,
+                    _,
+                    methods,
+                    _,
+                ) = stmt
                 {
                     for method in methods {
                         let (method_span, method_name) = match method {
-                            Ast::Def(method_span, method_name, _, _, _, _, _)
+                            Ast::Def(method_span, method_name, _, _, _, _, _, _)
                             | Ast::BuiltinDecl(method_span, method_name, _, _, _) => {
                                 (method_span, method_name)
                             }
@@ -1522,7 +1577,7 @@ pub fn precollect_declaration_index(
 
                 let (span, name, kind, visibility, hidden, user_importable, user_callable) =
                     match stmt {
-                        Ast::Def(span, name, _, _, _, _, attrs) => (
+                        Ast::Def(span, name, _, _, _, _, _, attrs) => (
                             span,
                             name.as_str(),
                             DeclarationKind::Def,
@@ -1568,9 +1623,9 @@ pub fn precollect_declaration_index(
                             entry_user_importable(attrs),
                             entry_user_callable(attrs),
                         ),
-                        Ast::ImplDef(_, _, _, _)
-                        | Ast::TraitDef(_, _, _, _, _)
-                        | Ast::TraitImplDef(_, _, _, _, _, _) => continue,
+                        Ast::ImplDef(_, _, _, _) | Ast::TraitDef(..) | Ast::TraitImplDef(..) => {
+                            continue
+                        }
                         Ast::ResultCtorDecl(span, name, _, _, attrs) => (
                             span,
                             name.as_str(),
@@ -1846,6 +1901,7 @@ impl Resolver {
                                 type_params,
                                 params,
                                 ret_ty,
+                                where_clause,
                                 body,
                                 attrs,
                             ) => {
@@ -1884,6 +1940,8 @@ impl Resolver {
                                     type_params,
                                     lowered_params,
                                     lowered_ret_ty,
+                                    where_clause
+                                        .map(|clause| rewrite_self_where_clause(clause, &target)),
                                     Box::new(lowered_body),
                                     attrs,
                                 ));
@@ -2023,7 +2081,7 @@ impl Resolver {
         let mut declared_in_batch = HashSet::new();
         for stmt in stmts {
             match stmt {
-                Ast::Def(span, name, _, _, _, _, _) => {
+                Ast::Def(span, name, _, _, _, _, _, _) => {
                     let surface = global_surface_name(name).to_string();
                     self.reject_duplicate_top_level_declaration(
                         &mut declared_in_batch,
@@ -2067,7 +2125,7 @@ impl Resolver {
                     self.record_predeclared_uid(name, uid, DeclarationKind::Const);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
-                Ast::TraitDef(span, name, _type_params, methods, _) => {
+                Ast::TraitDef(span, name, _type_params, _, methods, _) => {
                     reject_reserved_owner_name("Owner name", name, span, false)?;
                     self.reject_duplicate_top_level_declaration(
                         &mut declared_in_batch,
@@ -2221,7 +2279,7 @@ impl Resolver {
                         }
                     }
                 }
-                Ast::TraitImplDef(_, _, _, _, _, _) => {}
+                Ast::TraitImplDef(..) => {}
                 _ => {}
             }
         }

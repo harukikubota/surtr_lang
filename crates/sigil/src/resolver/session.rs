@@ -33,7 +33,7 @@ impl SigilSession {
     fn reject_duplicate_current_module_defs(&self, ast: &[Ast]) -> Result<(), ResolveError> {
         for stmt in ast {
             match stmt {
-                Ast::Def(span, name, _, _, _, _, _)
+                Ast::Def(span, name, _, _, _, _, _, _)
                 | Ast::ExtractorDef(span, name, _, _, _, _, _)
                 | Ast::ConstDef(span, name, _, _, _) => {
                     let qualified_name = self.qualify_current_name(name);

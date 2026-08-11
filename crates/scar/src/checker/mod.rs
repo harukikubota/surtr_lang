@@ -411,6 +411,7 @@ struct TraitMethodInfo {
     type_params: Vec<ResolvedTypeParam>,
     params: Vec<ResolvedFunParam>,
     ret_ty: AstTy,
+    where_clause: Option<TypedWhereClause>,
     attrs: ResolvedDeclAttrs,
     body: Option<Box<Resolved>>,
     span: Span,
@@ -421,6 +422,7 @@ struct TraitMethodInfo {
 struct TraitInfo {
     id: ResolvedId,
     type_params: Vec<ResolvedTypeParam>,
+    where_clause: Option<TypedWhereClause>,
     methods: HashMap<String, TraitMethodInfo>,
 }
 
@@ -432,6 +434,7 @@ struct TraitImplMethodInfo {
     type_params: Vec<ResolvedTypeParam>,
     params: Vec<ResolvedFunParam>,
     ret_ty: Option<AstTy>,
+    where_clause: Option<TypedWhereClause>,
     body: Box<Resolved>,
     attrs: ResolvedDeclAttrs,
     span: Span,
@@ -449,6 +452,7 @@ struct TraitImplInfo {
     target_name: String,
     target_ast_ty: AstTy,
     target_ty: Ty,
+    where_clause: Option<TypedWhereClause>,
     type_param_vars: Vec<u32>,
     methods: HashMap<String, TraitImplMethodInfo>,
 }
@@ -557,7 +561,9 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
         Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
             type_contains_unresolved_vars(inner)
         }
-        Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(type_contains_unresolved_vars),
+        Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
+            items.iter().any(type_contains_unresolved_vars)
+        }
         Ty::Func(params, ret) => {
             params.iter().any(type_contains_unresolved_vars) || type_contains_unresolved_vars(ret)
         }
@@ -1012,6 +1018,7 @@ enum CanonicalTyKey {
     Error,
     Hole,
     Var(u32),
+    SelfApp(Vec<CanonicalTyKey>),
     List(Box<CanonicalTyKey>),
     Tuple(Vec<CanonicalTyKey>),
     Func {
@@ -1441,7 +1448,7 @@ impl ScarSession {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 Self::rewrite_fun_indices_in_ty(inner, rewrites)
             }
-            Ty::Tuple(items) => {
+            Ty::Tuple(items) | Ty::SelfApp(items) => {
                 for item in items {
                     Self::rewrite_fun_indices_in_ty(item, rewrites);
                 }
@@ -1689,7 +1696,7 @@ impl ScarSession {
                 }
                 Self::rewrite_fun_indices_in_node(body, rewrites);
             }
-            TypedInner::Def(_, _, type_params, params, ret_ty, body, _) => {
+            TypedInner::Def(_, _, type_params, params, ret_ty, _, body, _) => {
                 for type_param in type_params {
                     let _ = type_param;
                 }
@@ -1714,8 +1721,8 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_node(body, rewrites);
             }
             TypedInner::EnumDef(_, _)
-            | TypedInner::TraitDef(_, _)
-            | TypedInner::TraitImplDef(_, _)
+            | TypedInner::TraitDef(..)
+            | TypedInner::TraitImplDef(..)
             | TypedInner::BuiltinExtractorDecl(_, _, _)
             | TypedInner::StructDef(_, _, _, _, _)
             | TypedInner::RecordDef(_, _, _, _, _) => {}
@@ -2142,7 +2149,7 @@ impl Checker {
                     }
                     self.warn_unused_type_params(type_params, &used, &id.name);
                 }
-                Resolved::Def(_, id, type_params, params, ret_ty, _, _) => {
+                Resolved::Def(_, id, type_params, params, ret_ty, _, _, _) => {
                     let used = Self::signature_type_param_uses(params, ret_ty.as_ref());
                     self.warn_unused_type_params(type_params, &used, &id.name);
                 }
@@ -2154,7 +2161,7 @@ impl Checker {
                     Self::collect_ast_ty_type_params(ret_ty, &mut used);
                     self.warn_unused_type_params(type_params, &used, &id.name);
                 }
-                Resolved::TraitDef(_, id, type_params, methods, _) => {
+                Resolved::TraitDef(_, id, type_params, _, methods, _) => {
                     let mut trait_used = HashSet::new();
                     for method in methods {
                         for param in &method.params {
@@ -2172,7 +2179,7 @@ impl Checker {
                     }
                     self.warn_unused_type_params(type_params, &trait_used, &id.name);
                 }
-                Resolved::TraitImplDef(_, _, _, _, methods) => {
+                Resolved::TraitImplDef(_, _, _, _, _, methods) => {
                     for method in methods {
                         let used =
                             Self::signature_type_param_uses(&method.params, method.ret_ty.as_ref());
@@ -2362,7 +2369,7 @@ impl Checker {
                 self.collect_unused_value_warnings_in_node(update_fun);
             }
             TypedInner::DeferrorDef(_, _, _, _, show)
-            | TypedInner::Def(_, _, _, _, _, show, _)
+            | TypedInner::Def(_, _, _, _, _, _, show, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, show, _)
             | TypedInner::Closure(_, _, show) => {
                 self.collect_unused_value_warnings_in_node(show);
@@ -2381,8 +2388,8 @@ impl Checker {
             | TypedInner::FacetPath(_)
             | TypedInner::PendingFacetPath(_)
             | TypedInner::EnumDef(_, _)
-            | TypedInner::TraitDef(_, _)
-            | TypedInner::TraitImplDef(_, _)
+            | TypedInner::TraitDef(..)
+            | TypedInner::TraitImplDef(..)
             | TypedInner::BuiltinExtractorDecl(_, _, _)
             | TypedInner::StructDef(_, _, _, _, _)
             | TypedInner::RecordDef(_, _, _, _, _) => {}
@@ -2415,7 +2422,9 @@ impl Checker {
             Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => {
                 self.ty_contains_process_init(&inner)
             }
-            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_process_init(item)),
+            Ty::Tuple(items) | Ty::SelfApp(items) => {
+                items.iter().any(|item| self.ty_contains_process_init(item))
+            }
             Ty::Func(params, ret) => {
                 params
                     .iter()
@@ -2824,7 +2833,7 @@ impl Checker {
             Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => {
                 self.ty_contains_handler_capability_pid(&inner, slots)
             }
-            Ty::Tuple(items) => items
+            Ty::Tuple(items) | Ty::SelfApp(items) => items
                 .iter()
                 .any(|item| self.ty_contains_handler_capability_pid(item, slots)),
             Ty::Func(params, ret) => {
@@ -3063,11 +3072,23 @@ impl Checker {
                 if let Resolved::ConstDef(..) = &stmt {
                     continue;
                 }
-                if let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, methods) =
-                    &stmt
+                if let Resolved::TraitImplDef(
+                    span,
+                    trait_id,
+                    trait_args,
+                    target_ty,
+                    where_clause,
+                    methods,
+                ) = &stmt
                 {
-                    let nodes = self
-                        .check_trait_impl_items(span, trait_id, trait_args, target_ty, methods)?;
+                    let nodes = self.check_trait_impl_items(
+                        span,
+                        trait_id,
+                        trait_args,
+                        target_ty,
+                        where_clause.as_ref(),
+                        methods,
+                    )?;
                     typed.extend(nodes.into_iter().map(|node| {
                         let profile = self.profiler.start();
                         let node = self.resolve_typed_node(node);

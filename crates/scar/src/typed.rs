@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
-use sigil::resolved::{Resolved, ResolvedId, ResolvedProcessHandlerUid, ResolvedProcessSpec};
+use sigil::resolved::{
+    Resolved, ResolvedId, ResolvedProcessHandlerUid, ResolvedProcessSpec, ResolvedWhereClause,
+    ResolvedWhereConstraintRhs,
+};
 use sindr::primitives::SurtrInt;
-use spire::ast::{BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, Visibility};
+use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, Visibility};
 
 use crate::types::Ty;
 
@@ -18,6 +21,84 @@ pub struct TypedProgram {
     pub nodes: Vec<TypedNode>,
     pub process_specs: Vec<TypedProcessSpec>,
     pub boot_plan: SupervisorInitSpec,
+}
+
+/// A declaration-level constraint clause preserved by Scar for later trait
+/// validation phases. Step 4 records the resolved constraint kinds without
+/// interpreting constructor arity, parent traits, or slot mappings.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedWhereClause {
+    pub constraints: Vec<TypedWhereConstraint>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedWhereConstraint {
+    pub subject: AstTy,
+    pub bounds: Vec<TypedWhereConstraintRhs>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TypedWhereConstraintRhs {
+    Trait(ResolvedId),
+    TypeConstructor {
+        span: Span,
+        slots: Vec<AstTy>,
+    },
+    TraitSlot {
+        trait_id: ResolvedId,
+        slot_name: String,
+        span: Span,
+    },
+}
+
+impl From<&ResolvedWhereClause> for TypedWhereClause {
+    fn from(clause: &ResolvedWhereClause) -> Self {
+        Self {
+            constraints: clause
+                .constraints
+                .iter()
+                .map(|constraint| TypedWhereConstraint {
+                    subject: constraint.subject.clone(),
+                    bounds: constraint
+                        .bounds
+                        .iter()
+                        .map(|bound| match bound {
+                            ResolvedWhereConstraintRhs::Trait(id) => {
+                                TypedWhereConstraintRhs::Trait(id.clone())
+                            }
+                            ResolvedWhereConstraintRhs::TypeConstructor { span, slots } => {
+                                TypedWhereConstraintRhs::TypeConstructor {
+                                    span: span.clone(),
+                                    slots: slots.clone(),
+                                }
+                            }
+                            ResolvedWhereConstraintRhs::TraitSlot {
+                                trait_id,
+                                slot_name,
+                                span,
+                            } => TypedWhereConstraintRhs::TraitSlot {
+                                trait_id: trait_id.clone(),
+                                slot_name: slot_name.clone(),
+                                span: span.clone(),
+                            },
+                        })
+                        .collect(),
+                    span: constraint.span.clone(),
+                })
+                .collect(),
+            span: clause.span.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedTraitMethodInfo {
+    pub name: String,
+    pub params: Vec<Ty>,
+    pub ret_ty: Ty,
+    pub where_clause: Option<TypedWhereClause>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -413,6 +494,7 @@ pub enum TypedInner {
         Vec<TypedTypeParam>,
         Vec<TypedFunParam>,
         Ty,
+        Option<TypedWhereClause>,
         Box<TypedNode>,
         Visibility,
     ),
@@ -429,10 +511,10 @@ pub enum TypedInner {
     ),
 
     /// Trait definition metadata.
-    TraitDef(String, Vec<String>),
+    TraitDef(String, Option<TypedWhereClause>, Vec<TypedTraitMethodInfo>),
 
     /// Trait impl metadata.
-    TraitImplDef(String, String),
+    TraitImplDef(String, String, Option<TypedWhereClause>),
 
     /// Builtin extractor declaration.
     BuiltinExtractorDecl(ResolvedId, Ty, Ty),

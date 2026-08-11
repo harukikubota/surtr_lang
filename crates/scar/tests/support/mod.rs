@@ -179,7 +179,15 @@ fn parse_std_module_stage(source: &str, fallback_module_path: &str) -> Vec<sigil
                     process_spec: None,
                 });
             }
-            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+            Ast::TraitImplDef(
+                span,
+                trait_name,
+                trait_args,
+                target_ty,
+                where_clause,
+                methods,
+                attrs,
+            ) => {
                 let module_path = match &target_ty {
                     spire::ast::AstTy::Named(_, name)
                     | spire::ast::AstTy::ImplTrait(_, name)
@@ -194,6 +202,7 @@ fn parse_std_module_stage(source: &str, fallback_module_path: &str) -> Vec<sigil
                     trait_name,
                     trait_args,
                     target_ty,
+                    where_clause,
                     methods,
                     attrs.clone(),
                 ));

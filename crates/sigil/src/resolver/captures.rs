@@ -42,7 +42,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                     Resolved::Bind(_, pat, _) | Resolved::SafeBind(_, pat, _) => {
                         collect_bind_pattern_bindings(pat, &mut local_bound);
                     }
-                    Resolved::Def(_, id, _, params, _, _, _) => {
+                    Resolved::Def(_, id, _, params, _, _, _, _) => {
                         local_bound.insert(id.unique_id);
                         for param in params {
                             local_bound.insert(param.id.unique_id);
@@ -209,13 +209,13 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         | Resolved::DeferrorDef(_, _, _, _)
         | Resolved::EnumDef(_, _, _, _, _)
         | Resolved::ConstDef(_, _, _, _, _)
-        | Resolved::TraitDef(_, _, _, _, _)
-        | Resolved::TraitImplDef(_, _, _, _, _)
+        | Resolved::TraitDef(_, _, _, _, _, _)
+        | Resolved::TraitImplDef(_, _, _, _, _, _)
         | Resolved::BuiltinDecl(_, _, _, _, _)
         | Resolved::BuiltinExtractorDecl(_, _, _, _, _)
         | Resolved::BuiltinTypeDecl(_, _, _, _)
         | Resolved::ResultCtorDecl(_, _, _, _, _) => {}
-        Resolved::Def(_, id, _, params, _, body, _) => {
+        Resolved::Def(_, id, _, params, _, _, body, _) => {
             let mut fun_bound = bound.clone();
             fun_bound.insert(id.unique_id);
             for param in params {

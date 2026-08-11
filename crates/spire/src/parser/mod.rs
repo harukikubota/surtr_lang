@@ -499,23 +499,35 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
             methods,
             attrs,
         )),
-        Ast::TraitDef(span, name, type_params, methods, attrs) => Ok(Ast::TraitDef(
+        Ast::TraitDef(span, name, type_params, where_clause, methods, attrs) => Ok(Ast::TraitDef(
             span.clone(),
             qualify_namespace_head(namespace, &name, 2, &span, "trait", false)?,
             type_params,
+            where_clause
+                .map(|clause| qualify_namespace_where_clause(clause, namespace))
+                .transpose()?,
             methods,
             attrs,
         )),
-        Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
-            Ok(Ast::TraitImplDef(
-                span.clone(),
-                qualify_namespace_head(namespace, &trait_name, 2, &span, "trait", false)?,
-                trait_args,
-                qualify_namespace_type(target_ty, namespace)?,
-                methods,
-                attrs,
-            ))
-        }
+        Ast::TraitImplDef(
+            span,
+            trait_name,
+            trait_args,
+            target_ty,
+            where_clause,
+            methods,
+            attrs,
+        ) => Ok(Ast::TraitImplDef(
+            span.clone(),
+            qualify_namespace_head(namespace, &trait_name, 2, &span, "trait", false)?,
+            trait_args,
+            qualify_namespace_type(target_ty, namespace)?,
+            where_clause
+                .map(|clause| qualify_namespace_where_clause(clause, namespace))
+                .transpose()?,
+            methods,
+            attrs,
+        )),
         Ast::StructDef(span, name, type_params, fields, attrs) => Ok(Ast::StructDef(
             span.clone(),
             qualify_namespace_head(namespace, &name, 2, &span, "type", true)?,
@@ -598,13 +610,20 @@ fn qualify_namespace_type(ty: AstTy, namespace: &str) -> Result<AstTy, ParseErro
             span.clone(),
             qualify_namespace_head(namespace, &name, 2, &span, "trait", false)?,
         )),
-        AstTy::Generic(span, name, args) => Ok(AstTy::Generic(
-            span.clone(),
-            qualify_namespace_head(namespace, &name, 2, &span, "type", false)?,
-            args.into_iter()
-                .map(|arg| qualify_namespace_type(arg, namespace))
-                .collect::<Result<Vec<_>, ParseError>>()?,
-        )),
+        AstTy::Generic(span, name, args) => {
+            let name = if name == "Self" || name.starts_with('$') {
+                name
+            } else {
+                qualify_namespace_head(namespace, &name, 2, &span, "type", false)?
+            };
+            Ok(AstTy::Generic(
+                span,
+                name,
+                args.into_iter()
+                    .map(|arg| qualify_namespace_type(arg, namespace))
+                    .collect::<Result<Vec<_>, ParseError>>()?,
+            ))
+        }
         AstTy::Tuple(span, items) => Ok(AstTy::Tuple(
             span,
             items
@@ -621,6 +640,46 @@ fn qualify_namespace_type(ty: AstTy, namespace: &str) -> Result<AstTy, ParseErro
             Box::new(qualify_namespace_type(*ret, namespace)?),
         )),
     }
+}
+
+fn qualify_namespace_where_clause(
+    clause: WhereClause,
+    namespace: &str,
+) -> Result<WhereClause, ParseError> {
+    Ok(WhereClause {
+        span: clause.span,
+        constraints: clause
+            .constraints
+            .into_iter()
+            .map(|constraint| {
+                Ok(WhereConstraint {
+                    subject: qualify_namespace_type(constraint.subject, namespace)?,
+                    bounds: constraint
+                        .bounds
+                        .into_iter()
+                        .map(|bound| match bound {
+                            WhereConstraintRhs::Trait(span, name) => {
+                                Ok(WhereConstraintRhs::Trait(span, name))
+                            }
+                            WhereConstraintRhs::TypeConstructor(span, slots) => {
+                                Ok(WhereConstraintRhs::TypeConstructor(
+                                    span,
+                                    slots
+                                        .into_iter()
+                                        .map(|slot| qualify_namespace_type(slot, namespace))
+                                        .collect::<Result<Vec<_>, ParseError>>()?,
+                                ))
+                            }
+                            WhereConstraintRhs::TraitSlot(span, name, slot) => {
+                                Ok(WhereConstraintRhs::TraitSlot(span, name, slot))
+                            }
+                        })
+                        .collect::<Result<Vec<_>, ParseError>>()?,
+                    span: constraint.span,
+                })
+            })
+            .collect::<Result<Vec<_>, ParseError>>()?,
+    })
 }
 
 fn owner_head_name(node: &Ast) -> Option<&str> {
@@ -1008,7 +1067,7 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             Box::new(rewrite_process_owner_refs(*show_expr, old_name, new_name)),
             attrs,
         ),
-        Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => Ast::Def(
+        Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, attrs) => Ast::Def(
             span,
             name,
             type_params,
@@ -1021,6 +1080,8 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                 })
                 .collect(),
             ret_ty.map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+            where_clause
+                .map(|clause| rewrite_process_owner_where_clause(clause, old_name, new_name)),
             Box::new(rewrite_process_owner_refs(*body, old_name, new_name)),
             attrs,
         ),
@@ -1106,19 +1167,27 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             rewrite_process_owner_refs_in_body(methods, old_name, new_name),
             attrs,
         ),
-        Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
-            Ast::TraitImplDef(
-                span,
-                trait_name,
-                trait_args
-                    .into_iter()
-                    .map(|ty| rewrite_process_owner_ty(ty, old_name, new_name))
-                    .collect(),
-                rewrite_process_owner_ty(target_ty, old_name, new_name),
-                rewrite_process_owner_refs_in_body(methods, old_name, new_name),
-                attrs,
-            )
-        }
+        Ast::TraitImplDef(
+            span,
+            trait_name,
+            trait_args,
+            target_ty,
+            where_clause,
+            methods,
+            attrs,
+        ) => Ast::TraitImplDef(
+            span,
+            trait_name,
+            trait_args
+                .into_iter()
+                .map(|ty| rewrite_process_owner_ty(ty, old_name, new_name))
+                .collect(),
+            rewrite_process_owner_ty(target_ty, old_name, new_name),
+            where_clause
+                .map(|clause| rewrite_process_owner_where_clause(clause, old_name, new_name)),
+            rewrite_process_owner_refs_in_body(methods, old_name, new_name),
+            attrs,
+        ),
         Ast::Closure(span, params, body) => Ast::Closure(
             span,
             params
@@ -1215,6 +1284,50 @@ fn rewrite_process_owner_ty(ty: AstTy, old_name: &str, new_name: &str) -> AstTy 
                 .collect(),
             Box::new(rewrite_process_owner_ty(*ret_ty, old_name, new_name)),
         ),
+    }
+}
+
+fn rewrite_process_owner_where_clause(
+    clause: WhereClause,
+    old_name: &str,
+    new_name: &str,
+) -> WhereClause {
+    WhereClause {
+        span: clause.span,
+        constraints: clause
+            .constraints
+            .into_iter()
+            .map(|constraint| WhereConstraint {
+                subject: rewrite_process_owner_ty(constraint.subject, old_name, new_name),
+                bounds: constraint
+                    .bounds
+                    .into_iter()
+                    .map(|bound| match bound {
+                        WhereConstraintRhs::Trait(span, name) => WhereConstraintRhs::Trait(
+                            span,
+                            rewrite_process_owner_symbol(name, old_name, new_name),
+                        ),
+                        WhereConstraintRhs::TypeConstructor(span, slots) => {
+                            WhereConstraintRhs::TypeConstructor(
+                                span,
+                                slots
+                                    .into_iter()
+                                    .map(|slot| rewrite_process_owner_ty(slot, old_name, new_name))
+                                    .collect(),
+                            )
+                        }
+                        WhereConstraintRhs::TraitSlot(span, name, slot) => {
+                            WhereConstraintRhs::TraitSlot(
+                                span,
+                                rewrite_process_owner_symbol(name, old_name, new_name),
+                                slot,
+                            )
+                        }
+                    })
+                    .collect(),
+                span: constraint.span,
+            })
+            .collect(),
     }
 }
 
@@ -1396,6 +1509,41 @@ fn shift_ast_ty(ty: AstTy, delta: usize) -> AstTy {
             params.into_iter().map(|p| shift_ast_ty(p, delta)).collect(),
             Box::new(shift_ast_ty(*ret, delta)),
         ),
+    }
+}
+
+fn shift_where_clause(clause: WhereClause, delta: usize) -> WhereClause {
+    WhereClause {
+        span: shift_span(clause.span, delta),
+        constraints: clause
+            .constraints
+            .into_iter()
+            .map(|constraint| WhereConstraint {
+                subject: shift_ast_ty(constraint.subject, delta),
+                bounds: constraint
+                    .bounds
+                    .into_iter()
+                    .map(|bound| match bound {
+                        WhereConstraintRhs::Trait(span, name) => {
+                            WhereConstraintRhs::Trait(shift_span(span, delta), name)
+                        }
+                        WhereConstraintRhs::TypeConstructor(span, slots) => {
+                            WhereConstraintRhs::TypeConstructor(
+                                shift_span(span, delta),
+                                slots
+                                    .into_iter()
+                                    .map(|slot| shift_ast_ty(slot, delta))
+                                    .collect(),
+                            )
+                        }
+                        WhereConstraintRhs::TraitSlot(span, name, slot) => {
+                            WhereConstraintRhs::TraitSlot(shift_span(span, delta), name, slot)
+                        }
+                    })
+                    .collect(),
+                span: shift_span(constraint.span, delta),
+            })
+            .collect(),
     }
 }
 
@@ -1870,7 +2018,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             shift_decl_attrs(attrs),
         ),
-        Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => Ast::Def(
+        Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, attrs) => Ast::Def(
             shift_span(span, delta),
             name,
             type_params
@@ -1886,6 +2034,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|p| shift_fun_param(p, delta))
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
+            where_clause.map(|clause| shift_where_clause(clause, delta)),
             Box::new(shift_ast_span(*body, delta)),
             shift_decl_attrs(attrs),
         ),
@@ -2078,7 +2227,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             shift_decl_attrs(attrs),
         ),
-        Ast::TraitDef(span, name, type_params, methods, attrs) => Ast::TraitDef(
+        Ast::TraitDef(span, name, type_params, where_clause, methods, attrs) => Ast::TraitDef(
             shift_span(span, delta),
             name,
             type_params
@@ -2089,6 +2238,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     span: shift_span(param.span, delta),
                 })
                 .collect(),
+            where_clause.map(|clause| shift_where_clause(clause, delta)),
             methods
                 .into_iter()
                 .map(|method| TraitMethodSig {
@@ -2108,6 +2258,9 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                         .map(|param| shift_fun_param(param, delta))
                         .collect(),
                     ret_ty: shift_ast_ty(method.ret_ty, delta),
+                    where_clause: method
+                        .where_clause
+                        .map(|clause| shift_where_clause(clause, delta)),
                     body: method
                         .body
                         .map(|body| Box::new(shift_ast_span(*body, delta))),
@@ -2117,7 +2270,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             shift_decl_attrs(attrs),
         ),
-        Ast::TraitImplDef(span, trait_name, trait_args, target, methods, attrs) => {
+        Ast::TraitImplDef(span, trait_name, trait_args, target, where_clause, methods, attrs) => {
             Ast::TraitImplDef(
                 shift_span(span, delta),
                 trait_name,
@@ -2126,6 +2279,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     .map(|arg| shift_ast_ty(arg, delta))
                     .collect(),
                 shift_ast_ty(target, delta),
+                where_clause.map(|clause| shift_where_clause(clause, delta)),
                 methods
                     .into_iter()
                     .map(|method| shift_ast_span(method, delta))
@@ -2213,7 +2367,7 @@ impl Ast {
             | Ast::ConstructorCall(s, _, _)
             | Ast::DeferrorDef(s, _, _, _, _)
             | Ast::EnumDef(s, _, _, _, _)
-            | Ast::Def(s, _, _, _, _, _, _)
+            | Ast::Def(s, _, _, _, _, _, _, _)
             | Ast::ConstDef(s, _, _, _, _)
             | Ast::SupervisorInit(s, _)
             | Ast::ExtractorDef(s, _, _, _, _, _, _)
@@ -2229,8 +2383,8 @@ impl Ast {
             | Ast::Defsupervisor(s, _, _, _, _)
             | Ast::DefdynamicSupervisor(s, _, _, _, _)
             | Ast::ImplDef(s, _, _, _)
-            | Ast::TraitDef(s, _, _, _, _)
-            | Ast::TraitImplDef(s, _, _, _, _, _)
+            | Ast::TraitDef(s, _, _, _, _, _)
+            | Ast::TraitImplDef(s, _, _, _, _, _, _)
             | Ast::Import(s, _, _)
             | Ast::Include(s, _)
             | Ast::Closure(s, _, _)

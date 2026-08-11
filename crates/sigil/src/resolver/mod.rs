@@ -494,6 +494,20 @@ fn rebase_resolved_nodes(nodes: &mut [Resolved], base: u32, offset: u32) {
     }
 }
 
+fn rebase_where_clause(clause: &mut ResolvedWhereClause, base: u32, offset: u32) {
+    for constraint in &mut clause.constraints {
+        for bound in &mut constraint.bounds {
+            match bound {
+                ResolvedWhereConstraintRhs::Trait(id) => rebase_resolved_id(id, base, offset),
+                ResolvedWhereConstraintRhs::TraitSlot { trait_id, .. } => {
+                    rebase_resolved_id(trait_id, base, offset)
+                }
+                ResolvedWhereConstraintRhs::TypeConstructor { .. } => {}
+            }
+        }
+    }
+}
+
 fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
     match node {
         Resolved::Lit(..) | Resolved::ListNil(_) | Resolved::TypeRefWitness(..) => {}
@@ -621,10 +635,13 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_resolved_id(&mut variant.id, base, offset);
             }
         }
-        Resolved::Def(_, id, type_params, params, _, body, _) => {
+        Resolved::Def(_, id, type_params, params, _, where_clause, body, _) => {
             rebase_resolved_id(id, base, offset);
             rebase_type_params(type_params, base, offset);
             rebase_fun_params(params, base, offset);
+            if let Some(clause) = where_clause {
+                rebase_where_clause(clause, base, offset);
+            }
             rebase_resolved_node(body, base, offset);
         }
         Resolved::ConstDef(_, id, _, value, _) => {
@@ -637,24 +654,36 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_extractor_param(param, base, offset);
             rebase_resolved_node(body, base, offset);
         }
-        Resolved::TraitDef(_, id, type_params, methods, _) => {
+        Resolved::TraitDef(_, id, type_params, where_clause, methods, _) => {
             rebase_resolved_id(id, base, offset);
             rebase_type_params(type_params, base, offset);
+            if let Some(clause) = where_clause {
+                rebase_where_clause(clause, base, offset);
+            }
             for method in methods {
                 rebase_resolved_id(&mut method.id, base, offset);
                 rebase_type_params(&mut method.type_params, base, offset);
                 rebase_fun_params(&mut method.params, base, offset);
+                if let Some(clause) = &mut method.where_clause {
+                    rebase_where_clause(clause, base, offset);
+                }
                 if let Some(body) = &mut method.body {
                     rebase_resolved_node(body, base, offset);
                 }
             }
         }
-        Resolved::TraitImplDef(_, id, _, _, methods) => {
+        Resolved::TraitImplDef(_, id, _, _, where_clause, methods) => {
             rebase_resolved_id(id, base, offset);
+            if let Some(clause) = where_clause {
+                rebase_where_clause(clause, base, offset);
+            }
             for method in methods {
                 rebase_resolved_id(&mut method.function_id, base, offset);
                 rebase_type_params(&mut method.type_params, base, offset);
                 rebase_fun_params(&mut method.params, base, offset);
+                if let Some(clause) = &mut method.where_clause {
+                    rebase_where_clause(clause, base, offset);
+                }
                 rebase_resolved_node(&mut method.body, base, offset);
             }
         }

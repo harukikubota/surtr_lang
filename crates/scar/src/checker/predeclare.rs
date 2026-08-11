@@ -847,7 +847,7 @@ impl Checker {
         }
 
         for stmt in stmts {
-            let Resolved::Def(_, id, _, _, _, _, _) = stmt else {
+            let Resolved::Def(_, id, _, _, _, _, _, _) = stmt else {
                 continue;
             };
             if let Some((target, method)) = Self::split_impl_method_id(id) {
@@ -1031,7 +1031,7 @@ impl Checker {
                 Self::collect_ty_vars(update_source, out);
                 Self::collect_ty_vars(update_focus, out);
             }
-            Ty::Tuple(items) | Ty::Enum(_, items) => {
+            Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
                 for item in items {
                     Self::collect_ty_vars(item, out);
                 }
@@ -1517,7 +1517,7 @@ impl Checker {
 
     pub(super) fn predeclare_traits(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
         for stmt in stmts {
-            let Resolved::TraitDef(span, id, type_params, methods, _) = stmt else {
+            let Resolved::TraitDef(span, id, type_params, where_clause, methods, _) = stmt else {
                 continue;
             };
             let trait_key = self.trait_key(id);
@@ -1536,6 +1536,7 @@ impl Checker {
                         type_params: method.type_params.clone(),
                         params: method.params.clone(),
                         ret_ty: method.ret_ty.clone(),
+                        where_clause: method.where_clause.as_ref().map(TypedWhereClause::from),
                         attrs: method.attrs.clone(),
                         body: method.body.clone(),
                         span: method.span.clone(),
@@ -1547,6 +1548,7 @@ impl Checker {
                 TraitInfo {
                     id: id.clone(),
                     type_params: type_params.clone(),
+                    where_clause: where_clause.as_ref().map(TypedWhereClause::from),
                     methods: method_map,
                 },
             );
@@ -1554,7 +1556,14 @@ impl Checker {
         }
 
         for stmt in stmts {
-            let Resolved::TraitImplDef(span, trait_id, trait_args, target_ast_ty, methods) = stmt
+            let Resolved::TraitImplDef(
+                span,
+                trait_id,
+                trait_args,
+                target_ast_ty,
+                where_clause,
+                methods,
+            ) = stmt
             else {
                 continue;
             };
@@ -1600,6 +1609,7 @@ impl Checker {
                         type_params: method.type_params.clone(),
                         params: method.params.clone(),
                         ret_ty: method.ret_ty.clone(),
+                        where_clause: method.where_clause.as_ref().map(TypedWhereClause::from),
                         body: method.body.clone(),
                         attrs: method.attrs.clone(),
                         span: method.span.clone(),
@@ -1642,6 +1652,7 @@ impl Checker {
                         type_params: trait_method.type_params.clone(),
                         params: trait_method.params.clone(),
                         ret_ty: None,
+                        where_clause: trait_method.where_clause.clone(),
                         body: default_body,
                         attrs: trait_method.attrs.clone(),
                         span: trait_method.span.clone(),
@@ -1810,6 +1821,7 @@ impl Checker {
                     target_name,
                     target_ast_ty: target_ast_ty.clone(),
                     target_ty,
+                    where_clause: where_clause.as_ref().map(TypedWhereClause::from),
                     type_param_vars,
                     methods: method_map,
                 },
@@ -1825,7 +1837,7 @@ impl Checker {
         let mut trait_impl_keys_in_stmts = HashSet::new();
 
         for stmt in stmts {
-            let Resolved::TraitImplDef(_, trait_id, trait_args, target_ast_ty, _) = stmt else {
+            let Resolved::TraitImplDef(_, trait_id, trait_args, target_ast_ty, _, _) = stmt else {
                 continue;
             };
             let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
@@ -1904,7 +1916,7 @@ impl Checker {
                         },
                     );
                 }
-                Resolved::Def(_, id, type_params, params, ret_ty, _, _) => {
+                Resolved::Def(_, id, type_params, params, ret_ty, _, _, _) => {
                     self.register_function_id(id);
                     let mut tyvars = HashMap::new();
                     self.seed_signature_type_params(type_params, &mut tyvars);

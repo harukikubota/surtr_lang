@@ -226,6 +226,7 @@ pub enum Resolved {
         Vec<ResolvedTypeParam>,
         Vec<ResolvedFunParam>,
         Option<AstTy>,
+        Option<ResolvedWhereClause>,
         Box<Resolved>,
         ResolvedDeclAttrs,
     ),
@@ -254,6 +255,7 @@ pub enum Resolved {
         Span,
         ResolvedId,
         Vec<ResolvedTypeParam>,
+        Option<ResolvedWhereClause>,
         Vec<ResolvedTraitMethodSig>,
         ResolvedDeclAttrs,
     ),
@@ -264,6 +266,7 @@ pub enum Resolved {
         ResolvedId,
         Vec<AstTy>,
         AstTy,
+        Option<ResolvedWhereClause>,
         Vec<ResolvedTraitImplMethod>,
     ),
 
@@ -399,9 +402,37 @@ pub struct ResolvedTraitMethodSig {
     pub type_params: Vec<ResolvedTypeParam>,
     pub params: Vec<ResolvedFunParam>,
     pub ret_ty: AstTy,
+    pub where_clause: Option<ResolvedWhereClause>,
     pub body: Option<Box<Resolved>>,
     pub attrs: ResolvedDeclAttrs,
     pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedWhereClause {
+    pub constraints: Vec<ResolvedWhereConstraint>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedWhereConstraint {
+    pub subject: AstTy,
+    pub bounds: Vec<ResolvedWhereConstraintRhs>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ResolvedWhereConstraintRhs {
+    Trait(ResolvedId),
+    TypeConstructor {
+        span: Span,
+        slots: Vec<AstTy>,
+    },
+    TraitSlot {
+        trait_id: ResolvedId,
+        slot_name: Symbol,
+        span: Span,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -411,6 +442,7 @@ pub struct ResolvedTraitImplMethod {
     pub type_params: Vec<ResolvedTypeParam>,
     pub params: Vec<ResolvedFunParam>,
     pub ret_ty: Option<AstTy>,
+    pub where_clause: Option<ResolvedWhereClause>,
     pub body: Box<Resolved>,
     pub attrs: ResolvedDeclAttrs,
     pub span: Span,

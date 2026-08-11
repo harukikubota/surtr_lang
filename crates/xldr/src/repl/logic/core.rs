@@ -5595,6 +5595,13 @@ impl ReplEngine {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Ty::SelfApp(args) => format!(
+                "Self<{}>",
+                args.iter()
+                    .map(Self::ty_to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Ty::Result(ok, err) => {
                 format!(
                     "Result<{}, {}>",
@@ -7004,7 +7011,7 @@ impl ReplEngine {
                     .iter()
                     .find(|stmt| !matches!(stmt, Ast::Import(_, _, _)));
                 match first_non_import {
-                    Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _)) => {
+                    Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(..)) => {
                         member_auto_import_modules.insert(module.module_path.clone());
                     }
                     _ => {
@@ -8553,7 +8560,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::ConstructorCall(span, _, _)
         | Ast::DeferrorDef(span, _, _, _, _)
         | Ast::EnumDef(span, _, _, _, _)
-        | Ast::Def(span, _, _, _, _, _, _)
+        | Ast::Def(span, ..)
         | Ast::ConstDef(span, _, _, _, _)
         | Ast::SupervisorInit(span, _)
         | Ast::ExtractorDef(span, _, _, _, _, _, _)
@@ -8569,8 +8576,8 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::DefdynamicSupervisor(span, _, _, _, _)
         | Ast::Namespace(span, _, _)
         | Ast::ImplDef(span, _, _, _)
-        | Ast::TraitDef(span, _, _, _, _)
-        | Ast::TraitImplDef(span, _, _, _, _, _)
+        | Ast::TraitDef(span, ..)
+        | Ast::TraitImplDef(span, ..)
         | Ast::Import(span, _, _)
         | Ast::Include(span, _)
         | Ast::Closure(span, _, _)

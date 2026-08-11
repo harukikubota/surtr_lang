@@ -1,6 +1,6 @@
 use scar::typed::{
     OperatorTraitOp, TraitCallOrigin, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode,
-    TypedPattern, TypedProgram,
+    TypedPattern, TypedProgram, TypedWhereConstraintRhs,
 };
 use scar::types::Ty;
 use sigil::resolved::{
@@ -459,6 +459,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     (
         "generic_user_function_calls_typecheck_inside_script_module_scope",
         generic_user_function_calls_typecheck_inside_script_module_scope as fn(),
+    ),
+    (
+        "where_constraint_kinds_survive_in_typed_metadata",
+        where_constraint_kinds_survive_in_typed_metadata as fn(),
     ),
     (
         "rigid_generic_return_rejects_concrete_body",
@@ -3396,7 +3400,7 @@ print(to_string(value))"#,
     assert!(
         typed
             .iter()
-            .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _))),
+            .any(|node| matches!(node.node, TypedInner::TraitImplDef(..))),
         "expected namespaced trait impl to survive typechecking"
     );
 }
@@ -3416,7 +3420,7 @@ impl PairTrait for ($A, $B) {
     assert!(
         typed
             .iter()
-            .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _))),
+            .any(|node| matches!(node.node, TypedInner::TraitImplDef(..))),
         "expected tuple trait impl to survive typechecking"
     );
 }
@@ -3436,7 +3440,7 @@ impl PairTrait for (Int, String) {
     assert!(
         typed
             .iter()
-            .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _))),
+            .any(|node| matches!(node.node, TypedInner::TraitImplDef(..))),
         "expected concrete tuple trait impl to survive typechecking"
     );
 }
@@ -3460,6 +3464,110 @@ print(right)"#,
             >= 2,
         "expected both generic function call sites to typecheck"
     );
+}
+
+#[test]
+fn where_constraint_kinds_survive_in_typed_metadata() {
+    let typed = typecheck_with_rules(
+        r#"deftrait Marker<$Slot>
+where
+  Self: Type<$Slot>
+{
+  def mark(self: Self) -> Self
+  where
+    Self: Marker
+}
+
+defenum Boxed<$T> {
+  Box($T),
+}
+
+impl Marker<$T> for Boxed<$T>
+where
+  $T: Marker.$Slot
+{
+  def mark(self: Self) -> Self
+  where
+    $T: Marker
+  {
+    self
+  }
+}
+
+def keep(value: $A) -> $A
+where
+  $A: Marker + Type<$B> + Marker.$Slot
+{
+  value
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("Step 4 records constraints without applying their later semantics");
+
+    let where_clause = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Def(_, id, _, _, _, where_clause, _, _) if id.name == "keep" => {
+                where_clause.as_ref()
+            }
+            _ => None,
+        })
+        .expect("typed def should retain its where clause");
+    let bounds = &where_clause.constraints[0].bounds;
+    assert!(matches!(bounds[0], TypedWhereConstraintRhs::Trait(_)));
+    assert!(matches!(
+        bounds[1],
+        TypedWhereConstraintRhs::TypeConstructor { .. }
+    ));
+    assert!(matches!(
+        bounds[2],
+        TypedWhereConstraintRhs::TraitSlot { .. }
+    ));
+
+    let (trait_where, trait_methods) = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::TraitDef(name, where_clause, methods) if name.ends_with("Marker") => {
+                Some((where_clause.as_ref(), methods))
+            }
+            _ => None,
+        })
+        .expect("typed trait should retain metadata");
+    assert!(trait_where.is_some());
+    assert!(trait_methods[0].where_clause.is_some());
+    assert!(typed
+        .iter()
+        .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _, Some(_)))));
+    assert!(typed.iter().any(|node| match &node.node {
+        TypedInner::Def(_, id, _, _, _, Some(_), _, _) => id.name.contains("mark"),
+        _ => false,
+    }));
+}
+
+#[test]
+fn functor_shaped_self_applications_survive_in_typed_metadata() {
+    let typed = typecheck_with_rules(
+        r#"deftrait FunctorShape
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("Step 4 should preserve higher-kinded Self applications");
+
+    let method = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::TraitDef(name, _, methods) if name.ends_with("FunctorShape") => {
+                methods.iter().find(|method| method.name == "fmap")
+            }
+            _ => None,
+        })
+        .expect("typed trait metadata should retain fmap");
+    assert!(matches!(method.params.first(), Some(Ty::SelfApp(args)) if args.len() == 1));
+    assert!(matches!(method.ret_ty, Ty::SelfApp(ref args) if args.len() == 1));
 }
 
 fn rigid_generic_return_rejects_concrete_body() {
@@ -3783,7 +3891,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             sigil::resolved::Resolved::BuiltinDecl(_, id, _, _, _) if id.unique_id == use_uid => {
                 Some(format!("builtin {}", id.name))
             }
-            sigil::resolved::Resolved::Def(_, id, _, _, _, _, _) if id.unique_id == use_uid => {
+            sigil::resolved::Resolved::Def(_, id, _, _, _, _, _, _) if id.unique_id == use_uid => {
                 Some(format!("def {}", id.name))
             }
             sigil::resolved::Resolved::ExtractorDef(_, id, _, _, _, _, _)
@@ -4774,7 +4882,7 @@ fn result_match_wildcard_self_after_ok_can_change_ok_payload_type() {
     let typed = typecheck(resolved).expect("Err-proven wildcard arm should typecheck");
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::Def(..))));
 }
 
 fn result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape() {
@@ -4790,7 +4898,7 @@ fn result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape() {
     let typed = typecheck(resolved).expect("Err-proven bind-style wildcard arm should typecheck");
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::Def(..))));
 }
 
 fn result_match_wildcard_self_requires_err_proven_branch() {
@@ -4832,7 +4940,7 @@ fn local_binding_annotation_can_reference_outer_generic_type_param() {
     );
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::Def(..))));
 }
 
 fn closure_param_annotation_can_reference_outer_generic_type_param() {
@@ -4844,7 +4952,7 @@ fn closure_param_annotation_can_reference_outer_generic_type_param() {
     );
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::Def(..))));
 }
 
 fn generic_first_can_inline_tuple_rebuild_with_closure_param_annotation() {
@@ -4858,7 +4966,7 @@ fn generic_first_can_inline_tuple_rebuild_with_closure_param_annotation() {
     );
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::Def(..))));
 }
 
 fn sibling_closures_keep_substitution_state_local() {
@@ -5536,7 +5644,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
                 scar::typed::TypedInterpolatedPart::Expr(expr) => has_pending_trait_call(expr),
             }),
             TypedInner::Dbg(args) => args.iter().any(|arg| has_pending_trait_call(&arg.expr)),
-            TypedInner::Def(_, _, _, _, _, body, _)
+            TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
@@ -5650,7 +5758,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
                 scar::typed::TypedInterpolatedPart::Expr(expr) => has_pending_trait_call(expr),
             }),
             TypedInner::Dbg(args) => args.iter().any(|arg| has_pending_trait_call(&arg.expr)),
-            TypedInner::Def(_, _, _, _, _, body, _)
+            TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
@@ -6178,7 +6286,7 @@ fn collect_decode_trait_calls(node: &TypedNode, calls: &mut Vec<(String, Option<
         TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) => {
             collect_decode_trait_calls(rhs, calls);
         }
-        TypedInner::Def(_, _, _, _, _, body, _)
+        TypedInner::Def(_, _, _, _, _, _, body, _)
         | TypedInner::ExtractorDef(_, _, _, _, _, body, _) => {
             collect_decode_trait_calls(body, calls);
         }

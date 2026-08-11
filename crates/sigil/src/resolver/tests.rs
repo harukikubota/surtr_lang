@@ -123,7 +123,7 @@ def main() -> Int { help() }
         .any(|stmt| matches!(stmt, Ast::Import(_, _, _))));
     assert!(remaining_ast
         .iter()
-        .any(|stmt| matches!(stmt, Ast::Def(_, _, _, _, _, _, _))));
+        .any(|stmt| matches!(stmt, Ast::Def(..))));
 }
 
 #[test]
@@ -1015,7 +1015,7 @@ fn test_parallel_stage_resolve_rebases_local_ids() {
     let local_ids = resolved
         .iter()
         .filter_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, body, _) if id.name == "value" => first_bind_id(body),
+            Resolved::Def(_, id, _, _, _, _, body, _) if id.name == "value" => first_bind_id(body),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1303,15 +1303,143 @@ impl Add for Int {
     let resolved = resolve(ast).expect("trait nodes should resolve");
     assert!(matches!(
         &resolved[0],
-        Resolved::TraitDef(_, id, _, methods, _)
+        Resolved::TraitDef(_, id, _, _, methods, _)
             if id.name == "Add"
                 && methods.len() == 1
                 && methods[0].id.qualified_name.as_deref() == Some("Add::add")
     ));
     assert!(matches!(
         &resolved[1],
-        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), methods)
+        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), _, methods)
             if id.name == "Add" && target == "Global::Int" && methods.len() == 1
+    ));
+}
+
+#[test]
+fn test_resolve_where_clauses_preserve_constraint_kinds_and_trait_ids() {
+    let ast = parse_module_ast(
+        r#"deftrait Equal {
+  def equal(self: Self, rhs: Self) -> Boolean
+}
+
+deftrait Functor
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+  where
+    $A: Equal
+}
+
+def identity(value: $A) -> $A
+where
+  $A: Equal
+{
+  value
+}
+
+defstruct Boxed<$T> {
+  value: $T,
+}
+
+impl Functor for Boxed<$T>
+where
+  $T: Functor.$A
+{
+  def fmap(self: Self, mapper: ($A -> $B)) -> Boxed<$B>
+  where
+    $B: Equal
+  {
+    Boxed { value: mapper(self.value) }
+  }
+}"#,
+        "WhereConstraints",
+    );
+
+    let resolved = resolve(ast).expect("where clauses should resolve");
+    let equal_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, _, _, _) if id.name == "Equal" => Some(id.clone()),
+            _ => None,
+        })
+        .expect("Equal trait id");
+
+    let functor_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, where_clause, methods, _) if id.name == "Functor" => {
+                let clause = where_clause.as_ref().expect("Functor where clause");
+                assert!(matches!(
+                    clause.constraints[0].bounds.as_slice(),
+                    [ResolvedWhereConstraintRhs::TypeConstructor { slots, .. }]
+                        if matches!(slots.as_slice(), [AstTy::Named(_, slot)] if slot == "$A")
+                ));
+                let method_clause = methods[0]
+                    .where_clause
+                    .as_ref()
+                    .expect("trait method where clause");
+                assert!(matches!(
+                    method_clause.constraints[0].bounds.as_slice(),
+                    [ResolvedWhereConstraintRhs::Trait(bound_id)]
+                        if bound_id.unique_id == equal_id.unique_id
+                ));
+                Some(id.clone())
+            }
+            _ => None,
+        })
+        .expect("Functor trait id");
+
+    let function_clause = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, where_clause, _, _) if id.name == "identity" => {
+                where_clause.as_ref()
+            }
+            _ => None,
+        })
+        .expect("function where clause");
+    assert!(matches!(
+        function_clause.constraints[0].bounds.as_slice(),
+        [ResolvedWhereConstraintRhs::Trait(bound_id)]
+            if bound_id.unique_id == equal_id.unique_id
+    ));
+
+    let impl_clause = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, id, _, _, where_clause, _)
+                if id.unique_id == functor_id.unique_id =>
+            {
+                where_clause.as_ref()
+            }
+            _ => None,
+        })
+        .expect("trait impl where clause");
+    assert!(matches!(
+        impl_clause.constraints[0].bounds.as_slice(),
+        [ResolvedWhereConstraintRhs::TraitSlot {
+            trait_id,
+            slot_name,
+            ..
+        }] if trait_id.unique_id == functor_id.unique_id && slot_name == "$A"
+    ));
+
+    let impl_method_clause = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, id, _, _, _, methods)
+                if id.unique_id == functor_id.unique_id =>
+            {
+                methods[0].where_clause.as_ref()
+            }
+            _ => None,
+        })
+        .expect("trait impl method where clause");
+    assert!(matches!(
+        impl_method_clause.constraints[0].bounds.as_slice(),
+        [ResolvedWhereConstraintRhs::Trait(bound_id)]
+            if bound_id.unique_id == equal_id.unique_id
     ));
 }
 
@@ -1332,7 +1460,7 @@ fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
     let resolved = resolve(ast).expect("trait default bodies should resolve");
 
     match &resolved[0] {
-        Resolved::TraitDef(_, id, _, methods, _) => {
+        Resolved::TraitDef(_, id, _, _, methods, _) => {
             assert_eq!(id.name, "Metric");
             assert_eq!(methods.len(), 2);
             assert_eq!(methods[0].attrs.doc.as_deref(), Some("Delegates to abs."));
@@ -1374,7 +1502,7 @@ impl Add for Int {
     let resolved = resolve(ast).expect("trait impl builtin method should resolve");
     assert!(matches!(
         &resolved[1],
-        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), methods)
+        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), _, methods)
             if id.name == "Add"
                 && target == "Global::Int"
                 && methods.len() == 1
@@ -1626,7 +1754,7 @@ impl User {
     let lowered = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, body, _)
+            Resolved::Def(_, id, _, _, _, _, body, _)
                 if id.qualified_name.as_deref() == Some("Global::User::new") =>
             {
                 Some(body.as_ref())
@@ -1793,7 +1921,7 @@ def parse_base(base: IntBase) -> Int {
     let decl_uid = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, _, _)
+            Resolved::Def(_, id, _, _, _, _, _, _)
                 if id.qualified_name.as_deref() == Some("Global::IntBase::radix") =>
             {
                 Some(id.unique_id)
@@ -1805,7 +1933,7 @@ def parse_base(base: IntBase) -> Int {
     let call_uid = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, body, _) if id.name == "parse_base" => {
+            Resolved::Def(_, id, _, _, _, _, body, _) if id.name == "parse_base" => {
                 assert_eq!(
                     id.qualified_name.as_deref(),
                     Some("Global::Int::parse_base")
@@ -1904,7 +2032,7 @@ print(to_string(1))"#,
     )
     .unwrap();
     match &resolved[0] {
-        Resolved::Def(_, id, type_params, params, ret_ty, body, attrs) => {
+        Resolved::Def(_, id, type_params, params, ret_ty, _, body, attrs) => {
             assert_eq!(id.name, "add");
             assert!(type_params.is_empty());
             assert_eq!(params.len(), 2);
@@ -2618,7 +2746,9 @@ fn test_decode_helper_inside_decode_impl_uses_trait_helper_not_current_method() 
     let method_body = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::TraitImplDef(_, _, _, _, methods) => methods.first().map(|m| m.body.as_ref()),
+            Resolved::TraitImplDef(_, _, _, _, _, methods) => {
+                methods.first().map(|m| m.body.as_ref())
+            }
             _ => None,
         })
         .expect("trait impl method body should exist");
@@ -2917,7 +3047,7 @@ def add(x: Int, y: Int) -> Int { x + y }"#,
     };
 
     let def_id = match &resolved[1] {
-        Resolved::Def(_, id, _, _, _, _, _) => id.unique_id,
+        Resolved::Def(_, id, _, _, _, _, _, _) => id.unique_id,
         _ => panic!("Expected Def"),
     };
 
@@ -3030,7 +3160,7 @@ deferror NotFound(code: String) {
                     }
                     _ => Vec::new(),
                 },
-                Resolved::Def(_, id, _, _, _, _, _)
+                Resolved::Def(_, id, _, _, _, _, _, _)
                 | Resolved::RecordDef(_, id, _)
                 | Resolved::StructDef(_, id, ..)
                 | Resolved::DeferrorDef(_, id, _, _) => vec![id.unique_id],
@@ -3906,7 +4036,7 @@ print(to_string(add(7, 3)))"#,
     let helper_add_uid = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, _, _)
+            Resolved::Def(_, id, _, _, _, _, _, _)
                 if id.qualified_name.as_deref() == Some("Helper::add") =>
             {
                 Some(id.unique_id)
@@ -4040,7 +4170,7 @@ value = add1(41)"#,
     let mut user_def_uid = None;
     let mut user_param_uid = None;
     for node in &resolved {
-        if let Resolved::Def(_, id, _, params, _, _, _) = node {
+        if let Resolved::Def(_, id, _, params, _, _, _, _) = node {
             match id.qualified_name.as_deref() {
                 Some("Helper::keep") => {
                     helper_param_uid = params.first().map(|param| param.id.unique_id);
@@ -4237,7 +4367,7 @@ fn test_sigil_session_allows_top_level_shadowing_of_imported_name() {
     let resolved = session.resolve(ast).expect("resolve failed");
 
     let def_id = match &resolved[0] {
-        Resolved::Def(_, id, _, _, _, _, _) => id.unique_id,
+        Resolved::Def(_, id, _, _, _, _, _, _) => id.unique_id,
         other => panic!("Expected Def, got {:?}", other),
     };
 
@@ -5669,7 +5799,7 @@ def parse() -> Int { add(7, 3) }"#,
     let helper_add_uid = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, _, _)
+            Resolved::Def(_, id, _, _, _, _, _, _)
                 if id.qualified_name.as_deref() == Some("Helper::add") =>
             {
                 Some(id.unique_id)
@@ -5679,7 +5809,7 @@ def parse() -> Int { add(7, 3) }"#,
         .expect("helper add should be resolved");
 
     let parser_add_uid = resolved.iter().find_map(|node| match node {
-        Resolved::Def(_, id, _, _, _, body, _)
+        Resolved::Def(_, id, _, _, _, _, body, _)
             if id.qualified_name.as_deref() == Some("Parser::parse") =>
         {
             find_called_uid(body.as_ref(), "add")
@@ -5850,7 +5980,7 @@ fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_parameter() 
     let pipe_rhs = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, body, _) if id.name == "apply" => find_pipe_rhs(body),
+            Resolved::Def(_, id, _, _, _, _, body, _) if id.name == "apply" => find_pipe_rhs(body),
             _ => None,
         })
         .expect("expected pipe rhs inside apply body");

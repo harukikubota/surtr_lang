@@ -2,7 +2,7 @@ use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use sindr::names::surface_path_name;
 use spire::ast::{
     Ast, AstTy, BuiltinTypeHead, EnumVariant, ExtractorParam, FunParam, RecordField,
-    TraitMethodSig, TypeParam,
+    TraitMethodSig, TypeParam, WhereClause, WhereConstraintRhs,
 };
 
 use crate::StagedModuleAst;
@@ -311,6 +311,7 @@ fn format_trait_impl_method_signature(
     type_params: &[TypeParam],
     params: &[FunParam],
     ret_ty: &Option<AstTy>,
+    where_clause: Option<&WhereClause>,
 ) -> String {
     let params = params
         .iter()
@@ -332,7 +333,44 @@ fn format_trait_impl_method_signature(
         None => format!("{method_name}{type_params}({params})"),
     };
     let impl_sig = format_trait_impl_signature(trait_name, trait_args, target_ty);
-    format!("{impl_sig}::{method_sig}")
+    format!(
+        "{impl_sig}::{method_sig}{}",
+        format_where_clause(where_clause)
+    )
+}
+
+fn format_where_clause(where_clause: Option<&WhereClause>) -> String {
+    let Some(where_clause) = where_clause else {
+        return String::new();
+    };
+    let constraints = where_clause
+        .constraints
+        .iter()
+        .map(|constraint| {
+            let bounds = constraint
+                .bounds
+                .iter()
+                .map(|bound| match bound {
+                    WhereConstraintRhs::Trait(_, name) => name.clone(),
+                    WhereConstraintRhs::TypeConstructor(_, slots) => format!(
+                        "Type<{}>",
+                        slots
+                            .iter()
+                            .map(format_ast_ty)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    WhereConstraintRhs::TraitSlot(_, owner, slot) => {
+                        format!("{owner}.{slot}")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" + ");
+            format!("{}: {bounds}", format_ast_ty(&constraint.subject))
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(" where {constraints}")
 }
 
 fn qualified_name(module_path: &str, name: &str) -> String {
@@ -353,7 +391,7 @@ fn qualified_name(module_path: &str, name: &str) -> String {
 fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<DocEntry>) {
     for stmt in ast {
         match stmt {
-            Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
+            Ast::Def(_, name, type_params, params, ret_ty, _, _, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
@@ -413,7 +451,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     });
                 }
             }
-            Ast::TraitDef(_, name, _type_params, methods, attrs) => {
+            Ast::TraitDef(_, name, _type_params, _, methods, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
@@ -474,7 +512,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
             Ast::ImplDef(_, target, methods, _attrs) => {
                 for method in methods {
                     match method {
-                        Ast::Def(_, name, type_params, params, ret_ty, _, attrs) => {
+                        Ast::Def(_, name, type_params, params, ret_ty, _, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
                                 let qualified_method_name = if surface_path_name(module_path)
                                     == surface_path_name(target)
@@ -574,7 +612,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     }
                 }
             }
-            Ast::TraitImplDef(_, trait_name, trait_args, target_ty, methods, attrs) => {
+            Ast::TraitImplDef(_, trait_name, trait_args, target_ty, _, methods, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     let rendered = format_trait_impl_signature(trait_name, trait_args, target_ty);
                     out.push(DocEntry {
@@ -587,19 +625,36 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                 }
                 for method in methods {
                     let method_parts = match method {
-                        Ast::Def(_, name, type_params, params, ret_ty, _, method_attrs) => Some((
+                        Ast::Def(
+                            _,
+                            name,
+                            type_params,
+                            params,
+                            ret_ty,
+                            where_clause,
+                            _,
+                            method_attrs,
+                        ) => Some((
                             name,
                             type_params.as_slice(),
                             params.as_slice(),
                             ret_ty,
+                            where_clause.as_ref(),
                             method_attrs,
                         )),
-                        Ast::BuiltinDecl(_, name, params, ret_ty, method_attrs) => {
-                            Some((name, [].as_slice(), params.as_slice(), ret_ty, method_attrs))
-                        }
+                        Ast::BuiltinDecl(_, name, params, ret_ty, method_attrs) => Some((
+                            name,
+                            [].as_slice(),
+                            params.as_slice(),
+                            ret_ty,
+                            None,
+                            method_attrs,
+                        )),
                         _ => None,
                     };
-                    if let Some((name, type_params, params, ret_ty, method_attrs)) = method_parts {
+                    if let Some((name, type_params, params, ret_ty, where_clause, method_attrs)) =
+                        method_parts
+                    {
                         if let Some(doc) = &method_attrs.doc {
                             let rendered = format_trait_impl_method_signature(
                                 trait_name,
@@ -609,6 +664,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                                 type_params,
                                 params,
                                 ret_ty,
+                                where_clause,
                             );
                             out.push(DocEntry {
                                 qualified_name: qualified_name(
@@ -720,7 +776,7 @@ fn collect_signature_entries_for_ast(
 ) {
     for stmt in ast {
         match stmt {
-            Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
+            Ast::Def(_, name, type_params, params, ret_ty, _, _, _) => {
                 push_signature_entry(
                     out,
                     module_path,
@@ -765,7 +821,7 @@ fn collect_signature_entries_for_ast(
                     format_extractor_signature(name, &[], param, ret_ty),
                 );
             }
-            Ast::TraitDef(_, name, _type_params, methods, _) => {
+            Ast::TraitDef(_, name, _type_params, _, methods, _) => {
                 push_signature_entry(
                     out,
                     module_path,
@@ -817,7 +873,7 @@ fn collect_signature_entries_for_ast(
             Ast::ImplDef(_, target, methods, _) => {
                 for method in methods {
                     match method {
-                        Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
+                        Ast::Def(_, name, type_params, params, ret_ty, _, _, _) => {
                             let qualified_method_name =
                                 if surface_path_name(module_path) == surface_path_name(target) {
                                     format!("{}::{name}", surface_path_name(target))
@@ -893,7 +949,7 @@ fn collect_signature_entries_for_ast(
                     }
                 }
             }
-            Ast::TraitImplDef(_, trait_name, trait_args, target_ty, methods, _) => {
+            Ast::TraitImplDef(_, trait_name, trait_args, target_ty, _, methods, _) => {
                 let rendered = format_trait_impl_signature(trait_name, trait_args, target_ty);
                 push_signature_entry(
                     out,
@@ -904,15 +960,21 @@ fn collect_signature_entries_for_ast(
                 );
                 for method in methods {
                     let method_parts = match method {
-                        Ast::Def(_, name, type_params, params, ret_ty, _, _) => {
-                            Some((name, type_params.as_slice(), params.as_slice(), ret_ty))
+                        Ast::Def(_, name, type_params, params, ret_ty, where_clause, _, _) => {
+                            Some((
+                                name,
+                                type_params.as_slice(),
+                                params.as_slice(),
+                                ret_ty,
+                                where_clause.as_ref(),
+                            ))
                         }
                         Ast::BuiltinDecl(_, name, params, ret_ty, _) => {
-                            Some((name, [].as_slice(), params.as_slice(), ret_ty))
+                            Some((name, [].as_slice(), params.as_slice(), ret_ty, None))
                         }
                         _ => None,
                     };
-                    if let Some((name, type_params, params, ret_ty)) = method_parts {
+                    if let Some((name, type_params, params, ret_ty, where_clause)) = method_parts {
                         let rendered = format_trait_impl_method_signature(
                             trait_name,
                             trait_args,
@@ -921,6 +983,7 @@ fn collect_signature_entries_for_ast(
                             type_params,
                             params,
                             ret_ty,
+                            where_clause,
                         );
                         push_signature_entry(
                             out,

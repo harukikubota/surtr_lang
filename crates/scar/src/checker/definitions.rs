@@ -722,6 +722,7 @@ impl Checker {
         type_params: &[ResolvedTypeParam],
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
+        where_clause: Option<&ResolvedWhereClause>,
         body: &Resolved,
         attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
@@ -929,6 +930,7 @@ impl Checker {
                 typed_type_params,
                 typed_params,
                 expected_ret,
+                where_clause.map(TypedWhereClause::from),
                 Box::new(typed_body),
                 attrs.visibility,
             ),
@@ -1073,6 +1075,7 @@ impl Checker {
         trait_id: &ResolvedId,
         trait_args: &[AstTy],
         target_ast_ty: &AstTy,
+        where_clause: Option<&ResolvedWhereClause>,
         _methods: &[ResolvedTraitImplMethod],
     ) -> Result<Vec<TypedNode>, TypeError> {
         let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
@@ -1114,6 +1117,7 @@ impl Checker {
             node: TypedInner::TraitImplDef(
                 self.trait_instance_key(trait_id, trait_args),
                 target_name.clone(),
+                where_clause.map(TypedWhereClause::from),
             ),
         }];
 
@@ -1239,6 +1243,7 @@ impl Checker {
                     typed_type_params,
                     typed_params,
                     expected_ret,
+                    method.where_clause.clone(),
                     Box::new(typed_body),
                     method.attrs.visibility,
                 ),
@@ -1254,6 +1259,7 @@ impl Checker {
         trait_id: &ResolvedId,
         trait_args: &[AstTy],
         target_ast_ty: &AstTy,
+        where_clause: Option<&ResolvedWhereClause>,
         _methods: &[ResolvedTraitImplMethod],
     ) -> Result<TypedNode, TypeError> {
         let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
@@ -1272,6 +1278,7 @@ impl Checker {
             node: TypedInner::TraitImplDef(
                 self.trait_instance_key(trait_id, trait_args),
                 target_name,
+                where_clause.map(TypedWhereClause::from),
             ),
         })
     }
