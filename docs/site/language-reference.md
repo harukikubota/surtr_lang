@@ -519,6 +519,7 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Sho
 ### auto import
 
 - `Bootstrap`, `Kernel` と `@autoimport` 付き標準 `impl Type` owner helper surface / 標準 trait は auto import 対象
+- `Functor`, `Applicative`, `Monad` は auto import 対象であり、`fmap`, `pure`, `ap`, `return`, `bind` を bare 名で呼べる
 - `Bootstrap` / `Kernel` の明示 `import` は compile error
 - それ以外の標準定義ソースは auto import しない
 

@@ -51,7 +51,7 @@ process examples でも、entry script から `include "./Agents.srt"` や `incl
 
 - `../../lib/kernel.srt` の `defmod Kernel`
 - `../../lib/types/result.srt` などの `@autoimport impl Type`
-- `../../lib/trait/eq.srt`, `concat.srt`, `from.srt`, `try_from.srt` などの trait 宣言
+- `../../lib/traits/operator/functor.srt`, `applicative.srt`, `monad.srt`、および `eq.srt`, `concat.srt`, `from.srt`, `try_from.srt` などの trait 宣言
 
 module / type owner / trait では意味合いが少し違います。
 
@@ -70,7 +70,13 @@ trait 側で重要なのは、autoimport される helper が「別の関数定�
 print(concat("a", "b"))
 print(from::<String>(42))
 print(inspect(try_from::<Int>("42")))
+pure_value: Result<Int> = pure(1)
+returned_value: Result<Int> = return(10)
 ```
+
+`Functor`, `Applicative`, `Monad` も autoimport されるため、`fmap`, `pure`, `ap`,
+`return`, `bind` を bare 名で呼べます。演算子で書くとネストしやすい処理や、
+trait helper を高階関数として扱う場合に利用できます。
 
 一方で、すべての trait helper が autoimport されるわけではありません。  
 `Add`, `Sub`, `Mul` のように「演算子の別表記」が主目的のものは、qualified call か明示 import を使います。
@@ -86,7 +92,7 @@ print(to_string(add(3, 4)))
 
 - `print`, `if`, `inspect` のような cross-cutting API は `Kernel` 由来
 - `Result::map_err`, `Result::chain` のような標準 owner helper は `@autoimport impl Type` 由来
-- `eq`, `concat`, `from`, `try_from`, `to_string` のような頻出 helper は autoimport trait alias
+- `eq`, `concat`, `from`, `try_from`, `to_string`, `fmap`, `pure`, `ap`, `return`, `bind` のような頻出 helper は autoimport trait alias
 - `Add::add`, `Sub::sub`, `Mul::mul` のような helper は qualified/import 前提
 
 ## どこで確認するか

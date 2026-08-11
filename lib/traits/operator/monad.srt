@@ -3,6 +3,7 @@ Standard `Monad` trait declaration.
 `Monad` extends `Applicative` with contextual sequencing. The `|>=` operator
 lowers through this trait.
 """
+@autoimport
 deftrait Monad
 where
   Self: Applicative

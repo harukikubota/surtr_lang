@@ -3,6 +3,7 @@ Standard `Functor` trait declaration.
 `Functor` models mapping a plain unary callable over a unary type constructor.
 The `|*>` operator lowers through this trait.
 """
+@autoimport
 deftrait Functor
 where
   Self: Type<$A>

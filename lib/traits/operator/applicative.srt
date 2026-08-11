@@ -20,6 +20,7 @@ behavior while combining successful values.
 xldr(1)> Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2)
 Ok(3)
 """
+@autoimport
 deftrait Applicative
 where
   Self: Functor

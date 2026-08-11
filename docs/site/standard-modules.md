@@ -47,7 +47,7 @@ hello
 xldr(2)>
 ```
 
-`print` が import なしで使えるのは `Kernel` が auto import されるためです。`map_err(...)` や `chain(...)` のような標準 owner helper が bare 名で使えるのは、対応する `@autoimport impl Type` surface が auto import されるためです。
+`print` が import なしで使えるのは `Kernel` が auto import されるためです。`map_err(...)` や `chain(...)` のような標準 owner helper が bare 名で使えるのは、対応する `@autoimport impl Type` surface が auto import されるためです。`fmap(...)`, `pure(...)`, `ap(...)`, `return(...)`, `bind(...)` も、`Functor` / `Applicative` / `Monad` の autoimport trait alias として import なしで使えます。
 
 ## 次に読むページ
 

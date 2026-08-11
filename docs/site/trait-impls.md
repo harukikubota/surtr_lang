@@ -51,12 +51,20 @@ xldr(2)>
 
 - `Functor::fmap` / `|*>` は文脈の中身だけを変換します。
 - `Applicative::pure` は値を文脈へ持ち上げ、`Applicative::ap` / `|*|` は文脈内の callable と文脈内の値を組み合わせます。
-- `Monad::bind` / `|>=` は文脈内の値を次の文脈付き計算へ渡します。
+- `Monad::return` は値を文脈へ持ち上げ、`Monad::bind` / `|>=` は文脈内の値を次の文脈付き計算へ渡します。
+
+これら3 trait は auto import 対象です。そのため、qualified call の代わりに
+`fmap(...)`, `pure(...)`, `ap(...)`, `return(...)`, `bind(...)` と書けます。
+演算子は文脈の流れを読みやすくし、helper の直接呼び出しは flat な式や高階関数で
+便利です。
 
 複数引数の mapper は `curry()` で明示的にカリー化します。
 
 ```surtr
 Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2) # => Ok(3)
+
+value: Result<Int> = pure(1)
+mapped: Result<Int> = fmap(value, {|n| n + 1})
 ```
 
 変換系は `From` / `TryFrom` trait が裏側の coherence を担います。
