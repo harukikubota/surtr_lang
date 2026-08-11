@@ -2618,8 +2618,8 @@ impl ReplEngine {
 
     fn facet_source_and_focus_ast_ty(ty: &AstTy) -> Option<(AstTy, AstTy)> {
         match ty {
-            AstTy::Generic(_, name, args) if name == "Facet" && args.len() == 2 => {
-                Some((args[0].clone(), args[1].clone()))
+            AstTy::Generic(_, name, args) if name == "Facet" && args.len() == 5 => {
+                Some((args[1].clone(), args[2].clone()))
             }
             _ => None,
         }
@@ -2646,7 +2646,9 @@ impl ReplEngine {
         let mut lines = if root_only && is_view_closure {
             vec![format!("{path_display} -> ({source} -> _)")]
         } else if root_only && root_kind == surtr_analysis::FacetPathRootKind::TypeRoot {
-            vec![format!("{path_display} -> Facet<{source}, _>")]
+            vec![format!(
+                "{path_display} -> Facet<InfallibleStructural, {source}, _, _, _>"
+            )]
         } else if root_only && root_kind == surtr_analysis::FacetPathRootKind::ValueRoot {
             vec![format!("{path_display} -> _")]
         } else if is_view_closure {
@@ -4882,26 +4884,33 @@ impl ReplEngine {
         let mut lines = vec![
             "## FacetPath".to_string(),
             format!("type: {}", crate::surface_rendered_name(&info.ty)),
-            format!("kind: {}", info.path_kind),
-            "view API: Facet::view".to_string(),
             format!(
-                "preview API: {}",
-                if info.path_kind == "variant" {
-                    "Facet::preview"
-                } else {
-                    "unavailable"
+                "stage: {}",
+                match info.stage {
+                    forge::ReplFacetStage::Template => "template",
+                    forge::ReplFacetStage::Pending => "pending",
                 }
             ),
+            format!("kind: {}", info.path_kind),
+            format!("source: {}", crate::surface_rendered_name(&info.source_ty)),
+            format!("focus: {}", crate::surface_rendered_name(&info.focus_ty)),
             format!(
-                "view result: {}",
-                crate::surface_rendered_name(&info.view_result_ty)
+                "updated source: {}",
+                crate::surface_rendered_name(&info.update_source_ty)
+            ),
+            format!(
+                "replacement focus: {}",
+                crate::surface_rendered_name(&info.update_focus_ty)
             ),
             format!(
                 "full path: {}",
                 crate::surface_rendered_name(&info.full_path)
             ),
+            "## API eligibility".to_string(),
             "## Flow".to_string(),
         ];
+        let flow_index = lines.len() - 1;
+        lines.splice(flow_index..flow_index, info.api_eligibility.iter().cloned());
 
         let mut previous_terminal = None::<String>;
         for (index, segment) in info.segments.iter().enumerate() {
@@ -5584,7 +5593,33 @@ impl ReplEngine {
         }
         forge::ReplFacetInfo {
             ty: Self::ty_to_string(ty),
+            stage: forge::ReplFacetStage::Template,
             path_kind: path.path_kind.as_str().to_string(),
+            source_ty: Self::ty_to_string(&path.source_ty),
+            focus_ty: Self::ty_to_string(&path.focus_ty),
+            update_source_ty: Self::ty_to_string(&path.update_source_ty),
+            update_focus_ty: Self::ty_to_string(&path.update_focus_ty),
+            api_eligibility: {
+                let mut apis = vec![
+                    "view: available".to_string(),
+                    "set: available".to_string(),
+                    "over: available".to_string(),
+                ];
+                if path.has_variant_segment() {
+                    apis.push("preview: available".to_string());
+                    apis.push("case_over: available".to_string());
+                    if path.final_segment_is_variant() {
+                        apis.push("case_set: available".to_string());
+                    }
+                }
+                if path.is_infallible_structural() {
+                    apis.push("put: available when replacement B derives T".to_string());
+                }
+                if matches!(path.focus_ty, Ty::Result(_, _)) {
+                    apis.push("over_result: available".to_string());
+                }
+                apis
+            },
             view_result_ty: if source_is_result || path_is_fallible || path.may_fail {
                 format!("Result<{}, Error>", Self::ty_to_string(&path.focus_ty))
             } else {
@@ -5603,7 +5638,13 @@ impl ReplEngine {
                 let full_path = Self::render_pending_facet_path(path);
                 Some(forge::ReplFacetInfo {
                     ty: Self::ty_to_string(&node.ty),
-                    path_kind: "structural".to_string(),
+                    stage: forge::ReplFacetStage::Pending,
+                    path_kind: "pending".to_string(),
+                    source_ty: "_".to_string(),
+                    focus_ty: "_".to_string(),
+                    update_source_ty: "_".to_string(),
+                    update_focus_ty: "_".to_string(),
+                    api_eligibility: vec!["pending specialization".to_string()],
                     view_result_ty: "_".to_string(),
                     full_path,
                     segments: path

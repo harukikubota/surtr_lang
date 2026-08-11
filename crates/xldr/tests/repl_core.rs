@@ -753,7 +753,10 @@ fn core_command_argument_completion_uses_command_policies() {
     );
 
     let facet = rendered_text(&engine.handle_line("path = Tuple._0"));
-    assert!(facet.contains("path: Facet<_, _>"), "{facet}");
+    assert!(
+        facet.contains("path: Facet<InfallibleStructural, _, _, _, _>"),
+        "{facet}"
+    );
     let facet_candidates = engine
         .completions(":facet pa", ":facet pa".len())
         .candidates;
@@ -1792,7 +1795,7 @@ impl User {
         .expect("type-root facet completion should show signature help");
     let rendered = signature.lines.join("\n");
     assert!(
-        rendered.contains("User.[field] -> Facet<User, _>"),
+        rendered.contains("User.[field] -> Facet<InfallibleStructural, User, _, _, _>"),
         "unexpected facet signature help: {rendered:?}"
     );
 }
@@ -1875,7 +1878,7 @@ defrecord User(profile: Result<Profile>)
 
     let path = rendered_text(&engine.handle_line("path = User.profile.first"));
     assert!(
-        path.contains("path: Facet<User, String>"),
+        path.contains("path: Facet<InfallibleStructural, User, String, _, _>"),
         "completion should match the compiled transparent Result path: {path}"
     );
 }
@@ -2111,9 +2114,8 @@ defenum Slot { Some(String), None }
 "#,
     )
     .expect("script preload should bootstrap");
-    assert!(
-        rendered_text(&engine.handle_line("name_path = User.name")).contains("Facet<User, String>")
-    );
+    assert!(rendered_text(&engine.handle_line("name_path = User.name"))
+        .contains("Facet<InfallibleStructural, User, String, _, _>"));
 
     for api in [
         "view",
@@ -2220,7 +2222,8 @@ defrecord User(profile: Profile, age: Int)
 "#,
     )
     .expect("script preload should bootstrap");
-    assert!(rendered_text(&engine.handle_line("p = User.profile")).contains("Facet<User, Profile>"));
+    assert!(rendered_text(&engine.handle_line("p = User.profile"))
+        .contains("Facet<InfallibleStructural, User, Profile, _, _>"));
 
     let completion = engine.completions("p.", "p.".len());
     let labels = completion
@@ -2253,9 +2256,8 @@ def view(value: Int) -> Int { value }
 "#,
     )
     .expect("script preload should bootstrap");
-    assert!(
-        rendered_text(&engine.handle_line("name_path = User.name")).contains("Facet<User, String>")
-    );
+    assert!(rendered_text(&engine.handle_line("name_path = User.name"))
+        .contains("Facet<InfallibleStructural, User, String, _, _>"));
     assert!(rendered_text(&engine.handle_line("n = 1")).contains("n: Int"));
 
     let completion = engine.completions("view(", "view(".len());
@@ -2913,7 +2915,7 @@ fn core_reuses_deferred_tuple_facet_bindings_between_inputs() {
     let mut engine = engine();
 
     let facet = engine.handle_line("a = Tuple._1");
-    assert!(rendered_text(&facet).contains("a: Facet<_, _> = Tuple._1"));
+    assert!(rendered_text(&facet).contains("a: Facet<InfallibleStructural, _, _, _, _> = Tuple._1"));
 
     let pair = engine.handle_line("pair = (\"alice\", 2)");
     assert!(rendered_text(&pair).contains("pair: (String, Int) = (\"alice\", 2)"));
@@ -3023,18 +3025,26 @@ fn core_renders_top_level_facet_chain_expressions_without_codegen_leak() {
     let mut engine = engine();
 
     let tuple_facet = engine.handle_line("a = Tuple._1");
-    assert!(rendered_text(&tuple_facet).contains("a: Facet<_, _> = Tuple._1"));
+    assert!(rendered_text(&tuple_facet)
+        .contains("a: Facet<InfallibleStructural, _, _, _, _> = Tuple._1"));
 
     let enum_facet = engine.handle_line("ep = IntBase.Oct");
-    assert!(rendered_text(&enum_facet).contains("ep: Facet<IntBase, Unit> = IntBase.Oct"));
+    assert!(rendered_text(&enum_facet)
+        .contains("ep: Facet<VariantPath, IntBase, Unit, _, _> = IntBase.Oct"));
 
     let slash = engine.handle_line("a / ep");
     let slash = rendered_text(&slash);
-    assert!(slash.contains("Facet<_, _> = Tuple._1.Oct"), "{slash}");
+    assert!(
+        slash.contains("Facet<InfallibleStructural, _, _, _, _> = Tuple._1.Oct"),
+        "{slash}"
+    );
 
     let helper = engine.handle_line("Facet::chain(a, ep)");
     let helper = rendered_text(&helper);
-    assert!(helper.contains("Facet<_, _> = Tuple._1.Oct"), "{helper}");
+    assert!(
+        helper.contains("Facet<InfallibleStructural, _, _, _, _> = Tuple._1.Oct"),
+        "{helper}"
+    );
 }
 
 #[test]
@@ -3042,20 +3052,23 @@ fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
     let mut engine = engine();
 
     let binding = engine.handle_line("path = Tuple._0");
-    assert!(rendered_text(&binding).contains("path: Facet<_, _> = Tuple._0"));
+    assert!(rendered_text(&binding)
+        .contains("path: Facet<InfallibleStructural, _, _, _, _> = Tuple._0"));
 
     let facet_info = engine.handle_line(":facet path");
     assert!(matches!(facet_info.output, ReplOutput::StyledDoc { .. }));
     let facet_info = rendered_text(&facet_info);
     assert!(facet_info.contains("## FacetPath"), "{facet_info}");
-    assert!(facet_info.contains("type: Facet<_, _>"), "{facet_info}");
-    assert!(facet_info.contains("kind: structural"), "{facet_info}");
-    assert!(facet_info.contains("view API: Facet::view"), "{facet_info}");
     assert!(
-        facet_info.contains("preview API: unavailable"),
+        facet_info.contains("type: Facet<InfallibleStructural, _, _, _, _>"),
         "{facet_info}"
     );
-    assert!(facet_info.contains("view result: _"), "{facet_info}");
+    assert!(facet_info.contains("stage: pending"), "{facet_info}");
+    assert!(facet_info.contains("kind: pending"), "{facet_info}");
+    assert!(
+        facet_info.contains("pending specialization"),
+        "{facet_info}"
+    );
     assert!(facet_info.contains("full path: Tuple._0"), "{facet_info}");
     assert!(facet_info.contains("## Flow"), "{facet_info}");
     assert!(facet_info.contains("hop 1: Tuple._0"), "{facet_info}");
@@ -3066,15 +3079,8 @@ fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
 
     let fallible = engine.handle_line(":facet BitWidth.Any");
     let fallible = rendered_text(&fallible);
-    assert!(fallible.contains("kind: variant"), "{fallible}");
-    assert!(
-        fallible.contains("preview API: Facet::preview"),
-        "{fallible}"
-    );
-    assert!(
-        fallible.contains("view result: Result<Int, Error>"),
-        "{fallible}"
-    );
+    assert!(fallible.contains("kind: VariantPath"), "{fallible}");
+    assert!(fallible.contains("preview: available"), "{fallible}");
     assert!(fallible.contains("## Stops"), "{fallible}");
     assert!(fallible.contains("stop 1:"), "{fallible}");
     assert!(
@@ -3088,10 +3094,13 @@ fn core_renders_negative_and_range_list_facets() {
     let mut engine = engine();
 
     let last = engine.handle_line("last = List.[-1]");
-    assert!(rendered_text(&last).contains("last: Facet<_, _> = List.[-1]"));
+    assert!(
+        rendered_text(&last).contains("last: Facet<InfallibleStructural, _, _, _, _> = List.[-1]")
+    );
 
     let window = engine.handle_line("window = List.[1..-1]");
-    assert!(rendered_text(&window).contains("window: Facet<_, _> = List.[1..-1]"));
+    assert!(rendered_text(&window)
+        .contains("window: Facet<InfallibleStructural, _, _, _, _> = List.[1..-1]"));
 
     let info = engine.handle_line(":facet window");
     let info = rendered_text(&info);

@@ -1798,11 +1798,23 @@ pub struct ReplFacetSegmentInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplFacetInfo {
     pub ty: String,
+    pub stage: ReplFacetStage,
     pub path_kind: String,
+    pub source_ty: String,
+    pub focus_ty: String,
+    pub update_source_ty: String,
+    pub update_focus_ty: String,
+    pub api_eligibility: Vec<String>,
     pub view_result_ty: String,
     pub full_path: String,
     pub segments: Vec<ReplFacetSegmentInfo>,
     pub stop_points: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplFacetStage {
+    Template,
+    Pending,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4195,7 +4207,13 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
             }
             Some(ReplFacetInfo {
                 ty: ty_to_string(&node.ty),
+                stage: ReplFacetStage::Template,
                 path_kind: path.path_kind.as_str().to_string(),
+                source_ty: ty_to_string(&path.source_ty),
+                focus_ty: ty_to_string(&path.focus_ty),
+                update_source_ty: ty_to_string(&path.update_source_ty),
+                update_focus_ty: ty_to_string(&path.update_focus_ty),
+                api_eligibility: facet_api_eligibility(path),
                 view_result_ty: if path_is_fallible || path.may_fail {
                     format!("Result<{}, Error>", ty_to_string(&path.focus_ty))
                 } else {
@@ -4208,7 +4226,13 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
         }
         TypedInner::PendingFacetPath(path) => Some(ReplFacetInfo {
             ty: ty_to_string(&node.ty),
-            path_kind: "structural".to_string(),
+            stage: ReplFacetStage::Pending,
+            path_kind: "pending".to_string(),
+            source_ty: "_".to_string(),
+            focus_ty: "_".to_string(),
+            update_source_ty: "_".to_string(),
+            update_focus_ty: "_".to_string(),
+            api_eligibility: vec!["pending specialization".to_string()],
             view_result_ty: "_".to_string(),
             full_path: if path.segments.is_empty() {
                 "<facet>".to_string()
@@ -4258,6 +4282,38 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
         }),
         _ => None,
     }
+}
+
+fn facet_api_eligibility(path: &TypedFacetPath) -> Vec<String> {
+    let deferred = matches!(
+        (&path.update_source_ty, &path.update_focus_ty),
+        (Ty::Hole, Ty::Hole)
+    );
+    let mut apis = Vec::new();
+    if deferred {
+        apis.push("view: available".to_string());
+        if path.has_variant_segment() {
+            apis.push("preview: available".to_string());
+        }
+    } else {
+        apis.push("view: unavailable (concrete update slots)".to_string());
+        apis.push("preview: unavailable (concrete update slots)".to_string());
+    }
+    if path.is_infallible_structural() {
+        apis.push("put: available when replacement B derives T".to_string());
+    }
+    apis.push("set: available".to_string());
+    apis.push("over: available".to_string());
+    if matches!(path.focus_ty, Ty::Result(_, _)) {
+        apis.push("over_result: available".to_string());
+    }
+    if path.has_variant_segment() {
+        apis.push("case_over: available".to_string());
+        if path.final_segment_is_variant() {
+            apis.push("case_set: available".to_string());
+        }
+    }
+    apis
 }
 
 fn collect_stmt_meta(

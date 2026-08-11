@@ -2886,7 +2886,7 @@ fn signature_type_param_bound(signature: &str, param_name: &str) -> Option<Strin
 }
 
 fn facet_path_arg_type(ty: &AstTy) -> bool {
-    matches!(ty, AstTy::Generic(_, name, args) if name == "Facet" && args.len() == 2)
+    matches!(ty, AstTy::Generic(_, name, args) if name == "Facet" && args.len() == 5)
 }
 
 fn parameter_type_accepts_arg_type(param: &str, arg: &str) -> bool {
@@ -2998,7 +2998,7 @@ fn completion_candidate_from_symbol(
 fn facet_binding_type(detail: &str) -> bool {
     matches!(
         parse_signature_type(detail),
-        Some(AstTy::Generic(_, name, args)) if name == "Facet" && args.len() == 2
+        Some(AstTy::Generic(_, name, args)) if name == "Facet" && args.len() == 5
     )
 }
 
