@@ -1,2 +1,2 @@
 phase: typecheck
-contains: optional Facet segment requires an enum variant
+contains: optional Facet selectors are no longer supported

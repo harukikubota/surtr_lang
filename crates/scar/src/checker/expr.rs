@@ -8819,6 +8819,16 @@ impl Checker {
                 hint: None,
             });
         };
+        if *optional {
+            return Err(TypeError {
+                message: "optional Facet selectors are no longer supported".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Facet variant selectors are required because an optional mismatch cannot preserve a type-changing rebuild."
+                        .into(),
+                ),
+            });
+        }
         match self.resolve_ty(source_ty) {
             Ty::Tuple(items) => {
                 if *optional {

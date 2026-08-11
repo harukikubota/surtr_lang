@@ -12,9 +12,7 @@ Ok(80)
 [99, 20]
 Ok(81)
 Option::Some("alice!")
-Option::None
 [99, 25]
 Ok(82)
 Option::Some("alice!!")
 Option::Some(Ok("alice!"))
-Option::Some(Err(NoneError("None Value.")))

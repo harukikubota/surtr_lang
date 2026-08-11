@@ -10,7 +10,7 @@ consume them in that same scope via
 Use `Facet` when you want to describe "where" inside a value the compiler should
 look or update.
 `Option<T>` fields work naturally with enum-case Facet paths such as
-`Option.Some`, `Option.Some?`, `case_set`, and `case_over`.
+`Option.Some`, `case_set`, and `case_over`.
 When a field should participate in Result-style update flows, use
 `Result<T, NoneError>` explicitly.
 
@@ -38,7 +38,6 @@ Common path forms:
 - nested path: `User.profile / Profile.name`, `User.profile.name`
 - function-form nested path: `Facet::chain(User.profile, Profile.name)`
 - enum variant selector: `Expr.Add`
-- optional enum variant selector: `Expr.Add?`
 - value sugar: `value.segment`
 - shorthand source/path capture: `~value.segment`
 
@@ -249,9 +248,8 @@ impl Facet {
   `case_set` is valid only when the Facet path contains an enum selector and
   the final segment is that enum case.
 
-  Required enum segments return `Err(VariantMismatch(...))` when the source is
-  on another variant. Optional enum segments such as `Option.Some?` skip a
-  variant mismatch and return the original source unchanged.
+  Enum segments are required and return `Err(VariantMismatch(...))` when the
+  source is on another variant.
   """
   @builtin def case_set(facet: Facet<CasePath, $S, $A, $T, $B>, source: $S, value: $B) -> Result<$T>
 
@@ -312,9 +310,7 @@ impl Facet {
 
   @doc """
   Update a focus reached through an enum case path.
-  `case_over` requires at least one enum selector in the Facet path. Optional
-  selectors such as `Option.Some?` skip mismatches and leave the source
-  unchanged.
+  `case_over` requires at least one required enum selector in the Facet path.
 
   `case_over` accepts both plain and `Result` focus.
   When the focus is plain `$A`, `update_fun` receives `$A` and returns

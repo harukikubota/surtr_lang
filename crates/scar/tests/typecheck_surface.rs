@@ -2156,7 +2156,7 @@ Facet::set(User.name?, user, "bob")"#,
     .expect_err("optional marker on a field should fail");
     assert!(err
         .message
-        .contains("optional Facet segment requires an enum variant"));
+        .contains("optional Facet selectors are no longer supported"));
 }
 
 fn facet_case_api_requires_enum_path_and_records_modes() {
@@ -2167,7 +2167,7 @@ fn facet_case_api_requires_enum_path_and_records_modes() {
 }
 slot = Slot::Some(Ok("alice"))
 updated =? Facet::case_set(Slot.Some, slot, Ok("bob"))
-overed =? Facet::case_over(Slot.Some?, updated, {|name| Ok(name ++ "!")})
+overed =? Facet::case_over(Slot.Some, updated, {|name| Ok(name ++ "!")})
 Facet::case_over(Slot.Some, overed, {|value: Result<String>| Ok(value)})"#,
     );
     let rendered = format!("{typed:?}");
