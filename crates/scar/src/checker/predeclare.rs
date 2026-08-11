@@ -2201,6 +2201,9 @@ impl Checker {
                     continue;
                 }
                 let Some(default_body) = trait_method.body.clone() else {
+                    if trait_method.attrs.visibility == spire::ast::Visibility::Private {
+                        continue;
+                    }
                     return Err(TypeError {
                         message: format!(
                             "Trait impl {} for {} is missing method `{}`",
@@ -2279,6 +2282,17 @@ impl Checker {
                     });
                 }
 
+                if trait_method.attrs.visibility != impl_method.attrs.visibility {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait impl method {}::{} has incompatible visibility",
+                            trait_id.name, method_name
+                        ),
+                        span: impl_method.span.clone(),
+                        hint: Some("A trait private helper must be implemented with `defp`, and a public trait method with `def`".into()),
+                    });
+                }
+
                 let (trait_params, trait_ret, trait_head_vars, _) =
                     self.resolve_trait_method_signature(&trait_info, trait_method, &target_ty)?;
                 let trait_head_mapping = trait_head_vars
@@ -2342,6 +2356,19 @@ impl Checker {
                                 .join(", "),
                             self.ty_name(&impl_ret)
                         )),
+                    });
+                }
+
+                if Self::where_clause_key(trait_method.where_clause.as_ref())
+                    != Self::where_clause_key(impl_method.where_clause.as_ref())
+                {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait impl method {}::{} has incompatible trait constraints",
+                            trait_id.name, method_name
+                        ),
+                        span: impl_method.span.clone(),
+                        hint: Some("The impl method must use the same where constraints as the trait method".into()),
                     });
                 }
             }
@@ -2414,52 +2441,95 @@ impl Checker {
 
         let impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
         for child_impl in &impls {
-            let child_trait_key = self.trait_key(&child_impl.trait_id);
-            let Some(child_trait) = self.traits.get(&child_trait_key) else {
-                continue;
-            };
-            for parent in &child_trait.parents {
-                let parent_key = self.trait_key(parent);
-                let parent_trait = self.traits.get(&parent_key).ok_or_else(|| TypeError {
-                    message: format!("Unknown parent trait: {}", parent.name),
-                    span: parent.span.clone(),
-                    hint: None,
-                })?;
-                if !parent_trait.type_params.is_empty() {
-                    return Err(TypeError {
-                        message: format!(
-                            "Parent trait {} requires type arguments and cannot be used as a bare parent constraint",
-                            parent.name
-                        ),
-                        span: parent.span.clone(),
-                        hint: None,
-                    });
-                }
-                let parent_impl_key = (parent_key.clone(), child_impl.target_name.clone());
-                let parent_impl =
-                    self.trait_impls
-                        .get(&parent_impl_key)
-                        .ok_or_else(|| TypeError {
-                            message: format!(
-                                "Trait impl {} for {} requires parent impl {} for the same target",
-                                child_impl.trait_id.name, child_impl.target_name, parent.name
-                            ),
-                            span: child_impl.trait_id.span.clone(),
-                            hint: None,
-                        })?;
-                if child_impl.constructor_slot_positions != parent_impl.constructor_slot_positions {
-                    return Err(TypeError {
-                        message: format!(
-                            "Trait impl {} for {} must use the same constructor slot mapping as parent {}",
-                            child_impl.trait_id.name, child_impl.target_name, parent.name
-                        ),
-                        span: child_impl.trait_id.span.clone(),
-                        hint: None,
-                    });
-                }
-            }
+            self.validate_parent_impl_chain(child_impl, &mut HashSet::new())?;
         }
 
+        Ok(())
+    }
+
+    fn where_clause_key(clause: Option<&TypedWhereClause>) -> Option<String> {
+        clause.map(|clause| {
+            clause
+                .constraints
+                .iter()
+                .map(|constraint| {
+                    let bounds = constraint
+                        .bounds
+                        .iter()
+                        .map(|bound| match bound {
+                            TypedWhereConstraintRhs::Trait(id) => format!("trait:{}", id.qualified_name.as_deref().unwrap_or(&id.name)),
+                            TypedWhereConstraintRhs::TypeConstructor { slots, .. } => format!(
+                                "type:{}",
+                                slots.iter().map(Self::ast_ty_key).collect::<Vec<_>>().join(",")
+                            ),
+                            TypedWhereConstraintRhs::TraitSlot { trait_id, slot_name, slot_ordinal, .. } => format!(
+                                "slot:{}:{}:{}",
+                                trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name),
+                                slot_name,
+                                slot_ordinal
+                            ),
+                        })
+                        .collect::<Vec<_>>()
+                        .join("+");
+                    format!("{}:{}", Self::ast_ty_key(&constraint.subject), bounds)
+                })
+                .collect::<Vec<_>>()
+                .join(";")
+        })
+    }
+
+    fn validate_parent_impl_chain(
+        &self,
+        child_impl: &TraitImplInfo,
+        visiting: &mut HashSet<(String, String)>,
+    ) -> Result<(), TypeError> {
+        let child_trait_key = self.trait_key(&child_impl.trait_id);
+        let visit_key = (child_trait_key.clone(), child_impl.target_name.clone());
+        if !visiting.insert(visit_key.clone()) {
+            return Ok(());
+        }
+        let Some(child_trait) = self.traits.get(&child_trait_key) else {
+            return Ok(());
+        };
+        for parent in &child_trait.parents {
+            let parent_key = self.trait_key(parent);
+            let parent_trait = self.traits.get(&parent_key).ok_or_else(|| TypeError {
+                message: format!("Unknown parent trait: {}", parent.name),
+                span: parent.span.clone(),
+                hint: None,
+            })?;
+            if !parent_trait.type_params.is_empty() {
+                return Err(TypeError {
+                    message: format!(
+                        "Parent trait {} requires type arguments and cannot be used as a bare parent constraint",
+                        parent.name
+                    ),
+                    span: parent.span.clone(),
+                    hint: None,
+                });
+            }
+            let parent_impl_key = (parent_key.clone(), child_impl.target_name.clone());
+            let parent_impl = self.trait_impls.get(&parent_impl_key).ok_or_else(|| TypeError {
+                message: format!(
+                    "Trait impl {} for {} requires parent impl {} for the same target",
+                    child_impl.trait_id.name, child_impl.target_name, parent.name
+                ),
+                span: child_impl.trait_id.span.clone(),
+                hint: None,
+            })?;
+            if child_impl.constructor_slot_positions != parent_impl.constructor_slot_positions {
+                return Err(TypeError {
+                    message: format!(
+                        "Trait impl {} for {} must use the same constructor slot mapping as parent {}",
+                        child_impl.trait_id.name, child_impl.target_name, parent.name
+                    ),
+                    span: child_impl.trait_id.span.clone(),
+                    hint: None,
+                });
+            }
+            self.validate_parent_impl_chain(parent_impl, visiting)?;
+        }
+        visiting.remove(&visit_key);
         Ok(())
     }
 

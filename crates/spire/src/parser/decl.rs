@@ -1609,9 +1609,9 @@ impl Parser<'_> {
                     }
                     continue;
                 }
-                if !matches!(self.peek(), Token::Def | Token::Annotator(_)) {
+                if !matches!(self.peek(), Token::Def | Token::Defp | Token::Annotator(_)) {
                     return Err(ParseError::syntax(
-                        "trait impl body may only contain `def` declarations",
+                        "trait impl body may only contain `def` / `defp` declarations",
                         self.peek_span(),
                     ));
                 }
@@ -2392,9 +2392,9 @@ impl Parser<'_> {
                 }
                 self.skip_newlines();
             }
-            if !matches!(self.peek(), Token::Def) {
+            if !matches!(self.peek(), Token::Def | Token::Defp) {
                 return Err(ParseError::syntax(
-                    "trait body may only contain `def` signatures",
+                    "trait body may only contain `def` / `defp` declarations",
                     self.peek_span(),
                 ));
             }
@@ -2425,7 +2425,22 @@ impl Parser<'_> {
         annotator_start: Option<usize>,
     ) -> Result<TraitMethodSig, ParseError> {
         let sp = self.peek_span();
-        self.expect(&Token::Def)?;
+        let visibility = match self.peek() {
+            Token::Def => {
+                self.advance();
+                Visibility::Public
+            }
+            Token::Defp => {
+                self.advance();
+                Visibility::Private
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    "Expected `def` or `defp`",
+                    self.peek_span(),
+                ));
+            }
+        };
         let (name, _) = self.expect_ident()?;
         let type_params = self.parse_decl_type_params()?;
         let mut params = Vec::new();
@@ -2517,6 +2532,12 @@ impl Parser<'_> {
                 end.end,
             )
         } else {
+            if visibility == Visibility::Private {
+                return Err(ParseError::syntax(
+                    "trait `defp` must have a body",
+                    self.peek_span(),
+                ));
+            }
             let end = if self.pos > 0 {
                 self.tokens[self.pos - 1].span.end
             } else {
@@ -2525,6 +2546,8 @@ impl Parser<'_> {
             (None, end)
         };
 
+        let mut attrs = attrs;
+        attrs.visibility = visibility;
         Ok(TraitMethodSig {
             name,
             type_params,

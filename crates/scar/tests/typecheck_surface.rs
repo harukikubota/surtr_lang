@@ -3777,6 +3777,22 @@ impl Parent for Identity<$T> {{
 }
 
 #[test]
+fn trait_default_methods_and_private_helpers_are_accepted() {
+    let source = r#"
+deftrait DefaultValue {
+  def value(self: Self) -> Int { helper() }
+  defp helper() -> Int { 42 }
+}
+
+impl DefaultValue for Int {
+  defp helper() -> Int { 7 }
+}
+"#;
+    typecheck_with_rules(source, RuntimeSourcePolicy::script())
+        .expect("default trait methods and impl-private helpers should typecheck");
+}
+
+#[test]
 fn parent_trait_cycles_and_slot_mapping_mismatches_are_rejected() {
     let cycle = r#"deftrait Left
 where

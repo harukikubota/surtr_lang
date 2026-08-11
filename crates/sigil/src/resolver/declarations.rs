@@ -1471,9 +1471,9 @@ pub fn precollect_declaration_index(
                                 stage_index,
                                 false,
                                 false,
-                                Visibility::Public,
-                                true,
-                                true,
+                                method.attrs.visibility,
+                                method.attrs.visibility == Visibility::Public,
+                                method.attrs.visibility == Visibility::Public,
                             ),
                             &method.span,
                         )?;
@@ -1500,7 +1500,7 @@ pub fn precollect_declaration_index(
                             _ => {
                                 return Err(ResolveError {
                                     message:
-                                        "trait impl body may only contain `def` / `@builtin def` declarations"
+                                    "trait impl body may only contain `def` / `defp` / `@builtin def` declarations"
                                             .to_string(),
                                     span: span.clone(),
                                     related_labels: Vec::new(),
