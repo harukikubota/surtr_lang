@@ -236,6 +236,18 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_put_supports_type_changing_tuple_update as fn(),
     ),
     (
+        "facet_put_rebuilds_unique_generic_named_type",
+        facet_put_rebuilds_unique_generic_named_type as fn(),
+    ),
+    (
+        "facet_put_rejects_repeated_generic_named_type",
+        facet_put_rejects_repeated_generic_named_type as fn(),
+    ),
+    (
+        "facet_case_set_rebuilds_unique_generic_enum",
+        facet_case_set_rebuilds_unique_generic_enum as fn(),
+    ),
+    (
         "facet_put_rejects_result_annotation_context",
         facet_put_rejects_result_annotation_context as fn(),
     ),
@@ -2119,7 +2131,13 @@ bad = Facet::set(List.[0..1], values, 9)"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("slice set should require List<A>");
-    assert!(set_err.message.contains("Facet::set value type mismatch"));
+    assert!(
+        set_err.message.contains("Facet::set value type mismatch")
+            || set_err
+                .message
+                .contains("Facet updates through List segments cannot change the element type"),
+        "{set_err:?}"
+    );
 
     let over_err = typecheck_with_rules(
         r#"values = [1, 2, 3]
@@ -2326,6 +2344,50 @@ fn facet_put_supports_type_changing_tuple_update() {
         RuntimeSourcePolicy::script(),
     )
     .expect("Facet::put should rebuild a tuple with the replacement type");
+}
+
+fn facet_put_rebuilds_unique_generic_named_type() {
+    typecheck_with_rules(
+        r#"defstruct Box<$A> {
+  value: $A,
+}
+impl Box {
+  def new<$A>(value: $A) -> Box<$A> { Box { value: value } }
+}
+updated = Facet::put(Box.value, Box(1), "one")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("Facet::put should rebuild a uniquely parameterized named type");
+}
+
+fn facet_put_rejects_repeated_generic_named_type() {
+    let err = typecheck_with_rules(
+        r#"defstruct Pair<$A> {
+  left: $A,
+  right: $A,
+}
+impl Pair {
+  def new<$A>(left: $A, right: $A) -> Pair<$A> { Pair { left: left, right: right } }
+}
+Facet::put(Pair.left, Pair(1, 2), "one")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("a repeated generic parameter must not be rebuilt through one field");
+    assert!(err
+        .message
+        .contains("generic parameter occurs outside the updated field"));
+}
+
+fn facet_case_set_rebuilds_unique_generic_enum() {
+    typecheck_with_rules(
+        r#"defenum Slot<$A> {
+  Some($A),
+  None,
+}
+updated = Facet::case_set(Slot.Some, Slot::Some(1), "one")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("Facet::case_set should rebuild a uniquely parameterized enum");
 }
 
 fn facet_put_rejects_result_annotation_context() {

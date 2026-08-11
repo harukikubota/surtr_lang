@@ -5307,8 +5307,16 @@ impl Checker {
                         hint: None,
                     });
                 };
-                fields[index].1 =
+                let rebuilt_field =
                     self.rebuild_facet_source_type(&field_ty, rest, replacement_ty, span)?;
+                self.ensure_named_facet_rebuild_is_unique(
+                    &name,
+                    index,
+                    &field_ty,
+                    &rebuilt_field,
+                    span,
+                )?;
+                fields[index].1 = rebuilt_field;
                 Ok(Ty::Struct(name, fields))
             }
             (Ty::Record(name, mut fields), TypedFacetSegment::Field { field_index, .. }) => {
@@ -5320,8 +5328,16 @@ impl Checker {
                         hint: None,
                     });
                 };
-                fields[index].1 =
+                let rebuilt_field =
                     self.rebuild_facet_source_type(&field_ty, rest, replacement_ty, span)?;
+                self.ensure_named_facet_rebuild_is_unique(
+                    &name,
+                    index,
+                    &field_ty,
+                    &rebuilt_field,
+                    span,
+                )?;
+                fields[index].1 = rebuilt_field;
                 Ok(Ty::Record(name, fields))
             }
             (Ty::List(inner), TypedFacetSegment::ListIndex { .. }) => {
@@ -5385,6 +5401,7 @@ impl Checker {
                         span: span.clone(),
                         hint: None,
                     })?;
+                let enum_template = variant.enum_ty.clone();
                 if !self.types_compatible(&variant.enum_ty, &source) {
                     return Err(TypeError {
                         message: "Facet enum path is inconsistent with its source type".into(),
@@ -5392,29 +5409,355 @@ impl Checker {
                         hint: None,
                     });
                 }
-                let original = match variant.payload.as_slice() {
+                let payload_template = match variant.payload.as_slice() {
                     [] => Ty::Unit,
                     [only] => only.clone(),
                     payload => Ty::Tuple(payload.to_vec()),
                 };
+                let original = self.resolve_ty(&payload_template);
                 let focus =
                     self.rebuild_facet_source_type(&original, rest, replacement_ty, span)?;
-                if !self.types_compatible(&original, &focus) {
-                    return Err(TypeError {
-                        message:
-                            "Facet updates through enum cases cannot change the payload type yet"
-                                .into(),
-                        span: span.clone(),
-                        hint: Some("Use a replacement with the existing case payload type.".into()),
-                    });
+                if self.resolve_ty(&original) == self.resolve_ty(&focus) {
+                    return Ok(source);
                 }
-                Ok(source)
+                let mut replacements = HashMap::new();
+                self.collect_facet_rebuild_tyvar_replacements(
+                    &payload_template,
+                    &focus,
+                    &mut replacements,
+                    span,
+                )?;
+                self.ensure_enum_facet_rebuild_is_unique(
+                    enum_name,
+                    &enum_template,
+                    &replacements,
+                    span,
+                )?;
+                Ok(self.replace_facet_rebuild_tyvars(&enum_template, &replacements))
             }
             _ => Err(TypeError {
                 message: "Facet path is inconsistent with its source type".into(),
                 span: span.clone(),
                 hint: None,
             }),
+        }
+    }
+
+    fn count_tyvar_occurrences(&self, ty: &Ty, needle: u32) -> usize {
+        match ty {
+            Ty::Var(var) => usize::from(*var == needle),
+            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
+                self.count_tyvar_occurrences(inner, needle)
+            }
+            Ty::Tuple(items) => items
+                .iter()
+                .map(|item| self.count_tyvar_occurrences(item, needle))
+                .sum(),
+            Ty::Func(params, ret) => {
+                params
+                    .iter()
+                    .map(|param| self.count_tyvar_occurrences(param, needle))
+                    .sum::<usize>()
+                    + self.count_tyvar_occurrences(ret, needle)
+            }
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
+                self.count_tyvar_occurrences(source, needle)
+                    + self.count_tyvar_occurrences(focus, needle)
+                    + self.count_tyvar_occurrences(update_source, needle)
+                    + self.count_tyvar_occurrences(update_focus, needle)
+            }
+            Ty::Result(ok, err) => {
+                self.count_tyvar_occurrences(ok, needle) + self.count_tyvar_occurrences(err, needle)
+            }
+            Ty::Enum(_, args) => args
+                .iter()
+                .map(|arg| self.count_tyvar_occurrences(arg, needle))
+                .sum(),
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+                .iter()
+                .map(|(_, field)| self.count_tyvar_occurrences(field, needle))
+                .sum(),
+            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+                params
+                    .iter()
+                    .map(|param| self.count_tyvar_occurrences(param, needle))
+                    .sum::<usize>()
+                    + self.count_tyvar_occurrences(ret, needle)
+            }
+            Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Error
+            | Ty::Hole
+            | Ty::Pid(_) => 0,
+        }
+    }
+
+    fn collect_facet_rebuild_tyvar_replacements(
+        &self,
+        template: &Ty,
+        replacement: &Ty,
+        replacements: &mut HashMap<u32, Ty>,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if self.resolve_ty(template) == self.resolve_ty(replacement) {
+            return Ok(());
+        }
+        match (template, replacement) {
+            (Ty::Var(var), _) => {
+                let replacement = self.resolve_ty(replacement);
+                if let Some(existing) = replacements.get(var) {
+                    if self.resolve_ty(existing) != replacement {
+                        return Err(TypeError {
+                            message: "Facet enum case update would assign incompatible types to the same generic parameter".into(),
+                            span: span.clone(),
+                            hint: Some("A type-changing enum case update must determine each generic parameter exactly once.".into()),
+                        });
+                    }
+                } else {
+                    replacements.insert(*var, replacement);
+                }
+                Ok(())
+            }
+            (Ty::List(template), Ty::List(replacement))
+            | (Ty::TypeRef(template), Ty::TypeRef(replacement))
+            | (Ty::Lazy(template), Ty::Lazy(replacement)) => self
+                .collect_facet_rebuild_tyvar_replacements(template, replacement, replacements, span),
+            (Ty::Tuple(templates), Ty::Tuple(replacements_ty))
+            | (Ty::Enum(_, templates), Ty::Enum(_, replacements_ty)) => {
+                if templates.len() != replacements_ty.len() {
+                    return self.facet_rebuild_not_generic_error(span);
+                }
+                for (template, replacement) in templates.iter().zip(replacements_ty) {
+                    self.collect_facet_rebuild_tyvar_replacements(
+                        template,
+                        replacement,
+                        replacements,
+                        span,
+                    )?;
+                }
+                Ok(())
+            }
+            (Ty::Struct(template_name, template_fields), Ty::Struct(replacement_name, replacement_fields))
+            | (Ty::Record(template_name, template_fields), Ty::Record(replacement_name, replacement_fields))
+                if template_name == replacement_name && template_fields.len() == replacement_fields.len() =>
+            {
+                for ((template_name, template), (replacement_name, replacement)) in
+                    template_fields.iter().zip(replacement_fields)
+                {
+                    if template_name != replacement_name {
+                        return self.facet_rebuild_not_generic_error(span);
+                    }
+                    self.collect_facet_rebuild_tyvar_replacements(
+                        template,
+                        replacement,
+                        replacements,
+                        span,
+                    )?;
+                }
+                Ok(())
+            }
+            (Ty::Result(template_ok, template_err), Ty::Result(replacement_ok, replacement_err)) => {
+                self.collect_facet_rebuild_tyvar_replacements(
+                    template_ok,
+                    replacement_ok,
+                    replacements,
+                    span,
+                )?;
+                self.collect_facet_rebuild_tyvar_replacements(
+                    template_err,
+                    replacement_err,
+                    replacements,
+                    span,
+                )
+            }
+            _ => self.facet_rebuild_not_generic_error(span),
+        }
+    }
+
+    fn facet_rebuild_not_generic_error(&self, span: &Span) -> Result<(), TypeError> {
+        Err(TypeError {
+            message: "Facet cannot change this enum case payload because it does not map to a generic parameter".into(),
+            span: span.clone(),
+            hint: Some("Only uniquely rebuildable generic enum cases support a type-changing Facet update.".into()),
+        })
+    }
+
+    fn ensure_enum_facet_rebuild_is_unique(
+        &self,
+        enum_name: &str,
+        enum_template: &Ty,
+        replacements: &HashMap<u32, Ty>,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let enum_args = match enum_template {
+            Ty::Enum(_, args) => args.iter().collect::<Vec<_>>(),
+            Ty::Result(ok, _) => vec![ok.as_ref()],
+            _ => return self.facet_rebuild_not_generic_error(span),
+        };
+        let variants = self
+            .lookup_enum_variants_of(enum_name)
+            .ok_or_else(|| TypeError {
+                message: "Facet enum path is inconsistent with its source type".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        for changed_var in replacements.keys() {
+            let Some(index) = enum_args.iter().position(|arg| matches!(arg, Ty::Var(var) if *var == *changed_var)) else {
+                return self.facet_rebuild_not_generic_error(span);
+            };
+            let Some(original_var) = variants
+                .first()
+                .and_then(|variant| match &variant.enum_ty {
+                    Ty::Enum(_, args) => args.get(index),
+                    Ty::Result(ok, _) if index == 0 => Some(ok.as_ref()),
+                    _ => None,
+                })
+                .and_then(|arg| match arg {
+                    Ty::Var(var) => Some(*var),
+                    _ => None,
+                })
+            else {
+                return self.facet_rebuild_not_generic_error(span);
+            };
+            let occurrences = variants
+                .iter()
+                .flat_map(|variant| variant.payload.iter())
+                .map(|payload| self.count_tyvar_occurrences(payload, original_var))
+                .sum::<usize>();
+            if occurrences != 1 {
+                return Err(TypeError {
+                    message: format!(
+                        "Facet cannot rebuild {} because a generic parameter occurs outside the updated case payload",
+                        Self::surface_name(enum_name)
+                    ),
+                    span: span.clone(),
+                    hint: Some("A type-changing enum case update must determine each generic parameter uniquely.".into()),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn replace_facet_rebuild_tyvars(&self, ty: &Ty, replacements: &HashMap<u32, Ty>) -> Ty {
+        match ty {
+            Ty::Var(var) => replacements
+                .get(var)
+                .cloned()
+                .unwrap_or_else(|| self.resolve_ty(ty)),
+            Ty::List(inner) => Ty::List(Box::new(self.replace_facet_rebuild_tyvars(inner, replacements))),
+            Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.replace_facet_rebuild_tyvars(inner, replacements))),
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(self.replace_facet_rebuild_tyvars(inner, replacements))),
+            Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.replace_facet_rebuild_tyvars(item, replacements)).collect()),
+            Ty::Func(params, ret) => Ty::Func(
+                params.iter().map(|param| self.replace_facet_rebuild_tyvars(param, replacements)).collect(),
+                Box::new(self.replace_facet_rebuild_tyvars(ret, replacements)),
+            ),
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                kind.clone(),
+                Box::new(self.replace_facet_rebuild_tyvars(source, replacements)),
+                Box::new(self.replace_facet_rebuild_tyvars(focus, replacements)),
+                Box::new(self.replace_facet_rebuild_tyvars(update_source, replacements)),
+                Box::new(self.replace_facet_rebuild_tyvars(update_focus, replacements)),
+            ),
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(self.replace_facet_rebuild_tyvars(ok, replacements)),
+                Box::new(self.replace_facet_rebuild_tyvars(err, replacements)),
+            ),
+            Ty::Enum(name, args) => Ty::Enum(
+                name.clone(),
+                args.iter().map(|arg| self.replace_facet_rebuild_tyvars(arg, replacements)).collect(),
+            ),
+            Ty::Struct(name, fields) => Ty::Struct(
+                name.clone(),
+                fields.iter().map(|(field, ty)| (field.clone(), self.replace_facet_rebuild_tyvars(ty, replacements))).collect(),
+            ),
+            Ty::Record(name, fields) => Ty::Record(
+                name.clone(),
+                fields.iter().map(|(field, ty)| (field.clone(), self.replace_facet_rebuild_tyvars(ty, replacements))).collect(),
+            ),
+            Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
+                name: name.clone(),
+                params: params.iter().map(|param| self.replace_facet_rebuild_tyvars(param, replacements)).collect(),
+                ret: Box::new(self.replace_facet_rebuild_tyvars(ret, replacements)),
+            },
+            Ty::UserFunc { fun_idx, type_params, params, ret } => Ty::UserFunc {
+                fun_idx: *fun_idx,
+                type_params: type_params.clone(),
+                params: params.iter().map(|param| self.replace_facet_rebuild_tyvars(param, replacements)).collect(),
+                ret: Box::new(self.replace_facet_rebuild_tyvars(ret, replacements)),
+            },
+            _ => ty.clone(),
+        }
+    }
+
+    fn ensure_named_facet_rebuild_is_unique(
+        &self,
+        type_name: &str,
+        field_index: usize,
+        before: &Ty,
+        after: &Ty,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if self.resolve_ty(before) == self.resolve_ty(after) {
+            return Ok(());
+        }
+        let Some(def) = self.env.lookup_type_def(type_name) else {
+            return Err(TypeError {
+                message: format!("Facet cannot derive a rebuilt type for {}", Self::surface_name(type_name)),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        // Concrete named records remain structurally rebuildable.  The
+        // uniqueness constraint matters when a declaration-level generic
+        // parameter would need a new instantiation.
+        if def.type_param_vars.is_empty() {
+            return Ok(());
+        }
+        let mut rebuildable = false;
+        for var in &def.type_param_vars {
+            let selected_count = def
+                .fields
+                .get(field_index)
+                .map(|(_, ty)| self.count_tyvar_occurrences(ty, *var))
+                .unwrap_or(0);
+            if selected_count == 0 {
+                continue;
+            }
+            let other_count = def
+                .fields
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != field_index)
+                .map(|(_, (_, ty))| self.count_tyvar_occurrences(ty, *var))
+                .sum::<usize>();
+            if selected_count == 1 && other_count == 0 {
+                rebuildable = true;
+                continue;
+            }
+            return Err(TypeError {
+                message: format!(
+                    "Facet cannot rebuild {} because a generic parameter occurs outside the updated field",
+                    Self::surface_name(type_name)
+                ),
+                span: span.clone(),
+                hint: Some("Use a path whose replacement determines each changed generic parameter uniquely.".into()),
+            });
+        }
+        if rebuildable {
+            Ok(())
+        } else {
+            Err(TypeError {
+                message: format!(
+                    "Facet cannot rebuild {} because the updated field does not determine a generic parameter",
+                    Self::surface_name(type_name)
+                ),
+                span: span.clone(),
+                hint: Some("Only uniquely rebuildable generic named types support a type-changing Facet update.".into()),
+            })
         }
     }
 
