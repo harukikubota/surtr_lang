@@ -2759,6 +2759,31 @@ defmod Math {
 }
 
 #[test]
+fn core_imports_non_autoimport_trait_and_rejects_autoimport_trait() {
+    let mut engine = engine();
+
+    let imported = engine.handle_line("import Add");
+    assert!(rendered_text(&imported).contains("Imported Add"));
+
+    let result = engine.handle_line("add(1, 2)");
+    assert!(rendered_text(&result).contains("3"));
+
+    let rejected = engine.handle_line("import Compare");
+    assert!(rendered_text(&rejected)
+        .contains("Compare` is auto-imported and cannot be explicitly imported"));
+}
+
+#[test]
+fn core_script_preload_imports_non_autoimport_trait() {
+    let mut engine =
+        ReplEngine::from_script_source("trait-import.srt", "import Add\nvalue = add(1, 2)\n")
+            .expect("script preload should accept non-autoimport trait import");
+
+    let result = engine.handle_line("value");
+    assert!(rendered_text(&result).contains("3"));
+}
+
+#[test]
 fn core_from_project_module_stages_exposes_compiled_project_definitions() {
     let mut engine = ReplEngine::from_project_module_stages(&[vec![xldr::ModuleInput {
         file_name: "math.srt".into(),

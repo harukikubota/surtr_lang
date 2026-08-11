@@ -1188,6 +1188,68 @@ impl ReplEngine {
         span: &Span,
         imported_symbols: &mut Vec<String>,
     ) -> Result<(), ResolveError> {
+        if let Some(trait_entry) = self.declaration_index.values().find(|entry| {
+            entry.kind == sigil::DeclarationKind::Trait
+                && (entry.name == module_name
+                    || crate::surface_path_name(&entry.fq_name) == module_name)
+        }) {
+            let trait_fq_name = trait_entry.fq_name.clone();
+            let trait_name = trait_entry.name.clone();
+            let trait_uid = self
+                .sigil_session
+                .lookup_uid(&trait_fq_name)
+                .ok_or_else(|| ResolveError {
+                    message: format!(
+                        "Import target `{}` is not available in the current stage",
+                        trait_fq_name
+                    ),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                })?;
+            self.bind_import_name(&trait_name, trait_uid, module_name, span, imported_symbols)?;
+
+            let method_prefix = format!("{}::", trait_fq_name);
+            let methods = self
+                .declaration_index
+                .values()
+                .filter(|entry| {
+                    entry.kind == sigil::DeclarationKind::TraitMethod
+                        && entry.fq_name.starts_with(&method_prefix)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for method_entry in methods {
+                let method_uid = self
+                    .sigil_session
+                    .lookup_uid(&method_entry.fq_name)
+                    .ok_or_else(|| ResolveError {
+                        message: format!(
+                            "Import target `{}` is not available in the current stage",
+                            method_entry.fq_name
+                        ),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    })?;
+                self.bind_import_name(
+                    &method_entry.name,
+                    method_uid,
+                    module_name,
+                    span,
+                    imported_symbols,
+                )?;
+                if let Some(short_method_name) = method_entry.name.rsplit("::").next() {
+                    self.bind_import_name(
+                        short_method_name,
+                        method_uid,
+                        module_name,
+                        span,
+                        imported_symbols,
+                    )?;
+                }
+            }
+            return Ok(());
+        }
+
         let mut imported_any = false;
         let mut blocked_by_stage = false;
         let current_stage_index = self.module_stages.len();
@@ -8878,6 +8940,57 @@ fn apply_preload_imports(
 
         match spec {
             ImportSpec::All => {
+                if let Some(trait_entry) = declaration_index.values().find(|entry| {
+                    entry.kind == sigil::DeclarationKind::Trait
+                        && (entry.name == module_name
+                            || crate::surface_path_name(&entry.fq_name) == module_name)
+                }) {
+                    let trait_fq_name = trait_entry.fq_name.clone();
+                    let trait_uid = sigil_session.lookup_uid(&trait_fq_name).ok_or_else(|| {
+                        ReplLoadError::Load(LoadError::BootstrapFailed {
+                            phase: "resolve".into(),
+                            file_name: "<repl-preload>".into(),
+                            message: format!(
+                                "Import target `{}` is not available in the current stage",
+                                trait_fq_name
+                            ),
+                        })
+                    })?;
+                    sigil_session.define_with_id(&trait_entry.name, trait_uid);
+                    imported_symbols.push(trait_entry.name.clone());
+
+                    let method_prefix = format!("{}::", trait_fq_name);
+                    let methods = declaration_index
+                        .values()
+                        .filter(|entry| {
+                            entry.kind == sigil::DeclarationKind::TraitMethod
+                                && entry.fq_name.starts_with(&method_prefix)
+                                && entry.stage_index < current_stage_index
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    for method_entry in methods {
+                        let method_uid = sigil_session
+                            .lookup_uid(&method_entry.fq_name)
+                            .ok_or_else(|| {
+                                ReplLoadError::Load(LoadError::BootstrapFailed {
+                                    phase: "resolve".into(),
+                                    file_name: "<repl-preload>".into(),
+                                    message: format!(
+                                        "Import target `{}` is not available in the current stage",
+                                        method_entry.fq_name
+                                    ),
+                                })
+                            })?;
+                        sigil_session.define_with_id(&method_entry.name, method_uid);
+                        imported_symbols.push(method_entry.name.clone());
+                        if let Some(short_method_name) = method_entry.name.rsplit("::").next() {
+                            sigil_session.define_with_id(short_method_name, method_uid);
+                            imported_symbols.push(short_method_name.to_string());
+                        }
+                    }
+                    continue;
+                }
                 for entry in declaration_index.values().filter(|entry| {
                     entry.module_path == canonical_module_name
                         && entry.stage_index < current_stage_index
