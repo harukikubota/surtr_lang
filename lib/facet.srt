@@ -1,3 +1,15 @@
+@FacetPathKind Type InfallibleStructural
+@FacetPathKind Type FallibleStructural
+@FacetPathKind Type VariantPath
+
+@FacetPathKind Type ReadablePath =
+  InfallibleStructural | FallibleStructural | VariantPath
+@FacetPathKind Type WritablePath =
+  InfallibleStructural | FallibleStructural | VariantPath
+@FacetPathKind Type PutPath = InfallibleStructural
+@FacetPathKind Type PreviewPath = VariantPath
+@FacetPathKind Type CasePath = VariantPath
+
 @doc """
 Standard `Facet` type declaration.
 `Facet<K, S, A, T, B>` is a compiler-managed path capability from source `S`
@@ -94,17 +106,6 @@ Container bracket expressions follow these additional rules:
 - `const Facet<...>` accepts only literal bracket segments such as `List.[0]`,
   `List.[-1]`, `List.[1..3]`, and `HashMap.["talk"]`
 """
-@FacetPathKind Type InfallibleStructural
-@FacetPathKind Type FallibleStructural
-@FacetPathKind Type VariantPath
-
-@FacetPathKind Type ReadablePath =
-  InfallibleStructural | FallibleStructural | VariantPath
-@FacetPathKind Type WritablePath =
-  InfallibleStructural | FallibleStructural | VariantPath
-@FacetPathKind Type PutPath = InfallibleStructural
-@FacetPathKind Type PreviewPath = VariantPath
-@FacetPathKind Type CasePath = VariantPath
 
 @builtin type Facet<$K, $S, $A, $T, $B>
 

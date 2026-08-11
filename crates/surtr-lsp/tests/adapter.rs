@@ -129,7 +129,10 @@ fn completion_uses_facet_api_first_argument_constraints_through_lsp() {
             label: "Facet::view".to_string(),
             replacement: "Facet::view".to_string(),
             kind: CompletionKind::FunctionCall,
-            detail: Some("view(facet: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>".to_string()),
+            detail: Some(
+                "view(facet: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>"
+                    .to_string(),
+            ),
             documentation: None,
             sort_text: None,
             origin: None,

@@ -1261,7 +1261,9 @@ fn analysis_service_facet_arg_completion_uses_source_location_root_capabilities(
         label: "Facet::view".to_string(),
         replacement: "Facet::view".to_string(),
         kind: CompletionKind::FunctionCall,
-        detail: Some("view(facet: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>".to_string()),
+        detail: Some(
+            "view(facet: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>".to_string(),
+        ),
         documentation: None,
         sort_text: None,
         origin: None,

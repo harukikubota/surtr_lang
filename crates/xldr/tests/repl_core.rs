@@ -3753,6 +3753,22 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{compare_doc}"
     );
 
+    let facet_doc = doc_text(&engine.handle_line(":doc Facet"));
+    assert!(
+        facet_doc.contains("Standard `Facet` type declaration."),
+        "{facet_doc}"
+    );
+    assert!(
+        !facet_doc.contains("Compose` implementation for nested `Facet` paths"),
+        "{facet_doc}"
+    );
+
+    let string_doc = doc_text(&engine.handle_line(":doc String"));
+    assert!(
+        string_doc.contains("Standard `String` type declaration."),
+        "{string_doc}"
+    );
+
     let compare_target_doc = doc_text(&engine.handle_line(":doc Compare(Int, Int)"));
     assert!(compare_target_doc.contains("Standard `Compare` trait declaration."));
     assert!(

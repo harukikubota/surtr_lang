@@ -1457,10 +1457,7 @@ fn repl_supports_deferred_lens_bindings_and_lens_command() {
     assert!(stdout.contains("hop 1: Tuple._1"), "{stdout}");
     assert!(stdout.contains("Stops"), "{stdout}");
     assert!(stdout.contains("stop 1:"), "{stdout}");
-    assert!(
-        stdout.contains("kind: VariantPath"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("kind: VariantPath"), "{stdout}");
     assert!(
         stdout.contains("variant mismatch returns Result"),
         "{stdout}"

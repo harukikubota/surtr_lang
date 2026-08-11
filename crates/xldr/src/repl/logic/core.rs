@@ -3817,16 +3817,28 @@ impl ReplEngine {
             let entry = self.qualified_declaration(symbol)?;
             return Self::declaration_is_public_surface(entry).then_some(entry);
         }
-        let visible_uid = self.sigil_session.lookup_uid(symbol)?;
+        if let Some(visible_uid) = self.sigil_session.lookup_uid(symbol) {
+            return self.declaration_index.values().find(|entry| {
+                Self::declaration_is_public_surface(entry)
+                    && (entry.name == symbol
+                        || entry
+                            .name
+                            .rsplit("::")
+                            .next()
+                            .is_some_and(|tail| tail == symbol))
+                    && self.sigil_session.lookup_uid(&entry.fq_name) == Some(visible_uid)
+            });
+        }
+
+        // Builtin types intentionally do not enter the value scope, but they
+        // remain public declarations and must still be addressable by :doc.
+        // Resolve the bare type name directly from the declaration index only
+        // after the ordinary scope lookup has found nothing, preserving local
+        // binding shadowing for all scope-visible declarations.
         self.declaration_index.values().find(|entry| {
-            Self::declaration_is_public_surface(entry)
-                && (entry.name == symbol
-                    || entry
-                        .name
-                        .rsplit("::")
-                        .next()
-                        .is_some_and(|tail| tail == symbol))
-                && self.sigil_session.lookup_uid(&entry.fq_name) == Some(visible_uid)
+            entry.kind == sigil::DeclarationKind::BuiltinType
+                && Self::declaration_is_public_surface(entry)
+                && sindr::names::surface_path_eq(&entry.fq_name, symbol)
         })
     }
 
