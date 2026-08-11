@@ -277,9 +277,9 @@ Ok(11) |>= require_at_least(10)
 Ok(11) |>= require_at_least(10)   # => require_at_least(11, 10)
 ```
 
-#### `|*|` Applicative apply
+#### `|*|` Applicative ap
 
-`|*|` は `Applicative::apply` の surface syntax です。
+`|*|` は `Applicative::ap` の surface syntax です。
 
 - `Result<(A -> B)> |*| Result<A> -> Result<B>`
 - `List<(A -> B)> |*| List<A> -> List<B>`

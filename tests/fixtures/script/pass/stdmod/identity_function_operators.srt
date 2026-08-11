@@ -19,7 +19,7 @@ impl Applicative for Identity<$T> {
     Identity { value: value }
   }
 
-  def apply(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
+  def ap(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
     f = mapper.value
     Identity { value: f(value.value) }
   }
@@ -81,7 +81,7 @@ pure: Identity<Int> = Applicative::pure(2)
 mapper_identity: Identity<(Int -> Int)> = Identity(&inc)
 returned: Identity<Int> = Monad::return(3)
 value_identity: Identity<Int> = Identity(1)
-applied: Identity<Int> = Applicative::apply(mapper_identity, value_identity)
+applied: Identity<Int> = Applicative::ap(mapper_identity, value_identity)
 lifted = &ident_inc >* &render
 kleisli = &ident_inc >=> &ident_render
 

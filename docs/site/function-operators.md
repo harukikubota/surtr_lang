@@ -135,9 +135,9 @@ def neighbors(n: Int) -> List<Int> { [n - 1, n, n + 1] }
 print(to_string([3, 5] |>= neighbors()))
 ```
 
-## `|*|` Applicative apply
+## `|*|` Applicative ap
 
-`|*|` は `Applicative::apply` の surface syntax です。左辺は文脈内の
+`|*|` は `Applicative::ap` の surface syntax です。左辺は文脈内の
 callable、右辺は同じ文脈の値です。
 
 ```surtr

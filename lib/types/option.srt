@@ -82,7 +82,7 @@ impl Applicative for Option<$T> {
     Option::Some(value)
   }
 
-  def apply(mapper: Option<($A -> $B)>, value: Option<$A>) -> Option<$B> {
+  def ap(mapper: Option<($A -> $B)>, value: Option<$A>) -> Option<$B> {
     match mapper {
       Option::Some(f) => match value {
         Option::Some(inner) => Option::Some(f(inner)),

@@ -627,7 +627,7 @@ print(to_string([1, 2, 3] |>= expand()))
 
 ### 10.4 `|*|` は文脈内の function を適用する
 
-`|*|` は `Applicative::apply` です。左辺に文脈内の function、右辺に
+`|*|` は `Applicative::ap` です。左辺に文脈内の function、右辺に
 同じ文脈の value を置きます。
 
 ```surtr

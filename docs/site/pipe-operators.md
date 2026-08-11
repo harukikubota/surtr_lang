@@ -8,7 +8,7 @@ Surtr には、値や文脈付きの値を左から右へ流すためのパイ�
 - `|>` は plain apply です
 - `|*>` は map です
 - `|>=` は bind です
-- `|*|` は Applicative apply です
+- `|*|` は Applicative ap です
 - 右辺が call 式なら、左辺値は第 1 引数へ注入されます
 - `_1` は右辺 call の direct positional argument に 1 回だけ置けます
 - `_1` は pipe の外では使えません
@@ -74,7 +74,7 @@ Ok(" 42 ") |*> String::trim() |>= try_from(Int)
 
 `Result` なら `Err` を伝播し、`List` なら返ってきた `List` をつなげます。
 
-## `|*|` Applicative apply
+## `|*|` Applicative ap
 
 `|*|` は文脈内の function を文脈内の value に適用します。
 

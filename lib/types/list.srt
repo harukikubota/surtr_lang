@@ -661,7 +661,7 @@ impl Applicative for List<$T> {
     [value]
   }
 
-  def apply(mapper: List<($A -> $B)>, value: List<$A>) -> List<$B> {
+  def ap(mapper: List<($A -> $B)>, value: List<$A>) -> List<$B> {
     List::flat_map(mapper, {|f| List::map(value, f)})
   }
 }

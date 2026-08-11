@@ -1523,7 +1523,7 @@ fn repl_reports_return_mismatch_for_concretized_trait_helper_closure() {
 #[test]
 fn repl_propagates_apply_context_into_nested_pure() {
     let output = run_repl_session(
-        "l: Result<(Int -> Int)> = Applicative::pure({|n| n + 10})\nApplicative::apply(l, Applicative::pure(10))\n:quit\n",
+        "l: Result<(Int -> Int)> = Applicative::pure({|n| n + 10})\nApplicative::ap(l, Applicative::pure(10))\n:quit\n",
     );
     assert!(
         output.status.success(),

@@ -182,7 +182,7 @@ match mapped {
 }
 ```
 
-### `|*|` Applicative apply
+### `|*|` Applicative ap
 
 `Result` では、成功値を保持した function と成功値を保持した引数を
 組み合わせます。`Err` が含まれる場合は `Result` の失敗伝播規則に従います。

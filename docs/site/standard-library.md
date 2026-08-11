@@ -624,7 +624,7 @@ path の停止点をまとめて見たいときに使います。
 |---|---|
 | `x |> f(1)` | call 式への第一引数注入 |
 | `list |*> f()` | `List::map` と同じ方向の変換 |
-| `mapper |*| value` | `Applicative::apply` による文脈内 callable の適用 |
+| `mapper |*| value` | `Applicative::ap` による文脈内 callable の適用 |
 | `list |>= f()` | `List` の bind 方向の変換 |
 | `&f >* &g` | 文脈付き関数の後ろに pure function をつなぐ lifted compose |
 | `&f >=> &g` | `List` または `Result` を返す関数どうしの Kleisli 合成 |

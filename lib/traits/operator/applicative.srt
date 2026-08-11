@@ -4,10 +4,10 @@ Standard `Applicative` trait declaration.
 `Applicative` extends `Functor` with two operations:
 
 - `pure` lifts an ordinary value into the context.
-- `apply` applies a function already in the context to a value in the same
+- `ap` applies a function already in the context to a value in the same
   context.
 
-The `|*|` operator is the surface form of `Applicative::apply`:
+The `|*|` operator is the surface form of `Applicative::ap`:
 `mapper |*| value`. The mapper must be explicitly curried when it has more
 than one argument, so each `|*|` step consumes one contextual argument.
 
@@ -30,5 +30,5 @@ where
 
   # Apply a contextual callable to a contextual value. With a curried mapper,
   # repeated calls consume arguments from left to right.
-  def apply(mapper: Self<($A -> $B)>, value: Self<$A>) -> Self<$B>
+  def ap(mapper: Self<($A -> $B)>, value: Self<$A>) -> Self<$B>
 }

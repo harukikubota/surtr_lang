@@ -3200,7 +3200,7 @@ impl Checker {
             }
         }
         if self.trait_matches_short_name(trait_name, "Applicative")
-            && method_name == "apply"
+            && method_name == "ap"
             && positional_args.len() == 2
         {
             let typed_mapper = self.check_node(positional_args[0])?;
@@ -3208,19 +3208,19 @@ impl Checker {
                 .constructor_slot_type_for(trait_name, &typed_mapper.ty)
                 .ok_or_else(|| TypeError {
                     message: format!(
-                        "Applicative::apply requires a contextual callable, got {}",
+                        "Applicative::ap requires a contextual callable, got {}",
                         self.ty_name(&typed_mapper.ty)
                     ),
                     span: typed_mapper.span.clone(),
                     hint: None,
                 })?;
             let (input, output) =
-                self.unary_function_parts(&mapper_inner, "Applicative::apply", span)?;
+                self.unary_function_parts(&mapper_inner, "Applicative::ap", span)?;
             let expected_value_ty = self
                 .constructor_context_type_for(trait_name, &typed_mapper.ty, &input)
                 .ok_or_else(|| TypeError {
                     message: format!(
-                        "Applicative::apply cannot infer value context from {}",
+                        "Applicative::ap cannot infer value context from {}",
                         self.ty_name(&typed_mapper.ty)
                     ),
                     span: typed_mapper.span.clone(),
@@ -3231,14 +3231,14 @@ impl Checker {
             let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
             let Some((dispatch, expected_mapper)) = self.constructor_functor_dispatch(
                 trait_name,
-                "apply",
+                "ap",
                 &typed_value.ty,
                 &input,
                 &callable_ty,
             ) else {
                 return Err(TypeError {
                     message: format!(
-                        "Applicative::apply requires Applicative implementation for {}",
+                        "Applicative::ap requires Applicative implementation for {}",
                         self.ty_name(&typed_value.ty)
                     ),
                     span: typed_value.span.clone(),
@@ -3247,21 +3247,21 @@ impl Checker {
             };
             if !self.types_compatible(&expected_mapper, &typed_mapper.ty) {
                 return Err(TypeError {
-                    message: "Applicative::apply requires mapper and value in the same context"
+                    message: "Applicative::ap requires mapper and value in the same context"
                         .into(),
                     span: span.clone(),
                     hint: None,
                 });
             }
             let (_, result_ty) = self
-                .constructor_functor_dispatch(trait_name, "apply", &typed_value.ty, &input, &output)
+                .constructor_functor_dispatch(trait_name, "ap", &typed_value.ty, &input, &output)
                 .expect("the same Applicative impl already matched");
             return Ok(TypedNode {
                 ty: result_ty,
                 span: span.clone(),
                 node: TypedInner::TraitCall {
                     trait_name: trait_name.to_string(),
-                    method_name: "apply".into(),
+                    method_name: "ap".into(),
                     receiver_ty: self.resolve_ty(&typed_value.ty),
                     dispatch,
                     origin: TraitCallOrigin::Explicit,
@@ -3945,7 +3945,7 @@ impl Checker {
         let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
         let Some((dispatch, expected_mapper)) = self.constructor_functor_dispatch(
             "Applicative",
-            "apply",
+            "ap",
             &typed_value.ty,
             &input,
             &callable_ty,
@@ -3967,14 +3967,14 @@ impl Checker {
             });
         }
         let (_, result_ty) = self
-            .constructor_functor_dispatch("Applicative", "apply", &typed_value.ty, &input, &output)
+            .constructor_functor_dispatch("Applicative", "ap", &typed_value.ty, &input, &output)
             .expect("the same Applicative impl already matched");
         Ok(TypedNode {
             ty: result_ty,
             span: span.clone(),
             node: TypedInner::TraitCall {
                 trait_name: "Applicative".into(),
-                method_name: "apply".into(),
+                method_name: "ap".into(),
                 receiver_ty: self.resolve_ty(&typed_value.ty),
                 dispatch,
                 origin: TraitCallOrigin::Operator {

@@ -4116,7 +4116,7 @@ impl Applicative for Identity<$T> {
     Identity { value: value }
   }
 
-  def apply(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
+  def ap(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
     f = mapper.value
     Identity { value: f(value.value) }
   }

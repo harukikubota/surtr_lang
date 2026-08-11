@@ -5107,7 +5107,7 @@ impl Functor for Boxed<$T> {
 impl Applicative for Boxed<$T> {
   def pure(value: $A) -> Boxed<$A> { Boxed::Box(value) }
 
-  def apply(mapper: Boxed<($A -> $B)>, value: Boxed<$A>) -> Boxed<$B> {
+  def ap(mapper: Boxed<($A -> $B)>, value: Boxed<$A>) -> Boxed<$B> {
     match mapper {
       Boxed::Box(f) => match value {
         Boxed::Box(inner) => Boxed::Box(f(inner)),

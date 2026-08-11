@@ -413,7 +413,7 @@ impl Applicative for Result<$T> {
     Ok(value)
   }
 
-  def apply(mapper: Result<($A -> $B)>, value: Result<$A>) -> Result<$B> {
+  def ap(mapper: Result<($A -> $B)>, value: Result<$A>) -> Result<$B> {
     match mapper {
       Ok(f) => match value {
         Ok(inner) => Ok(f(inner)),
