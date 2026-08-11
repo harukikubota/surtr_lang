@@ -709,7 +709,7 @@ fn source_signature_caption_handles_defmod_and_impls() {
     );
 
     let trait_impl_source = r#"impl From<String> for Int {
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from(self: Self) -> String {
     inspect(self)
   }
 }"#;
@@ -719,6 +719,6 @@ fn source_signature_caption_handles_defmod_and_impls() {
     assert_eq!(
         source_signature_caption(trait_impl_source, &trait_impl_lines, trait_impl_sig, "from")
             .as_deref(),
-        Some("impl From<String> for Int { def from(self: Self, to: TypeRef<String>) -> String }")
+        Some("impl From<String> for Int { def from(self: Self) -> String }")
     );
 }

@@ -3493,7 +3493,6 @@ impl ReplEngine {
                 | "BulkUpdateEntries"
                 | "Hole"
                 | "Lazy"
-                | "TypeRef"
                 | "StandbyInit"
                 | "Closure"
         )
@@ -5575,7 +5574,6 @@ impl ReplEngine {
             Ty::Hole => "_".into(),
             Ty::List(inner) => format!("List<{}>", Self::ty_to_string(inner)),
             Ty::Lazy(inner) => format!("Lazy<{}>", Self::ty_to_string(inner)),
-            Ty::TypeRef(inner) => format!("TypeRef<{}>", Self::ty_to_string(inner)),
             Ty::Pid(name) => format!("PID<{}>", crate::surface_rendered_name(name)),
             Ty::Facet(kind, source, focus, update_source, update_focus) => {
                 format!(
@@ -6640,10 +6638,6 @@ impl ReplEngine {
         if param == arg || param == "Self" || param.starts_with('$') {
             return true;
         }
-        if param.starts_with("TypeRef<") && param.ends_with('>') {
-            let inner = &param["TypeRef<".len()..param.len() - 1];
-            return inner == arg || inner.starts_with('$');
-        }
         false
     }
 
@@ -6726,9 +6720,6 @@ impl ReplEngine {
             }
             AstTy::Named(_, name) => matches!(arg, AstTy::Named(_, other) if other == name),
             AstTy::ImplTrait(_, name) => matches!(arg, AstTy::ImplTrait(_, other) if other == name),
-            AstTy::Generic(_, name, params) if name == "TypeRef" && params.len() == 1 => {
-                Self::unify_query_ty(&params[0], arg, substitutions, self_ty)
-            }
             AstTy::Generic(_, name, params) => match arg {
                 AstTy::Generic(_, other, args) if name == other && params.len() == args.len() => {
                     params.iter().zip(args).all(|(param, arg)| {

@@ -1443,7 +1443,7 @@ fn test_function_def_parses_bounded_type_params() {
 fn test_trait_def_parses_head_type_params() {
     let ast = parse_with_context(
         r#"deftrait From<$To> {
-  def from(self: Self, to: TypeRef<$To>) -> $To
+  def from(self: Self) -> $To
 }"#,
         ParserContext::module(1, None),
     )
@@ -1455,12 +1455,7 @@ fn test_trait_def_parses_head_type_params() {
             assert_eq!(type_params.len(), 1);
             assert_eq!(type_params[0].name, "$To");
             assert_eq!(methods.len(), 1);
-            assert!(matches!(
-                methods[0].params[1].ty,
-                AstTy::Generic(_, ref name, ref args)
-                    if name == "TypeRef"
-                        && matches!(args.as_slice(), [AstTy::Named(_, arg)] if arg == "$To")
-            ));
+            assert_eq!(methods[0].params.len(), 1);
         }
         _ => panic!("Expected TraitDef"),
     }
@@ -1470,7 +1465,7 @@ fn test_trait_def_parses_head_type_params() {
 fn test_trait_impl_parses_trait_type_args() {
     let ast = parse_with_context(
         r#"impl From<String> for Int {
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from(self: Self) -> String {
     inspect(self)
   }
 }"#,

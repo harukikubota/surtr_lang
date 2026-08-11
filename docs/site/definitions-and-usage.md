@@ -86,13 +86,13 @@ xldr(3)>
 target type を取る変換は、value ではなく型スロットとして読みます。
 
 ```text
-xldr(1)> print(from(42, String))
+xldr(1)> print(from::<String>(42))
 42
 xldr(2)>
 ```
 
 この `String` は ordinary value ではなく、変換先型の指定です。  
-`TypeRef<$T>` を含む型注釈ルール全体は `./type-annotations.md` を参照してください。
+型注釈と明示型引数のルール全体は `./type-annotations.md` を参照してください。
 
 ## 関連ページ
 
@@ -110,4 +110,4 @@ xldr(2)>
 ## 躓きやすいポイント
 
 - `defstruct` / `defenum` / `defextractor` のような宣言は REPL top-level にそのまま置けません。
-- `from(value, TargetTy)` の第2引数は ordinary value ではなく型指定スロットです。
+- `from::<TargetTy>(value)` の第2引数は ordinary value ではなく型指定スロットです。

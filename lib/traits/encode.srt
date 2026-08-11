@@ -1,8 +1,7 @@
 @doc """
 Standard `Encode` trait declaration.
 `Encode<$To>` converts `Self` into `$To`.
-The `to: TypeRef<$To>` parameter is a signature-level witness slot and is not
-meant to be observed at runtime.
+Choose the output format with an explicit type argument.
 Format-specific value owners can expose source-level aliases that fix the target
 type, such as `JsonValue::encode(value)` for `Encode<JsonValue>`.
 
@@ -13,5 +12,5 @@ Ok("\"hello\"")
 """
 deftrait Encode<$To> {
   # Convert the value into the requested target representation.
-  def encode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+  def encode(self: Self) -> Result<$To, Error>
 }

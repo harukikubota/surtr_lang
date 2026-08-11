@@ -89,10 +89,6 @@ pub enum Ty {
     /// Generic function type: `(params) -> ret`
     Func(Vec<Ty>, Box<Ty>),
 
-    /// Compiler-reserved target-type witness used only in restricted trait
-    /// method parameter positions such as `From<$To>::from(_, TypeRef<$To>)`.
-    TypeRef(Box<Ty>),
-
     /// Compiler-reserved lazy special-form marker used only in std builtin
     /// declarations. User code cannot name or transport Lazy values directly.
     Lazy(Box<Ty>),

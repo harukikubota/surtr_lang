@@ -113,22 +113,18 @@ match expr {
 - trait は method のみを持つ
 - `impl Trait` は parameter 位置のみで使える
 - `-> impl Trait` は未対応
-- `where` clause は未対応
+- `where` clause は宣言・trait・impl に制約を追加する
 - `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
 - 数値 helper は `Int::abs` / `Float::safe_div` のような concrete type owner surface として提供する
 - `Compare` が三値比較の正本で、`< <= > >=` も `Compare` を前提に動く
-- `TypeRef<$T>` は compiler-reserved な target type witness
-- `TypeRef<$T>` は trait head で宣言された型引数に対応するときだけ、trait method parameter 型として使える
-- `TypeRef<$T>` は通常関数の引数型、戻り値型、field、local binding には使えない
 - `Hole` は compiler-reserved な ignored-input callable marker
 - `_` は `Hole` の surface 表記
 - `Hole` / `_` は data type wildcard ではなく、限定された callable surface にだけ現れる
 
 ### `from` / `try_from`
 
-- source 上の呼び出しは `from(value, TargetTy)` / `try_from(value, TargetTy)`
-- 第2引数 `TargetTy` は ordinary expression ではなく型指定スロット
-- 内部的には `TypeRef<TargetTy>` witness として扱う
+- source 上の呼び出しは `from::<TargetTy>(value)` / `try_from::<TargetTy>(value)`
+- `TargetTy` は明示型引数であり runtime の値引数ではない
 - `From<$To>` / `TryFrom<$To>` trait が impl coherence を担う
 
 ### `Result<T>`
@@ -335,7 +331,7 @@ value: Int =? parse_int("1")
 - `pattern =? Result<T, E>` は `Ok` を束縛し、`Err` を早期伝播する
 - `pattern =? expr` は SafeBind 対象の失敗しうるパターン入力を扱う
 - 現時点の対象は `Result`、`List`、`String`
-- `Option` は SafeBind 対象ではない。`from(value, Result)` で明示的に変換してから使う
+- `Option` は SafeBind 対象ではない。`from::<Result>(value)` で明示的に変換してから使う
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
 
 #### range literal
@@ -564,7 +560,7 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Sho
 @builtin type Result<$T>
 ```
 
-`Unit`, `TypeRef<$T>`, `Hole` は `special_types.srt` に集約します。
+`Unit`, `Hole` は `special_types.srt` に集約します。
 数値 helper は `int.srt` / `float.srt` の `impl Int` / `impl Float` に置きます。
 
 ### import の重複

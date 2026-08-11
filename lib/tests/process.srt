@@ -42,7 +42,7 @@ test("Process") {
 
   describe("Process::sleep") {
     it("accepts converted durations") {
-      d: Duration =? try_from(1, Duration)
+      d: Duration =? try_from::<Duration>(1)
       assert_eq("Ok(())", inspect(Process::sleep(d)))
     }
   }

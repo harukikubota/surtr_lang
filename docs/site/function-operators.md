@@ -116,7 +116,7 @@ names = users |*> _.name
 `|>=` は文脈を保ったまま次の段階へ渡します。
 
 ```surtr
-try_from("42", Int) |>= require_at_least(10)
+try_from::<Int>("42") |>= require_at_least(10)
 [1, 2, 3] |>= expand()
 Ok(" 42 ") |*> String::trim() |>= try_from(Int)
 ```
@@ -174,7 +174,7 @@ pipeline2 = &parse >* {|n| "#" ++ to_string(n)}
 
 ```surtr
 def parse_int(text: String) -> Result<Int> {
-  try_from(text, Int)
+  try_from::<Int>(text)
 }
 
 def render_int(value: Int) -> String {
@@ -202,7 +202,7 @@ pipeline2 = &parse >=> {|n| require_at_least(n, 10)}
 
 ```surtr
 def parse_int(text: String) -> Result<Int> {
-  try_from(text, Int)
+  try_from::<Int>(text)
 }
 
 def require_small(x: Int) -> Result<Int> {
@@ -219,7 +219,7 @@ pipeline = &parse_int >=> &require_small
 REPL では入力自体は受理しますが、失敗時はエラーを表示してセッションを継続します。
 
 ```surtr
-value: Int =? try_from("1", Int)
+value: Int =? try_from::<Int>("1")
 [head, ..tail] =? [1, 2, 3]
 [first, ..rest] =? "source"
 ```
@@ -230,7 +230,7 @@ value: Int =? try_from("1", Int)
 - `List`
 - `String`
 
-`Option` は `=?` の対象外なので、必要なら `from(value, Result)` で `Result` へ変換してから使います。
+`Option` は `=?` の対象外なので、必要なら `from::<Result>(value)` で `Result` へ変換してから使います。
 たとえば `num: Int =? Option::Some(1)` はエラーです。
 
 `=?` も trait 演算子ではなく、language-level binding form です。
@@ -246,7 +246,7 @@ SafeBind の流れは次です。
 
 ```surtr
 def parse_int(text: String) -> Result<Int> {
-  try_from(text, Int)
+  try_from::<Int>(text)
 }
 
 def require_small(x: Int) -> Result<Int> {

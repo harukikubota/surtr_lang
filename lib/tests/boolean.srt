@@ -19,7 +19,7 @@ test("Boolean") {
 
   describe("trait integrations") {
     it("renders through Show and converts with From") {
-      assert_eq(("True", True, "False"), (to_string(True), from(True, Boolean), from(False, String)))
+      assert_eq(("True", True, "False"), (to_string(True), from::<Boolean>(True), from::<String>(False)))
     }
 
     it("supports Eq and Neq helpers") {

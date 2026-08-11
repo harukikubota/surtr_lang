@@ -203,78 +203,16 @@ def show_value(x: impl Show) -> String {
 - `-> impl Trait` と `where ...` はまだ使えない
 
 target type を明示する trait では、compiler-reserved な witness type
-`TypeRef<$T>` を method parameter にだけ置けます。
-これは ordinary value ではなく、「どの型へ変換するか」を表すための特別な型です。
+値引数だけでは決まらない target type は、明示型引数で指定します。
 
 ```surtr
-@builtin type TypeRef<$T>
-
-deftrait From<$To> {
-  def from(self: Self, to: TypeRef<$To>) -> $To
-}
-
-deftrait TryFrom<$To> {
-  def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}
+text = from::<String>(42)
+number =? try_from::<Int>("42")
+json =? Encode::encode::<JsonValue>(value)
+config =? Decode::decode::<Config>(json)
 ```
 
-`TypeRef<$T>` のルールはかなり限定的です。
-
-- trait head で宣言した型引数に対応するときだけ使える
-- trait method parameter と、それに対応する impl method parameter にだけ書ける
-- 通常の `def` の引数や戻り値には書けない
-- local 変数の型注釈や field type にも書けない
-- 値として生成したり返したり束縛したりすることはできない
-
-この制約により、`TypeRef` は first-class value ではなく
-"target type witness" としてだけ振る舞います。
-
-### 5.3 `from` / `try_from`
-
-`From` / `TryFrom` 系は、trait と call surface を少し分けて考えると分かりやすいです。
-
-- impl coherence は `From<$To>` / `TryFrom<$To>` trait で管理する
-- source 上の呼び出しは `from(value, TargetTy)` / `try_from(value, TargetTy)` で書く
-- 第2引数の `TargetTy` は ordinary expression ではなく、型指定スロットとして扱う
-
-```surtr
-text = from(42, String)
-value = try_from("42", Int)
-```
-
-この `String` / `Int` は value ではありません。
-`from` / `try_from` の第2引数位置に限って、bare な型名が
-内部的に `TypeRef<String>` / `TypeRef<Int>` の witness として解釈されます。
-
-pipeline でも同じ方向で読めます。
-
-```surtr
-text = 42 |> from(String)
-value = "42" |> try_from(Int)
-```
-
-target type を取る trait は `From` / `TryFrom` だけに限りません。
-たとえば decoder 系でも同じパターンを使えます。
-
-```surtr
-deftrait Decode<$To> {
-  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}
-```
-
-このときも `TypeRef<$To>` は ordinary value にはならず、
-trait method parameter の中だけで target type witness として使われます。
-
-ignored-input callable を表す `_` も、同じく compiler-special な扱いを持ちます。
-
-```surtr
-keep_one: (_ -> Int) = always(1)
-```
-
-この `_` は generic wildcard ではなく、internal な `Hole` marker の surface です。  
-「何か 1 つ受けるが、その値は見ない callable」を stable に表示・注釈するためにあります。
-
-`TypeRef<$T>` と `Hole` のまとまった説明は `./special-types.md` を参照してください。
+`::<...>` は runtime の引数を増やさず、trait dispatch と generic specialization の型入力になります。capture でも `&Decode::decode::<Config>` のように同じ構文を使えます。
 
 ### 5.4 関数コールと関数値
 
@@ -524,7 +462,7 @@ def pick() -> Result<Int> {
 通常の user code では `Result<T>` を返す関数の中で使います。
 現在きちんと使える対象は `Result`、`List`、`String` です。
 `Option` は標準 enum として存在しますが、`=?` や Result 文脈の関数演算子では特別扱いしません。
-必要な場合は `from(value, Result)` で明示的に `Result` へ変換します。
+必要な場合は `from::<Result>(value)` で明示的に `Result` へ変換します。
 欠損を field として持ちつつ Result パイプへそのまま流したい場合は、
 `Option<T>` より `T?` を使う方が自然です。
 そのため `num: Int =? Option::Some(1)` はエラーです。
@@ -799,7 +737,7 @@ Bootstrap -> [SpecialTypes, Kernel, Show, Eq, Ordering, Compare, Concat, From, T
   - auto-import の起点になる安定アンカー
   - `NoneError` などの bootstrap concrete error
 - `SpecialTypes`
-  - `Unit`, `TypeRef<$T>`, `Hole` の canonical builtin type 宣言
+  - `Unit`, `Hole` の canonical builtin type 宣言
 - `Kernel`
   - auto import される最小の標準 API
   - `defmod Kernel` 配下に置かれる `print` のような cross-cutting builtin
@@ -828,7 +766,7 @@ User-visible integer values backed by BigInt.
 利用者として押さえておくとよい点は次のとおりです。
 
 - canonical builtin type head は各対応 file のトップレベルに並ぶ
-- compiler-special type (`Unit`, `TypeRef<$T>`, `Hole`) は `special_types.srt` に集約される
+- compiler-special type (`Unit`, `Hole`) は `special_types.srt` に集約される
 - 各 `defmod Name { ... }` がモジュール API になる
 - builtin type、module、関数、標準 error には `@doc` を付けられる
 

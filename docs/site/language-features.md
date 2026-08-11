@@ -68,8 +68,8 @@ trait 側で重要なのは、autoimport される helper が「別の関数定�
 
 ```surtr
 print(concat("a", "b"))
-print(from(42, String))
-print(inspect(try_from("42", Int)))
+print(from::<String>(42))
+print(inspect(try_from::<Int>("42")))
 ```
 
 一方で、すべての trait helper が autoimport されるわけではありません。  

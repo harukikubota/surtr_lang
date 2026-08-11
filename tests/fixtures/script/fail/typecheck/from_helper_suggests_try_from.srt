@@ -1,1 +1,1 @@
-value = from("42", Int)
+value = from::<Int>("42")

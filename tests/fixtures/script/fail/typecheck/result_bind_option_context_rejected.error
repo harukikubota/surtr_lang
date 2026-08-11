@@ -1,4 +1,4 @@
 phase: typecheck
 contains: cannot switch from Result into Option bind context
 contains: Option is not standard for failure propagation
-contains: from(value, Result)
+contains: from::<Result>(value)

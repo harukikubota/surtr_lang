@@ -225,38 +225,38 @@ test("String") {
 
   describe("TryFrom") {
     it("supports result pipeline assertions") {
-      try_from("1", Int) |>= assert_eq(1)
+      try_from::<Int>("1") |>= assert_eq(1)
     }
 
     it("parses signed integers") {
-      try_from("-12", Int) |>= assert_eq(-12)
+      try_from::<Int>("-12") |>= assert_eq(-12)
     }
 
     it("reports invalid integer text") {
-      assert_err_contains("invalid integer literal", try_from("bad", Int))
+      assert_err_contains("invalid integer literal", try_from::<Int>("bad"))
     }
 
     it("parses booleans") {
-      try_from("true", Boolean) |>= assert_eq(True)
+      try_from::<Boolean>("true") |>= assert_eq(True)
     }
 
     it("parses alternate boolean casing") {
-      try_from("False", Boolean) |>= assert_eq(False)
+      try_from::<Boolean>("False") |>= assert_eq(False)
     }
 
     it("reports invalid boolean text") {
-      assert_err_contains("invalid boolean literal", try_from("maybe", Boolean))
+      assert_err_contains("invalid boolean literal", try_from::<Boolean>("maybe"))
     }
   }
 
   describe("trait integration") {
     it("converts user wrappers through From") {
-      slug = from("  surtr code  ", Slug)
+      slug = from::<Slug>("  surtr code  ")
       assert_eq("surtr-code", to_string(slug))
     }
 
     it("reuses string helpers through wrapper methods") {
-      slug = from("  surtr code  ", Slug)
+      slug = from::<Slug>("  surtr code  ")
       assert_eq("[\"surtr\", \"code\"]", inspect(Slug::segments(slug)))
     }
   }

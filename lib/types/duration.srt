@@ -2,7 +2,7 @@
 Standard `Duration` data type.
 `Duration` is an opaque millisecond span used by process and task APIs.
 The field stays private so callers construct validated values through `Duration(...)`
-or `try_from(..., Duration)`, while the `100ms` literal remains syntax sugar.
+or `try_from::<Duration>(...)`, while the `100ms` literal remains syntax sugar.
 
 ## REPL
 xldr(1)> 250ms
@@ -140,12 +140,12 @@ impl TryFrom<Duration> for Int {
   Prefer the literal form or constructor sugar in ordinary code.
 
   ## REPL
-  xldr(1)> try_from(10, Duration)
+  xldr(1)> try_from::<Duration>(10)
   Ok(10ms)
   xldr(2)> Duration(10)
   Ok(10ms)
   """
-  def try_from(self: Self, to: TypeRef<Duration>) -> Result<Duration, Error> {
+  def try_from(self: Self) -> Result<Duration, Error> {
     Duration(self)
   }
 }

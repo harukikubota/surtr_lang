@@ -848,10 +848,10 @@ impl From<Int> for Int {
   @doc """
   Return the value unchanged when converting `Int` to `Int`.
   ## REPL
-  xldr(1)> from(42, Int)
+  xldr(1)> from::<Int>(42)
   42
   """
-  def from(self: Self, to: TypeRef<Int>) -> Int {
+  def from(self: Self) -> Int {
     self
   }
 }
@@ -860,10 +860,10 @@ impl From<String> for Int {
   @doc """
   Convert `Int` into its standard string representation.
   ## REPL
-  xldr(1)> from(42, String)
+  xldr(1)> from::<String>(42)
   "42"
   """
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from(self: Self) -> String {
     to_string(self)
   }
 }

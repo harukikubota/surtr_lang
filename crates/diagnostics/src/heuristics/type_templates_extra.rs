@@ -596,10 +596,10 @@ pub(crate) fn flow_operator_help(
             "Use `|*>` to map over the Option value, or change the RHS to return Option.".into()
         }
         "|>=" if message.contains("cannot use Option as a standard failure container for Result bind") => {
-            "Convert the Option value explicitly with `from(value, Result)` before binding.".into()
+            "Convert the Option value explicitly with `from::<Result>(value)` before binding.".into()
         }
         "|>=" if message.contains("cannot switch from Result into Option bind context") => {
-            "Wrap the RHS so it converts Option to Result explicitly with `from(value, Result)`.".into()
+            "Wrap the RHS so it converts Option to Result explicitly with `from::<Result>(value)`.".into()
         }
         "|>=" if message.contains("cannot mix Result, List, and Option context") => {
             "Keep the same container family across bind.".into()

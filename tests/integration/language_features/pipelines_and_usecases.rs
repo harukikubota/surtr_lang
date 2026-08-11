@@ -316,7 +316,7 @@ def mk_detail(ch: String) -> String {
 }
 
 def parse_hand(ch: String) -> Result<Int> {
-  try_from(ch, Int)
+  try_from::<Int>(ch)
     |> map_err(ParseHandError("invalid digit: " ++ ch))
     |>= ensure(&is_digit_rank, ParseHandError(mk_detail(ch)))
 }

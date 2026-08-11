@@ -2778,9 +2778,6 @@ fn unify_query_ty(
         }
         AstTy::Named(_, name) => matches!(arg, AstTy::Named(_, other) if other == name),
         AstTy::ImplTrait(_, name) => matches!(arg, AstTy::ImplTrait(_, other) if other == name),
-        AstTy::Generic(_, name, params) if name == "TypeRef" && params.len() == 1 => {
-            unify_query_ty(&params[0], arg, substitutions, self_ty)
-        }
         AstTy::Generic(_, name, params) => match arg {
             AstTy::Generic(_, other, args) if name == other && params.len() == args.len() => params
                 .iter()
@@ -2892,10 +2889,6 @@ fn facet_path_arg_type(ty: &AstTy) -> bool {
 fn parameter_type_accepts_arg_type(param: &str, arg: &str) -> bool {
     if param == arg || param == "Self" || param.starts_with('$') {
         return true;
-    }
-    if param.starts_with("TypeRef<") && param.ends_with('>') {
-        let inner = &param["TypeRef<".len()..param.len() - 1];
-        return inner == arg || inner.starts_with('$');
     }
     false
 }

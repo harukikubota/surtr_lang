@@ -112,7 +112,7 @@ defmod Bootstrap {
   bound variables are introduced and evaluation continues.
 
   ## Examples
-  value: Int =? try_from("1", Int)
+  value: Int =? try_from::<Int>("1")
   [head, ..tail] =? [1, 2, 3]
   [first, ..rest] =? "source"
 

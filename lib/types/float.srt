@@ -141,10 +141,10 @@ impl From<Float> for Float {
   @doc """
   Return the value unchanged when converting `Float` to `Float`.
   ## REPL
-  xldr(1)> from(1.5, Float)
+  xldr(1)> from::<Float>(1.5)
   1.5
   """
-  def from(self: Self, to: TypeRef<Float>) -> Float {
+  def from(self: Self) -> Float {
     self
   }
 }
@@ -153,10 +153,10 @@ impl From<String> for Float {
   @doc """
   Convert `Float` into its standard string representation.
   ## REPL
-  xldr(1)> from(1.5, String)
+  xldr(1)> from::<String>(1.5)
   "1.5"
   """
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from(self: Self) -> String {
     to_string(self)
   }
 }

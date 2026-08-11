@@ -688,23 +688,6 @@ impl Checker {
                 })
             }
 
-            Resolved::TypeRefWitness(span, ast_ty) => {
-                let target_ty = match ast_ty {
-                    spire::ast::AstTy::Named(_, name) if name == "Result" => {
-                        Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error))
-                    }
-                    spire::ast::AstTy::Named(_, name) if name == "Option" => {
-                        Ty::Enum("Option".into(), vec![self.env.fresh_tyvar()])
-                    }
-                    _ => self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?,
-                };
-                Ok(TypedNode {
-                    ty: Ty::TypeRef(Box::new(target_ty)),
-                    span: span.clone(),
-                    node: TypedInner::Lit(Lit::Unit),
-                })
-            }
-
             Resolved::TypeApply(span, target, args) => {
                 self.check_explicit_type_apply(span, target, args)
             }
@@ -1484,7 +1467,7 @@ impl Checker {
             | Resolved::Compose(_, _, _)
             | Resolved::LiftedCompose(_, _, _)
             | Resolved::KleisliCompose(_, _, _) => self.check_node(node),
-            Resolved::Var(_, _) | Resolved::Grouped(_, _) => {
+            Resolved::Var(_, _) | Resolved::Grouped(_, _) | Resolved::TypeApply(_, _, _) => {
                 self.check_function_value_operand(node, op_name)
             }
             _ => Err(TypeError {
@@ -1513,7 +1496,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         match node {
             Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => self.check_node(node),
-            Resolved::Var(_, _) | Resolved::Grouped(_, _) => {
+            Resolved::Var(_, _) | Resolved::Grouped(_, _) | Resolved::TypeApply(_, _, _) => {
                 self.check_function_value_operand(node, op_name)
             }
             Resolved::App(span, func, args) => self.check_injected_call(span, func, args, op_name),
@@ -1535,6 +1518,7 @@ impl Checker {
                 | Resolved::Capture(_, _, _)
                 | Resolved::Closure(_, _, _, _)
                 | Resolved::Grouped(_, _)
+                | Resolved::TypeApply(_, _, _)
         )
     }
 
@@ -1983,8 +1967,7 @@ impl Checker {
                     None
                 }
             }
-            (Ty::List(expected_inner), Ty::List(actual_inner))
-            | (Ty::TypeRef(expected_inner), Ty::TypeRef(actual_inner)) => {
+            (Ty::List(expected_inner), Ty::List(actual_inner)) => {
                 self.bound_mismatch_message(&expected_inner, &actual_inner)
             }
             (Ty::Tuple(expected_items), Ty::Tuple(actual_items)) => expected_items
@@ -2082,7 +2065,6 @@ impl Checker {
             | Resolved::ProcessContextHandler(span, _)
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
-            | Resolved::TypeRefWitness(span, _)
             | Resolved::StructDef(span, ..)
             | Resolved::RecordDef(span, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
@@ -2820,7 +2802,7 @@ impl Checker {
         trait_name: &str,
         method_name: &str,
         receiver_ty: &Ty,
-        typed_args: &[TypedNode],
+        requested_trait_args: &[Ty],
         span: &Span,
     ) -> Option<TypeError> {
         let requested_trait = if self.trait_matches_short_name(trait_name, "From") {
@@ -2836,13 +2818,10 @@ impl Checker {
             "From"
         };
         let receiver_name = self.trait_target_name(receiver_ty)?;
-        let witness_ty = self.resolve_ty(&typed_args.get(1)?.ty);
-        let Ty::TypeRef(target_ty) = witness_ty else {
-            return None;
-        };
+        let target_ty = self.resolve_ty(requested_trait_args.first()?);
         let opposite_trait_key = self.trait_key_by_short_name(opposite_trait)?;
         let opposite_instance_key =
-            self.trait_instance_key_from_tys(&opposite_trait_key, &[target_ty.as_ref().clone()]);
+            self.trait_instance_key_from_tys(&opposite_trait_key, &[target_ty.clone()]);
         if !self
             .trait_impls
             .contains_key(&(opposite_instance_key, receiver_name.clone()))
@@ -2858,7 +2837,7 @@ impl Checker {
         };
         Some(TypeError {
             message: format!(
-                "{} -> {} implements {}, not {}. Use {}(value, {}).",
+                "{} -> {} implements {}, not {}. Use {}::<{}>(value).",
                 receiver_name,
                 target_name,
                 opposite_trait,
@@ -3246,7 +3225,7 @@ impl Checker {
             &trait_call_name,
             method_name,
             &receiver_ty,
-            &typed_args,
+            &trait_arg_tys,
             &receiver_span,
         ) {
             if self
@@ -3605,6 +3584,20 @@ impl Checker {
                     self.check_apply_callable(right, "`|>`")?
                 }
             }
+            Resolved::TypeApply(call_span, _, _) => self
+                .check_trait_helper_pipe_callable(
+                    call_span,
+                    right,
+                    &[],
+                    self.resolve_ty(&typed_left.ty),
+                    rhs_ret_expected.clone(),
+                    "`|>`",
+                )?
+                .ok_or_else(|| TypeError {
+                    message: "`|>` requires a specialized trait helper on the right".into(),
+                    span: call_span.clone(),
+                    hint: None,
+                })?,
             _ => self.check_apply_callable(right, "`|>`")?,
         };
         let (param, ret) = self.unary_function_parts(&typed_right.ty, "`|>`", &typed_right.span)?;
@@ -3893,6 +3886,20 @@ impl Checker {
                         .or_else(|_| self.check_apply_callable(right, "`|>=`"))?
                 }
             }
+            (Resolved::TypeApply(call_span, _, _), Some(contract)) => self
+                .check_trait_helper_pipe_callable(
+                    call_span,
+                    right,
+                    &[],
+                    contract.input.clone(),
+                    contract.ret.clone(),
+                    "`|>=`",
+                )?
+                .ok_or_else(|| TypeError {
+                    message: "`|>=` requires a specialized trait helper on the right".into(),
+                    span: call_span.clone(),
+                    hint: None,
+                })?,
             _ => self.check_apply_callable(right, "`|>=`")?,
         };
         let (rhs_in, rhs_ret) =
@@ -3976,7 +3983,7 @@ impl Checker {
                         &typed_left.ty,
                         &typed_right.ty,
                         Some(
-                            "Option is not standard for failure propagation. Convert explicitly with `from(value, Result)` before using `|>=`, for example `from(option_value, Result) |>= rhs()`.".into(),
+                            "Option is not standard for failure propagation. Convert explicitly with `from::<Result>(value)` before using `|>=`, for example `from::<Result>(option_value) |>= rhs()`.".into(),
                         ),
                     )),
                 });
@@ -3991,7 +3998,7 @@ impl Checker {
                         &typed_left.ty,
                         &typed_right.ty,
                         Some(
-                            "Option is not standard for failure propagation. Convert the RHS explicitly to Result with `from(value, Result)` around the Option result, for example `result_value |>= {|value| from(option_rhs(value), Result)}`.".into(),
+                            "Option is not standard for failure propagation. Convert the RHS explicitly to Result with `from::<Result>(value)` around the Option result, for example `result_value |>= {|value| from::<Result>(option_rhs(value))}`.".into(),
                         ),
                     )),
                 });
@@ -5966,9 +5973,7 @@ impl Checker {
     fn count_tyvar_occurrences(&self, ty: &Ty, needle: u32) -> usize {
         match ty {
             Ty::Var(var) => usize::from(*var == needle),
-            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-                self.count_tyvar_occurrences(inner, needle)
-            }
+            Ty::List(inner) | Ty::Lazy(inner) => self.count_tyvar_occurrences(inner, needle),
             Ty::Tuple(items) | Ty::SelfApp(items) => items
                 .iter()
                 .map(|item| self.count_tyvar_occurrences(item, needle))
@@ -6042,7 +6047,6 @@ impl Checker {
                 Ok(())
             }
             (Ty::List(template), Ty::List(replacement))
-            | (Ty::TypeRef(template), Ty::TypeRef(replacement))
             | (Ty::Lazy(template), Ty::Lazy(replacement)) => self
                 .collect_facet_rebuild_tyvar_replacements(
                     template,
@@ -6185,9 +6189,6 @@ impl Checker {
                 .cloned()
                 .unwrap_or_else(|| self.resolve_ty(ty)),
             Ty::List(inner) => Ty::List(Box::new(
-                self.replace_facet_rebuild_tyvars(inner, replacements),
-            )),
-            Ty::TypeRef(inner) => Ty::TypeRef(Box::new(
                 self.replace_facet_rebuild_tyvars(inner, replacements),
             )),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(

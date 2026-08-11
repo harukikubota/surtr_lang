@@ -946,12 +946,12 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         json_value_encode_source_alias_typechecks as fn(),
     ),
     (
-        "decode_helper_typechecks_format_and_target_witnesses",
-        decode_helper_typechecks_format_and_target_witnesses as fn(),
+        "decode_helper_typechecks_explicit_target",
+        decode_helper_typechecks_explicit_target as fn(),
     ),
     (
-        "decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses",
-        decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses as fn(),
+        "decode_helper_inside_decode_impl_dispatches_by_receiver_and_target",
+        decode_helper_inside_decode_impl_dispatches_by_receiver_and_target as fn(),
     ),
     (
         "decode_helper_allows_same_pattern_recursive_dispatch",
@@ -6246,7 +6246,7 @@ fn bind_operator_missing_impl_lists_available_implementations_in_hint() {
 }
 
 fn from_helper_typechecks_as_generic_trait_call() {
-    let typed = typecheck_with_builtin_prelude(r#"value = from(42, String)"#);
+    let typed = typecheck_with_builtin_prelude(r#"value = from::<String>(42)"#);
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -6271,7 +6271,7 @@ fn from_helper_typechecks_as_generic_trait_call() {
             assert_eq!(method_name, "from");
             assert_eq!(name, "From<String>::Int::from");
             assert_eq!(receiver_ty, &scar::types::Ty::Int);
-            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert_eq!(args.len(), 1);
             assert_eq!(rhs.ty, scar::types::Ty::Str);
         }
         other => panic!("expected trait call, got {:?}", other),
@@ -6279,7 +6279,7 @@ fn from_helper_typechecks_as_generic_trait_call() {
 }
 
 fn try_from_helper_typechecks_as_generic_trait_call() {
-    let typed = typecheck_with_builtin_prelude(r#"value = try_from("42", Int)"#);
+    let typed = typecheck_with_builtin_prelude(r#"value = try_from::<Int>("42")"#);
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -6304,7 +6304,7 @@ fn try_from_helper_typechecks_as_generic_trait_call() {
             assert_eq!(method_name, "try_from");
             assert_eq!(name, "TryFrom<Int>::String::try_from");
             assert_eq!(receiver_ty, &scar::types::Ty::Str);
-            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert_eq!(args.len(), 1);
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
         }
         other => panic!("expected trait call, got {:?}", other),
@@ -6312,7 +6312,7 @@ fn try_from_helper_typechecks_as_generic_trait_call() {
 }
 
 fn encode_helper_typechecks_as_generic_trait_call() {
-    let typed = typecheck_with_builtin_prelude(r#"value = Encode::encode("hello", JsonValue)"#);
+    let typed = typecheck_with_builtin_prelude(r#"value = Encode::encode::<JsonValue>("hello")"#);
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -6337,7 +6337,7 @@ fn encode_helper_typechecks_as_generic_trait_call() {
             assert_eq!(method_name, "encode");
             assert_eq!(name, "Encode<JsonValue>::String::encode");
             assert_eq!(receiver_ty, &scar::types::Ty::Str);
-            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert_eq!(args.len(), 1);
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
         }
         other => panic!("expected trait call, got {:?}", other),
@@ -6356,9 +6356,9 @@ fn json_value_encode_source_alias_typechecks() {
     assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
 }
 
-fn decode_helper_typechecks_format_and_target_witnesses() {
+fn decode_helper_typechecks_explicit_target() {
     let typed = typecheck_with_builtin_prelude(
-        r#"value = JsonValue::decode(JsonValue::String("ok"), String)"#,
+        r#"value = Decode::decode::<String>(JsonValue::String("ok"))"#,
     );
     let rhs = typed
         .iter()
@@ -6386,28 +6386,28 @@ fn decode_helper_typechecks_format_and_target_witnesses() {
             assert!(
                 matches!(receiver_ty, scar::types::Ty::Enum(name, _) if name.ends_with("JsonValue"))
             );
-            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert_eq!(args.len(), 1);
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
         }
         other => panic!("expected trait call, got {:?}", other),
     }
 }
 
-fn decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses() {
+fn decode_helper_inside_decode_impl_dispatches_by_receiver_and_target() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord JsonSpecConfig(name: String, entrypoint: String)
 
 impl Decode<JsonSpecConfig> for JsonValue {
-  def decode(self: Self, to: TypeRef<JsonSpecConfig>) -> Result<JsonSpecConfig, Error> {
+  def decode(self: Self) -> Result<JsonSpecConfig, Error> {
     name_json =? Json::get(self, "name")
-    name =? JsonValue::decode(name_json, String)
+    name =? Decode::decode::<String>(name_json)
     entry_json =? Json::get(self, "entrypoint")
-    entry =? entry_json |> JsonValue::decode(String)
+    entry =? entry_json |> Decode::decode::<String>
     Ok(JsonSpecConfig(name, entry))
   }
 }
 
-cfg = JsonValue::decode(JsonValue::Null, JsonSpecConfig)"#,
+cfg = Decode::decode::<JsonSpecConfig>(JsonValue::Null)"#,
     );
     let mut calls = Vec::new();
     for node in &typed {
@@ -6442,8 +6442,8 @@ fn decode_helper_allows_same_pattern_recursive_dispatch() {
         r#"defrecord JsonSpecRecursive(value: String)
 
 impl Decode<JsonSpecRecursive> for JsonValue {
-  def decode(self: Self, to: TypeRef<JsonSpecRecursive>) -> Result<JsonSpecRecursive, Error> {
-    JsonValue::decode(self, JsonSpecRecursive)
+  def decode(self: Self) -> Result<JsonSpecRecursive, Error> {
+    Decode::decode::<JsonSpecRecursive>(self)
   }
 }"#,
     );
@@ -6454,12 +6454,12 @@ fn encode_helper_dispatches_to_receiver_impl_with_json_value_target() {
         r#"defrecord JsonSpecConfig(name: String, entrypoint: String)
 
 impl Encode<JsonValue> for JsonSpecConfig {
-  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+  def encode(self: Self) -> Result<JsonValue, Error> {
     Ok(JsonValue::String(self.name))
   }
 }
 
-json = Encode::encode(JsonSpecConfig("surtr", "boot"), JsonValue)"#,
+json = Encode::encode::<JsonValue>(JsonSpecConfig("surtr", "boot"))"#,
     );
     let rhs = typed
         .iter()
@@ -6483,7 +6483,7 @@ json = Encode::encode(JsonSpecConfig("surtr", "boot"), JsonValue)"#,
             assert_eq!(trait_name, "Encode<JsonValue>");
             assert_eq!(method_name, "encode");
             assert_eq!(name, "Encode<JsonValue>::Global::JsonSpecConfig::encode");
-            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert_eq!(args.len(), 1);
         }
         other => panic!("expected trait call, got {:?}", other),
     }
@@ -6494,8 +6494,8 @@ fn encode_helper_allows_same_pattern_recursive_dispatch() {
         r#"defrecord JsonSpecRecursive(value: String)
 
 impl Encode<JsonValue> for JsonSpecRecursive {
-  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
-    Encode::encode(self, JsonValue)
+  def encode(self: Self) -> Result<JsonValue, Error> {
+    Encode::encode::<JsonValue>(self)
   }
 }"#,
     );
@@ -6576,21 +6576,21 @@ fn trait_dispatch_name(dispatch: &scar::typed::TraitDispatch) -> Option<String> 
 }
 
 fn from_helper_suggests_try_from_when_only_fallible_impl_exists() {
-    let resolved = resolve_with_builtin_prelude(r#"value = from("42", Int)"#);
+    let resolved = resolve_with_builtin_prelude(r#"value = from::<Int>("42")"#);
     let err = typecheck(resolved).expect_err("from on fallible conversion must fail");
     assert!(err
         .message
         .contains("String -> Int implements TryFrom, not From"));
-    assert!(err.message.contains("Use try_from(value, Int)."));
+    assert!(err.message.contains("Use try_from::<Int>(value)."));
 }
 
 fn try_from_helper_suggests_from_when_only_infallible_impl_exists() {
-    let resolved = resolve_with_builtin_prelude(r#"value = try_from(42, String)"#);
+    let resolved = resolve_with_builtin_prelude(r#"value = try_from::<String>(42)"#);
     let err = typecheck(resolved).expect_err("try_from on infallible conversion must fail");
     assert!(err
         .message
         .contains("Int -> String implements From, not TryFrom"));
-    assert!(err.message.contains("Use from(value, String)."));
+    assert!(err.message.contains("Use from::<String>(value)."));
 }
 
 fn from_and_try_from_impls_are_mutually_exclusive() {
@@ -6623,19 +6623,19 @@ inspect(self)
 }
 
 impl From<String> for String {
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from(self: Self) -> String {
 self
   }
 }
 
 impl TryFrom<Int> for String {
-  def try_from(self: Self, to: TypeRef<Int>) -> Result<Int, Error> {
+  def try_from(self: Self) -> Result<Int, Error> {
 Ok(0)
   }
 }
 
 impl From<Int> for String {
-  def from(self: Self, to: TypeRef<Int>) -> Int {
+  def from(self: Self) -> Int {
 0
   }
 }

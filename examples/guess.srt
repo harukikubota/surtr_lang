@@ -20,7 +20,7 @@ def in_range(value: Int) -> Boolean {
 }
 
 def parse_number(input: String) -> Result<Int> {
-  try_from(input, Int) |> map_err(NotNumberGuessError(input))
+  try_from::<Int>(input) |> map_err(NotNumberGuessError(input))
 }
 
 def parse_guess(input: String) -> Result<Int> {

@@ -194,10 +194,6 @@ pub enum Resolved {
     /// Constructor call: `Point(1.0, 2.0)`
     ConstructorCall(Span, ResolvedId, Vec<ResolvedRecordLitArg>),
 
-    /// Compiler-synthesized target-type witness used only for conversion
-    /// surfaces such as `from(value, String)`.
-    TypeRefWitness(Span, AstTy),
-
     /// Struct definition (passed through for Scar)
     StructDef(
         Span,

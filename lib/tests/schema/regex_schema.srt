@@ -21,7 +21,7 @@ defmod RegexSchema {
     caps =? Regex::captures(re, text)
     team =? RegexCaptures::get_name(caps, "team")
     id_text =? RegexCaptures::get_name(caps, "id")
-    id =? try_from(id_text, Int)
+    id =? try_from::<Int>(id_text)
     Ok(IssueRef::new(team, id))
   }
 }

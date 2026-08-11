@@ -48,7 +48,7 @@ xldr(2)>
 変換系は `From` / `TryFrom` trait が裏側の coherence を担います。
 
 ```text
-xldr(1)> print(match try_from("42", Int) { Ok(value) => to_string(value), Err(err) => inspect(err), })
+xldr(1)> print(match try_from::<Int>("42") { Ok(value) => to_string(value), Err(err) => inspect(err), })
 42
 xldr(2)>
 ```
@@ -62,7 +62,7 @@ xldr(2)>
 - `impl Trait<Concrete> for Type { ... }`
   - target type つき trait 実装
 
-`TypeRef<$T>` を含む型注釈ルールは `./type-annotations.md` にまとめています。
+型注釈と明示型引数のルールは `./type-annotations.md` にまとめています。
 
 ## 関連ページ
 

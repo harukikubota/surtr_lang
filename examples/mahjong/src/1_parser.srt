@@ -52,7 +52,7 @@ defmod MahjongParser {
   }
 
   defp _digit_to_int(ch: String) -> Result<Int, ParseHandError> {
-    try_from(ch, Int)
+    try_from::<Int>(ch)
     |> map_err(ParseHandError("invalid digit: " ++ ch))
     |>= ensure(&_is_digit_rank, ParseHandError("digit must be 1..9: " ++ ch))
   }

@@ -73,10 +73,10 @@ impl From<Boolean> for Boolean {
   @doc """
   Return the value unchanged when converting `Boolean` to `Boolean`.
   ## REPL
-  xldr(1)> from(True, Boolean)
+  xldr(1)> from::<Boolean>(True)
   True
   """
-  def from(self: Self, to: TypeRef<Boolean>) -> Boolean {
+  def from(self: Self) -> Boolean {
     self
   }
 }
@@ -85,10 +85,10 @@ impl From<String> for Boolean {
   @doc """
   Convert `Boolean` into its standard string representation.
   ## REPL
-  xldr(1)> from(True, String)
+  xldr(1)> from::<String>(True)
   "True"
   """
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from(self: Self) -> String {
     to_string(self)
   }
 }

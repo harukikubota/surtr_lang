@@ -36,7 +36,7 @@ ret: Result<Int> = Err(InvalidPort(0))
 
 ```surtr
 def parse_port(text: String) -> Result<Int> {
-  value: Int =? try_from(text, Int)
+  value: Int =? try_from::<Int>(text)
   if(value > 0, Ok(value), Err(InvalidPort(value)))
 }
 ```
@@ -46,7 +46,7 @@ def parse_port(text: String) -> Result<Int> {
 
 ```surtr
 def parse_port(text: String) -> Result<Int> {
-  parsed = try_from(text, Int)
+  parsed = try_from::<Int>(text)
   match parsed {
     Ok(value) => if(value > 0, Ok(value), Err(InvalidPort(value))),
     _ => parsed,
@@ -115,7 +115,7 @@ def render_bool(text: String) -> String {
 
 ```surtr
 def parse_and_increment(text: String) -> Result<Int> {
-  value: Int =? try_from(text, Int)
+  value: Int =? try_from::<Int>(text)
   Ok(value + 1)
 }
 ```
@@ -124,7 +124,7 @@ def parse_and_increment(text: String) -> Result<Int> {
 
 ```surtr
 def parse_and_increment(text: String) -> Result<Int> {
-  parsed = try_from(text, Int)
+  parsed = try_from::<Int>(text)
   match parsed {
     Ok(value) => Ok(value + 1),
     _ => parsed,
@@ -136,8 +136,8 @@ SafeBind は複数段にも使えます。
 
 ```surtr
 def load_pair(a: String, b: String) -> Result<Int> {
-  left: Int =? try_from(a, Int)
-  right: Int =? try_from(b, Int)
+  left: Int =? try_from::<Int>(a)
+  right: Int =? try_from::<Int>(b)
   Int::safe_div(left + right, 2)
 }
 ```
@@ -146,10 +146,10 @@ def load_pair(a: String, b: String) -> Result<Int> {
 
 ```surtr
 def load_pair(a: String, b: String) -> Result<Int> {
-  left_result = try_from(a, Int)
+  left_result = try_from::<Int>(a)
   match left_result {
     Ok(left) => {
-      right_result = try_from(b, Int)
+      right_result = try_from::<Int>(b)
       match right_result {
       Ok(right) => Int::safe_div(left + right, 2),
       _ => right_result,
@@ -187,13 +187,13 @@ match mapped {
 成功値を次の `Result` 返却関数へ渡します。
 
 ```surtr
-try_from("42", Int) |>= require_at_least(10)
+try_from::<Int>("42") |>= require_at_least(10)
 ```
 
 `match` へ読み下すと次です。
 
 ```surtr
-parsed = try_from("42", Int)
+parsed = try_from::<Int>("42")
 match parsed {
   Ok(value) => require_at_least(value, 10),
   _ => parsed,
@@ -248,7 +248,7 @@ Surtr のエラー回復は「例外を捕まえる」のではなく、`Err` �
 
 ```surtr
 def read_with_default(text: String) -> Int {
-  match try_from(text, Int) {
+  match try_from::<Int>(text) {
     Ok(value) => value,
     Err(NoneError) => 0,
     Err(_) => 0,
@@ -260,7 +260,7 @@ def read_with_default(text: String) -> Int {
 
 ```surtr
 def parse_or_zero(text: String) -> Result<Int> {
-  parsed = try_from(text, Int)
+  parsed = try_from::<Int>(text)
   match parsed {
     Ok(value) => Ok(value),
     Err(NoneError) => Ok(0),
@@ -273,7 +273,7 @@ def parse_or_zero(text: String) -> Result<Int> {
 
 ```surtr
 def require_port(text: String) -> Result<Int> {
-  match try_from(text, Int) {
+  match try_from::<Int>(text) {
     Ok(value) => if(value > 0, Ok(value), Err(InvalidPort(value))),
     Err(_) => Err(InvalidPort(-1)),
   }

@@ -1,17 +1,17 @@
 defrecord JsonSpecRwConfig(name: String, entrypoint: String)
 
 impl Decode<JsonSpecRwConfig> for JsonValue {
-  def decode(self: Self, to: TypeRef<JsonSpecRwConfig>) -> Result<JsonSpecRwConfig, Error> {
+  def decode(self: Self) -> Result<JsonSpecRwConfig, Error> {
     name_json =? Json::get(self, "name")
-    name =? JsonValue::decode(name_json, String)
+    name =? Decode::decode::<String>(name_json)
     entry_json =? Json::get(self, "entrypoint")
-    entry =? JsonValue::decode(entry_json, String)
+    entry =? Decode::decode::<String>(entry_json)
     Ok(JsonSpecRwConfig(name, entry))
   }
 }
 
 impl Encode<JsonValue> for JsonSpecRwConfig {
-  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+  def encode(self: Self) -> Result<JsonValue, Error> {
     Ok(JsonValue::Object(HashMap::from_entries([
       ("name", JsonValue::String(self.name)),
       ("entrypoint", JsonValue::String(self.entrypoint)),
@@ -22,7 +22,7 @@ impl Encode<JsonValue> for JsonSpecRwConfig {
 def load_config(path: String) -> Result<JsonSpecRwConfig, Error> {
   text =? File::read(path)
   json =? Json::decode(text)
-  JsonValue::decode(json, JsonSpecRwConfig)
+  Decode::decode::<JsonSpecRwConfig>(json)
 }
 
 def save_config(path: String, config: JsonSpecRwConfig) -> Result<Unit, Error> {

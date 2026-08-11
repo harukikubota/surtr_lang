@@ -103,10 +103,10 @@ impl From<Unit> for Unit {
   @doc """
   Return the value unchanged when converting `Unit` to `Unit`.
   ## REPL
-  xldr(1)> from((), Unit)
+  xldr(1)> from::<Unit>(())
   ()
   """
-  def from(self: Self, to: TypeRef<Unit>) -> Unit {
+  def from(self: Self) -> Unit {
     self
   }
 }
@@ -115,23 +115,14 @@ impl From<String> for Unit {
   @doc """
   Convert `Unit` into its standard string representation.
   ## REPL
-  xldr(1)> from((), String)
+  xldr(1)> from::<String>(())
   "()"
   """
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from(self: Self) -> String {
     to_string(self)
   }
 }
 
-
-@doc """
-Compiler-reserved target-type witness.
-Use level: signature-only marker for target-oriented trait methods.
-`TypeRef<$T>` is not an ordinary first-class value type. It exists only to
-describe trait method parameters that need an explicit target type witness.
-Do not use it in ordinary bindings, field types, or return types.
-"""
-@builtin type TypeRef<$T>
 
 @doc """
 Compiler-reserved ignored-input closure marker.

@@ -1137,10 +1137,6 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &["$T"],
     },
     BuiltinTypeMeta {
-        name: TypeName::TypeRef.as_str(),
-        params: &["$T"],
-    },
-    BuiltinTypeMeta {
         name: TypeName::Hole.as_str(),
         params: &[],
     },

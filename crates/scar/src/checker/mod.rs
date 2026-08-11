@@ -562,9 +562,7 @@ pub fn typecheck_with_context_with_warnings(
 pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) => true,
-        Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-            type_contains_unresolved_vars(inner)
-        }
+        Ty::List(inner) | Ty::Lazy(inner) => type_contains_unresolved_vars(inner),
         Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
             items.iter().any(type_contains_unresolved_vars)
         }
@@ -886,12 +884,6 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                     Box::new(update_focus.clone()),
                 )
             }
-            "TypeRef" => {
-                let [inner] = args.as_slice() else {
-                    return Err("TypeRef requires exactly 1 type argument".into());
-                };
-                Ty::TypeRef(Box::new(inner.clone()))
-            }
             "PID" => {
                 let [inner] = args.as_slice() else {
                     return Err("PID requires exactly 1 type argument".into());
@@ -1029,7 +1021,6 @@ enum CanonicalTyKey {
         params: Vec<CanonicalTyKey>,
         ret: Box<CanonicalTyKey>,
     },
-    TypeRef(Box<CanonicalTyKey>),
     Lazy(Box<CanonicalTyKey>),
     Facet {
         kind: crate::types::FacetKind,
@@ -1449,9 +1440,7 @@ impl ScarSession {
 
     fn rewrite_fun_indices_in_ty(ty: &mut Ty, rewrites: &HashMap<u32, u32>) {
         match ty {
-            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-                Self::rewrite_fun_indices_in_ty(inner, rewrites)
-            }
+            Ty::List(inner) | Ty::Lazy(inner) => Self::rewrite_fun_indices_in_ty(inner, rewrites),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 for item in items {
                     Self::rewrite_fun_indices_in_ty(item, rewrites);
@@ -2423,9 +2412,7 @@ impl Checker {
             Ty::Result(ok, err) => {
                 self.ty_contains_process_init(&ok) || self.ty_contains_process_init(&err)
             }
-            Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => {
-                self.ty_contains_process_init(&inner)
-            }
+            Ty::List(inner) | Ty::Lazy(inner) => self.ty_contains_process_init(&inner),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 items.iter().any(|item| self.ty_contains_process_init(item))
             }
@@ -2834,7 +2821,7 @@ impl Checker {
                 self.ty_contains_handler_capability_pid(&ok, slots)
                     || self.ty_contains_handler_capability_pid(&err, slots)
             }
-            Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => {
+            Ty::List(inner) | Ty::Lazy(inner) => {
                 self.ty_contains_handler_capability_pid(&inner, slots)
             }
             Ty::Tuple(items) | Ty::SelfApp(items) => items

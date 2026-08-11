@@ -80,35 +80,16 @@ def show_value(x: impl Show) -> String {
 - `-> impl Trait`
 - `where` clause
 
-## `TypeRef<$T>`
+## 明示型引数
 
-`TypeRef<$T>` は ordinary value type ではありません。  
-target-oriented trait method の witness としてだけ使います。
+変換先など、値引数だけでは決まらない型は `::<...>` で指定します。
 
 ```surtr
-@builtin type TypeRef<$T>
-
-deftrait From<$To> {
-  def from(self: Self, to: TypeRef<$To>) -> $To
-}
-
-deftrait TryFrom<$To> {
-  def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}
+text = from::<String>(42)
+number =? try_from::<Int>("42")
 ```
 
-### 使ってよい場所
-
-- trait head で宣言した型引数に対応する trait method parameter
-- それに対応する `impl Trait for Type` 側の method parameter
-
-### 使わない場所
-
-- 通常の `def` の引数型
-- 通常の `def` の戻り値型
-- field type
-- local binding の型注釈
-- first-class value としての生成・返却・保存
+明示型引数は runtime の値ではなく、呼び出し時の型入力です。通常関数、trait helper、capture で同じ構文を使えます。
 
 ## 空リスト
 
@@ -124,14 +105,14 @@ names: List<String> = []
 呼び出し surface では target type を value ではなく型スロットとして読みます。
 
 ```text
-xldr(1)> print(from(42, String))
+xldr(1)> print(from::<String>(42))
 42
 xldr(2)>
 ```
 
 この `String` は ordinary value ではなく、変換先型の指定です。
 
-`TypeRef<$T>` の詳しい背景と利用境界は `./special-types.md` を参照してください。
+compiler-special type の利用境界は `./special-types.md` を参照してください。
 
 ## `_` / `Hole`
 
@@ -168,5 +149,5 @@ keep_one: (_ -> Int) = always(1)
 
 ## 躓きやすいポイント
 
-- `TypeRef<$T>` は通常の型注釈には使えず、target-oriented trait method parameter 専用です。
+- target-oriented trait の型入力は `::<...>` で指定し、値引数として型名を渡しません。
 - 空リスト `[]` は要素型が見えないため、文脈が弱い場所では型注釈を付ける前提で読むと混乱しにくいです。

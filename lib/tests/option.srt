@@ -21,19 +21,19 @@ test("Option") {
 
   describe("conversions") {
     it("converts option into result") {
-      assert_eq("Ok(7)", inspect(from(Option::Some(7), Result)))
+      assert_eq("Ok(7)", inspect(from::<Result>(Option::Some(7))))
     }
 
     it("converts none into none error") {
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(from(Option::None, Result)))
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(from::<Result>(Option::None)))
     }
 
     it("converts result into option") {
-      assert_eq("Option::Some(9)", inspect(from(Ok(9), Option)))
+      assert_eq("Option::Some(9)", inspect(from::<Option>(Ok(9))))
     }
 
     it("drops concrete errors when converting err into option") {
-      assert_eq("Option::None", inspect(from(Err(NoneError), Option)))
+      assert_eq("Option::None", inspect(from::<Option>(Err(NoneError))))
     }
   }
 

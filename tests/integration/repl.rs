@@ -571,7 +571,7 @@ fn repl_colorizes_sig_command_signature() {
 #[test]
 fn repl_sig_expression_query_flows_through_cli_presentation() {
     let output = run_repl_session(
-        "ret = Ok(\"3\")\nup = {|term: String| try_from(term, Int)}\n:sig ret |>= up\n:quit\n",
+        "ret = Ok(\"3\")\nup = {|term: String| try_from::<Int>(term)}\n:sig ret |>= up\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -854,7 +854,7 @@ fn repl_sig_enum_rejects_extra_input_with_shared_message() {
 #[test]
 fn repl_info_renders_styled_summary_for_queries() {
     let output = run_repl_session_with_color(
-        "ret = Ok(\"3\")\nup = {|term: String| try_from(term, Int)}\n:info ret |>= up\n:quit\n",
+        "ret = Ok(\"3\")\nup = {|term: String| try_from::<Int>(term)}\n:info ret |>= up\n:quit\n",
     );
     assert!(
         output.status.success(),

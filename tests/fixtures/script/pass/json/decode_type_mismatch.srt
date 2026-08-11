@@ -1,5 +1,5 @@
 json =? Json::decode("42")
-result = JsonValue::decode(json, String)
+result = Decode::decode::<String>(json)
 match result {
   Ok(_) => print("unexpected-ok"),
   Err(err) => print(Error::kind(err)),

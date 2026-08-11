@@ -1059,7 +1059,6 @@ impl Checker {
                     .collect(),
                 ret: Box::new(self.canonical_ty_key(&ret)),
             },
-            Ty::TypeRef(inner) => CanonicalTyKey::TypeRef(Box::new(self.canonical_ty_key(&inner))),
             Ty::Lazy(inner) => CanonicalTyKey::Lazy(Box::new(self.canonical_ty_key(&inner))),
             Ty::Facet(kind, source, focus, update_source, update_focus) => CanonicalTyKey::Facet {
                 kind,
@@ -1232,7 +1231,7 @@ impl Checker {
             (Ty::List(left), Ty::List(right)) => {
                 self.match_specialization_ty(left, right, bound_tyvars, mapping)
             }
-            (Ty::TypeRef(left), Ty::TypeRef(right)) | (Ty::Lazy(left), Ty::Lazy(right)) => {
+            (Ty::Lazy(left), Ty::Lazy(right)) => {
                 self.match_specialization_ty(left, right, bound_tyvars, mapping)
             }
             (
@@ -1534,7 +1533,7 @@ impl Checker {
                     ordered.push(var);
                 }
             }
-            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
+            Ty::List(inner) | Ty::Lazy(inner) => {
                 self.collect_bound_tyvars_in_ty(&inner, ordered, seen)
             }
             Ty::Facet(_, source, focus, update_source, update_focus) => {
@@ -2160,9 +2159,6 @@ impl Checker {
                 .cloned()
                 .unwrap_or_else(|| self.resolve_ty(ty)),
             Ty::List(inner) => Ty::List(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
-            Ty::TypeRef(inner) => {
-                Ty::TypeRef(Box::new(self.substitute_ty_with_mapping(inner, mapping)))
-            }
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
                 *kind,

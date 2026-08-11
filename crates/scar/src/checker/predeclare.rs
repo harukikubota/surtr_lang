@@ -572,7 +572,7 @@ impl Checker {
                     edges.entry(id.name.clone()).or_default();
                     for field in fields {
                         let mut refs = Vec::new();
-                        Self::collect_type_ref_names(&field.ty, &mut refs);
+                        Self::collect_type_dependency_names(&field.ty, &mut refs);
                         for ref_name in refs {
                             edges.entry(id.name.clone()).or_default().insert(ref_name);
                         }
@@ -586,7 +586,7 @@ impl Checker {
                         let mut variant_refs = HashSet::new();
                         for payload_ty in &variant.payload {
                             let mut refs = Vec::new();
-                            Self::collect_type_ref_names(payload_ty, &mut refs);
+                            Self::collect_type_dependency_names(payload_ty, &mut refs);
                             for ref_name in refs {
                                 variant_refs.insert(ref_name);
                             }
@@ -1018,9 +1018,7 @@ impl Checker {
                     out.push(*var);
                 }
             }
-            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-                Self::collect_ty_vars(inner, out)
-            }
+            Ty::List(inner) | Ty::Lazy(inner) => Self::collect_ty_vars(inner, out),
             Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);
@@ -1681,22 +1679,12 @@ impl Checker {
             .params
             .iter()
             .map(|param| {
-                if let Some(ty) = self.resolve_trait_type_ref_param_ty(
+                self.resolve_trait_signature_ast_ty_in_context(
                     &param.ty,
-                    &trait_head_bindings,
-                    false,
+                    TypeSyntaxContext::General,
                     self_ty,
                     &mut tyvars,
-                )? {
-                    Ok(ty)
-                } else {
-                    self.resolve_trait_signature_ast_ty_in_context(
-                        &param.ty,
-                        TypeSyntaxContext::General,
-                        self_ty,
-                        &mut tyvars,
-                    )
-                }
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret = self.resolve_trait_signature_ast_ty_in_context(
@@ -1765,11 +1753,6 @@ impl Checker {
                     .collect::<Result<_, _>>()?,
                 Box::new(self.expand_trait_self_apps(*ret, target_ty, constructor_slot_vars)?),
             ),
-            Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.expand_trait_self_apps(
-                *inner,
-                target_ty,
-                constructor_slot_vars,
-            )?)),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.expand_trait_self_apps(
                 *inner,
                 target_ty,
@@ -1928,22 +1911,12 @@ impl Checker {
             .params
             .iter()
             .map(|param| {
-                if let Some(ty) = self.resolve_trait_type_ref_param_ty(
+                self.resolve_trait_signature_ast_ty_in_context(
                     &param.ty,
-                    &trait_head_bindings,
-                    true,
+                    TypeSyntaxContext::General,
                     &self_ty,
                     &mut tyvars,
-                )? {
-                    Ok(ty)
-                } else {
-                    self.resolve_trait_signature_ast_ty_in_context(
-                        &param.ty,
-                        TypeSyntaxContext::General,
-                        &self_ty,
-                        &mut tyvars,
-                    )
-                }
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret_source = method.ret_ty.as_ref().unwrap_or(fallback_ret_ty);
@@ -2687,9 +2660,6 @@ mod policy_tests {
         ));
         assert!(!Checker::builtin_type_has_public_trait_target_surface(
             "Self"
-        ));
-        assert!(!Checker::builtin_type_has_public_trait_target_surface(
-            "TypeRef"
         ));
         assert!(!Checker::builtin_type_has_public_trait_target_surface(
             "StandbyInit"

@@ -130,10 +130,10 @@ impl From<Result<$T>> for Option<$T> {
   @doc """
   Convert `Option<$T>` into `Result<$T>` using `NoneError` for missing values.
   ## REPL
-  xldr(1)> from(Option::Some(1), Result)
+  xldr(1)> from::<Result>(Option::Some(1))
   Ok(1)
   """
-  def from(self: Self, to: TypeRef<Result<$T>>) -> Result<$T> {
+  def from(self: Self) -> Result<$T> {
     match self {
       Option::Some(value) => Ok(value),
       Option::None => Err(NoneError),
@@ -145,10 +145,10 @@ impl From<Option<$T>> for Result<$T> {
   @doc """
   Convert `Result<$T>` into `Option<$T>`, dropping the concrete error value.
   ## REPL
-  xldr(1)> from(Ok(1), Option)
+  xldr(1)> from::<Option>(Ok(1))
   Option::Some(1)
   """
-  def from(self: Self, to: TypeRef<Option<$T>>) -> Option<$T> {
+  def from(self: Self) -> Option<$T> {
     match self {
       Ok(value) => Option::Some(value),
       Err(_) => Option::None,

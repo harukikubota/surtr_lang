@@ -182,7 +182,6 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::InferredFacetCapture(_, _) => {}
         Resolved::ProcessContextHandler(_, _) => {}
-        Resolved::TypeRefWitness(_, _) => {}
         Resolved::StructLit(_, _, fields) => {
             for field in fields {
                 match field {

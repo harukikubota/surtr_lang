@@ -175,7 +175,7 @@ impl JsonValue {
   `Encode<JsonValue> for typeof(value)`.
   """
   def encode<$T>(value: $T) -> Result<JsonValue, Error> {
-    Encode::encode(value, JsonValue)
+    Encode::encode::<JsonValue>(value)
   }
 }
 
@@ -183,7 +183,7 @@ impl Decode<JsonValue> for String {
   @doc """
   Parse a JSON text string into `JsonValue`.
   """
-  def decode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+  def decode(self: Self) -> Result<JsonValue, Error> {
     Json::decode(self)
   }
 }
@@ -192,7 +192,7 @@ impl Decode<String> for JsonValue {
   @doc """
   Decode a `JsonValue::String` through the generic `Decode` trait.
   """
-  def decode(self: Self, to: TypeRef<String>) -> Result<String, Error> {
+  def decode(self: Self) -> Result<String, Error> {
     Json::as_string(self)
   }
 }
@@ -201,7 +201,7 @@ impl Decode<Int> for JsonValue {
   @doc """
   Decode a `JsonValue::Int` through the generic `Decode` trait.
   """
-  def decode(self: Self, to: TypeRef<Int>) -> Result<Int, Error> {
+  def decode(self: Self) -> Result<Int, Error> {
     Json::as_int(self)
   }
 }
@@ -210,7 +210,7 @@ impl Decode<Float> for JsonValue {
   @doc """
   Decode a `JsonValue::Float` through the generic `Decode` trait.
   """
-  def decode(self: Self, to: TypeRef<Float>) -> Result<Float, Error> {
+  def decode(self: Self) -> Result<Float, Error> {
     Json::as_float(self)
   }
 }
@@ -219,7 +219,7 @@ impl Decode<Boolean> for JsonValue {
   @doc """
   Decode a `JsonValue::Bool` through the generic `Decode` trait.
   """
-  def decode(self: Self, to: TypeRef<Boolean>) -> Result<Boolean, Error> {
+  def decode(self: Self) -> Result<Boolean, Error> {
     Json::as_bool(self)
   }
 }
@@ -228,7 +228,7 @@ impl Encode<JsonValue> for JsonValue {
   @doc """
   Keep an existing `JsonValue` unchanged when encoding to JSON.
   """
-  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+  def encode(self: Self) -> Result<JsonValue, Error> {
     Ok(self)
   }
 }
@@ -237,7 +237,7 @@ impl Encode<JsonValue> for String {
   @doc """
   Encode a string as `JsonValue::String`.
   """
-  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+  def encode(self: Self) -> Result<JsonValue, Error> {
     Ok(JsonValue::String(self))
   }
 }
@@ -246,7 +246,7 @@ impl Encode<JsonValue> for Int {
   @doc """
   Encode an integer as `JsonValue::Int`.
   """
-  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+  def encode(self: Self) -> Result<JsonValue, Error> {
     Ok(JsonValue::Int(self))
   }
 }
@@ -255,7 +255,7 @@ impl Encode<JsonValue> for Float {
   @doc """
   Encode a floating-point value as `JsonValue::Float`.
   """
-  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+  def encode(self: Self) -> Result<JsonValue, Error> {
     Ok(JsonValue::Float(self))
   }
 }
@@ -264,7 +264,7 @@ impl Encode<JsonValue> for Boolean {
   @doc """
   Encode a boolean as `JsonValue::Bool`.
   """
-  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+  def encode(self: Self) -> Result<JsonValue, Error> {
     Ok(JsonValue::Bool(self))
   }
 }

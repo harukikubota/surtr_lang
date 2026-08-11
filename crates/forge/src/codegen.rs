@@ -4773,10 +4773,6 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
             "Lazy<{}>",
             ty_to_string_with_type_params(inner, type_params)
         ),
-        Ty::TypeRef(inner) => format!(
-            "TypeRef<{}>",
-            ty_to_string_with_type_params(inner, type_params)
-        ),
         Ty::Pid(name) => format!("PID<{}>", surface_rendered_name(name)),
         Ty::Facet(kind, source, focus, update_source, update_focus) => {
             format!(
@@ -4870,7 +4866,7 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
 fn ty_contains_var(ty: &Ty, needle: u32) -> bool {
     match ty {
         Ty::Var(var) => *var == needle,
-        Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => ty_contains_var(inner, needle),
+        Ty::List(inner) | Ty::Lazy(inner) => ty_contains_var(inner, needle),
         Ty::Tuple(items) | Ty::SelfApp(items) => {
             items.iter().any(|item| ty_contains_var(item, needle))
         }

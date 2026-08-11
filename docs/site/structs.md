@@ -24,7 +24,7 @@ impl User {
 欠損可能 field を持たせるときは、`T?` または `Option<T>` を使います。
 `T?` は `Option<T>` に下がる sugar です。
 `Result` を返す helper 関数とつなぐときは、必要に応じて
-`from(value, Result)` / `from(value, Option)` を明示します。
+`from::<Result>(value)` / `from::<Option>(value)` を明示します。
 
 ## 構築ルール
 

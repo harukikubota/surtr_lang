@@ -601,7 +601,7 @@ fn rebase_where_clause(clause: &mut ResolvedWhereClause, base: u32, offset: u32)
 
 fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
     match node {
-        Resolved::Lit(..) | Resolved::ListNil(_) | Resolved::TypeRefWitness(..) => {}
+        Resolved::Lit(..) | Resolved::ListNil(_) => {}
         Resolved::Var(_, id) => rebase_resolved_id(id, base, offset),
         Resolved::App(_, func, args) => {
             rebase_resolved_node(func, base, offset);

@@ -95,11 +95,6 @@ impl Checker {
         }
     }
 
-    fn builtin_type_ref_witness_allowed(name: &str) -> bool {
-        builtin_type_usage_policy(Self::surface_name(name))
-            .is_some_and(|policy| policy.type_ref_witness_allowed)
-    }
-
     fn builtin_type_is_clause_block_surface_only(name: &str) -> bool {
         builtin_type_usage_policy(Self::surface_name(name))
             .is_some_and(|policy| policy.clause_block_surface_only)
@@ -161,9 +156,7 @@ impl Checker {
         match ty {
             Ty::Error => true,
             Ty::Result(ok, _) => Self::ty_exposes_error_value(ok),
-            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-                Self::ty_exposes_error_value(inner)
-            }
+            Ty::List(inner) | Ty::Lazy(inner) => Self::ty_exposes_error_value(inner),
             Ty::Facet(_, source, focus, update_source, update_focus) => {
                 Self::ty_exposes_error_value(source)
                     || Self::ty_exposes_error_value(focus)
@@ -237,19 +230,6 @@ impl Checker {
             TypeSyntaxContext::ExtractorBody
         } else {
             TypeSyntaxContext::BindingAnnotation
-        }
-    }
-
-    fn type_ref_not_allowed_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            message:
-                "TypeRef<$T> is only allowed as a trait method parameter tied to a trait head type parameter."
-                    .into(),
-            span: span.clone(),
-            hint: Some(
-                "Use TypeRef<$T> only in deftrait / impl Trait method parameters, not in ordinary signatures or return types."
-                    .into(),
-            ),
         }
     }
 
@@ -382,70 +362,6 @@ impl Checker {
         }
     }
 
-    pub(super) fn resolve_trait_type_ref_param_ty(
-        &mut self,
-        ast_ty: &AstTy,
-        trait_head_bindings: &HashMap<String, Ty>,
-        allow_concrete_inner: bool,
-        self_ty: &Ty,
-        tyvars: &mut HashMap<String, Ty>,
-    ) -> Result<Option<Ty>, TypeError> {
-        let AstTy::Generic(span, name, args) = ast_ty else {
-            return Ok(None);
-        };
-        if name != "TypeRef" {
-            return Ok(None);
-        }
-        if args.len() != 1 {
-            return Err(TypeError {
-                message: "TypeRef<T> requires exactly 1 type argument".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-
-        let inner = match &args[0] {
-            AstTy::Named(_, name) if name.starts_with('$') => {
-                trait_head_bindings
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| TypeError {
-                        message: format!(
-                            "TypeRef<{}> must refer to a type parameter declared on the surrounding trait head",
-                            name
-                        ),
-                        span: Self::ast_ty_span(&args[0]).clone(),
-                        hint: None,
-                    })?
-            }
-            other if allow_concrete_inner => self.resolve_trait_signature_ast_ty_in_context(
-                other,
-                TypeSyntaxContext::General,
-                self_ty,
-                tyvars,
-            )?,
-            _ => {
-                return Err(TypeError {
-                    message:
-                        "TypeRef<$T> in trait declarations must point at a trait head type parameter."
-                            .into(),
-                    span: Self::ast_ty_span(&args[0]).clone(),
-                    hint: None,
-                });
-            }
-        };
-
-        if matches!(inner, Ty::TypeRef(_)) {
-            return Err(TypeError {
-                message: "Nested TypeRef is not supported".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-
-        Ok(Some(Ty::TypeRef(Box::new(inner))))
-    }
-
     pub(super) fn register_tyvar_bound(&mut self, var: u32, trait_name: &str) {
         let bounds = self.tyvar_bounds.entry(var).or_default();
         if !bounds.iter().any(|bound| bound == trait_name) {
@@ -490,7 +406,7 @@ impl Checker {
         }
     }
 
-    pub(super) fn collect_type_ref_names(ast_ty: &AstTy, out: &mut Vec<String>) {
+    pub(super) fn collect_type_dependency_names(ast_ty: &AstTy, out: &mut Vec<String>) {
         match ast_ty {
             AstTy::Named(_, name) => {
                 if !name.starts_with('$') {
@@ -499,19 +415,19 @@ impl Checker {
             }
             AstTy::Generic(_, _, args) => {
                 for arg in args {
-                    Self::collect_type_ref_names(arg, out);
+                    Self::collect_type_dependency_names(arg, out);
                 }
             }
             AstTy::Tuple(_, items) => {
                 for item in items {
-                    Self::collect_type_ref_names(item, out);
+                    Self::collect_type_dependency_names(item, out);
                 }
             }
             AstTy::Func(_, params, ret) => {
                 for param in params {
-                    Self::collect_type_ref_names(param, out);
+                    Self::collect_type_dependency_names(param, out);
                 }
-                Self::collect_type_ref_names(ret, out);
+                Self::collect_type_dependency_names(ret, out);
             }
             AstTy::ImplTrait(_, name) => out.push(Self::canonical_user_type_name(name)),
         }
@@ -642,7 +558,6 @@ impl Checker {
                                 | TypeName::Duration
                                 | TypeName::StandbyInit
                                 | TypeName::Lazy
-                                | TypeName::TypeRef
                                 | TypeName::Hole
                                 | TypeName::Closure
                                 | TypeName::MatchArms
@@ -662,11 +577,6 @@ impl Checker {
                         }
                     }
                 }
-            }
-            AstTy::Generic(span, name, _)
-                if Self::builtin_type_ref_witness_allowed(name) =>
-            {
-                Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(span, name, _)
                 if Self::builtin_type_is_clause_block_surface_only(name) =>
@@ -1051,9 +961,6 @@ impl Checker {
                     self.register_tyvar_bound(var, trait_name);
                 }
                 Ok(fresh)
-            }
-            AstTy::Generic(span, name, _) if Self::builtin_type_ref_witness_allowed(name) => {
-                Err(self.type_ref_not_allowed_error(span))
             }
             AstTy::Generic(_, name, args) if name == "Self" && mode.self_ty().is_some() => {
                 let args = args
@@ -1460,9 +1367,7 @@ impl Checker {
                 | (Ty::Unit, Ty::Unit)
                 | (Ty::Error, Ty::Error) => true,
                 (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
-                (Ty::TypeRef(a), Ty::TypeRef(b)) | (Ty::Lazy(a), Ty::Lazy(b)) => {
-                    self.types_compatible(a, b)
-                }
+                (Ty::Lazy(a), Ty::Lazy(b)) => self.types_compatible(a, b),
                 (Ty::Pid(a), Ty::Pid(b)) => {
                     Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
                         || a.starts_with('$')
@@ -1640,7 +1545,7 @@ impl Checker {
             Ty::Var(var) => var == needle,
             Ty::Hole => false,
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
-            Ty::TypeRef(inner) | Ty::Lazy(inner) => self.ty_contains_var(&inner, needle),
+            Ty::Lazy(inner) => self.ty_contains_var(&inner, needle),
             Ty::Pid(_) => false,
             Ty::Facet(_, source, focus, update_source, update_focus) => {
                 self.ty_contains_var(&source, needle)
@@ -1682,7 +1587,6 @@ impl Checker {
             },
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
             Ty::Hole => Ty::Hole,
-            Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.resolve_ty(inner))),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.resolve_ty(inner))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
@@ -1762,9 +1666,6 @@ impl Checker {
                 .clone(),
             Ty::List(inner) => Ty::List(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
             Ty::Hole => Ty::Hole,
-            Ty::TypeRef(inner) => {
-                Ty::TypeRef(Box::new(self.instantiate_ty_with_fresh(inner, fresh)))
-            }
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
@@ -1869,9 +1770,6 @@ impl Checker {
             Ty::Var(var) => bindings.get(var).cloned().unwrap_or(Ty::Var(*var)),
             Ty::List(inner) => Ty::List(Box::new(self.substitute_type_def_ty(inner, bindings))),
             Ty::Hole => Ty::Hole,
-            Ty::TypeRef(inner) => {
-                Ty::TypeRef(Box::new(self.substitute_type_def_ty(inner, bindings)))
-            }
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_type_def_ty(inner, bindings))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
@@ -2049,10 +1947,6 @@ impl Checker {
                 "Lazy<{}>",
                 self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
             ),
-            Ty::TypeRef(inner) => format!(
-                "TypeRef<{}>",
-                self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
-            ),
             Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),
             Ty::Facet(kind, source, focus, update_source, update_focus) => format!(
                 "Facet<{}, {}, {}, {}, {}>",
@@ -2158,7 +2052,6 @@ impl Checker {
             ),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
-            Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
             Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),
             Ty::Facet(kind, source, focus, update_source, update_focus) => {
                 format!(
@@ -2215,9 +2108,7 @@ impl Checker {
     pub(super) fn ty_contains_facet(&self, ty: &Ty) -> bool {
         match self.resolve_ty(ty) {
             Ty::Facet(..) => true,
-            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-                self.ty_contains_facet(inner.as_ref())
-            }
+            Ty::List(inner) | Ty::Lazy(inner) => self.ty_contains_facet(inner.as_ref()),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 items.iter().any(|item| self.ty_contains_facet(item))
             }
@@ -2825,12 +2716,6 @@ impl Checker {
 #[cfg(test)]
 mod tests {
     use super::Checker;
-
-    #[test]
-    fn type_ref_witness_gate_uses_builtin_type_usage_policy() {
-        assert!(Checker::builtin_type_ref_witness_allowed("TypeRef"));
-        assert!(!Checker::builtin_type_ref_witness_allowed("String"));
-    }
 
     #[test]
     fn clause_block_surface_type_query_uses_builtin_type_usage_policy() {

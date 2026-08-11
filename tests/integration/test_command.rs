@@ -350,7 +350,7 @@ import Test;
 test("String") {
   describe("TryFrom") {
     it("parses ints through the assertion pipeline") {
-      try_from("1", Int) |>= assert_eq(1)
+      try_from::<Int>("1") |>= assert_eq(1)
     }
   }
 }

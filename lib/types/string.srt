@@ -532,10 +532,10 @@ impl From<String> for String {
   @doc """
   Return the value unchanged when converting `String` to `String`.
   ## REPL
-  xldr(1)> from("abc", String)
+  xldr(1)> from::<String>("abc")
   "abc"
   """
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from(self: Self) -> String {
     self
   }
 }
@@ -544,10 +544,10 @@ impl TryFrom<Int> for String {
   @doc """
   Parse the string as an `Int`, returning an error result on invalid input.
   ## REPL
-  xldr(1)> try_from("42", Int)
+  xldr(1)> try_from::<Int>("42")
   Ok(42)
   """
-  def try_from(self: Self, to: TypeRef<Int>) -> Result<Int, Error> {
+  def try_from(self: Self) -> Result<Int, Error> {
     String::try_to_int(self)
   }
 }
@@ -556,10 +556,10 @@ impl TryFrom<Boolean> for String {
   @doc """
   Parse the string as a `Boolean`, returning an error result on invalid input.
   ## REPL
-  xldr(1)> try_from("True", Boolean)
+  xldr(1)> try_from::<Boolean>("True")
   Ok(True)
   """
-  def try_from(self: Self, to: TypeRef<Boolean>) -> Result<Boolean, Error> {
+  def try_from(self: Self) -> Result<Boolean, Error> {
     String::try_to_boolean(self)
   }
 }

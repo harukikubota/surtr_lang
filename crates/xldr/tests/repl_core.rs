@@ -1200,7 +1200,6 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
         "BulkUpdateEntries",
         "Hole",
         "Lazy",
-        "TypeRef",
         "StandbyInit",
         "Closure",
     ];

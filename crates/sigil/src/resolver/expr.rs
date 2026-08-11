@@ -66,72 +66,6 @@ fn is_synthetic_builtin_symbol_uid(uid: u32) -> bool {
     )
 }
 
-#[derive(Debug, Clone, Copy)]
-struct TypeRefHelperSpec {
-    bare_name: &'static str,
-    owner: &'static str,
-    method: &'static str,
-    arity: usize,
-    witness_arg_indices: &'static [usize],
-}
-
-const TYPE_REF_HELPERS: &[TypeRefHelperSpec] = &[
-    TypeRefHelperSpec {
-        bare_name: "from",
-        owner: "From",
-        method: "from",
-        arity: 2,
-        witness_arg_indices: &[1],
-    },
-    TypeRefHelperSpec {
-        bare_name: "try_from",
-        owner: "TryFrom",
-        method: "try_from",
-        arity: 2,
-        witness_arg_indices: &[1],
-    },
-    TypeRefHelperSpec {
-        bare_name: "encode",
-        owner: "Encode",
-        method: "encode",
-        arity: 2,
-        witness_arg_indices: &[1],
-    },
-    TypeRefHelperSpec {
-        bare_name: "decode",
-        owner: "Decode",
-        method: "decode",
-        arity: 2,
-        witness_arg_indices: &[1],
-    },
-];
-
-#[derive(Debug, Clone, Copy)]
-enum TypeRefHelperCall {
-    InScope(&'static TypeRefHelperSpec),
-    ExplicitTrait(&'static TypeRefHelperSpec),
-    JsonValueDecode(&'static TypeRefHelperSpec),
-}
-
-impl TypeRefHelperCall {
-    fn spec(self) -> &'static TypeRefHelperSpec {
-        match self {
-            Self::InScope(spec) | Self::ExplicitTrait(spec) | Self::JsonValueDecode(spec) => spec,
-        }
-    }
-
-    fn allows_canonical_resolution(self) -> bool {
-        !matches!(self, Self::InScope(_))
-    }
-
-    fn helper_owner_hint(self) -> Option<&'static str> {
-        match self {
-            Self::JsonValueDecode(_) => Some("JsonValue"),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CanonicalSpecialForm {
     If(IfKind),
@@ -1523,89 +1457,6 @@ impl Resolver {
         self.desugar_pipeline_rhs_special_form_partial(rhs)
     }
 
-    fn type_ref_helper_for_call(func: &Ast) -> Option<TypeRefHelperCall> {
-        match func {
-            Ast::Var(_, name) if name == "decode" || name == "encode" => None,
-            Ast::Var(_, name) => TYPE_REF_HELPERS
-                .iter()
-                .find(|spec| spec.bare_name == name.as_str())
-                .map(TypeRefHelperCall::InScope),
-            Ast::Path(_, path) if path.segments.len() >= 2 => {
-                let method = path.segments.last()?;
-                let owner = path.segments.get(path.segments.len() - 2)?;
-                if owner == "JsonValue" && method == "decode" {
-                    return TYPE_REF_HELPERS
-                        .iter()
-                        .find(|spec| spec.owner == "Decode" && spec.method == "decode")
-                        .map(TypeRefHelperCall::JsonValueDecode);
-                }
-                TYPE_REF_HELPERS
-                    .iter()
-                    .find(|spec| spec.owner == owner.as_str() && spec.method == method.as_str())
-                    .map(TypeRefHelperCall::ExplicitTrait)
-            }
-            _ => None,
-        }
-    }
-
-    fn resolve_type_ref_helper_func(
-        &self,
-        span: Span,
-        helper: TypeRefHelperCall,
-    ) -> Option<Resolved> {
-        let spec = helper.spec();
-        let method_alias = format!("{}::{}", spec.owner, spec.method);
-        let scoped_uid = self.scope.lookup(&method_alias);
-        let uid = if helper.allows_canonical_resolution() {
-            scoped_uid
-                .or_else(|| self.declaration_uids.get(&method_alias).copied())
-                .or_else(|| {
-                    let canonical_fq = format!("{}::{}", spec.owner, method_alias);
-                    self.declaration_uids.get(&canonical_fq).copied()
-                })
-                .or_else(|| {
-                    self.declaration_entries
-                        .iter()
-                        .find_map(|(fq_name, entry)| {
-                            (entry.kind == DeclarationKind::TraitMethod
-                                && global_surface_name(&entry.module_path) == spec.owner
-                                && entry.name == method_alias)
-                                .then(|| self.declaration_uids.get(fq_name).copied())
-                                .flatten()
-                        })
-                })
-        } else {
-            scoped_uid
-        }?;
-        let fq_name = self
-            .declaration_fq_name_for_uid(uid)
-            .unwrap_or(method_alias);
-        let is_trait_method = self
-            .declaration_entries
-            .get(&fq_name)
-            .is_some_and(|entry| entry.kind == DeclarationKind::TraitMethod)
-            || self
-                .declaration_uid_kinds
-                .get(&uid)
-                .is_some_and(|kind| *kind == DeclarationKind::TraitMethod);
-        is_trait_method.then(|| {
-            Resolved::Var(
-                span.clone(),
-                ResolvedId {
-                    name: helper
-                        .helper_owner_hint()
-                        .map(|owner| format!("{}::{}", owner, spec.method))
-                        .unwrap_or_else(|| spec.method.into()),
-                    qualified_name: Some(fq_name),
-                    unique_id: uid,
-                    compiler_generated: false,
-                    symbol_info: None,
-                    span,
-                },
-            )
-        })
-    }
-
     fn undefined_callable_arity_message(func: &Ast, arity: usize) -> Option<String> {
         match func {
             Ast::Var(_, name) => Some(format!("Undefined function {}/{}", name, arity)),
@@ -1754,50 +1605,6 @@ impl Resolver {
                 }
             }
             _ => err,
-        }
-    }
-
-    fn type_witness_from_expr(expr: Ast) -> Result<AstTy, ResolveError> {
-        match expr {
-            Ast::ConstructorCall(span, name, args) => {
-                if args.is_empty() {
-                    return Ok(AstTy::Named(span, name));
-                }
-                let inner = args
-                    .into_iter()
-                    .map(|arg| match arg {
-                        RecordLitArg::Positional(expr) => Self::type_witness_from_expr(expr),
-                        RecordLitArg::Named(_, expr) => Err(ResolveError {
-                            message: "type witness arguments do not accept named type parameters"
-                                .into(),
-                            span: expr.span().clone(),
-                            related_labels: Vec::new(),
-                        }),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(AstTy::Generic(span, name, inner))
-            }
-            Ast::Path(span, path) => Ok(AstTy::Named(span, path.segments.join("::"))),
-            Ast::Var(span, name) if name == "Unit" => Ok(AstTy::Named(span, name)),
-            Ast::Var(span, name) if name.chars().next().is_some_and(|ch| ch.is_uppercase()) => {
-                Ok(AstTy::Named(span, name))
-            }
-            other => Err(ResolveError {
-                message: "conversion target must be a bare type name such as String or Result<Int>"
-                    .into(),
-                span: other.span().clone(),
-                related_labels: Vec::new(),
-            }),
-        }
-    }
-
-    fn type_witness_span(ast_ty: &AstTy) -> &Span {
-        match ast_ty {
-            AstTy::Named(span, _)
-            | AstTy::Generic(span, _, _)
-            | AstTy::Tuple(span, _)
-            | AstTy::Func(span, _, _)
-            | AstTy::ImplTrait(span, _) => span,
         }
     }
 
@@ -2487,60 +2294,6 @@ impl Resolver {
                     if name == "||" {
                         return self.resolve_logic_call(span, args, LogicKind::Or);
                     }
-                }
-
-                if let Some(helper) = Self::type_ref_helper_for_call(&func) {
-                    let spec = helper.spec();
-                    let resolved_func = self
-                        .resolve_type_ref_helper_func(func.span().clone(), helper)
-                        .map(Ok)
-                        .unwrap_or_else(|| {
-                            self.resolve_node(*func.clone()).map_err(|err| {
-                                self.map_undefined_callable_error(err, &func, args.len())
-                            })
-                        })?;
-                    let direct_arity = args.len();
-                    let injected_receiver = direct_arity + 1 == spec.arity;
-                    if direct_arity != spec.arity && !injected_receiver {
-                        return Err(ResolveError {
-                            message: format!(
-                                "{} expects exactly {} positional arguments",
-                                spec.bare_name, spec.arity
-                            ),
-                            span,
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    let mut resolved_args = Vec::with_capacity(spec.arity);
-                    for (idx, arg) in args.into_iter().enumerate() {
-                        let effective_idx = if injected_receiver { idx + 1 } else { idx };
-                        match arg {
-                            RecordLitArg::Positional(expr)
-                                if spec.witness_arg_indices.contains(&effective_idx) =>
-                            {
-                                let witness_ty = Self::type_witness_from_expr(expr)?;
-                                resolved_args.push(ResolvedRecordLitArg::Positional(
-                                    Resolved::TypeRefWitness(
-                                        Self::type_witness_span(&witness_ty).clone(),
-                                        witness_ty,
-                                    ),
-                                ));
-                            }
-                            RecordLitArg::Positional(expr) => resolved_args
-                                .push(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?)),
-                            RecordLitArg::Named(_, expr) => {
-                                return Err(ResolveError {
-                                    message: format!(
-                                        "{} does not accept named arguments",
-                                        spec.bare_name
-                                    ),
-                                    span: expr.span().clone(),
-                                    related_labels: Vec::new(),
-                                });
-                            }
-                        }
-                    }
-                    return Ok(Resolved::App(span, Box::new(resolved_func), resolved_args));
                 }
 
                 let resolved_func = match self.resolve_node(*func.clone()) {
