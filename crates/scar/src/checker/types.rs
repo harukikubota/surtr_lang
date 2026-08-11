@@ -1500,6 +1500,21 @@ impl Checker {
         result
     }
 
+    /// Checks whether a callable parameter can consume an argument. `Hole` is
+    /// an ignored-input marker, not a wildcard type: it is accepted only at
+    /// this callable-application boundary and never participates in general
+    /// type compatibility or unification.
+    pub(super) fn callable_accepts_input(&mut self, param: &Ty, argument: &Ty) -> bool {
+        matches!(self.resolve_ty(param), Ty::Hole) || self.types_compatible(param, argument)
+    }
+
+    /// Flow operators encode their callable input in their trait arguments.
+    /// Preserve the ignored-input meaning there without treating `Hole` as a
+    /// generally compatible type or binding it to the implementation generic.
+    pub(super) fn operator_trait_arg_compatible(&mut self, expected: &Ty, actual: &Ty) -> bool {
+        matches!(self.resolve_ty(actual), Ty::Hole) || self.types_compatible(expected, actual)
+    }
+
     pub(super) fn bind_tyvar(&mut self, var: u32, ty: &Ty) -> bool {
         let profile = self.profiler.start();
         let ty = self.resolve_ty(ty);

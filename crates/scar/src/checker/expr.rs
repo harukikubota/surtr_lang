@@ -2387,10 +2387,9 @@ impl Checker {
                 let before = self.substitutions.clone();
                 let target_matches = self.types_compatible(&impl_target, receiver_ty);
                 let args_match = target_matches
-                    && impl_trait_args
-                        .iter()
-                        .zip(requested_trait_args.iter())
-                        .all(|(expected, actual)| self.types_compatible(expected, actual));
+                    && impl_trait_args.iter().zip(requested_trait_args.iter()).all(
+                        |(expected, actual)| self.operator_trait_arg_compatible(expected, actual),
+                    );
                 if !args_match {
                     self.substitutions = before;
                     continue;
@@ -3180,7 +3179,7 @@ impl Checker {
 
         match &receiver_ty {
             Ty::Result(ok, _) => {
-                if !self.types_compatible(ok.as_ref(), &rhs_in) {
+                if !self.callable_accepts_input(&rhs_in, ok.as_ref()) {
                     return Err(TypeError {
                         message: format!(
                             "`|*>` type mismatch: expected {}, got {}",
@@ -3199,7 +3198,7 @@ impl Checker {
                 }
             }
             Ty::List(item) => {
-                if !self.types_compatible(item.as_ref(), &rhs_in) {
+                if !self.callable_accepts_input(&rhs_in, item.as_ref()) {
                     return Err(TypeError {
                         message: format!(
                             "`|*>` type mismatch: expected {}, got {}",
@@ -3218,7 +3217,7 @@ impl Checker {
                 }
             }
             Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
-                if !self.types_compatible(&args[0], &rhs_in) {
+                if !self.callable_accepts_input(&rhs_in, &args[0]) {
                     return Err(TypeError {
                         message: format!(
                             "`|*>` type mismatch: expected {}, got {}",
@@ -3362,7 +3361,9 @@ impl Checker {
                 )? {
                     typed
                 } else {
-                    self.check_apply_callable(right, "`|>=`")?
+                    let expected_callable = self.expected_callable_ty(&contract);
+                    self.check_node_with_expected(right, Some(&expected_callable))
+                        .or_else(|_| self.check_apply_callable(right, "`|>=`"))?
                 }
             }
             _ => self.check_apply_callable(right, "`|>=`")?,
@@ -3374,7 +3375,7 @@ impl Checker {
             |ty: &Ty| matches!(ty, Ty::Enum(name, _) if Self::surface_name(name) == "Option");
         match (&receiver_ty, self.resolve_ty(&rhs_ret)) {
             (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
-                if !self.types_compatible(ok.as_ref(), &rhs_in)
+                if !self.callable_accepts_input(&rhs_in, ok.as_ref())
                     || !self.types_compatible(err.as_ref(), next_err.as_ref())
                 {
                     return Err(TypeError {
@@ -3396,7 +3397,7 @@ impl Checker {
                 }
             }
             (Ty::List(item), Ty::List(_)) => {
-                if !self.types_compatible(item.as_ref(), &rhs_in) {
+                if !self.callable_accepts_input(&rhs_in, item.as_ref()) {
                     return Err(TypeError {
                         message: format!(
                             "`|>=` type mismatch: expected {}, got {}",
@@ -3419,7 +3420,7 @@ impl Checker {
                     && args.len() == 1
                     && Self::surface_name(&next_name) == "Option" =>
             {
-                if !self.types_compatible(&args[0], &rhs_in) {
+                if !self.callable_accepts_input(&rhs_in, &args[0]) {
                     return Err(TypeError {
                         message: format!(
                             "`|>=` type mismatch: expected {}, got {}",
@@ -3639,7 +3640,7 @@ impl Checker {
             self.check_compose_callable_with_contract(right, &right_contract, "`>>`")?;
         let (right_in, right_out) =
             self.unary_function_parts(&typed_right.ty, "`>>`", &typed_right.span)?;
-        if !self.types_compatible(&left_out, &right_in) {
+        if !self.callable_accepts_input(&right_in, &left_out) {
             let extra = match self.resolve_ty(&left_out) {
                 Ty::Result(ok, _) if self.resolve_ty(ok.as_ref()) == self.resolve_ty(&right_in) => {
                     Some(format!(
@@ -3764,7 +3765,7 @@ impl Checker {
         }
         match self.resolve_ty(&left_out) {
             Ty::Result(ok, err) => {
-                if !self.types_compatible(ok.as_ref(), &right_in) {
+                if !self.callable_accepts_input(&right_in, ok.as_ref()) {
                     return Err(TypeError {
                         message:
                             "`>*` requires the left contextual output to match the right input type"
@@ -3808,7 +3809,7 @@ impl Checker {
                 )
             }
             Ty::List(item) => {
-                if !self.types_compatible(item.as_ref(), &right_in) {
+                if !self.callable_accepts_input(&right_in, item.as_ref()) {
                     return Err(TypeError {
                         message:
                             "`>*` requires the left contextual output to match the right input type"
@@ -3849,7 +3850,7 @@ impl Checker {
                 )
             }
             Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
-                if !self.types_compatible(&args[0], &right_in) {
+                if !self.callable_accepts_input(&right_in, &args[0]) {
                     return Err(TypeError {
                         message:
                             "`>*` requires the left contextual output to match the right input type"
@@ -4013,7 +4014,7 @@ impl Checker {
             self.unary_function_parts(&typed_right.ty, "`>=>`", &typed_right.span)?;
         match (self.resolve_ty(&left_out), self.resolve_ty(&right_out)) {
             (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
-                if !self.types_compatible(ok.as_ref(), &right_in)
+                if !self.callable_accepts_input(&right_in, ok.as_ref())
                     || !self.types_compatible(err.as_ref(), next_err.as_ref())
                 {
                     return Err(TypeError {
@@ -4058,7 +4059,7 @@ impl Checker {
                 )
             }
             (Ty::List(item), Ty::List(next_item)) => {
-                if !self.types_compatible(item.as_ref(), &right_in) {
+                if !self.callable_accepts_input(&right_in, item.as_ref()) {
                     return Err(TypeError {
                         message: "`>=>` requires matching List element types across both sides"
                             .into(),
@@ -4104,7 +4105,7 @@ impl Checker {
                     && args.len() == 1
                     && next_args.len() == 1 =>
             {
-                if !self.types_compatible(&args[0], &right_in) {
+                if !self.callable_accepts_input(&right_in, &args[0]) {
                     return Err(TypeError {
                         message: "`>=>` requires matching Option payload types across both sides"
                             .into(),
