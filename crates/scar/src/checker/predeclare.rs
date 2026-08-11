@@ -1021,9 +1021,15 @@ impl Checker {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 Self::collect_ty_vars(inner, out)
             }
-            Ty::Facet(source, focus) | Ty::Result(source, focus) => {
+            Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);
+            }
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
+                Self::collect_ty_vars(source, out);
+                Self::collect_ty_vars(focus, out);
+                Self::collect_ty_vars(update_source, out);
+                Self::collect_ty_vars(update_focus, out);
             }
             Ty::Tuple(items) | Ty::Enum(_, items) => {
                 for item in items {
@@ -1212,7 +1218,7 @@ impl Checker {
             Ty::Pid(name) => Some(format!("PID<{name}>")),
             Ty::Result(_, _) => Some("Result".into()),
             Ty::List(_) => Some("List".into()),
-            Ty::Facet(_, _) => Some("Facet".into()),
+            Ty::Facet(..) => Some("Facet".into()),
             Ty::Tuple(items) if items.len() >= 2 => Some(format!("Tuple{}", items.len())),
             Ty::Func(_, _) => Some("Function".into()),
             Ty::Struct(name, _) | Ty::Record(name, _) => Some(name),

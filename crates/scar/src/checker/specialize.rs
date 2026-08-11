@@ -1048,9 +1048,12 @@ impl Checker {
             },
             Ty::TypeRef(inner) => CanonicalTyKey::TypeRef(Box::new(self.canonical_ty_key(&inner))),
             Ty::Lazy(inner) => CanonicalTyKey::Lazy(Box::new(self.canonical_ty_key(&inner))),
-            Ty::Facet(source, focus) => CanonicalTyKey::Facet {
+            Ty::Facet(kind, source, focus, update_source, update_focus) => CanonicalTyKey::Facet {
+                kind,
                 source: Box::new(self.canonical_ty_key(&source)),
                 focus: Box::new(self.canonical_ty_key(&focus)),
+                update_source: Box::new(self.canonical_ty_key(&update_source)),
+                update_focus: Box::new(self.canonical_ty_key(&update_focus)),
             },
             Ty::Pid(name) => CanonicalTyKey::Pid(Self::canonical_specialization_name(&name)),
             Ty::BuiltinFunc { name, params, ret } => CanonicalTyKey::BuiltinFunc {
@@ -1211,9 +1214,24 @@ impl Checker {
             (Ty::TypeRef(left), Ty::TypeRef(right)) | (Ty::Lazy(left), Ty::Lazy(right)) => {
                 self.match_specialization_ty(left, right, bound_tyvars, mapping)
             }
-            (Ty::Facet(left_source, left_focus), Ty::Facet(right_source, right_focus)) => {
+            (
+                Ty::Facet(_, left_source, left_focus, left_update_source, left_update_focus),
+                Ty::Facet(_, right_source, right_focus, right_update_source, right_update_focus),
+            ) => {
                 self.match_specialization_ty(left_source, right_source, bound_tyvars, mapping);
                 self.match_specialization_ty(left_focus, right_focus, bound_tyvars, mapping);
+                self.match_specialization_ty(
+                    left_update_source,
+                    right_update_source,
+                    bound_tyvars,
+                    mapping,
+                );
+                self.match_specialization_ty(
+                    left_update_focus,
+                    right_update_focus,
+                    bound_tyvars,
+                    mapping,
+                );
             }
             (Ty::Tuple(left), Ty::Tuple(right)) => {
                 for (left, right) in left.iter().zip(right.iter()) {
@@ -1493,9 +1511,11 @@ impl Checker {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 self.collect_bound_tyvars_in_ty(&inner, ordered, seen)
             }
-            Ty::Facet(source, focus) => {
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
                 self.collect_bound_tyvars_in_ty(&source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&focus, ordered, seen);
+                self.collect_bound_tyvars_in_ty(&update_source, ordered, seen);
+                self.collect_bound_tyvars_in_ty(&update_focus, ordered, seen);
             }
             Ty::Tuple(items) => {
                 for item in items {
@@ -1742,6 +1762,8 @@ impl Checker {
             TypedInner::FacetPath(path) => TypedInner::FacetPath(TypedFacetPath {
                 source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                 focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                update_source_ty: self.substitute_ty_with_mapping(&path.update_source_ty, mapping),
+                update_focus_ty: self.substitute_ty_with_mapping(&path.update_focus_ty, mapping),
                 path_kind: path.path_kind,
                 may_fail: path.may_fail,
                 source_readonly_root: path.source_readonly_root,
@@ -1763,6 +1785,10 @@ impl Checker {
                 path: TypedFacetPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    update_source_ty: self
+                        .substitute_ty_with_mapping(&path.update_source_ty, mapping),
+                    update_focus_ty: self
+                        .substitute_ty_with_mapping(&path.update_focus_ty, mapping),
                     path_kind: path.path_kind,
                     may_fail: path.may_fail,
                     source_readonly_root: path.source_readonly_root,
@@ -1781,6 +1807,10 @@ impl Checker {
                 path: TypedFacetPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    update_source_ty: self
+                        .substitute_ty_with_mapping(&path.update_source_ty, mapping),
+                    update_focus_ty: self
+                        .substitute_ty_with_mapping(&path.update_focus_ty, mapping),
                     path_kind: path.path_kind,
                     may_fail: path.may_fail,
                     source_readonly_root: path.source_readonly_root,
@@ -1801,6 +1831,10 @@ impl Checker {
                 path: TypedFacetPath {
                     source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
                     focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+                    update_source_ty: self
+                        .substitute_ty_with_mapping(&path.update_source_ty, mapping),
+                    update_focus_ty: self
+                        .substitute_ty_with_mapping(&path.update_focus_ty, mapping),
                     path_kind: path.path_kind,
                     may_fail: path.may_fail,
                     source_readonly_root: path.source_readonly_root,
@@ -2090,9 +2124,12 @@ impl Checker {
                 .cloned()
                 .unwrap_or_else(|| self.resolve_ty(ty)),
             Ty::List(inner) => Ty::List(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
-            Ty::Facet(source, focus) => Ty::Facet(
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                *kind,
                 Box::new(self.substitute_ty_with_mapping(source, mapping)),
                 Box::new(self.substitute_ty_with_mapping(focus, mapping)),
+                Box::new(self.substitute_ty_with_mapping(update_source, mapping)),
+                Box::new(self.substitute_ty_with_mapping(update_focus, mapping)),
             ),
             Ty::Tuple(items) => Ty::Tuple(
                 items

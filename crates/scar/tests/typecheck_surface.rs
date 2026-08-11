@@ -232,8 +232,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return as fn(),
     ),
     (
-        "facet_put_rejects_type_changing_tuple_update",
-        facet_put_rejects_type_changing_tuple_update as fn(),
+        "facet_put_supports_type_changing_tuple_update",
+        facet_put_supports_type_changing_tuple_update as fn(),
     ),
     (
         "facet_put_rejects_result_annotation_context",
@@ -2318,17 +2318,14 @@ fn facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return(
         .contains("Tuple._0 requires tuple source context"));
 }
 
-fn facet_put_rejects_type_changing_tuple_update() {
-    let err = typecheck_with_rules(
+fn facet_put_supports_type_changing_tuple_update() {
+    typecheck_with_rules(
         r#"def first(f: (Int -> String)) -> ((Int, Boolean) -> (String, Boolean)) {
   {|pair: (Int, Boolean)| Facet::put(Tuple._0, pair, f(pair._0))}
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("type-changing tuple update should fail for Facet::put");
-    assert!(err
-        .message
-        .contains("Facet::put value type mismatch: expected Int, got String"));
+    .expect("Facet::put should rebuild a tuple with the replacement type");
 }
 
 fn facet_put_rejects_result_annotation_context() {

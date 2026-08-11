@@ -561,8 +561,14 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
         Ty::Func(params, ret) => {
             params.iter().any(type_contains_unresolved_vars) || type_contains_unresolved_vars(ret)
         }
-        Ty::Facet(source, focus) | Ty::Result(source, focus) => {
+        Ty::Result(source, focus) => {
             type_contains_unresolved_vars(source) || type_contains_unresolved_vars(focus)
+        }
+        Ty::Facet(_, source, focus, update_source, update_focus) => {
+            type_contains_unresolved_vars(source)
+                || type_contains_unresolved_vars(focus)
+                || type_contains_unresolved_vars(update_source)
+                || type_contains_unresolved_vars(update_focus)
         }
         Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
             params.iter().any(type_contains_unresolved_vars) || type_contains_unresolved_vars(ret)
@@ -844,10 +850,26 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                 Ty::Lazy(Box::new(inner.clone()))
             }
             "Facet" => {
-                let [_kind, source, focus, _update_source, _update_focus] = args.as_slice() else {
+                let [kind, source, focus, update_source, update_focus] = args.as_slice() else {
                     return Err("Facet requires exactly 5 type arguments".into());
                 };
-                Ty::Facet(Box::new(source.clone()), Box::new(focus.clone()))
+                // Builtin polymorphic signatures use `$K` / `$L` for the
+                // path-kind position.  `Ty` deliberately keeps Facet's kind
+                // concrete, so use the broad readable capability while the
+                // intrinsic checker preserves the path's actual atomic kind.
+                let kind = match kind {
+                    Ty::Enum(name, _) => crate::types::FacetKind::from_surface_name(&name)
+                        .ok_or_else(|| format!("unknown Facet kind `{name}`"))?,
+                    Ty::Var(_) => crate::types::FacetKind::ReadablePath,
+                    _ => return Err("Facet kind must be a path kind name".into()),
+                };
+                Ty::Facet(
+                    kind,
+                    Box::new(source.clone()),
+                    Box::new(focus.clone()),
+                    Box::new(update_source.clone()),
+                    Box::new(update_focus.clone()),
+                )
             }
             "TypeRef" => {
                 let [inner] = args.as_slice() else {
@@ -994,8 +1016,11 @@ enum CanonicalTyKey {
     TypeRef(Box<CanonicalTyKey>),
     Lazy(Box<CanonicalTyKey>),
     Facet {
+        kind: crate::types::FacetKind,
         source: Box<CanonicalTyKey>,
         focus: Box<CanonicalTyKey>,
+        update_source: Box<CanonicalTyKey>,
+        update_focus: Box<CanonicalTyKey>,
     },
     Pid(String),
     BuiltinFunc {
@@ -1422,9 +1447,11 @@ impl ScarSession {
                 }
                 Self::rewrite_fun_indices_in_ty(ret, rewrites);
             }
-            Ty::Facet(source, focus) => {
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
                 Self::rewrite_fun_indices_in_ty(source, rewrites);
                 Self::rewrite_fun_indices_in_ty(focus, rewrites);
+                Self::rewrite_fun_indices_in_ty(update_source, rewrites);
+                Self::rewrite_fun_indices_in_ty(update_focus, rewrites);
             }
             Ty::BuiltinFunc { params, ret, .. } => {
                 for param in params {
@@ -2398,7 +2425,7 @@ impl Checker {
             | Ty::Hole
             | Ty::Var(_)
             | Ty::Error
-            | Ty::Facet(_, _) => false,
+            | Ty::Facet(..) => false,
         }
     }
 
@@ -2811,9 +2838,11 @@ impl Checker {
             | Ty::Unit
             | Ty::Error
             | Ty::Hole => false,
-            Ty::Facet(source, focus) => {
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
                 self.ty_contains_handler_capability_pid(&source, slots)
                     || self.ty_contains_handler_capability_pid(&focus, slots)
+                    || self.ty_contains_handler_capability_pid(&update_source, slots)
+                    || self.ty_contains_handler_capability_pid(&update_focus, slots)
             }
         }
     }

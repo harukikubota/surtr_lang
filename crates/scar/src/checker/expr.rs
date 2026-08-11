@@ -28,7 +28,6 @@ enum FacetPathInput<'a> {
 struct PreparedFacetInput {
     typed_source: TypedNode,
     source_is_result: bool,
-    source_value_ty: Ty,
     path: TypedFacetPath,
 }
 
@@ -548,21 +547,28 @@ impl Checker {
                     {
                         return Err(self.error_observer_escape_error(span));
                     }
-                    if matches!(ty, Ty::Facet(_, _)) {
+                    if matches!(ty, Ty::Facet(..)) {
                         if let Some(path) = self.facet_bindings.get(&id.unique_id).cloned() {
                             return Ok(match path {
                                 StoredFacetPath::Concrete(path) => {
                                     let source_ty = self.resolve_ty(&path.source_ty);
                                     let focus_ty = self.resolve_ty(&path.focus_ty);
+                                    let update_source_ty = self.resolve_ty(&path.update_source_ty);
+                                    let update_focus_ty = self.resolve_ty(&path.update_focus_ty);
                                     TypedNode {
                                         ty: Ty::Facet(
+                                            Self::facet_kind_from_path_kind(path.path_kind),
                                             Box::new(source_ty.clone()),
                                             Box::new(focus_ty.clone()),
+                                            Box::new(update_source_ty.clone()),
+                                            Box::new(update_focus_ty.clone()),
                                         ),
                                         span: span.clone(),
                                         node: TypedInner::FacetPath(TypedFacetPath {
                                             source_ty,
                                             focus_ty,
+                                            update_source_ty,
+                                            update_focus_ty,
                                             path_kind: path.path_kind,
                                             may_fail: path.may_fail,
                                             source_readonly_root: path.source_readonly_root,
@@ -710,7 +716,8 @@ impl Checker {
                             Self::ast_ty_span(ast_ty),
                         ));
                     }
-                    let typed_rhs = self.check_node_with_expected(rhs, Some(&expected))?;
+                    let mut typed_rhs = self.check_node_with_expected(rhs, Some(&expected))?;
+                    self.apply_facet_annotation(&mut typed_rhs, &expected, span)?;
                     if !self.types_compatible(&expected, &typed_rhs.ty) {
                         if let Some(err) =
                             self.facet_replace_result_context_error(&typed_rhs, &expected, span)
@@ -733,7 +740,7 @@ impl Checker {
                 {
                     return Err(self.pending_trait_helper_error(method_name, pending_span));
                 }
-                let facet_path = if matches!(typed_rhs.ty, Ty::Facet(_, _)) {
+                let facet_path = if matches!(typed_rhs.ty, Ty::Facet(..)) {
                     Some(self.stored_facet_path_from_node(typed_rhs.clone(), span)?)
                 } else {
                     None
@@ -985,6 +992,64 @@ impl Checker {
         }
     }
 
+    /// A user-facing Facet annotation describes a path template; it does not
+    /// coerce or select a different path.  Preserve concrete update slots on
+    /// the compile-time path so every later API use can validate them against
+    /// its independently-derived rebuild result.
+    fn apply_facet_annotation(
+        &mut self,
+        typed: &mut TypedNode,
+        expected: &Ty,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let expected = self.resolve_ty(expected);
+        let actual = self.resolve_ty(&typed.ty);
+        let (
+            Ty::Facet(
+                expected_kind,
+                expected_source,
+                expected_focus,
+                expected_update_source,
+                expected_update_focus,
+            ),
+            Ty::Facet(actual_kind, actual_source, actual_focus, _, _),
+        ) = (&expected, &actual)
+        else {
+            return Ok(());
+        };
+
+        if !expected_kind.is_atomic()
+            || expected_kind != actual_kind
+            || !self.types_compatible(expected_source, actual_source)
+            || !self.types_compatible(expected_focus, actual_focus)
+        {
+            return Err(TypeError {
+                message: format!(
+                    "Facet annotation does not match this path: expected {}, got {}",
+                    self.ty_name(&expected),
+                    self.ty_name(&actual)
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Facet K, S, and A are derived from the path and must match exactly.".into(),
+                ),
+            });
+        }
+
+        match &mut typed.node {
+            TypedInner::FacetPath(path) => {
+                path.update_source_ty = expected_update_source.as_ref().clone();
+                path.update_focus_ty = expected_update_focus.as_ref().clone();
+            }
+            // A pending path will be specialized with the annotated source
+            // before it can be bound.  Its update slots remain on `typed.ty`.
+            TypedInner::PendingFacetPath(_) => {}
+            _ => return Ok(()),
+        }
+        typed.ty = expected;
+        Ok(())
+    }
+
     pub(super) fn facet_replace_result_context_error(
         &self,
         typed: &TypedNode,
@@ -1066,10 +1131,19 @@ impl Checker {
         typed: TypedNode,
         span: &Span,
     ) -> Result<StoredFacetPath, TypeError> {
+        let slots = match self.resolve_ty(&typed.ty) {
+            Ty::Facet(_, _, _, update_source, update_focus) => (
+                update_source.as_ref().clone(),
+                update_focus.as_ref().clone(),
+            ),
+            _ => (Ty::Hole, Ty::Hole),
+        };
         match typed.node {
             TypedInner::FacetPath(path) => Ok(StoredFacetPath::Concrete(TypedFacetPath {
                 source_ty: self.resolve_ty(&path.source_ty),
                 focus_ty: self.resolve_ty(&path.focus_ty),
+                update_source_ty: self.resolve_ty(&slots.0),
+                update_focus_ty: self.resolve_ty(&slots.1),
                 path_kind: path.path_kind,
                 may_fail: path.may_fail,
                 source_readonly_root: path.source_readonly_root,
@@ -1152,7 +1226,7 @@ impl Checker {
         rhs: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_rhs = self.check_node(rhs)?;
-        if matches!(typed_rhs.ty, Ty::Facet(_, _)) {
+        if matches!(typed_rhs.ty, Ty::Facet(..)) {
             return Err(TypeError {
                 message: "Facet values cannot be bound with `=?`".into(),
                 span: typed_rhs.span.clone(),
@@ -4586,11 +4660,35 @@ impl Checker {
         }
     }
 
+    fn facet_kind_from_path_kind(path_kind: TypedFacetPathKind) -> crate::types::FacetKind {
+        match path_kind {
+            TypedFacetPathKind::InfallibleStructural => {
+                crate::types::FacetKind::InfallibleStructural
+            }
+            TypedFacetPathKind::FallibleStructural => crate::types::FacetKind::FallibleStructural,
+            TypedFacetPathKind::VariantPath => crate::types::FacetKind::VariantPath,
+        }
+    }
+
+    fn deferred_facet_ty(path_kind: TypedFacetPathKind, source: Ty, focus: Ty) -> Ty {
+        Ty::Facet(
+            Self::facet_kind_from_path_kind(path_kind),
+            Box::new(source),
+            Box::new(focus),
+            Box::new(Ty::Hole),
+            Box::new(Ty::Hole),
+        )
+    }
+
     fn pending_facet_node(&mut self, span: &Span, path: PendingFacetPath) -> TypedNode {
         let source_tv = self.env.fresh_tyvar();
         let focus_tv = self.env.fresh_tyvar();
         TypedNode {
-            ty: Ty::Facet(Box::new(source_tv), Box::new(focus_tv)),
+            ty: Self::deferred_facet_ty(
+                TypedFacetPathKind::InfallibleStructural,
+                source_tv,
+                focus_tv,
+            ),
             span: span.clone(),
             node: TypedInner::PendingFacetPath(path),
         }
@@ -4699,6 +4797,8 @@ impl Checker {
         Ok(TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: current_source,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(&segments),
             may_fail,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
@@ -4712,17 +4812,27 @@ impl Checker {
         span: &Span,
         expected_source: Option<&Ty>,
     ) -> Result<TypedFacetPath, TypeError> {
-        if !matches!(typed.ty, Ty::Facet(_, _)) {
+        let facet_ty = self.resolve_ty(&typed.ty);
+        if !matches!(facet_ty, Ty::Facet(..)) {
             return Err(TypeError {
                 message: format!("Expected Facet<...> value, got {}", self.ty_name(&typed.ty)),
                 span: typed.span.clone(),
                 hint: None,
             });
         }
+        let update_slots = match facet_ty {
+            Ty::Facet(_, _, _, update_source, update_focus) => (
+                update_source.as_ref().clone(),
+                update_focus.as_ref().clone(),
+            ),
+            _ => unreachable!("Facet type checked above"),
+        };
         match typed.node {
             TypedInner::FacetPath(path) => Ok(TypedFacetPath {
                 source_ty: self.resolve_ty(&path.source_ty),
                 focus_ty: self.resolve_ty(&path.focus_ty),
+                update_source_ty: self.resolve_ty(&update_slots.0),
+                update_focus_ty: self.resolve_ty(&update_slots.1),
                 path_kind: path.path_kind,
                 may_fail: path.may_fail,
                 source_readonly_root: path.source_readonly_root,
@@ -4750,8 +4860,11 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let expected_right_focus = self.env.fresh_tyvar();
         let expected_right_ty = Ty::Facet(
+            crate::types::FacetKind::ReadablePath,
             Box::new(self.resolve_ty(&left_path.focus_ty)),
             Box::new(expected_right_focus),
+            Box::new(Ty::Hole),
+            Box::new(Ty::Hole),
         );
         let right = self.check_node_with_expected(right_expr, Some(&expected_right_ty))?;
         let right_path =
@@ -4777,6 +4890,8 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: if left_path.path_kind == TypedFacetPathKind::VariantPath
                 || right_path.path_kind == TypedFacetPathKind::VariantPath
             {
@@ -4793,7 +4908,7 @@ impl Checker {
             segments,
         };
         Ok(TypedNode {
-            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+            ty: Self::deferred_facet_ty(path.path_kind, source_ty, focus_ty),
             span: span.clone(),
             node: TypedInner::FacetPath(path),
         })
@@ -4892,7 +5007,7 @@ impl Checker {
         source_expr: &Resolved,
     ) -> Result<(TypedNode, bool, Ty), TypeError> {
         let typed_source = self.check_node(source_expr)?;
-        if matches!(typed_source.ty, Ty::Facet(_, _)) {
+        if matches!(typed_source.ty, Ty::Facet(..)) {
             return Err(TypeError {
                 message: format!("{} source value cannot be a Facet", op_name),
                 span: typed_source.span.clone(),
@@ -4998,8 +5113,11 @@ impl Checker {
     ) -> Result<TypedFacetPath, TypeError> {
         let expected_focus_ty = self.env.fresh_tyvar();
         let expected_path_ty = Ty::Facet(
+            crate::types::FacetKind::ReadablePath,
             Box::new(self.resolve_ty(source_value_ty)),
             Box::new(expected_focus_ty),
+            Box::new(Ty::Hole),
+            Box::new(Ty::Hole),
         );
         let path_node = self.check_node_with_expected(path_expr, Some(&expected_path_ty))?;
         let path = self.resolve_facet_path_from_node(path_node, span, Some(source_value_ty))?;
@@ -5118,9 +5236,226 @@ impl Checker {
         Ok(PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
             path,
         })
+    }
+
+    fn ensure_deferred_facet_slots(
+        &self,
+        op_name: &str,
+        path: &TypedFacetPath,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if matches!(
+            (&path.update_source_ty, &path.update_focus_ty),
+            (Ty::Hole, Ty::Hole)
+        ) {
+            return Ok(());
+        }
+        Err(TypeError {
+            message: format!("{op_name} requires a Facet with deferred update slots `_, _`"),
+            span: span.clone(),
+            hint: Some("Use a deferred Facet path for read-only consumption.".into()),
+        })
+    }
+
+    fn rebuild_facet_source_type(
+        &mut self,
+        source_ty: &Ty,
+        segments: &[TypedFacetSegment],
+        replacement_ty: &Ty,
+        span: &Span,
+    ) -> Result<Ty, TypeError> {
+        if segments.is_empty() {
+            return Ok(self.resolve_ty(replacement_ty));
+        }
+
+        let source_ty = self.resolve_ty(source_ty);
+        // Result values encountered *inside* a path are transparent to
+        // traversal, but remain part of the rebuilt source shape.
+        if let Ty::Result(ok, err) = source_ty {
+            return Ok(Ty::Result(
+                Box::new(self.rebuild_facet_source_type(&ok, segments, replacement_ty, span)?),
+                err,
+            ));
+        }
+
+        let segment = &segments[0];
+        let rest = &segments[1..];
+        match (source_ty, segment) {
+            (Ty::Tuple(mut items), TypedFacetSegment::Tuple { field_index, .. }) => {
+                let index = *field_index as usize;
+                let Some(field_ty) = items.get(index).cloned() else {
+                    return Err(TypeError {
+                        message: "Facet tuple path is inconsistent with its source type".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                };
+                items[index] =
+                    self.rebuild_facet_source_type(&field_ty, rest, replacement_ty, span)?;
+                Ok(Ty::Tuple(items))
+            }
+            (Ty::Struct(name, mut fields), TypedFacetSegment::Field { field_index, .. }) => {
+                let index = *field_index as usize;
+                let Some((_, field_ty)) = fields.get(index).cloned() else {
+                    return Err(TypeError {
+                        message: "Facet field path is inconsistent with its source type".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                };
+                fields[index].1 =
+                    self.rebuild_facet_source_type(&field_ty, rest, replacement_ty, span)?;
+                Ok(Ty::Struct(name, fields))
+            }
+            (Ty::Record(name, mut fields), TypedFacetSegment::Field { field_index, .. }) => {
+                let index = *field_index as usize;
+                let Some((_, field_ty)) = fields.get(index).cloned() else {
+                    return Err(TypeError {
+                        message: "Facet field path is inconsistent with its source type".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                };
+                fields[index].1 =
+                    self.rebuild_facet_source_type(&field_ty, rest, replacement_ty, span)?;
+                Ok(Ty::Record(name, fields))
+            }
+            (Ty::List(inner), TypedFacetSegment::ListIndex { .. }) => {
+                let rebuilt = self.rebuild_facet_source_type(&inner, rest, replacement_ty, span)?;
+                if !self.types_compatible(&inner, &rebuilt) {
+                    return Err(TypeError {
+                        message:
+                            "Facet updates through List segments cannot change the element type"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some("Replace with the existing list element type.".into()),
+                    });
+                }
+                Ok(Ty::List(inner))
+            }
+            (Ty::List(inner), TypedFacetSegment::ListRange { .. }) => {
+                let expected = Ty::List(inner.clone());
+                let rebuilt =
+                    self.rebuild_facet_source_type(&expected, rest, replacement_ty, span)?;
+                if !self.types_compatible(&expected, &rebuilt) {
+                    return Err(TypeError {
+                        message:
+                            "Facet updates through List segments cannot change the element type"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some("Replace with the existing list element type.".into()),
+                    });
+                }
+                Ok(Ty::List(inner))
+            }
+            (Ty::Enum(name, args), TypedFacetSegment::MapKey { .. })
+                if Self::surface_name(&name) == "HashMap" && args.len() == 1 =>
+            {
+                let value_ty = args[0].clone();
+                let rebuilt =
+                    self.rebuild_facet_source_type(&value_ty, rest, replacement_ty, span)?;
+                if !self.types_compatible(&value_ty, &rebuilt) {
+                    return Err(TypeError {
+                        message:
+                            "Facet updates through HashMap segments cannot change the value type"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some("Replace with the existing HashMap value type.".into()),
+                    });
+                }
+                Ok(Ty::Enum(name, args))
+            }
+            (
+                source,
+                TypedFacetSegment::Variant {
+                    enum_name,
+                    variant_name,
+                    ..
+                },
+            ) => {
+                let variant = self
+                    .lookup_enum_variant_by_short_name(enum_name, variant_name)
+                    .map(|variant| self.instantiate_enum_variant(&variant))
+                    .ok_or_else(|| TypeError {
+                        message: "Facet enum path is inconsistent with its source type".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                if !self.types_compatible(&variant.enum_ty, &source) {
+                    return Err(TypeError {
+                        message: "Facet enum path is inconsistent with its source type".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let original = match variant.payload.as_slice() {
+                    [] => Ty::Unit,
+                    [only] => only.clone(),
+                    payload => Ty::Tuple(payload.to_vec()),
+                };
+                let focus =
+                    self.rebuild_facet_source_type(&original, rest, replacement_ty, span)?;
+                if !self.types_compatible(&original, &focus) {
+                    return Err(TypeError {
+                        message:
+                            "Facet updates through enum cases cannot change the payload type yet"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some("Use a replacement with the existing case payload type.".into()),
+                    });
+                }
+                Ok(source)
+            }
+            _ => Err(TypeError {
+                message: "Facet path is inconsistent with its source type".into(),
+                span: span.clone(),
+                hint: None,
+            }),
+        }
+    }
+
+    fn finalize_facet_update(
+        &mut self,
+        path: &mut TypedFacetPath,
+        replacement_ty: &Ty,
+        span: &Span,
+    ) -> Result<Ty, TypeError> {
+        let replacement_ty = self.resolve_ty(replacement_ty);
+        let update_source_ty =
+            self.rebuild_facet_source_type(&path.source_ty, &path.segments, &replacement_ty, span)?;
+
+        if !matches!(path.update_focus_ty, Ty::Hole)
+            && !self.types_compatible(&path.update_focus_ty, &replacement_ty)
+        {
+            return Err(TypeError {
+                message: format!(
+                    "Facet replacement type mismatch: annotation requires {}, got {}",
+                    self.ty_name(&path.update_focus_ty),
+                    self.ty_name(&replacement_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if !matches!(path.update_source_ty, Ty::Hole)
+            && !self.types_compatible(&path.update_source_ty, &update_source_ty)
+        {
+            return Err(TypeError {
+                message: format!(
+                    "Facet rebuilt source type mismatch: annotation requires {}, got {}",
+                    self.ty_name(&path.update_source_ty),
+                    self.ty_name(&update_source_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        path.update_focus_ty = replacement_ty;
+        path.update_source_ty = update_source_ty.clone();
+        Ok(update_source_ty)
     }
 
     fn check_facet_view_intrinsic(
@@ -5136,6 +5471,7 @@ impl Checker {
             path,
             ..
         } = self.prepare_facet_input(span, "Facet::view", &source_expr, path_input)?;
+        self.ensure_deferred_facet_slots("Facet::view", &path, span)?;
 
         let focus_ty = self.resolve_ty(&path.focus_ty);
         let out_ty = if source_is_result || path.may_fail {
@@ -5168,6 +5504,7 @@ impl Checker {
             path,
             ..
         } = self.prepare_facet_input(span, "Facet::preview", &source_expr, path_input)?;
+        self.ensure_deferred_facet_slots("Facet::preview", &path, span)?;
         if !path.has_variant_segment() {
             return Err(TypeError {
                 message: "Facet::preview requires a variant Facet".into(),
@@ -5198,13 +5535,15 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::set", &source_expr, path_input)?;
         self.check_mutating_facet_path_permissions("Facet::set", &path, span)?;
 
-        let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
-        if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
+        let typed_value = self.check_node(value_expr)?;
+        if matches!(self.resolve_ty(&path.focus_ty), Ty::Result(_, _))
+            && !matches!(self.resolve_ty(&typed_value.ty), Ty::Result(_, _))
+        {
             return Err(TypeError {
                 message: format!(
                     "Facet::set value type mismatch: expected {}, got {}",
@@ -5212,15 +5551,13 @@ impl Checker {
                     self.ty_name(&typed_value.ty)
                 ),
                 span: typed_value.span.clone(),
-                hint: None,
+                hint: Some("Facet::set replaces a Result property as a whole; use Facet::over to update its Ok payload.".into()),
             });
         }
+        let update_source_ty = self.finalize_facet_update(&mut path, &typed_value.ty, span)?;
 
         Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&source_value_ty)),
-                Box::new(Ty::Error),
-            ),
+            ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetSet {
                 source: Box::new(typed_source),
@@ -5242,8 +5579,8 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::put", &source_expr, path_input)?;
         if source_is_result {
             return Err(TypeError {
@@ -5261,21 +5598,11 @@ impl Checker {
         }
         self.check_mutating_facet_path_permissions("Facet::put", &path, span)?;
 
-        let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
-        if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
-            return Err(TypeError {
-                message: format!(
-                    "Facet::put value type mismatch: expected {}, got {}",
-                    self.ty_name(&path.focus_ty),
-                    self.ty_name(&typed_value.ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: None,
-            });
-        }
+        let typed_value = self.check_node(value_expr)?;
+        let update_source_ty = self.finalize_facet_update(&mut path, &typed_value.ty, span)?;
 
         Ok(TypedNode {
-            ty: self.resolve_ty(&source_value_ty),
+            ty: update_source_ty,
             span: span.clone(),
             node: TypedInner::FacetSet {
                 source: Box::new(typed_source),
@@ -5297,25 +5624,24 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::over", &source_expr, path_input)?;
         self.check_mutating_facet_path_permissions("Facet::over", &path, span)?;
 
         let typed_update = self.check_node(update_expr)?;
-        let mode = self.check_facet_over_callable(
+        let (mode, replacement_ty) = self.check_facet_over_callable(
             "Facet::over",
             span,
             &path.focus_ty,
             &typed_update,
             false,
+            false,
         )?;
+        let update_source_ty = self.finalize_facet_update(&mut path, &replacement_ty, span)?;
 
         Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&source_value_ty)),
-                Box::new(Ty::Error),
-            ),
+            ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetOver {
                 source: Box::new(typed_source),
@@ -5353,8 +5679,8 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::case_set", &source_expr, path_input)?;
         self.require_enum_facet_path("Facet::case_set", &path, span)?;
         if !path.final_segment_is_variant() {
@@ -5369,24 +5695,11 @@ impl Checker {
         }
         self.check_mutating_facet_path_permissions("Facet::case_set", &path, span)?;
 
-        let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
-        if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
-            return Err(TypeError {
-                message: format!(
-                    "Facet::case_set value type mismatch: expected {}, got {}",
-                    self.ty_name(&path.focus_ty),
-                    self.ty_name(&typed_value.ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: None,
-            });
-        }
+        let typed_value = self.check_node(value_expr)?;
+        let update_source_ty = self.finalize_facet_update(&mut path, &typed_value.ty, span)?;
 
         Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&source_value_ty)),
-                Box::new(Ty::Error),
-            ),
+            ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetSet {
                 source: Box::new(typed_source),
@@ -5408,32 +5721,36 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::case_over", &source_expr, path_input)?;
         self.require_enum_facet_path("Facet::case_over", &path, span)?;
         self.check_mutating_facet_path_permissions("Facet::case_over", &path, span)?;
 
         let typed_update = self.check_node(update_expr)?;
-        let mode = match self.check_facet_over_callable(
+        let (mode, replacement_ty) = match self.check_facet_over_callable(
             "Facet::case_over",
             span,
             &path.focus_ty,
             &typed_update,
             false,
+            true,
         )? {
-            TypedFacetOverMode::FocusValue => TypedFacetOverMode::CaseFocusValue,
-            TypedFacetOverMode::FocusResult => TypedFacetOverMode::CaseFocusResult,
-            mode @ (TypedFacetOverMode::CaseFocusValue | TypedFacetOverMode::CaseFocusResult) => {
-                mode
+            (TypedFacetOverMode::FocusValue, replacement) => {
+                (TypedFacetOverMode::CaseFocusValue, replacement)
             }
+            (TypedFacetOverMode::FocusResult, replacement) => {
+                (TypedFacetOverMode::CaseFocusResult, replacement)
+            }
+            (
+                mode @ (TypedFacetOverMode::CaseFocusValue | TypedFacetOverMode::CaseFocusResult),
+                replacement,
+            ) => (mode, replacement),
         };
+        let update_source_ty = self.finalize_facet_update(&mut path, &replacement_ty, span)?;
 
         Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&source_value_ty)),
-                Box::new(Ty::Error),
-            ),
+            ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetOver {
                 source: Box::new(typed_source),
@@ -5455,8 +5772,8 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::over_result", &source_expr, path_input)?;
         self.check_mutating_facet_path_permissions("Facet::over_result", &path, span)?;
 
@@ -5472,19 +5789,18 @@ impl Checker {
         }
 
         let typed_update = self.check_node(update_expr)?;
-        let mode = self.check_facet_over_callable(
+        let (mode, replacement_ty) = self.check_facet_over_callable(
             "Facet::over_result",
             span,
             &path.focus_ty,
             &typed_update,
             true,
+            true,
         )?;
+        let update_source_ty = self.finalize_facet_update(&mut path, &replacement_ty, span)?;
 
         Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&source_value_ty)),
-                Box::new(Ty::Error),
-            ),
+            ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetOver {
                 source: Box::new(typed_source),
@@ -5503,7 +5819,8 @@ impl Checker {
         focus_ty: &Ty,
         typed_update: &TypedNode,
         require_result_focus: bool,
-    ) -> Result<TypedFacetOverMode, TypeError> {
+        allow_result_focus_input: bool,
+    ) -> Result<(TypedFacetOverMode, Ty), TypeError> {
         let (in_ty, out_ty) = self.unary_function_parts(&typed_update.ty, op_name, span)?;
         let resolved_focus_ty = self.resolve_ty(focus_ty);
         let value_focus_ty = match &resolved_focus_ty {
@@ -5516,8 +5833,20 @@ impl Checker {
         } else if let Some(value_focus_ty) = &value_focus_ty {
             if self.types_compatible(value_focus_ty, &in_ty) {
                 TypedFacetOverMode::FocusValue
-            } else {
+            } else if allow_result_focus_input {
                 TypedFacetOverMode::FocusResult
+            } else {
+                return Err(TypeError {
+                    message: format!(
+                        "{op_name} update function input mismatch: expected {}, got {}",
+                        self.ty_name(value_focus_ty),
+                        self.ty_name(&in_ty)
+                    ),
+                    span: typed_update.span.clone(),
+                    hint: Some(
+                        "Use Facet::over_result to update the Result property as a whole.".into(),
+                    ),
+                });
             }
         } else {
             TypedFacetOverMode::FocusValue
@@ -5552,19 +5881,17 @@ impl Checker {
                 });
             }
         };
-        let expected_output_ty = match (&mode, &value_focus_ty) {
-            (TypedFacetOverMode::FocusValue, Some(value_focus_ty)) => value_focus_ty,
-            _ => &resolved_focus_ty,
-        };
-        if !self.types_compatible(expected_output_ty, &out_ok) {
+        if require_result_focus && !matches!(out_ok, Ty::Result(_, _)) {
             return Err(TypeError {
                 message: format!(
-                    "{op_name} update function output mismatch: expected {}, got {}",
-                    self.ty_name(expected_output_ty),
-                    self.ty_name(&out_ok)
+                    "{op_name} update function output mismatch: must return Result<Result<...>>, got {}",
+                    self.ty_name(&out_ty)
                 ),
                 span: typed_update.span.clone(),
-                hint: None,
+                hint: Some(
+                    "Return an outer Result for mapper failure and an inner Result property value."
+                        .into(),
+                ),
             });
         }
         if !self.types_compatible(&Ty::Error, &out_err) {
@@ -5578,7 +5905,13 @@ impl Checker {
             });
         }
 
-        Ok(mode)
+        let replacement_ty = match (&mode, &resolved_focus_ty) {
+            (TypedFacetOverMode::FocusValue, Ty::Result(_, err)) => {
+                Ty::Result(Box::new(out_ok), err.clone())
+            }
+            _ => out_ok,
+        };
+        Ok((mode, replacement_ty))
     }
 
     fn readonly_type_name(ty: &Ty) -> Option<&str> {
@@ -6875,7 +7208,7 @@ impl Checker {
                     return Err(self.pending_trait_helper_error(method_name, pending_span));
                 }
             }
-            if matches!(typed_body.ty, Ty::Facet(_, _)) {
+            if matches!(typed_body.ty, Ty::Facet(..)) {
                 return Err(TypeError {
                     message:
                         "Facet is compile-time only in Stage1 and cannot be returned from closures"
@@ -7062,7 +7395,7 @@ impl Checker {
 
         let typed_target = self.check_node(target)?;
         let target_ty = self.resolve_ty(&typed_target.ty);
-        if let Ty::Facet(source_ty, focus_ty) = &target_ty {
+        if let Ty::Facet(_, source_ty, focus_ty, ..) = &target_ty {
             let view_id = self.runtime_helper_id("Facet::view", span)?;
             let param_uid = Self::next_synthetic_range_uid();
             let param_name = "__facet_capture_arg".to_string();
@@ -7442,7 +7775,7 @@ impl Checker {
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
-        if matches!(typed_left.ty, Ty::Facet(_, _)) {
+        if matches!(typed_left.ty, Ty::Facet(..)) {
             return match typed_left.node {
                 TypedInner::FacetPath(path) => self.compose_facet_paths(span, path, right, "`/`"),
                 TypedInner::PendingFacetPath(path) => {
@@ -8693,7 +9026,7 @@ impl Checker {
         };
         let expected_ty = self.resolve_ty(expected_ty);
         let (expected_source, expected_focus) = match expected_ty {
-            Ty::Facet(source, focus) => (source.as_ref().clone(), focus.as_ref().clone()),
+            Ty::Facet(_, source, focus, ..) => (source.as_ref().clone(), focus.as_ref().clone()),
             other => {
                 return Err(TypeError {
                     message: format!(
@@ -8755,6 +9088,8 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
@@ -8771,7 +9106,7 @@ impl Checker {
         };
 
         Ok(Some(TypedNode {
-            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+            ty: Self::deferred_facet_ty(path.path_kind, source_ty, focus_ty),
             span: span.clone(),
             node: TypedInner::FacetPath(path),
         }))
@@ -8805,7 +9140,7 @@ impl Checker {
         };
         let expected_ty = self.resolve_ty(expected_ty);
         let (expected_source, expected_focus) = match expected_ty {
-            Ty::Facet(source, focus) => (source.as_ref().clone(), focus.as_ref().clone()),
+            Ty::Facet(_, source, focus, ..) => (source.as_ref().clone(), focus.as_ref().clone()),
             other => {
                 return Err(TypeError {
                     message: format!(
@@ -8840,6 +9175,8 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&typed_segment)),
             may_fail,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
@@ -8847,7 +9184,7 @@ impl Checker {
         };
 
         Ok(Some(TypedNode {
-            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+            ty: Self::deferred_facet_ty(path.path_kind, source_ty, focus_ty),
             span: span.clone(),
             node: TypedInner::FacetPath(path),
         }))
@@ -8861,7 +9198,7 @@ impl Checker {
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         let (source_ty, expected_focus_ty) = match expected.map(|ty| self.resolve_ty(ty)) {
-            Some(Ty::Facet(source, focus)) => {
+            Some(Ty::Facet(_, source, focus, ..)) => {
                 (source.as_ref().clone(), Some(focus.as_ref().clone()))
             }
             _ => {
@@ -8888,13 +9225,15 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
             may_fail,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![segment],
         };
         Ok(TypedNode {
-            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+            ty: Self::deferred_facet_ty(path.path_kind, source_ty, focus_ty),
             span: span.clone(),
             node: TypedInner::FacetPath(path),
         })
@@ -9012,7 +9351,7 @@ impl Checker {
         }
         let typed_expr = self.check_node(expr)?;
 
-        if matches!(typed_expr.ty, Ty::Facet(_, _)) {
+        if matches!(typed_expr.ty, Ty::Facet(..)) {
             let path = self.resolve_facet_path_from_node(typed_expr, span, None)?;
             let (segment_source_ty, result_transparent) = match self.resolve_ty(&path.focus_ty) {
                 Ty::Result(ok, _) => (ok.as_ref().clone(), true),
@@ -9031,13 +9370,15 @@ impl Checker {
             let combined = TypedFacetPath {
                 source_ty: source_ty.clone(),
                 focus_ty: focus_ty.clone(),
+                update_source_ty: Ty::Hole,
+                update_focus_ty: Ty::Hole,
                 path_kind: Self::facet_path_kind_for_segments(&segments),
                 may_fail: path.may_fail || may_fail || result_transparent,
                 source_readonly_root: path.source_readonly_root,
                 segments,
             };
             return Ok(TypedNode {
-                ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+                ty: Self::deferred_facet_ty(combined.path_kind, source_ty, focus_ty),
                 span: span.clone(),
                 node: TypedInner::FacetPath(combined),
             });
@@ -9057,6 +9398,8 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_focus_ty,
             focus_ty: focus_ty.clone(),
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
             may_fail,
             source_readonly_root: false,
@@ -9249,6 +9592,8 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Str,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,
@@ -9290,6 +9635,8 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,
@@ -9327,6 +9674,8 @@ mod tests {
         let readonly_root_path = TypedFacetPath {
             source_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
             focus_ty: Ty::Str,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: true,
@@ -9353,6 +9702,8 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Str,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,

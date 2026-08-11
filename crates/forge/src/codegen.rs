@@ -4562,11 +4562,14 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
             ty_to_string_with_type_params(inner, type_params)
         ),
         Ty::Pid(name) => format!("PID<{}>", surface_rendered_name(name)),
-        Ty::Facet(source, focus) => {
+        Ty::Facet(kind, source, focus, update_source, update_focus) => {
             format!(
-                "Facet<{}, {}>",
+                "Facet<{}, {}, {}, {}, {}>",
+                kind.as_str(),
                 ty_to_string_with_type_params(source, type_params),
-                ty_to_string_with_type_params(focus, type_params)
+                ty_to_string_with_type_params(focus, type_params),
+                ty_to_string_with_type_params(update_source, type_params),
+                ty_to_string_with_type_params(update_focus, type_params)
             )
         }
         Ty::Tuple(items) => format!(
@@ -4650,8 +4653,11 @@ fn ty_contains_var(ty: &Ty, needle: u32) -> bool {
             params.iter().any(|param| ty_contains_var(param, needle))
                 || ty_contains_var(ret, needle)
         }
-        Ty::Facet(source, focus) => {
-            ty_contains_var(source, needle) || ty_contains_var(focus, needle)
+        Ty::Facet(_, source, focus, update_source, update_focus) => {
+            ty_contains_var(source, needle)
+                || ty_contains_var(focus, needle)
+                || ty_contains_var(update_source, needle)
+                || ty_contains_var(update_focus, needle)
         }
         Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
             params.iter().any(|param| ty_contains_var(param, needle))
@@ -6272,7 +6278,7 @@ impl Codegen {
             TypedInner::EagerBoundary(inner) => self.emit_node(inner)?,
 
             TypedInner::Bind(pat, rhs) => {
-                if matches!(rhs.ty, Ty::Facet(_, _)) {
+                if matches!(rhs.ty, Ty::Facet(..)) {
                     self.reserve_pattern_slots_for_facet_bind(pat);
                     let unit_idx = self.add_constant(Constant::Unit);
                     self.emit(Opcode::LoadConst(unit_idx));

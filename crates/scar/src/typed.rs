@@ -215,6 +215,11 @@ impl TypedFacetPathKind {
 pub struct TypedFacetPath {
     pub source_ty: Ty,
     pub focus_ty: Ty,
+    /// Update-side slots carried by a concrete Facet annotation.  Both are
+    /// `Hole` for a deferred path, so consuming the same binding can derive a
+    /// fresh replacement type each time.
+    pub update_source_ty: Ty,
+    pub update_focus_ty: Ty,
     pub path_kind: TypedFacetPathKind,
     pub may_fail: bool,
     pub source_readonly_root: bool,

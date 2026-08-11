@@ -67,6 +67,26 @@ impl Checker {
         }
     }
 
+    fn facet_kind_annotation(
+        &self,
+        ast: &AstTy,
+        allow_alias: bool,
+    ) -> Result<crate::types::FacetKind, TypeError> {
+        self.validate_facet_kind_annotation(ast, allow_alias)?;
+        let AstTy::Named(_, name) = ast else {
+            unreachable!("validated Facet kind is named")
+        };
+        if Self::surface_name(name).starts_with('$') {
+            // Generic kind variables occur only in builtin chain signatures.
+            // They are a constraint placeholder until a concrete path is built.
+            return Ok(crate::types::FacetKind::ReadablePath);
+        }
+        Ok(
+            crate::types::FacetKind::from_surface_name(Self::surface_name(name))
+                .expect("validated Facet kind name"),
+        )
+    }
+
     fn canonical_user_type_name(name: &str) -> String {
         if name.contains("::") {
             name.to_string()
@@ -144,8 +164,11 @@ impl Checker {
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 Self::ty_exposes_error_value(inner)
             }
-            Ty::Facet(source, focus) => {
-                Self::ty_exposes_error_value(source) || Self::ty_exposes_error_value(focus)
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
+                Self::ty_exposes_error_value(source)
+                    || Self::ty_exposes_error_value(focus)
+                    || Self::ty_exposes_error_value(update_source)
+                    || Self::ty_exposes_error_value(update_focus)
             }
             Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(Self::ty_exposes_error_value),
             Ty::Func(params, ret) => {
@@ -706,7 +729,7 @@ impl Checker {
                         5,
                         "Facet<K, S, A, T, B> requires exactly 5 type arguments",
                     )?;
-                    self.validate_facet_kind_annotation(&args[0], false)?;
+                    let kind = self.facet_kind_annotation(&args[0], false)?;
                     // K is a compile-only declaration name.  The currently
                     // runtime-free capability representation stores S/A; T/B
                     // are validated here and instantiated by the intrinsic.
@@ -723,7 +746,13 @@ impl Checker {
                     if matches!((&update_source, &update_focus), (Ty::Hole, Ty::Hole))
                         || (!matches!(update_source, Ty::Hole) && !matches!(update_focus, Ty::Hole))
                     {
-                        Ok(Ty::Facet(Box::new(source), Box::new(focus)))
+                        Ok(Ty::Facet(
+                            kind,
+                            Box::new(source),
+                            Box::new(focus),
+                            Box::new(update_source),
+                            Box::new(update_focus),
+                        ))
                     } else {
                         Err(TypeError {
                             message: "Facet update slots T and B must both be `_` or both be concrete types".into(),
@@ -1144,7 +1173,7 @@ impl Checker {
                         5,
                         "Facet<K, S, A, T, B> requires exactly 5 type arguments",
                     )?;
-                    self.validate_facet_kind_annotation(
+                    let kind = self.facet_kind_annotation(
                         &args[0],
                         matches!(mode, SignatureTyMode::Builtin),
                     )?;
@@ -1182,7 +1211,13 @@ impl Checker {
                             hint: None,
                         });
                     }
-                    Ok(Ty::Facet(Box::new(source), Box::new(focus)))
+                    Ok(Ty::Facet(
+                        kind,
+                        Box::new(source),
+                        Box::new(focus),
+                        Box::new(update_source),
+                        Box::new(update_focus),
+                    ))
                 }
                 "PID" => self.resolve_pid_surface_ty(span, args),
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
@@ -1418,8 +1453,15 @@ impl Checker {
                     _ => false,
                 }
             }
-            (Ty::Facet(src_a, focus_a), Ty::Facet(src_b, focus_b)) => {
-                self.types_compatible(src_a, src_b) && self.types_compatible(focus_a, focus_b)
+            (
+                Ty::Facet(kind_a, src_a, focus_a, update_src_a, update_focus_a),
+                Ty::Facet(kind_b, src_b, focus_b, update_src_b, update_focus_b),
+            ) => {
+                kind_a.accepts(*kind_b)
+                    && self.types_compatible(src_a, src_b)
+                    && self.types_compatible(focus_a, focus_b)
+                    && self.types_compatible(update_src_a, update_src_b)
+                    && self.types_compatible(update_focus_a, update_focus_b)
             }
             (Ty::Tuple(a), Ty::Tuple(b)) => {
                 a.len() == b.len()
@@ -1513,8 +1555,11 @@ impl Checker {
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
             Ty::TypeRef(inner) | Ty::Lazy(inner) => self.ty_contains_var(&inner, needle),
             Ty::Pid(_) => false,
-            Ty::Facet(source, focus) => {
-                self.ty_contains_var(&source, needle) || self.ty_contains_var(&focus, needle)
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
+                self.ty_contains_var(&source, needle)
+                    || self.ty_contains_var(&focus, needle)
+                    || self.ty_contains_var(&update_source, needle)
+                    || self.ty_contains_var(&update_focus, needle)
             }
             Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_var(item, needle)),
             Ty::Func(params, ret) => {
@@ -1551,9 +1596,12 @@ impl Checker {
             Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.resolve_ty(inner))),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.resolve_ty(inner))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
-            Ty::Facet(source, focus) => Ty::Facet(
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                *kind,
                 Box::new(self.resolve_ty(source)),
                 Box::new(self.resolve_ty(focus)),
+                Box::new(self.resolve_ty(update_source)),
+                Box::new(self.resolve_ty(update_focus)),
             ),
             Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.resolve_ty(item)).collect()),
             Ty::Func(params, ret) => Ty::Func(
@@ -1627,9 +1675,12 @@ impl Checker {
             }
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
-            Ty::Facet(source, focus) => Ty::Facet(
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                *kind,
                 Box::new(self.instantiate_ty_with_fresh(source, fresh)),
                 Box::new(self.instantiate_ty_with_fresh(focus, fresh)),
+                Box::new(self.instantiate_ty_with_fresh(update_source, fresh)),
+                Box::new(self.instantiate_ty_with_fresh(update_focus, fresh)),
             ),
             Ty::Tuple(items) => Ty::Tuple(
                 items
@@ -1722,9 +1773,12 @@ impl Checker {
             }
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_type_def_ty(inner, bindings))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
-            Ty::Facet(source, focus) => Ty::Facet(
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                *kind,
                 Box::new(self.substitute_type_def_ty(source, bindings)),
                 Box::new(self.substitute_type_def_ty(focus, bindings)),
+                Box::new(self.substitute_type_def_ty(update_source, bindings)),
+                Box::new(self.substitute_type_def_ty(update_focus, bindings)),
             ),
             Ty::Tuple(items) => Ty::Tuple(
                 items
@@ -1886,10 +1940,13 @@ impl Checker {
                 self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
             ),
             Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),
-            Ty::Facet(source, focus) => format!(
-                "Facet<{}, {}>",
+            Ty::Facet(kind, source, focus, update_source, update_focus) => format!(
+                "Facet<{}, {}, {}, {}, {}>",
+                kind.as_str(),
                 self.diagnostic_ty_name_with_state(source, tyvars, next_tyvar_index),
-                self.diagnostic_ty_name_with_state(focus, tyvars, next_tyvar_index)
+                self.diagnostic_ty_name_with_state(focus, tyvars, next_tyvar_index),
+                self.diagnostic_ty_name_with_state(update_source, tyvars, next_tyvar_index),
+                self.diagnostic_ty_name_with_state(update_focus, tyvars, next_tyvar_index)
             ),
             Ty::Tuple(items) => format!(
                 "({})",
@@ -1982,8 +2039,15 @@ impl Checker {
             Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
             Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),
-            Ty::Facet(source, focus) => {
-                format!("Facet<{}, {}>", self.ty_name(source), self.ty_name(focus))
+            Ty::Facet(kind, source, focus, update_source, update_focus) => {
+                format!(
+                    "Facet<{}, {}, {}, {}, {}>",
+                    kind.as_str(),
+                    self.ty_name(source),
+                    self.ty_name(focus),
+                    self.ty_name(update_source),
+                    self.ty_name(update_focus)
+                )
             }
             Ty::Tuple(items) => format!(
                 "({})",
@@ -2029,7 +2093,7 @@ impl Checker {
 
     pub(super) fn ty_contains_facet(&self, ty: &Ty) -> bool {
         match self.resolve_ty(ty) {
-            Ty::Facet(_, _) => true,
+            Ty::Facet(..) => true,
             Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
                 self.ty_contains_facet(inner.as_ref())
             }
@@ -2065,6 +2129,8 @@ impl Checker {
         TypedFacetPath {
             source_ty: self.resolve_ty(&path.source_ty),
             focus_ty: self.resolve_ty(&path.focus_ty),
+            update_source_ty: self.resolve_ty(&path.update_source_ty),
+            update_focus_ty: self.resolve_ty(&path.update_focus_ty),
             path_kind: path.path_kind,
             may_fail: path.may_fail,
             source_readonly_root: path.source_readonly_root,

@@ -5639,8 +5639,21 @@ impl ReplEngine {
             } => Some(Self::facet_info_from_path(
                 path,
                 &Ty::Facet(
+                    match path.path_kind {
+                        scar::typed::TypedFacetPathKind::InfallibleStructural => {
+                            scar::types::FacetKind::InfallibleStructural
+                        }
+                        scar::typed::TypedFacetPathKind::FallibleStructural => {
+                            scar::types::FacetKind::FallibleStructural
+                        }
+                        scar::typed::TypedFacetPathKind::VariantPath => {
+                            scar::types::FacetKind::VariantPath
+                        }
+                    },
                     Box::new(path.source_ty.clone()),
                     Box::new(path.focus_ty.clone()),
+                    Box::new(Ty::Hole),
+                    Box::new(Ty::Hole),
                 ),
                 *source_is_result,
             )),
@@ -5660,11 +5673,14 @@ impl ReplEngine {
             Ty::Lazy(inner) => format!("Lazy<{}>", Self::ty_to_string(inner)),
             Ty::TypeRef(inner) => format!("TypeRef<{}>", Self::ty_to_string(inner)),
             Ty::Pid(name) => format!("PID<{}>", crate::surface_rendered_name(name)),
-            Ty::Facet(source, focus) => {
+            Ty::Facet(kind, source, focus, update_source, update_focus) => {
                 format!(
-                    "Facet<{}, {}>",
+                    "Facet<{}, {}, {}, {}, {}>",
+                    kind.as_str(),
                     Self::ty_to_string(source),
-                    Self::ty_to_string(focus)
+                    Self::ty_to_string(focus),
+                    Self::ty_to_string(update_source),
+                    Self::ty_to_string(update_focus)
                 )
             }
             Ty::Tuple(items) => format!(
