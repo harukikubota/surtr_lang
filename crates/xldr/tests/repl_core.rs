@@ -3090,6 +3090,28 @@ fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
 }
 
 #[test]
+fn core_facet_command_inspects_operations_and_kind_queries() {
+    let mut engine = engine();
+
+    let operation = rendered_text(&engine.handle_line(
+        ":facet Facet::set(Tuple._0, (1, True), \"one\")",
+    ));
+    assert!(operation.contains("## FacetOperation"), "{operation}");
+    assert!(operation.contains("operation: Facet::set"), "{operation}");
+    assert!(operation.contains("kind constraint: WritablePath"), "{operation}");
+    assert!(operation.contains("replacement: String"), "{operation}");
+    assert!(operation.contains("result: Result<(String, Boolean), Error>"), "{operation}");
+
+    let kind = rendered_text(&engine.handle_line(":info ReadablePath"));
+    assert!(kind.contains("@FacetPathKind Type ReadablePath"), "{kind}");
+    assert!(kind.contains("Effective atomic kinds"), "{kind}");
+
+    let sig = rendered_text(&engine.handle_line(":sig ReadablePath"));
+    assert!(sig.contains("has no constructor signature"), "{sig}");
+    assert!(sig.contains("Use `:info ReadablePath`"), "{sig}");
+}
+
+#[test]
 fn core_renders_negative_and_range_list_facets() {
     let mut engine = engine();
 

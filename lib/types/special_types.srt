@@ -138,7 +138,8 @@ Compiler-reserved ignored-input closure marker.
 Use level: callable surface marker only.
 `Hole` is not a first-class data type.
 It exists only as the canonical builtin type behind `_` when a callable value
-intentionally accepts an input that is not observed.
-Do not use it as plain data, field, container element, or return hole.
+intentionally accepts an input that is not observed, or when both update-side
+slots of `Facet<K, S, A, T, B>` are deferred. Do not use it as plain data,
+field, container element, or return hole.
 """
 @builtin type Hole

@@ -5,9 +5,10 @@ pub mod opcode;
 pub mod registry;
 
 pub use codegen::{
-    codegen, codegen_typed_program, compose_bytecode_with_chunk, BindingInfo, ChunkMeta,
-    ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind, ReplFacetInfo,
-    ReplFacetSegmentInfo, ReplFacetStage, ReplTypeKind, TypeDefDisplay,
+    codegen, codegen_typed_program, compose_bytecode_with_chunk, repl_facet_info_for_node,
+    BindingInfo, ChunkMeta, ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind,
+    ReplFacetInfo, ReplFacetOperation, ReplFacetSegmentInfo, ReplFacetStage, ReplTypeKind,
+    TypeDefDisplay,
 };
 
 #[cfg(test)]

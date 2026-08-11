@@ -1445,17 +1445,20 @@ fn repl_supports_deferred_lens_bindings_and_lens_command() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("a: Facet<_, _> = Tuple._1"), "{stdout}");
+    assert!(
+        stdout.contains("a: Facet<InfallibleStructural, _, _, _, _> = Tuple._1"),
+        "{stdout}"
+    );
     assert!(stdout.contains("2"), "{stdout}");
     assert!(stdout.contains("FacetPath"), "{stdout}");
-    assert!(stdout.contains("view result: _"), "{stdout}");
+    assert!(stdout.contains("replacement focus: _"), "{stdout}");
     assert!(stdout.contains("full path: Tuple._1"), "{stdout}");
     assert!(stdout.contains("Flow"), "{stdout}");
     assert!(stdout.contains("hop 1: Tuple._1"), "{stdout}");
     assert!(stdout.contains("Stops"), "{stdout}");
     assert!(stdout.contains("stop 1:"), "{stdout}");
     assert!(
-        stdout.contains("view result: Result<Int, Error>"),
+        stdout.contains("kind: VariantPath"),
         "{stdout}"
     );
     assert!(
@@ -1477,11 +1480,17 @@ fn repl_renders_top_level_lens_chain_expressions() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
-        stdout.contains("ep: Facet<IntBase, Unit> = IntBase.Oct"),
+        stdout.contains("ep: Facet<VariantPath, IntBase, Unit, _, _> = IntBase.Oct"),
         "{stdout}"
     );
-    assert!(stdout.contains("a: Facet<_, _> = Tuple._1"), "{stdout}");
-    assert!(stdout.contains("Facet<_, _> = Tuple._1.Oct"), "{stdout}");
+    assert!(
+        stdout.contains("a: Facet<InfallibleStructural, _, _, _, _> = Tuple._1"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Facet<InfallibleStructural, _, _, _, _> = Tuple._1.Oct"),
+        "{stdout}"
+    );
 }
 
 #[test]

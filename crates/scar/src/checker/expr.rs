@@ -4765,7 +4765,8 @@ impl Checker {
                             .into(),
                     span: span.clone(),
                     hint: Some(
-                        "Use Tuple._N only where a Facet<(...), ...> is expected.".into(),
+                        "Use Tuple._N only where a Facet<K, (...), ..., T, B> is expected."
+                            .into(),
                     ),
                 });
             };

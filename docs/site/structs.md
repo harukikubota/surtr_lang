@@ -207,11 +207,11 @@ defstruct User {
   nickname: String?,
 }
 
-next =? Facet::case_over(User.nickname.Some?, user, normalize_name)
+next =? Facet::case_over(User.nickname.Some, user, normalize_name)
 ```
 
 `nickname: String?` は `Option<String>` と同じなので、
-optional payload を更新するときは `Some` / `Some?` を経由した
+optional payload を更新するときは required `Some` selector を経由した
 `Facet::case_over` / `Facet::case_set` が自然です。
 
 たとえば `impl User` 内で `with_age` を定義して再構築できます。

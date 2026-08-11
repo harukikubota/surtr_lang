@@ -12,9 +12,7 @@ use eldr::builtin::inspect_value;
 use eldr::interactive::InteractiveChunkPolicy;
 use eldr::value::{TypeKind, Value};
 use forge::bytecode::populate_error_template_lines;
-use scar::typed::{
-    PendingFacetSegment, TypedFacetPath, TypedFacetSegment, TypedInner, TypedNode, TypedPattern,
-};
+use scar::typed::{TypedInner, TypedNode, TypedPattern};
 use scar::types::Ty;
 use serde::{Deserialize, Serialize};
 use sigil::error::ResolveError;
@@ -4735,6 +4733,13 @@ impl ReplEngine {
         if trimmed.is_empty() {
             return Self::plain(Self::sig_help_lines());
         }
+        if Self::facet_path_kind_info(trimmed).is_some() {
+            return Self::plain(vec![
+                format!("`{trimmed}` has no constructor signature."),
+                "Facet path kinds are compiler-managed and cannot be used as values.".into(),
+                format!("Use `:info {trimmed}`."),
+            ]);
+        }
         match parse_repl_query(trimmed) {
             Ok(ReplQuery::Symbol(symbol)) => {
                 if let Some(result) = self.handle_sig_binding(symbol.source.as_str()) {
@@ -4882,7 +4887,11 @@ impl ReplEngine {
 
     fn render_facet_info(info: &forge::ReplFacetInfo) -> Vec<String> {
         let mut lines = vec![
-            "## FacetPath".to_string(),
+            if info.operation.is_some() {
+                "## FacetOperation".to_string()
+            } else {
+                "## FacetPath".to_string()
+            },
             format!("type: {}", crate::surface_rendered_name(&info.ty)),
             format!(
                 "stage: {}",
@@ -4909,6 +4918,29 @@ impl ReplEngine {
             "## API eligibility".to_string(),
             "## Flow".to_string(),
         ];
+        if let Some(operation) = &info.operation {
+            lines.insert(1, format!("operation: {}", operation.name));
+            lines.insert(2, format!("kind constraint: {}", operation.kind_constraint));
+            lines.insert(
+                3,
+                format!(
+                    "result: {}",
+                    crate::surface_rendered_name(&operation.result_ty)
+                ),
+            );
+            if let Some(replacement) = &operation.replacement_ty {
+                lines.insert(
+                    4,
+                    format!("replacement: {}", crate::surface_rendered_name(replacement)),
+                );
+            }
+            if let Some(mapper) = &operation.mapper_ty {
+                lines.insert(
+                    5,
+                    format!("mapper: {}", crate::surface_rendered_name(mapper)),
+                );
+            }
+        }
         let flow_index = lines.len() - 1;
         lines.splice(flow_index..flow_index, info.api_eligibility.iter().cloned());
 
@@ -5083,7 +5115,7 @@ impl ReplEngine {
         let Some(root) = typed.first() else {
             return Self::plain(Self::facet_help_lines());
         };
-        let Some(info) = Self::facet_info_for_typed_node(root) else {
+        let Some(info) = forge::repl_facet_info_for_node(root) else {
             return Self::plain(vec![format!(
                 "`{source_query}` is not a FacetPath binding or expression."
             )]);
@@ -5093,6 +5125,9 @@ impl ReplEngine {
     }
 
     fn handle_info_symbol(&self, source_query: &str, symbol: &str) -> ReplResult {
+        if let Some(lines) = Self::facet_path_kind_info(symbol) {
+            return Self::styled(lines);
+        }
         if let Some(binding) = self.binding_info(symbol) {
             return self.render_info_binding(symbol, binding);
         }
@@ -5125,6 +5160,54 @@ impl ReplEngine {
         }
 
         Self::plain(vec![format!("No signature found for {}", source_query)])
+    }
+
+    fn facet_path_kind_info(symbol: &str) -> Option<Vec<String>> {
+        let name = crate::surface_path_name(symbol).rsplit("::").next()?;
+        let atomic = ["InfallibleStructural", "FallibleStructural", "VariantPath"];
+        let aliases: &[(&str, &[&str])] = &[
+            ("ReadablePath", &atomic),
+            ("WritablePath", &atomic),
+            ("PutPath", &["InfallibleStructural"]),
+            ("PreviewPath", &["VariantPath"]),
+            ("CasePath", &["VariantPath"]),
+        ];
+        if name == "FacetPathKind" {
+            let mut lines = vec![
+                "FacetPathKind".into(),
+                "Compiler-managed types usable only as the first argument of Facet<K, S, A, T, B>."
+                    .into(),
+                "Atomic kinds".into(),
+            ];
+            lines.extend(atomic.iter().map(|kind| format!("- {kind}")));
+            lines.push("Kind-set aliases".into());
+            lines.extend(aliases.iter().map(|(alias, _)| format!("- {alias}")));
+            return Some(lines);
+        }
+        if atomic.contains(&name) {
+            return Some(vec![
+                format!("@FacetPathKind Type {name}"),
+                "Compiler-derived atomic Facet path kind.".into(),
+                "Usage: first type argument of Facet<K, S, A, T, B> only.".into(),
+            ]);
+        }
+        aliases
+            .iter()
+            .find(|(alias, _)| *alias == name)
+            .map(|(alias, members)| {
+                let rhs = members.join(" | ");
+                let mut lines = vec![
+                    format!("@FacetPathKind Type {alias} ="),
+                    format!("  {rhs}"),
+                    "Direct members".into(),
+                ];
+                lines.extend(members.iter().map(|member| format!("- {member}")));
+                lines.push("Effective atomic kinds".into());
+                lines.extend(members.iter().map(|member| format!("- {member}")));
+                lines.push("Usage: first type argument of Facet<K, S, A, T, B> only.".into());
+                lines.push("Compiler-managed; not a runtime value or constructor.".into());
+                lines
+            })
     }
 
     fn render_info_binding(&self, symbol: &str, binding: &forge::BindingInfo) -> ReplResult {
@@ -5318,387 +5401,6 @@ impl ReplEngine {
             .join("\n"),
             ReplOutput::StatusMessage(message) => message.clone(),
             ReplOutput::EvalStarted { source, .. } => source.clone(),
-        }
-    }
-
-    fn render_typed_facet_path(path: &TypedFacetPath) -> String {
-        let mut rendered = String::new();
-        for segment in &path.segments {
-            match segment {
-                TypedFacetSegment::Tuple { field_index, .. } => {
-                    if rendered.is_empty() {
-                        rendered.push_str("Tuple");
-                    }
-                    rendered.push_str(&format!("._{field_index}"));
-                }
-                TypedFacetSegment::Field { field_name, .. } => {
-                    if rendered.is_empty() {
-                        rendered.push_str(&Self::ty_to_string(&path.source_ty));
-                    }
-                    rendered.push('.');
-                    rendered.push_str(field_name);
-                }
-                TypedFacetSegment::Variant { variant_name, .. } => {
-                    if rendered.is_empty() {
-                        rendered.push_str(&Self::ty_to_string(&path.source_ty));
-                    }
-                    rendered.push('.');
-                    rendered.push_str(variant_name);
-                }
-                TypedFacetSegment::ListIndex { display, .. }
-                | TypedFacetSegment::ListRange { display, .. } => {
-                    if rendered.is_empty() {
-                        rendered.push_str("List");
-                    }
-                    rendered.push_str(&format!(".[{display}]"));
-                }
-                TypedFacetSegment::MapKey { display, .. } => {
-                    if rendered.is_empty() {
-                        rendered.push_str("HashMap");
-                    }
-                    rendered.push_str(&format!(".[{display}]"));
-                }
-            }
-        }
-        if rendered.is_empty() {
-            "<facet>".to_string()
-        } else {
-            rendered
-        }
-    }
-
-    fn facet_segment_label(segment: &TypedFacetSegment) -> String {
-        match segment {
-            TypedFacetSegment::Field { field_name, .. } => field_name.clone(),
-            TypedFacetSegment::Tuple { field_index, .. } => format!("_{field_index}"),
-            TypedFacetSegment::Variant { variant_name, .. } => variant_name.clone(),
-            TypedFacetSegment::ListIndex { display, .. }
-            | TypedFacetSegment::ListRange { display, .. }
-            | TypedFacetSegment::MapKey { display, .. } => format!("[{display}]"),
-        }
-    }
-
-    fn pending_facet_segment_label(segment: &PendingFacetSegment) -> String {
-        match segment {
-            PendingFacetSegment::Field { name, optional } => {
-                if *optional {
-                    format!("{name}?")
-                } else {
-                    name.clone()
-                }
-            }
-            PendingFacetSegment::Bracket { display, .. }
-            | PendingFacetSegment::RangeBracket { display, .. } => format!("[{display}]"),
-        }
-    }
-
-    fn pending_facet_segment_kind(segment: &PendingFacetSegment) -> &'static str {
-        match segment {
-            PendingFacetSegment::Field { name, .. } if name.starts_with('_') => "tuple",
-            PendingFacetSegment::Field { .. } => "field",
-            PendingFacetSegment::Bracket { .. } | PendingFacetSegment::RangeBracket { .. } => {
-                "container segment"
-            }
-        }
-    }
-
-    fn render_pending_facet_path(path: &scar::typed::PendingFacetPath) -> String {
-        if path.segments.is_empty() {
-            return "<facet>".to_string();
-        }
-        let mut rendered = path.root_path_name.clone().unwrap_or_default();
-        for segment in &path.segments {
-            let label = Self::pending_facet_segment_label(segment);
-            if rendered.is_empty() {
-                if matches!(
-                    segment,
-                    PendingFacetSegment::Field { name, .. } if name.starts_with('_')
-                ) {
-                    rendered.push_str("Tuple");
-                    rendered.push('.');
-                }
-            } else {
-                rendered.push('.');
-            }
-            rendered.push_str(&label);
-        }
-        rendered
-    }
-
-    fn facet_info_from_path(
-        path: &TypedFacetPath,
-        ty: &Ty,
-        source_is_result: bool,
-    ) -> forge::ReplFacetInfo {
-        let mut current_source = path.source_ty.clone();
-        let mut segments = Vec::with_capacity(path.segments.len());
-        let mut stop_points = Vec::new();
-        let mut path_is_fallible = false;
-        if source_is_result {
-            stop_points.push("source - input already starts in Result context".to_string());
-        }
-        let mut prefix = String::new();
-        for segment in &path.segments {
-            let label = Self::facet_segment_label(segment);
-            let (kind, fallible, reason) = match segment {
-                TypedFacetSegment::Field {
-                    field_index,
-                    field_name,
-                    ..
-                } => {
-                    let focus_ty = match &current_source {
-                        Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
-                            .get(*field_index as usize)
-                            .map(|(_, ty)| ty.clone())
-                            .unwrap_or(Ty::Unit),
-                        _ => Ty::Unit,
-                    };
-                    if !prefix.is_empty() {
-                        prefix.push('.');
-                    }
-                    prefix.push_str(field_name);
-                    segments.push(forge::ReplFacetSegmentInfo {
-                        label: prefix.clone(),
-                        kind: "field".to_string(),
-                        source_ty: Self::ty_to_string(&current_source),
-                        focus_ty: Self::ty_to_string(&focus_ty),
-                        fallible: false,
-                        reason: "field access".to_string(),
-                    });
-                    current_source = focus_ty;
-                    ("field", false, "field access")
-                }
-                TypedFacetSegment::Tuple { field_index, .. } => {
-                    let focus_ty = match &current_source {
-                        Ty::Tuple(items) => items
-                            .get(*field_index as usize)
-                            .cloned()
-                            .unwrap_or(Ty::Unit),
-                        _ => Ty::Unit,
-                    };
-                    if prefix.is_empty() {
-                        prefix.push_str("Tuple");
-                    }
-                    prefix.push_str(&format!("._{field_index}"));
-                    segments.push(forge::ReplFacetSegmentInfo {
-                        label: prefix.clone(),
-                        kind: "tuple".to_string(),
-                        source_ty: Self::ty_to_string(&current_source),
-                        focus_ty: Self::ty_to_string(&focus_ty),
-                        fallible: false,
-                        reason: "tuple index access".to_string(),
-                    });
-                    current_source = focus_ty;
-                    ("tuple", false, "tuple index access")
-                }
-                TypedFacetSegment::Variant { variant_name, .. } => {
-                    if !prefix.is_empty() {
-                        prefix.push('.');
-                    }
-                    prefix.push_str(variant_name);
-                    let focus_ty = path.focus_ty.clone();
-                    path_is_fallible = true;
-                    stop_points.push(format!("{prefix} - variant mismatch returns Result"));
-                    segments.push(forge::ReplFacetSegmentInfo {
-                        label: prefix.clone(),
-                        kind: "variant".to_string(),
-                        source_ty: Self::ty_to_string(&current_source),
-                        focus_ty: Self::ty_to_string(&focus_ty),
-                        fallible: true,
-                        reason: "variant mismatch returns Result".to_string(),
-                    });
-                    current_source = focus_ty;
-                    ("variant", true, "variant mismatch returns Result")
-                }
-                TypedFacetSegment::ListIndex { display, .. }
-                | TypedFacetSegment::ListRange { display, .. } => {
-                    let focus_ty = match &current_source {
-                        Ty::List(inner) => match segment {
-                            TypedFacetSegment::ListIndex { .. } => inner.as_ref().clone(),
-                            TypedFacetSegment::ListRange { .. } => {
-                                Ty::List(Box::new(inner.as_ref().clone()))
-                            }
-                            _ => unreachable!(),
-                        },
-                        _ => path.focus_ty.clone(),
-                    };
-                    if prefix.is_empty() {
-                        prefix.push_str("List.");
-                    } else {
-                        prefix.push('.');
-                    }
-                    prefix.push_str(&format!("[{display}]"));
-                    path_is_fallible = true;
-                    segments.push(forge::ReplFacetSegmentInfo {
-                        label: prefix.clone(),
-                        kind: match segment {
-                            TypedFacetSegment::ListIndex { .. } => "list index".to_string(),
-                            TypedFacetSegment::ListRange { .. } => "list range".to_string(),
-                            _ => unreachable!(),
-                        },
-                        source_ty: Self::ty_to_string(&current_source),
-                        focus_ty: Self::ty_to_string(&focus_ty),
-                        fallible: true,
-                        reason: match segment {
-                            TypedFacetSegment::ListIndex { .. } => {
-                                "index miss returns Result".to_string()
-                            }
-                            TypedFacetSegment::ListRange { .. } => {
-                                "range miss returns Result".to_string()
-                            }
-                            _ => unreachable!(),
-                        },
-                    });
-                    current_source = focus_ty;
-                    match segment {
-                        TypedFacetSegment::ListIndex { .. } => {
-                            ("list index", true, "index miss returns Result")
-                        }
-                        TypedFacetSegment::ListRange { .. } => {
-                            ("list range", true, "range miss returns Result")
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                TypedFacetSegment::MapKey { display, .. } => {
-                    let focus_ty = match &current_source {
-                        Ty::Enum(name, args)
-                            if name.rsplit("::").next().unwrap_or(name) == "HashMap"
-                                && args.len() == 1 =>
-                        {
-                            args[0].clone()
-                        }
-                        _ => path.focus_ty.clone(),
-                    };
-                    if prefix.is_empty() {
-                        prefix.push_str("HashMap.");
-                    } else {
-                        prefix.push('.');
-                    }
-                    prefix.push_str(&format!("[{display}]"));
-                    path_is_fallible = true;
-                    segments.push(forge::ReplFacetSegmentInfo {
-                        label: prefix.clone(),
-                        kind: "map key".to_string(),
-                        source_ty: Self::ty_to_string(&current_source),
-                        focus_ty: Self::ty_to_string(&focus_ty),
-                        fallible: true,
-                        reason: "key miss returns Result".to_string(),
-                    });
-                    current_source = focus_ty;
-                    ("map key", true, "key miss returns Result")
-                }
-            };
-            let _ = (kind, fallible, reason, label);
-        }
-        forge::ReplFacetInfo {
-            ty: Self::ty_to_string(ty),
-            stage: forge::ReplFacetStage::Template,
-            path_kind: path.path_kind.as_str().to_string(),
-            source_ty: Self::ty_to_string(&path.source_ty),
-            focus_ty: Self::ty_to_string(&path.focus_ty),
-            update_source_ty: Self::ty_to_string(&path.update_source_ty),
-            update_focus_ty: Self::ty_to_string(&path.update_focus_ty),
-            api_eligibility: {
-                let mut apis = vec![
-                    "view: available".to_string(),
-                    "set: available".to_string(),
-                    "over: available".to_string(),
-                ];
-                if path.has_variant_segment() {
-                    apis.push("preview: available".to_string());
-                    apis.push("case_over: available".to_string());
-                    if path.final_segment_is_variant() {
-                        apis.push("case_set: available".to_string());
-                    }
-                }
-                if path.is_infallible_structural() {
-                    apis.push("put: available when replacement B derives T".to_string());
-                }
-                if matches!(path.focus_ty, Ty::Result(_, _)) {
-                    apis.push("over_result: available".to_string());
-                }
-                apis
-            },
-            view_result_ty: if source_is_result || path_is_fallible || path.may_fail {
-                format!("Result<{}, Error>", Self::ty_to_string(&path.focus_ty))
-            } else {
-                Self::ty_to_string(&path.focus_ty)
-            },
-            full_path: Self::render_typed_facet_path(path),
-            segments,
-            stop_points,
-        }
-    }
-
-    fn facet_info_for_typed_node(node: &TypedNode) -> Option<forge::ReplFacetInfo> {
-        match &node.node {
-            TypedInner::FacetPath(path) => Some(Self::facet_info_from_path(path, &node.ty, false)),
-            TypedInner::PendingFacetPath(path) => {
-                let full_path = Self::render_pending_facet_path(path);
-                Some(forge::ReplFacetInfo {
-                    ty: Self::ty_to_string(&node.ty),
-                    stage: forge::ReplFacetStage::Pending,
-                    path_kind: "pending".to_string(),
-                    source_ty: "_".to_string(),
-                    focus_ty: "_".to_string(),
-                    update_source_ty: "_".to_string(),
-                    update_focus_ty: "_".to_string(),
-                    api_eligibility: vec!["pending specialization".to_string()],
-                    view_result_ty: "_".to_string(),
-                    full_path,
-                    segments: path
-                        .segments
-                        .iter()
-                        .map(|segment| forge::ReplFacetSegmentInfo {
-                            label: if matches!(
-                                segment,
-                                PendingFacetSegment::Field { name, .. } if name.starts_with('_')
-                            ) {
-                                format!("Tuple.{}", Self::pending_facet_segment_label(segment))
-                            } else {
-                                Self::pending_facet_segment_label(segment)
-                            },
-                            kind: Self::pending_facet_segment_kind(segment).to_string(),
-                            source_ty: "_".to_string(),
-                            focus_ty: "_".to_string(),
-                            fallible: matches!(
-                                segment,
-                                PendingFacetSegment::Bracket { .. }
-                                    | PendingFacetSegment::RangeBracket { .. }
-                            ),
-                            reason: "requires Facet context to specialize".to_string(),
-                        })
-                        .collect(),
-                    stop_points: Vec::new(),
-                })
-            }
-            TypedInner::FacetView {
-                path,
-                source_is_result,
-                ..
-            } => Some(Self::facet_info_from_path(
-                path,
-                &Ty::Facet(
-                    match path.path_kind {
-                        scar::typed::TypedFacetPathKind::InfallibleStructural => {
-                            scar::types::FacetKind::InfallibleStructural
-                        }
-                        scar::typed::TypedFacetPathKind::FallibleStructural => {
-                            scar::types::FacetKind::FallibleStructural
-                        }
-                        scar::typed::TypedFacetPathKind::VariantPath => {
-                            scar::types::FacetKind::VariantPath
-                        }
-                    },
-                    Box::new(path.source_ty.clone()),
-                    Box::new(path.focus_ty.clone()),
-                    Box::new(Ty::Hole),
-                    Box::new(Ty::Hole),
-                ),
-                *source_is_result,
-            )),
-            _ => None,
         }
     }
 

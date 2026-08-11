@@ -571,7 +571,7 @@ fn test_intrinsic_bulk_update_decl_parses_in_std_module() {
     let mut context = ParserContext::project(0);
     context.parse_rules = ParseRules::permissive_for_tests();
     let ast = parse_with_context(
-        r#"@builtin type Facet<$S, $A>
+        r#"@builtin type Facet<$K, $S, $A, $T, $B>
 impl Facet {
   @doc """
   Bulk update special form.

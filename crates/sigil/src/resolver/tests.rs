@@ -4595,7 +4595,7 @@ fn resolves_container_root_facet_paths() {
     let module_stages = vec![vec![staged_module(
         "Facet",
         parse_module_ast(
-            r#"@builtin def view(facet: Facet<$S, $A>, source: $S) -> Result<$A>"#,
+            r#"@builtin def view(facet: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>"#,
             "Facet",
         ),
     )]];
@@ -4626,8 +4626,8 @@ fn resolves_bulk_update_case_actions_as_facet_calls() {
     let module_stages = vec![vec![staged_module(
         "Facet",
         parse_module_ast(
-            r#"@builtin def case_set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>
-@builtin def set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>"#,
+            r#"@builtin def case_set(facet: Facet<CasePath, $S, $A, $T, $B>, source: $S, value: $B) -> Result<$T>
+@builtin def set(facet: Facet<WritablePath, $S, $A, $T, $B>, source: $S, value: $B) -> Result<$T>"#,
             "Facet",
         ),
     )]];

@@ -2,10 +2,10 @@
 
 ## This Change Scope
 
-- Facet API first arguments are treated as `Facet<S, A>` expectation points.
+- Facet API first arguments are treated as `Facet<K, S, A, T, B>` expectation points.
 - The shared completion path should suggest:
   - path-constructable type roots: `defstruct`, `defrecord`, `defenum`, plus structural builtin roots such as `Tuple`, `List`, `HashMap`
-  - visible bindings whose type is `Facet<_, _>`
+  - visible bindings whose type is `Facet<_, _, _, _, _>`
 - Primitive roots are not path-constructable candidates:
   - `String`
   - `Int`
@@ -34,7 +34,7 @@ Covered Facet APIs:
 - `Facet::set(~user.name, "bob")`
 - `Facet::set(~ret.name, "bob")`
 - Nested structural paths such as `User.profile.name` and `~ret.profile.name`
-- Result-backed focus fields, such as `Facet::set(User.score, user, 3)` where `score: Result<Int>`
+- Result-backed focus fields, such as `Facet::over(User.score, user, {|score| Ok(score + 1)})` where `score: Result<Int>`
 
 ## Still Not Inferable By Design
 

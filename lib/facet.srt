@@ -389,9 +389,9 @@ impl Facet {
 
   The types must line up:
 
-  - `outer: Facet<S, A>`
-  - `inner: Facet<A, B>`
-  - result: `Facet<S, B>`
+  - `outer: Facet<K, S, A, _, _>`
+  - `inner: Facet<L, A, B, _, _>`
+  - result: `Facet<K, S, B, _, _>`
 
   This is the canonical path-composition API.
 

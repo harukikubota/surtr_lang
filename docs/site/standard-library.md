@@ -433,7 +433,7 @@ path capability です。
 
 - `S` は source の型
 - `A` は focus の型
-- `Facet<S, A>` は「`S` の中の `A` を指す path」
+- `Facet<K, S, A, T, B>` は compiler-managed な path capability。`K/S/A` は path 導出、`T/B` は update-side slot を表す
 
 ### path の書き方
 
@@ -455,7 +455,7 @@ Tuple._1
 ```
 
 - `.0`, `.1` ではなく `._0`, `._1`
-- `Tuple._N` は `Facet<(...), ...>` が期待される場所で使うほか、同一スコープの local binding として deferred path に束縛できる
+- `Tuple._N` は `Facet<K, (...), ..., T, B>` が期待される場所で使うほか、同一スコープの local binding として deferred path に束縛できる
 - `_0` 単体は使わない
 
 enum variant path は `Enum.Variant` です。
@@ -607,9 +607,9 @@ name = Facet::view(profile_name, user)
 
 型の並びは次です。
 
-- `outer: Facet<S, A>`
-- `inner: Facet<A, B>`
-- result: `Facet<S, B>`
+- `outer: Facet<K, S, A, _, _>`
+- `inner: Facet<L, A, B, _, _>`
+- result: `Facet<K, S, B, _, _>`
 
 ### Facet のスコープ規約
 

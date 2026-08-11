@@ -2062,7 +2062,7 @@ fn facet_arg_completion_includes_capability_declared_roots_without_detail_heuris
     let mut symbols = vec![completion_symbol(
         "Facet::view",
         CompletionKind::FunctionCall,
-        "Facet::view(path: Facet<$S, $A>, source: $S) -> $A",
+        "Facet::view(path: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>",
     )];
     symbols.extend(
         SemanticIndex::from_declaration_index(&declarations)
@@ -2113,7 +2113,7 @@ fn facet_arg_completion_includes_builtin_path_roots_and_excludes_plain_builtin_t
     let mut symbols = vec![completion_symbol(
         "Facet::view",
         CompletionKind::FunctionCall,
-        "Facet::view(path: Facet<$S, $A>, source: $S) -> $A",
+        "Facet::view(path: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>",
     )];
     symbols.extend(
         SemanticIndex::from_metadata(&docs, &[])

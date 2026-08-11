@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use scar::typed::*;
-use scar::types::Ty;
+use scar::types::{FacetKind, Ty};
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
 use sindr::ir::{
@@ -1809,6 +1809,16 @@ pub struct ReplFacetInfo {
     pub full_path: String,
     pub segments: Vec<ReplFacetSegmentInfo>,
     pub stop_points: Vec<String>,
+    pub operation: Option<ReplFacetOperation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplFacetOperation {
+    pub name: String,
+    pub kind_constraint: String,
+    pub result_ty: String,
+    pub replacement_ty: Option<String>,
+    pub mapper_ty: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -4009,7 +4019,111 @@ fn top_level_result_facet_info(typed: &[TypedNode]) -> Option<ReplFacetInfo> {
                 TypedInner::Def(..) | TypedInner::ExtractorDef(..) | TypedInner::DeferrorDef(..)
             )
         })
-        .and_then(facet_info_for_node)
+        .and_then(repl_facet_info_for_node)
+}
+
+/// Produces the shared REPL inspection view from Scar's typed Facet metadata.
+/// Both the compiled REPL chunk and ad-hoc `:facet` queries use this function
+/// so their displayed slot and API state cannot drift.
+pub fn repl_facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
+    let (path, source_is_result, operation) =
+        match &node.node {
+            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => {
+                return facet_info_for_node(node)
+            }
+            TypedInner::FacetView {
+                path,
+                source_is_result,
+                ..
+            } => (
+                path,
+                *source_is_result,
+                ReplFacetOperation {
+                    name: "Facet::view".into(),
+                    kind_constraint: "ReadablePath".into(),
+                    result_ty: ty_to_string(&node.ty),
+                    replacement_ty: None,
+                    mapper_ty: None,
+                },
+            ),
+            TypedInner::FacetSet {
+                path,
+                source_is_result,
+                value,
+                mode,
+                ..
+            } => (
+                path,
+                *source_is_result,
+                ReplFacetOperation {
+                    name: match mode {
+                        TypedFacetSetMode::Exact => "Facet::set",
+                        TypedFacetSetMode::CaseSet => "Facet::case_set",
+                    }
+                    .into(),
+                    kind_constraint: match mode {
+                        TypedFacetSetMode::Exact => "WritablePath",
+                        TypedFacetSetMode::CaseSet => "CasePath",
+                    }
+                    .into(),
+                    result_ty: ty_to_string(&node.ty),
+                    replacement_ty: Some(ty_to_string(&value.ty)),
+                    mapper_ty: None,
+                },
+            ),
+            TypedInner::FacetOver {
+                path,
+                source_is_result,
+                update_fun,
+                mode,
+                ..
+            } => (
+                path,
+                *source_is_result,
+                ReplFacetOperation {
+                    name: match mode {
+                        TypedFacetOverMode::FocusValue => "Facet::over",
+                        TypedFacetOverMode::FocusResult => "Facet::over_result",
+                        TypedFacetOverMode::CaseFocusValue
+                        | TypedFacetOverMode::CaseFocusResult => "Facet::case_over",
+                    }
+                    .into(),
+                    kind_constraint: match mode {
+                        TypedFacetOverMode::CaseFocusValue
+                        | TypedFacetOverMode::CaseFocusResult => "CasePath",
+                        _ => "WritablePath",
+                    }
+                    .into(),
+                    result_ty: ty_to_string(&node.ty),
+                    replacement_ty: Some(ty_to_string(&path.update_focus_ty)),
+                    mapper_ty: Some(ty_to_string(&update_fun.ty)),
+                },
+            ),
+            _ => return None,
+        };
+    let facet_ty = Ty::Facet(
+        match path.path_kind {
+            TypedFacetPathKind::InfallibleStructural => FacetKind::InfallibleStructural,
+            TypedFacetPathKind::FallibleStructural => FacetKind::FallibleStructural,
+            TypedFacetPathKind::VariantPath => FacetKind::VariantPath,
+        },
+        Box::new(path.source_ty.clone()),
+        Box::new(path.focus_ty.clone()),
+        Box::new(path.update_source_ty.clone()),
+        Box::new(path.update_focus_ty.clone()),
+    );
+    let template = TypedNode {
+        ty: facet_ty,
+        span: node.span.clone(),
+        node: TypedInner::FacetPath(path.clone()),
+    };
+    let mut info = facet_info_for_node(&template)?;
+    if source_is_result {
+        info.stop_points
+            .insert(0, "source - input already starts in Result context".into());
+    }
+    info.operation = Some(operation);
+    Some(info)
 }
 
 fn facet_segment_label(segment: &TypedFacetSegment) -> String {
@@ -4224,6 +4338,7 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                 full_path: facet_path_full_path(path),
                 segments,
                 stop_points,
+                operation: None,
             })
         }
         TypedInner::PendingFacetPath(path) => Some(ReplFacetInfo {
@@ -4281,6 +4396,7 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                 })
                 .collect(),
             stop_points: Vec::new(),
+            operation: None,
         }),
         _ => None,
     }
