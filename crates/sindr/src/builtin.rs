@@ -1037,6 +1037,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 3,
         sig_str: "(String, String, String) -> String",
     },
+    BuiltinMeta {
+        name: "curry",
+        arity: 1,
+        sig_str: "($A) -> $B",
+    },
 ];
 
 /// Function metadata view. Prefer this name when the caller needs runtime

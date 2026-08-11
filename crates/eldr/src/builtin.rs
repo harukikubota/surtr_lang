@@ -835,6 +835,10 @@ const BUILTIN_IMPLS: &[BuiltinImpl] = &[
         name: "string_replace",
         func: builtin_string_replace,
     },
+    BuiltinImpl {
+        name: "curry",
+        func: builtin_curry_unreachable,
+    },
 ];
 
 const _: () = {
@@ -885,6 +889,12 @@ fn expected_builtin_arity(name: &str, default_arity: u8) -> String {
         "__supervisor_workers" => "3 or 4".to_string(),
         _ => default_arity.to_string(),
     }
+}
+
+fn builtin_curry_unreachable(_vm: &mut VM, _args: Vec<Value>) -> Result<Value, RuntimeError> {
+    Err(RuntimeError::new(
+        "Function::curry must be lowered by the type checker",
+    ))
 }
 
 fn builtin_print(vm: &mut VM, args: Vec<Value>) -> Result<Value, RuntimeError> {

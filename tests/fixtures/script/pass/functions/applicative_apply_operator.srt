@@ -2,6 +2,18 @@ def inc(value: Int) -> Int {
   value + 1
 }
 
+def add3(left: Int, middle: Int, right: Int) -> Int {
+  left + middle + right
+}
+
+def add4(a: Int, b: Int, c: Int, d: Int) -> Int {
+  a + b + c + d
+}
+
+def make_pair<$A, $B>(left: $A, right: $B) -> ($A, $B) {
+  (left, right)
+}
+
 mapper: Result<(Int -> Int)> = Ok(&inc)
 value: Result<Int> = Ok(1)
 applied: Result<Int> = mapper |*| value
@@ -10,3 +22,14 @@ print(inspect(applied))
 
 add_applied: Result<Int> = Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2)
 print(inspect(add_applied))
+
+curried3 = curry(&add3)
+curried3_applied: Result<Int> = Ok(curried3) |*| Ok(1) |*| Ok(2) |*| Ok(3)
+print(inspect(curried3_applied))
+
+curried4 = curry({|a: Int, b: Int, c: Int, d: Int| a + b + c + d})
+curried4_applied: Result<Int> = Ok(curried4) |*| Ok(1) |*| Ok(2) |*| Ok(3) |*| Ok(4)
+print(inspect(curried4_applied))
+
+generic_curried: Result<(String, Int)> = Ok(curry(&make_pair)) |*| Ok("left") |*| Ok(9)
+print(inspect(generic_curried))

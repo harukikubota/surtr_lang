@@ -1791,6 +1791,173 @@ impl Checker {
         )
     }
 
+    fn is_function_curry_callee(&self, func: &Resolved) -> bool {
+        matches!(
+            func,
+            Resolved::Var(_, id)
+                if id.name == "curry"
+                    || id.name == "Function::curry"
+                    || id.qualified_name.as_deref() == Some("Function::curry")
+        )
+    }
+
+    fn curry_source_captures(node: &TypedNode, out: &mut Vec<ResolvedId>) {
+        let mut add = |id: &ResolvedId| {
+            if !out
+                .iter()
+                .any(|existing| existing.unique_id == id.unique_id)
+            {
+                out.push(id.clone());
+            }
+        };
+        match &node.node {
+            TypedInner::Var(id) => add(id),
+            TypedInner::Capture(target, _) => Self::curry_source_captures(target, out),
+            TypedInner::Closure(_, captures, _) => captures.iter().for_each(&mut add),
+            _ => {}
+        }
+    }
+
+    fn check_function_curry(
+        &mut self,
+        span: &Span,
+        _func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        let [ResolvedRecordLitArg::Positional(source)] = args else {
+            return Err(TypeError {
+                message: "Function::curry expects exactly one positional callable".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        if matches!(source, Resolved::App(..)) {
+            return Err(TypeError {
+                message: "Function::curry requires a function value, not a function call".into(),
+                span: self.resolved_span(source).clone(),
+                hint: Some(
+                    "Use `&f`, `&Type::method`, a closure, or a bound callable value.".into(),
+                ),
+            });
+        }
+
+        let trait_capture = match source {
+            Resolved::Capture(_, target, _) => self.trait_method_ref(target).is_some(),
+            _ => false,
+        };
+        let typed_source = if trait_capture {
+            // Trait helper captures need a callable context to resolve their
+            // receiver. The current trait-helper surface used by Function is
+            // binary; the resulting signature is then validated below.
+            let expected = Ty::Func(
+                vec![self.env.fresh_tyvar(), self.env.fresh_tyvar()],
+                Box::new(self.env.fresh_tyvar()),
+            );
+            self.check_node_with_expected(source, Some(&expected))?
+        } else {
+            self.check_node(source)?
+        };
+        let source_ty = self.resolve_ty(&typed_source.ty);
+        let (params, ret) = match &source_ty {
+            Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
+            // A named function is only a valid curry input through an explicit
+            // capture. A bare function name must retain the language's existing
+            // function-value restriction.
+            Ty::UserFunc { .. } | Ty::BuiltinFunc { .. } => {
+                return Err(TypeError {
+                    message: "Function::curry requires an explicit function capture".into(),
+                    span: self.resolved_span(source).clone(),
+                    hint: Some(
+                        "Use `curry(&function)` or bind a closure/callable value first.".into(),
+                    ),
+                })
+            }
+            _ => {
+                return Err(TypeError {
+                    message: format!(
+                        "Function::curry requires a function value, got {}",
+                        self.ty_name(&source_ty)
+                    ),
+                    span: typed_source.span.clone(),
+                    hint: None,
+                })
+            }
+        };
+        if params.len() < 2 {
+            return Err(TypeError {
+                message: format!(
+                    "Function::curry requires a function with at least two arguments, got {}",
+                    params.len()
+                ),
+                span: typed_source.span.clone(),
+                hint: None,
+            });
+        }
+
+        let mut source_captures = Vec::new();
+        Self::curry_source_captures(&typed_source, &mut source_captures);
+        let mut parameter_ids = Vec::with_capacity(params.len());
+        for index in 0..params.len() {
+            parameter_ids.push(ResolvedId {
+                name: format!("__curry_arg_{index}"),
+                qualified_name: None,
+                symbol_info: None,
+                unique_id: Self::next_synthetic_range_uid(),
+                compiler_generated: true,
+                span: span.clone(),
+            });
+        }
+
+        let mut callable = typed_source;
+        let mut result_ty = ret;
+        for index in (0..params.len()).rev() {
+            let mut call_args = Vec::with_capacity(params.len());
+            for (arg_index, param_ty) in params.iter().enumerate() {
+                let arg_ty = self.resolve_ty(param_ty);
+                call_args.push(TypedNode {
+                    ty: arg_ty,
+                    span: span.clone(),
+                    node: TypedInner::Var(parameter_ids[arg_index].clone()),
+                });
+            }
+            if index < params.len() - 1 {
+                // The nested closure is already the value produced by the
+                // suffix of the chain; only the outermost body calls the
+                // original callable.
+                call_args.clear();
+            }
+            let body = if index == params.len() - 1 {
+                TypedNode {
+                    ty: self.resolve_ty(&result_ty),
+                    span: span.clone(),
+                    node: TypedInner::App(Box::new(callable.clone()), call_args),
+                }
+            } else {
+                callable
+            };
+            let mut captures = source_captures.clone();
+            captures.extend(parameter_ids[..index].iter().cloned());
+            let closure_ty = Ty::Func(
+                vec![self.resolve_ty(&params[index])],
+                Box::new(self.resolve_ty(&result_ty)),
+            );
+            callable = TypedNode {
+                ty: closure_ty,
+                span: span.clone(),
+                node: TypedInner::Closure(
+                    vec![TypedClosureParam {
+                        id: parameter_ids[index].clone(),
+                        ty: self.resolve_ty(&params[index]),
+                    }],
+                    captures,
+                    Box::new(body),
+                ),
+            };
+            result_ty = callable.ty.clone();
+        }
+        Ok(callable)
+    }
+
     fn check_function_on_with_expected(
         &mut self,
         span: &Span,
@@ -7542,6 +7709,9 @@ impl Checker {
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
+        if self.is_function_curry_callee(func) {
+            return self.check_function_curry(span, func, args);
+        }
         if let Some(typed) = self.try_check_process_intrinsic_app(span, func, args)? {
             return Ok(typed);
         }
