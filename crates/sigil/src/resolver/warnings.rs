@@ -234,7 +234,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 collect_node_usage(arg, usage);
             }
         }
-        Resolved::StructDef(_, _, _, _, _) | Resolved::RecordDef(_, _, _) => {}
+        Resolved::StructDef(_, _, _, _, _) | Resolved::RecordDef(_, _, _, _) => {}
         Resolved::DeferrorDef(_, _, _, show_expr) => collect_node_usage(show_expr, usage),
         Resolved::EnumDef(_, _, _, _, _) => {}
         Resolved::Def(_, _, _, params, _, _, body, _) => {

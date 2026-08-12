@@ -869,7 +869,7 @@ impl Checker {
             Resolved::StructDef(span, id, type_params, fields, _) => {
                 self.check_struct_def(span, id, type_params, fields)
             }
-            Resolved::RecordDef(span, id, fields) => self.check_record_def(span, id, fields),
+            Resolved::RecordDef(span, id, fields, _) => self.check_record_def(span, id, fields),
             Resolved::EnumDef(span, id, type_params, variants, attrs) => {
                 self.check_enum_def(span, id, type_params, variants, attrs)
             }
@@ -2195,7 +2195,7 @@ impl Checker {
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
             | Resolved::StructDef(span, ..)
-            | Resolved::RecordDef(span, _, _)
+            | Resolved::RecordDef(span, _, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
             | Resolved::EnumDef(span, _, _, _, _)
             | Resolved::Def(span, _, _, _, _, _, _, _)

@@ -1916,6 +1916,7 @@ impl Resolver {
         &mut self,
         stmts: Vec<Ast>,
     ) -> Result<Vec<Resolved>, ResolveError> {
+        let stmts = super::derive::expand_derive_annotations(stmts)?;
         let stmts = self.lower_impl_defs(stmts)?;
         self.explicit_module_imports = Self::collect_explicit_module_imports(&stmts);
         self.validate_auto_import_conflicts(&stmts)?;
@@ -2583,7 +2584,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::RecordDef(span, name, fields, _) => {
+            Ast::RecordDef(span, name, fields, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -2612,7 +2613,12 @@ impl Resolver {
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
-                Ok(Resolved::RecordDef(span, rid, rfields))
+                Ok(Resolved::RecordDef(
+                    span,
+                    rid,
+                    rfields,
+                    resolve_decl_attrs(&attrs),
+                ))
             }
 
             Ast::DeferrorDef(span, name, fields, show_expr, _) => {

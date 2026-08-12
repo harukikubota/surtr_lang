@@ -338,7 +338,7 @@ impl Checker {
                         .collect::<Vec<_>>(),
                     false,
                 )),
-                Resolved::RecordDef(_, id, _) => {
+                Resolved::RecordDef(_, id, _, _) => {
                     Some((&id.name, &id.span, TypeKind::Record, Vec::new(), false))
                 }
                 Resolved::DeferrorDef(_, id, _, _) => Some((
@@ -461,7 +461,7 @@ impl Checker {
                     self.env
                         .bind_var(id.unique_id, Ty::Struct(id.name.clone(), ty_fields));
                 }
-                Resolved::RecordDef(_, id, fields) => {
+                Resolved::RecordDef(_, id, fields, _) => {
                     let ty_fields = fields
                         .iter()
                         .map(|f| {
@@ -673,7 +673,7 @@ impl Checker {
         for stmt in stmts {
             match stmt {
                 Resolved::StructDef(_, id, _, fields, _)
-                | Resolved::RecordDef(_, id, fields)
+                | Resolved::RecordDef(_, id, fields, _)
                 | Resolved::DeferrorDef(_, id, fields, _) => {
                     decl_spans.insert(id.name.clone(), id.span.clone());
                     edges.entry(id.name.clone()).or_default();

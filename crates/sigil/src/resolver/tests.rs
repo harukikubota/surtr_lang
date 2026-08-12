@@ -2422,6 +2422,26 @@ deftrait Eq {
 }
 
 #[test]
+fn derive_expands_struct_into_trait_impl_nodes() {
+    let resolved = parse_and_resolve(
+        r#"deftrait Eq {
+  def eq(self: Self, rhs: Self) -> Boolean
+}
+@derive Eq
+defstruct User { name: String }
+"#,
+    )
+    .expect("derive should resolve");
+
+    assert!(matches!(resolved[1], Resolved::StructDef(..)));
+    assert!(matches!(
+        resolved[2],
+        Resolved::TraitImplDef(_, ref trait_id, _, _, _, _)
+            if trait_id.name == "Eq"
+    ));
+}
+
+#[test]
 fn test_neq_helper_resolves_via_autoimport_trait() {
     let module_stages = vec![vec![staged_module(
         "Neq",
@@ -2736,7 +2756,7 @@ defrecord Point(x: Float, y: Float)"#,
     };
 
     let def_id = match &resolved[1] {
-        Resolved::RecordDef(_, id, _) => id.unique_id,
+        Resolved::RecordDef(_, id, _, _) => id.unique_id,
         _ => panic!("Expected RecordDef"),
     };
 
@@ -2799,7 +2819,7 @@ deferror NotFound(code: String) {
                     _ => Vec::new(),
                 },
                 Resolved::Def(_, id, _, _, _, _, _, _)
-                | Resolved::RecordDef(_, id, _)
+                | Resolved::RecordDef(_, id, _, _)
                 | Resolved::StructDef(_, id, ..)
                 | Resolved::DeferrorDef(_, id, _, _) => vec![id.unique_id],
                 _ => Vec::new(),
@@ -4266,7 +4286,7 @@ deferror Oops(reason: String) { reason }"#,
     }
 
     match &resolved[1] {
-        Resolved::RecordDef(_, id, _) => {
+        Resolved::RecordDef(_, id, _, _) => {
             let info = id.symbol_info.as_ref().expect("record should carry info");
             assert_eq!(info.identity, TypeIdentity::Record);
             assert!(info.capabilities.type_annotation);

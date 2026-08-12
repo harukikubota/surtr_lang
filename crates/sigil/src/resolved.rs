@@ -7,6 +7,7 @@ use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
 pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
     pub builtin: bool,
+    pub derives: Vec<String>,
     pub facet_path_kind: Option<Vec<String>>,
     pub hidden: bool,
     pub readonly: bool,
@@ -20,6 +21,7 @@ impl Default for ResolvedDeclAttrs {
         Self {
             doc: None,
             builtin: false,
+            derives: Vec::new(),
             facet_path_kind: None,
             hidden: false,
             readonly: false,
@@ -207,7 +209,7 @@ pub enum Resolved {
     ),
 
     /// Record definition (passed through for Scar)
-    RecordDef(Span, ResolvedId, Vec<ResolvedField>),
+    RecordDef(Span, ResolvedId, Vec<ResolvedField>, ResolvedDeclAttrs),
 
     /// Error type definition
     DeferrorDef(Span, ResolvedId, Vec<ResolvedField>, Box<Resolved>),

@@ -206,7 +206,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             }
         }
         Resolved::StructDef(_, _, _, _, _)
-        | Resolved::RecordDef(_, _, _)
+        | Resolved::RecordDef(_, _, _, _)
         | Resolved::DeferrorDef(_, _, _, _)
         | Resolved::EnumDef(_, _, _, _, _)
         | Resolved::ConstDef(_, _, _, _, _)
