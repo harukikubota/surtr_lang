@@ -4210,7 +4210,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             sigil::resolved::Resolved::StructDef(_, id, ..) if id.unique_id == use_uid => {
                 Some(format!("struct {}", id.name))
             }
-            sigil::resolved::Resolved::RecordDef(_, id, _) if id.unique_id == use_uid => {
+            sigil::resolved::Resolved::RecordDef(_, id, _, _) if id.unique_id == use_uid => {
                 Some(format!("record {}", id.name))
             }
             sigil::resolved::Resolved::DeferrorDef(_, id, _, _) if id.unique_id == use_uid => {
