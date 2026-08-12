@@ -89,34 +89,32 @@ fn format_type_params(type_params: &[TypeParam]) -> String {
 
 fn format_fun_signature(
     name: &str,
-    type_params: &[TypeParam],
+    _type_params: &[TypeParam],
     params: &[FunParam],
     ret_ty: &Option<AstTy>,
 ) -> String {
-    let type_params = format_type_params(type_params);
     let params = params
         .iter()
         .map(|param| format!("{}: {}", param.name, format_ast_ty(&param.ty)))
         .collect::<Vec<_>>()
         .join(", ");
     match ret_ty {
-        Some(ret) => format!("{name}{type_params}({params}) -> {}", format_ast_ty(ret)),
-        None => format!("{name}{type_params}({params})"),
+        Some(ret) => format!("{name}({params}) -> {}", format_ast_ty(ret)),
+        None => format!("{name}({params})"),
     }
 }
 
 fn format_extractor_signature(
     name: &str,
-    type_params: &[TypeParam],
+    _type_params: &[TypeParam],
     param: &ExtractorParam,
     ret_ty: &AstTy,
 ) -> String {
-    let type_params = format_type_params(type_params);
     let param = match &param.ty {
         Some(ty) => format!("{}: {}", param.name, format_ast_ty(ty)),
         None => param.name.clone(),
     };
-    format!("{name}{type_params}({param}) -> {}", format_ast_ty(ret_ty))
+    format!("{name}({param}) -> {}", format_ast_ty(ret_ty))
 }
 
 fn format_result_ctor_signature(name: &str, param_ty: &AstTy, ret_ty: &AstTy) -> String {

@@ -240,7 +240,7 @@ defmod Kernel {
   xldr(1)> match [1, 2] { [head, ..tail] => to_string(head), [] => "empty", }
   "1"
   """
-  @builtin defextractor uncons<$Head, $Tail>(term) -> Option<($Head, $Tail)>
+  @builtin defextractor uncons(term: $Tail) -> Option<($Head, $Tail)>
 
   @doc """
   Print a string to stdout.

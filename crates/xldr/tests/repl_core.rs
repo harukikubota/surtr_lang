@@ -4100,7 +4100,7 @@ fn core_sig_monad_operator_lists_user_defined_identity_impl() {
 }
 
 impl Identity {
-  def new<$T>(value: $T) -> Identity<$T> {
+  def new(value: $T) -> Identity<$T> {
     Identity { value: value }
   }
 }
@@ -4289,7 +4289,7 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
     let extractor_sig = signature_text(&engine.handle_line(":sig Range!()"));
     assert!(
         extractor_sig
-            .contains("defined:\n  Range::deconstruct<$A>(self: Range<$A>) -> Option<($A, $A)>"),
+            .contains("defined:\n  Range::deconstruct(self: Range<$A>) -> Option<($A, $A)>"),
         "{extractor_sig}"
     );
     assert!(

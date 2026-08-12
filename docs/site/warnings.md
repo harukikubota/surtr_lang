@@ -115,15 +115,15 @@ def main() -> Unit {
 
 ## Unused Type Parameter
 
-関数、extractor、struct、enum、trait、trait method、trait impl method の型引数が、引数型・戻り値型・field・variant payload・関連 method signature などの実際の型位置に現れない場合に警告します。
+struct、enum、trait、trait method、trait impl method の型引数が、field・variant payload・関連 method signature などの実際の型位置に現れない場合に警告します。通常関数には明示型引数がなく、signature slot の導入元が検証されます。
 
 ```surtr
-def id<$A, $Unused>(value: $A) -> $A {
+def id(value: $A) -> $A {
   value
 }
 ```
 
-`$A` は引数型と戻り値型で使われていますが、`$Unused` は使われていません。
+`$A` は引数型と戻り値型で使われています。通常の関数に未使用の明示型引数を置く構文はありません。
 
 型引数の bound だけでは使用とはみなしません。
 

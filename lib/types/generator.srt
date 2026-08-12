@@ -104,7 +104,7 @@ impl Generator {
   xldr(2)> Generator::to_list(gen)
   [1, 2, 4]
   """
-  def unfold<$UState, $UItem>(
+  def unfold(
     state: $UState,
     step: ($UState, Int -> Result<($UItem, $UState)>),
   ) -> Generator<$UState, $UItem> {
@@ -118,7 +118,7 @@ impl Generator {
   xldr(2)> Generator::next(g0)
   Ok((10, (1, [11, 12])))
   """
-  def next<$State, $Item>(
+  def next(
     gen: Generator<$State, $Item>,
   ) -> Result<($Item, Generator<$State, $Item>), NoneError> {
     current_idx = idx(gen)
@@ -136,7 +136,7 @@ impl Generator {
   xldr(3)> Generator::idx(g1)
   1
   """
-  def idx<$State, $Item>(gen: Generator<$State, $Item>) -> Int {
+  def idx(gen: Generator<$State, $Item>) -> Int {
     gen_idx(gen)
   }
 
@@ -146,7 +146,7 @@ impl Generator {
   xldr(1)> Generator::to_list(Generator::with_index(Generator::range(5, 7)))
   [(0, 5), (1, 6), (2, 7)]
   """
-  def with_index<$State, $Item>(
+  def with_index(
     gen: Generator<$State, $Item>,
   ) -> Generator<$State, (Int, $Item)> {
     start_idx = idx(gen)
@@ -161,7 +161,7 @@ impl Generator {
   xldr(2)> Generator::to_list(mapped)
   ["n=1", "n=2", "n=3"]
   """
-  def map<$State, $A, $B>(
+  def map(
     gen: Generator<$State, $A>,
     f: ($A -> $B),
   ) -> Generator<$State, $B> {
@@ -177,7 +177,7 @@ impl Generator {
   xldr(2)> Generator::take(Generator::range(1, 5), 0)
   []
   """
-  def take<$State, $Item>(gen: Generator<$State, $Item>, count: Int) -> List<$Item> {
+  def take(gen: Generator<$State, $Item>, count: Int) -> List<$Item> {
     List::take(to_list(gen), count)
   }
 
@@ -187,7 +187,7 @@ impl Generator {
   xldr(1)> Generator::to_list(Generator::range(1, 3))
   [1, 2, 3]
   """
-  def to_list<$State, $Item>(gen: Generator<$State, $Item>) -> List<$Item> {
+  def to_list(gen: Generator<$State, $Item>) -> List<$Item> {
     gen_items(gen)
   }
 
@@ -198,7 +198,7 @@ impl Generator {
   xldr(1)> Generator::to_list(Generator::iterate(1, 5, {|x| x * 2}))
   [1, 2, 4, 8, 16]
   """
-  def iterate<$A>(seed: $A, count: Int, step: ($A -> $A)) -> Generator<$A, $A> {
+  def iterate(seed: $A, count: Int, step: ($A -> $A)) -> Generator<$A, $A> {
     unfold(seed, {|current, emitted|
       if(emitted < count, Ok((current, step(current))), Err(NoneError))
     })

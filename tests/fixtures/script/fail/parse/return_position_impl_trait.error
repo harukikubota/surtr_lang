@@ -1,2 +1,2 @@
 phase: parse
-contains: return-position `impl Trait` is not supported
+contains: Anonymous `impl Trait` types are not supported

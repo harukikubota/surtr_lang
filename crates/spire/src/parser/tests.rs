@@ -1421,22 +1421,19 @@ fn test_doc_attributes_parse_for_trait_impl_methods() {
 }
 
 #[test]
-fn test_function_def_parses_bounded_type_params() {
-    let ast = parse("def add<$N: Describable>(x: $N, y: $N) -> $N { x }").unwrap();
+fn test_function_def_rejects_explicit_type_params() {
+    let err = parse("def add<$N: Describable>(x: $N, y: $N) -> $N { x }")
+        .expect_err("regular definitions must not accept explicit type parameters");
+    assert!(err
+        .to_string()
+        .contains("must not declare explicit type parameters"));
+}
 
-    match ast.as_slice() {
-        [Ast::Def(_, name, type_params, params, Some(AstTy::Named(_, ret_ty)), _, _, _)] => {
-            assert_eq!(name, "add");
-            assert_eq!(type_params.len(), 1);
-            assert_eq!(type_params[0].name, "$N");
-            assert_eq!(type_params[0].bound.as_deref(), Some("Describable"));
-            assert_eq!(params.len(), 2);
-            assert!(matches!(params[0].ty, AstTy::Named(_, ref ty) if ty == "$N"));
-            assert!(matches!(params[1].ty, AstTy::Named(_, ref ty) if ty == "$N"));
-            assert_eq!(ret_ty, "$N");
-        }
-        _ => panic!("Expected Def with bounded type parameters"),
-    }
+#[test]
+fn test_defmod_rejects_type_params() {
+    let err = parse("defmod MyFun<$A> { def id(value: $A) -> $A { value } }")
+        .expect_err("defmod must not accept type parameters");
+    assert!(!err.to_string().is_empty());
 }
 
 #[test]
@@ -1494,21 +1491,17 @@ fn test_trait_impl_parses_trait_type_args() {
 }
 
 #[test]
-fn test_function_def_parses_parameter_position_impl_trait() {
-    let ast = parse("def abs(x: impl Describable) -> Int { 0 }").unwrap();
+fn test_function_def_rejects_impl_trait_parameter() {
+    let err = parse("def abs(x: impl Describable) -> Int { 0 }")
+        .expect_err("anonymous impl Trait parameters must be rejected");
+    assert!(err.to_string().contains("Anonymous `impl Trait` types"));
+}
 
-    match ast.as_slice() {
-        [Ast::Def(_, name, type_params, params, Some(AstTy::Named(_, ret_ty)), _, _, _)] => {
-            assert_eq!(name, "abs");
-            assert!(type_params.is_empty());
-            assert_eq!(params.len(), 1);
-            assert!(
-                matches!(params[0].ty, AstTy::ImplTrait(_, ref trait_name) if trait_name == "Describable")
-            );
-            assert_eq!(ret_ty, "Int");
-        }
-        _ => panic!("Expected Def with impl Trait parameter"),
-    }
+#[test]
+fn test_impl_target_rejects_impl_trait_components() {
+    let err = parse("impl Compare for (impl Compare, impl Conpare) { }")
+        .expect_err("anonymous impl Trait target components must be rejected");
+    assert!(err.to_string().contains("Anonymous `impl Trait` types"));
 }
 
 #[test]
@@ -1517,13 +1510,13 @@ fn test_return_position_impl_trait_is_rejected() {
         .expect_err("return-position impl Trait should be rejected");
     assert!(err
         .message()
-        .contains("return-position `impl Trait` is not supported"));
+        .contains("Anonymous `impl Trait` types are not supported"));
 }
 
 #[test]
 fn test_function_where_clause_parses_multiple_bounds() {
     let ast = parse(
-        r#"def append<$A>(left: $A, right: $A) -> $A
+        r#"def append(left: $A, right: $A) -> $A
 where
   $A: Eq + Concat
 {

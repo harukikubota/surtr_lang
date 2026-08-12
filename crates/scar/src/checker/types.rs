@@ -23,10 +23,6 @@ impl<'a> SignatureTyMode<'a> {
     fn allows_user_generic_fallback(self) -> bool {
         !matches!(self, SignatureTyMode::Builtin)
     }
-
-    fn rejects_impl_trait_in_error_marker(self) -> bool {
-        matches!(self, SignatureTyMode::Normal)
-    }
 }
 
 impl Checker {
@@ -941,27 +937,11 @@ impl Checker {
             AstTy::Named(span, name) if Self::surface_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
             }
-            AstTy::ImplTrait(_, trait_name) => {
-                if context == TypeSyntaxContext::ErrorMarker
-                    && mode.rejects_impl_trait_in_error_marker()
-                {
-                    return Err(TypeError {
-                        message:
-                            "The error marker E in Result<T, E> must be a deferror-defined type."
-                                .into(),
-                        span: Self::ast_ty_span(ast_ty).clone(),
-                        hint: None,
-                    });
-                }
-                if matches!(mode, SignatureTyMode::Builtin) {
-                    return self.resolve_ast_ty_in_context(ast_ty, context);
-                }
-                let fresh = self.env.fresh_tyvar();
-                if let Ty::Var(var) = fresh {
-                    self.register_tyvar_bound(var, trait_name);
-                }
-                Ok(fresh)
-            }
+            AstTy::ImplTrait(_, _) => Err(TypeError {
+                message: "Anonymous `impl Trait` types are not supported; introduce a named type slot and constrain it with `where`".into(),
+                span: Self::ast_ty_span(ast_ty).clone(),
+                hint: Some("Use a named `$T` type slot and add `$T: Trait` to the `where` clause.".into()),
+            }),
             AstTy::Generic(_, name, args) if name == "Self" && mode.self_ty().is_some() => {
                 let args = args
                     .iter()

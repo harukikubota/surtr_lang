@@ -1745,6 +1745,12 @@ impl Parser<'_> {
         };
         let (name, _) = self.expect_ident()?;
         let type_params = self.parse_decl_type_params()?;
+        if !type_params.is_empty() {
+            return Err(ParseError::syntax(
+                "Regular function definitions must not declare explicit type parameters; introduce type slots from the signature instead",
+                type_params[0].span.clone(),
+            ));
+        }
         let mut params = Vec::new();
 
         if matches!(self.peek(), Token::Unit) {
@@ -1898,7 +1904,7 @@ impl Parser<'_> {
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
             return Err(ParseError::syntax(
-                "@builtin impl method declarations do not accept method type parameters",
+                "Impl methods must not declare explicit type parameters; introduce type slots from the signature instead",
                 type_params[0].span.clone(),
             ));
         }
@@ -2443,6 +2449,12 @@ impl Parser<'_> {
         };
         let (name, _) = self.expect_ident()?;
         let type_params = self.parse_decl_type_params()?;
+        if !type_params.is_empty() {
+            return Err(ParseError::syntax(
+                "Regular function definitions must not declare explicit type parameters; introduce type slots from the signature instead",
+                type_params[0].span.clone(),
+            ));
+        }
         let mut params = Vec::new();
         let self_context = Some("Self".to_string());
 
@@ -3056,6 +3068,12 @@ impl Parser<'_> {
             self.ensure_non_const_identifier(&name, name_span.clone(), "Function name")?;
         }
         let type_params = self.parse_decl_type_params()?;
+        if !type_params.is_empty() {
+            return Err(ParseError::syntax(
+                "Regular function definitions must not declare explicit type parameters; introduce type slots from the signature instead",
+                type_params[0].span.clone(),
+            ));
+        }
         let mut params = Vec::new();
         if matches!(self.peek(), Token::Unit) {
             self.advance();
@@ -3134,6 +3152,12 @@ impl Parser<'_> {
             self.ensure_non_const_identifier(&name, name_span.clone(), "Extractor name")?;
         }
         let type_params = self.parse_decl_type_params()?;
+        if !type_params.is_empty() {
+            return Err(ParseError::syntax(
+                "Extractor definitions must not declare explicit type parameters; introduce type slots from the signature instead",
+                type_params[0].span.clone(),
+            ));
+        }
         if Self::is_constructor_style_name(&name) {
             return Err(ParseError::syntax(
                 format!(

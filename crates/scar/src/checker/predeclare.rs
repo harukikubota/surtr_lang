@@ -2457,12 +2457,24 @@ impl Checker {
                         .bounds
                         .iter()
                         .map(|bound| match bound {
-                            TypedWhereConstraintRhs::Trait(id) => format!("trait:{}", id.qualified_name.as_deref().unwrap_or(&id.name)),
+                            TypedWhereConstraintRhs::Trait(id) => format!(
+                                "trait:{}",
+                                id.qualified_name.as_deref().unwrap_or(&id.name)
+                            ),
                             TypedWhereConstraintRhs::TypeConstructor { slots, .. } => format!(
                                 "type:{}",
-                                slots.iter().map(Self::ast_ty_key).collect::<Vec<_>>().join(",")
+                                slots
+                                    .iter()
+                                    .map(Self::ast_ty_key)
+                                    .collect::<Vec<_>>()
+                                    .join(",")
                             ),
-                            TypedWhereConstraintRhs::TraitSlot { trait_id, slot_name, slot_ordinal, .. } => format!(
+                            TypedWhereConstraintRhs::TraitSlot {
+                                trait_id,
+                                slot_name,
+                                slot_ordinal,
+                                ..
+                            } => format!(
                                 "slot:{}:{}:{}",
                                 trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name),
                                 slot_name,
@@ -2509,14 +2521,17 @@ impl Checker {
                 });
             }
             let parent_impl_key = (parent_key.clone(), child_impl.target_name.clone());
-            let parent_impl = self.trait_impls.get(&parent_impl_key).ok_or_else(|| TypeError {
-                message: format!(
-                    "Trait impl {} for {} requires parent impl {} for the same target",
-                    child_impl.trait_id.name, child_impl.target_name, parent.name
-                ),
-                span: child_impl.trait_id.span.clone(),
-                hint: None,
-            })?;
+            let parent_impl = self
+                .trait_impls
+                .get(&parent_impl_key)
+                .ok_or_else(|| TypeError {
+                    message: format!(
+                        "Trait impl {} for {} requires parent impl {} for the same target",
+                        child_impl.trait_id.name, child_impl.target_name, parent.name
+                    ),
+                    span: child_impl.trait_id.span.clone(),
+                    hint: None,
+                })?;
             if child_impl.constructor_slot_positions != parent_impl.constructor_slot_positions {
                 return Err(TypeError {
                     message: format!(
@@ -2618,8 +2633,20 @@ impl Checker {
                         },
                     );
                 }
-                Resolved::Def(_, id, type_params, params, ret_ty, where_clause, _, _) => {
+                Resolved::Def(_, id, type_params, params, ret_ty, where_clause, _, attrs) => {
                     self.register_function_id(id);
+                    if !attrs.builtin
+                        && Self::split_impl_method_name(
+                            id.qualified_name.as_deref().unwrap_or(&id.name),
+                        )
+                        .is_none()
+                    {
+                        Self::reject_return_only_signature_slots(
+                            params,
+                            ret_ty.as_ref(),
+                            &id.span,
+                        )?;
+                    }
                     let mut tyvars = HashMap::new();
                     self.seed_signature_type_params(type_params, &mut tyvars);
                     let param_tys = params

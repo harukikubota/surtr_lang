@@ -181,11 +181,17 @@ deftrait Describable {
   def describe(self: Self) -> String
 }
 
-def render<$T: Describable>(x: $T) -> String {
+def render(x: $T) -> String
+where
+  $T: Describable
+{
   Describable::describe(x)
 }
 
-def show_value(x: impl Show) -> String {
+def show_value(x: $T) -> String
+where
+  $T: Show
+{
   to_string(x)
 }
 ```
@@ -198,9 +204,9 @@ def show_value(x: impl Show) -> String {
 - `+`, `-`, `*` は `Add` / `Sub` / `Mul` の dispatch
 - `Compare` は三値比較の正本で、`< <= > >=` も `Compare` を前提に動く
 - trait 側の型引数を使う実装は `impl Trait<Concrete> for Type { ... }` の形で書く
-- `impl Trait` は parameter 位置だけで使える
-- 戻り値でも同じ型を使いたいときは `<$T: Describable>` のように名前付き bound を使う
-- `-> impl Trait` と `where ...` はまだ使えない
+- 匿名 `impl Trait` 型は使わず、名前付き型変数と `where` clause で制約を書く
+- 戻り値でも同じ型を使いたいときは signature slot と `where $T: Describable` を使う
+- 匿名 `impl Trait` 型は parameter / return / generic argument / impl target component のいずれでも禁止。`where ...` で名前付き型 slot に制約を書く
 
 target type を明示する trait では、compiler-reserved な witness type
 値引数だけでは決まらない target type は、明示型引数で指定します。

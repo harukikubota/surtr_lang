@@ -10,7 +10,7 @@ def add4(a: Int, b: Int, c: Int, d: Int) -> Int {
   a + b + c + d
 }
 
-def make_pair<$A, $B>(left: $A, right: $B) -> ($A, $B) {
+def make_pair(left: $A, right: $B) -> ($A, $B) {
   (left, right)
 }
 

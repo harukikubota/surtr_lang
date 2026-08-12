@@ -1441,7 +1441,7 @@ Facet::view(Expr.Add, expr)"#,
     #[test]
     fn bounded_add_generic_helpers_emit_specialized_functions() {
         let bytecode = codegen_source(
-            r#"def double<$N: Add>(x: $N) -> $N { x + x }
+            r#"def double(x: $N) -> $N where $N: Add { x + x }
 a = double(21)
 b = double(1.5)"#,
         );

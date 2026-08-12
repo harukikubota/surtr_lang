@@ -137,16 +137,10 @@ impl Parser<'_> {
         }
 
         if matches!(self.peek(), Token::Impl) {
-            self.advance();
-            self.skip_newlines();
-            let (trait_name, trait_span) = self.expect_qualified_ident(2, "trait")?;
-            return Ok(self.parse_optional_type_suffix(AstTy::ImplTrait(
-                Span {
-                    start: sp.start,
-                    end: trait_span.end,
-                },
-                trait_name,
-            )));
+            return Err(ParseError::syntax(
+                "Anonymous `impl Trait` types are not supported; introduce a named type slot and constrain it with `where`",
+                sp,
+            ));
         }
 
         // Named type, possibly with type args: Result<Int>, List<Int>, Option<Int>, ...

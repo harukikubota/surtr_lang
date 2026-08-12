@@ -108,11 +108,10 @@ match expr {
 - trait 宣言は `deftrait Name<$T, ...> { ... }` のように型引数を取ってよい
 - trait 実装は `impl Trait for Type { ... }`
 - trait 実装は `impl Trait<Concrete, ...> for Type { ... }` の形も取れる
-- generic callable は `identity::<Int>(1)` のように型引数を明示でき、capture は `&identity::<Int>` と書ける
-- trait helper の明示型引数は trait/function generic のみを対象とし、`Self` は値引数または期待 callable 型から推論する
+- 通常 callable は型引数を明示できない。型スロットは signature の引数型・receiver 型から推論する
+- `::<Int>` は `try_from::<Int>(value)` のような Trait helper の target specialization にだけ使える。`Self` は値引数または期待 callable 型から推論する
 - trait は method のみを持つ
-- `impl Trait` は parameter 位置のみで使える
-- `-> impl Trait` は未対応
+- 匿名 `impl Trait` 型は使えず、名前付き型変数と `where` clause で制約する
 - `where` clause は宣言・trait・impl に制約を追加する
 - `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
 - 数値 helper は `Int::abs` / `Float::safe_div` のような concrete type owner surface として提供する
@@ -644,7 +643,7 @@ defmod Bootstrap {
 - default method body
 - trait inheritance
 - multi-trait bounds
-- return-position `impl Trait`
+- 匿名 `impl Trait` 型（parameter / return / generic argument / impl target component）
 - `where` clauses
 - 型エイリアス / NewType
 - マクロシステム拡張

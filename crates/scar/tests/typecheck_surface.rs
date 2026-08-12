@@ -465,12 +465,12 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         where_constraint_kinds_survive_in_typed_metadata as fn(),
     ),
     (
-        "rigid_generic_return_rejects_concrete_body",
-        rigid_generic_return_rejects_concrete_body as fn(),
+        "return_only_signature_slots_are_rejected",
+        return_only_signature_slots_are_rejected as fn(),
     ),
     (
-        "signature_generics_are_rigid_while_definition_body_is_checked",
-        signature_generics_are_rigid_while_definition_body_is_checked as fn(),
+        "signature_slots_are_checked_before_definition_bodies",
+        signature_slots_are_checked_before_definition_bodies as fn(),
     ),
     (
         "named_args_user_function_calls_typecheck_inside_script_module_scope",
@@ -2360,7 +2360,7 @@ fn facet_put_rebuilds_unique_generic_named_type() {
   value: $A,
 }
 impl Box {
-  def new<$A>(value: $A) -> Box<$A> { Box { value: value } }
+  def new(value: $A) -> Box<$A> { Box { value: value } }
 }
 updated = Facet::put(Box.value, Box(1), "one")"#,
         RuntimeSourcePolicy::script(),
@@ -2375,7 +2375,7 @@ fn facet_put_rejects_repeated_generic_named_type() {
   right: $A,
 }
 impl Pair {
-  def new<$A>(left: $A, right: $A) -> Pair<$A> { Pair { left: left, right: right } }
+  def new(left: $A, right: $A) -> Pair<$A> { Pair { left: left, right: right } }
 }
 Facet::put(Pair.left, Pair(1, 2), "one")"#,
         RuntimeSourcePolicy::script(),
@@ -3226,7 +3226,7 @@ fn generic_struct_single_type_param_typechecks() {
   value: $A,
 }
 impl Box {
-  def new<$A>(value: $A) -> Box<$A> {
+  def new(value: $A) -> Box<$A> {
     Box { value: value }
   }
 }
@@ -3259,7 +3259,7 @@ fn generic_struct_two_type_params_typecheck() {
   right: $B,
 }
 impl Pair {
-  def new<$A, $B>(left: $A, right: $B) -> Pair<$A, $B> {
+  def new(left: $A, right: $B) -> Pair<$A, $B> {
     Pair { left: left, right: right }
   }
 }
@@ -3488,7 +3488,7 @@ where
 {
   def mark(self: Self) -> Self
   where
-    $T: Marker
+    Self: Marker
   {
     self
   }
@@ -3559,7 +3559,7 @@ impl Default for String {
   }
 }
 
-def make() -> $A
+def make(seed: $A) -> $A
 where
   $A: Default
 {
@@ -3568,13 +3568,13 @@ where
 "#;
 
     typecheck_with_rules(
-        &format!("{source}\nvalue: String = make()"),
+        &format!("{source}\nvalue: String = make(\"seed\")"),
         RuntimeSourcePolicy::script(),
     )
     .expect("a call target with the declared where-bound implementation should typecheck");
 
     let err = typecheck_with_rules(
-        &format!("{source}\nvalue: Int = make()"),
+        &format!("{source}\nvalue: Int = make(1)"),
         RuntimeSourcePolicy::script(),
     )
     .expect_err("the generic call must retain and enforce its where bound");
@@ -3885,44 +3885,37 @@ impl Keep for Int {
     );
 }
 
-fn rigid_generic_return_rejects_concrete_body() {
+fn return_only_signature_slots_are_rejected() {
     let err = typecheck_with_rules(
         r#"def nil() -> $A {
   ""
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("a concrete body must not satisfy a rigid generic return type");
-    assert!(
-        err.message.contains("expected $") && err.message.contains("got String"),
-        "unexpected error: {}",
-        err.message
-    );
+    .expect_err("a return-only signature slot must be rejected");
+    assert!(err.message.contains("appears only in the return type"));
 
     typecheck_with_builtin_prelude(r#"def id(value: $A) -> $A { value }"#);
 }
 
-fn signature_generics_are_rigid_while_definition_body_is_checked() {
+fn signature_slots_are_checked_before_definition_bodies() {
     let err = typecheck_with_rules(
         r#"def wrong(value: $A) -> $B {
   value
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("independent signature generics must not unify in the definition body");
-    assert!(
-        err.message.contains("expected $") && err.message.contains(", got $"),
-        "unexpected error: {}",
-        err.message
-    );
+    .expect_err("a return-only signature slot must be rejected before body checking");
+    assert!(err.message.contains("appears only in the return type"));
 
-    typecheck_with_rules(
+    let err = typecheck_with_rules(
         r#"def identity(value: $A) -> $A { value }
 
 def gen_nil() -> List<$A> { [] }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect("matching rigid generics and generic container slots remain valid");
+    .expect_err("a return-only signature slot must be rejected");
+    assert!(err.message.contains("appears only in the return type"));
 }
 
 fn named_args_user_function_calls_typecheck_inside_script_module_scope() {
@@ -5286,7 +5279,7 @@ fn closure_param_annotation_can_reference_outer_generic_type_param() {
 
 fn generic_first_can_inline_tuple_rebuild_with_closure_param_annotation() {
     let typed = typecheck_with_builtin_prelude(
-        r#"def first(f: ($A -> $C)) -> (($A, $B) -> ($C, $B)) {
+        r#"def first(f: ($A -> $C), seed: $B) -> (($A, $B) -> ($C, $B)) {
   {|pair: ($A, $B)|
     (left, right) = pair
     (f(left), right)
@@ -5508,7 +5501,7 @@ fn generic_struct_bare_annotation_requires_type_args() {
 }
 boxed: Box = Box(1)
 impl Box {
-  def new<$A>(value: $A) -> Box<$A> {
+  def new(value: $A) -> Box<$A> {
     Box { value: value }
   }
 }"#,
@@ -5525,7 +5518,7 @@ fn generic_struct_arity_mismatch_is_rejected() {
 }
 pair: Pair<Int> = Pair(1, 2)
 impl Pair {
-  def new<$A, $B>(left: $A, right: $B) -> Pair<$A, $B> {
+  def new(left: $A, right: $B) -> Pair<$A, $B> {
     Pair { left: left, right: right }
   }
 }"#,
@@ -5990,7 +5983,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
     }
 
     let typed = typecheck_with_builtin_prelude(
-        r#"def double<$N: Add>(x: $N) -> $N { x + x }
+        r#"def double(x: $N) -> $N where $N: Add { x + x }
 a = double(21)
 b = double(1.5)"#,
     );
@@ -6121,7 +6114,7 @@ fn generic_struct_constructor_calls_remain_polymorphic_within_one_source() {
   value: $A,
 }
 impl Box {
-  def new<$A>(value: $A) -> Box<$A> {
+  def new(value: $A) -> Box<$A> {
     Box { value: value }
   }
 }
@@ -7563,9 +7556,7 @@ value = Result::tap_err(Err(NoneError), id(handler))"#,
 #[test]
 fn explicit_type_arguments_specialize_functions_trait_calls_and_captures() {
     let typed = typecheck_with_builtin_prelude(
-        r#"def identity(value: $A) -> $A { value }
-
-deftrait Convert<$To> {
+        r#"deftrait Convert<$To> {
   def convert(self: Self) -> $To
 }
 
@@ -7573,20 +7564,24 @@ impl Convert<Int> for String {
   def convert(self: String) -> Int { 1 }
 }
 
-number: Int = identity::<Int>(1)
-identity_fn: (Int -> Int) = &identity::<Int>
 converted: Int = Convert::convert::<Int>("")
 convert_fn: (String -> Int) = &Convert::convert::<Int>
 again: Int = convert_fn("")"#,
     );
     assert!(!typed.is_empty());
+}
 
+#[test]
+fn explicit_type_arguments_are_rejected_for_regular_callables() {
     let resolved = resolve_with_builtin_prelude(
         r#"def identity(value: $A) -> $A { value }
-bad: String = identity::<Int>(1)"#,
+bad: Int = identity::<Int>(1)"#,
     );
-    let err = typecheck(resolved).expect_err("explicit Int must not satisfy String");
-    assert!(err.message.contains("expected String, got Int"), "{err:?}");
+    let err = typecheck(resolved).expect_err("regular callables must reject explicit arguments");
+    assert!(
+        err.message.contains("only allowed for trait helpers"),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -7616,17 +7611,17 @@ fn explicit_function_type_arguments_follow_signature_order() {
   (left, right)
 }
 
-value: (Int, String) = pair::<Int, String>(1, "ok")"#,
+value: (Int, String) = pair(1, "ok")"#,
         RuntimeSourcePolicy::script(),
     )
     .expect("implicit generic slots should follow their first signature appearance");
 
     typecheck_with_rules(
-        r#"def reversed<$B, $A>(left: $A, right: $B) -> ($A, $B) {
+        r#"def reversed(left: $A, right: $B) -> ($A, $B) {
   (left, right)
 }
 
-value: (String, Int) = reversed::<Int, String>("ok", 1)"#,
+value: (String, Int) = reversed("ok", 1)"#,
         RuntimeSourcePolicy::script(),
     )
     .expect("declared generic slots should follow their declaration order");

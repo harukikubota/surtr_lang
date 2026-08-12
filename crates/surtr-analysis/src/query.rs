@@ -767,7 +767,12 @@ mod tests {
     #[test]
     fn reject_impl_trait_query_types() {
         let err = parse_command_query("show(impl Show)").expect_err("query should fail");
-        assert!(err.message().contains("concrete type"), "{}", err.message());
+        assert!(
+            err.message()
+                .contains("Unsupported command query argument `impl Show`"),
+            "{}",
+            err.message()
+        );
     }
 
     #[test]

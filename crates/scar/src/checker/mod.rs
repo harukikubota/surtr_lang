@@ -2291,6 +2291,34 @@ impl Checker {
         used
     }
 
+    fn reject_return_only_signature_slots(
+        params: &[ResolvedFunParam],
+        ret_ty: Option<&AstTy>,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let mut parameter_slots = HashSet::new();
+        for param in params {
+            Self::collect_ast_ty_type_params(&param.ty, &mut parameter_slots);
+        }
+        let mut return_slots = HashSet::new();
+        if let Some(ret_ty) = ret_ty {
+            Self::collect_ast_ty_type_params(ret_ty, &mut return_slots);
+        }
+        if let Some(name) = return_slots.difference(&parameter_slots).next().cloned() {
+            return Err(TypeError {
+                message: format!(
+                    "Signature type slot {name} appears only in the return type and has no introduction site"
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Introduce the slot in an argument or receiver type, or declare it as a trait/constructor slot."
+                        .into(),
+                ),
+            });
+        }
+        Ok(())
+    }
+
     fn collect_ast_ty_type_params(ty: &AstTy, used: &mut HashSet<String>) {
         match ty {
             AstTy::Named(_, name) => {

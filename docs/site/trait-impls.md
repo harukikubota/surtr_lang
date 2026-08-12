@@ -102,8 +102,8 @@ xldr(2)>
 
 ## 躓きやすいポイント
 
-- `impl Trait` は parameter 位置だけで、`-> impl Trait` はまだ使えません。
-- `where` clause と multi-trait bound はまだ使えません。
+- 匿名 `impl Trait` 型は使わず、名前付き型変数と `where` clause で制約します。
+- `where` clause と multi-trait bound は signature slot の制約として使えます。
 - `+`, `-`, `*` は `Add` / `Sub` / `Mul` の dispatch です。
 - `|*>`, `|*|`, `|>=` はそれぞれ `Functor::fmap`, `Applicative::ap`, `Monad::bind` の dispatch です。
 - `|*|` は未カリー化 callable を暗黙変換しません。複数引数では `curry()` を明示します。

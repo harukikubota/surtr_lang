@@ -35,16 +35,19 @@ inc_fn: (Int -> Int) = &inc
 
 ## generic annotation
 
-generic parameter は `$` 付きで書きます。
+signature slot は `$` 付きで書きます。通常の `def` に型引数リストは書きません。
 
 ```surtr
-def id<$A>(value: $A) -> $A { value }
+def id(value: $A) -> $A { value }
 ```
 
 trait bound を付けるときは次の形です。
 
 ```surtr
-def twice<$N: Add>(x: $N) -> $N {
+def twice(x: $N) -> $N
+where
+  $N: Add
+{
   Add::add(x, x)
 }
 ```
@@ -65,20 +68,18 @@ def parse_bool(text: String) -> Result<Boolean> {
 
 補助表記として `Result<T, E>` が現れることがありますが、builtin type head の中心は `Result<T>` です。
 
-## `impl Trait` parameter
+## Trait 制約
 
-parameter 位置では `impl Trait` が使えます。
+匿名 `impl Trait` 型は使いません。名前付き signature slot と `where` clause で制約を記述します。
 
 ```surtr
-def show_value(x: impl Show) -> String {
+def show_value(x: $T) -> String
+where
+  $T: Show
+{
   to_string(x)
 }
 ```
-
-現時点では次は未対応です。
-
-- `-> impl Trait`
-- `where` clause
 
 ## 明示型引数
 
@@ -89,7 +90,7 @@ text = from::<String>(42)
 number =? try_from::<Int>("42")
 ```
 
-明示型引数は runtime の値ではなく、呼び出し時の型入力です。通常関数、trait helper、capture で同じ構文を使えます。
+明示型引数は runtime の値ではなく、Trait helper の target specialization にだけ使う型入力です。通常関数の型スロットは signature から導入し、`id::<Int>(1)` や `&id::<Int>` は書けません。
 
 ## 空リスト
 

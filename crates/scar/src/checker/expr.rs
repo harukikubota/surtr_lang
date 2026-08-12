@@ -1002,62 +1002,14 @@ impl Checker {
                 hint: None,
             });
         };
-        let raw_ty = self
-            .env
-            .lookup_var(id.unique_id)
-            .cloned()
-            .ok_or_else(|| TypeError {
-                message: format!("Undefined callable: {}", id.name),
-                span: span.clone(),
-                hint: None,
-            })?;
-        let Ty::UserFunc {
-            fun_idx,
-            type_params,
-            params,
-            ret,
-        } = raw_ty
-        else {
-            return Err(TypeError {
-                message: format!("{} does not accept explicit type arguments", id.name),
-                span: span.clone(),
-                hint: None,
-            });
-        };
-        if args.len() != type_params.len() {
-            return Err(TypeError {
-                message: format!(
-                    "{} expects {} explicit type argument(s), got {}",
-                    id.name,
-                    type_params.len(),
-                    args.len()
-                ),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        let explicit_tys = args
-            .iter()
-            .map(|arg| self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General))
-            .collect::<Result<Vec<_>, _>>()?;
-        let mapping = type_params
-            .iter()
-            .copied()
-            .zip(explicit_tys)
-            .collect::<HashMap<_, _>>();
-        let specialized = Ty::UserFunc {
-            fun_idx,
-            type_params: Vec::new(),
-            params: params
-                .iter()
-                .map(|param| self.substitute_ty_with_mapping(param, &mapping))
-                .collect(),
-            ret: Box::new(self.substitute_ty_with_mapping(ret.as_ref(), &mapping)),
-        };
-        Ok(TypedNode {
-            ty: specialized,
+        let _ = args;
+        Err(TypeError {
+            message: format!(
+                "{} is a regular callable; explicit type arguments are only allowed for trait helpers",
+                id.name
+            ),
             span: span.clone(),
-            node: TypedInner::Var(id.clone()),
+            hint: Some("Use the argument and expected result types for ordinary signature slots.".into()),
         })
     }
 

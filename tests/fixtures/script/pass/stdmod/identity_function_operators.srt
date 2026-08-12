@@ -3,7 +3,7 @@ defstruct Identity<$T> {
 }
 
 impl Identity {
-  def new<$T>(value: $T) -> Identity<$T> {
+  def new(value: $T) -> Identity<$T> {
     Identity { value: value }
   }
 }

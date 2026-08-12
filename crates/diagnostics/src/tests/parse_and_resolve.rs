@@ -204,7 +204,7 @@ fn parse_error_spec_labels_return_position_impl_trait() {
 
 #[test]
 fn parse_error_spec_labels_where_clause_staging() {
-    let source = "def double<$N>(x: $N) -> $N where $N: Show { x + x }";
+    let source = "def double(x: $N) -> $N where $N: Show { x + x }";
     let spec = parse_error_spec(
         source,
         "`where` clauses are staged and not implemented yet",

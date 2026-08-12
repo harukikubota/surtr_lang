@@ -200,7 +200,7 @@ defstruct Box<$A> {
 }
 
 impl Box {
-  def new<$A: Compare>(value: $A) -> Box<$A> {
+  def new(value: $A) -> Box<$A> where $A: Compare {
     Box { value }
   }
 }
