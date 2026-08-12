@@ -1858,6 +1858,7 @@ impl Parser<'_> {
             DeclAttrs {
                 doc: attrs.doc,
                 builtin: attrs.builtin,
+                compiler_generated: attrs.compiler_generated,
                 derives: attrs.derives,
                 facet_path_kind: attrs.facet_path_kind,
                 auto_import: attrs.auto_import,

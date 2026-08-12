@@ -23,6 +23,7 @@ pub enum Visibility {
 pub struct DeclAttrs {
     pub doc: Option<String>,
     pub builtin: bool,
+    pub compiler_generated: bool,
     /// Traits requested by a single `@derive` annotation.
     pub derives: Vec<Symbol>,
     /// Compiler declaration for a Facet path kind. These declarations are
@@ -41,6 +42,7 @@ impl Default for DeclAttrs {
         Self {
             doc: None,
             builtin: false,
+            compiler_generated: false,
             derives: Vec::new(),
             facet_path_kind: None,
             auto_import: false,

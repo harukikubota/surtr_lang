@@ -1,0 +1,16 @@
+@derive Eq
+defstruct User {
+  value: Int,
+}
+
+impl User {
+  def new(value: Int) -> Self {
+    User { value: value }
+  }
+}
+
+impl Eq for User {
+  def eq(self: Self, rhs: Self) -> Boolean {
+    self.value == rhs.value
+  }
+}

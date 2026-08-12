@@ -1,8 +1,8 @@
 use super::*;
-use sindr::derive::{derive_trait_meta, DeriveGenerator};
+use sindr::derive::{derive_trait_meta, DeriveGenerator, DeriveTraitMeta, FieldTraitRequirement};
 use spire::ast::{
-    AstMatchArm, AstPath, AstPattern, AstTy, BinOp, DeclAttrs, EnumVariant, FunParam, Lit,
-    RecordLitArg, Span, TypeParam, WhereClause, WhereConstraint, WhereConstraintRhs,
+    AstMatchArm, AstPath, AstPattern, AstTy, DeclAttrs, EnumVariant, FunParam, Lit, RecordLitArg,
+    Span, TypeParam, WhereClause, WhereConstraint, WhereConstraintRhs,
 };
 
 pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
@@ -74,7 +74,7 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
             ),
             _ => unreachable!(),
         };
-        let mut generators = Vec::new();
+        let mut metas = Vec::new();
         let mut names = Vec::new();
         for derive_name in derives {
             let meta = derive_trait_meta(&derive_name).ok_or_else(|| ResolveError {
@@ -93,21 +93,26 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
                 });
             }
             names.push(meta.trait_name.as_str().to_string());
-            generators.push(meta.generator);
+            metas.push(meta);
         }
-        if generators.contains(&DeriveGenerator::NegatedEq)
+        if metas
+            .iter()
+            .any(|meta| meta.generator == DeriveGenerator::NegatedEq)
             && !names.iter().any(|name| name == "Eq")
         {
-            generators.insert(0, DeriveGenerator::StructuralEq);
+            metas.insert(
+                0,
+                derive_trait_meta("Eq").expect("Eq is registered with Neq"),
+            );
         }
-        for generator in generators {
+        for meta in metas {
             expanded.push(make_derived_impl(
                 &name,
                 &type_params,
                 &fields,
                 &variants,
                 &span,
-                generator,
+                &meta,
             ));
         }
     }
@@ -147,7 +152,16 @@ fn field(span: &Span, receiver: &str, name: &str) -> Ast {
 fn fold_and(span: &Span, values: Vec<Ast>) -> Ast {
     values
         .into_iter()
-        .reduce(|left, right| call(span, &["&&"], vec![left, right]))
+        .reduce(|left, right| {
+            Ast::App(
+                span.clone(),
+                Box::new(Ast::Var(span.clone(), "&&".into())),
+                vec![
+                    RecordLitArg::Positional(left),
+                    RecordLitArg::Positional(right),
+                ],
+            )
+        })
         .unwrap_or_else(|| Ast::Lit(span.clone(), Lit::Bool(true)))
 }
 
@@ -156,18 +170,24 @@ fn lexicographic(span: &Span, comparisons: Vec<Ast>) -> Ast {
         .into_iter()
         .rev()
         .reduce(|next, comparison| {
-            Ast::App(
+            Ast::Match(
                 span.clone(),
-                Box::new(path(span, &["Kernel", "if"])),
+                Box::new(comparison),
                 vec![
-                    RecordLitArg::Positional(Ast::BinOp(
-                        span.clone(),
-                        BinOp::Eq,
-                        Box::new(comparison.clone()),
-                        Box::new(path(span, &["Ordering", "Equal"])),
-                    )),
-                    RecordLitArg::Positional(next),
-                    RecordLitArg::Positional(comparison),
+                    AstMatchArm {
+                        pattern: AstPattern::Constructor(
+                            span.clone(),
+                            "Ordering::Equal".into(),
+                            Vec::new(),
+                        ),
+                        guard: None,
+                        body: next,
+                    },
+                    AstMatchArm {
+                        pattern: AstPattern::Var(span.clone(), "__derive_order".into()),
+                        guard: None,
+                        body: var(span, "__derive_order"),
+                    },
                 ],
             )
         })
@@ -254,6 +274,15 @@ fn enum_body(
             });
         }
     }
+    arms.push(AstMatchArm {
+        pattern: AstPattern::Wildcard(span.clone()),
+        guard: None,
+        body: match generator {
+            DeriveGenerator::StructuralEq => Ast::Lit(span.clone(), Lit::Bool(false)),
+            DeriveGenerator::LexicographicCompare => path(span, &["Ordering", "Equal"]),
+            _ => Ast::Lit(span.clone(), Lit::Bool(false)),
+        },
+    });
     Ast::Match(
         span.clone(),
         Box::new(Ast::TupleLiteral(
@@ -270,11 +299,11 @@ fn make_derived_impl(
     fields: &[(String, AstTy)],
     variants: &[EnumVariant],
     span: &Span,
-    generator: DeriveGenerator,
+    meta: &DeriveTraitMeta,
 ) -> Ast {
-    let (trait_name, method_name, return_type, body) = match generator {
+    let generator = meta.generator;
+    let (method_name, return_type, body) = match generator {
         DeriveGenerator::StructuralEq => (
-            "Eq",
             "eq",
             "Boolean",
             if variants.is_empty() {
@@ -296,7 +325,6 @@ fn make_derived_impl(
             },
         ),
         DeriveGenerator::NegatedEq => (
-            "Neq",
             "neq",
             "Boolean",
             call(
@@ -310,7 +338,6 @@ fn make_derived_impl(
             ),
         ),
         DeriveGenerator::LexicographicCompare => (
-            "Compare",
             "compare",
             "Ordering",
             if variants.is_empty() {
@@ -332,7 +359,6 @@ fn make_derived_impl(
             },
         ),
         DeriveGenerator::InspectShow => (
-            "Show",
             "to_string",
             "String",
             call(span, &["inspect"], vec![var(span, "self")]),
@@ -350,34 +376,38 @@ fn make_derived_impl(
                 .collect(),
         )
     };
-    let where_clause = match generator {
-        DeriveGenerator::InspectShow => None,
-        DeriveGenerator::StructuralEq | DeriveGenerator::NegatedEq => Some(WhereClause {
+    let where_clause = match &meta.field_requirement {
+        FieldTraitRequirement::None => None,
+        FieldTraitRequirement::RequiresTrait(trait_name) => Some(WhereClause {
             constraints: type_params
                 .iter()
                 .map(|param| WhereConstraint {
                     subject: named(span, &param.name),
-                    bounds: vec![WhereConstraintRhs::Trait(span.clone(), "Eq".into())],
-                    span: span.clone(),
-                })
-                .collect(),
-            span: span.clone(),
-        }),
-        DeriveGenerator::LexicographicCompare => Some(WhereClause {
-            constraints: type_params
-                .iter()
-                .map(|param| WhereConstraint {
-                    subject: named(span, &param.name),
-                    bounds: vec![WhereConstraintRhs::Trait(span.clone(), "Compare".into())],
+                    bounds: vec![WhereConstraintRhs::Trait(
+                        span.clone(),
+                        trait_name.as_str().into(),
+                    )],
                     span: span.clone(),
                 })
                 .collect(),
             span: span.clone(),
         }),
     };
+    let mut params = vec![FunParam {
+        name: "self".into(),
+        ty: named(span, "Self"),
+        span: span.clone(),
+    }];
+    if generator != DeriveGenerator::InspectShow {
+        params.push(FunParam {
+            name: "rhs".into(),
+            ty: named(span, "Self"),
+            span: span.clone(),
+        });
+    }
     Ast::TraitImplDef(
         span.clone(),
-        trait_name.into(),
+        meta.trait_name.as_str().into(),
         Vec::new(),
         target,
         where_clause,
@@ -385,23 +415,15 @@ fn make_derived_impl(
             span.clone(),
             method_name.into(),
             Vec::new(),
-            vec![
-                FunParam {
-                    name: "self".into(),
-                    ty: named(span, "Self"),
-                    span: span.clone(),
-                },
-                FunParam {
-                    name: "rhs".into(),
-                    ty: named(span, "Self"),
-                    span: span.clone(),
-                },
-            ],
+            params,
             Some(named(span, return_type)),
             None,
             Box::new(Ast::Block(span.clone(), vec![body])),
             DeclAttrs::default(),
         )],
-        DeclAttrs::default(),
+        DeclAttrs {
+            compiler_generated: true,
+            ..DeclAttrs::default()
+        },
     )
 }

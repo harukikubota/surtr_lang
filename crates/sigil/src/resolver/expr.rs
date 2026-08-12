@@ -2960,7 +2960,7 @@ impl Resolver {
                 target_ty,
                 where_clause,
                 methods,
-                _attrs,
+                attrs,
             ) => {
                 let (trait_uid, qualified_trait_name) =
                     self.resolve_trait_reference(&trait_name, &span)?;
@@ -2968,7 +2968,7 @@ impl Resolver {
                     name: trait_name.clone(),
                     qualified_name: Some(qualified_trait_name.clone()),
                     unique_id: trait_uid,
-                    compiler_generated: false,
+                    compiler_generated: attrs.compiler_generated,
                     symbol_info: None,
                     span: span.clone(),
                 };
@@ -3712,7 +3712,7 @@ impl Resolver {
 pub(super) fn validate_trait_impl_pairs_in_nodes(
     resolved: &[Resolved],
 ) -> Result<(), ResolveError> {
-    let mut seen_pairs: HashMap<String, Span> = HashMap::new();
+    let mut seen_pairs: HashMap<String, (Span, bool)> = HashMap::new();
     for node in resolved {
         let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, _, _) = node else {
             continue;
@@ -3722,12 +3722,13 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
             trait_args,
         );
         let pair_key = format!("{} for {}", trait_name, ast_ty_key(target_ty));
-        if let Some(first_span) = seen_pairs.get(&pair_key) {
+        if let Some((first_span, first_generated)) = seen_pairs.get(&pair_key) {
             return Err(ResolveError {
-                message: format!(
-                    "Multiple trait impl blocks for `{}` are not allowed",
-                    pair_key
-                ),
+                message: if *first_generated || trait_id.compiler_generated {
+                    format!("DerivedImplConflict: multiple trait impl blocks for `{pair_key}`")
+                } else {
+                    format!("Multiple trait impl blocks for `{pair_key}` are not allowed")
+                },
                 span: span.clone(),
                 related_labels: vec![
                     ResolveErrorLabel {
@@ -3741,7 +3742,10 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
                 ],
             });
         } else {
-            seen_pairs.insert(pair_key.clone(), span.clone());
+            seen_pairs.insert(
+                pair_key.clone(),
+                (span.clone(), trait_id.compiler_generated),
+            );
         }
     }
     Ok(())
