@@ -2164,6 +2164,55 @@ fn test_unknown_annotator_is_error() {
 }
 
 #[test]
+fn test_derive_annotation_is_attached_to_data_declarations() {
+    let ast = parse(
+        "@derive Eq,\n  Neq, Compare, Show\ndefstruct User { name: String, age: Int }\n\n@derive Eq\ndefrecord Point(x: Int, y: Int)\n\n@derive Show\ndefenum Color { Red, Blue }",
+    )
+    .expect("derive annotations should parse");
+
+    assert!(matches!(
+        &ast[0],
+        Ast::StructDef(_, _, _, _, attrs) if attrs.derives == ["Eq", "Neq", "Compare", "Show"]
+    ));
+    assert!(matches!(
+        &ast[1],
+        Ast::RecordDef(_, _, _, attrs) if attrs.derives == ["Eq"]
+    ));
+    assert!(matches!(
+        &ast[2],
+        Ast::EnumDef(_, _, _, _, attrs) if attrs.derives == ["Show"]
+    ));
+}
+
+#[test]
+fn test_derive_annotation_rejects_empty_trailing_and_duplicate_lists() {
+    for (source, expected) in [
+        ("@derive\ndefstruct User {}", "at least one bare trait name"),
+        ("@derive Eq,\ndefstruct User {}", "after"),
+        ("@derive Eq, Eq\ndefstruct User {}", "DuplicateDerivedTrait"),
+        (
+            "@derive Eq\n@derive Show\ndefstruct User {}",
+            "may only appear once",
+        ),
+    ] {
+        let err = parse(source).expect_err("invalid derive annotation should fail");
+        assert!(
+            err.message().contains(expected),
+            "{}: {}",
+            source,
+            err.message()
+        );
+    }
+}
+
+#[test]
+fn test_derive_annotation_rejects_non_data_declarations() {
+    let err =
+        parse("@derive Eq\ndef main() -> Int { 0 }").expect_err("derive on a function should fail");
+    assert!(err.message().contains("DeriveNotAllowed"));
+}
+
+#[test]
 fn test_binop() {
     let ast = parse("x = 10 + 5").unwrap();
     match &ast[0] {

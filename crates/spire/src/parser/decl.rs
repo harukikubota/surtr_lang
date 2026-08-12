@@ -1858,6 +1858,7 @@ impl Parser<'_> {
             DeclAttrs {
                 doc: attrs.doc,
                 builtin: attrs.builtin,
+                derives: attrs.derives,
                 facet_path_kind: attrs.facet_path_kind,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
@@ -3375,6 +3376,7 @@ impl Parser<'_> {
         let mut saw_builtin = false;
         let mut saw_intrinsic = false;
         let mut saw_facet_path_kind = false;
+        let mut saw_derive = false;
         let mut start_span: Option<Span> = None;
         let mut intrinsic_start_span: Option<Span> = None;
 
@@ -3394,6 +3396,46 @@ impl Parser<'_> {
                         ));
                     }
                     saw_builtin = true;
+                }
+                "derive" => {
+                    if saw_derive {
+                        return Err(ParseError::syntax(
+                            "@derive may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    saw_derive = true;
+                    if !matches!(self.peek(), Token::Ident(_)) {
+                        return Err(ParseError::syntax(
+                            "@derive expects at least one bare trait name",
+                            self.peek_span(),
+                        ));
+                    }
+                    loop {
+                        let trait_name = match self.advance().token {
+                            Token::Ident(name) => name,
+                            _ => unreachable!("derive trait names are checked above"),
+                        };
+                        if attrs.derives.iter().any(|name| name == &trait_name) {
+                            return Err(ParseError::syntax(
+                                format!("DuplicateDerivedTrait: `{trait_name}`"),
+                                self.peek_span(),
+                            ));
+                        }
+                        attrs.derives.push(trait_name);
+                        self.skip_newlines();
+                        if !matches!(self.peek(), Token::Comma) {
+                            break;
+                        }
+                        self.advance();
+                        self.skip_newlines();
+                        if !matches!(self.peek(), Token::Ident(_)) {
+                            return Err(ParseError::syntax(
+                                "@derive expects a bare trait name after `,`",
+                                self.peek_span(),
+                            ));
+                        }
+                    }
                 }
                 "FacetPathKind" => {
                     if saw_facet_path_kind {
@@ -3594,6 +3636,17 @@ impl Parser<'_> {
                 )),
             }
         } else {
+            if saw_derive
+                && !matches!(
+                    self.peek(),
+                    Token::Defstruct | Token::Defrecord | Token::Defenum
+                )
+            {
+                return Err(ParseError::syntax(
+                    "DeriveNotAllowed: @derive is only allowed on `defstruct`, `defrecord`, or `defenum`",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
             if attrs.hidden {
                 return Err(ParseError::syntax(
                     "@hidden is only allowed together with @builtin in standard/internal source",
