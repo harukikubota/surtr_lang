@@ -7,7 +7,7 @@ This is the shared result type used by the `Compare` trait.
 xldr(1)> Ordering::Less
 Ordering::Less
 """
-@derive Eq, Neq, Show
+@derive Eq, Show
 defenum Ordering {
   Less,
   Equal,

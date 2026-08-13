@@ -89,17 +89,9 @@ where
   def eq(self: Self, rhs: Self) -> Boolean {
     if(Eq::eq(self.min, rhs.min), Eq::eq(self.max, rhs.max), False)
   }
-}
 
-impl Neq for Range<$A>
-where
-  $A: Neq
-{
-  @doc """
-  Return `True` when either boundary differs.
-  """
   def neq(self: Self, rhs: Self) -> Boolean {
-    if(Neq::neq(self.min, rhs.min), True, Neq::neq(self.max, rhs.max))
+    if(Eq::eq(self.min, rhs.min), Eq::neq(self.max, rhs.max), True)
   }
 }
 

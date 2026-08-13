@@ -171,16 +171,6 @@ impl Eq for Float {
   @builtin def eq(self: Self, rhs: Self) -> Boolean
 }
 
-impl Neq for Float {
-  @doc """
-  Return `True` when the float values differ.
-  ## REPL
-  xldr(1)> neq(1.5, 2.0)
-  True
-  """
-  @builtin def neq(self: Self, rhs: Self) -> Boolean
-}
-
 impl Compare for Float {
   @doc """
   Return the three-way ordering between the two float values.

@@ -2424,7 +2424,8 @@ deftrait Eq {
 #[test]
 fn derive_expands_struct_into_trait_impl_nodes() {
     let resolved = parse_and_resolve(
-        r#"deftrait Eq {
+        r#"def if(flag: Boolean, then_branch: $A, else_branch: $A) -> $A { then_branch }
+deftrait Eq {
   def eq(self: Self, rhs: Self) -> Boolean
 }
 @derive Eq
@@ -2433,9 +2434,9 @@ defstruct User { name: String }
     )
     .expect("derive should resolve");
 
-    assert!(matches!(resolved[1], Resolved::StructDef(..)));
+    assert!(matches!(resolved[2], Resolved::StructDef(..)));
     assert!(matches!(
-        resolved[2],
+        resolved[3],
         Resolved::TraitImplDef(_, ref trait_id, _, _, _, _)
             if trait_id.name == "Eq"
     ));

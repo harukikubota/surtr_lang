@@ -38,7 +38,6 @@ mod tests {
     const MUL_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/mul.srt");
     const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/traits/show.srt");
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/eq.srt");
-    const NEQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/neq.srt");
     const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compare.srt");
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/concat.srt");
     const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/from.srt");
@@ -203,7 +202,6 @@ mod tests {
                 ("Sub", SUB_MODULE_SOURCE),
                 ("Mul", MUL_MODULE_SOURCE),
                 ("Eq", EQ_MODULE_SOURCE),
-                ("Neq", NEQ_MODULE_SOURCE),
                 ("Compare", COMPARE_MODULE_SOURCE),
                 ("Concat", CONCAT_MODULE_SOURCE),
                 ("Show", SHOW_MODULE_SOURCE),

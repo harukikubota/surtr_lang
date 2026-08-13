@@ -12,4 +12,9 @@ True
 deftrait Eq {
   # Return `True` when both values are equal.
   def eq(self: Self, rhs: Self) -> Boolean
+
+  # Return `True` when both values differ.
+  def neq(self: Self, rhs: Self) -> Boolean {
+    Boolean::not(Eq::eq(self, rhs))
+  }
 }

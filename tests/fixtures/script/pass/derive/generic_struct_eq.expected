@@ -1,0 +1,3 @@
+(True, True)
+(True, True)
+(Ordering::Greater, "Pair(left: 1, right: \"one\")")

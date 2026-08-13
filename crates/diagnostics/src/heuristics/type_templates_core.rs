@@ -295,7 +295,7 @@ pub(crate) fn parse_binary_operator_error(message: &str) -> Option<ParsedBinaryO
             failure_kind: BinaryOperatorFailureKind::IncompatibleTypes,
         });
     }
-    if let Some(tail) = message.strip_prefix("Neq::neq helper cannot compare ") {
+    if let Some(tail) = message.strip_prefix("Eq::neq helper cannot compare ") {
         let (left_ty, right_ty) = tail.split_once(" and ")?;
         return Some(ParsedBinaryOperatorError {
             op_name_hint: Some("Neq"),

@@ -1523,9 +1523,6 @@ impl Checker {
         if self.trait_matches_short_name(trait_name, "Eq") {
             return &["Boolean", "Float", "Int", "String"];
         }
-        if self.trait_matches_short_name(trait_name, "Neq") {
-            return &["Boolean", "Float", "Int", "String"];
-        }
         if self.trait_matches_short_name(trait_name, "Show") {
             return &["Boolean", "Error", "Float", "Int", "String", "Unit"];
         }
@@ -1725,7 +1722,7 @@ impl Checker {
         {
             return Some(TraitDispatchTarget::BinOp(BinOp::Eq));
         }
-        if self.trait_matches_short_name(trait_name, "Neq")
+        if self.trait_matches_short_name(trait_name, "Eq")
             && matches!(target_name, "Int" | "Float" | "String" | "Boolean")
             && method_name == "neq"
         {
@@ -1745,9 +1742,7 @@ impl Checker {
                 Ty::Var(_) | Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error
             );
         }
-        if self.trait_matches_short_name(trait_name, "Eq")
-            || self.trait_matches_short_name(trait_name, "Neq")
-        {
+        if self.trait_matches_short_name(trait_name, "Eq") {
             return matches!(ty, Ty::Enum(_, _));
         }
         false
@@ -1771,11 +1766,6 @@ impl Checker {
         if self.trait_matches_short_name(trait_name, "Eq") {
             return match (method_name, target_ty) {
                 ("eq", Ty::Enum(_, _)) => Some(TraitDispatchTarget::BinOp(BinOp::Eq)),
-                _ => None,
-            };
-        }
-        if self.trait_matches_short_name(trait_name, "Neq") {
-            return match (method_name, target_ty) {
                 ("neq", Ty::Enum(_, _)) => Some(TraitDispatchTarget::BinOp(BinOp::Neq)),
                 _ => None,
             };

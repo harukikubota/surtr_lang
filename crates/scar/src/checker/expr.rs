@@ -3512,10 +3512,10 @@ impl Checker {
                             hint: trait_hint(self),
                         });
                     }
-                    if self.trait_matches_short_name(trait_name, "Neq") && method_name == "neq" {
+                    if self.trait_matches_short_name(trait_name, "Eq") && method_name == "neq" {
                         return Err(TypeError {
                             message: format!(
-                                "Neq::neq helper cannot compare {} and {}",
+                                "Eq::neq helper cannot compare {} and {}",
                                 left_ty, right_ty
                             ),
                             span: arg.span.clone(),
@@ -9194,7 +9194,7 @@ impl Checker {
                 let receiver_ty = self.resolve_ty(&lt);
                 let (trait_short_name, method_name, symbol) = match op {
                     BinOp::Eq => ("Eq", "eq", "=="),
-                    BinOp::Neq => ("Neq", "neq", "!="),
+                    BinOp::Neq => ("Eq", "neq", "!="),
                     _ => return Err(Self::unsupported_binop_type_error(op, span)),
                 };
                 let eq_trait = self

@@ -5,7 +5,7 @@ Colors supported by the `StyledDoc` rendering helpers.
 Use these with `StyledDocStyle`, `StyledDoc::style`, or the color shortcuts such
 as `StyledDoc::red`.
 """
-@derive Eq, Neq, Compare, Show
+@derive Eq, Compare, Show
 defenum StyledDocColor {
   Black,
   Red,

@@ -41,7 +41,7 @@ defenum BitWidth {
 @doc """
 Type-safe radix marker for integer parsing helpers and diagnostics.
 """
-@derive Eq, Neq, Compare, Show
+@derive Eq, Compare, Show
 defenum IntBase {
   Bin,
   Oct,
@@ -877,16 +877,6 @@ impl Eq for Int {
   True
   """
   @builtin def eq(self: Self, rhs: Self) -> Boolean
-}
-
-impl Neq for Int {
-  @doc """
-  Return `True` when the integer values differ.
-  ## REPL
-  xldr(1)> neq(2, 3)
-  True
-  """
-  @builtin def neq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Compare for Int {

@@ -17,7 +17,6 @@ const SUB_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/su
 const MUL_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/mul.srt");
 const SHOW_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/show.srt");
 const EQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/eq.srt");
-const NEQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/neq.srt");
 const COMPARE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/compare.srt");
 const CONCAT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/concat.srt");
 const FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/from.srt");
@@ -419,7 +418,6 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             ("Sub", pick_override("Sub", SUB_MODULE_SOURCE, overrides)),
             ("Mul", pick_override("Mul", MUL_MODULE_SOURCE, overrides)),
             ("Eq", pick_override("Eq", EQ_MODULE_SOURCE, overrides)),
-            ("Neq", pick_override("Neq", NEQ_MODULE_SOURCE, overrides)),
             (
                 "Compare",
                 pick_override("Compare", COMPARE_MODULE_SOURCE, overrides),

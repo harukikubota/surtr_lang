@@ -1,0 +1,18 @@
+@derive Eq, Compare, Show
+defenum Choice<$A> {
+  Empty,
+  Value($A),
+}
+
+@derive Eq, Compare, Show
+defrecord Point(x: Int, y: Int)
+
+choice_same: Choice<Int> = Choice::Value(1)
+choice_other: Choice<Int> = Choice::Value(2)
+point_same = Point(1, 2)
+point_other = Point(1, 3)
+
+print(inspect((choice_same == choice_same, choice_same != choice_other)))
+print(inspect((compare(choice_same, choice_other), to_string(choice_same))))
+print(inspect((point_same == point_same, point_same != point_other)))
+print(inspect((compare(point_same, point_other), to_string(point_same))))

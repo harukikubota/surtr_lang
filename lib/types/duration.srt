@@ -92,18 +92,6 @@ impl Eq for Duration {
   }
 }
 
-impl Neq for Duration {
-  @doc """
-  Return `True` when the durations differ.
-  ## REPL
-  xldr(1)> 10ms != 20ms
-  True
-  """
-  def neq(self: Self, rhs: Self) -> Boolean {
-    self.millis != rhs.millis
-  }
-}
-
 impl Compare for Duration {
   @doc """
   Return the three-way ordering between two durations.

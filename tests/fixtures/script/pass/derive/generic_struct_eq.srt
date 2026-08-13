@@ -1,0 +1,27 @@
+@derive Eq, Compare, Show
+defstruct Box<$A> {
+  value: $A,
+}
+
+impl Box {
+  def new(value: $A) -> Box<$A> { Box { value: value } }
+}
+
+@derive Eq, Compare, Show
+defstruct Pair<$A, $B> {
+  left: $A,
+  right: $B,
+}
+
+impl Pair {
+  def new(left: $A, right: $B) -> Pair<$A, $B> { Pair { left: left, right: right } }
+}
+
+box_same: Box<Int> = Box(42)
+box_other: Box<Int> = Box(7)
+pair_same: Pair<Int, String> = Pair(1, "one")
+pair_other: Pair<Int, String> = Pair(2, "one")
+
+print(inspect((box_same == box_same, box_same != box_other)))
+print(inspect((pair_same == pair_same, pair_same != pair_other)))
+print(inspect((compare(box_same, box_other), to_string(pair_same))))

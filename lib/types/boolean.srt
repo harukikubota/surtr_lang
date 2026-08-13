@@ -102,13 +102,3 @@ impl Eq for Boolean {
   """
   @builtin def eq(self: Self, rhs: Self) -> Boolean
 }
-
-impl Neq for Boolean {
-  @doc """
-  Return `True` when the boolean values differ.
-  ## REPL
-  xldr(1)> neq(True, False)
-  True
-  """
-  @builtin def neq(self: Self, rhs: Self) -> Boolean
-}

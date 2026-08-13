@@ -43,7 +43,6 @@ pub enum FieldTraitRequirement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeriveGenerator {
     StructuralEq,
-    NegatedEq,
     LexicographicCompare,
     InspectShow,
 }
@@ -68,11 +67,6 @@ const DERIVE_TRAIT_SPECS: &[DeriveTraitSpec] = &[
         name: "Eq",
         field_requirement: Some("Eq"),
         generator: DeriveGenerator::StructuralEq,
-    },
-    DeriveTraitSpec {
-        name: "Neq",
-        field_requirement: Some("Eq"),
-        generator: DeriveGenerator::NegatedEq,
     },
     DeriveTraitSpec {
         name: "Compare",

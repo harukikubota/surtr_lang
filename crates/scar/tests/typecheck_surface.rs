@@ -4358,7 +4358,9 @@ guard = assert(False, bad_code())"#,
 fn kernel_and_contract_rejects_eager_signature() {
     let err = typecheck_std_modules_with_overrides(&[(
         "Kernel",
-        r#"defmod Kernel {
+        r#"@autoimport
+defmod Kernel {
+  @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A
   @builtin def and(left: Boolean, right: Boolean) -> Boolean
 }"#,
     )])
@@ -4375,10 +4377,14 @@ fn special_form_builtin_decl_must_live_under_kernel() {
 
 impl Boolean {
   def not(value: Boolean) -> Boolean {
-if(value, False, True)
+    value
   }
 
   @builtin def and(left: Boolean, right: Boolean) -> Boolean
+}
+
+impl Eq for Boolean {
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
 }"#,
     )])
     .expect_err("special-form declaration outside Kernel must fail");

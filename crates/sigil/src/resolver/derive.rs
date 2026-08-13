@@ -95,16 +95,6 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
             names.push(meta.trait_name.as_str().to_string());
             metas.push(meta);
         }
-        if metas
-            .iter()
-            .any(|meta| meta.generator == DeriveGenerator::NegatedEq)
-            && !names.iter().any(|name| name == "Eq")
-        {
-            metas.insert(
-                0,
-                derive_trait_meta("Eq").expect("Eq is registered with Neq"),
-            );
-        }
         for meta in metas {
             expanded.push(make_derived_impl(
                 &name,
@@ -324,19 +314,6 @@ fn make_derived_impl(
                 enum_body(span, name, variants, generator)
             },
         ),
-        DeriveGenerator::NegatedEq => (
-            "neq",
-            "Boolean",
-            call(
-                span,
-                &["Boolean", "not"],
-                vec![call(
-                    span,
-                    &["Eq", "eq"],
-                    vec![var(span, "self"), var(span, "rhs")],
-                )],
-            ),
-        ),
         DeriveGenerator::LexicographicCompare => (
             "compare",
             "Ordering",
@@ -405,22 +382,44 @@ fn make_derived_impl(
             span: span.clone(),
         });
     }
+    let mut methods = vec![Ast::Def(
+        span.clone(),
+        method_name.into(),
+        Vec::new(),
+        params.clone(),
+        Some(named(span, return_type)),
+        None,
+        Box::new(Ast::Block(span.clone(), vec![body.clone()])),
+        DeclAttrs::default(),
+    )];
+    if generator == DeriveGenerator::StructuralEq {
+        let neq_body = call(
+            span,
+            &["if"],
+            vec![
+                body.clone(),
+                Ast::Lit(span.clone(), Lit::Bool(false)),
+                Ast::Lit(span.clone(), Lit::Bool(true)),
+            ],
+        );
+        methods.push(Ast::Def(
+            span.clone(),
+            "neq".into(),
+            Vec::new(),
+            params,
+            Some(named(span, "Boolean")),
+            None,
+            Box::new(Ast::Block(span.clone(), vec![neq_body])),
+            DeclAttrs::default(),
+        ));
+    }
     Ast::TraitImplDef(
         span.clone(),
         meta.trait_name.as_str().into(),
         Vec::new(),
         target,
         where_clause,
-        vec![Ast::Def(
-            span.clone(),
-            method_name.into(),
-            Vec::new(),
-            params,
-            Some(named(span, return_type)),
-            None,
-            Box::new(Ast::Block(span.clone(), vec![body])),
-            DeclAttrs::default(),
-        )],
+        methods,
         DeclAttrs {
             compiler_generated: true,
             ..DeclAttrs::default()

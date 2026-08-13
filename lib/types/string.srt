@@ -30,7 +30,7 @@ Encoding selector for integer-based string conversion helpers.
 `Utf8` treats integers as raw UTF-8 byte values, while `Ascii` restricts the
 sequence to 7-bit ASCII.
 """
-@derive Eq, Neq, Compare, Show
+@derive Eq, Compare, Show
 defenum StringEncoding {
   Utf8,
   Ascii,
@@ -573,16 +573,6 @@ impl Eq for String {
   True
   """
   @builtin def eq(self: Self, rhs: Self) -> Boolean
-}
-
-impl Neq for String {
-  @doc """
-  Return `True` when the string values differ.
-  ## REPL
-  xldr(1)> neq("a", "b")
-  True
-  """
-  @builtin def neq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Concat for String {
