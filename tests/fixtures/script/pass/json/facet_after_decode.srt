@@ -1,7 +1,7 @@
 defrecord JsonSpecConfig(name: String, entrypoint: String)
 
 impl Decode<JsonSpecConfig> for JsonValue {
-  def decode(self: Self) -> Result<JsonSpecConfig, Error> {
+  def decode::<JsonSpecConfig>(self: Self) -> Result<JsonSpecConfig, Error> {
     name_json =? Json::get(self, "name")
     name =? Decode::decode::<String>(name_json)
     entry_json =? Json::get(self, "entrypoint")

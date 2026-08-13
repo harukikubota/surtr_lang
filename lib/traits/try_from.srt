@@ -12,5 +12,5 @@ Ok(42)
 @autoimport
 deftrait TryFrom<$To> {
   # Convert the value into the requested target type and return `Err(...)` on failure.
-  def try_from(self: Self) -> Result<$To, Error>
+  def try_from::<$To>(self: Self) -> Result<$To, Error>
 }

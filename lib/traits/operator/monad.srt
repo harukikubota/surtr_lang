@@ -8,7 +8,7 @@ deftrait Monad
 where
   Self: Applicative
 {
-  def return(value: $A) -> Self<$A>
+  def return::<Self, $A>(value: $A) -> Self<$A>
   # Chain a contextual callable after the contextual receiver.
-  def bind(self: Self<$A>, mapper: ($A -> Self<$B>)) -> Self<$B>
+  def bind::<Self, $A, $B>(self: Self<$A>, mapper: ($A -> Self<$B>)) -> Self<$B>
 }

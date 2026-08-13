@@ -16,6 +16,7 @@ const ADD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/ad
 const SUB_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/sub.srt");
 const MUL_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/mul.srt");
 const SHOW_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/show.srt");
+const DEFAULT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/default.srt");
 const EQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/eq.srt");
 const COMPARE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/compare.srt");
 const CONCAT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/concat.srt");
@@ -427,6 +428,10 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
                 pick_override("Concat", CONCAT_MODULE_SOURCE, overrides),
             ),
             ("Show", pick_override("Show", SHOW_MODULE_SOURCE, overrides)),
+            (
+                "Default",
+                pick_override("Default", DEFAULT_MODULE_SOURCE, overrides),
+            ),
             (
                 "Ordering",
                 pick_override("Ordering", ORDERING_MODULE_SOURCE, overrides),

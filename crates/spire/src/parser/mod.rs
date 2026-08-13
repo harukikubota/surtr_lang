@@ -2255,6 +2255,11 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .into_iter()
                 .map(|method| TraitMethodSig {
                     name: method.name,
+                    fun_params: method
+                        .fun_params
+                        .into_iter()
+                        .map(|ty| shift_ast_ty(ty, delta))
+                        .collect(),
                     type_params: method
                         .type_params
                         .into_iter()

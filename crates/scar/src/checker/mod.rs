@@ -408,6 +408,7 @@ enum TypeSyntaxContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitMethodInfo {
     id: ResolvedId,
+    fun_params: Vec<AstTy>,
     type_params: Vec<ResolvedTypeParam>,
     params: Vec<ResolvedFunParam>,
     ret_ty: AstTy,
@@ -433,6 +434,7 @@ struct TraitInfo {
 struct TraitImplMethodInfo {
     method_name: String,
     function_id: ResolvedId,
+    fun_params: Vec<AstTy>,
     type_params: Vec<ResolvedTypeParam>,
     params: Vec<ResolvedFunParam>,
     ret_ty: Option<AstTy>,
@@ -2212,7 +2214,10 @@ impl Checker {
         ));
     }
 
-    fn collect_unused_type_parameter_warnings(&mut self, stmts: &[Resolved]) {
+    fn collect_unused_type_parameter_warnings(
+        &mut self,
+        stmts: &[Resolved],
+    ) -> Result<(), TypeError> {
         for stmt in stmts {
             match stmt {
                 Resolved::StructDef(_, id, type_params, fields, _) => {
@@ -2246,13 +2251,67 @@ impl Checker {
                 Resolved::TraitDef(_, id, type_params, _, methods, _) => {
                     let mut trait_used = HashSet::new();
                     for method in methods {
+                        let mut method_input_used = HashSet::new();
+                        for fun_param in &method.fun_params {
+                            Self::collect_ast_ty_type_params(fun_param, &mut method_input_used);
+                        }
                         for param in &method.params {
                             Self::collect_ast_ty_type_params(&param.ty, &mut trait_used);
+                            Self::collect_ast_ty_type_params(&param.ty, &mut method_input_used);
                         }
+                        let mut method_output_used = HashSet::new();
                         Self::collect_ast_ty_type_params(&method.ret_ty, &mut trait_used);
+                        Self::collect_ast_ty_type_params(&method.ret_ty, &mut method_output_used);
 
-                        let method_used =
-                            Self::signature_type_param_uses(&method.params, Some(&method.ret_ty));
+                        let mut method_used = method_input_used.clone();
+                        method_used.extend(method_output_used.iter().cloned());
+                        if method
+                            .where_clause
+                            .as_ref()
+                            .map(|clause| {
+                                clause.constraints.iter().any(|constraint| {
+                                    let mut vars = HashSet::new();
+                                    Self::collect_ast_ty_type_params(
+                                        &constraint.subject,
+                                        &mut vars,
+                                    );
+                                    vars.into_iter().any(|var| !method_used.contains(&var))
+                                })
+                            })
+                            .unwrap_or(false)
+                        {
+                            return Err(TypeError {
+                                message: format!(
+                                    "Trait method {} has a type variable used only by where constraints",
+                                    method.id.name
+                                ),
+                                span: method.span.clone(),
+                                hint: Some("Add the type variable to FunParams or a value argument.".into()),
+                            });
+                        }
+                        if method_output_used.iter().any(|var| !method_input_used.contains(var)) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "Trait method {} has a type variable that is only present in its return type",
+                                    method.id.name
+                                ),
+                                span: method.span.clone(),
+                                hint: Some("Add the type variable to FunParams or a value argument.".into()),
+                            });
+                        }
+                        if id.name == "Default"
+                            && method.id.name == "default"
+                            && !method.fun_params.iter().any(|param| {
+                                matches!(param, AstTy::Named(_, name) if name == "Self")
+                            })
+                        {
+                            return Err(TypeError {
+                                message: "Default::default must declare Self in FunParams".into(),
+                                span: method.span.clone(),
+                                hint: Some("Use `def default::<Self>() -> Self`.".into()),
+                            });
+                        }
+
                         self.warn_unused_type_params(
                             &method.type_params,
                             &method_used,
@@ -2275,6 +2334,7 @@ impl Checker {
                 _ => {}
             }
         }
+        Ok(())
     }
 
     fn signature_type_param_uses(
@@ -3131,7 +3191,7 @@ impl Checker {
         let mut stmt_kind_totals = HashMap::<String, (u64, Duration)>::new();
 
         let result = (|| -> Result<Vec<TypedNode>, TypeError> {
-            self.collect_unused_type_parameter_warnings(&stmts);
+            self.collect_unused_type_parameter_warnings(&stmts)?;
 
             let t = profile_enabled.then(Instant::now);
             self.predeclare_error_types(&stmts);

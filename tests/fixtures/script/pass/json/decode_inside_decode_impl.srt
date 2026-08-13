@@ -1,7 +1,7 @@
 defrecord JsonSpecNestedConfig(name: String, entrypoint: String)
 
 impl Decode<JsonSpecNestedConfig> for JsonValue {
-  def decode(self: Self) -> Result<JsonSpecNestedConfig, Error> {
+  def decode::<JsonSpecNestedConfig>(self: Self) -> Result<JsonSpecNestedConfig, Error> {
     name_json =? Json::get(self, "name")
     name =? Decode::decode::<String>(name_json)
     entry_json =? Json::get(self, "entrypoint")

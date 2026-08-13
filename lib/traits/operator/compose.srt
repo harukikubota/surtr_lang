@@ -8,5 +8,5 @@ It is not arithmetic division; use `safe_div` for division.
 """
 deftrait Compose<$Rhs, $Out> {
   # Compose the receiver value with `rhs`.
-  def compose(self: Self, rhs: $Rhs) -> $Out
+  def compose::<Self, $Rhs, $Out>(self: Self, rhs: $Rhs) -> $Out
 }

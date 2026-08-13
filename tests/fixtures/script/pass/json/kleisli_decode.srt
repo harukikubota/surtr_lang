@@ -1,7 +1,7 @@
 defrecord JsonSpecKleisliConfig(name: String)
 
 impl Decode<JsonSpecKleisliConfig> for JsonValue {
-  def decode(self: Self) -> Result<JsonSpecKleisliConfig, Error> {
+  def decode::<JsonSpecKleisliConfig>(self: Self) -> Result<JsonSpecKleisliConfig, Error> {
     name_json =? Json::get(self, "name")
     name =? Decode::decode::<String>(name_json)
     Ok(JsonSpecKleisliConfig(name))

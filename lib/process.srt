@@ -83,7 +83,7 @@ impl WorkerStrategy {
   @doc """
   Default worker strategy: one fixed worker.
   """
-  def default() -> Self {
+  def default::<Self>() -> Self {
     WorkerStrategy::fixed(1)
   }
 }

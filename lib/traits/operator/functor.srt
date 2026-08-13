@@ -9,5 +9,5 @@ where
   Self: Type<$A>
 {
   # Map a plain callable over the contextual receiver.
-  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+  def fmap::<Self, $A, $B>(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
 }

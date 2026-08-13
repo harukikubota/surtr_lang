@@ -1,0 +1,12 @@
+@derive Default(White)
+defenum Color {
+  Black,
+  White,
+}
+
+def main() -> Unit {
+  color: Color = default()
+  print(inspect(color))
+}
+
+main()

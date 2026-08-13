@@ -94,7 +94,7 @@ impl Show for Unit {
   xldr(1)> to_string(())
   "()"
   """
-  def to_string(self: Self) -> String {
+  def to_string::<Unit>(self: Self) -> String {
     inspect(self)
   }
 }
@@ -106,7 +106,7 @@ impl From<Unit> for Unit {
   xldr(1)> from::<Unit>(())
   ()
   """
-  def from(self: Self) -> Unit {
+  def from::<Unit>(self: Self) -> Unit {
     self
   }
 }
@@ -118,7 +118,7 @@ impl From<String> for Unit {
   xldr(1)> from::<String>(())
   "()"
   """
-  def from(self: Self) -> String {
+  def from::<String>(self: Self) -> String {
     to_string(self)
   }
 }

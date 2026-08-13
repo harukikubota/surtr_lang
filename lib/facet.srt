@@ -435,5 +435,5 @@ impl Compose<Facet<$L, $A, $B, _, _>, Facet<$K, $S, $B, _, _>> for Facet<$K, $S,
   `left / right` and `Compose::compose(left, right)` follow this contract.
   `Facet::chain(left, right)` remains the canonical helper form.
   """
-  @builtin def compose(self: Self, rhs: Facet<$L, $A, $B, _, _>) -> Facet<$K, $S, $B, _, _>
+  @builtin def compose::<Facet<$K, $S, $A, _, _>, Facet<$L, $A, $B, _, _>, Facet<$K, $S, $B, _, _>>(self: Self, rhs: Facet<$L, $A, $B, _, _>) -> Facet<$K, $S, $B, _, _>
 }

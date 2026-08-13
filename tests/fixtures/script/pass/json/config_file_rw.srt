@@ -1,7 +1,7 @@
 defrecord JsonSpecRwConfig(name: String, entrypoint: String)
 
 impl Decode<JsonSpecRwConfig> for JsonValue {
-  def decode(self: Self) -> Result<JsonSpecRwConfig, Error> {
+  def decode::<JsonSpecRwConfig>(self: Self) -> Result<JsonSpecRwConfig, Error> {
     name_json =? Json::get(self, "name")
     name =? Decode::decode::<String>(name_json)
     entry_json =? Json::get(self, "entrypoint")
@@ -11,7 +11,7 @@ impl Decode<JsonSpecRwConfig> for JsonValue {
 }
 
 impl Encode<JsonValue> for JsonSpecRwConfig {
-  def encode(self: Self) -> Result<JsonValue, Error> {
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
     Ok(JsonValue::Object(HashMap::from_entries([
       ("name", JsonValue::String(self.name)),
       ("entrypoint", JsonValue::String(self.entrypoint)),

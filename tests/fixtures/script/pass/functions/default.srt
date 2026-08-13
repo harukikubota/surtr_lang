@@ -1,0 +1,6 @@
+def main() -> Unit {
+  a: Int = default::<Int>()
+  print(to_string(a))
+}
+
+main()

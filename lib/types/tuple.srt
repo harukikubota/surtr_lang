@@ -11,7 +11,7 @@ where
   $A0: Compare
   $A1: Compare
 {
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<Self>(self: Self, rhs: Self) -> Ordering {
     match Compare::compare(self._0, rhs._0) {
       Ordering::Equal => Compare::compare(self._1, rhs._1),
       ordering => ordering,
@@ -25,7 +25,7 @@ where
   $A1: Compare
   $A2: Compare
 {
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<Self>(self: Self, rhs: Self) -> Ordering {
     match Compare::compare(self._0, rhs._0) {
       Ordering::Equal => match Compare::compare(self._1, rhs._1) {
         Ordering::Equal => Compare::compare(self._2, rhs._2),
@@ -43,7 +43,7 @@ where
   $A2: Compare
   $A3: Compare
 {
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<Self>(self: Self, rhs: Self) -> Ordering {
     match Compare::compare(self._0, rhs._0) {
       Ordering::Equal => match Compare::compare(self._1, rhs._1) {
         Ordering::Equal => match Compare::compare(self._2, rhs._2) {
@@ -65,7 +65,7 @@ where
   $A3: Compare
   $A4: Compare
 {
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<Self>(self: Self, rhs: Self) -> Ordering {
     match Compare::compare(self._0, rhs._0) {
       Ordering::Equal => match Compare::compare(self._1, rhs._1) {
         Ordering::Equal => match Compare::compare(self._2, rhs._2) {
@@ -91,7 +91,7 @@ where
   $A4: Compare
   $A5: Compare
 {
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<Self>(self: Self, rhs: Self) -> Ordering {
     match Compare::compare(self._0, rhs._0) {
       Ordering::Equal => match Compare::compare(self._1, rhs._1) {
         Ordering::Equal => match Compare::compare(self._2, rhs._2) {
@@ -121,7 +121,7 @@ where
   $A5: Compare
   $A6: Compare
 {
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<Self>(self: Self, rhs: Self) -> Ordering {
     match Compare::compare(self._0, rhs._0) {
       Ordering::Equal => match Compare::compare(self._1, rhs._1) {
         Ordering::Equal => match Compare::compare(self._2, rhs._2) {
@@ -155,7 +155,7 @@ where
   $A6: Compare
   $A7: Compare
 {
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<Self>(self: Self, rhs: Self) -> Ordering {
     match Compare::compare(self._0, rhs._0) {
       Ordering::Equal => match Compare::compare(self._1, rhs._1) {
         Ordering::Equal => match Compare::compare(self._2, rhs._2) {

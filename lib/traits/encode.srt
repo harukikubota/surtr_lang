@@ -12,5 +12,5 @@ Ok("\"hello\"")
 """
 deftrait Encode<$To> {
   # Convert the value into the requested target representation.
-  def encode(self: Self) -> Result<$To, Error>
+  def encode::<$To>(self: Self) -> Result<$To, Error>
 }

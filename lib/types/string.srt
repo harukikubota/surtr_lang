@@ -7,6 +7,10 @@ surface shape for strings.
 """
 @builtin type String
 
+impl Default for String {
+  def default::<String>() -> String { "" }
+}
+
 @doc """
 Concrete string-module error for `String::repeat`.
 Negative counts stay as recoverable values instead of becoming implicit
@@ -524,7 +528,7 @@ impl Show for String {
   xldr(1)> to_string("abc")
   "abc"
   """
-  def to_string(self: Self) -> String {
+  def to_string::<String>(self: Self) -> String {
     self
   }
 }
@@ -536,7 +540,7 @@ impl From<String> for String {
   xldr(1)> from::<String>("abc")
   "abc"
   """
-  def from(self: Self) -> String {
+  def from::<String>(self: Self) -> String {
     self
   }
 }
@@ -548,7 +552,7 @@ impl TryFrom<Int> for String {
   xldr(1)> try_from::<Int>("42")
   Ok(42)
   """
-  def try_from(self: Self) -> Result<Int, Error> {
+  def try_from::<Int>(self: Self) -> Result<Int, Error> {
     String::try_to_int(self)
   }
 }
@@ -560,7 +564,7 @@ impl TryFrom<Boolean> for String {
   xldr(1)> try_from::<Boolean>("True")
   Ok(True)
   """
-  def try_from(self: Self) -> Result<Boolean, Error> {
+  def try_from::<Boolean>(self: Self) -> Result<Boolean, Error> {
     String::try_to_boolean(self)
   }
 }
@@ -572,7 +576,7 @@ impl Eq for String {
   xldr(1)> eq("a", "a")
   True
   """
-  @builtin def eq(self: Self, rhs: Self) -> Boolean
+  @builtin def eq::<String>(self: Self, rhs: Self) -> Boolean
 }
 
 impl Concat for String {
@@ -582,5 +586,5 @@ impl Concat for String {
   xldr(1)> concat("ab", "cd")
   "abcd"
   """
-  @builtin def concat(self: Self, rhs: Self) -> Self
+  @builtin def concat::<String>(self: Self, rhs: Self) -> Self
 }

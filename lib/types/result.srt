@@ -397,7 +397,7 @@ impl Result {
 This is the source-level meaning of `value |*> f`.
 """
 impl Functor for Result<$T> {
-  def fmap(self: Result<$A>, mapper: ($A -> $B)) -> Result<$B> {
+  def fmap::<Result<$T>, $A, $B>(self: Result<$A>, mapper: ($A -> $B)) -> Result<$B> {
     match self {
       Ok(value) => Ok(mapper(value)),
       _ => self,
@@ -409,11 +409,11 @@ impl Functor for Result<$T> {
 `Applicative` implementation for `Result`.
 """
 impl Applicative for Result<$T> {
-  def pure(value: $A) -> Result<$A> {
+  def pure::<Result<$T>, $A>(value: $A) -> Result<$A> {
     Ok(value)
   }
 
-  def ap(mapper: Result<($A -> $B)>, value: Result<$A>) -> Result<$B> {
+  def ap::<Result<$T>, $A, $B>(mapper: Result<($A -> $B)>, value: Result<$A>) -> Result<$B> {
     match mapper {
       Ok(f) => match value {
         Ok(inner) => Ok(f(inner)),
@@ -429,11 +429,11 @@ impl Applicative for Result<$T> {
 This is the source-level meaning of `value |>= mapper`.
 """
 impl Monad for Result<$T> {
-  def return(value: $A) -> Result<$A> {
+  def return::<Result<$T>, $A>(value: $A) -> Result<$A> {
     Ok(value)
   }
 
-  def bind(self: Result<$A>, mapper: ($A -> Result<$B>)) -> Result<$B> {
+  def bind::<Result<$T>, $A, $B>(self: Result<$A>, mapper: ($A -> Result<$B>)) -> Result<$B> {
     match self {
       Ok(value) => mapper(value),
       _ => self,
@@ -446,7 +446,7 @@ impl Monad for Result<$T> {
 This is the source-level meaning of `left >* right` for `Result`.
 """
 impl LiftComposable<$A, $B, $C, Result<$C>> for ($A -> Result<$B>) {
-  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Result<$C>) {
+  def lift_compose::<($A -> Result<$B>), $A, $B, $C, Result<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Result<$C>) {
     {|value| Functor::fmap(self(value), rhs)}
   }
 }
@@ -456,7 +456,7 @@ impl LiftComposable<$A, $B, $C, Result<$C>> for ($A -> Result<$B>) {
 This is the source-level meaning of `left >=> right` for `Result`.
 """
 impl KleisliComposable<$A, $B, Result<$C>> for ($A -> Result<$B>) {
-  def kleisli_compose(self: Self, rhs: ($B -> Result<$C>)) -> ($A -> Result<$C>) {
+  def kleisli_compose::<($A -> Result<$B>), $A, $B, Result<$C>>(self: Self, rhs: ($B -> Result<$C>)) -> ($A -> Result<$C>) {
     {|value| Monad::bind(self(value), rhs)}
   }
 }

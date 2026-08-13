@@ -1138,7 +1138,7 @@ impl Checker {
                         span: method.span.clone(),
                         hint: None,
                     })?;
-            let (param_tys, expected_ret, type_params) = self.resolve_trait_impl_method_signature(
+            let (param_tys, expected_ret, type_params, _) = self.resolve_trait_impl_method_signature(
                 &trait_info,
                 trait_args,
                 &method,

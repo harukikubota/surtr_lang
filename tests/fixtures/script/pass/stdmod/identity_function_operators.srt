@@ -9,40 +9,40 @@ impl Identity {
 }
 
 impl Functor for Identity<$T> {
-  def fmap(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
+  def fmap::<Identity<$T>, $A, $B>(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
     Identity { value: mapper(self.value) }
   }
 }
 
 impl Applicative for Identity<$T> {
-  def pure(value: $A) -> Identity<$A> {
+  def pure::<Identity<$T>, $A>(value: $A) -> Identity<$A> {
     Identity { value: value }
   }
 
-  def ap(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
+  def ap::<Identity<$T>, $A, $B>(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
     f = mapper.value
     Identity { value: f(value.value) }
   }
 }
 
 impl Monad for Identity<$T> {
-  def return(value: $A) -> Identity<$A> {
+  def return::<Identity<$T>, $A>(value: $A) -> Identity<$A> {
     Identity { value: value }
   }
 
-  def bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
+  def bind::<Identity<$T>, $A, $B>(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
     mapper(self.value)
   }
 }
 
 impl LiftComposable<$A, $B, $C, Identity<$C>> for ($A -> Identity<$B>) {
-  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Identity<$C>) {
+  def lift_compose::<($A -> Identity<$B>), $A, $B, $C, Identity<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Identity<$C>) {
     {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
 impl KleisliComposable<$A, $B, Identity<$C>> for ($A -> Identity<$B>) {
-  def kleisli_compose(self: Self, rhs: ($B -> Identity<$C>)) -> ($A -> Identity<$C>) {
+  def kleisli_compose::<($A -> Identity<$B>), $A, $B, Identity<$C>>(self: Self, rhs: ($B -> Identity<$C>)) -> ($A -> Identity<$C>) {
     {|value| Monad::bind(self(value), rhs)}
   }
 }

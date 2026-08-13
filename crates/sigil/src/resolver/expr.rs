@@ -2898,6 +2898,7 @@ impl Resolver {
                 {
                     let spire::ast::TraitMethodSig {
                         name: method_name,
+                        fun_params,
                         type_params,
                         params,
                         ret_ty,
@@ -2931,6 +2932,10 @@ impl Resolver {
                             symbol_info: None,
                             span: method_span.clone(),
                         },
+                        fun_params: fun_params
+                            .into_iter()
+                            .map(|ty| self.resolve_type_annotation(ty))
+                            .collect::<Result<Vec<_>, _>>()?,
                         type_params: self.resolve_type_params(type_params)?,
                         params: resolved_params,
                         ret_ty: self.resolve_type_annotation(ret_ty)?,
@@ -3028,6 +3033,12 @@ impl Resolver {
                             });
                         }
                     };
+                    let fun_params = attrs
+                        .fun_params
+                        .clone()
+                        .into_iter()
+                        .map(|ty| self.resolve_type_annotation(ty))
+                        .collect::<Result<Vec<_>, _>>()?;
                     let qualified_function_name = trait_impl_method_qualified_name(
                         self.current_module_path.as_deref(),
                         &trait_name,
@@ -3082,6 +3093,7 @@ impl Resolver {
                             symbol_info: None,
                             span: method_span.clone(),
                         },
+                        fun_params,
                         type_params: self.resolve_type_params(type_params)?,
                         params: resolved_params,
                         ret_ty: ret_ty

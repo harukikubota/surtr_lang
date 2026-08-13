@@ -110,6 +110,7 @@ match expr {
 - trait 実装は `impl Trait<Concrete, ...> for Type { ... }` の形も取れる
 - 通常 callable は型引数を明示できない。型スロットは signature の引数型・receiver 型から推論する
 - `::<Int>` は `try_from::<Int>(value)` のような Trait helper の target specialization にだけ使える。`Self` は値引数または期待 callable 型から推論する
+- FunParams は、型変数が value parameter の型から導入できない場合にだけ使う。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で FunParams に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として FunParams に置く
 - trait は method のみを持つ
 - 匿名 `impl Trait` 型は使えず、名前付き型変数と `where` clause で制約する
 - `where` clause は宣言・trait・impl に制約を追加する

@@ -12,5 +12,5 @@ xldr(1)> to_string(42)
 @autoimport
 deftrait Show {
   # Return the standard string representation for the value.
-  def to_string(self: Self) -> String
+  def to_string::<Self>(self: Self) -> String
 }

@@ -35,6 +35,8 @@ pub struct DeclAttrs {
     pub visibility: Visibility,
     pub user_importable: bool,
     pub user_callable: bool,
+    /// Impl-method dispatch slots, populated only for trait impl methods.
+    pub fun_params: Vec<AstTy>,
 }
 
 impl Default for DeclAttrs {
@@ -51,6 +53,7 @@ impl Default for DeclAttrs {
             visibility: Visibility::Public,
             user_importable: true,
             user_callable: true,
+            fun_params: Vec::new(),
         }
     }
 }
@@ -460,6 +463,8 @@ pub struct FunParam {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitMethodSig {
     pub name: Symbol,
+    /// Explicit dispatch type slots written as `method::<Self, $A>`.
+    pub fun_params: Vec<AstTy>,
     pub type_params: Vec<TypeParam>,
     pub params: Vec<FunParam>,
     pub ret_ty: AstTy,

@@ -3,7 +3,7 @@ defenum Boxed<$T> {
 }
 
 impl From<Option<$T>> for Boxed<$T> {
-  def from(self: Self) -> Option<$T> {
+  def from::<Option<$T>>(self: Self) -> Option<$T> {
     match self {
       Boxed::Box(value) => Option::Some(value),
     }

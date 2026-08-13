@@ -96,6 +96,22 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
             metas.push(meta);
         }
         for meta in metas {
+            if meta.default_variant.is_some() && !matches!(meta.generator, DeriveGenerator::Default) {
+                return Err(ResolveError {
+                    message: format!("DeriveVariantNotAllowed: {}", meta.trait_name.as_str()),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                });
+            }
+            if let Some(variant) = &meta.default_variant {
+                if variants.iter().all(|candidate| candidate.name != *variant) {
+                    return Err(ResolveError {
+                        message: format!("UnknownDefaultVariant: {}", variant),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                }
+            }
             expanded.push(make_derived_impl(
                 &name,
                 &type_params,
@@ -131,6 +147,14 @@ fn call(span: &Span, segments: &[&str], args: Vec<Ast>) -> Ast {
     Ast::App(
         span.clone(),
         Box::new(path(span, segments)),
+        args.into_iter().map(RecordLitArg::Positional).collect(),
+    )
+}
+
+fn constructor(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
+    Ast::ConstructorCall(
+        span.clone(),
+        name.into(),
         args.into_iter().map(RecordLitArg::Positional).collect(),
     )
 }
@@ -226,6 +250,14 @@ fn enum_body(
                             &["Ordering", "Greater"]
                         },
                     ),
+                    DeriveGenerator::Default => constructor(
+                        span,
+                        &format!("{}::{}", type_name, left_variant.name),
+                        left_names
+                            .iter()
+                            .map(|_| call(span, &["Default", "default"], Vec::new()))
+                            .collect(),
+                    ),
                     _ => Ast::Lit(span.clone(), Lit::Bool(true)),
                 }
             } else {
@@ -254,6 +286,14 @@ fn enum_body(
                             })
                             .collect(),
                     ),
+                    DeriveGenerator::Default => constructor(
+                        span,
+                        &format!("{}::{}", type_name, left_variant.name),
+                        left_names
+                            .iter()
+                            .map(|_| call(span, &["Default", "default"], Vec::new()))
+                            .collect(),
+                    ),
                     _ => Ast::Lit(span.clone(), Lit::Bool(true)),
                 }
             };
@@ -270,6 +310,7 @@ fn enum_body(
         body: match generator {
             DeriveGenerator::StructuralEq => Ast::Lit(span.clone(), Lit::Bool(false)),
             DeriveGenerator::LexicographicCompare => path(span, &["Ordering", "Equal"]),
+            DeriveGenerator::Default => Ast::Lit(span.clone(), Lit::Bool(false)),
             _ => Ast::Lit(span.clone(), Lit::Bool(false)),
         },
     });
@@ -340,6 +381,34 @@ fn make_derived_impl(
             "String",
             call(span, &["inspect"], vec![var(span, "self")]),
         ),
+        DeriveGenerator::Default => {
+            let body = if variants.is_empty() {
+                constructor(
+                    span,
+                    name,
+                    fields
+                        .iter()
+                        .map(|_| call(span, &["Default", "default"], Vec::new()))
+                        .collect(),
+                )
+            } else {
+                let variant = meta
+                    .default_variant
+                    .as_deref()
+                    .and_then(|wanted| variants.iter().find(|candidate| candidate.name == wanted))
+                    .unwrap_or(&variants[0]);
+                constructor(
+                    span,
+                    &format!("{}::{}", name, variant.name),
+                    variant
+                        .payload
+                        .iter()
+                        .map(|_| call(span, &["Default", "default"], Vec::new()))
+                        .collect(),
+                )
+            };
+            ("default", "Self", body)
+        }
     };
     let target = if type_params.is_empty() {
         named(span, name)
@@ -370,18 +439,27 @@ fn make_derived_impl(
             span: span.clone(),
         }),
     };
-    let mut params = vec![FunParam {
-        name: "self".into(),
-        ty: named(span, "Self"),
-        span: span.clone(),
-    }];
-    if generator != DeriveGenerator::InspectShow {
+    let mut params = Vec::new();
+    if !matches!(generator, DeriveGenerator::InspectShow | DeriveGenerator::Default) {
+        params.push(FunParam {
+            name: "self".into(),
+            ty: named(span, "Self"),
+            span: span.clone(),
+        });
         params.push(FunParam {
             name: "rhs".into(),
             ty: named(span, "Self"),
             span: span.clone(),
         });
+    } else if generator == DeriveGenerator::InspectShow {
+        params.push(FunParam {
+            name: "self".into(),
+            ty: named(span, "Self"),
+            span: span.clone(),
+        });
     }
+    let mut generated_attrs = DeclAttrs::default();
+    generated_attrs.fun_params = vec![named(span, "Self")];
     let mut methods = vec![Ast::Def(
         span.clone(),
         method_name.into(),
@@ -390,7 +468,7 @@ fn make_derived_impl(
         Some(named(span, return_type)),
         None,
         Box::new(Ast::Block(span.clone(), vec![body.clone()])),
-        DeclAttrs::default(),
+        generated_attrs.clone(),
     )];
     if generator == DeriveGenerator::StructuralEq {
         let neq_body = call(
@@ -410,7 +488,7 @@ fn make_derived_impl(
             Some(named(span, "Boolean")),
             None,
             Box::new(Ast::Block(span.clone(), vec![neq_body])),
-            DeclAttrs::default(),
+            generated_attrs,
         ));
     }
     Ast::TraitImplDef(

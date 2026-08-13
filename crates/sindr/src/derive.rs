@@ -45,6 +45,7 @@ pub enum DeriveGenerator {
     StructuralEq,
     LexicographicCompare,
     InspectShow,
+    Default,
 }
 
 /// Complete metadata for one deriveable trait.
@@ -54,6 +55,7 @@ pub struct DeriveTraitMeta {
     pub applicability: DeriveApplicability,
     pub field_requirement: FieldTraitRequirement,
     pub generator: DeriveGenerator,
+    pub default_variant: Option<String>,
 }
 
 struct DeriveTraitSpec {
@@ -78,6 +80,11 @@ const DERIVE_TRAIT_SPECS: &[DeriveTraitSpec] = &[
         field_requirement: None,
         generator: DeriveGenerator::InspectShow,
     },
+    DeriveTraitSpec {
+        name: "Default",
+        field_requirement: Some("Default"),
+        generator: DeriveGenerator::Default,
+    },
 ];
 
 /// Resolve a surface or canonical trait name to its derive recipe.
@@ -85,7 +92,11 @@ const DERIVE_TRAIT_SPECS: &[DeriveTraitSpec] = &[
 /// The returned metadata is owned so the registry can later be extended with
 /// dynamically registered user recipes without exposing the static table.
 pub fn derive_trait_meta(name: &str) -> Option<DeriveTraitMeta> {
-    let surface_name = surface_path_name(name);
+    let (base_name, variant) = name
+        .split_once('(')
+        .map(|(base, variant)| (base, variant.strip_suffix(')')))
+        .unwrap_or((name, None));
+    let surface_name = surface_path_name(base_name);
     DERIVE_TRAIT_SPECS
         .iter()
         .find(|spec| surface_path_name(spec.name) == surface_name)
@@ -98,6 +109,7 @@ pub fn derive_trait_meta(name: &str) -> Option<DeriveTraitMeta> {
                 .map(FieldTraitRequirement::RequiresTrait)
                 .unwrap_or(FieldTraitRequirement::None),
             generator: spec.generator,
+            default_variant: variant.map(str::to_string),
         })
 }
 

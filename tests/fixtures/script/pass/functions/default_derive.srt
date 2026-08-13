@@ -1,0 +1,19 @@
+@derive Default
+defstruct DefaultConfig {
+  port: Int,
+  name: String,
+}
+
+impl DefaultConfig {
+  def new(port: Int, name: String) -> Self {
+    DefaultConfig { port: port, name: name }
+  }
+}
+
+def main() -> Unit {
+  config: DefaultConfig = default()
+  print(to_string(config.port))
+  print(config.name)
+}
+
+main()

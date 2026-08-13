@@ -3280,17 +3280,47 @@ impl Checker {
             let probe_self = self.env.fresh_tyvar();
             let (_, probe_ret, _, _) =
                 self.resolve_trait_method_signature(&trait_info, &method, &probe_self)?;
-            if matches!(probe_ret, Ty::SelfApp(_)) {
-                let expected = expected_ret_ty.ok_or_else(|| TypeError {
-                    message: format!(
-                        "{}::{} requires an expected return type",
-                        trait_name, method_name
-                    ),
-                    span: span.clone(),
-                    hint: Some(format!(
-                        "Add a type annotation so {}::{} can select a concrete implementation.",
-                        trait_name, method_name
-                    )),
+            if matches!(probe_ret, Ty::SelfApp(_))
+                || (self.trait_matches_short_name(trait_name, "Default")
+                    && method_name == "default"
+                    && explicit_type_args.is_some())
+            {
+                let explicit_target = if self.trait_matches_short_name(trait_name, "Default")
+                    && method_name == "default"
+                {
+                    match explicit_type_args {
+                        Some([arg]) => Some(
+                            self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?,
+                        ),
+                        Some(args) => {
+                            return Err(TypeError {
+                                message: format!(
+                                    "{}::{} expects one explicit target type, got {}",
+                                    trait_name,
+                                    method_name,
+                                    args.len()
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            });
+                        }
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+                let expected = explicit_target.as_ref().or(expected_ret_ty).ok_or_else(|| {
+                    TypeError {
+                        message: format!(
+                            "{}::{} requires an expected return type",
+                            trait_name, method_name
+                        ),
+                        span: span.clone(),
+                        hint: Some(format!(
+                            "Add a type annotation so {}::{} can select a concrete implementation.",
+                            trait_name, method_name
+                        )),
+                    }
                 })?;
                 let dispatch = self
                     .constructor_target_dispatch(trait_name, method_name, expected)
@@ -3304,7 +3334,7 @@ impl Checker {
                         span: span.clone(),
                         hint: Some(self.trait_implementation_summary(trait_name)),
                     })?;
-                return Ok(TypedNode {
+                let typed = TypedNode {
                     ty: self.resolve_ty(expected),
                     span: span.clone(),
                     node: TypedInner::TraitCall {
@@ -3315,7 +3345,23 @@ impl Checker {
                         origin: TraitCallOrigin::Explicit,
                         args: Vec::new(),
                     },
-                });
+                };
+                if let Some(expected_ret_ty) = expected_ret_ty {
+                    if !self.types_compatible(&typed.ty, expected_ret_ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "{}::{} target {} does not match expected return type {}",
+                                trait_name,
+                                method_name,
+                                self.ty_name(&typed.ty),
+                                self.ty_name(expected_ret_ty)
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+                return Ok(typed);
             }
         }
         if self.trait_matches_short_name(trait_name, "Applicative")

@@ -12,5 +12,5 @@ xldr(1)> from::<String>(42)
 @autoimport
 deftrait From<$To> {
   # Convert the value into the requested target type.
-  def from(self: Self) -> $To
+  def from::<$To>(self: Self) -> $To
 }

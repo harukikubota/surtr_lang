@@ -12,5 +12,5 @@ Ok(Object(hash!["name" => String("surtr")]))
 """
 deftrait Decode<$To> {
   # Convert the value into the requested target type.
-  def decode(self: Self) -> Result<$To, Error>
+  def decode::<$To>(self: Self) -> Result<$To, Error>
 }

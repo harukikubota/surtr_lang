@@ -198,6 +198,7 @@ fn trait_head_type_parameter_unused_by_methods_warns_even_with_bound() {
         None,
         vec![ResolvedTraitMethodSig {
             id: id("Describe::describe", 31),
+            fun_params: Vec::new(),
             type_params: Vec::new(),
             params: Vec::new(),
             ret_ty: named_ty("String", 35),

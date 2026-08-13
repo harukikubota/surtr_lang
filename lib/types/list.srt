@@ -660,7 +660,7 @@ impl List {
 This is the source-level meaning of `values |*> f`.
 """
 impl Functor for List<$T> {
-  def fmap(self: List<$A>, mapper: ($A -> $B)) -> List<$B> {
+  def fmap::<List<$T>, $A, $B>(self: List<$A>, mapper: ($A -> $B)) -> List<$B> {
     List::map(self, mapper)
   }
 }
@@ -669,11 +669,11 @@ impl Functor for List<$T> {
 `Applicative` implementation for `List`.
 """
 impl Applicative for List<$T> {
-  def pure(value: $A) -> List<$A> {
+  def pure::<List<$T>, $A>(value: $A) -> List<$A> {
     [value]
   }
 
-  def ap(mapper: List<($A -> $B)>, value: List<$A>) -> List<$B> {
+  def ap::<List<$T>, $A, $B>(mapper: List<($A -> $B)>, value: List<$A>) -> List<$B> {
     List::flat_map(mapper, {|f| List::map(value, f)})
   }
 }
@@ -683,11 +683,11 @@ impl Applicative for List<$T> {
 This is the source-level meaning of `values |>= mapper`.
 """
 impl Monad for List<$T> {
-  def return(value: $A) -> List<$A> {
+  def return::<List<$T>, $A>(value: $A) -> List<$A> {
     [value]
   }
 
-  def bind(self: List<$A>, mapper: ($A -> List<$B>)) -> List<$B> {
+  def bind::<List<$T>, $A, $B>(self: List<$A>, mapper: ($A -> List<$B>)) -> List<$B> {
     List::flat_map(self, mapper)
   }
 }
@@ -697,7 +697,7 @@ impl Monad for List<$T> {
 This is the source-level meaning of `left >* right` for `List`.
 """
 impl LiftComposable<$A, $B, $C, List<$C>> for ($A -> List<$B>) {
-  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> List<$C>) {
+  def lift_compose::<($A -> List<$B>), $A, $B, $C, List<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> List<$C>) {
     {|value| Functor::fmap(self(value), rhs)}
   }
 }
@@ -707,7 +707,7 @@ impl LiftComposable<$A, $B, $C, List<$C>> for ($A -> List<$B>) {
 This is the source-level meaning of `left >=> right` for `List`.
 """
 impl KleisliComposable<$A, $B, List<$C>> for ($A -> List<$B>) {
-  def kleisli_compose(self: Self, rhs: ($B -> List<$C>)) -> ($A -> List<$C>) {
+  def kleisli_compose::<($A -> List<$B>), $A, $B, List<$C>>(self: Self, rhs: ($B -> List<$C>)) -> ($A -> List<$C>) {
     {|value| Monad::bind(self(value), rhs)}
   }
 }

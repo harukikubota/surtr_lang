@@ -66,7 +66,7 @@ impl Option {
 This is the source-level meaning of `value |*> f`.
 """
 impl Functor for Option<$T> {
-  def fmap(self: Option<$A>, mapper: ($A -> $B)) -> Option<$B> {
+  def fmap::<Option<$T>, $A, $B>(self: Option<$A>, mapper: ($A -> $B)) -> Option<$B> {
     match self {
       Option::Some(value) => Option::Some(mapper(value)),
       Option::None => Option::None,
@@ -78,11 +78,11 @@ impl Functor for Option<$T> {
 `Applicative` implementation for `Option`.
 """
 impl Applicative for Option<$T> {
-  def pure(value: $A) -> Option<$A> {
+  def pure::<Option<$T>, $A>(value: $A) -> Option<$A> {
     Option::Some(value)
   }
 
-  def ap(mapper: Option<($A -> $B)>, value: Option<$A>) -> Option<$B> {
+  def ap::<Option<$T>, $A, $B>(mapper: Option<($A -> $B)>, value: Option<$A>) -> Option<$B> {
     match mapper {
       Option::Some(f) => match value {
         Option::Some(inner) => Option::Some(f(inner)),
@@ -98,11 +98,11 @@ impl Applicative for Option<$T> {
 This is the source-level meaning of `value |>= mapper`.
 """
 impl Monad for Option<$T> {
-  def return(value: $A) -> Option<$A> {
+  def return::<Option<$T>, $A>(value: $A) -> Option<$A> {
     Option::Some(value)
   }
 
-  def bind(self: Option<$A>, mapper: ($A -> Option<$B>)) -> Option<$B> {
+  def bind::<Option<$T>, $A, $B>(self: Option<$A>, mapper: ($A -> Option<$B>)) -> Option<$B> {
     match self {
       Option::Some(value) => mapper(value),
       Option::None => Option::None,
@@ -115,7 +115,7 @@ impl Monad for Option<$T> {
 This is the source-level meaning of `left >* right` for `Option`.
 """
 impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
-  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
+  def lift_compose::<($A -> Option<$B>), $A, $B, $C, Option<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
     {|value| Functor::fmap(self(value), rhs)}
   }
 }
@@ -125,7 +125,7 @@ impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
 This is the source-level meaning of `left >=> right` for `Option`.
 """
 impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
-  def kleisli_compose(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
+  def kleisli_compose::<($A -> Option<$B>), $A, $B, Option<$C>>(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
     {|value| Monad::bind(self(value), rhs)}
   }
 }
@@ -137,7 +137,7 @@ impl From<Result<$T>> for Option<$T> {
   xldr(1)> from::<Result>(Option::Some(1))
   Ok(1)
   """
-  def from(self: Self) -> Result<$T> {
+  def from::<Result<$T>>(self: Self) -> Result<$T> {
     match self {
       Option::Some(value) => Ok(value),
       Option::None => Err(NoneError),
@@ -152,7 +152,7 @@ impl From<Option<$T>> for Result<$T> {
   xldr(1)> from::<Option>(Ok(1))
   Option::Some(1)
   """
-  def from(self: Self) -> Option<$T> {
+  def from::<Option<$T>>(self: Self) -> Option<$T> {
     match self {
       Ok(value) => Option::Some(value),
       Err(_) => Option::None,

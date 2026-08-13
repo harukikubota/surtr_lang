@@ -403,6 +403,7 @@ pub struct ResolvedEnumVariant {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedTraitMethodSig {
     pub id: ResolvedId,
+    pub fun_params: Vec<AstTy>,
     pub type_params: Vec<ResolvedTypeParam>,
     pub params: Vec<ResolvedFunParam>,
     pub ret_ty: AstTy,
@@ -444,6 +445,7 @@ pub enum ResolvedWhereConstraintRhs {
 pub struct ResolvedTraitImplMethod {
     pub method_name: Symbol,
     pub function_id: ResolvedId,
+    pub fun_params: Vec<AstTy>,
     pub type_params: Vec<ResolvedTypeParam>,
     pub params: Vec<ResolvedFunParam>,
     pub ret_ty: Option<AstTy>,

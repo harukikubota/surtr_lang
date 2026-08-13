@@ -1744,6 +1744,7 @@ impl Parser<'_> {
             }
         };
         let (name, _) = self.expect_ident()?;
+        let fun_params = self.parse_trait_fun_params_for_context(Some(target.to_string()))?;
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
             return Err(ParseError::syntax(
@@ -1867,6 +1868,7 @@ impl Parser<'_> {
                 visibility,
                 user_importable: attrs.user_importable,
                 user_callable: attrs.user_callable,
+                fun_params,
             },
         );
         let attrs = ast_decl_attrs(&ast).ok_or_else(|| {
@@ -1903,6 +1905,7 @@ impl Parser<'_> {
             }
         };
         let (name, _) = self.expect_builtin_decl_name()?;
+        attrs.fun_params = self.parse_trait_fun_params_for_context(Some(target.to_string()))?;
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
             return Err(ParseError::syntax(
@@ -2450,6 +2453,7 @@ impl Parser<'_> {
             }
         };
         let (name, _) = self.expect_ident()?;
+        let fun_params = self.parse_trait_fun_params()?;
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
             return Err(ParseError::syntax(
@@ -2564,6 +2568,7 @@ impl Parser<'_> {
         attrs.visibility = visibility;
         Ok(TraitMethodSig {
             name,
+            fun_params,
             type_params,
             params,
             ret_ty,
@@ -2575,6 +2580,39 @@ impl Parser<'_> {
                 end,
             },
         })
+    }
+
+    fn parse_trait_fun_params(&mut self) -> Result<Vec<AstTy>, ParseError> {
+        self.parse_trait_fun_params_for_context(Some("Self".into()))
+    }
+
+    fn parse_trait_fun_params_for_context(
+        &mut self,
+        self_context: Option<String>,
+    ) -> Result<Vec<AstTy>, ParseError> {
+        if !matches!(self.peek(), Token::Colon)
+            || !matches!(self.peek_n(1), Some(Token::Colon))
+            || !matches!(self.peek_n(2), Some(Token::Lt))
+        {
+            return Ok(Vec::new());
+        }
+        self.advance();
+        self.advance();
+        self.advance();
+        self.skip_newlines();
+        let mut params = Vec::new();
+        loop {
+            params.push(self.parse_type_in_impl_context(self_context.clone())?);
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                continue;
+            }
+            self.expect(&Token::Gt)?;
+            break;
+        }
+        Ok(params)
     }
 
     pub(super) fn parse_trait_method_param(
@@ -3425,6 +3463,31 @@ impl Parser<'_> {
                         }
                         attrs.derives.push(trait_name);
                         self.skip_newlines();
+                        if matches!(self.peek(), Token::LParen) {
+                            self.advance();
+                            self.skip_newlines();
+                            let variant = match self.advance().token {
+                                Token::Ident(name) => name,
+                                _ => {
+                                    return Err(ParseError::syntax(
+                                        "@derive variant expects a bare name",
+                                        self.peek_span(),
+                                    ))
+                                }
+                            };
+                            self.skip_newlines();
+                            if !matches!(self.peek(), Token::RParen) {
+                                return Err(ParseError::syntax(
+                                    "@derive variant expects `)`",
+                                    self.peek_span(),
+                                ));
+                            }
+                            self.advance();
+                            let last = attrs.derives.last_mut().expect("derive just pushed");
+                            last.push('(');
+                            last.push_str(&variant);
+                            last.push(')');
+                        }
                         if !matches!(self.peek(), Token::Comma) {
                             break;
                         }

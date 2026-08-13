@@ -19,6 +19,20 @@ impl Add for Int {
 
 `Self` は Trait の実装対象型を表す。`Int` のように target が非 generic なら、`Self` に型引数を付けない。
 
+FunParams は、型変数が value parameter の型から導入できない場合に使う。`Self` が `self` などの引数位置に現れる method は FunParams を必要としない。trait 宣言に FunParams がある場合だけ、impl 側で trait head と impl target による置換形を宣言する。
+
+```surtr
+deftrait TryFrom<$To> {
+  def try_from::<$To>(self: Self) -> Result<$To, Error>
+}
+
+impl TryFrom<Int> for String {
+  def try_from::<Int>(self: String) -> Result<Int, Error> { # ... }
+}
+```
+
+引数位置ですでに導入されている型変数を同じ型で FunParams に重ねて指定するのはエラーである。`Eq::eq(self: Self, rhs: Self)` のような method は `::<Self>` を付けない。一方、`TryFrom` の `$To` は引数位置から導入されず、変換先を指定する FunParams として `::<$To>` に置く。
+
 ## 型スロット
 
 通常の `def` に明示的な generic parameter list は書かない。型変数は signature に現れるポリモーフィックなスロットである。
@@ -44,7 +58,7 @@ method の引数から導入できない Trait 固有の型は、Trait head に�
 
 ```surtr
 deftrait TryFrom<$To> {
-  def try_from(self: Self) -> Result<$To, Error>
+  def try_from::<$To>(self: Self) -> Result<$To, Error>
 }
 ```
 

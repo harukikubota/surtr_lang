@@ -3385,7 +3385,7 @@ fn namespaced_type_and_trait_impl_typecheck_inside_script_module_scope() {
 }
 
 impl Show for Auth::User {
-  def to_string(self: Self) -> String { "user" }
+  def to_string::<Auth::User>(self: Self) -> String { "user" }
 }
 
 value: Auth::User = Auth::User("alice")
@@ -3550,13 +3550,7 @@ marked: Boxed<Int> = Marker::mark(Boxed::Box(1))"#,
 #[test]
 fn function_where_bounds_propagate_to_generic_call_sites() {
     let source = r#"deftrait Default {
-  def default() -> Self
-}
-
-impl Default for String {
-  def default() -> String {
-    ""
-  }
+  def default::<Self>() -> Self
 }
 
 def make(seed: $A) -> $A
@@ -3574,7 +3568,7 @@ where
     .expect("a call target with the declared where-bound implementation should typecheck");
 
     let err = typecheck_with_rules(
-        &format!("{source}\nvalue: Int = make(1)"),
+        &format!("{source}\nvalue: Boolean = make(True)"),
         RuntimeSourcePolicy::script(),
     )
     .expect_err("the generic call must retain and enforce its where bound");
@@ -3588,7 +3582,7 @@ where
 fn where_clause_does_not_declare_a_new_type_variable() {
     let err = typecheck_with_rules(
         r#"deftrait Default {
-  def default() -> Self
+  def default::<Self>() -> Self
 }
 
 def id(value: $A) -> $A
@@ -4384,7 +4378,7 @@ impl Boolean {
 }
 
 impl Eq for Boolean {
-  @builtin def eq(self: Self, rhs: Self) -> Boolean
+  @builtin def eq::<Boolean>(self: Self, rhs: Self) -> Boolean
 }"#,
     )])
     .expect_err("special-form declaration outside Kernel must fail");
@@ -5112,7 +5106,7 @@ fn user_defined_container_can_use_context_operators_via_traits() {
 }
 
 impl Functor for Boxed<$T> {
-  def fmap(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
+  def fmap::<Boxed<$T>, $A, $B>(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
     match self {
       Boxed::Box(value) => Boxed::Box(mapper(value)),
     }
@@ -5120,9 +5114,9 @@ impl Functor for Boxed<$T> {
 }
 
 impl Applicative for Boxed<$T> {
-  def pure(value: $A) -> Boxed<$A> { Boxed::Box(value) }
+  def pure::<Boxed<$T>, $A>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
 
-  def ap(mapper: Boxed<($A -> $B)>, value: Boxed<$A>) -> Boxed<$B> {
+  def ap::<Boxed<$T>, $A, $B>(mapper: Boxed<($A -> $B)>, value: Boxed<$A>) -> Boxed<$B> {
     match mapper {
       Boxed::Box(f) => match value {
         Boxed::Box(inner) => Boxed::Box(f(inner)),
@@ -5132,9 +5126,9 @@ impl Applicative for Boxed<$T> {
 }
 
 impl Monad for Boxed<$T> {
-  def return(value: $A) -> Boxed<$A> { Boxed::Box(value) }
+  def return::<Boxed<$T>, $A>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
 
-  def bind(self: Boxed<$A>, mapper: ($A -> Boxed<$B>)) -> Boxed<$B> {
+  def bind::<Boxed<$T>, $A, $B>(self: Boxed<$A>, mapper: ($A -> Boxed<$B>)) -> Boxed<$B> {
     match self {
       Boxed::Box(value) => mapper(value),
     }
@@ -5142,13 +5136,13 @@ impl Monad for Boxed<$T> {
 }
 
 impl LiftComposable<$A, $B, $C, Boxed<$C>> for ($A -> Boxed<$B>) {
-  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Boxed<$C>) {
+  def lift_compose::<($A -> Boxed<$B>), $A, $B, $C, Boxed<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Boxed<$C>) {
     {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
 impl KleisliComposable<$A, $B, Boxed<$C>> for ($A -> Boxed<$B>) {
-  def kleisli_compose(self: Self, rhs: ($B -> Boxed<$C>)) -> ($A -> Boxed<$C>) {
+  def kleisli_compose::<($A -> Boxed<$B>), $A, $B, Boxed<$C>>(self: Self, rhs: ($B -> Boxed<$C>)) -> ($A -> Boxed<$C>) {
     {|value| Monad::bind(self(value), rhs)}
   }
 }
@@ -5835,7 +5829,7 @@ impl BoxedInt {
 }
 
 impl Compare for BoxedInt {
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<BoxedInt>(self: Self, rhs: Self) -> Ordering {
     Compare::compare(self.value, rhs.value)
   }
 }
@@ -6481,7 +6475,7 @@ fn decode_helper_inside_decode_impl_dispatches_by_receiver_and_target() {
         r#"defrecord JsonSpecConfig(name: String, entrypoint: String)
 
 impl Decode<JsonSpecConfig> for JsonValue {
-  def decode(self: Self) -> Result<JsonSpecConfig, Error> {
+  def decode::<JsonSpecConfig>(self: Self) -> Result<JsonSpecConfig, Error> {
     name_json =? Json::get(self, "name")
     name =? Decode::decode::<String>(name_json)
     entry_json =? Json::get(self, "entrypoint")
@@ -6525,7 +6519,7 @@ fn decode_helper_allows_same_pattern_recursive_dispatch() {
         r#"defrecord JsonSpecRecursive(value: String)
 
 impl Decode<JsonSpecRecursive> for JsonValue {
-  def decode(self: Self) -> Result<JsonSpecRecursive, Error> {
+  def decode::<JsonSpecRecursive>(self: Self) -> Result<JsonSpecRecursive, Error> {
     Decode::decode::<JsonSpecRecursive>(self)
   }
 }"#,
@@ -6537,7 +6531,7 @@ fn encode_helper_dispatches_to_receiver_impl_with_json_value_target() {
         r#"defrecord JsonSpecConfig(name: String, entrypoint: String)
 
 impl Encode<JsonValue> for JsonSpecConfig {
-  def encode(self: Self) -> Result<JsonValue, Error> {
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
     Ok(JsonValue::String(self.name))
   }
 }
@@ -6577,7 +6571,7 @@ fn encode_helper_allows_same_pattern_recursive_dispatch() {
         r#"defrecord JsonSpecRecursive(value: String)
 
 impl Encode<JsonValue> for JsonSpecRecursive {
-  def encode(self: Self) -> Result<JsonValue, Error> {
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
     Encode::encode::<JsonValue>(self)
   }
 }"#,
@@ -6700,35 +6694,35 @@ impl String {
 }
 
 impl Show for String {
-  def to_string(self: Self) -> String {
+  def to_string::<String>(self: Self) -> String {
 inspect(self)
   }
 }
 
 impl From<String> for String {
-  def from(self: Self) -> String {
+  def from::<String>(self: Self) -> String {
 self
   }
 }
 
 impl TryFrom<Int> for String {
-  def try_from(self: Self) -> Result<Int, Error> {
+  def try_from::<Int>(self: Self) -> Result<Int, Error> {
 Ok(0)
   }
 }
 
 impl From<Int> for String {
-  def from(self: Self) -> Int {
+  def from::<Int>(self: Self) -> Int {
 0
   }
 }
 
 impl Eq for String {
-  def eq(self: Self, rhs: Self) -> Boolean {
+  def eq::<String>(self: Self, rhs: Self) -> Boolean {
 self == rhs
   }
 
-  def neq(self: Self, rhs: Self) -> Boolean {
+  def neq::<String>(self: Self, rhs: Self) -> Boolean {
 self != rhs
   }
 }"#,
@@ -7563,11 +7557,11 @@ value = Result::tap_err(Err(NoneError), id(handler))"#,
 fn explicit_type_arguments_specialize_functions_trait_calls_and_captures() {
     let typed = typecheck_with_builtin_prelude(
         r#"deftrait Convert<$To> {
-  def convert(self: Self) -> $To
+  def convert::<Self, $To>(self: Self) -> $To
 }
 
 impl Convert<Int> for String {
-  def convert(self: String) -> Int { 1 }
+  def convert::<String, Int>(self: String) -> Int { 1 }
 }
 
 converted: Int = Convert::convert::<Int>("")

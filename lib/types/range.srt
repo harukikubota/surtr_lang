@@ -86,11 +86,11 @@ where
   @doc """
   Return `True` when both boundaries are equal.
   """
-  def eq(self: Self, rhs: Self) -> Boolean {
+  def eq::<Self>(self: Self, rhs: Self) -> Boolean {
     if(Eq::eq(self.min, rhs.min), Eq::eq(self.max, rhs.max), False)
   }
 
-  def neq(self: Self, rhs: Self) -> Boolean {
+  def neq::<Self>(self: Self, rhs: Self) -> Boolean {
     if(Eq::eq(self.min, rhs.min), Eq::neq(self.max, rhs.max), True)
   }
 }
@@ -102,7 +102,7 @@ where
   @doc """
   Return the lexicographic ordering between two ranges.
   """
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<Self>(self: Self, rhs: Self) -> Ordering {
     match Compare::compare(self.min, rhs.min) {
       Ordering::Equal => Compare::compare(self.max, rhs.max),
       order => order,
