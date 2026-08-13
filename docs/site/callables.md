@@ -230,36 +230,17 @@ plus = {|x| x + 1}
 
 ## trailing block
 
-call 式の最終引数がゼロ引数 closure なら、末尾へ外出しして書けます。
+call 式の最終引数がclosure なら、末尾へ外出しして書けます。
 
 ```surtr
 Test::it("increments") {
   print("ok")
 }
+
+List::map([1, 1, 2, 3]) {|num| num + 1 }
 ```
 
 これは通常の call の sugar です。constructor call には使いません。
-
-## よくある迷いどころ
-
-```surtr
-value |> normalize           # NG
-value |> &normalize          # OK
-value |> normalize(10)       # OK
-
-pipeline = parse >=> check   # NG
-pipeline = &parse >=> &check # OK
-
-1 `+` 2                      # OK
-True `Boolean::eqv` False    # OK
-f = `+`                      # NG
-```
-
-見分け方は単純です。
-
-- すぐ実行したいなら call
-- あとで渡したいなら capture / closure
-- 二項 call を中置で読みたければ FuncLiteral
 
 ## 関連ページ
 
