@@ -1,6 +1,7 @@
 @doc """
 Path value used by FS and Shell.
 """
+@derive Eq, Neq, Show
 defstruct FilePath {
   raw: String,
 }
@@ -14,6 +15,7 @@ impl FilePath {
 @doc """
 Portable filesystem entry category.
 """
+@derive Eq, Neq, Compare, Show
 defenum FileSystemEntryKind {
   File,
   Directory,
@@ -24,6 +26,7 @@ defenum FileSystemEntryKind {
 @doc """
 Portable permission view.
 """
+@derive Eq, Neq, Show
 defstruct FileSystemPermissions {
   read_only: Boolean,
   executable: Boolean,

@@ -41,6 +41,7 @@ defenum BitWidth {
 @doc """
 Type-safe radix marker for integer parsing helpers and diagnostics.
 """
+@derive Eq, Neq, Compare, Show
 defenum IntBase {
   Bin,
   Oct,

@@ -30,6 +30,7 @@ Encoding selector for integer-based string conversion helpers.
 `Utf8` treats integers as raw UTF-8 byte values, while `Ascii` restricts the
 sequence to 7-bit ASCII.
 """
+@derive Eq, Neq, Compare, Show
 defenum StringEncoding {
   Utf8,
   Ascii,
