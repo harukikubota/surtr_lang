@@ -6295,3 +6295,17 @@ fn test_explicit_type_arguments_reject_empty_self_constructor_and_repetition() {
         assert!(parse(source).is_err(), "{source} should fail");
     }
 }
+
+#[test]
+fn test_list_monoid_helpers_parse() {
+    parse(
+        r#"defstruct Monoid<$A> { empty: $A, combine: ($A, $A -> $A) }
+impl List {
+  def fold(values: List<$A>, monoid: Monoid<$A>) -> $A { reduce(values, monoid.empty, monoid.combine) }
+  def fold_map(values: List<$A>, monoid: Monoid<$B>, mapper: ($A -> $B)) -> $B { combine = monoid.combine
+    reduce(values, monoid.empty, {|acc, value| combine(acc, mapper(value))}) }
+  def reduce_with(values: List<$A>, combine: ($A, $A -> $A)) -> Option<$A> { match values { [] => Option::None, [head, ..tail] => Option::Some(reduce(tail, head, combine)), } }
+}"#,
+    )
+    .expect("Monoid List helpers should parse");
+}

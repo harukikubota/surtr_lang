@@ -204,6 +204,13 @@ const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
+        file_name: "types/monoid.srt",
+        module_path: "Monoid",
+        source: include_str!("../../../lib/types/monoid.srt"),
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
         file_name: "traits/operator/pipe_apply.srt",
         module_path: "PipeApply",
         source: include_str!("../../../lib/traits/operator/pipe_apply.srt"),

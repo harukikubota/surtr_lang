@@ -30,6 +30,7 @@ const APPLICATIVE_MODULE_SOURCE: &str =
 const MONAD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/monad.srt");
 const ALTERNATIVE_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/alternative.srt");
+const MONOID_MODULE_SOURCE: &str = include_str!("../../../../lib/types/monoid.srt");
 const PIPE_APPLY_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/pipe_apply.srt");
 const COMPOSE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/compose.srt");
@@ -471,6 +472,7 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
                 "Alternative",
                 pick_override("Alternative", ALTERNATIVE_MODULE_SOURCE, overrides),
             ),
+            ("Monoid", pick_override("Monoid", MONOID_MODULE_SOURCE, overrides)),
             (
                 "PipeApply",
                 pick_override("PipeApply", PIPE_APPLY_MODULE_SOURCE, overrides),

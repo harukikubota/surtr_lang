@@ -314,6 +314,32 @@ impl List {
   }
 
   @doc """
+  Fold a list from left to right using a `Monoid` identity and operation.
+  Empty lists return `monoid.empty`.
+  """
+  def fold(values: List<$A>, monoid: Monoid<$A>) -> $A {
+    reduce(values, monoid.empty, monoid.combine)
+  }
+
+  @doc """
+  Map each value and fold the mapped sequence from left to right.
+  """
+  def fold_map(values: List<$A>, monoid: Monoid<$B>, mapper: ($A -> $B)) -> $B {
+    combine = monoid.combine
+    reduce(values, monoid.empty, {|acc, value| combine(acc, mapper(value))})
+  }
+
+  @doc """
+  Reduce a non-empty list from left to right. Empty input returns `Option::None`.
+  """
+  def reduce_with(values: List<$A>, combine: ($A, $A -> $A)) -> Option<$A> {
+    match values {
+      [] => Option::None,
+      [head, ..tail] => Option::Some(reduce(tail, head, combine)),
+    }
+  }
+
+  @doc """
   Fold a list from left to right with early exit.
   ## REPL
   xldr(1)> List::reduce_while([1, 2, 3], 0, {|acc, n| if(acc + n < 3, ReduceStep::Resume(acc + n), ReduceStep::Stop(acc + n))})

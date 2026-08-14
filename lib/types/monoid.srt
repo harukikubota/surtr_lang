@@ -1,0 +1,16 @@
+@doc """
+An associative operation together with its identity value.
+
+`combine` must be associative and `empty` must be a left and right identity.
+Those laws are a library contract; they are not proven by the compiler.
+"""
+defstruct Monoid<$A> {
+  empty: $A,
+  combine: ($A, $A -> $A),
+}
+
+impl Monoid {
+  def new(empty: $A, combine: ($A, $A -> $A)) -> Monoid<$A> {
+    Monoid { empty, combine }
+  }
+}

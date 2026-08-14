@@ -19,6 +19,16 @@ test("List") {
       assert_eq((first <|> second) <|> third, first <|> (second <|> third))
     }
 
+    it("folds, maps, and reduces with a Monoid") {
+      sum = Monoid(0, {|left, right| left + right})
+      assert_eq(0, List::fold([], sum))
+      assert_eq(6, List::fold([1, 2, 3], sum))
+      assert_eq(12, List::fold_map([1, 2, 3], sum, {|value| value * 2}))
+      assert_eq(Option::Some(6), List::reduce_with([1, 2, 3], sum.combine))
+      values: List<Int> = []
+      assert_eq(Option::None, List::reduce_with(values, sum.combine))
+    }
+
     it("each runs callbacks from left to right") {
       capture_stdout()
       result = List::each([1, 2, 3], {|n| print("n=#{to_string(n)}")})

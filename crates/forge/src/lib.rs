@@ -51,6 +51,7 @@ mod tests {
     const MONAD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/monad.srt");
     const ALTERNATIVE_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/alternative.srt");
+    const MONOID_MODULE_SOURCE: &str = include_str!("../../../lib/types/monoid.srt");
     const PIPE_APPLY_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/pipe_apply.srt");
     const COMPOSE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compose.srt");
@@ -218,6 +219,7 @@ mod tests {
                 ("Applicative", APPLICATIVE_MODULE_SOURCE),
                 ("Monad", MONAD_MODULE_SOURCE),
                 ("Alternative", ALTERNATIVE_MODULE_SOURCE),
+                ("Monoid", MONOID_MODULE_SOURCE),
                 ("PipeApply", PIPE_APPLY_MODULE_SOURCE),
                 ("Compose", COMPOSE_MODULE_SOURCE),
                 ("Composable", COMPOSABLE_MODULE_SOURCE),
