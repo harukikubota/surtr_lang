@@ -6,6 +6,42 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 static SYNTHETIC_DEFAULT_METHOD_UID: AtomicU32 = AtomicU32::new(0x6000_0000);
 
 impl Checker {
+    pub(super) fn predeclare_signature_aliases(
+        &mut self,
+        stmts: &[Resolved],
+    ) -> Result<(), TypeError> {
+        for stmt in stmts {
+            let Resolved::TypeAlias(span, name, params, rhs) = stmt else {
+                continue;
+            };
+            if self.signature_aliases.contains_key(name) || self.env.lookup_type_def(name).is_some() {
+                return Err(TypeError {
+                    message: format!("Duplicate visible type name `{}` in the flat type namespace", name),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            let mut used = HashSet::new();
+            Self::collect_ast_ty_type_params(rhs, &mut used);
+            if let Some(param) = params.iter().find(|param| !used.contains(&param.name)) {
+                return Err(TypeError {
+                    message: format!("Type alias {} has an unused type parameter {}", name, param.name),
+                    span: param.span.clone(),
+                    hint: Some("Every alias type parameter must appear in its function signature.".into()),
+                });
+            }
+            self.signature_aliases.insert(
+                name.clone(),
+                SignatureAliasInfo {
+                    params: params.clone(),
+                    rhs: rhs.clone(),
+                    span: span.clone(),
+                },
+            );
+        }
+        Ok(())
+    }
+
     fn where_constraint_subject_ty(
         &self,
         subject: &AstTy,

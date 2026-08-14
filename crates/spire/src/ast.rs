@@ -704,6 +704,9 @@ pub enum Ast {
     /// Builtin type declaration: `@builtin type Int`
     BuiltinTypeDecl(Span, BuiltinTypeHead, DeclAttrs),
 
+    /// Compile-time-only alias for a function signature.
+    TypeAlias(Span, Symbol, Vec<TypeParam>, AstTy),
+
     /// Declaration-only Result constructor contracts used by std modules.
     ///
     /// Surface syntax is intentionally special-cased:

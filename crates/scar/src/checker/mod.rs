@@ -463,6 +463,13 @@ struct TraitImplInfo {
     methods: HashMap<String, TraitImplMethodInfo>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SignatureAliasInfo {
+    params: Vec<ResolvedTypeParam>,
+    rhs: AstTy,
+    span: Span,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 enum ConstKind {
     PrimitiveLiteral,
@@ -1076,6 +1083,7 @@ struct PersistentCheckerState {
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    signature_aliases: HashMap<String, SignatureAliasInfo>,
 }
 
 impl PersistentCheckerState {
@@ -1095,6 +1103,7 @@ impl PersistentCheckerState {
             trait_impl_index_by_base_trait: HashMap::new(),
             trait_methods_by_qualified_name: HashMap::new(),
             tyvar_bounds: HashMap::new(),
+            signature_aliases: HashMap::new(),
         }
     }
 
@@ -1114,6 +1123,7 @@ impl PersistentCheckerState {
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
+            signature_aliases: self.signature_aliases.clone(),
             process_specs,
         }
     }
@@ -1136,6 +1146,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             trait_impl_index_by_base_trait: checkpoint.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: checkpoint.trait_methods_by_qualified_name,
             tyvar_bounds: checkpoint.tyvar_bounds,
+            signature_aliases: checkpoint.signature_aliases,
         }
     }
 }
@@ -1158,6 +1169,7 @@ pub struct ScarCheckpoint {
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    signature_aliases: HashMap<String, SignatureAliasInfo>,
     process_specs: Vec<TypedProcessSpec>,
 }
 
@@ -2040,6 +2052,8 @@ struct Checker {
     specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    signature_aliases: HashMap<String, SignatureAliasInfo>,
+    alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
     allow_error_function_params: bool,
@@ -2122,6 +2136,8 @@ impl Checker {
             specialization_fun_idxs: state.specialization_fun_idxs,
             substitutions: HashMap::new(),
             tyvar_bounds: state.tyvar_bounds,
+            signature_aliases: state.signature_aliases,
+            alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             allow_error_function_params: context.allow_error_function_params,
@@ -3126,6 +3142,7 @@ impl Checker {
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
+            signature_aliases: self.signature_aliases.clone(),
         }
     }
 
@@ -3145,6 +3162,7 @@ impl Checker {
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name,
             tyvar_bounds: self.tyvar_bounds,
+            signature_aliases: self.signature_aliases,
         }
     }
 
@@ -3198,6 +3216,8 @@ impl Checker {
             if let Some(start) = t {
                 predeclare_error_types_dur = start.elapsed();
             }
+
+            self.predeclare_signature_aliases(&stmts)?;
 
             let t = profile_enabled.then(Instant::now);
             self.predeclare_type_signatures(&stmts)?;

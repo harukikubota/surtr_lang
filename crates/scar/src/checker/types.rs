@@ -26,6 +26,58 @@ impl<'a> SignatureTyMode<'a> {
 }
 
 impl Checker {
+    fn resolve_signature_alias(
+        &mut self,
+        span: &Span,
+        name: &str,
+        args: &[AstTy],
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+        mode: SignatureTyMode<'_>,
+    ) -> Result<Option<Ty>, TypeError> {
+        let Some(alias) = self.signature_aliases.get(name).cloned() else {
+            return Ok(None);
+        };
+        if alias.params.len() != args.len() {
+            return Err(TypeError {
+                message: format!(
+                    "Type alias {} requires {} type argument(s), got {}",
+                    Self::surface_name(name), alias.params.len(), args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if self.alias_expansion_stack.iter().any(|item| item == name) {
+            let mut cycle = self.alias_expansion_stack.clone();
+            cycle.push(name.to_string());
+            return Err(TypeError {
+                message: format!("Cyclic type alias: {}", cycle.join(" -> ")),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let mut alias_tyvars = tyvars.clone();
+        for (param, arg) in alias.params.iter().zip(args) {
+            let actual = self.resolve_signature_like_ast_ty_in_context(
+                arg,
+                TypeSyntaxContext::General,
+                tyvars,
+                mode,
+            )?;
+            alias_tyvars.insert(param.name.clone(), actual);
+        }
+        self.alias_expansion_stack.push(name.to_string());
+        let result = self.resolve_signature_like_ast_ty_in_context(
+            &alias.rhs,
+            context,
+            &mut alias_tyvars,
+            mode,
+        );
+        self.alias_expansion_stack.pop();
+        result.map(Some)
+    }
+
     fn validate_facet_kind_annotation(
         &self,
         ast: &AstTy,
@@ -894,6 +946,29 @@ impl Checker {
     }
 
     fn resolve_signature_like_ast_ty_in_context(
+        &mut self,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+        mode: SignatureTyMode<'_>,
+    ) -> Result<Ty, TypeError> {
+        match ast_ty {
+            AstTy::Named(span, name) => {
+                if let Some(alias) = self.resolve_signature_alias(span, name, &[], context, tyvars, mode)? {
+                    return Ok(alias);
+                }
+            }
+            AstTy::Generic(span, name, args) => {
+                if let Some(alias) = self.resolve_signature_alias(span, name, args, context, tyvars, mode)? {
+                    return Ok(alias);
+                }
+            }
+            _ => {}
+        }
+        self.resolve_signature_like_ast_ty_in_context_non_alias(ast_ty, context, tyvars, mode)
+    }
+
+    fn resolve_signature_like_ast_ty_in_context_non_alias(
         &mut self,
         ast_ty: &AstTy,
         context: TypeSyntaxContext,

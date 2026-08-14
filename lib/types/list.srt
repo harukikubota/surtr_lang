@@ -306,7 +306,7 @@ impl List {
   xldr(1)> List::reduce([1, 2, 3], 0, {|acc, n| acc + n})
   6
   """
-  def reduce(values: List<$A>, init: $B, f: ($B, $A -> $B)) -> $B {
+  def reduce(values: List<$A>, init: $B, f: Reducer<$B, $A>) -> $B {
     match values {
       [] => init,
       [head, ..tail] => reduce(tail, f(init, head), f),
@@ -324,7 +324,7 @@ impl List {
   @doc """
   Map each value and fold the mapped sequence from left to right.
   """
-  def fold_map(values: List<$A>, monoid: Monoid<$B>, mapper: ($A -> $B)) -> $B {
+  def fold_map(values: List<$A>, monoid: Monoid<$B>, mapper: Mapper<$A, $B>) -> $B {
     combine = monoid.combine
     reduce(values, monoid.empty, {|acc, value| combine(acc, mapper(value))})
   }
@@ -332,7 +332,7 @@ impl List {
   @doc """
   Reduce a non-empty list from left to right. Empty input returns `Option::None`.
   """
-  def reduce_with(values: List<$A>, combine: ($A, $A -> $A)) -> Option<$A> {
+  def reduce_with(values: List<$A>, combine: Semigroup<$A>) -> Option<$A> {
     match values {
       [] => Option::None,
       [head, ..tail] => Option::Some(reduce(tail, head, combine)),

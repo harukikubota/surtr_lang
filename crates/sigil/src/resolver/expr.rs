@@ -694,6 +694,7 @@ impl Resolver {
             | Ast::IntrinsicDecl(_, _, _, _)
             | Ast::BuiltinExtractorDecl(_, _, _, _, _)
             | Ast::BuiltinTypeDecl(_, _, _)
+            | Ast::TypeAlias(_, _, _, _)
             | Ast::ResultCtorDecl(_, _, _, _, _)
             | Ast::Defmod(_, _, _, _)
             | Ast::Defagent(_, _, _, _, _)
@@ -3231,6 +3232,19 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
+            Ast::TypeAlias(span, name, type_params, rhs) => Ok(Resolved::TypeAlias(
+                span,
+                name,
+                type_params
+                    .into_iter()
+                    .map(|param| ResolvedTypeParam {
+                        name: param.name,
+                        bound: param.bound,
+                        span: param.span,
+                    })
+                    .collect(),
+                rhs,
+            )),
             Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)

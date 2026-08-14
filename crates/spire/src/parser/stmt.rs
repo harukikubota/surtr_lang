@@ -34,6 +34,7 @@ impl Parser<'_> {
                     | Token::Deferror
                     | Token::Defenum
                     | Token::Defextractor
+                    | Token::Type
             )
         {
             return Err(ParseError::syntax(
@@ -63,6 +64,7 @@ impl Parser<'_> {
             Token::Deferror => self.parse_deferror_def()?,
             Token::Defenum => self.parse_enum_def()?,
             Token::Defextractor => self.parse_extractor_def()?,
+            Token::Type => self.parse_type_alias()?,
             _ => {
                 if self.is_pattern_bind_stmt_start() {
                     let save = self.pos;

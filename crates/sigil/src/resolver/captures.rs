@@ -67,6 +67,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                         local_bound.insert(param.id.unique_id);
                     }
                     Resolved::BuiltinTypeDecl(_, _, _, _) => {}
+                    Resolved::TypeAlias(_, _, _, _) => {}
                     Resolved::ResultCtorDecl(_, _, _, _, _) => {}
                     Resolved::Closure(_, params, _, _) => {
                         for param in params {
@@ -215,6 +216,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         | Resolved::BuiltinDecl(_, _, _, _, _)
         | Resolved::BuiltinExtractorDecl(_, _, _, _, _)
         | Resolved::BuiltinTypeDecl(_, _, _, _)
+        | Resolved::TypeAlias(_, _, _, _)
         | Resolved::ResultCtorDecl(_, _, _, _, _) => {}
         Resolved::Def(_, id, _, params, _, _, body, _) => {
             let mut fun_bound = bound.clone();

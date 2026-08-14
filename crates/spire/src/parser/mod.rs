@@ -559,6 +559,12 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
             head.name = qualify_namespace_head(namespace, &head.name, 2, &span, "type", true)?;
             Ok(Ast::BuiltinTypeDecl(span, head, attrs))
         }
+        Ast::TypeAlias(span, name, type_params, rhs) => Ok(Ast::TypeAlias(
+            span.clone(),
+            qualify_namespace_head(namespace, &name, 2, &span, "type alias", true)?,
+            type_params,
+            qualify_namespace_type(rhs, namespace)?,
+        )),
         Ast::Namespace(span, _, _) => Err(ParseError::syntax(
             "Nested namespace declarations are not allowed",
             span,
@@ -2180,6 +2186,12 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             shift_builtin_type_head(head, delta),
             shift_decl_attrs(attrs),
         ),
+        Ast::TypeAlias(span, name, type_params, rhs) => Ast::TypeAlias(
+            shift_span(span, delta),
+            name,
+            type_params,
+            shift_ast_ty(rhs, delta),
+        ),
         Ast::Namespace(span, name, body) => Ast::Namespace(
             shift_span(span, delta),
             name,
@@ -2394,6 +2406,7 @@ impl Ast {
             | Ast::IntrinsicDecl(s, _, _, _)
             | Ast::BuiltinExtractorDecl(s, _, _, _, _)
             | Ast::BuiltinTypeDecl(s, _, _)
+            | Ast::TypeAlias(s, _, _, _)
             | Ast::Namespace(s, _, _)
             | Ast::ResultCtorDecl(s, _, _, _, _)
             | Ast::Defmod(s, _, _, _)

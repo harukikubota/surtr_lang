@@ -6309,3 +6309,13 @@ impl List {
     )
     .expect("Monoid List helpers should parse");
 }
+
+#[test]
+fn test_function_signature_type_alias_parses() {
+    let ast = parse("type Mapper<$A, $B> = ($A -> $B)").expect("signature alias should parse");
+    assert!(matches!(
+        ast.as_slice(),
+        [Ast::TypeAlias(_, name, params, AstTy::Func(_, _, _))]
+            if name == "Mapper" && params.len() == 2
+    ));
+}

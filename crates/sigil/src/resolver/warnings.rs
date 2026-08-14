@@ -118,6 +118,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         | Resolved::InferredFacetCapture(_, _)
         | Resolved::ProcessContextHandler(_, _)
         | Resolved::BuiltinTypeDecl(..)
+        | Resolved::TypeAlias(..)
         | Resolved::ResultCtorDecl(..) => {}
         Resolved::Var(_, id) => usage.use_id(id),
         Resolved::App(_, func, args) => {

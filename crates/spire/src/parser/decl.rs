@@ -3739,6 +3739,7 @@ impl Parser<'_> {
                 Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
                 Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
                 Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
+                Token::Type => self.parse_type_alias(),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
                     "@doc / @autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `defagent`, `defstruct`, `defrecord`, `deferror`, `defenum`, `defextractor`, `@builtin type/def/defextractor`, or `@intrinsic def`",
@@ -3746,6 +3747,29 @@ impl Parser<'_> {
                 )),
             }
         }
+    }
+
+    pub(super) fn parse_type_alias(&mut self) -> Result<Ast, ParseError> {
+        let start = self.expect(&Token::Type)?.start;
+        let (name, _) = self.expect_ident()?;
+        let type_params = self.parse_decl_type_params()?;
+        self.skip_newlines();
+        self.expect(&Token::Bind)?;
+        self.skip_newlines();
+        let rhs = self.parse_type()?;
+        if !matches!(rhs, AstTy::Func(..)) {
+            return Err(ParseError::syntax(
+                "type aliases may only name function signatures",
+                ast_ty_span(&rhs).clone(),
+            ));
+        }
+        let end = ast_ty_span(&rhs).end;
+        Ok(Ast::TypeAlias(
+            Span { start, end },
+            name,
+            type_params,
+            rhs,
+        ))
     }
 
     pub(super) fn parse_defagent_default_attrs(&mut self) -> Result<Ast, ParseError> {

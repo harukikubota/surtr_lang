@@ -2637,6 +2637,7 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
         | Ast::IntrinsicDecl(..)
         | Ast::BuiltinExtractorDecl(..)
         | Ast::BuiltinTypeDecl(..)
+        | Ast::TypeAlias(..)
         | Ast::ResultCtorDecl(..)
         | Ast::Def(..)
         | Ast::DeferrorDef(..)
