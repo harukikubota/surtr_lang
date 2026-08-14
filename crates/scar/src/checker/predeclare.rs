@@ -1222,7 +1222,7 @@ impl Checker {
         }
     }
 
-    fn collect_ty_vars(ty: &Ty, out: &mut Vec<u32>) {
+    pub(super) fn collect_ty_vars(ty: &Ty, out: &mut Vec<u32>) {
         match ty {
             Ty::Var(var) => {
                 if !out.contains(var) {

@@ -1365,6 +1365,11 @@ impl Checker {
                     self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
                 }
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(
+                    _body,
+                    &mut ordered,
+                    &mut seen,
+                );
                 // Function-local inference variables can carry trait bounds,
                 // but callers cannot infer them from a call site. Only the
                 // declared signature determines a valid specialization key.
@@ -1377,11 +1382,78 @@ impl Checker {
                 }
                 self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(
+                    _body,
+                    &mut ordered,
+                    &mut seen,
+                );
                 // See `Def` above: exclude function-local inference variables.
             }
             _ => {}
         }
         ordered
+    }
+
+    /// A generic trait instance may be pending in a definition body even when
+    /// the current surface syntax cannot express that fully-instantiated
+    /// bound in the enclosing signature. It still has to participate in the
+    /// definition's specialization key, otherwise Forge sees a Pending call.
+    fn collect_pending_trait_receiver_tyvars_in_node(
+        &self,
+        node: &TypedNode,
+        ordered: &mut Vec<u32>,
+        seen: &mut HashSet<u32>,
+    ) {
+        match &node.node {
+            TypedInner::TraitCall {
+                dispatch: TraitDispatch::Pending,
+                receiver_ty,
+                args,
+                ..
+            } => {
+                let mut vars = Vec::new();
+                Self::collect_ty_vars(receiver_ty, &mut vars);
+                for var in vars {
+                    if seen.insert(var) {
+                        ordered.push(var);
+                    }
+                }
+                for arg in args {
+                    self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
+                }
+            }
+            TypedInner::TraitCall { args, .. }
+            | TypedInner::ListLiteral(args)
+            | TypedInner::TupleLiteral(args) => {
+                for arg in args {
+                    self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
+                }
+            }
+            TypedInner::App(func, args)
+            | TypedInner::InjectCall(func, args)
+            | TypedInner::Capture(func, args) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(func, ordered, seen);
+                for arg in args {
+                    self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
+                }
+            }
+            TypedInner::Block(stmts) => {
+                for stmt in stmts {
+                    self.collect_pending_trait_receiver_tyvars_in_node(stmt, ordered, seen);
+                }
+            }
+            TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) | TypedInner::Semi(rhs) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(rhs, ordered, seen)
+            }
+            TypedInner::BinOp(_, left, right)
+            | TypedInner::Pipe(left, right)
+            | TypedInner::Compose(_, left, right)
+            | TypedInner::ListCons(left, right) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(left, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(right, ordered, seen);
+            }
+            _ => {}
+        }
     }
 
     #[allow(dead_code)]
