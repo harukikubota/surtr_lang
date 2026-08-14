@@ -501,30 +501,12 @@ impl Checker {
         }
     }
 
-    pub(super) fn register_pending_tyvar_bound(&mut self, var: u32, trait_name: &str) {
-        let bounds = self.pending_tyvar_bounds.entry(var).or_default();
-        if !bounds.iter().any(|bound| bound == trait_name) {
-            bounds.push(trait_name.to_string());
-            bounds.sort();
-        }
-    }
-
-    fn pending_tyvar_bound_names(&self, var: u32) -> Vec<String> {
-        self.pending_tyvar_bounds.get(&var).cloned().unwrap_or_default()
-    }
-
     pub(super) fn tyvar_bound_names(&self, var: u32) -> Vec<String> {
         self.tyvar_bounds.get(&var).cloned().unwrap_or_default()
     }
 
     pub(super) fn tyvar_has_bound(&self, var: u32, trait_name: &str) -> bool {
         self.tyvar_bounds
-            .get(&var)
-            .is_some_and(|bounds| bounds.iter().any(|bound| bound == trait_name))
-    }
-
-    pub(super) fn tyvar_has_pending_bound(&self, var: u32, trait_name: &str) -> bool {
-        self.pending_tyvar_bounds
             .get(&var)
             .is_some_and(|bounds| bounds.iter().any(|bound| bound == trait_name))
     }
@@ -1742,7 +1724,6 @@ impl Checker {
             false
         } else {
             let var_bounds = self.tyvar_bound_names(var);
-            let pending_bounds = self.pending_tyvar_bound_names(var);
             match &ty {
                 Ty::Var(other) => {
                     let mut combined = var_bounds;
@@ -1754,20 +1735,9 @@ impl Checker {
                     combined.sort();
                     self.tyvar_bounds.insert(var, combined.clone());
                     self.tyvar_bounds.insert(*other, combined);
-                    let mut pending = pending_bounds;
-                    for bound in self.pending_tyvar_bound_names(*other) {
-                        if !pending.iter().any(|existing| existing == &bound) {
-                            pending.push(bound);
-                        }
-                    }
-                    pending.sort();
-                    self.pending_tyvar_bounds.insert(var, pending.clone());
-                    self.pending_tyvar_bounds.insert(*other, pending);
                 }
                 _ => {
-                    if !self.ty_satisfies_bounds(&ty, &var_bounds)
-                        || !self.ty_satisfies_bounds(&ty, &pending_bounds)
-                    {
+                    if !self.ty_satisfies_bounds(&ty, &var_bounds) {
                         self.profiler.finish(ProfileEvent::BindTyVar, profile);
                         return false;
                     }
