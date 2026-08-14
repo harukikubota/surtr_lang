@@ -1157,6 +1157,40 @@ impl Metric for Int {
 }
 
 #[test]
+fn test_resolve_rejects_duplicate_callable_in_trait_impl() {
+    let result = parse_and_resolve(
+        r#"deftrait Mark {
+  def mark(self: Self) -> Int
+}
+
+impl Mark for Int {
+  def mark(self: Self) -> Int { 1 }
+  def mark(self: Self) -> Int { 2 }
+}"#,
+    );
+
+    let err = result.expect_err("duplicate trait impl method must fail");
+    assert!(err.message.contains("Duplicate function `mark`"));
+    assert_eq!(err.related_labels.len(), 2);
+}
+
+#[test]
+fn test_resolve_rejects_public_private_overload_in_inherent_impl() {
+    let result = parse_and_resolve(
+        r#"defstruct User { name: String }
+
+impl User {
+  def name(self: Self) -> String { self.name }
+  defp name(self: Self) -> String { self.name }
+}"#,
+    );
+
+    let err = result.expect_err("def and defp cannot overload each other");
+    assert!(err.message.contains("Duplicate function `name`"));
+    assert_eq!(err.related_labels.len(), 2);
+}
+
+#[test]
 fn test_precollect_rejects_impl_target_for_record() {
     let module_stages = vec![vec![staged_module(
         "",

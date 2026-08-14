@@ -1,5 +1,5 @@
 use super::captures::collect_captures;
-use super::declarations::trait_instance_key;
+use super::declarations::{ast_ty_key, trait_instance_key};
 use super::scope_init::{
     initialize_scope, is_doc_only_builtin_decl, is_runtime_builtin_decl,
     is_special_form_builtin_decl, resolve_decl_attrs,
@@ -2968,6 +2968,14 @@ impl Resolver {
                 methods,
                 attrs,
             ) => {
+                validate_unique_callable_names(
+                    &format!(
+                        "impl `{}` for `{}`",
+                        trait_instance_key(&trait_name, &trait_args),
+                        ast_ty_key(&target_ty)
+                    ),
+                    &methods,
+                )?;
                 let (trait_uid, qualified_trait_name) =
                     self.resolve_trait_reference(&trait_name, &span)?;
                 let trait_id = ResolvedId {

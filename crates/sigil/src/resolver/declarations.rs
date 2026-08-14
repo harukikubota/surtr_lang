@@ -62,6 +62,46 @@ fn builtin_special_enum_variant_alias(enum_name: &str, variant_name: &str) -> bo
     )
 }
 
+/// Reject overloads before an implementation body is lowered into the
+/// declaration index.  Inherent implementation members use their stable
+/// qualified name as an index key, but trait implementation members include a
+/// source offset in their private name so that two methods could otherwise
+/// silently survive until Scar overwrote one of them.
+pub(super) fn validate_unique_callable_names(
+    owner: &str,
+    methods: &[Ast],
+) -> Result<(), ResolveError> {
+    let mut first_by_name = HashMap::<String, Span>::new();
+    for method in methods {
+        let (span, name) = match method {
+            Ast::Def(span, name, _, _, _, _, _, _)
+            | Ast::BuiltinDecl(span, name, _, _, _)
+            | Ast::ExtractorDef(span, name, _, _, _, _, _)
+            | Ast::BuiltinExtractorDecl(span, name, _, _, _) => (span, name),
+            Ast::IntrinsicDecl(span, name, _, _) => (span, name),
+            _ => continue,
+        };
+        if let Some(first_span) = first_by_name.get(name) {
+            return Err(ResolveError {
+                message: format!("Duplicate function `{name}` in {owner}"),
+                span: span.clone(),
+                related_labels: vec![
+                    ResolveErrorLabel {
+                        span: first_span.clone(),
+                        message: "first definition".to_string(),
+                    },
+                    ResolveErrorLabel {
+                        span: span.clone(),
+                        message: "conflicting definition".to_string(),
+                    },
+                ],
+            });
+        }
+        first_by_name.insert(name.clone(), span.clone());
+    }
+    Ok(())
+}
+
 fn type_declaration_kind(stmt: &Ast) -> Option<DeclarationKind> {
     match stmt {
         Ast::StructDef(..) => Some(DeclarationKind::Struct),
@@ -1325,6 +1365,10 @@ pub fn precollect_declaration_index(
 
             for stmt in &module.ast {
                 if let Ast::ImplDef(span, target, methods, _) = stmt {
+                    validate_unique_callable_names(
+                        &format!("impl `{}`", global_surface_name(target)),
+                        methods,
+                    )?;
                     let target_kind = resolve_impl_target_kind(target, span, &stage_impl_targets)?;
                     if !matches!(
                         target_kind,
@@ -1481,16 +1525,17 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::TraitImplDef(
-                    span,
-                    _trait_name,
-                    _trait_args,
-                    _target_ty,
-                    _,
-                    methods,
-                    _,
-                ) = stmt
+                if let Ast::TraitImplDef(span, trait_name, trait_args, target_ty, _, methods, _) =
+                    stmt
                 {
+                    validate_unique_callable_names(
+                        &format!(
+                            "impl `{}` for `{}`",
+                            trait_instance_key(trait_name, trait_args),
+                            ast_ty_key(target_ty)
+                        ),
+                        methods,
+                    )?;
                     for method in methods {
                         let (method_span, method_name) = match method {
                             Ast::Def(method_span, method_name, _, _, _, _, _, _)
@@ -1509,9 +1554,9 @@ pub fn precollect_declaration_index(
                         };
                         let internal_name = trait_impl_method_qualified_name(
                             Some(module.module_path.as_str()),
-                            _trait_name,
-                            _trait_args,
-                            _target_ty,
+                            trait_name,
+                            trait_args,
+                            target_ty,
                             &method_name,
                             method_span.start,
                         );
@@ -1861,6 +1906,10 @@ impl Resolver {
         for stmt in stmts {
             match stmt {
                 Ast::ImplDef(span, target, methods, _attrs) => {
+                    validate_unique_callable_names(
+                        &format!("impl `{}`", global_surface_name(&target)),
+                        &methods,
+                    )?;
                     let target_kind = resolve_impl_target_kind(&target, &span, impl_targets)?;
                     if !matches!(
                         target_kind,
