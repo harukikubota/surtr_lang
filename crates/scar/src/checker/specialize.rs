@@ -982,8 +982,18 @@ impl Checker {
                 hint: None,
             })?;
         let key = self.specialization_key_for_def(original_def, concrete_tys)?;
-        if let Some(existing) = specialization_fun_idxs.get(&key) {
-            return Ok(*existing);
+        if let Some(existing) = specialization_fun_idxs.get(&key).copied() {
+            let is_available = defs_by_fun_idx.contains_key(&existing)
+                || generated_defs
+                    .iter()
+                    .any(|def| Self::def_fun_idx(def) == Some(existing));
+            if is_available {
+                return Ok(existing);
+            }
+            // Persistent sessions can retain a specialization key after the
+            // corresponding generated definition was discarded with an older
+            // compilation unit.  Never emit a stale function index.
+            specialization_fun_idxs.remove(&key);
         }
 
         let specialized_fun_idx = self.env.next_fun_idx;
@@ -1000,6 +1010,8 @@ impl Checker {
             specialization_fun_idxs,
             generated_defs,
         )?;
+        self.specializable_defs
+            .insert(specialized_fun_idx, rewritten_def.clone());
         generated_defs.push(rewritten_def);
         Ok(specialized_fun_idx)
     }
