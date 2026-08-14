@@ -321,3 +321,7 @@ Concrete bootstrap error for enum-variant selector mismatch in Facet access.
 value's tag.
 """
 deferror VariantMismatch(detail: String) { detail }
+
+type Mapper<$A, $B> = ($A -> $B)
+type Predicate<$A> = ($A -> Boolean)
+type Reducer<$Acc, $A> = ($Acc, $A -> $Acc)
