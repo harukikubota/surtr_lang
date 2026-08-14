@@ -72,8 +72,20 @@ impl Checker {
     /// polymorphic scheme of a callable.  In particular, an alias must not
     /// turn a polymorphic closure back into a monomorphic local binding.
     fn is_non_expansive_callable_value(&self, node: &TypedNode) -> bool {
-        matches!(node.node, TypedInner::Closure(..) | TypedInner::Capture(..) | TypedInner::Var(_))
-            && matches!(self.resolve_ty(&node.ty), Ty::Func(..))
+        if !matches!(self.resolve_ty(&node.ty), Ty::Func(..)) {
+            return false;
+        }
+        match &node.node {
+            TypedInner::Closure(..) | TypedInner::Capture(..) | TypedInner::Var(_) => true,
+            TypedInner::If(_, then_branch, Some(else_branch)) => {
+                self.is_non_expansive_callable_value(then_branch)
+                    && self.is_non_expansive_callable_value(else_branch)
+            }
+            TypedInner::Match(_, arms) => arms
+                .iter()
+                .all(|arm| self.is_non_expansive_callable_value(&arm.body)),
+            _ => false,
+        }
     }
 
     fn instantiate_local_callable_scheme(&mut self, scheme: &TypeScheme) -> Ty {
