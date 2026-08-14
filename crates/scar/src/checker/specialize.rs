@@ -1240,6 +1240,25 @@ impl Checker {
             (Ty::Var(var), ty) if bound_tyvars.contains(var) => {
                 mapping.entry(*var).or_insert_with(|| self.resolve_ty(ty));
             }
+            (Ty::SelfApp(items), actual)
+                if Self::constructor_application_parts(items).is_some() =>
+            {
+                let (witness, expected_slots) =
+                    Self::constructor_application_parts(items).expect("checked above");
+                if let Some(actual_slots) = Self::constructor_application_slots(actual) {
+                    self.match_specialization_ty(witness, actual, bound_tyvars, mapping);
+                    for (expected_slot, actual_slot) in
+                        expected_slots.iter().zip(actual_slots.iter())
+                    {
+                        self.match_specialization_ty(
+                            expected_slot,
+                            actual_slot,
+                            bound_tyvars,
+                            mapping,
+                        );
+                    }
+                }
+            }
             (Ty::List(left), Ty::List(right)) => {
                 self.match_specialization_ty(left, right, bound_tyvars, mapping)
             }
@@ -1554,9 +1573,25 @@ impl Checker {
                 self.collect_bound_tyvars_in_ty(&update_source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&update_focus, ordered, seen);
             }
-            Ty::Tuple(items) | Ty::SelfApp(items) => {
+            Ty::Tuple(items) => {
                 for item in items {
                     self.collect_bound_tyvars_in_ty(&item, ordered, seen);
+                }
+            }
+            Ty::SelfApp(items) => {
+                if let Some((witness, slots)) = Self::constructor_application_parts(&items) {
+                    if let Ty::Var(var) = self.resolve_ty(witness) {
+                        if seen.insert(var) {
+                            ordered.push(var);
+                        }
+                    }
+                    for slot in slots {
+                        self.collect_bound_tyvars_in_ty(slot, ordered, seen);
+                    }
+                } else {
+                    for item in items {
+                        self.collect_bound_tyvars_in_ty(&item, ordered, seen);
+                    }
                 }
             }
             Ty::Func(params, ret) => {

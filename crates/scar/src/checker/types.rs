@@ -36,7 +36,7 @@ impl Checker {
         }
     }
 
-    fn constructor_application_slots(ty: &Ty) -> Option<Vec<Ty>> {
+    pub(super) fn constructor_application_slots(ty: &Ty) -> Option<Vec<Ty>> {
         match ty {
             Ty::List(inner) => Some(vec![inner.as_ref().clone()]),
             Ty::Result(ok, _) => Some(vec![ok.as_ref().clone()]),

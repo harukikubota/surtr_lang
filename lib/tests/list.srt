@@ -3,8 +3,17 @@ include "./schema/list_schema.srt"
 import ListSchema::{add_one, list_pure, list_step1, list_step2, list_step3};
 import Test;
 
+def map_applicative(value: Applicative<$A>, mapper: ($A -> $B)) -> Applicative<$B> {
+  Functor::fmap(value, mapper)
+}
+
 test("List") {
   describe("helpers") {
+    it("specializes constructor-constrained fmap") {
+      mapped: List<String> = map_applicative([9, 10], &to_string)
+      assert_eq(mapped, ["9", "10"])
+    }
+
     it("concatenates lists with Alternative choice") {
       assert_eq([1, 2, 3], [1, 2] <|> [3])
     }

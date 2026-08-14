@@ -11,6 +11,10 @@ def audit_applicative(value: Applicative) -> Unit {
   ()
 }
 
+def map_applicative(value: Applicative<$A>, mapper: ($A -> $B)) -> Applicative<$B> {
+  Functor::fmap(value, mapper)
+}
+
 test("Option") {
   describe("predicates and constructors") {
     it("reports some and none states") {
@@ -46,6 +50,11 @@ test("Option") {
   }
 
   describe("trait integrations") {
+    it("specializes constructor-constrained fmap") {
+      mapped: Option<String> = map_applicative(Option::Some(9), &to_string)
+      assert_eq(mapped, Option::Some("9"))
+    }
+
     it("chooses the first Some with Alternative") {
       assert_eq(Option::Some(7), Option::Some(7) <|> Option::Some(9))
     }

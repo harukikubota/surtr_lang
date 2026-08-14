@@ -4307,6 +4307,37 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
+        if let Ty::SelfApp(items) = &receiver_ty {
+            if let Some((witness, [input])) = Self::constructor_application_parts(items) {
+                if !self.callable_accepts_input(&rhs_in, input) {
+                    return Err(TypeError {
+                        message: format!(
+                            "`|*>` type mismatch: expected {}, got {}",
+                            self.ty_name(input),
+                            self.ty_name(&rhs_in)
+                        ),
+                        span: typed_right.span.clone(),
+                        hint: None,
+                    });
+                }
+                return Ok(TypedNode {
+                    ty: Ty::SelfApp(vec![Ty::Hole, witness.clone(), rhs_out.clone()]),
+                    span: span.clone(),
+                    node: TypedInner::TraitCall {
+                        trait_name: functor_trait,
+                        method_name: "fmap".into(),
+                        receiver_ty: receiver_ty.clone(),
+                        dispatch: TraitDispatch::Pending,
+                        origin: TraitCallOrigin::Operator {
+                            op: OperatorTraitOp::PipeMap,
+                            lhs_ty: receiver_ty,
+                            rhs_ty: self.resolve_ty(&typed_right.ty),
+                        },
+                        args: vec![typed_left, typed_right],
+                    },
+                });
+            }
+        }
         let Some((dispatch, result_ty)) = self.constructor_functor_dispatch(
             &functor_trait,
             "fmap",
