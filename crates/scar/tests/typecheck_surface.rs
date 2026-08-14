@@ -3566,6 +3566,19 @@ second: String = id("t")"#,
 }
 
 #[test]
+fn annotated_local_callable_remains_monomorphic() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"id: (Int -> Int) = {|x| x}
+bad: String = id("not an int")"#,
+    );
+
+    assert!(
+        typecheck(resolved).is_err(),
+        "an explicit callable annotation must prevent generalization"
+    );
+}
+
+#[test]
 fn unbound_generic_argument_synthesizes_closure_shape() {
     let typed = typecheck_with_builtin_prelude(
         r#"def box(value: $A) -> $A { value }
