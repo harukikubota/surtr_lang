@@ -19,6 +19,12 @@ test("List") {
       assert_eq((first <|> second) <|> third, first <|> (second <|> third))
     }
 
+    it("keeps Monad return equal to Applicative pure") {
+      pure_value: List<Int> = Applicative::pure(4)
+      returned_value: List<Int> = Monad::return(4)
+      assert_eq(pure_value, returned_value)
+    }
+
     it("folds, maps, and reduces with a Monoid") {
       sum = Monoid(0, {|left, right| left + right})
       assert_eq(0, List::fold([], sum))

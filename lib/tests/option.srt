@@ -56,6 +56,12 @@ test("Option") {
       assert_eq((first <|> second) <|> third, first <|> (second <|> third))
     }
 
+    it("keeps Monad return equal to Applicative pure") {
+      pure_value: Option<Int> = Applicative::pure(4)
+      returned_value: Option<Int> = Monad::return(4)
+      assert_eq(pure_value, returned_value)
+    }
+
     it("maps with functor operator") {
       assert_eq("Option::Some(8)", inspect(Option::Some(7) |*> {|value| value + 1}))
     }
