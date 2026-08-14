@@ -66,6 +66,10 @@ mapped: Result<Int> = fmap(value, {|n| n + 1})
 
 変換系は `From` / `TryFrom` trait が裏側の coherence を担います。
 
+impl coherence は型変数名や宣言順ではなく、Trait 引数と target 型の構造で決まります。generic は任意の型と一致し、型コンストラクタの内側も再帰照合するため、`List<$A>` と `List<Int>` は重複です。Surtr V1 は specialization の優先順位を持たず、overlap は compile error にします。`List<Int>` と `List<String>` のように同時成立しない pattern は併存できます。
+
+`From` / `TryFrom` の排他も同じ照合を使うため、generic parameter を `$A` から `$T` へ改名して回避することはできません。
+
 ```text
 xldr(1)> print(match try_from::<Int>("42") { Ok(value) => to_string(value), Err(err) => inspect(err), })
 42
@@ -105,3 +109,4 @@ xldr(2)>
 - `|*>`, `|*|`, `|>=` はそれぞれ `Functor::fmap`, `Applicative::ap`, `Monad::bind` の dispatch です。
 - `|*|` は未カリー化 callable を暗黙変換しません。複数引数では `curry()` を明示します。
 - `From` / `TryFrom` の呼び出し surface は簡潔でも、coherence 自体は trait 実装側で管理されています。
+- 1 つの `defmod` / `impl` block に同名 method を複数定義できません。signature や `def` / `defp` を変えても overload にはなりません。

@@ -109,6 +109,7 @@ where
 - constructor slot を target parameter へ対応付ける
 
 比較対象は method 名、引数、戻り値、型変数の同一性、constructor slot、`where` 制約である。型変数の名前そのものは比較しない。
+`where` 制約の記述順も意味に影響せず、同じ制約集合なら一致する。
 
 ```surtr
 deftrait Functor
@@ -138,6 +139,37 @@ where
   // ...
 }
 ```
+
+## impl の重複と coherence
+
+同じ Trait の 2 つの impl が同じ具体型に適用できる状態を overlap と呼ぶ。Surtr は overlap を compile error にし、宣言順で片方を優先しない。V1 に specialization や most-specific 選択はない。
+
+generic は任意の型と一致し、型コンストラクタの内側も再帰的に検査する。そのため次は重複である。
+
+```surtr
+impl Mark for List<$A> { ... }
+impl Mark for List<Int> { ... } # NG: List<Int> で交差する
+```
+
+より深い pattern も同じである。
+
+```surtr
+impl Mark for Pair<$A, Int> { ... }
+impl Mark for Pair<String, $B> { ... } # NG: Pair<String, Int> で交差する
+```
+
+一方、同時に成立する代入がない concrete pattern は、外側の型名が同じでも併存できる。
+
+```surtr
+impl Mark for List<Int> { ... }
+impl Mark for List<String> { ... } # OK
+```
+
+Trait 自身が型引数を持つ場合は、target と Trait 引数の両方を使って交差を判定する。`where` 制約の違いだけで impl を分岐することはできない。
+
+`From` と `TryFrom` も同じ再帰照合を使って排他的に検査する。`$A` を `$T` に改名しても別の実装にはならない。
+
+各 `defmod` / inherent `impl` / trait `impl` block 内では method 名を一意にする。引数型や `def` / `defp` を変えて同名 method を overload することはできない。
 
 ## default method
 

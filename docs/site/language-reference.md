@@ -108,6 +108,9 @@ match expr {
 - trait 宣言は `deftrait Name<$T, ...> { ... }` のように型引数を取ってよい
 - trait 実装は `impl Trait for Type { ... }`
 - trait 実装は `impl Trait<Concrete, ...> for Type { ... }` の形も取れる
+- 同じ Trait の impl は Trait 引数と target 型を再帰 unification して overlap を判定し、交差する場合は宣言順にかかわらず compile error とする。generic は任意の型 pattern と一致し、V1 は specialization 優先順位を持たない
+- 同じ nominal target でも full pattern が構造的に disjoint なら併存できる。`where` 制約の違いだけでは disjoint とみなさない
+- `defmod` / inherent `impl` / trait `impl` block 内の callable 名は一意であり、signature や `def` / `defp` の違いによる overload はできない
 - 通常 callable は型引数を明示できない。型スロットは signature の引数型・receiver 型から推論する
 - `::<Int>` は `try_from::<Int>(value)` のような Trait helper の target specialization にだけ使える。`Self` は値引数または期待 callable 型から推論する
 - FunParams は、型変数が value parameter の型から導入できない場合にだけ使う。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で FunParams に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として FunParams に置く
@@ -126,6 +129,7 @@ match expr {
 - source 上の呼び出しは `from::<TargetTy>(value)` / `try_from::<TargetTy>(value)`
 - `TargetTy` は明示型引数であり runtime の値引数ではない
 - `From<$To>` / `TryFrom<$To>` trait が impl coherence を担う
+- `From` / `TryFrom` の排他は generic 名を alpha-normalize し、target と変換元を再帰照合する
 
 ### `Result<T>`
 

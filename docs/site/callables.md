@@ -18,6 +18,7 @@ Surtr では、見た目が似ていても次の 4 つは役割が違います�
 - compose 系演算子 `>>`, `>*`, `>=>` は call ではなく関数値を要求します
 - unqualified infix `` `on` `` は常に `Function::on` を呼びます
 - closure / capture 内の trait helper は、期待 callable 型がある場所まで解決を遅延できます
+- 型注釈で単相に固定していない local callable は、呼び出しごとに fresh な型で利用できます
 
 ## 関数コール
 
@@ -36,6 +37,15 @@ call はその場で実行され、結果の値を返します。
 sum = add(1, 2)              # Int
 name = User::get_name(user)  # String
 ```
+
+local callable の型スロットは call-site ごとに fresh になるため、同じ callable を異なる型で呼べます。1 式にまとめるか行を分けるかは結果に影響しません。
+
+```surtr
+id = {|x| x}
+pair: (Int, String) = (id(1), id("surtr"))
+```
+
+外側から capture した値の型や、明示注釈で固定した型まで call ごとに変わるわけではありません。
 
 一方で、compose 系が欲しいのは「実行結果」ではなく「あとで呼べる値」です。
 
@@ -157,6 +167,15 @@ suffix = "!"
 excited = {|name| name ++ suffix}
 print(excited("alice"))
 ```
+
+generic 引数がまだ決まっていなくても、closure や literal を直接渡せます。compiler は actual expression の shape から先に型を得て、generic slot と照合します。
+
+```surtr
+boxed = Box({|n: Int| n + 1})
+values = wrap([1, 2, 3])
+```
+
+通常 call、constructor、Trait helper、apply、compose は同じ引数推論規則を使います。expected type が既知なら list の各要素、tuple の各 slot、`if` の全 branch、`match` の全 arm へ伝播します。空 collection など式だけでは型を一意にできない場合は、引き続き型注釈が必要です。
 
 関数演算子の右辺にもそのまま置けます。
 
