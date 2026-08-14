@@ -1,0 +1,9 @@
+def accept(value: ($A, Option<Int>)) -> Int { 1 }
+
+id = {|x| x}
+alias = id
+pair: (Int, String) = (alias(1), alias("s"))
+
+print(to_string(pair._0))
+print(pair._1)
+print(to_string(accept(("tag", Applicative::pure(2)))))

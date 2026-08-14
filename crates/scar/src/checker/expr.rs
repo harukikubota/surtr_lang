@@ -68,6 +68,14 @@ impl Checker {
         }
     }
 
+    /// Values which do not evaluate an arbitrary call can safely retain the
+    /// polymorphic scheme of a callable.  In particular, an alias must not
+    /// turn a polymorphic closure back into a monomorphic local binding.
+    fn is_non_expansive_callable_value(&self, node: &TypedNode) -> bool {
+        matches!(node.node, TypedInner::Closure(..) | TypedInner::Capture(..) | TypedInner::Var(_))
+            && matches!(self.resolve_ty(&node.ty), Ty::Func(..))
+    }
+
     fn instantiate_local_callable_scheme(&mut self, scheme: &TypeScheme) -> Ty {
         let mapping = scheme
             .quantified
@@ -940,7 +948,7 @@ impl Checker {
                     }
                 }
                 if !matches!(pat, ResolvedPattern::Annotated(..))
-                    && matches!(typed_rhs.node, TypedInner::Closure(..))
+                    && self.is_non_expansive_callable_value(&typed_rhs)
                 {
                     self.generalize_local_callable_binding(&typed_pat);
                 }
@@ -1263,16 +1271,6 @@ impl Checker {
                     return self.check_tuple_literal(span, elems);
                 };
                 if elems.len() != item_tys.len() {
-                    return self.check_tuple_literal(span, elems);
-                }
-                if item_tys
-                    .iter()
-                    .any(|item_ty| matches!(self.resolve_ty(item_ty), Ty::Var(_)))
-                {
-                    // A partially unknown tuple shape must be synthesized as
-                    // a whole. The enclosing container will then unify it
-                    // with the generic expected element type, retaining the
-                    // normal outer diagnostic for malformed literals.
                     return self.check_tuple_literal(span, elems);
                 }
                 let typed_elems = elems

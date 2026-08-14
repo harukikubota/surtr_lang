@@ -1,2 +1,2 @@
 phase: typecheck
-contains: expected List<(String,
+contains: expected String, got Int
