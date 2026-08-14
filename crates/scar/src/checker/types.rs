@@ -1007,6 +1007,27 @@ impl Checker {
                 if let Some(alias) = self.resolve_signature_alias(span, name, &[], context, tyvars, mode)? {
                     return Ok(alias);
                 }
+                if let Some((trait_key, _trait_info)) = self.traits.iter().find(|(key, info)| {
+                    !info.constructor_slots.is_empty()
+                        && (Self::surface_name(key) == Self::surface_name(name)
+                            || Self::surface_name(&info.id.name) == Self::surface_name(name))
+                }) {
+                    if !matches!(context, TypeSyntaxContext::General | TypeSyntaxContext::BindingAnnotation) {
+                        return Err(TypeError {
+                            message: format!(
+                                "Bare constructor trait {} is only allowed for a value parameter or local binding",
+                                Self::surface_name(name)
+                            ),
+                            span: span.clone(),
+                            hint: Some("Use an explicit application such as `Applicative<$A>` in callable signatures.".into()),
+                        });
+                    }
+                    let witness = tyvars
+                        .entry(format!("@constructor-witness:{trait_key}"))
+                        .or_insert_with(|| self.env.fresh_tyvar())
+                        .clone();
+                    return Ok(Ty::SelfApp(vec![Ty::Hole, witness]));
+                }
             }
             AstTy::Generic(span, name, args) => {
                 if let Some(alias) = self.resolve_signature_alias(span, name, args, context, tyvars, mode)? {
@@ -1557,12 +1578,13 @@ impl Checker {
                     if !self.types_compatible(witness, other) {
                         false
                     } else {
-                        Self::constructor_application_slots(other).is_some_and(|actual_slots| {
-                            actual_slots.len() == expected_slots.len()
-                                && expected_slots.iter().zip(actual_slots.iter()).all(
-                                    |(expected, actual)| self.types_compatible(expected, actual),
-                                )
-                        })
+                        expected_slots.is_empty()
+                            || Self::constructor_application_slots(other).is_some_and(|actual_slots| {
+                                actual_slots.len() == expected_slots.len()
+                                    && expected_slots.iter().zip(actual_slots.iter()).all(
+                                        |(expected, actual)| self.types_compatible(expected, actual),
+                                    )
+                            })
                     }
                 }
                 (other, Ty::SelfApp(b)) if Self::constructor_application_parts(b).is_some() => {

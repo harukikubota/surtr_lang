@@ -7,6 +7,10 @@ def preserve_applicative(value: Applicative<$A>) -> Applicative<$A> {
   value
 }
 
+def audit_applicative(value: Applicative) -> Unit {
+  ()
+}
+
 test("Option") {
   describe("predicates and constructors") {
     it("reports some and none states") {
@@ -107,3 +111,4 @@ test("Option") {
 
 preserved: Option<Int> = preserve_applicative(Option::Some(9))
 assert_eq(preserved, Option::Some(9))
+audit_applicative(Option::Some(9))
