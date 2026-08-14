@@ -2054,6 +2054,9 @@ struct Checker {
     specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    /// Obligations discovered while an inference variable is unresolved.
+    /// Unlike `tyvar_bounds`, these are not declaration capabilities.
+    pending_tyvar_bounds: HashMap<u32, Vec<String>>,
     /// Static constructor-trait capabilities attached to abstract bindings.
     /// These are intentionally binding-local: constructor roots may share a
     /// witness while different bindings expose different trait capabilities.
@@ -2142,6 +2145,7 @@ impl Checker {
             specialization_fun_idxs: state.specialization_fun_idxs,
             substitutions: HashMap::new(),
             tyvar_bounds: state.tyvar_bounds,
+            pending_tyvar_bounds: HashMap::new(),
             constructor_capabilities: HashMap::new(),
             signature_aliases: state.signature_aliases,
             alias_expansion_stack: Vec::new(),
@@ -2187,6 +2191,7 @@ impl Checker {
         checker.facet_bindings = self.facet_bindings.clone();
         checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
+        checker.pending_tyvar_bounds = self.pending_tyvar_bounds.clone();
         checker.constructor_capabilities = self.constructor_capabilities.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();

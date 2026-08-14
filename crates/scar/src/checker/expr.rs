@@ -2818,6 +2818,7 @@ impl Checker {
         let result = match receiver_ty {
             Ty::Var(var) => {
                 if self.tyvar_has_bound(var, trait_name)
+                    || self.tyvar_has_pending_bound(var, trait_name)
                     || self.tyvar_satisfies_compiler_trait(var, trait_name)
                 {
                     Some(TraitDispatch::Pending)
@@ -3027,6 +3028,10 @@ impl Checker {
                     continue;
                 };
                 let trait_key = self.trait_key(trait_id);
+                if let Ty::Var(var) = concrete {
+                    self.register_pending_tyvar_bound(var, &trait_key);
+                    continue;
+                }
                 if !self.trait_impl_exists(&trait_key, &concrete) {
                     return false;
                 }
@@ -4133,7 +4138,7 @@ impl Checker {
         let trait_call_summary = self.trait_implementation_summary(&trait_call_name);
         let receiver_ty = self.resolve_ty(&self_ty);
         if let Ty::Var(var) = receiver_ty {
-            self.register_tyvar_bound(var, &trait_call_name);
+            self.register_pending_tyvar_bound(var, &trait_call_name);
         }
         let receiver_span = typed_args
             .first()
