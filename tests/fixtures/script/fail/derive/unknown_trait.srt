@@ -1,0 +1,4 @@
+@derive TotallyUnknown
+defstruct User {
+  value: Int,
+}

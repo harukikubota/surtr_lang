@@ -19,6 +19,7 @@ use crate::scope::Scope;
 
 mod captures;
 mod declarations;
+mod derive;
 mod expr;
 mod imports;
 mod patterns;
@@ -112,6 +113,91 @@ fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<Strin
         }
     }
     names
+}
+
+fn collect_staged_trait_constructor_slots(
+    module_stages: &[Vec<StagedModuleAst>],
+    declaration_uids: &HashMap<String, u32>,
+) -> HashMap<u32, Vec<String>> {
+    let mut result = HashMap::new();
+    let mut parents = Vec::new();
+    let lookup_uid = |name: &str, module_path: &str| {
+        declaration_uids
+            .get(name)
+            .or_else(|| declaration_uids.get(&format!("{}::{}", module_path, name)))
+            .copied()
+            .or_else(|| {
+                let suffix = format!("::{name}");
+                let mut matches = declaration_uids
+                    .iter()
+                    .filter(|(fq_name, _)| fq_name.ends_with(&suffix))
+                    .map(|(_, uid)| *uid);
+                let first = matches.next()?;
+                matches.next().is_none().then_some(first)
+            })
+    };
+    for module in module_stages.iter().flatten() {
+        for stmt in &module.ast {
+            let Ast::TraitDef(_, name, _, Some(clause), _, _) = stmt else {
+                continue;
+            };
+            let fq_name = if module.module_path.is_empty() {
+                name.clone()
+            } else {
+                format!("{}::{}", module.module_path, name)
+            };
+            let Some(uid) = declaration_uids
+                .get(&fq_name)
+                .or_else(|| declaration_uids.get(name))
+                .copied()
+            else {
+                continue;
+            };
+            for constraint in &clause.constraints {
+                if !matches!(&constraint.subject, AstTy::Named(_, subject) if subject == "Self") {
+                    continue;
+                }
+                for bound in &constraint.bounds {
+                    match bound {
+                        spire::ast::WhereConstraintRhs::TypeConstructor(_, slots) => {
+                            result.insert(
+                                uid,
+                                slots
+                                    .iter()
+                                    .filter_map(|slot| match slot {
+                                        AstTy::Named(_, name) => Some(name.clone()),
+                                        _ => None,
+                                    })
+                                    .collect(),
+                            );
+                        }
+                        spire::ast::WhereConstraintRhs::Trait(_, parent_name) => {
+                            if let Some(parent_uid) = lookup_uid(parent_name, &module.module_path) {
+                                parents.push((uid, parent_uid));
+                            }
+                        }
+                        spire::ast::WhereConstraintRhs::TraitSlot(..) => {}
+                    }
+                }
+            }
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (child, parent) in &parents {
+            if result.contains_key(child) {
+                continue;
+            }
+            if let Some(slots) = result.get(parent).cloned() {
+                result.insert(*child, slots);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    result
 }
 
 /// Resolve all identifiers in the AST to unique references.
@@ -248,6 +334,8 @@ pub fn resolve_staged_program_from_state_with_warnings(
 ) -> Result<PhaseOutput<ResolvedStagedProgram>, ResolveError> {
     let declaration_uids = assign_declaration_uids(declaration_index);
     let declaration_uid_kinds = declaration_uid_kind_map(declaration_index, &declaration_uids);
+    let trait_constructor_slots =
+        collect_staged_trait_constructor_slots(module_stages, &declaration_uids);
     let declaration_hidden_by_uid = declaration_index
         .iter()
         .filter_map(|(fq_name, entry)| {
@@ -285,6 +373,7 @@ pub fn resolve_staged_program_from_state_with_warnings(
             &declaration_uids,
             &declaration_uid_kinds,
             &declaration_hidden_by_uid,
+            &trait_constructor_slots,
             &stage_impl_targets,
         );
 
@@ -371,6 +460,7 @@ pub fn resolve_staged_program_from_state_with_warnings(
         user_resolver.declaration_uids = declaration_uids;
         user_resolver.declaration_uid_kinds = declaration_uid_kinds;
         user_resolver.declaration_hidden_by_uid = declaration_hidden_by_uid;
+        user_resolver.trait_constructor_slots = trait_constructor_slots;
         user_resolver.current_module_path = user_module_path;
         user_resolver.allow_top_level_shadowing = true;
         resolved.extend(user_resolver.resolve_program(user_ast)?);
@@ -423,6 +513,7 @@ fn resolve_stage_modules_parallel(
     declaration_uids: &HashMap<String, u32>,
     declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
     declaration_hidden_by_uid: &HashMap<u32, bool>,
+    trait_constructor_slots: &HashMap<u32, Vec<String>>,
     stage_impl_targets: &HashMap<String, declarations::ImplTargetResolution>,
 ) -> Vec<Result<StageModuleResolveResult, ResolveError>> {
     std::thread::scope(|scope| {
@@ -449,6 +540,7 @@ fn resolve_stage_modules_parallel(
                     resolver.declaration_uids = declaration_uids.clone();
                     resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
                     resolver.declaration_hidden_by_uid = declaration_hidden_by_uid.clone();
+                    resolver.trait_constructor_slots = trait_constructor_slots.clone();
                     resolver.current_stage_impl_targets = Some(stage_impl_targets.clone());
                     resolver.allow_top_level_shadowing = true;
                     let resolved = resolver.resolve_program(module.ast.clone())?;
@@ -494,9 +586,23 @@ fn rebase_resolved_nodes(nodes: &mut [Resolved], base: u32, offset: u32) {
     }
 }
 
+fn rebase_where_clause(clause: &mut ResolvedWhereClause, base: u32, offset: u32) {
+    for constraint in &mut clause.constraints {
+        for bound in &mut constraint.bounds {
+            match bound {
+                ResolvedWhereConstraintRhs::Trait(id) => rebase_resolved_id(id, base, offset),
+                ResolvedWhereConstraintRhs::TraitSlot { trait_id, .. } => {
+                    rebase_resolved_id(trait_id, base, offset)
+                }
+                ResolvedWhereConstraintRhs::TypeConstructor { .. } => {}
+            }
+        }
+    }
+}
+
 fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
     match node {
-        Resolved::Lit(..) | Resolved::ListNil(_) | Resolved::TypeRefWitness(..) => {}
+        Resolved::Lit(..) | Resolved::ListNil(_) => {}
         Resolved::Var(_, id) => rebase_resolved_id(id, base, offset),
         Resolved::App(_, func, args) => {
             rebase_resolved_node(func, base, offset);
@@ -504,6 +610,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_record_arg(arg, base, offset);
             }
         }
+        Resolved::TypeApply(_, target, _) => rebase_resolved_node(target, base, offset),
         Resolved::Block(_, nodes)
         | Resolved::ListLiteral(_, nodes)
         | Resolved::TupleLiteral(_, nodes) => {
@@ -526,6 +633,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         Resolved::BinOp(_, _, left, right)
         | Resolved::Pipe(_, left, right)
         | Resolved::ContextMap(_, left, right)
+        | Resolved::ContextApply(_, left, right)
         | Resolved::ContextBind(_, left, right)
         | Resolved::Compose(_, left, right)
         | Resolved::LiftedCompose(_, left, right)
@@ -605,7 +713,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_record_arg(arg, base, offset);
             }
         }
-        Resolved::StructDef(_, id, _, fields, _) | Resolved::RecordDef(_, id, fields) => {
+        Resolved::StructDef(_, id, _, fields, _) | Resolved::RecordDef(_, id, fields, _) => {
             rebase_resolved_id(id, base, offset);
             rebase_fields(fields, base, offset);
         }
@@ -621,10 +729,13 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_resolved_id(&mut variant.id, base, offset);
             }
         }
-        Resolved::Def(_, id, type_params, params, _, body, _) => {
+        Resolved::Def(_, id, type_params, params, _, where_clause, body, _) => {
             rebase_resolved_id(id, base, offset);
             rebase_type_params(type_params, base, offset);
             rebase_fun_params(params, base, offset);
+            if let Some(clause) = where_clause {
+                rebase_where_clause(clause, base, offset);
+            }
             rebase_resolved_node(body, base, offset);
         }
         Resolved::ConstDef(_, id, _, value, _) => {
@@ -637,24 +748,36 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_extractor_param(param, base, offset);
             rebase_resolved_node(body, base, offset);
         }
-        Resolved::TraitDef(_, id, type_params, methods, _) => {
+        Resolved::TraitDef(_, id, type_params, where_clause, methods, _) => {
             rebase_resolved_id(id, base, offset);
             rebase_type_params(type_params, base, offset);
+            if let Some(clause) = where_clause {
+                rebase_where_clause(clause, base, offset);
+            }
             for method in methods {
                 rebase_resolved_id(&mut method.id, base, offset);
                 rebase_type_params(&mut method.type_params, base, offset);
                 rebase_fun_params(&mut method.params, base, offset);
+                if let Some(clause) = &mut method.where_clause {
+                    rebase_where_clause(clause, base, offset);
+                }
                 if let Some(body) = &mut method.body {
                     rebase_resolved_node(body, base, offset);
                 }
             }
         }
-        Resolved::TraitImplDef(_, id, _, _, methods) => {
+        Resolved::TraitImplDef(_, id, _, _, where_clause, methods) => {
             rebase_resolved_id(id, base, offset);
+            if let Some(clause) = where_clause {
+                rebase_where_clause(clause, base, offset);
+            }
             for method in methods {
                 rebase_resolved_id(&mut method.function_id, base, offset);
                 rebase_type_params(&mut method.type_params, base, offset);
                 rebase_fun_params(&mut method.params, base, offset);
+                if let Some(clause) = &mut method.where_clause {
+                    rebase_where_clause(clause, base, offset);
+                }
                 rebase_resolved_node(&mut method.body, base, offset);
             }
         }
@@ -667,6 +790,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_extractor_param(param, base, offset);
         }
         Resolved::BuiltinTypeDecl(_, id, _, _) => rebase_resolved_id(id, base, offset),
+        Resolved::TypeAlias(_, _, _, _) => {}
         Resolved::ResultCtorDecl(_, id, _, _, _) => rebase_resolved_id(id, base, offset),
         Resolved::Closure(_, params, captures, body) => {
             for param in params {
@@ -901,6 +1025,7 @@ struct Resolver {
     declaration_uids: HashMap<String, u32>,
     declaration_uid_kinds: HashMap<u32, DeclarationKind>,
     declaration_hidden_by_uid: HashMap<u32, bool>,
+    trait_constructor_slots: HashMap<u32, Vec<String>>,
     explicit_module_imports: HashSet<String>,
     current_module_path: Option<String>,
     current_stage_impl_targets: Option<HashMap<String, declarations::ImplTargetResolution>>,

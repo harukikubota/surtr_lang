@@ -6,6 +6,149 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 static SYNTHETIC_DEFAULT_METHOD_UID: AtomicU32 = AtomicU32::new(0x6000_0000);
 
 impl Checker {
+    pub(super) fn predeclare_signature_aliases(
+        &mut self,
+        stmts: &[Resolved],
+    ) -> Result<(), TypeError> {
+        for stmt in stmts {
+            let Resolved::TypeAlias(span, name, params, rhs) = stmt else {
+                continue;
+            };
+            if self.signature_aliases.contains_key(name) || self.env.lookup_type_def(name).is_some() {
+                return Err(TypeError {
+                    message: format!("Duplicate visible type name `{}` in the flat type namespace", name),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            let mut used = HashSet::new();
+            Self::collect_ast_ty_type_params(rhs, &mut used);
+            if let Some(param) = params.iter().find(|param| !used.contains(&param.name)) {
+                return Err(TypeError {
+                    message: format!("Type alias {} has an unused type parameter {}", name, param.name),
+                    span: param.span.clone(),
+                    hint: Some("Every alias type parameter must appear in its function signature.".into()),
+                });
+            }
+            self.signature_aliases.insert(
+                name.clone(),
+                SignatureAliasInfo {
+                    params: params.clone(),
+                    rhs: rhs.clone(),
+                    span: span.clone(),
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn where_constraint_subject_ty(
+        &self,
+        subject: &AstTy,
+        tyvars: &HashMap<String, Ty>,
+        self_ty: Option<&Ty>,
+        span: &Span,
+    ) -> Result<Ty, TypeError> {
+        let AstTy::Named(_, name) = subject else {
+            return Err(TypeError {
+                message: "where constraint subjects must be `Self` or a signature type variable"
+                    .into(),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        if name == "Self" {
+            return self_ty.cloned().ok_or_else(|| TypeError {
+                message: "`Self` is only available in trait and trait impl where clauses".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if !name.starts_with('$') {
+            return Err(TypeError {
+                message: "where constraint subjects must be `Self` or a signature type variable"
+                    .into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        tyvars.get(name).cloned().ok_or_else(|| TypeError {
+            message: format!(
+                "where clause constraint `{name}` does not appear in the declaration signature"
+            ),
+            span: span.clone(),
+            hint: Some("where clauses add constraints; they do not declare type variables".into()),
+        })
+    }
+
+    fn apply_where_trait_bound(
+        &mut self,
+        subject: &Ty,
+        trait_id: &ResolvedId,
+    ) -> Result<(), TypeError> {
+        let trait_key = self.trait_key(trait_id);
+        match self.resolve_ty(subject) {
+            Ty::Var(var) => {
+                self.register_tyvar_bound(var, &trait_key);
+                Ok(())
+            }
+            // A concrete `Self` is already guarded by trait dispatch/impl
+            // validation. Signature where clauses primarily add bounds to
+            // variables that must survive instantiation at call sites.
+            _ => Ok(()),
+        }
+    }
+
+    pub(super) fn apply_resolved_where_trait_bounds(
+        &mut self,
+        where_clause: Option<&ResolvedWhereClause>,
+        tyvars: &HashMap<String, Ty>,
+        self_ty: Option<&Ty>,
+    ) -> Result<(), TypeError> {
+        let Some(where_clause) = where_clause else {
+            return Ok(());
+        };
+        for constraint in &where_clause.constraints {
+            let subject = self.where_constraint_subject_ty(
+                &constraint.subject,
+                tyvars,
+                self_ty,
+                &constraint.span,
+            )?;
+            for bound in &constraint.bounds {
+                if let ResolvedWhereConstraintRhs::Trait(trait_id) = bound {
+                    self.apply_where_trait_bound(&subject, trait_id)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_typed_where_trait_bounds(
+        &mut self,
+        where_clause: Option<&TypedWhereClause>,
+        tyvars: &HashMap<String, Ty>,
+        self_ty: Option<&Ty>,
+    ) -> Result<(), TypeError> {
+        let Some(where_clause) = where_clause else {
+            return Ok(());
+        };
+        for constraint in &where_clause.constraints {
+            let subject = self.where_constraint_subject_ty(
+                &constraint.subject,
+                tyvars,
+                self_ty,
+                &constraint.span,
+            )?;
+            for bound in &constraint.bounds {
+                if let TypedWhereConstraintRhs::Trait(trait_id) = bound {
+                    self.apply_where_trait_bound(&subject, trait_id)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn next_synthetic_default_method_uid() -> u32 {
         SYNTHETIC_DEFAULT_METHOD_UID.fetch_add(1, AtomicOrdering::Relaxed)
     }
@@ -231,7 +374,7 @@ impl Checker {
                         .collect::<Vec<_>>(),
                     false,
                 )),
-                Resolved::RecordDef(_, id, _) => {
+                Resolved::RecordDef(_, id, _, _) => {
                     Some((&id.name, &id.span, TypeKind::Record, Vec::new(), false))
                 }
                 Resolved::DeferrorDef(_, id, _, _) => Some((
@@ -310,7 +453,7 @@ impl Checker {
                             if self.ty_contains_process_init(&field_ty) {
                                 return Err(TypeError {
                                     message:
-                                        "ProcessInit<T> is only allowed as Lazy @init return type"
+                                        "StandbyInit<T> is only allowed as Standby @init return type"
                                             .into(),
                                     span: f.span.clone(),
                                     hint: None,
@@ -354,7 +497,7 @@ impl Checker {
                     self.env
                         .bind_var(id.unique_id, Ty::Struct(id.name.clone(), ty_fields));
                 }
-                Resolved::RecordDef(_, id, fields) => {
+                Resolved::RecordDef(_, id, fields, _) => {
                     let ty_fields = fields
                         .iter()
                         .map(|f| {
@@ -363,7 +506,7 @@ impl Checker {
                             if self.ty_contains_process_init(&field_ty) {
                                 return Err(TypeError {
                                     message:
-                                        "ProcessInit<T> is only allowed as Lazy @init return type"
+                                        "StandbyInit<T> is only allowed as Standby @init return type"
                                             .into(),
                                     span: f.span.clone(),
                                     hint: None,
@@ -503,7 +646,7 @@ impl Checker {
                                 if self.ty_contains_process_init(&payload_ty) {
                                     return Err(TypeError {
                                         message:
-                                            "ProcessInit<T> is only allowed as Lazy @init return type"
+                                            "StandbyInit<T> is only allowed as Standby @init return type"
                                                 .into(),
                                         span: Self::ast_ty_span(ty).clone(),
                                         hint: None,
@@ -566,13 +709,13 @@ impl Checker {
         for stmt in stmts {
             match stmt {
                 Resolved::StructDef(_, id, _, fields, _)
-                | Resolved::RecordDef(_, id, fields)
+                | Resolved::RecordDef(_, id, fields, _)
                 | Resolved::DeferrorDef(_, id, fields, _) => {
                     decl_spans.insert(id.name.clone(), id.span.clone());
                     edges.entry(id.name.clone()).or_default();
                     for field in fields {
                         let mut refs = Vec::new();
-                        Self::collect_type_ref_names(&field.ty, &mut refs);
+                        Self::collect_type_dependency_names(&field.ty, &mut refs);
                         for ref_name in refs {
                             edges.entry(id.name.clone()).or_default().insert(ref_name);
                         }
@@ -586,7 +729,7 @@ impl Checker {
                         let mut variant_refs = HashSet::new();
                         for payload_ty in &variant.payload {
                             let mut refs = Vec::new();
-                            Self::collect_type_ref_names(payload_ty, &mut refs);
+                            Self::collect_type_dependency_names(payload_ty, &mut refs);
                             for ref_name in refs {
                                 variant_refs.insert(ref_name);
                             }
@@ -847,7 +990,7 @@ impl Checker {
         }
 
         for stmt in stmts {
-            let Resolved::Def(_, id, _, _, _, _, _) = stmt else {
+            let Resolved::Def(_, id, _, _, _, _, _, _) = stmt else {
                 continue;
             };
             if let Some((target, method)) = Self::split_impl_method_id(id) {
@@ -1018,14 +1161,18 @@ impl Checker {
                     out.push(*var);
                 }
             }
-            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-                Self::collect_ty_vars(inner, out)
-            }
-            Ty::Facet(source, focus) | Ty::Result(source, focus) => {
+            Ty::List(inner) | Ty::Lazy(inner) => Self::collect_ty_vars(inner, out),
+            Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);
             }
-            Ty::Tuple(items) | Ty::Enum(_, items) => {
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
+                Self::collect_ty_vars(source, out);
+                Self::collect_ty_vars(focus, out);
+                Self::collect_ty_vars(update_source, out);
+                Self::collect_ty_vars(update_focus, out);
+            }
+            Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
                 for item in items {
                     Self::collect_ty_vars(item, out);
                 }
@@ -1058,11 +1205,311 @@ impl Checker {
         }
     }
 
+    fn signature_type_param_vars(
+        declared: &[ResolvedTypeParam],
+        tyvars: &HashMap<String, Ty>,
+        params: &[Ty],
+        ret: &Ty,
+    ) -> Vec<u32> {
+        let mut vars = Vec::new();
+        for param in declared {
+            if let Some(ty) = tyvars.get(&param.name) {
+                Self::collect_ty_vars(ty, &mut vars);
+            }
+        }
+        for param in params {
+            Self::collect_ty_vars(param, &mut vars);
+        }
+        Self::collect_ty_vars(ret, &mut vars);
+        vars
+    }
+
+    fn trait_constructor_slots(
+        &self,
+        trait_id: &ResolvedId,
+        where_clause: Option<&ResolvedWhereClause>,
+    ) -> Result<Vec<String>, TypeError> {
+        let mut slots = None;
+        let Some(clause) = where_clause else {
+            return Ok(Vec::new());
+        };
+        for constraint in &clause.constraints {
+            if !matches!(&constraint.subject, AstTy::Named(_, name) if name == "Self") {
+                continue;
+            }
+            for bound in &constraint.bounds {
+                let ResolvedWhereConstraintRhs::TypeConstructor {
+                    span,
+                    slots: declared_slots,
+                } = bound
+                else {
+                    continue;
+                };
+                if slots.is_some() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait {} declares more than one Self type-constructor constraint",
+                            trait_id.name
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                if declared_slots.is_empty() {
+                    return Err(TypeError {
+                        message: "Type constructor constraints require at least one slot".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let mut names = Vec::with_capacity(declared_slots.len());
+                let mut seen = HashSet::new();
+                for slot in declared_slots {
+                    let AstTy::Named(slot_span, name) = slot else {
+                        return Err(TypeError {
+                            message: "Type constructor slots must be type variables such as `$A`"
+                                .into(),
+                            span: Self::ast_ty_span(slot).clone(),
+                            hint: None,
+                        });
+                    };
+                    if !name.starts_with('$') {
+                        return Err(TypeError {
+                            message: "Type constructor slots must be type variables such as `$A`"
+                                .into(),
+                            span: slot_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    if !seen.insert(name.clone()) {
+                        return Err(TypeError {
+                            message: format!("Duplicate type constructor slot: {}", name),
+                            span: slot_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    names.push(name.clone());
+                }
+                slots = Some(names);
+            }
+        }
+        Ok(slots.unwrap_or_default())
+    }
+
+    fn trait_parents(where_clause: Option<&ResolvedWhereClause>) -> Vec<ResolvedId> {
+        let Some(clause) = where_clause else {
+            return Vec::new();
+        };
+        clause
+            .constraints
+            .iter()
+            .filter(|constraint| {
+                matches!(&constraint.subject, AstTy::Named(_, subject) if subject == "Self")
+            })
+            .flat_map(|constraint| constraint.bounds.iter())
+            .filter_map(|bound| match bound {
+                ResolvedWhereConstraintRhs::Trait(parent) => Some(parent.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn resolve_trait_constraint_closure(&mut self) -> Result<(), TypeError> {
+        fn visit(
+            key: &str,
+            traits: &HashMap<String, TraitInfo>,
+            visiting: &mut Vec<String>,
+            resolved: &mut HashMap<String, Vec<String>>,
+        ) -> Result<Vec<String>, TypeError> {
+            if let Some(slots) = resolved.get(key) {
+                return Ok(slots.clone());
+            }
+            if let Some(start) = visiting.iter().position(|item| item == key) {
+                let mut cycle = visiting[start..].to_vec();
+                cycle.push(key.to_string());
+                let info = traits.get(key).expect("visited trait must exist");
+                return Err(TypeError {
+                    message: format!("Parent trait constraint cycle: {}", cycle.join(" -> ")),
+                    span: info.id.span.clone(),
+                    hint: None,
+                });
+            }
+            let info = traits.get(key).ok_or_else(|| TypeError {
+                message: format!("Unknown parent trait: {key}"),
+                span: Span { start: 0, end: 0 },
+                hint: None,
+            })?;
+            visiting.push(key.to_string());
+            let mut slots = info.constructor_slots.clone();
+            for parent in &info.parents {
+                let parent_key = parent
+                    .qualified_name
+                    .clone()
+                    .unwrap_or_else(|| parent.name.clone());
+                let parent_slots = visit(&parent_key, traits, visiting, resolved)?;
+                if slots.is_empty() {
+                    slots = parent_slots;
+                } else if !parent_slots.is_empty() && slots.len() != parent_slots.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait {} exposes {} constructor slot(s), but parent {} exposes {}",
+                            info.id.name,
+                            slots.len(),
+                            parent.name,
+                            parent_slots.len()
+                        ),
+                        span: info.id.span.clone(),
+                        hint: None,
+                    });
+                }
+            }
+            visiting.pop();
+            resolved.insert(key.to_string(), slots.clone());
+            Ok(slots)
+        }
+
+        let keys = self.traits.keys().cloned().collect::<Vec<_>>();
+        let snapshot = self.traits.clone();
+        let mut resolved = HashMap::new();
+        for key in &keys {
+            visit(key, &snapshot, &mut Vec::new(), &mut resolved)?;
+        }
+        for (key, slots) in resolved {
+            if let Some(info) = self.traits.get_mut(&key) {
+                info.constructor_slots = slots;
+            }
+        }
+        Ok(())
+    }
+
+    fn target_top_level_type_params(target_ast_ty: &AstTy) -> Vec<String> {
+        let AstTy::Generic(_, _, args) = target_ast_ty else {
+            return Vec::new();
+        };
+        args.iter()
+            .filter_map(|arg| match arg {
+                AstTy::Named(_, name) if name.starts_with('$') => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn constructor_slot_vars_for_impl(
+        &self,
+        trait_info: &TraitInfo,
+        target_ast_ty: &AstTy,
+        where_clause: Option<&ResolvedWhereClause>,
+        target_param_vars: &HashMap<String, u32>,
+        span: &Span,
+    ) -> Result<(Vec<u32>, Vec<usize>), TypeError> {
+        let target_params = Self::target_top_level_type_params(target_ast_ty);
+        let mut mapped_slots = vec![None; trait_info.constructor_slots.len()];
+        let mut mapped_params = HashSet::new();
+        if let Some(clause) = where_clause {
+            for constraint in &clause.constraints {
+                let AstTy::Named(subject_span, subject) = &constraint.subject else {
+                    continue;
+                };
+                for bound in &constraint.bounds {
+                    let ResolvedWhereConstraintRhs::TraitSlot {
+                        trait_id,
+                        slot_name,
+                        slot_ordinal,
+                        span: bound_span,
+                    } = bound
+                    else {
+                        continue;
+                    };
+                    if trait_id.unique_id != trait_info.id.unique_id {
+                        continue;
+                    }
+                    if !target_params.contains(subject) {
+                        return Err(TypeError {
+                            message: format!(
+                                "{} is not a top-level type parameter of the impl target",
+                                subject
+                            ),
+                            span: subject_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let slot_ordinal = *slot_ordinal as usize;
+                    if slot_ordinal >= trait_info.constructor_slots.len() {
+                        return Err(TypeError {
+                            message: format!(
+                                "Trait {} has no constructor slot {}",
+                                trait_info.id.name, slot_name
+                            ),
+                            span: bound_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    if mapped_slots[slot_ordinal].is_some() {
+                        return Err(TypeError {
+                            message: format!(
+                                "Trait constructor slot {} is mapped more than once",
+                                slot_name
+                            ),
+                            span: bound_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    if !mapped_params.insert(subject.clone()) {
+                        return Err(TypeError {
+                            message: format!(
+                                "Impl target parameter {} is mapped to more than one constructor slot",
+                                subject
+                            ),
+                            span: bound_span.clone(),
+                            hint: None,
+                        });
+                    }
+                    mapped_slots[slot_ordinal] = target_param_vars.get(subject).copied();
+                }
+            }
+        }
+
+        if mapped_slots.iter().all(Option::is_none)
+            && trait_info.constructor_slots.len() == 1
+            && target_params.len() == 1
+        {
+            mapped_slots[0] = target_param_vars.get(&target_params[0]).copied();
+        }
+
+        if mapped_slots.iter().any(Option::is_none) {
+            return Err(TypeError {
+                message: format!(
+                    "{} does not satisfy Type<{}>: map every constructor slot in the impl where clause",
+                    Self::surface_ast_ty_key(target_ast_ty),
+                    trait_info.constructor_slots.join(", ")
+                ),
+                span: span.clone(),
+                hint: Some(format!(
+                    "Use `where $T: {}.{}` for each public constructor slot.",
+                    trait_info.id.name,
+                    trait_info.constructor_slots[0]
+                )),
+            });
+        }
+
+        let vars = mapped_slots.into_iter().flatten().collect::<Vec<_>>();
+        let positions = vars
+            .iter()
+            .map(|var| {
+                target_params
+                    .iter()
+                    .position(|param| target_param_vars.get(param) == Some(var))
+                    .expect("mapped constructor variable must belong to target parameters")
+            })
+            .collect();
+        Ok((vars, positions))
+    }
+
     pub(super) fn resolve_trait_impl_head_tys(
         &mut self,
         trait_args: &[AstTy],
         target_ast_ty: &AstTy,
-    ) -> Result<(Vec<Ty>, Ty, Vec<u32>), TypeError> {
+    ) -> Result<(Vec<Ty>, Ty, Vec<u32>, HashMap<String, u32>), TypeError> {
         let mut tyvars = HashMap::new();
         let target_ty = self.resolve_signature_ast_ty_in_context(
             target_ast_ty,
@@ -1085,7 +1532,14 @@ impl Checker {
             Self::collect_ty_vars(ty, &mut type_param_vars);
         }
         Self::collect_ty_vars(&target_ty, &mut type_param_vars);
-        Ok((trait_arg_tys, target_ty, type_param_vars))
+        let target_param_vars = tyvars
+            .into_iter()
+            .filter_map(|(name, ty)| match ty {
+                Ty::Var(var) if name.starts_with('$') => Some((name, var)),
+                _ => None,
+            })
+            .collect();
+        Ok((trait_arg_tys, target_ty, type_param_vars, target_param_vars))
     }
 
     fn compiler_trait_target_names(&self, trait_name: &str) -> &'static [&'static str] {
@@ -1103,9 +1557,6 @@ impl Checker {
             return &["String"];
         }
         if self.trait_matches_short_name(trait_name, "Eq") {
-            return &["Boolean", "Float", "Int", "String"];
-        }
-        if self.trait_matches_short_name(trait_name, "Neq") {
             return &["Boolean", "Float", "Int", "String"];
         }
         if self.trait_matches_short_name(trait_name, "Show") {
@@ -1212,7 +1663,7 @@ impl Checker {
             Ty::Pid(name) => Some(format!("PID<{name}>")),
             Ty::Result(_, _) => Some("Result".into()),
             Ty::List(_) => Some("List".into()),
-            Ty::Facet(_, _) => Some("Facet".into()),
+            Ty::Facet(..) => Some("Facet".into()),
             Ty::Tuple(items) if items.len() >= 2 => Some(format!("Tuple{}", items.len())),
             Ty::Func(_, _) => Some("Function".into()),
             Ty::Struct(name, _) | Ty::Record(name, _) => Some(name),
@@ -1307,7 +1758,7 @@ impl Checker {
         {
             return Some(TraitDispatchTarget::BinOp(BinOp::Eq));
         }
-        if self.trait_matches_short_name(trait_name, "Neq")
+        if self.trait_matches_short_name(trait_name, "Eq")
             && matches!(target_name, "Int" | "Float" | "String" | "Boolean")
             && method_name == "neq"
         {
@@ -1327,9 +1778,7 @@ impl Checker {
                 Ty::Var(_) | Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error
             );
         }
-        if self.trait_matches_short_name(trait_name, "Eq")
-            || self.trait_matches_short_name(trait_name, "Neq")
-        {
+        if self.trait_matches_short_name(trait_name, "Eq") {
             return matches!(ty, Ty::Enum(_, _));
         }
         false
@@ -1353,11 +1802,6 @@ impl Checker {
         if self.trait_matches_short_name(trait_name, "Eq") {
             return match (method_name, target_ty) {
                 ("eq", Ty::Enum(_, _)) => Some(TraitDispatchTarget::BinOp(BinOp::Eq)),
-                _ => None,
-            };
-        }
-        if self.trait_matches_short_name(trait_name, "Neq") {
-            return match (method_name, target_ty) {
                 ("neq", Ty::Enum(_, _)) => Some(TraitDispatchTarget::BinOp(BinOp::Neq)),
                 _ => None,
             };
@@ -1370,7 +1814,7 @@ impl Checker {
         trait_info: &TraitInfo,
         method: &TraitMethodInfo,
         self_ty: &Ty,
-    ) -> Result<(Vec<Ty>, Ty, Vec<Ty>), TypeError> {
+    ) -> Result<(Vec<Ty>, Ty, Vec<Ty>, Vec<Ty>), TypeError> {
         let mut trait_head_bindings = HashMap::new();
         for param in &trait_info.type_params {
             let fresh = self.env.fresh_tyvar();
@@ -1387,22 +1831,12 @@ impl Checker {
             .params
             .iter()
             .map(|param| {
-                if let Some(ty) = self.resolve_trait_type_ref_param_ty(
+                self.resolve_trait_signature_ast_ty_in_context(
                     &param.ty,
-                    &trait_head_bindings,
-                    false,
+                    TypeSyntaxContext::General,
                     self_ty,
                     &mut tyvars,
-                )? {
-                    Ok(ty)
-                } else {
-                    self.resolve_trait_signature_ast_ty_in_context(
-                        &param.ty,
-                        TypeSyntaxContext::General,
-                        self_ty,
-                        &mut tyvars,
-                    )
-                }
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret = self.resolve_trait_signature_ast_ty_in_context(
@@ -1411,12 +1845,182 @@ impl Checker {
             self_ty,
             &mut tyvars,
         )?;
+        self.apply_typed_where_trait_bounds(method.where_clause.as_ref(), &tyvars, Some(self_ty))?;
         let trait_args = trait_info
             .type_params
             .iter()
             .filter_map(|param| trait_head_bindings.get(&param.name).cloned())
             .collect::<Vec<_>>();
-        Ok((params, ret, trait_args))
+        let explicit_slots = trait_info
+            .type_params
+            .iter()
+            .chain(method.type_params.iter())
+            .filter_map(|param| tyvars.get(&param.name).cloned())
+            .fold(Vec::new(), |mut slots, slot| {
+                if !slots.iter().any(|existing| existing == &slot) {
+                    slots.push(slot);
+                }
+                slots
+            });
+        Ok((params, ret, trait_args, explicit_slots))
+    }
+
+    fn expand_trait_self_apps(
+        &self,
+        ty: Ty,
+        target_ty: &Ty,
+        constructor_slot_vars: &[u32],
+    ) -> Result<Ty, TypeError> {
+        Ok(match ty {
+            Ty::SelfApp(args) => {
+                if args.len() != constructor_slot_vars.len() {
+                    return Err(TypeError {
+                        message: format!(
+                            "Self requires {} constructor argument(s), got {}",
+                            constructor_slot_vars.len(),
+                            args.len()
+                        ),
+                        span: Span { start: 0, end: 0 },
+                        hint: None,
+                    });
+                }
+                let mapping = constructor_slot_vars
+                    .iter()
+                    .copied()
+                    .zip(args)
+                    .collect::<HashMap<_, _>>();
+                self.substitute_ty_with_mapping(target_ty, &mapping)
+            }
+            Ty::List(inner) => Ty::List(Box::new(self.expand_trait_self_apps(
+                *inner,
+                target_ty,
+                constructor_slot_vars,
+            )?)),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| self.expand_trait_self_apps(item, target_ty, constructor_slot_vars))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Ty::Func(params, ret) => Ty::Func(
+                params
+                    .into_iter()
+                    .map(|param| {
+                        self.expand_trait_self_apps(param, target_ty, constructor_slot_vars)
+                    })
+                    .collect::<Result<_, _>>()?,
+                Box::new(self.expand_trait_self_apps(*ret, target_ty, constructor_slot_vars)?),
+            ),
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(self.expand_trait_self_apps(
+                *inner,
+                target_ty,
+                constructor_slot_vars,
+            )?)),
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                kind,
+                Box::new(self.expand_trait_self_apps(*source, target_ty, constructor_slot_vars)?),
+                Box::new(self.expand_trait_self_apps(*focus, target_ty, constructor_slot_vars)?),
+                Box::new(self.expand_trait_self_apps(
+                    *update_source,
+                    target_ty,
+                    constructor_slot_vars,
+                )?),
+                Box::new(self.expand_trait_self_apps(
+                    *update_focus,
+                    target_ty,
+                    constructor_slot_vars,
+                )?),
+            ),
+            Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
+                name,
+                params: params
+                    .into_iter()
+                    .map(|param| {
+                        self.expand_trait_self_apps(param, target_ty, constructor_slot_vars)
+                    })
+                    .collect::<Result<_, _>>()?,
+                ret: Box::new(self.expand_trait_self_apps(
+                    *ret,
+                    target_ty,
+                    constructor_slot_vars,
+                )?),
+            },
+            Ty::UserFunc {
+                fun_idx,
+                type_params,
+                params,
+                ret,
+            } => Ty::UserFunc {
+                fun_idx,
+                type_params,
+                params: params
+                    .into_iter()
+                    .map(|param| {
+                        self.expand_trait_self_apps(param, target_ty, constructor_slot_vars)
+                    })
+                    .collect::<Result<_, _>>()?,
+                ret: Box::new(self.expand_trait_self_apps(
+                    *ret,
+                    target_ty,
+                    constructor_slot_vars,
+                )?),
+            },
+            Ty::Struct(name, fields) => Ty::Struct(
+                name,
+                fields
+                    .into_iter()
+                    .map(|(name, field)| {
+                        Ok((
+                            name,
+                            self.expand_trait_self_apps(field, target_ty, constructor_slot_vars)?,
+                        ))
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+            ),
+            Ty::Record(name, fields) => Ty::Record(
+                name,
+                fields
+                    .into_iter()
+                    .map(|(name, field)| {
+                        Ok((
+                            name,
+                            self.expand_trait_self_apps(field, target_ty, constructor_slot_vars)?,
+                        ))
+                    })
+                    .collect::<Result<_, TypeError>>()?,
+            ),
+            Ty::Enum(name, args) => Ty::Enum(
+                name,
+                args.into_iter()
+                    .map(|arg| self.expand_trait_self_apps(arg, target_ty, constructor_slot_vars))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(self.expand_trait_self_apps(*ok, target_ty, constructor_slot_vars)?),
+                Box::new(self.expand_trait_self_apps(*err, target_ty, constructor_slot_vars)?),
+            ),
+            other => other,
+        })
+    }
+
+    fn alpha_normalized_signature(&self, params: &[Ty], ret: &Ty) -> (Vec<Ty>, Ty) {
+        let mut vars = Vec::new();
+        for param in params {
+            Self::collect_ty_vars(param, &mut vars);
+        }
+        Self::collect_ty_vars(ret, &mut vars);
+        let mapping = vars
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, var)| (var, Ty::Var(ordinal as u32)))
+            .collect::<HashMap<_, _>>();
+        (
+            params
+                .iter()
+                .map(|param| self.substitute_ty_with_mapping(param, &mapping))
+                .collect(),
+            self.substitute_ty_with_mapping(ret, &mapping),
+        )
     }
 
     pub(super) fn resolve_trait_impl_method_signature(
@@ -1426,7 +2030,7 @@ impl Checker {
         method: &TraitImplMethodInfo,
         target_ast_ty: &AstTy,
         fallback_ret_ty: &AstTy,
-    ) -> Result<(Vec<Ty>, Ty, Vec<u32>), TypeError> {
+    ) -> Result<(Vec<Ty>, Ty, Vec<u32>, Vec<Ty>), TypeError> {
         if trait_info.type_params.len() != trait_args.len() {
             return Err(TypeError {
                 message: format!(
@@ -1465,22 +2069,24 @@ impl Checker {
             .params
             .iter()
             .map(|param| {
-                if let Some(ty) = self.resolve_trait_type_ref_param_ty(
+                self.resolve_trait_signature_ast_ty_in_context(
                     &param.ty,
-                    &trait_head_bindings,
-                    true,
+                    TypeSyntaxContext::General,
                     &self_ty,
                     &mut tyvars,
-                )? {
-                    Ok(ty)
-                } else {
-                    self.resolve_trait_signature_ast_ty_in_context(
-                        &param.ty,
-                        TypeSyntaxContext::General,
-                        &self_ty,
-                        &mut tyvars,
-                    )
-                }
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let fun_params = method
+            .fun_params
+            .iter()
+            .map(|param| {
+                self.resolve_trait_signature_ast_ty_in_context(
+                    param,
+                    TypeSyntaxContext::General,
+                    &self_ty,
+                    &mut tyvars,
+                )
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret_source = method.ret_ty.as_ref().unwrap_or(fallback_ret_ty);
@@ -1490,6 +2096,7 @@ impl Checker {
             &self_ty,
             &mut tyvars,
         )?;
+        self.apply_typed_where_trait_bounds(method.where_clause.as_ref(), &tyvars, Some(&self_ty))?;
         let mut type_params = Vec::new();
         for ty in tyvars.values() {
             Self::collect_ty_vars(ty, &mut type_params);
@@ -1506,15 +2113,95 @@ impl Checker {
                 type_params.push(var);
             }
         }
-        Ok((params, ret, type_params))
+        Ok((params, ret, type_params, fun_params))
     }
 
     pub(super) fn predeclare_traits(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
         for stmt in stmts {
-            let Resolved::TraitDef(span, id, type_params, methods, _) = stmt else {
+            let Resolved::TraitDef(span, id, type_params, where_clause, methods, _) = stmt else {
                 continue;
             };
             let trait_key = self.trait_key(id);
+            let constructor_slots = self.trait_constructor_slots(id, where_clause.as_ref())?;
+            let parents = Self::trait_parents(where_clause.as_ref());
+            if !constructor_slots.is_empty() && !type_params.is_empty() {
+                return Err(TypeError {
+                    message: format!(
+                        "Constructor trait {} cannot declare trait type parameter(s)",
+                        id.name
+                    ),
+                    span: id.span.clone(),
+                    hint: Some(
+                        "Put element slots in `Self: Type<$A, ...>` and introduce them through method inputs."
+                            .into(),
+                    ),
+                });
+            }
+            let mut direct_parents = HashSet::new();
+            for parent in &parents {
+                let key = parent
+                    .qualified_name
+                    .as_deref()
+                    .unwrap_or(parent.name.as_str());
+                if !direct_parents.insert(key.to_string()) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait {} declares parent {} more than once",
+                            id.name, parent.name
+                        ),
+                        span: parent.span.clone(),
+                        hint: None,
+                    });
+                }
+            }
+            if !constructor_slots.is_empty() {
+                for method in methods {
+                    let mut fun_param_slots = HashSet::new();
+                    for fun_param in &method.fun_params {
+                        Self::collect_constructor_signature_slots(fun_param, &mut fun_param_slots);
+                    }
+                    let mut value_param_slots = HashSet::new();
+                    for param in &method.params {
+                        Self::collect_constructor_signature_slots(
+                            &param.ty,
+                            &mut value_param_slots,
+                        );
+                    }
+                    if let Some(slot) = fun_param_slots
+                        .intersection(&value_param_slots)
+                        .next()
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "Constructor trait method {} introduces {} through both FunParams and value arguments",
+                                method.id.name, slot
+                            ),
+                            span: method.span.clone(),
+                            hint: Some(
+                                "Introduce each type variable through exactly one input channel."
+                                    .into(),
+                            ),
+                        });
+                    }
+                    let mut input_slots = fun_param_slots;
+                    input_slots.extend(value_param_slots);
+                    let mut return_slots = HashSet::new();
+                    Self::collect_constructor_signature_slots(&method.ret_ty, &mut return_slots);
+                    if let Some(slot) = return_slots.difference(&input_slots).next() {
+                        return Err(TypeError {
+                            message: format!(
+                                "Constructor trait method {} has {} only in its return type",
+                                method.id.name, slot
+                            ),
+                            span: method.span.clone(),
+                            hint: Some(
+                                "Introduce the type variable through FunParams or a value argument."
+                                    .into(),
+                            ),
+                        });
+                    }
+                }
+            }
             let mut method_map = HashMap::new();
             for method in methods {
                 if let Some(qualified_name) = &method.id.qualified_name {
@@ -1527,9 +2214,11 @@ impl Checker {
                     method.id.name.clone(),
                     TraitMethodInfo {
                         id: method.id.clone(),
+                        fun_params: method.fun_params.clone(),
                         type_params: method.type_params.clone(),
                         params: method.params.clone(),
                         ret_ty: method.ret_ty.clone(),
+                        where_clause: method.where_clause.as_ref().map(TypedWhereClause::from),
                         attrs: method.attrs.clone(),
                         body: method.body.clone(),
                         span: method.span.clone(),
@@ -1537,18 +2226,31 @@ impl Checker {
                 );
             }
             self.traits.insert(
-                trait_key,
+                trait_key.clone(),
                 TraitInfo {
                     id: id.clone(),
                     type_params: type_params.clone(),
+                    where_clause: where_clause.as_ref().map(TypedWhereClause::from),
+                    constructor_root: (!constructor_slots.is_empty()).then_some(trait_key),
+                    constructor_slots,
+                    parents,
                     methods: method_map,
                 },
             );
             let _ = span;
         }
 
+        self.resolve_trait_constraint_closure()?;
+
         for stmt in stmts {
-            let Resolved::TraitImplDef(span, trait_id, trait_args, target_ast_ty, methods) = stmt
+            let Resolved::TraitImplDef(
+                span,
+                trait_id,
+                trait_args,
+                target_ast_ty,
+                where_clause,
+                methods,
+            ) = stmt
             else {
                 continue;
             };
@@ -1576,13 +2278,21 @@ impl Checker {
                 });
             }
             let trait_instance_key = self.trait_instance_key(trait_id, trait_args);
-            let (trait_arg_tys, target_ty, type_param_vars) =
+            let (trait_arg_tys, target_ty, type_param_vars, target_param_vars) =
                 self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
                 message: "trait impl target must be a concrete named type, tuple type, or function type".into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: Some("Use `impl Trait for Int` / `impl Trait for UserType` / `impl Trait for (Int, String)` / `impl Trait for ($A -> $B)`.".into()),
             })?;
+            let (constructor_slot_vars, constructor_slot_positions) = self
+                .constructor_slot_vars_for_impl(
+                    &trait_info,
+                    target_ast_ty,
+                    where_clause.as_ref(),
+                    &target_param_vars,
+                    span,
+                )?;
 
             let mut method_map = HashMap::new();
             for method in methods {
@@ -1591,9 +2301,11 @@ impl Checker {
                     TraitImplMethodInfo {
                         method_name: method.method_name.clone(),
                         function_id: method.function_id.clone(),
+                        fun_params: method.fun_params.clone(),
                         type_params: method.type_params.clone(),
                         params: method.params.clone(),
                         ret_ty: method.ret_ty.clone(),
+                        where_clause: method.where_clause.as_ref().map(TypedWhereClause::from),
                         body: method.body.clone(),
                         attrs: method.attrs.clone(),
                         span: method.span.clone(),
@@ -1613,6 +2325,9 @@ impl Checker {
                     continue;
                 }
                 let Some(default_body) = trait_method.body.clone() else {
+                    if trait_method.attrs.visibility == spire::ast::Visibility::Private {
+                        continue;
+                    }
                     return Err(TypeError {
                         message: format!(
                             "Trait impl {} for {} is missing method `{}`",
@@ -1633,9 +2348,11 @@ impl Checker {
                             required_method,
                             &trait_method.span,
                         ),
+                        fun_params: trait_method.fun_params.clone(),
                         type_params: trait_method.type_params.clone(),
                         params: trait_method.params.clone(),
                         ret_ty: None,
+                        where_clause: trait_method.where_clause.clone(),
                         body: default_body,
                         attrs: trait_method.attrs.clone(),
                         span: trait_method.span.clone(),
@@ -1690,9 +2407,38 @@ impl Checker {
                     });
                 }
 
-                let (trait_params, trait_ret, _) =
+                if trait_method.attrs.visibility != impl_method.attrs.visibility {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait impl method {}::{} has incompatible visibility",
+                            trait_id.name, method_name
+                        ),
+                        span: impl_method.span.clone(),
+                        hint: Some("A trait private helper must be implemented with `defp`, and a public trait method with `def`".into()),
+                    });
+                }
+
+                let (trait_params, trait_ret, trait_head_vars, _) =
                     self.resolve_trait_method_signature(&trait_info, trait_method, &target_ty)?;
-                let (impl_params, impl_ret, _) = self.resolve_trait_impl_method_signature(
+                let trait_head_mapping = trait_head_vars
+                    .into_iter()
+                    .zip(trait_arg_tys.iter().cloned())
+                    .filter_map(|(from, to)| match from {
+                        Ty::Var(var) => Some((var, to)),
+                        _ => None,
+                    })
+                    .collect::<HashMap<_, _>>();
+                let trait_params = trait_params
+                    .into_iter()
+                    .map(|param| {
+                        let param = self.substitute_ty_with_mapping(&param, &trait_head_mapping);
+                        self.expand_trait_self_apps(param, &target_ty, &constructor_slot_vars)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let trait_ret = self.substitute_ty_with_mapping(&trait_ret, &trait_head_mapping);
+                let trait_ret =
+                    self.expand_trait_self_apps(trait_ret, &target_ty, &constructor_slot_vars)?;
+                let (impl_params, impl_ret, _, _) = self.resolve_trait_impl_method_signature(
                     &trait_info,
                     trait_args,
                     impl_method,
@@ -1711,39 +2457,43 @@ impl Checker {
                     });
                 }
 
-                for (expected, got) in trait_params.iter().zip(&impl_params) {
-                    let before = self.substitutions.clone();
-                    let compatible = self.types_compatible(expected, got);
-                    self.substitutions = before;
-                    if !compatible {
-                        return Err(TypeError {
-                            message: format!(
-                                "Trait impl method {}::{} has incompatible parameter type: expected {}, got {}",
-                                trait_id.name,
-                                method_name,
-                                self.ty_name(expected),
-                                self.ty_name(got)
-                            ),
-                            span: impl_method.span.clone(),
-                            hint: None,
-                        });
-                    }
-                }
-
-                let before = self.substitutions.clone();
-                let ret_compatible = self.types_compatible(&trait_ret, &impl_ret);
-                self.substitutions = before;
-                if !ret_compatible {
+                let expected_signature = self.alpha_normalized_signature(&trait_params, &trait_ret);
+                let impl_signature = self.alpha_normalized_signature(&impl_params, &impl_ret);
+                if expected_signature != impl_signature {
                     return Err(TypeError {
                         message: format!(
-                            "Trait impl method {}::{} has incompatible return type: expected {}, got {}",
-                            trait_id.name,
-                            method_name,
-                            self.ty_name(&trait_ret),
-                            self.ty_name(&impl_ret)
+                            "Trait impl method {}::{} has an incompatible signature",
+                            trait_id.name, method_name
                         ),
                         span: impl_method.span.clone(),
-                        hint: None,
+                        hint: Some(format!(
+                            "Expected ({}) -> {}, got ({}) -> {}",
+                            trait_params
+                                .iter()
+                                .map(|ty| self.ty_name(ty))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            self.ty_name(&trait_ret),
+                            impl_params
+                                .iter()
+                                .map(|ty| self.ty_name(ty))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            self.ty_name(&impl_ret)
+                        )),
+                    });
+                }
+
+                if Self::where_clause_key(trait_method.where_clause.as_ref())
+                    != Self::where_clause_key(impl_method.where_clause.as_ref())
+                {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait impl method {}::{} has incompatible trait constraints",
+                            trait_id.name, method_name
+                        ),
+                        span: impl_method.span.clone(),
+                        hint: Some("The impl method must use the same where constraints as the trait method".into()),
                     });
                 }
             }
@@ -1804,13 +2554,122 @@ impl Checker {
                     target_name,
                     target_ast_ty: target_ast_ty.clone(),
                     target_ty,
+                    where_clause: where_clause.as_ref().map(TypedWhereClause::from),
                     type_param_vars,
+                    constructor_slot_vars,
+                    constructor_slot_positions,
                     methods: method_map,
                 },
             );
             self.index_trait_impl(impl_key);
         }
 
+        let impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
+        for child_impl in &impls {
+            self.validate_parent_impl_chain(child_impl, &mut HashSet::new())?;
+        }
+
+        Ok(())
+    }
+
+    fn where_clause_key(clause: Option<&TypedWhereClause>) -> Option<String> {
+        clause.map(|clause| {
+            clause
+                .constraints
+                .iter()
+                .map(|constraint| {
+                    let bounds = constraint
+                        .bounds
+                        .iter()
+                        .map(|bound| match bound {
+                            TypedWhereConstraintRhs::Trait(id) => format!(
+                                "trait:{}",
+                                id.qualified_name.as_deref().unwrap_or(&id.name)
+                            ),
+                            TypedWhereConstraintRhs::TypeConstructor { slots, .. } => format!(
+                                "type:{}",
+                                slots
+                                    .iter()
+                                    .map(Self::ast_ty_key)
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            ),
+                            TypedWhereConstraintRhs::TraitSlot {
+                                trait_id,
+                                slot_name,
+                                slot_ordinal,
+                                ..
+                            } => format!(
+                                "slot:{}:{}:{}",
+                                trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name),
+                                slot_name,
+                                slot_ordinal
+                            ),
+                        })
+                        .collect::<Vec<_>>()
+                        .join("+");
+                    format!("{}:{}", Self::ast_ty_key(&constraint.subject), bounds)
+                })
+                .collect::<Vec<_>>()
+                .join(";")
+        })
+    }
+
+    fn validate_parent_impl_chain(
+        &self,
+        child_impl: &TraitImplInfo,
+        visiting: &mut HashSet<(String, String)>,
+    ) -> Result<(), TypeError> {
+        let child_trait_key = self.trait_key(&child_impl.trait_id);
+        let visit_key = (child_trait_key.clone(), child_impl.target_name.clone());
+        if !visiting.insert(visit_key.clone()) {
+            return Ok(());
+        }
+        let Some(child_trait) = self.traits.get(&child_trait_key) else {
+            return Ok(());
+        };
+        for parent in &child_trait.parents {
+            let parent_key = self.trait_key(parent);
+            let parent_trait = self.traits.get(&parent_key).ok_or_else(|| TypeError {
+                message: format!("Unknown parent trait: {}", parent.name),
+                span: parent.span.clone(),
+                hint: None,
+            })?;
+            if !parent_trait.type_params.is_empty() {
+                return Err(TypeError {
+                    message: format!(
+                        "Parent trait {} requires type arguments and cannot be used as a bare parent constraint",
+                        parent.name
+                    ),
+                    span: parent.span.clone(),
+                    hint: None,
+                });
+            }
+            let parent_impl_key = (parent_key.clone(), child_impl.target_name.clone());
+            let parent_impl = self
+                .trait_impls
+                .get(&parent_impl_key)
+                .ok_or_else(|| TypeError {
+                    message: format!(
+                        "Trait impl {} for {} requires parent impl {} for the same target",
+                        child_impl.trait_id.name, child_impl.target_name, parent.name
+                    ),
+                    span: child_impl.trait_id.span.clone(),
+                    hint: None,
+                })?;
+            if child_impl.constructor_slot_positions != parent_impl.constructor_slot_positions {
+                return Err(TypeError {
+                    message: format!(
+                        "Trait impl {} for {} must use the same constructor slot mapping as parent {}",
+                        child_impl.trait_id.name, child_impl.target_name, parent.name
+                    ),
+                    span: child_impl.trait_id.span.clone(),
+                    hint: None,
+                });
+            }
+            self.validate_parent_impl_chain(parent_impl, visiting)?;
+        }
+        visiting.remove(&visit_key);
         Ok(())
     }
 
@@ -1819,10 +2678,11 @@ impl Checker {
         let mut trait_impl_keys_in_stmts = HashSet::new();
 
         for stmt in stmts {
-            let Resolved::TraitImplDef(_, trait_id, trait_args, target_ast_ty, _) = stmt else {
+            let Resolved::TraitImplDef(_, trait_id, trait_args, target_ast_ty, _, _) = stmt else {
                 continue;
             };
-            let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
+            let (_, target_ty, _, _) =
+                self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
             let target_name =
                 self.trait_target_name(&target_ty).ok_or_else(|| {
                     TypeError {
@@ -1898,8 +2758,20 @@ impl Checker {
                         },
                     );
                 }
-                Resolved::Def(_, id, type_params, params, ret_ty, _, _) => {
+                Resolved::Def(_, id, type_params, params, ret_ty, where_clause, _, attrs) => {
                     self.register_function_id(id);
+                    if !attrs.builtin
+                        && Self::split_impl_method_name(
+                            id.qualified_name.as_deref().unwrap_or(&id.name),
+                        )
+                        .is_none()
+                    {
+                        Self::reject_return_only_signature_slots(
+                            params,
+                            ret_ty.as_ref(),
+                            &id.span,
+                        )?;
+                    }
                     let mut tyvars = HashMap::new();
                     self.seed_signature_type_params(type_params, &mut tyvars);
                     let param_tys = params
@@ -1933,12 +2805,13 @@ impl Checker {
                         )?,
                         None => Ty::Unit,
                     };
+                    self.apply_resolved_where_trait_bounds(where_clause.as_ref(), &tyvars, None)?;
                     let function_symbol = id.qualified_name.as_deref().unwrap_or(&id.name);
                     if self.ty_contains_process_init(&ret)
                         && !self.is_lazy_init_function_symbol(function_symbol)
                     {
                         return Err(TypeError {
-                            message: "ProcessInit<T> is only allowed as Lazy @init return type"
+                            message: "StandbyInit<T> is only allowed as Standby @init return type"
                                 .into(),
                             span: ret_ty
                                 .as_ref()
@@ -1948,13 +2821,8 @@ impl Checker {
                             hint: None,
                         });
                     }
-                    let type_params = tyvars
-                        .values()
-                        .filter_map(|ty| match ty {
-                            Ty::Var(var) => Some(*var),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
+                    let type_params =
+                        Self::signature_type_param_vars(type_params, &tyvars, &param_tys, &ret);
                     self.env.bind_var(
                         id.unique_id,
                         Ty::UserFunc {
@@ -1990,13 +2858,12 @@ impl Checker {
                         TypeSyntaxContext::ExtractorReturn,
                         &mut tyvars,
                     )?;
-                    let type_params = tyvars
-                        .values()
-                        .filter_map(|ty| match ty {
-                            Ty::Var(var) => Some(*var),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>();
+                    let type_params = Self::signature_type_param_vars(
+                        type_params,
+                        &tyvars,
+                        std::slice::from_ref(&param_ty),
+                        &ret,
+                    );
                     self.env.bind_var(
                         id.unique_id,
                         Ty::UserFunc {
@@ -2086,7 +2953,7 @@ impl Checker {
                             span: method.span.clone(),
                             hint: None,
                         })?;
-                let (param_tys, ret, type_params) = self.resolve_trait_impl_method_signature(
+                let (param_tys, ret, type_params, _) = self.resolve_trait_impl_method_signature(
                     &trait_info,
                     &trait_impl.trait_args,
                     method,
@@ -2140,10 +3007,7 @@ mod policy_tests {
             "Self"
         ));
         assert!(!Checker::builtin_type_has_public_trait_target_surface(
-            "TypeRef"
-        ));
-        assert!(!Checker::builtin_type_has_public_trait_target_surface(
-            "ProcessInit"
+            "StandbyInit"
         ));
     }
 }

@@ -1,2 +1,0 @@
-phase: typecheck
-contains: ProcessInit<T> is only allowed as Lazy @init return type

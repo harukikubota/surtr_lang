@@ -357,6 +357,7 @@ fn scan_tolerant(source: &str) -> TolerantScan {
             let token = match three.as_str() {
                 "|*>" => Some(Token::PipeMap),
                 "|>=" => Some(Token::PipeBind),
+                "|*|" => Some(Token::PipeApplyContext),
                 ">=>" => Some(Token::KleisliCompose),
                 _ => None,
             };

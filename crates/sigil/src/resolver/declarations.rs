@@ -170,7 +170,15 @@ pub fn lower_module_source_ast(
                     process_spec: None,
                 });
             }
-            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+            Ast::TraitImplDef(
+                span,
+                trait_name,
+                trait_args,
+                target_ty,
+                where_clause,
+                methods,
+                attrs,
+            ) => {
                 let declared_span = span.clone();
                 let module_path = match &target_ty {
                     AstTy::Named(_, name)
@@ -186,6 +194,7 @@ pub fn lower_module_source_ast(
                     trait_name,
                     trait_args,
                     target_ty,
+                    where_clause,
                     methods,
                     attrs.clone(),
                 ));
@@ -350,7 +359,7 @@ pub fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
             .ast
             .iter()
             .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _))
+        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(..))
     )
 }
 
@@ -360,7 +369,7 @@ fn staged_module_is_impl_owner(module: &StagedModuleAst) -> bool {
             .ast
             .iter()
             .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(_, _, _, _, _, _))
+        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(..))
     )
 }
 
@@ -679,7 +688,10 @@ fn lower_impl_member_name(
     target: &str,
     method_name: &str,
 ) -> String {
-    if current_module_path == Some(target) {
+    if current_module_path
+        .map(surface_path_name)
+        .is_some_and(|module_path| module_path == surface_path_name(target))
+    {
         method_name.to_string()
     } else {
         normalize_impl_method_name(target, method_name)
@@ -852,6 +864,44 @@ fn rewrite_self_type(ty: AstTy, target: &str) -> AstTy {
                 .collect(),
             Box::new(rewrite_self_type(*ret, target)),
         ),
+    }
+}
+
+fn rewrite_self_where_clause(
+    clause: spire::ast::WhereClause,
+    target: &str,
+) -> spire::ast::WhereClause {
+    spire::ast::WhereClause {
+        constraints: clause
+            .constraints
+            .into_iter()
+            .map(|constraint| spire::ast::WhereConstraint {
+                subject: rewrite_self_type(constraint.subject, target),
+                bounds: constraint
+                    .bounds
+                    .into_iter()
+                    .map(|bound| match bound {
+                        spire::ast::WhereConstraintRhs::Trait(span, name) => {
+                            spire::ast::WhereConstraintRhs::Trait(span, name)
+                        }
+                        spire::ast::WhereConstraintRhs::TypeConstructor(span, slots) => {
+                            spire::ast::WhereConstraintRhs::TypeConstructor(
+                                span,
+                                slots
+                                    .into_iter()
+                                    .map(|slot| rewrite_self_type(slot, target))
+                                    .collect(),
+                            )
+                        }
+                        spire::ast::WhereConstraintRhs::TraitSlot(span, owner, slot) => {
+                            spire::ast::WhereConstraintRhs::TraitSlot(span, owner, slot)
+                        }
+                    })
+                    .collect(),
+                span: constraint.span,
+            })
+            .collect(),
+        span: clause.span,
     }
 }
 
@@ -1072,7 +1122,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .collect(),
             attrs,
         ),
-        Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => Ast::Def(
+        Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, attrs) => Ast::Def(
             span,
             name,
             type_params,
@@ -1085,6 +1135,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 })
                 .collect(),
             ret_ty.map(|ret| rewrite_self_type(ret, target)),
+            where_clause.map(|clause| rewrite_self_where_clause(clause, target)),
             Box::new(rewrite_self_ast(*body, target)),
             attrs,
         ),
@@ -1171,6 +1222,13 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
             Box::new(rewrite_self_ast(*capture_target, target)),
             args.into_iter()
                 .map(|arg| rewrite_self_ast(arg, target))
+                .collect(),
+        ),
+        Ast::TypeApply(span, target_expr, args) => Ast::TypeApply(
+            span,
+            Box::new(rewrite_self_ast(*target_expr, target)),
+            args.into_iter()
+                .map(|arg| rewrite_self_type(arg, target))
                 .collect(),
         ),
         Ast::FuncLiteralRef(span, func) => Ast::FuncLiteralRef(span, func),
@@ -1310,7 +1368,7 @@ pub fn precollect_declaration_index(
                     let method_module_path = impl_owner_module_path(target);
                     for method in methods {
                         let (method_span, method_name, kind, attrs) = match method {
-                            Ast::Def(method_span, method_name, _, _, _, _, attrs) => {
+                            Ast::Def(method_span, method_name, _, _, _, _, _, attrs) => {
                                 let kind = if method_name == "new" {
                                     if !matches!(target_kind, DeclarationKind::Struct) {
                                         return Err(ResolveError {
@@ -1370,7 +1428,7 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::TraitDef(span, name, _type_params, methods, attrs) = stmt {
+                if let Ast::TraitDef(span, name, _type_params, _, methods, attrs) = stmt {
                     reject_reserved_owner_name("Owner name", name, span, false)?;
                     let fq_name = if module.module_path.is_empty() {
                         name.clone()
@@ -1413,9 +1471,9 @@ pub fn precollect_declaration_index(
                                 stage_index,
                                 false,
                                 false,
-                                Visibility::Public,
-                                true,
-                                true,
+                                method.attrs.visibility,
+                                method.attrs.visibility == Visibility::Public,
+                                method.attrs.visibility == Visibility::Public,
                             ),
                             &method.span,
                         )?;
@@ -1423,19 +1481,26 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::TraitImplDef(span, _trait_name, _trait_args, _target_ty, methods, _) =
-                    stmt
+                if let Ast::TraitImplDef(
+                    span,
+                    _trait_name,
+                    _trait_args,
+                    _target_ty,
+                    _,
+                    methods,
+                    _,
+                ) = stmt
                 {
                     for method in methods {
                         let (method_span, method_name) = match method {
-                            Ast::Def(method_span, method_name, _, _, _, _, _)
+                            Ast::Def(method_span, method_name, _, _, _, _, _, _)
                             | Ast::BuiltinDecl(method_span, method_name, _, _, _) => {
                                 (method_span, method_name)
                             }
                             _ => {
                                 return Err(ResolveError {
                                     message:
-                                        "trait impl body may only contain `def` / `@builtin def` declarations"
+                                    "trait impl body may only contain `def` / `defp` / `@builtin def` declarations"
                                             .to_string(),
                                     span: span.clone(),
                                     related_labels: Vec::new(),
@@ -1519,7 +1584,7 @@ pub fn precollect_declaration_index(
 
                 let (span, name, kind, visibility, hidden, user_importable, user_callable) =
                     match stmt {
-                        Ast::Def(span, name, _, _, _, _, attrs) => (
+                        Ast::Def(span, name, _, _, _, _, _, attrs) => (
                             span,
                             name.as_str(),
                             DeclarationKind::Def,
@@ -1550,7 +1615,7 @@ pub fn precollect_declaration_index(
                             span,
                             name.as_str(),
                             DeclarationKind::Def,
-                            Visibility::Public,
+                            entry_visibility(attrs),
                             attrs.hidden,
                             entry_user_importable(attrs),
                             entry_user_callable(attrs),
@@ -1565,9 +1630,9 @@ pub fn precollect_declaration_index(
                             entry_user_importable(attrs),
                             entry_user_callable(attrs),
                         ),
-                        Ast::ImplDef(_, _, _, _)
-                        | Ast::TraitDef(_, _, _, _, _)
-                        | Ast::TraitImplDef(_, _, _, _, _, _) => continue,
+                        Ast::ImplDef(_, _, _, _) | Ast::TraitDef(..) | Ast::TraitImplDef(..) => {
+                            continue
+                        }
                         Ast::ResultCtorDecl(span, name, _, _, attrs) => (
                             span,
                             name.as_str(),
@@ -1843,6 +1908,7 @@ impl Resolver {
                                 type_params,
                                 params,
                                 ret_ty,
+                                where_clause,
                                 body,
                                 attrs,
                             ) => {
@@ -1881,6 +1947,8 @@ impl Resolver {
                                     type_params,
                                     lowered_params,
                                     lowered_ret_ty,
+                                    where_clause
+                                        .map(|clause| rewrite_self_where_clause(clause, &target)),
                                     Box::new(lowered_body),
                                     attrs,
                                 ));
@@ -2020,7 +2088,7 @@ impl Resolver {
         let mut declared_in_batch = HashSet::new();
         for stmt in stmts {
             match stmt {
-                Ast::Def(span, name, _, _, _, _, _) => {
+                Ast::Def(span, name, _, _, _, _, _, _) => {
                     let surface = global_surface_name(name).to_string();
                     self.reject_duplicate_top_level_declaration(
                         &mut declared_in_batch,
@@ -2064,7 +2132,7 @@ impl Resolver {
                     self.record_predeclared_uid(name, uid, DeclarationKind::Const);
                     self.predeclare_scope_binding(name, uid, Some(&qualified_name));
                 }
-                Ast::TraitDef(span, name, _type_params, methods, _) => {
+                Ast::TraitDef(span, name, _type_params, where_clause, methods, _) => {
                     reject_reserved_owner_name("Owner name", name, span, false)?;
                     self.reject_duplicate_top_level_declaration(
                         &mut declared_in_batch,
@@ -2076,6 +2144,30 @@ impl Resolver {
                     let uid = self.reserve_declaration_uid(&qualified_trait);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Trait);
                     self.predeclare_scope_binding(name, uid, None);
+                    if let Some(clause) = where_clause {
+                        for constraint in &clause.constraints {
+                            if !matches!(&constraint.subject, AstTy::Named(_, subject) if subject == "Self")
+                            {
+                                continue;
+                            }
+                            for bound in &constraint.bounds {
+                                if let spire::ast::WhereConstraintRhs::TypeConstructor(_, slots) =
+                                    bound
+                                {
+                                    self.trait_constructor_slots.insert(
+                                        uid,
+                                        slots
+                                            .iter()
+                                            .filter_map(|slot| match slot {
+                                                AstTy::Named(_, name) => Some(name.clone()),
+                                                _ => None,
+                                            })
+                                            .collect(),
+                                    );
+                                }
+                            }
+                        }
+                    }
 
                     for method in methods {
                         let method_alias = trait_method_qualified_name(name, &method.name);
@@ -2218,7 +2310,7 @@ impl Resolver {
                         }
                     }
                 }
-                Ast::TraitImplDef(_, _, _, _, _, _) => {}
+                Ast::TraitImplDef(..) => {}
                 _ => {}
             }
         }

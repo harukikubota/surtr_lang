@@ -72,20 +72,20 @@ types.
 
 @doc """
 Compiler-reserved process initialization protocol marker.
-`ProcessInit<$T>` may only appear as the successful value inside a Lazy process
-`@init` return type: `Result<ProcessInit<State>>`.
+`StandbyInit<$T>` may only appear as the successful value inside a Standby process
+`@init` return type: `Result<StandbyInit<State>>`.
 It is not an ordinary public API or data transport type.
 """
-@builtin type ProcessInit<$T>
+@builtin type StandbyInit<$T>
 
 @hidden
-@builtin def Pending() -> ProcessInit<$T>
+@builtin def Pending() -> StandbyInit<$T>
 
 @hidden
-@builtin def PendingAfter(duration: Duration) -> ProcessInit<$T>
+@builtin def PendingAfter(duration: Duration) -> StandbyInit<$T>
 
 @hidden
-@builtin def Ready(value: $T) -> ProcessInit<$T>
+@builtin def Ready(value: $T) -> StandbyInit<$T>
 
 impl Show for Unit {
   @doc """
@@ -94,7 +94,7 @@ impl Show for Unit {
   xldr(1)> to_string(())
   "()"
   """
-  def to_string(self: Self) -> String {
+  def to_string::<Unit>(self: Self) -> String {
     inspect(self)
   }
 }
@@ -103,10 +103,10 @@ impl From<Unit> for Unit {
   @doc """
   Return the value unchanged when converting `Unit` to `Unit`.
   ## REPL
-  xldr(1)> from((), Unit)
+  xldr(1)> from::<Unit>(())
   ()
   """
-  def from(self: Self, to: TypeRef<Unit>) -> Unit {
+  def from::<Unit>(self: Self) -> Unit {
     self
   }
 }
@@ -115,30 +115,22 @@ impl From<String> for Unit {
   @doc """
   Convert `Unit` into its standard string representation.
   ## REPL
-  xldr(1)> from((), String)
+  xldr(1)> from::<String>(())
   "()"
   """
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from::<String>(self: Self) -> String {
     to_string(self)
   }
 }
 
 
 @doc """
-Compiler-reserved target-type witness.
-Use level: signature-only marker for target-oriented trait methods.
-`TypeRef<$T>` is not an ordinary first-class value type. It exists only to
-describe trait method parameters that need an explicit target type witness.
-Do not use it in ordinary bindings, field types, or return types.
-"""
-@builtin type TypeRef<$T>
-
-@doc """
 Compiler-reserved ignored-input closure marker.
 Use level: callable surface marker only.
 `Hole` is not a first-class data type.
 It exists only as the canonical builtin type behind `_` when a callable value
-intentionally accepts an input that is not observed.
-Do not use it as plain data, field, container element, or return hole.
+intentionally accepts an input that is not observed, or when both update-side
+slots of `Facet<K, S, A, T, B>` are deferred. Do not use it as plain data,
+field, container element, or return hole.
 """
 @builtin type Hole

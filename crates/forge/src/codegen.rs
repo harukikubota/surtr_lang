@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use scar::typed::*;
-use scar::types::Ty;
+use scar::types::{FacetKind, Ty};
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
 use sindr::ir::{
@@ -206,11 +206,18 @@ fn collect_missing_singleton_calls(
         | TypedInner::FacetPath(_)
         | TypedInner::PendingFacetPath(_)
         | TypedInner::EnumDef(_, _)
-        | TypedInner::TraitDef(_, _)
-        | TypedInner::TraitImplDef(_, _)
+        | TypedInner::TraitDef(..)
+        | TypedInner::TraitImplDef(..)
         | TypedInner::BuiltinExtractorDecl(_, _, _)
         | TypedInner::StructDef(_, _, _, _, _)
         | TypedInner::RecordDef(_, _, _, _, _) => {}
+        TypedInner::EagerBoundary(inner) => collect_missing_singleton_calls(
+            inner,
+            surface_to_process,
+            available_singletons,
+            available_supervisors,
+            first_missing,
+        ),
         TypedInner::SupervisorSpawn {
             supervisor_process,
             init,
@@ -514,7 +521,7 @@ fn collect_missing_singleton_calls(
         }
         TypedInner::DeferrorDef(_, _, _, _, body)
         | TypedInner::Closure(_, _, body)
-        | TypedInner::Def(_, _, _, _, _, body, _)
+        | TypedInner::Def(_, _, _, _, _, _, body, _)
         | TypedInner::ExtractorDef(_, _, _, _, _, body, _) => collect_missing_singleton_calls(
             body,
             surface_to_process,
@@ -1173,7 +1180,7 @@ fn validate_runtime_handler_target(
 
 fn typed_def_return_ty(nodes: &[TypedNode], uid: u32) -> Option<&Ty> {
     nodes.iter().find_map(|node| match &node.node {
-        TypedInner::Def(_, id, _, _, ret_ty, _, _) if id.unique_id == uid => Some(ret_ty),
+        TypedInner::Def(_, id, _, _, ret_ty, _, _, _) if id.unique_id == uid => Some(ret_ty),
         _ => None,
     })
 }
@@ -1187,17 +1194,17 @@ fn init_state_ty(ret_ty: &Ty, lazy: bool, process_name: &str) -> Result<Ty, Code
         return Ok(ok_ty.clone());
     }
     match ok_ty {
-        Ty::Enum(name, args) if name == "ProcessInit" || name.ends_with("::ProcessInit") => {
+        Ty::Enum(name, args) if name == "StandbyInit" || name.ends_with("::StandbyInit") => {
             args.first().cloned().ok_or_else(|| CodegenError {
                 message: format!(
-                    "Lazy @init for process `{process_name}` must return Result<ProcessInit<State>>"
+                    "Standby @init for process `{process_name}` must return Result<StandbyInit<State>>"
                 ),
                 span: Span { start: 0, end: 0 },
             })
         }
         _ => Err(CodegenError {
             message: format!(
-                "Lazy @init for process `{process_name}` must return Result<ProcessInit<State>>"
+                "Standby @init for process `{process_name}` must return Result<StandbyInit<State>>"
             ),
             span: Span { start: 0, end: 0 },
         }),
@@ -1258,7 +1265,7 @@ fn build_runtime_process_specs(
     let qualified_names = nodes
         .iter()
         .filter_map(|node| match &node.node {
-            TypedInner::Def(_, id, _, _, _, _, _)
+            TypedInner::Def(_, id, _, _, _, _, _, _)
             | TypedInner::ExtractorDef(_, id, _, _, _, _, _) => Some((
                 id.unique_id,
                 id.qualified_name.clone().unwrap_or_else(|| id.name.clone()),
@@ -1481,16 +1488,16 @@ fn build_runtime_process_specs(
                 ),
                 span: Span { start: 0, end: 0 },
             })?;
-        let _state_ty = init_state_ty(init_ret_ty, spec.spec.lazy, &spec.process_name)?;
+        let _state_ty = init_state_ty(init_ret_ty, spec.spec.standby, &spec.process_name)?;
         let state_type = runtime_type_ref_from_ast(&spec.spec.state);
         let result_type = runtime_type_ref(init_ret_ty);
-        let init_policy = if spec.spec.lazy {
-            RuntimeInitPolicy::Lazy
+        let init_policy = if spec.spec.standby {
+            RuntimeInitPolicy::Standby
         } else {
             RuntimeInitPolicy::Eager
         };
-        let result_shape = if spec.spec.lazy {
-            RuntimeInitResultShape::LazyProcessInit {
+        let result_shape = if spec.spec.standby {
+            RuntimeInitResultShape::StandbyProcessInit {
                 result_type: result_type.clone(),
             }
         } else {
@@ -1786,16 +1793,41 @@ pub struct ReplFacetSegmentInfo {
     pub focus_ty: String,
     pub fallible: bool,
     pub reason: String,
+    pub policy: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplFacetInfo {
     pub ty: String,
+    pub stage: ReplFacetStage,
     pub path_kind: String,
+    pub source_ty: String,
+    pub focus_ty: String,
+    pub update_source_ty: String,
+    pub update_focus_ty: String,
+    pub api_eligibility: Vec<String>,
     pub view_result_ty: String,
     pub full_path: String,
     pub segments: Vec<ReplFacetSegmentInfo>,
     pub stop_points: Vec<String>,
+    pub operation: Option<ReplFacetOperation>,
+    pub root_policy: String,
+    pub available_in_current_scope: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplFacetOperation {
+    pub name: String,
+    pub kind_constraint: String,
+    pub result_ty: String,
+    pub replacement_ty: Option<String>,
+    pub mapper_ty: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplFacetStage {
+    Template,
+    Pending,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2495,7 +2527,7 @@ mod tests {
                 state: AstTy::Named(span(0, 0), "Int".into()),
                 boot: false,
                 registry: false,
-                lazy: false,
+                standby: false,
                 handlers: Vec::new(),
                 handler_specs: Vec::<ProcessRuntimeHandlerSpec>::new(),
                 supervisor_policy: None,
@@ -2523,6 +2555,7 @@ mod tests {
                         Vec::new(),
                         Vec::new(),
                         result_ty.clone(),
+                        None,
                         Box::new(lit_node(Ty::Int, Lit::Int(0.into()), span(0, 0))),
                         Visibility::Public,
                     ),
@@ -2536,6 +2569,7 @@ mod tests {
                         Vec::new(),
                         vec![typed_fun_param("state", 201, Ty::Int)],
                         result_ty,
+                        None,
                         Box::new(lit_node(Ty::Int, Lit::Int(1.into()), span(0, 0))),
                         Visibility::Public,
                     ),
@@ -3064,7 +3098,9 @@ mod tests {
         let path = TypedFacetPath {
             source_ty: Ty::List(Box::new(Ty::Int)),
             focus_ty: Ty::Int,
-            path_kind: TypedFacetPathKind::Structural,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,
             segments: vec![TypedFacetSegment::ListIndex {
@@ -3988,7 +4024,111 @@ fn top_level_result_facet_info(typed: &[TypedNode]) -> Option<ReplFacetInfo> {
                 TypedInner::Def(..) | TypedInner::ExtractorDef(..) | TypedInner::DeferrorDef(..)
             )
         })
-        .and_then(facet_info_for_node)
+        .and_then(repl_facet_info_for_node)
+}
+
+/// Produces the shared REPL inspection view from Scar's typed Facet metadata.
+/// Both the compiled REPL chunk and ad-hoc `:facet` queries use this function
+/// so their displayed slot and API state cannot drift.
+pub fn repl_facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
+    let (path, source_is_result, operation) =
+        match &node.node {
+            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => {
+                return facet_info_for_node(node)
+            }
+            TypedInner::FacetView {
+                path,
+                source_is_result,
+                ..
+            } => (
+                path,
+                *source_is_result,
+                ReplFacetOperation {
+                    name: "Facet::view".into(),
+                    kind_constraint: "ReadablePath".into(),
+                    result_ty: ty_to_string(&node.ty),
+                    replacement_ty: None,
+                    mapper_ty: None,
+                },
+            ),
+            TypedInner::FacetSet {
+                path,
+                source_is_result,
+                value,
+                mode,
+                ..
+            } => (
+                path,
+                *source_is_result,
+                ReplFacetOperation {
+                    name: match mode {
+                        TypedFacetSetMode::Exact => "Facet::set",
+                        TypedFacetSetMode::CaseSet => "Facet::case_set",
+                    }
+                    .into(),
+                    kind_constraint: match mode {
+                        TypedFacetSetMode::Exact => "WritablePath",
+                        TypedFacetSetMode::CaseSet => "CasePath",
+                    }
+                    .into(),
+                    result_ty: ty_to_string(&node.ty),
+                    replacement_ty: Some(ty_to_string(&value.ty)),
+                    mapper_ty: None,
+                },
+            ),
+            TypedInner::FacetOver {
+                path,
+                source_is_result,
+                update_fun,
+                mode,
+                ..
+            } => (
+                path,
+                *source_is_result,
+                ReplFacetOperation {
+                    name: match mode {
+                        TypedFacetOverMode::FocusValue => "Facet::over",
+                        TypedFacetOverMode::FocusResult => "Facet::over_result",
+                        TypedFacetOverMode::CaseFocusValue
+                        | TypedFacetOverMode::CaseFocusResult => "Facet::case_over",
+                    }
+                    .into(),
+                    kind_constraint: match mode {
+                        TypedFacetOverMode::CaseFocusValue
+                        | TypedFacetOverMode::CaseFocusResult => "CasePath",
+                        _ => "WritablePath",
+                    }
+                    .into(),
+                    result_ty: ty_to_string(&node.ty),
+                    replacement_ty: Some(ty_to_string(&path.update_focus_ty)),
+                    mapper_ty: Some(ty_to_string(&update_fun.ty)),
+                },
+            ),
+            _ => return None,
+        };
+    let facet_ty = Ty::Facet(
+        match path.path_kind {
+            TypedFacetPathKind::InfallibleStructural => FacetKind::InfallibleStructural,
+            TypedFacetPathKind::FallibleStructural => FacetKind::FallibleStructural,
+            TypedFacetPathKind::VariantPath => FacetKind::VariantPath,
+        },
+        Box::new(path.source_ty.clone()),
+        Box::new(path.focus_ty.clone()),
+        Box::new(path.update_source_ty.clone()),
+        Box::new(path.update_focus_ty.clone()),
+    );
+    let template = TypedNode {
+        ty: facet_ty,
+        span: node.span.clone(),
+        node: TypedInner::FacetPath(path.clone()),
+    };
+    let mut info = facet_info_for_node(&template)?;
+    if source_is_result {
+        info.stop_points
+            .insert(0, "source - input already starts in Result context".into());
+    }
+    info.operation = Some(operation);
+    Some(info)
 }
 
 fn facet_segment_label(segment: &TypedFacetSegment) -> String {
@@ -4156,24 +4296,38 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                     }
                     _ => prefix.push_str(&label),
                 }
-                let (kind, fallible, reason) = match segment {
-                    TypedFacetSegment::Field { .. } => ("field", false, "field access"),
-                    TypedFacetSegment::Tuple { .. } => ("tuple", false, "tuple index access"),
+                let (kind, fallible, reason, policy) = match segment {
+                    TypedFacetSegment::Field {
+                        readonly, private, ..
+                    } => (
+                        "field",
+                        false,
+                        "field access",
+                        match (*private, *readonly) {
+                            (true, true) => "private readonly",
+                            (true, false) => "private",
+                            (false, true) => "readonly",
+                            (false, false) => "public",
+                        },
+                    ),
+                    TypedFacetSegment::Tuple { .. } => {
+                        ("tuple", false, "tuple index access", "public")
+                    }
                     TypedFacetSegment::Variant { .. } => {
                         path_is_fallible = true;
-                        ("variant", true, "variant mismatch returns Result")
+                        ("variant", true, "variant mismatch returns Result", "public")
                     }
                     TypedFacetSegment::ListIndex { .. } => {
                         path_is_fallible = true;
-                        ("list index", true, "index miss returns Result")
+                        ("list index", true, "index miss returns Result", "public")
                     }
                     TypedFacetSegment::ListRange { .. } => {
                         path_is_fallible = true;
-                        ("list range", true, "range miss returns Result")
+                        ("list range", true, "range miss returns Result", "public")
                     }
                     TypedFacetSegment::MapKey { .. } => {
                         path_is_fallible = true;
-                        ("map key", true, "key miss returns Result")
+                        ("map key", true, "key miss returns Result", "public")
                     }
                 };
                 segments.push(ReplFacetSegmentInfo {
@@ -4183,12 +4337,19 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                     focus_ty: ty_to_string(&focus_ty),
                     fallible,
                     reason: reason.to_string(),
+                    policy: policy.to_string(),
                 });
                 current_source = focus_ty;
             }
             Some(ReplFacetInfo {
                 ty: ty_to_string(&node.ty),
+                stage: ReplFacetStage::Template,
                 path_kind: path.path_kind.as_str().to_string(),
+                source_ty: ty_to_string(&path.source_ty),
+                focus_ty: ty_to_string(&path.focus_ty),
+                update_source_ty: ty_to_string(&path.update_source_ty),
+                update_focus_ty: ty_to_string(&path.update_focus_ty),
+                api_eligibility: facet_api_eligibility(path),
                 view_result_ty: if path_is_fallible || path.may_fail {
                     format!("Result<{}, Error>", ty_to_string(&path.focus_ty))
                 } else {
@@ -4197,11 +4358,27 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                 full_path: facet_path_full_path(path),
                 segments,
                 stop_points,
+                operation: None,
+                root_policy: if path.source_readonly_root {
+                    "readonly"
+                } else {
+                    "public"
+                }
+                .to_string(),
+                available_in_current_scope: !path.segments.iter().any(|segment| {
+                    matches!(segment, TypedFacetSegment::Field { private: true, .. })
+                }),
             })
         }
         TypedInner::PendingFacetPath(path) => Some(ReplFacetInfo {
             ty: ty_to_string(&node.ty),
-            path_kind: "structural".to_string(),
+            stage: ReplFacetStage::Pending,
+            path_kind: "pending".to_string(),
+            source_ty: "_".to_string(),
+            focus_ty: "_".to_string(),
+            update_source_ty: "_".to_string(),
+            update_focus_ty: "_".to_string(),
+            api_eligibility: vec!["pending specialization".to_string()],
             view_result_ty: "_".to_string(),
             full_path: if path.segments.is_empty() {
                 "<facet>".to_string()
@@ -4245,12 +4422,58 @@ fn facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
                             | PendingFacetSegment::RangeBracket { .. }
                     ),
                     reason: "requires Facet context to specialize".to_string(),
+                    policy: "pending".to_string(),
                 })
                 .collect(),
             stop_points: Vec::new(),
+            operation: None,
+            root_policy: "public".to_string(),
+            available_in_current_scope: true,
         }),
         _ => None,
     }
+}
+
+fn facet_api_eligibility(path: &TypedFacetPath) -> Vec<String> {
+    let deferred = matches!(
+        (&path.update_source_ty, &path.update_focus_ty),
+        (Ty::Hole, Ty::Hole)
+    );
+    let mut apis = Vec::new();
+    if deferred {
+        apis.push("view: available".to_string());
+        if path.has_variant_segment() {
+            apis.push("preview: available".to_string());
+        }
+    } else {
+        apis.push("view: unavailable (concrete update slots)".to_string());
+        apis.push("preview: unavailable (concrete update slots)".to_string());
+    }
+    let readonly_boundary = path.source_readonly_root
+        || path
+            .segments
+            .iter()
+            .any(|segment| matches!(segment, TypedFacetSegment::Field { readonly: true, .. }));
+    if path.is_infallible_structural() && !readonly_boundary {
+        apis.push("put: available when replacement B derives T".to_string());
+    }
+    if readonly_boundary {
+        apis.push("set: unavailable (readonly boundary)".to_string());
+        apis.push("over: unavailable (readonly boundary)".to_string());
+    } else {
+        apis.push("set: available".to_string());
+        apis.push("over: available".to_string());
+    }
+    if matches!(path.focus_ty, Ty::Result(_, _)) {
+        apis.push("over_result: available".to_string());
+    }
+    if path.has_variant_segment() {
+        apis.push("case_over: available".to_string());
+        if path.final_segment_is_variant() {
+            apis.push("case_set: available".to_string());
+        }
+    }
+    apis
 }
 
 fn collect_stmt_meta(
@@ -4311,7 +4534,7 @@ fn collect_stmt_meta(
                     .collect(),
             });
         }
-        TypedInner::Def(_, id, _, _, _, _, _) => {
+        TypedInner::Def(_, id, _, _, _, _, _, _) => {
             function_defs.push(id.name.clone());
         }
         TypedInner::ExtractorDef(_, id, _, _, _, _, _) => {
@@ -4550,16 +4773,15 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
             "Lazy<{}>",
             ty_to_string_with_type_params(inner, type_params)
         ),
-        Ty::TypeRef(inner) => format!(
-            "TypeRef<{}>",
-            ty_to_string_with_type_params(inner, type_params)
-        ),
         Ty::Pid(name) => format!("PID<{}>", surface_rendered_name(name)),
-        Ty::Facet(source, focus) => {
+        Ty::Facet(kind, source, focus, update_source, update_focus) => {
             format!(
-                "Facet<{}, {}>",
+                "Facet<{}, {}, {}, {}, {}>",
+                kind.as_str(),
                 ty_to_string_with_type_params(source, type_params),
-                ty_to_string_with_type_params(focus, type_params)
+                ty_to_string_with_type_params(focus, type_params),
+                ty_to_string_with_type_params(update_source, type_params),
+                ty_to_string_with_type_params(update_focus, type_params)
             )
         }
         Ty::Tuple(items) => format!(
@@ -4567,6 +4789,13 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
             items
                 .iter()
                 .map(|item| ty_to_string_with_type_params(item, type_params))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Ty::SelfApp(args) => format!(
+            "Self<{}>",
+            args.iter()
+                .map(|arg| ty_to_string_with_type_params(arg, type_params))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
@@ -4637,14 +4866,19 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
 fn ty_contains_var(ty: &Ty, needle: u32) -> bool {
     match ty {
         Ty::Var(var) => *var == needle,
-        Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => ty_contains_var(inner, needle),
-        Ty::Tuple(items) => items.iter().any(|item| ty_contains_var(item, needle)),
+        Ty::List(inner) | Ty::Lazy(inner) => ty_contains_var(inner, needle),
+        Ty::Tuple(items) | Ty::SelfApp(items) => {
+            items.iter().any(|item| ty_contains_var(item, needle))
+        }
         Ty::Func(params, ret) => {
             params.iter().any(|param| ty_contains_var(param, needle))
                 || ty_contains_var(ret, needle)
         }
-        Ty::Facet(source, focus) => {
-            ty_contains_var(source, needle) || ty_contains_var(focus, needle)
+        Ty::Facet(_, source, focus, update_source, update_focus) => {
+            ty_contains_var(source, needle)
+                || ty_contains_var(focus, needle)
+                || ty_contains_var(update_source, needle)
+                || ty_contains_var(update_focus, needle)
         }
         Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
             params.iter().any(|param| ty_contains_var(param, needle))
@@ -5105,9 +5339,10 @@ impl Codegen {
                 .ok()
                 .flatten()
                 .or_else(|| self.direct_callable_target_for_id(id)),
-            TypedInner::App(func, _) | TypedInner::Capture(func, _) | TypedInner::Semi(func) => {
-                self.direct_callable_target_for_marker_node(func)
-            }
+            TypedInner::App(func, _)
+            | TypedInner::Capture(func, _)
+            | TypedInner::Semi(func)
+            | TypedInner::EagerBoundary(func) => self.direct_callable_target_for_marker_node(func),
             _ => None,
         }
     }
@@ -5948,7 +6183,7 @@ impl Codegen {
         let max_def_fun_idx = stmts
             .iter()
             .filter_map(|stmt| match &stmt.node {
-                TypedInner::Def(fun_idx, _, _, _, _, _, _) => Some(*fun_idx),
+                TypedInner::Def(fun_idx, _, _, _, _, _, _, _) => Some(*fun_idx),
                 TypedInner::ExtractorDef(fun_idx, _, _, _, _, _, _) => Some(*fun_idx),
                 TypedInner::DeferrorDef(_, fun_idx, _, _, _) => Some(*fun_idx),
                 _ => None,
@@ -5999,7 +6234,7 @@ impl Codegen {
             }
         }
         defs.sort_by_key(|stmt| match &stmt.node {
-            TypedInner::Def(fun_idx, _, _, _, _, _, _) => *fun_idx,
+            TypedInner::Def(fun_idx, _, _, _, _, _, _, _) => *fun_idx,
             TypedInner::ExtractorDef(fun_idx, _, _, _, _, _, _) => *fun_idx,
             TypedInner::DeferrorDef(_, fun_idx, _, _, _) => *fun_idx,
             _ => u32::MAX,
@@ -6042,9 +6277,16 @@ impl Codegen {
 
     fn emit_function_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
         let (fun_idx, id, type_params, params, ret_ty, body, visibility) = match &node.node {
-            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, visibility) => {
-                (fun_idx, id, type_params, params, ret_ty, body, visibility)
-            }
+            TypedInner::Def(
+                fun_idx,
+                id,
+                type_params,
+                params,
+                ret_ty,
+                _where_clause,
+                body,
+                visibility,
+            ) => (fun_idx, id, type_params, params, ret_ty, body, visibility),
             _ => {
                 return Err(CodegenError {
                     message: "expected function definition".into(),
@@ -6261,8 +6503,10 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(slot));
             }
 
+            TypedInner::EagerBoundary(inner) => self.emit_node(inner)?,
+
             TypedInner::Bind(pat, rhs) => {
-                if matches!(rhs.ty, Ty::Facet(_, _)) {
+                if matches!(rhs.ty, Ty::Facet(..)) {
                     self.reserve_pattern_slots_for_facet_bind(pat);
                     let unit_idx = self.add_constant(Constant::Unit);
                     self.emit(Opcode::LoadConst(unit_idx));
@@ -6780,7 +7024,16 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::Def(_fun_idx, _id, _type_params, _params, _ret_ty, _body, _) => {
+            TypedInner::Def(
+                _fun_idx,
+                _id,
+                _type_params,
+                _params,
+                _ret_ty,
+                _where_clause,
+                _body,
+                _,
+            ) => {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
             }
@@ -7176,7 +7429,7 @@ impl Codegen {
         } else {
             FacetUpdateLeaf::Set {
                 value_slot,
-                wrap_plain_result: matches!(mode, TypedFacetSetMode::WrapPlainResult),
+                wrap_plain_result: false,
             }
         };
 
@@ -9009,40 +9262,6 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_propagate_error_from_local(
-        &mut self,
-        error_slot: u32,
-        span: Span,
-    ) -> Result<(), CodegenError> {
-        if self.in_function {
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit(Opcode::LoadLocal(error_slot));
-            self.emit(Opcode::StructNew { field_count: 1 });
-            self.emit(Opcode::Return);
-        } else if self.top_level_returns_result {
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit(Opcode::LoadLocal(error_slot));
-            self.emit(Opcode::StructNew { field_count: 1 });
-            self.emit(Opcode::Halt);
-        } else {
-            self.emit(Opcode::LoadLocal(error_slot));
-            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
-                message: "Unknown builtin: eprint".into(),
-                span: span.clone(),
-            })?;
-            self.emit(Opcode::CallBuiltin {
-                builtin_id: eprint_id,
-                arity: 1,
-                span_start: span.start as u32,
-                span_end: span.end as u32,
-            });
-            self.emit(Opcode::Halt);
-        }
-        Ok(())
-    }
-
     fn emit_unpack_seq_payload_from_local(
         &mut self,
         tuple_slot: u32,
@@ -9076,7 +9295,7 @@ impl Codegen {
         extractor_ty: &Ty,
         success_tag: u32,
         no_match_tag: u32,
-        err_tag: u32,
+        _err_tag: u32,
         seq_len: usize,
         input_slot: u32,
         no_match_label: Label,
@@ -9217,7 +9436,6 @@ impl Codegen {
 
         let success_label = self.fresh_label();
         let check_no_match_label = self.fresh_label();
-        let check_err_label = self.fresh_label();
         let end_label = self.fresh_label();
 
         self.emit(Opcode::LoadLocal(result_slot));
@@ -9242,29 +9460,14 @@ impl Codegen {
         let no_match_tag_const = self.add_constant(Constant::Tag(no_match_tag));
         self.emit(Opcode::LoadConst(no_match_tag_const));
         self.emit(Opcode::EqTag);
-        self.emit_jump_if_false(check_err_label);
-        self.emit_jump(no_match_label);
-
-        self.patch_label(check_err_label);
-        self.emit(Opcode::LoadLocal(result_slot));
-        self.emit(Opcode::GetTag);
-        let err_tag_const = self.add_constant(Constant::Tag(err_tag));
-        self.emit(Opcode::LoadConst(err_tag_const));
-        self.emit(Opcode::EqTag);
         let invalid_outcome_label = self.fresh_label();
         self.emit_jump_if_false(invalid_outcome_label);
-
-        let error_slot = self.state.next_slot;
-        self.state.next_slot += 1;
-        self.emit(Opcode::LoadLocal(result_slot));
-        self.emit(Opcode::GetField { field_index: 1 });
-        self.emit(Opcode::StoreLocal(error_slot));
-        self.emit_propagate_error_from_local(error_slot, span.clone())?;
+        self.emit_jump(no_match_label);
 
         self.patch_label(invalid_outcome_label);
         self.emit_pattern_failure(
             "InvalidMatchResult",
-            "Extractor returned an unknown MatchResult tag.",
+            "Extractor returned an unknown Option tag.",
             span.clone(),
         )?;
 
@@ -9529,17 +9732,52 @@ impl Codegen {
 
     // ── If ──
 
+    /// Materialize an explicit eager lazy argument exactly once. The returned
+    /// slot is deliberately consumed by the enclosing special form; ordinary
+    /// `EagerBoundary` emission simply evaluates its inner expression.
+    fn materialize_eager_boundary(
+        &mut self,
+        node: &TypedNode,
+    ) -> Result<Option<u32>, CodegenError> {
+        let TypedInner::EagerBoundary(inner) = &node.node else {
+            return Ok(None);
+        };
+        self.emit_node(inner)?;
+        let slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(slot));
+        Ok(Some(slot))
+    }
+
+    fn emit_lazy_argument(
+        &mut self,
+        node: &TypedNode,
+        eager_slot: Option<u32>,
+    ) -> Result<(), CodegenError> {
+        if let Some(slot) = eager_slot {
+            self.emit(Opcode::LoadLocal(slot));
+        } else {
+            self.emit_node(node)?;
+        }
+        Ok(())
+    }
+
     fn emit_if(
         &mut self,
         cond: &TypedNode,
         then: &TypedNode,
         else_opt: &Option<Box<TypedNode>>,
     ) -> Result<(), CodegenError> {
+        let then_eager = self.materialize_eager_boundary(then)?;
+        let else_eager = match else_opt {
+            Some(branch) => self.materialize_eager_boundary(branch)?,
+            None => None,
+        };
         if let Some(cond_value) = Self::literal_bool_value(cond) {
             if cond_value {
-                self.emit_node(then)?;
+                self.emit_lazy_argument(then, then_eager)?;
             } else if let Some(else_branch) = else_opt {
-                self.emit_node(else_branch)?;
+                self.emit_lazy_argument(else_branch, else_eager)?;
             } else {
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
@@ -9555,19 +9793,19 @@ impl Codegen {
                 let end_label = self.fresh_label();
 
                 self.emit_jump_if_false(else_label);
-                self.emit_node(then)?;
+                self.emit_lazy_argument(then, then_eager)?;
                 self.emit_jump(end_label);
 
                 // Patch else label to current position
                 self.patch_label(else_label);
-                self.emit_node(else_branch)?;
+                self.emit_lazy_argument(else_branch, else_eager)?;
 
                 self.patch_label(end_label);
             }
             None => {
                 let end_label = self.fresh_label();
                 self.emit_jump_if_false(end_label);
-                self.emit_node(then)?;
+                self.emit_lazy_argument(then, then_eager)?;
                 self.emit(Opcode::Pop); // discard then result for if_then/2
                 self.patch_label(end_label);
                 // Push Unit
@@ -9584,11 +9822,13 @@ impl Codegen {
         cond: &TypedNode,
         err: &TypedNode,
     ) -> Result<(), CodegenError> {
+        let err_eager = self.materialize_eager_boundary(err)?;
         if let Some(cond_value) = Self::literal_bool_value(cond) {
             if cond_value {
                 self.emit_ok_unit_result()?;
             } else {
-                self.emit_err_result_value(err)?;
+                self.emit_lazy_argument(err, err_eager)?;
+                self.emit(Opcode::MakeErr);
             }
             return Ok(());
         }
@@ -9601,7 +9841,8 @@ impl Codegen {
         self.emit_jump(end_label);
 
         self.patch_label(fail_label);
-        self.emit_err_result_value(err)?;
+        self.emit_lazy_argument(err, err_eager)?;
+        self.emit(Opcode::MakeErr);
 
         self.patch_label(end_label);
         Ok(())
@@ -9619,6 +9860,8 @@ impl Codegen {
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(value_slot));
 
+        let err_eager = self.materialize_eager_boundary(err)?;
+
         self.emit(Opcode::LoadLocal(value_slot));
         self.emit_callable_invoke(pred, 1, &node.span)?;
 
@@ -9629,7 +9872,8 @@ impl Codegen {
         self.emit_jump(end_label);
 
         self.patch_label(fail_label);
-        self.emit_err_result_value(err)?;
+        self.emit_lazy_argument(err, err_eager)?;
+        self.emit(Opcode::MakeErr);
 
         self.patch_label(end_label);
         Ok(())
@@ -9642,6 +9886,7 @@ impl Codegen {
         marker: &TypedNode,
         handler: &TypedNode,
     ) -> Result<(), CodegenError> {
+        let marker_eager = self.materialize_eager_boundary(marker)?;
         self.emit_node(value)?;
         let result_slot = self.state.next_slot;
         self.state.next_slot += 1;
@@ -9661,6 +9906,10 @@ impl Codegen {
 
         self.patch_label(err_path);
         self.emit(Opcode::LoadLocal(result_slot));
+        // The eager value is deliberately materialized before the result tag
+        // check, but recover_kind's runtime ABI still consumes the static
+        // constructor reference used as its kind marker.
+        let _ = marker_eager;
         self.emit_recover_kind_marker_ref(marker)?;
         self.emit_callable_ref(handler)?;
         let builtin_id = Self::builtin_id("__recover_kind").ok_or_else(|| CodegenError {
@@ -9691,6 +9940,8 @@ impl Codegen {
         self.state.next_slot += 1;
         self.emit(Opcode::StoreLocal(result_slot));
 
+        let err_eager = self.materialize_eager_boundary(err)?;
+
         self.emit(Opcode::LoadLocal(result_slot));
         self.emit(Opcode::GetTag);
         let err_tag = self.add_constant(Constant::Tag(1));
@@ -9705,7 +9956,7 @@ impl Codegen {
 
         self.patch_label(err_path);
         self.emit(Opcode::LoadLocal(result_slot));
-        self.emit_node(err)?;
+        self.emit_lazy_argument(err, err_eager)?;
         let builtin_id = Self::builtin_id(builtin_name).ok_or_else(|| CodegenError {
             message: format!("Unknown builtin: {}", builtin_name),
             span: node.span.clone(),
@@ -9755,12 +10006,6 @@ impl Codegen {
     fn emit_ok_result_local(&mut self, slot: u32) -> Result<(), CodegenError> {
         self.emit(Opcode::LoadLocal(slot));
         self.emit(Opcode::MakeOk);
-        Ok(())
-    }
-
-    fn emit_err_result_value(&mut self, err: &TypedNode) -> Result<(), CodegenError> {
-        self.emit_node(err)?;
-        self.emit(Opcode::MakeErr);
         Ok(())
     }
 
@@ -10683,7 +10928,7 @@ mod process_runtime_v2_tests {
                 state: AstTy::Named(span(0, 0), "Int".to_string()),
                 boot: false,
                 registry: false,
-                lazy: false,
+                standby: false,
                 handlers: Vec::new(),
                 handler_specs: vec![
                     ProcessRuntimeHandlerSpec {
@@ -10736,7 +10981,7 @@ mod process_runtime_v2_tests {
                 state: AstTy::Named(span(0, 0), "Unit".to_string()),
                 boot: false,
                 registry: false,
-                lazy: false,
+                standby: false,
                 handlers: Vec::new(),
                 handler_specs: Vec::new(),
                 supervisor_policy: Some(supervisor_policy()),

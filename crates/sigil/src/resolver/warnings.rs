@@ -117,8 +117,8 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         | Resolved::ListNil(_)
         | Resolved::InferredFacetCapture(_, _)
         | Resolved::ProcessContextHandler(_, _)
-        | Resolved::TypeRefWitness(..)
         | Resolved::BuiltinTypeDecl(..)
+        | Resolved::TypeAlias(..)
         | Resolved::ResultCtorDecl(..) => {}
         Resolved::Var(_, id) => usage.use_id(id),
         Resolved::App(_, func, args) => {
@@ -127,6 +127,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 collect_record_arg_usage(arg, usage);
             }
         }
+        Resolved::TypeApply(_, target, _) => collect_node_usage(target, usage),
         Resolved::Block(_, nodes)
         | Resolved::ListLiteral(_, nodes)
         | Resolved::TupleLiteral(_, nodes)
@@ -148,6 +149,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         Resolved::BinOp(_, _, left, right)
         | Resolved::Pipe(_, left, right)
         | Resolved::ContextMap(_, left, right)
+        | Resolved::ContextApply(_, left, right)
         | Resolved::ContextBind(_, left, right)
         | Resolved::Compose(_, left, right)
         | Resolved::LiftedCompose(_, left, right)
@@ -233,10 +235,10 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 collect_node_usage(arg, usage);
             }
         }
-        Resolved::StructDef(_, _, _, _, _) | Resolved::RecordDef(_, _, _) => {}
+        Resolved::StructDef(_, _, _, _, _) | Resolved::RecordDef(_, _, _, _) => {}
         Resolved::DeferrorDef(_, _, _, show_expr) => collect_node_usage(show_expr, usage),
         Resolved::EnumDef(_, _, _, _, _) => {}
-        Resolved::Def(_, _, _, params, _, body, _) => {
+        Resolved::Def(_, _, _, params, _, _, body, _) => {
             for param in params {
                 usage.bind_id(&param.id);
             }
@@ -247,7 +249,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
             usage.bind_id(&param.id);
             collect_node_usage(body, usage);
         }
-        Resolved::TraitDef(_, _, _, methods, _) => {
+        Resolved::TraitDef(_, _, _, _, methods, _) => {
             for method in methods {
                 if let Some(body) = method.body.as_deref() {
                     for param in &method.params {
@@ -257,7 +259,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 }
             }
         }
-        Resolved::TraitImplDef(_, _, _, _, methods) => {
+        Resolved::TraitImplDef(_, _, _, _, _, methods) => {
             for method in methods {
                 for param in &method.params {
                     usage.bind_id(&param.id);

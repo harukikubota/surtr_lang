@@ -23,24 +23,188 @@ impl<'a> SignatureTyMode<'a> {
     fn allows_user_generic_fallback(self) -> bool {
         !matches!(self, SignatureTyMode::Builtin)
     }
-
-    fn rejects_impl_trait_in_error_marker(self) -> bool {
-        matches!(self, SignatureTyMode::Normal)
-    }
 }
 
 impl Checker {
+    // A constructor-trait application is encoded as `SelfApp(Hole, witness,
+    // slots...)`.  Plain `SelfApp(slots...)` remains the trait-metadata form.
+    // Keeping both in the existing type variant avoids leaking a runtime type.
+    pub(super) fn constructor_application_parts(items: &[Ty]) -> Option<(&Ty, &[Ty])> {
+        match items {
+            [Ty::Hole, witness, slots @ ..] => Some((witness, slots)),
+            _ => None,
+        }
+    }
+
+    fn constructor_root_trait_key(&self, trait_key: &str) -> Option<String> {
+        let trait_info = self.traits.get(trait_key)?;
+        if let Some(root) = &trait_info.constructor_root {
+            return Some(root.clone());
+        }
+        trait_info.parents.iter().find_map(|parent| {
+            let parent_key = parent
+                .qualified_name
+                .as_deref()
+                .unwrap_or(parent.name.as_str());
+            self.constructor_root_trait_key(parent_key)
+        })
+    }
+
+    pub(super) fn constructor_application_slots(ty: &Ty) -> Option<Vec<Ty>> {
+        match ty {
+            Ty::List(inner) => Some(vec![inner.as_ref().clone()]),
+            Ty::Result(ok, _) => Some(vec![ok.as_ref().clone()]),
+            Ty::Enum(_, args) => Some(args.clone()),
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => {
+                Some(fields.iter().map(|(_, ty)| ty.clone()).collect())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply_constructor_application(witness: &Ty, slots: &[Ty]) -> Option<Ty> {
+        match witness {
+            Ty::List(_) if slots.len() == 1 => Some(Ty::List(Box::new(slots[0].clone()))),
+            Ty::Result(_, err) if slots.len() == 1 => {
+                Some(Ty::Result(Box::new(slots[0].clone()), err.clone()))
+            }
+            Ty::Enum(name, args) if args.len() == slots.len() => {
+                Some(Ty::Enum(name.clone(), slots.to_vec()))
+            }
+            Ty::Struct(name, fields) if fields.len() == slots.len() => Some(Ty::Struct(
+                name.clone(),
+                fields
+                    .iter()
+                    .zip(slots)
+                    .map(|((field, _), ty)| (field.clone(), ty.clone()))
+                    .collect(),
+            )),
+            Ty::Record(name, fields) if fields.len() == slots.len() => Some(Ty::Record(
+                name.clone(),
+                fields
+                    .iter()
+                    .zip(slots)
+                    .map(|((field, _), ty)| (field.clone(), ty.clone()))
+                    .collect(),
+            )),
+            _ => None,
+        }
+    }
+    fn resolve_signature_alias(
+        &mut self,
+        span: &Span,
+        name: &str,
+        args: &[AstTy],
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+        mode: SignatureTyMode<'_>,
+    ) -> Result<Option<Ty>, TypeError> {
+        let Some(alias) = self.signature_aliases.get(name).cloned() else {
+            return Ok(None);
+        };
+        if alias.params.len() != args.len() {
+            return Err(TypeError {
+                message: format!(
+                    "Type alias {} requires {} type argument(s), got {}",
+                    Self::surface_name(name), alias.params.len(), args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if self.alias_expansion_stack.iter().any(|item| item == name) {
+            let mut cycle = self.alias_expansion_stack.clone();
+            cycle.push(name.to_string());
+            return Err(TypeError {
+                message: format!("Cyclic type alias: {}", cycle.join(" -> ")),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let mut alias_tyvars = tyvars.clone();
+        for (param, arg) in alias.params.iter().zip(args) {
+            let actual = self.resolve_signature_like_ast_ty_in_context(
+                arg,
+                TypeSyntaxContext::General,
+                tyvars,
+                mode,
+            )?;
+            alias_tyvars.insert(param.name.clone(), actual);
+        }
+        self.alias_expansion_stack.push(name.to_string());
+        let result = self.resolve_signature_like_ast_ty_in_context(
+            &alias.rhs,
+            context,
+            &mut alias_tyvars,
+            mode,
+        );
+        self.alias_expansion_stack.pop();
+        result.map(Some)
+    }
+
+    fn validate_facet_kind_annotation(
+        &self,
+        ast: &AstTy,
+        allow_alias: bool,
+    ) -> Result<(), TypeError> {
+        let AstTy::Named(span, name) = ast else {
+            return Err(TypeError {
+                message: "Facet kind slot K must be a compiler-managed path kind name".into(),
+                span: Self::ast_ty_span(ast).clone(),
+                hint: None,
+            });
+        };
+        let atomic = matches!(
+            Self::surface_name(name),
+            "InfallibleStructural" | "FallibleStructural" | "VariantPath"
+        );
+        let alias = matches!(
+            Self::surface_name(name),
+            "ReadablePath" | "WritablePath" | "PutPath" | "PreviewPath" | "CasePath"
+        );
+        if atomic || Self::surface_name(name).starts_with('$') || (allow_alias && alias) {
+            Ok(())
+        } else if alias {
+            Err(TypeError {
+                message: "Facet kind-set aliases are only valid in compiler intrinsic constraints, not user Facet annotations".into(),
+                span: span.clone(),
+                hint: Some("Use the derived atomic kind InfallibleStructural, FallibleStructural, or VariantPath.".into()),
+            })
+        } else {
+            Err(TypeError {
+                message: format!("Unknown Facet path kind `{}`", Self::surface_name(name)),
+                span: span.clone(),
+                hint: None,
+            })
+        }
+    }
+
+    fn facet_kind_annotation(
+        &self,
+        ast: &AstTy,
+        allow_alias: bool,
+    ) -> Result<crate::types::FacetKind, TypeError> {
+        self.validate_facet_kind_annotation(ast, allow_alias)?;
+        let AstTy::Named(_, name) = ast else {
+            unreachable!("validated Facet kind is named")
+        };
+        if Self::surface_name(name).starts_with('$') {
+            // Generic kind variables occur only in builtin chain signatures.
+            // They are a constraint placeholder until a concrete path is built.
+            return Ok(crate::types::FacetKind::ReadablePath);
+        }
+        Ok(
+            crate::types::FacetKind::from_surface_name(Self::surface_name(name))
+                .expect("validated Facet kind name"),
+        )
+    }
+
     fn canonical_user_type_name(name: &str) -> String {
         if name.contains("::") {
             name.to_string()
         } else {
             format!("Global::{name}")
         }
-    }
-
-    fn builtin_type_ref_witness_allowed(name: &str) -> bool {
-        builtin_type_usage_policy(Self::surface_name(name))
-            .is_some_and(|policy| policy.type_ref_witness_allowed)
     }
 
     fn builtin_type_is_clause_block_surface_only(name: &str) -> bool {
@@ -68,25 +232,12 @@ impl Checker {
         matches!(ty, Ty::Struct(name, _) if Self::surface_name(name) == "Duration")
     }
 
-    fn match_result_not_allowed_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            message: "MatchResult is extractor-only and can only be used in extractor definitions"
-                .into(),
-            span: span.clone(),
-            hint: Some(
-                "Use MatchResult only as a defextractor / @builtin defextractor return type or inside an extractor body. Ordinary APIs should return Result, Option, or a user-defined enum explicitly."
-                    .into(),
-            ),
-        }
-    }
-
     fn seq_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             message: "Seq is not a surface type in this version of Surtr".into(),
             span: span.clone(),
             hint: Some(
-                "Use tuple payloads for extractor success values, such as MatchResult<(A, B), Error>."
-                    .into(),
+                "Use tuple payloads for extractor success values, such as Option<(A, B)>.".into(),
             ),
         }
     }
@@ -117,13 +268,16 @@ impl Checker {
         match ty {
             Ty::Error => true,
             Ty::Result(ok, _) => Self::ty_exposes_error_value(ok),
-            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-                Self::ty_exposes_error_value(inner)
+            Ty::List(inner) | Ty::Lazy(inner) => Self::ty_exposes_error_value(inner),
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
+                Self::ty_exposes_error_value(source)
+                    || Self::ty_exposes_error_value(focus)
+                    || Self::ty_exposes_error_value(update_source)
+                    || Self::ty_exposes_error_value(update_focus)
             }
-            Ty::Facet(source, focus) => {
-                Self::ty_exposes_error_value(source) || Self::ty_exposes_error_value(focus)
+            Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
+                items.iter().any(Self::ty_exposes_error_value)
             }
-            Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(Self::ty_exposes_error_value),
             Ty::Func(params, ret) => {
                 params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
             }
@@ -183,31 +337,11 @@ impl Checker {
         )
     }
 
-    fn match_result_type_allowed(&self, context: TypeSyntaxContext) -> bool {
-        matches!(
-            context,
-            TypeSyntaxContext::ExtractorReturn | TypeSyntaxContext::ExtractorBody
-        ) || self.in_extractor_body
-    }
-
     pub(super) fn local_type_syntax_context(&self) -> TypeSyntaxContext {
         if self.in_extractor_body {
             TypeSyntaxContext::ExtractorBody
         } else {
             TypeSyntaxContext::BindingAnnotation
-        }
-    }
-
-    fn type_ref_not_allowed_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            message:
-                "TypeRef<$T> is only allowed as a trait method parameter tied to a trait head type parameter."
-                    .into(),
-            span: span.clone(),
-            hint: Some(
-                "Use TypeRef<$T> only in deftrait / impl Trait method parameters, not in ordinary signatures or return types."
-                    .into(),
-            ),
         }
     }
 
@@ -319,79 +453,25 @@ impl Checker {
         }
     }
 
+    fn reserved_hole_type_error(&self, span: &Span) -> TypeError {
+        TypeError {
+            message: "`Hole` is compiler-reserved; write `_` only in a callable input type or Facet deferred slots.".into(),
+            span: span.clone(),
+            hint: Some("`Hole` has no user-facing type spelling.".into()),
+        }
+    }
+
     fn resolve_hole_surface_ty(
         &self,
         span: &Span,
         context: TypeSyntaxContext,
     ) -> Result<Ty, TypeError> {
         match context {
-            TypeSyntaxContext::HoleClosureParam => Ok(Ty::Hole),
+            TypeSyntaxContext::HoleClosureParam | TypeSyntaxContext::FacetDeferredSlot => {
+                Ok(Ty::Hole)
+            }
             _ => Err(self.hole_not_allowed_error(span)),
         }
-    }
-
-    pub(super) fn resolve_trait_type_ref_param_ty(
-        &mut self,
-        ast_ty: &AstTy,
-        trait_head_bindings: &HashMap<String, Ty>,
-        allow_concrete_inner: bool,
-        self_ty: &Ty,
-        tyvars: &mut HashMap<String, Ty>,
-    ) -> Result<Option<Ty>, TypeError> {
-        let AstTy::Generic(span, name, args) = ast_ty else {
-            return Ok(None);
-        };
-        if name != "TypeRef" {
-            return Ok(None);
-        }
-        if args.len() != 1 {
-            return Err(TypeError {
-                message: "TypeRef<T> requires exactly 1 type argument".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-
-        let inner = match &args[0] {
-            AstTy::Named(_, name) if name.starts_with('$') => {
-                trait_head_bindings
-                    .get(name)
-                    .cloned()
-                    .ok_or_else(|| TypeError {
-                        message: format!(
-                            "TypeRef<{}> must refer to a type parameter declared on the surrounding trait head",
-                            name
-                        ),
-                        span: Self::ast_ty_span(&args[0]).clone(),
-                        hint: None,
-                    })?
-            }
-            other if allow_concrete_inner => self.resolve_trait_signature_ast_ty_in_context(
-                other,
-                TypeSyntaxContext::General,
-                self_ty,
-                tyvars,
-            )?,
-            _ => {
-                return Err(TypeError {
-                    message:
-                        "TypeRef<$T> in trait declarations must point at a trait head type parameter."
-                            .into(),
-                    span: Self::ast_ty_span(&args[0]).clone(),
-                    hint: None,
-                });
-            }
-        };
-
-        if matches!(inner, Ty::TypeRef(_)) {
-            return Err(TypeError {
-                message: "Nested TypeRef is not supported".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-
-        Ok(Some(Ty::TypeRef(Box::new(inner))))
     }
 
     pub(super) fn register_tyvar_bound(&mut self, var: u32, trait_name: &str) {
@@ -438,7 +518,7 @@ impl Checker {
         }
     }
 
-    pub(super) fn collect_type_ref_names(ast_ty: &AstTy, out: &mut Vec<String>) {
+    pub(super) fn collect_type_dependency_names(ast_ty: &AstTy, out: &mut Vec<String>) {
         match ast_ty {
             AstTy::Named(_, name) => {
                 if !name.starts_with('$') {
@@ -447,19 +527,19 @@ impl Checker {
             }
             AstTy::Generic(_, _, args) => {
                 for arg in args {
-                    Self::collect_type_ref_names(arg, out);
+                    Self::collect_type_dependency_names(arg, out);
                 }
             }
             AstTy::Tuple(_, items) => {
                 for item in items {
-                    Self::collect_type_ref_names(item, out);
+                    Self::collect_type_dependency_names(item, out);
                 }
             }
             AstTy::Func(_, params, ret) => {
                 for param in params {
-                    Self::collect_type_ref_names(param, out);
+                    Self::collect_type_dependency_names(param, out);
                 }
-                Self::collect_type_ref_names(ret, out);
+                Self::collect_type_dependency_names(ret, out);
             }
             AstTy::ImplTrait(_, name) => out.push(Self::canonical_user_type_name(name)),
         }
@@ -506,7 +586,8 @@ impl Checker {
                                     .into(),
                             ),
                         }),
-                    "_" | "Hole" => self.resolve_hole_surface_ty(span, context),
+                    "_" => self.resolve_hole_surface_ty(span, context),
+                    "Hole" => Err(self.reserved_hole_type_error(span)),
                     builtin_name if Self::builtin_type_is_clause_block_surface_only(builtin_name) => {
                         Err(self.clause_block_type_not_allowed_error(
                             span,
@@ -587,9 +668,8 @@ impl Checker {
                                 | TypeName::Generator
                                 | TypeName::Result
                                 | TypeName::Duration
-                                | TypeName::ProcessInit
+                                | TypeName::StandbyInit
                                 | TypeName::Lazy
-                                | TypeName::TypeRef
                                 | TypeName::Hole
                                 | TypeName::Closure
                                 | TypeName::MatchArms
@@ -611,11 +691,6 @@ impl Checker {
                 }
             }
             AstTy::Generic(span, name, _)
-                if Self::builtin_type_ref_witness_allowed(name) =>
-            {
-                Err(self.type_ref_not_allowed_error(span))
-            }
-            AstTy::Generic(span, name, _)
                 if Self::builtin_type_is_clause_block_surface_only(name) =>
             {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
@@ -629,32 +704,6 @@ impl Checker {
                 Err(self.seq_not_allowed_error(span))
             }
             AstTy::Generic(span, name, args) => match Self::surface_name(name) {
-                "MatchResult" => {
-                    if !self.match_result_type_allowed(context) {
-                        return Err(self.match_result_not_allowed_error(span));
-                    }
-                    if args.is_empty() || args.len() > 2 {
-                        return Err(TypeError {
-                            message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let value =
-                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
-                    if args.len() == 2 {
-                        let err =
-                            self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
-                        if !matches!(err, Ty::Error) {
-                            return Err(TypeError {
-                                message: "MatchResult<$Value, Error> requires Error as the second argument".into(),
-                                span: span.clone(),
-                                hint: None,
-                            });
-                        }
-                    }
-                    Ok(Ty::Enum("MatchResult".into(), vec![value]))
-                }
                 "List" => {
                     let args =
                         self.require_type_arg_count(span, args, 1, "List<T> requires exactly 1 type argument")?;
@@ -686,29 +735,55 @@ impl Checker {
                         self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
                     Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
                 }
-                "ProcessInit" => {
+                "StandbyInit" => {
                     let args = self.require_type_arg_count(
                         span,
                         args,
                         1,
-                        "ProcessInit<T> requires exactly 1 type argument",
+                        "StandbyInit<T> requires exactly 1 type argument",
                     )?;
                     let inner_ty =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
-                    Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
+                    Ok(Ty::Enum("StandbyInit".into(), vec![inner_ty]))
                 }
                 "Facet" => {
                     let args = self.require_type_arg_count(
                         span,
                         args,
-                        2,
-                        "Facet<S, A> requires exactly 2 type arguments",
+                        5,
+                        "Facet<K, S, A, T, B> requires exactly 5 type arguments",
                     )?;
+                    let kind = self.facet_kind_annotation(&args[0], false)?;
+                    // K is a compile-only declaration name.  The currently
+                    // runtime-free capability representation stores S/A; T/B
+                    // are validated here and instantiated by the intrinsic.
+                    // Kind names are compiler declarations, not ordinary
+                    // runtime types. Their validity is checked by Facet path
+                    // specialization, so do not resolve them through the
+                    // value-type namespace here.
                     let source =
-                        self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
-                    let focus =
                         self.resolve_ast_ty_in_context(&args[1], TypeSyntaxContext::General)?;
-                    Ok(Ty::Facet(Box::new(source), Box::new(focus)))
+                    let focus =
+                        self.resolve_ast_ty_in_context(&args[2], TypeSyntaxContext::General)?;
+                    let update_source = self.resolve_ast_ty_in_context(&args[3], TypeSyntaxContext::FacetDeferredSlot)?;
+                    let update_focus = self.resolve_ast_ty_in_context(&args[4], TypeSyntaxContext::FacetDeferredSlot)?;
+                    if matches!((&update_source, &update_focus), (Ty::Hole, Ty::Hole))
+                        || (!matches!(update_source, Ty::Hole) && !matches!(update_focus, Ty::Hole))
+                    {
+                        Ok(Ty::Facet(
+                            kind,
+                            Box::new(source),
+                            Box::new(focus),
+                            Box::new(update_source),
+                            Box::new(update_focus),
+                        ))
+                    } else {
+                        Err(TypeError {
+                            message: "Facet update slots T and B must both be `_` or both be concrete types".into(),
+                            span: span.clone(),
+                            hint: None,
+                        })
+                    }
                 }
                 "PID" => self.resolve_pid_surface_ty(span, args),
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
@@ -942,6 +1017,88 @@ impl Checker {
         mode: SignatureTyMode<'_>,
     ) -> Result<Ty, TypeError> {
         match ast_ty {
+            AstTy::Named(span, name) => {
+                if let Some(alias) = self.resolve_signature_alias(span, name, &[], context, tyvars, mode)? {
+                    return Ok(alias);
+                }
+                if let Some((trait_key, _trait_info)) = self.traits.iter().find(|(key, info)| {
+                    !info.constructor_slots.is_empty()
+                        && (Self::surface_name(key) == Self::surface_name(name)
+                            || Self::surface_name(&info.id.name) == Self::surface_name(name))
+                }) {
+                    if !matches!(context, TypeSyntaxContext::General | TypeSyntaxContext::BindingAnnotation) {
+                        return Err(TypeError {
+                            message: format!(
+                                "Bare constructor trait {} is only allowed for a value parameter or local binding",
+                                Self::surface_name(name)
+                            ),
+                            span: span.clone(),
+                            hint: Some("Use an explicit application such as `Applicative<$A>` in callable signatures.".into()),
+                        });
+                    }
+                    let witness = tyvars
+                        .entry(format!(
+                            "@constructor-witness:{}",
+                            self.constructor_root_trait_key(trait_key)
+                                .unwrap_or_else(|| trait_key.clone())
+                        ))
+                        .or_insert_with(|| self.env.fresh_tyvar())
+                        .clone();
+                    return Ok(Ty::SelfApp(vec![Ty::Hole, witness]));
+                }
+            }
+            AstTy::Generic(span, name, args) => {
+                if let Some(alias) = self.resolve_signature_alias(span, name, args, context, tyvars, mode)? {
+                    return Ok(alias);
+                }
+                if let Some((trait_key, trait_info)) = self.traits.iter().find(|(key, info)| {
+                    !info.constructor_slots.is_empty()
+                        && (Self::surface_name(key) == Self::surface_name(name)
+                            || Self::surface_name(&info.id.name) == Self::surface_name(name))
+                }) {
+                    if args.len() != trait_info.constructor_slots.len() {
+                        return Err(TypeError {
+                            message: format!(
+                                "Constructor trait {} requires {} slot argument(s), got {}",
+                                Self::surface_name(name), trait_info.constructor_slots.len(), args.len()
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let witness = tyvars
+                        .entry(format!(
+                            "@constructor-witness:{}",
+                            self.constructor_root_trait_key(trait_key)
+                                .unwrap_or_else(|| trait_key.clone())
+                        ))
+                        .or_insert_with(|| self.env.fresh_tyvar())
+                        .clone();
+                    let mut application = vec![Ty::Hole, witness];
+                    for arg in args {
+                        application.push(self.resolve_signature_like_ast_ty_in_context(
+                            arg,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                            mode,
+                        )?);
+                    }
+                    return Ok(Ty::SelfApp(application));
+                }
+            }
+            _ => {}
+        }
+        self.resolve_signature_like_ast_ty_in_context_non_alias(ast_ty, context, tyvars, mode)
+    }
+
+    fn resolve_signature_like_ast_ty_in_context_non_alias(
+        &mut self,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+        mode: SignatureTyMode<'_>,
+    ) -> Result<Ty, TypeError> {
+        match ast_ty {
             AstTy::Named(_, name) if name == "Self" => {
                 if let Some(self_ty) = mode.self_ty() {
                     Ok(self_ty.clone())
@@ -966,8 +1123,11 @@ impl Checker {
                 tyvars.insert(name.clone(), fresh.clone());
                 Ok(fresh)
             }
-            AstTy::Named(span, name) if matches!(Self::surface_name(name), "_" | "Hole") => {
+            AstTy::Named(span, name) if Self::surface_name(name) == "_" => {
                 self.resolve_hole_surface_ty(span, context)
+            }
+            AstTy::Named(span, name) if Self::surface_name(name) == "Hole" => {
+                Err(self.reserved_hole_type_error(span))
             }
             AstTy::Named(span, name) if Self::builtin_type_is_clause_block_surface_only(name) => {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
@@ -975,29 +1135,24 @@ impl Checker {
             AstTy::Named(span, name) if Self::surface_name(name) == "Seq" => {
                 Err(self.seq_not_allowed_error(span))
             }
-            AstTy::ImplTrait(_, trait_name) => {
-                if context == TypeSyntaxContext::ErrorMarker
-                    && mode.rejects_impl_trait_in_error_marker()
-                {
-                    return Err(TypeError {
-                        message:
-                            "The error marker E in Result<T, E> must be a deferror-defined type."
-                                .into(),
-                        span: Self::ast_ty_span(ast_ty).clone(),
-                        hint: None,
-                    });
-                }
-                if matches!(mode, SignatureTyMode::Builtin) {
-                    return self.resolve_ast_ty_in_context(ast_ty, context);
-                }
-                let fresh = self.env.fresh_tyvar();
-                if let Ty::Var(var) = fresh {
-                    self.register_tyvar_bound(var, trait_name);
-                }
-                Ok(fresh)
-            }
-            AstTy::Generic(span, name, _) if Self::builtin_type_ref_witness_allowed(name) => {
-                Err(self.type_ref_not_allowed_error(span))
+            AstTy::ImplTrait(_, _) => Err(TypeError {
+                message: "Anonymous `impl Trait` types are not supported; introduce a named type slot and constrain it with `where`".into(),
+                span: Self::ast_ty_span(ast_ty).clone(),
+                hint: Some("Use a named `$T` type slot and add `$T: Trait` to the `where` clause.".into()),
+            }),
+            AstTy::Generic(_, name, args) if name == "Self" && mode.self_ty().is_some() => {
+                let args = args
+                    .iter()
+                    .map(|arg| {
+                        self.resolve_signature_like_ast_ty_in_context(
+                            arg,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                            mode,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Ty::SelfApp(args))
             }
             AstTy::Generic(span, name, _)
                 if Self::builtin_type_is_clause_block_surface_only(name) =>
@@ -1026,39 +1181,25 @@ impl Checker {
                 Err(self.seq_not_allowed_error(span))
             }
             AstTy::Generic(span, name, args) => match Self::surface_name(name) {
-                "MatchResult" => {
-                    if !self.match_result_type_allowed(context) {
-                        return Err(self.match_result_not_allowed_error(span));
-                    }
-                    if args.is_empty() || args.len() > 2 {
-                        return Err(TypeError {
-                            message: "MatchResult<$Value> or MatchResult<$Value, Error> requires 1 or 2 type arguments".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    let value = self.resolve_signature_like_ast_ty_in_context(
+                "Option" => {
+                    let args = self.require_type_arg_count(
+                        span,
+                        args,
+                        1,
+                        "Option<T> requires exactly 1 type argument",
+                    )?;
+                    let inner_ty = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
                         TypeSyntaxContext::General,
                         tyvars,
                         mode,
                     )?;
-                    if args.len() == 2 {
-                        let err = self.resolve_signature_like_ast_ty_in_context(
-                            &args[1],
-                            TypeSyntaxContext::General,
-                            tyvars,
-                            mode,
-                        )?;
-                        if !matches!(err, Ty::Error) {
-                            return Err(TypeError {
-                                message: "MatchResult<$Value, Error> requires Error as the second argument".into(),
-                                span: span.clone(),
-                                hint: None,
-                            });
-                        }
-                    }
-                    Ok(Ty::Enum("MatchResult".into(), vec![value]))
+                    let enum_name = self
+                        .env
+                        .lookup_type_def(name)
+                        .map(|def| def.name.clone())
+                        .unwrap_or_else(|| name.clone());
+                    Ok(Ty::Enum(enum_name, vec![inner_ty]))
                 }
                 "List" => {
                     let args = self.require_type_arg_count(
@@ -1111,12 +1252,12 @@ impl Checker {
                     )?;
                     Ok(Ty::Enum("Generator".into(), vec![state_ty, item_ty]))
                 }
-                "ProcessInit" => {
+                "StandbyInit" => {
                     let args = self.require_type_arg_count(
                         span,
                         args,
                         1,
-                        "ProcessInit<T> requires exactly 1 type argument",
+                        "StandbyInit<T> requires exactly 1 type argument",
                     )?;
                     let inner_ty = self.resolve_signature_like_ast_ty_in_context(
                         &args[0],
@@ -1124,28 +1265,60 @@ impl Checker {
                         tyvars,
                         mode,
                     )?;
-                    Ok(Ty::Enum("ProcessInit".into(), vec![inner_ty]))
+                    Ok(Ty::Enum("StandbyInit".into(), vec![inner_ty]))
                 }
                 "Facet" => {
                     let args = self.require_type_arg_count(
                         span,
                         args,
-                        2,
-                        "Facet<S, A> requires exactly 2 type arguments",
+                        5,
+                        "Facet<K, S, A, T, B> requires exactly 5 type arguments",
                     )?;
-                    let source = self.resolve_signature_like_ast_ty_in_context(
+                    let kind = self.facet_kind_annotation(
                         &args[0],
-                        TypeSyntaxContext::General,
-                        tyvars,
-                        mode,
+                        matches!(mode, SignatureTyMode::Builtin),
                     )?;
-                    let focus = self.resolve_signature_like_ast_ty_in_context(
+                    // See the surface-type resolver above: K is compile-only.
+                    let source = self.resolve_signature_like_ast_ty_in_context(
                         &args[1],
                         TypeSyntaxContext::General,
                         tyvars,
                         mode,
                     )?;
-                    Ok(Ty::Facet(Box::new(source), Box::new(focus)))
+                    let focus = self.resolve_signature_like_ast_ty_in_context(
+                        &args[2],
+                        TypeSyntaxContext::General,
+                        tyvars,
+                        mode,
+                    )?;
+                    let update_source = self.resolve_signature_like_ast_ty_in_context(
+                        &args[3],
+                        TypeSyntaxContext::FacetDeferredSlot,
+                        tyvars,
+                        mode,
+                    )?;
+                    let update_focus = self.resolve_signature_like_ast_ty_in_context(
+                        &args[4],
+                        TypeSyntaxContext::FacetDeferredSlot,
+                        tyvars,
+                        mode,
+                    )?;
+                    if !matches!((&update_source, &update_focus), (Ty::Hole, Ty::Hole))
+                        && (matches!(update_source, Ty::Hole) || matches!(update_focus, Ty::Hole))
+                    {
+                        return Err(TypeError {
+                            message: "Facet update slots T and B must both be `_` or both be concrete types".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    Ok(Ty::Facet(
+                        kind,
+                        Box::new(source),
+                        Box::new(focus),
+                        Box::new(update_source),
+                        Box::new(update_focus),
+                    ))
                 }
                 "PID" => self.resolve_pid_surface_ty(span, args),
                 "Workers" => self.resolve_worker_handle_surface_ty(span, args, "Workers"),
@@ -1350,75 +1523,183 @@ impl Checker {
         let profile = self.profiler.start();
         let expected = self.resolve_ty(expected);
         let got = self.resolve_ty(got);
-        let result = match (&expected, &got) {
-            (Ty::Hole, Ty::Hole) => true,
-            (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
-            (Ty::Int, Ty::Int)
-            | (Ty::Float, Ty::Float)
-            | (Ty::Str, Ty::Str)
-            | (Ty::Bool, Ty::Bool)
-            | (Ty::Unit, Ty::Unit)
-            | (Ty::Error, Ty::Error) => true,
-            (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
-            (Ty::TypeRef(a), Ty::TypeRef(b)) | (Ty::Lazy(a), Ty::Lazy(b)) => {
-                self.types_compatible(a, b)
-            }
-            (Ty::Pid(a), Ty::Pid(b)) => {
-                Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
-                    || a.starts_with('$')
-                    || b.starts_with('$')
-            }
-            (Ty::Pid(expected_process), Ty::Enum(name, args))
-                if name == "WorkerLease" && args.len() == 1 =>
-            {
-                match args.first() {
-                    Some(Ty::Pid(actual_process)) => {
-                        Self::canonical_user_type_name(expected_process)
-                            == Self::canonical_user_type_name(actual_process)
-                            || expected_process.starts_with('$')
-                            || actual_process.starts_with('$')
-                    }
-                    _ => false,
+        let result =
+            match (&expected, &got) {
+                (Ty::Hole, Ty::Hole) => true,
+                (Ty::Var(left), Ty::Var(right)) => match (
+                    self.rigid_tyvars.contains(left),
+                    self.rigid_tyvars.contains(right),
+                ) {
+                    (true, true) => left == right,
+                    (true, false) => self.bind_tyvar(*right, &Ty::Var(*left)),
+                    (false, true) => self.bind_tyvar(*left, &Ty::Var(*right)),
+                    (false, false) => self.bind_tyvar(*left, &Ty::Var(*right)),
+                },
+                (Ty::Var(var), _) if self.rigid_tyvars.contains(var) => false,
+                (_, Ty::Var(var)) if self.rigid_tyvars.contains(var) => false,
+                (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
+                (Ty::Int, Ty::Int)
+                | (Ty::Float, Ty::Float)
+                | (Ty::Str, Ty::Str)
+                | (Ty::Bool, Ty::Bool)
+                | (Ty::Unit, Ty::Unit)
+                | (Ty::Error, Ty::Error) => true,
+                (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
+                (Ty::Lazy(a), Ty::Lazy(b)) => self.types_compatible(a, b),
+                (Ty::Pid(a), Ty::Pid(b)) => {
+                    Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
+                        || a.starts_with('$')
+                        || b.starts_with('$')
                 }
-            }
-            (Ty::Facet(src_a, focus_a), Ty::Facet(src_b, focus_b)) => {
-                self.types_compatible(src_a, src_b) && self.types_compatible(focus_a, focus_b)
-            }
-            (Ty::Tuple(a), Ty::Tuple(b)) => {
-                a.len() == b.len()
-                    && a.iter()
-                        .zip(b.iter())
-                        .all(|(left, right)| self.types_compatible(left, right))
-            }
-            (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
-                a_params.len() == b_params.len()
-                    && a_params
-                        .iter()
-                        .zip(b_params.iter())
-                        .all(|(a, b)| self.types_compatible(a, b))
-                    && self.types_compatible(a_ret, b_ret)
-            }
-            (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
-                self.types_compatible(ok1, ok2) && self.types_compatible(err1, err2)
-            }
-            (Ty::Struct(n1, _), Ty::Struct(n2, _)) => {
-                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-            }
-            (Ty::Record(n1, _), Ty::Record(n2, _)) => {
-                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-            }
-            (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
-                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                    && args1.len() == args2.len()
-                    && args1
-                        .iter()
-                        .zip(args2.iter())
-                        .all(|(left, right)| self.types_compatible(left, right))
-            }
-            _ => false,
-        };
+                (Ty::Pid(expected_process), Ty::Enum(name, args))
+                    if name == "WorkerLease" && args.len() == 1 =>
+                {
+                    match args.first() {
+                        Some(Ty::Pid(actual_process)) => {
+                            Self::canonical_user_type_name(expected_process)
+                                == Self::canonical_user_type_name(actual_process)
+                                || expected_process.starts_with('$')
+                                || actual_process.starts_with('$')
+                        }
+                        _ => false,
+                    }
+                }
+                (
+                    Ty::Facet(kind_a, src_a, focus_a, update_src_a, update_focus_a),
+                    Ty::Facet(kind_b, src_b, focus_b, update_src_b, update_focus_b),
+                ) => {
+                    kind_a.accepts(*kind_b)
+                        && self.types_compatible(src_a, src_b)
+                        && self.types_compatible(focus_a, focus_b)
+                        && self.types_compatible(update_src_a, update_src_b)
+                        && self.types_compatible(update_focus_a, update_focus_b)
+                }
+                (Ty::Tuple(a), Ty::Tuple(b)) => {
+                    a.len() == b.len()
+                        && a.iter()
+                            .zip(b.iter())
+                            .all(|(left, right)| self.types_compatible(left, right))
+                }
+                (Ty::SelfApp(a), Ty::SelfApp(b))
+                    if Self::constructor_application_parts(a).is_some()
+                        && Self::constructor_application_parts(b).is_some() =>
+                {
+                    let (left_witness, left_slots) =
+                        Self::constructor_application_parts(a).expect("checked above");
+                    let (right_witness, right_slots) =
+                        Self::constructor_application_parts(b).expect("checked above");
+                    left_slots.len() == right_slots.len()
+                        && self.types_compatible(left_witness, right_witness)
+                        && left_slots.iter().zip(right_slots.iter()).all(|(left, right)| {
+                            self.types_compatible(left, right)
+                        })
+                }
+                (Ty::SelfApp(a), other) if Self::constructor_application_parts(a).is_some() => {
+                    let (witness, expected_slots) =
+                        Self::constructor_application_parts(a).expect("checked above");
+                    if !self.types_compatible(witness, other) {
+                        false
+                    } else {
+                        expected_slots.is_empty()
+                            || Self::constructor_application_slots(other).is_some_and(|actual_slots| {
+                                actual_slots.len() == expected_slots.len()
+                                    && expected_slots.iter().zip(actual_slots.iter()).all(
+                                        |(expected, actual)| self.types_compatible(expected, actual),
+                                    )
+                            })
+                    }
+                }
+                (other, Ty::SelfApp(b)) if Self::constructor_application_parts(b).is_some() => {
+                    self.types_compatible(&Ty::SelfApp(b.clone()), other)
+                }
+                (Ty::SelfApp(a), Ty::SelfApp(b)) => {
+                    a.len() == b.len()
+                        && a.iter()
+                            .zip(b.iter())
+                            .all(|(left, right)| self.types_compatible(left, right))
+                }
+                (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
+                    a_params.len() == b_params.len()
+                        && a_params
+                            .iter()
+                            .zip(b_params.iter())
+                            .all(|(a, b)| self.types_compatible(a, b))
+                        && self.types_compatible(a_ret, b_ret)
+                }
+                (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
+                    self.types_compatible(ok1, ok2) && self.types_compatible(err1, err2)
+                }
+                (Ty::Struct(n1, fields1), Ty::Struct(n2, fields2)) => {
+                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                        && (fields1.is_empty()
+                            || fields2.is_empty()
+                            || (fields1.len() == fields2.len()
+                                && fields1.iter().zip(fields2).all(
+                                    |((name1, ty1), (name2, ty2))| {
+                                        name1 == name2 && self.types_compatible(ty1, ty2)
+                                    },
+                                )))
+                }
+                (Ty::Record(n1, fields1), Ty::Record(n2, fields2)) => {
+                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                        && (fields1.is_empty()
+                            || fields2.is_empty()
+                            || (fields1.len() == fields2.len()
+                                && fields1.iter().zip(fields2).all(
+                                    |((name1, ty1), (name2, ty2))| {
+                                        name1 == name2 && self.types_compatible(ty1, ty2)
+                                    },
+                                )))
+                }
+                (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
+                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                        && args1.len() == args2.len()
+                        && args1
+                            .iter()
+                            .zip(args2.iter())
+                            .all(|(left, right)| self.types_compatible(left, right))
+                }
+                _ => false,
+            };
         self.profiler.finish(ProfileEvent::TypesCompatible, profile);
         result
+    }
+
+    pub(super) fn signature_tyvar_ids(tyvars: &HashMap<String, Ty>) -> HashSet<u32> {
+        tyvars
+            .values()
+            .filter_map(|ty| match ty {
+                Ty::Var(var) => Some(*var),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub(super) fn types_compatible_with_rigid(
+        &mut self,
+        expected: &Ty,
+        got: &Ty,
+        rigid_tyvars: &HashSet<u32>,
+    ) -> bool {
+        let saved = std::mem::replace(&mut self.rigid_tyvars, rigid_tyvars.clone());
+        let compatible = self.types_compatible(expected, got);
+        self.rigid_tyvars = saved;
+        compatible
+    }
+
+    /// Checks whether a callable parameter can consume an argument. `Hole` is
+    /// an ignored-input marker, not a wildcard type: it is accepted only at
+    /// this callable-application boundary and never participates in general
+    /// type compatibility or unification.
+    pub(super) fn callable_accepts_input(&mut self, param: &Ty, argument: &Ty) -> bool {
+        matches!(self.resolve_ty(param), Ty::Hole) || self.types_compatible(param, argument)
+    }
+
+    /// Flow operators encode their callable input in their trait arguments.
+    /// Preserve the ignored-input meaning there without treating `Hole` as a
+    /// generally compatible type or binding it to the implementation generic.
+    pub(super) fn operator_trait_arg_compatible(&mut self, expected: &Ty, actual: &Ty) -> bool {
+        matches!(self.resolve_ty(actual), Ty::Hole) || self.types_compatible(expected, actual)
     }
 
     pub(super) fn bind_tyvar(&mut self, var: u32, ty: &Ty) -> bool {
@@ -1474,12 +1755,17 @@ impl Checker {
             Ty::Var(var) => var == needle,
             Ty::Hole => false,
             Ty::List(inner) => self.ty_contains_var(&inner, needle),
-            Ty::TypeRef(inner) | Ty::Lazy(inner) => self.ty_contains_var(&inner, needle),
+            Ty::Lazy(inner) => self.ty_contains_var(&inner, needle),
             Ty::Pid(_) => false,
-            Ty::Facet(source, focus) => {
-                self.ty_contains_var(&source, needle) || self.ty_contains_var(&focus, needle)
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
+                self.ty_contains_var(&source, needle)
+                    || self.ty_contains_var(&focus, needle)
+                    || self.ty_contains_var(&update_source, needle)
+                    || self.ty_contains_var(&update_focus, needle)
             }
-            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_var(item, needle)),
+            Ty::Tuple(items) | Ty::SelfApp(items) => {
+                items.iter().any(|item| self.ty_contains_var(item, needle))
+            }
             Ty::Func(params, ret) => {
                 params
                     .iter()
@@ -1511,14 +1797,25 @@ impl Checker {
             },
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
             Ty::Hole => Ty::Hole,
-            Ty::TypeRef(inner) => Ty::TypeRef(Box::new(self.resolve_ty(inner))),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.resolve_ty(inner))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
-            Ty::Facet(source, focus) => Ty::Facet(
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                *kind,
                 Box::new(self.resolve_ty(source)),
                 Box::new(self.resolve_ty(focus)),
+                Box::new(self.resolve_ty(update_source)),
+                Box::new(self.resolve_ty(update_focus)),
             ),
             Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.resolve_ty(item)).collect()),
+            Ty::SelfApp(items) => {
+                let resolved = items.iter().map(|item| self.resolve_ty(item)).collect::<Vec<_>>();
+                if let Some((witness, slots)) = Self::constructor_application_parts(&resolved) {
+                    if let Some(applied) = Self::apply_constructor_application(witness, slots) {
+                        return self.resolve_ty(&applied);
+                    }
+                }
+                Ty::SelfApp(resolved)
+            }
             Ty::Func(params, ret) => Ty::Func(
                 params.iter().map(|param| self.resolve_ty(param)).collect(),
                 Box::new(self.resolve_ty(ret)),
@@ -1585,16 +1882,22 @@ impl Checker {
                 .clone(),
             Ty::List(inner) => Ty::List(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
             Ty::Hole => Ty::Hole,
-            Ty::TypeRef(inner) => {
-                Ty::TypeRef(Box::new(self.instantiate_ty_with_fresh(inner, fresh)))
-            }
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
-            Ty::Facet(source, focus) => Ty::Facet(
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                *kind,
                 Box::new(self.instantiate_ty_with_fresh(source, fresh)),
                 Box::new(self.instantiate_ty_with_fresh(focus, fresh)),
+                Box::new(self.instantiate_ty_with_fresh(update_source, fresh)),
+                Box::new(self.instantiate_ty_with_fresh(update_focus, fresh)),
             ),
             Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.instantiate_ty_with_fresh(item, fresh))
+                    .collect(),
+            ),
+            Ty::SelfApp(items) => Ty::SelfApp(
                 items
                     .iter()
                     .map(|item| self.instantiate_ty_with_fresh(item, fresh))
@@ -1670,7 +1973,10 @@ impl Checker {
         result
     }
 
-    pub(super) fn instantiate_builtin_ty(&mut self, ty: &Ty) -> Ty {
+    /// Instantiates declaration-owned callable generics for one use site.
+    /// Every lookup gets an independent fresh map so substitutions cannot
+    /// leak between calls to the same function.
+    pub(super) fn instantiate_callable_ty(&mut self, ty: &Ty) -> Ty {
         let mut fresh = HashMap::new();
         self.instantiate_ty_with_fresh(ty, &mut fresh)
     }
@@ -1680,16 +1986,22 @@ impl Checker {
             Ty::Var(var) => bindings.get(var).cloned().unwrap_or(Ty::Var(*var)),
             Ty::List(inner) => Ty::List(Box::new(self.substitute_type_def_ty(inner, bindings))),
             Ty::Hole => Ty::Hole,
-            Ty::TypeRef(inner) => {
-                Ty::TypeRef(Box::new(self.substitute_type_def_ty(inner, bindings)))
-            }
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_type_def_ty(inner, bindings))),
             Ty::Pid(name) => Ty::Pid(name.clone()),
-            Ty::Facet(source, focus) => Ty::Facet(
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                *kind,
                 Box::new(self.substitute_type_def_ty(source, bindings)),
                 Box::new(self.substitute_type_def_ty(focus, bindings)),
+                Box::new(self.substitute_type_def_ty(update_source, bindings)),
+                Box::new(self.substitute_type_def_ty(update_focus, bindings)),
             ),
             Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.substitute_type_def_ty(item, bindings))
+                    .collect(),
+            ),
+            Ty::SelfApp(items) => Ty::SelfApp(
                 items
                     .iter()
                     .map(|item| self.substitute_type_def_ty(item, bindings))
@@ -1836,6 +2148,13 @@ impl Checker {
             Ty::Unit => "Unit".into(),
             Ty::Error => "Error".into(),
             Ty::Hole => "_".into(),
+            Ty::SelfApp(args) => format!(
+                "Self<{}>",
+                args.iter()
+                    .map(|arg| self.diagnostic_ty_name_with_state(arg, tyvars, next_tyvar_index))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Ty::List(inner) => format!(
                 "List<{}>",
                 self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
@@ -1844,15 +2163,14 @@ impl Checker {
                 "Lazy<{}>",
                 self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
             ),
-            Ty::TypeRef(inner) => format!(
-                "TypeRef<{}>",
-                self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
-            ),
             Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),
-            Ty::Facet(source, focus) => format!(
-                "Facet<{}, {}>",
+            Ty::Facet(kind, source, focus, update_source, update_focus) => format!(
+                "Facet<{}, {}, {}, {}, {}>",
+                kind.as_str(),
                 self.diagnostic_ty_name_with_state(source, tyvars, next_tyvar_index),
-                self.diagnostic_ty_name_with_state(focus, tyvars, next_tyvar_index)
+                self.diagnostic_ty_name_with_state(focus, tyvars, next_tyvar_index),
+                self.diagnostic_ty_name_with_state(update_source, tyvars, next_tyvar_index),
+                self.diagnostic_ty_name_with_state(update_focus, tyvars, next_tyvar_index)
             ),
             Ty::Tuple(items) => format!(
                 "({})",
@@ -1941,12 +2259,25 @@ impl Checker {
             Ty::Unit => "Unit".into(),
             Ty::Error => "Error".into(),
             Ty::Hole => "_".into(),
+            Ty::SelfApp(args) => format!(
+                "Self<{}>",
+                args.iter()
+                    .map(|arg| self.ty_name(arg))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
-            Ty::TypeRef(inner) => format!("TypeRef<{}>", self.ty_name(inner)),
             Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),
-            Ty::Facet(source, focus) => {
-                format!("Facet<{}, {}>", self.ty_name(source), self.ty_name(focus))
+            Ty::Facet(kind, source, focus, update_source, update_focus) => {
+                format!(
+                    "Facet<{}, {}, {}, {}, {}>",
+                    kind.as_str(),
+                    self.ty_name(source),
+                    self.ty_name(focus),
+                    self.ty_name(update_source),
+                    self.ty_name(update_focus)
+                )
             }
             Ty::Tuple(items) => format!(
                 "({})",
@@ -1992,11 +2323,11 @@ impl Checker {
 
     pub(super) fn ty_contains_facet(&self, ty: &Ty) -> bool {
         match self.resolve_ty(ty) {
-            Ty::Facet(_, _) => true,
-            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-                self.ty_contains_facet(inner.as_ref())
+            Ty::Facet(..) => true,
+            Ty::List(inner) | Ty::Lazy(inner) => self.ty_contains_facet(inner.as_ref()),
+            Ty::Tuple(items) | Ty::SelfApp(items) => {
+                items.iter().any(|item| self.ty_contains_facet(item))
             }
-            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_facet(item)),
             Ty::Func(params, ret) => {
                 params.iter().any(|param| self.ty_contains_facet(param))
                     || self.ty_contains_facet(ret.as_ref())
@@ -2028,6 +2359,8 @@ impl Checker {
         TypedFacetPath {
             source_ty: self.resolve_ty(&path.source_ty),
             focus_ty: self.resolve_ty(&path.focus_ty),
+            update_source_ty: self.resolve_ty(&path.update_source_ty),
+            update_focus_ty: self.resolve_ty(&path.update_focus_ty),
             path_kind: path.path_kind,
             may_fail: path.may_fail,
             source_readonly_root: path.source_readonly_root,
@@ -2192,6 +2525,9 @@ impl Checker {
                     })
                     .collect(),
             ),
+            TypedInner::EagerBoundary(inner) => {
+                TypedInner::EagerBoundary(Box::new(self.resolve_typed_node(*inner)))
+            }
             TypedInner::If(cond, then, else_opt) => TypedInner::If(
                 Box::new(self.resolve_typed_node(*cond)),
                 Box::new(self.resolve_typed_node(*then)),
@@ -2305,30 +2641,38 @@ impl Checker {
                     .collect(),
                 Box::new(self.resolve_typed_node(*show)),
             ),
-            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, visibility) => {
-                TypedInner::Def(
-                    fun_idx,
-                    id,
-                    type_params
-                        .into_iter()
-                        .map(|param| TypedTypeParam {
-                            name: param.name,
-                            ty_var: param.ty_var,
-                            bound: param.bound,
-                        })
-                        .collect(),
-                    params
-                        .into_iter()
-                        .map(|param| TypedFunParam {
-                            id: param.id,
-                            ty: self.resolve_ty(&param.ty),
-                        })
-                        .collect(),
-                    self.resolve_ty(&ret_ty),
-                    Box::new(self.resolve_typed_node(*body)),
-                    visibility,
-                )
-            }
+            TypedInner::Def(
+                fun_idx,
+                id,
+                type_params,
+                params,
+                ret_ty,
+                where_clause,
+                body,
+                visibility,
+            ) => TypedInner::Def(
+                fun_idx,
+                id,
+                type_params
+                    .into_iter()
+                    .map(|param| TypedTypeParam {
+                        name: param.name,
+                        ty_var: param.ty_var,
+                        bound: param.bound,
+                    })
+                    .collect(),
+                params
+                    .into_iter()
+                    .map(|param| TypedFunParam {
+                        id: param.id,
+                        ty: self.resolve_ty(&param.ty),
+                    })
+                    .collect(),
+                self.resolve_ty(&ret_ty),
+                where_clause,
+                Box::new(self.resolve_typed_node(*body)),
+                visibility,
+            ),
             TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, visibility) => {
                 TypedInner::ExtractorDef(
                     fun_idx,
@@ -2381,9 +2725,11 @@ impl Checker {
                 TypedInner::RecordDef(tag, name, field_names, field_policies, readonly_root)
             }
             TypedInner::EnumDef(name, variants) => TypedInner::EnumDef(name, variants),
-            TypedInner::TraitDef(name, methods) => TypedInner::TraitDef(name, methods),
-            TypedInner::TraitImplDef(trait_name, target_name) => {
-                TypedInner::TraitImplDef(trait_name, target_name)
+            TypedInner::TraitDef(name, where_clause, methods) => {
+                TypedInner::TraitDef(name, where_clause, methods)
+            }
+            TypedInner::TraitImplDef(trait_name, target_name, where_clause) => {
+                TypedInner::TraitImplDef(trait_name, target_name, where_clause)
             }
             TypedInner::Semi(inner) => TypedInner::Semi(Box::new(self.resolve_typed_node(*inner))),
         };
@@ -2588,12 +2934,6 @@ mod tests {
     use super::Checker;
 
     #[test]
-    fn type_ref_witness_gate_uses_builtin_type_usage_policy() {
-        assert!(Checker::builtin_type_ref_witness_allowed("TypeRef"));
-        assert!(!Checker::builtin_type_ref_witness_allowed("String"));
-    }
-
-    #[test]
     fn clause_block_surface_type_query_uses_builtin_type_usage_policy() {
         assert!(Checker::builtin_type_is_clause_block_surface_only(
             "MatchArms"
@@ -2608,7 +2948,7 @@ mod tests {
             "String"
         ));
         assert!(!Checker::builtin_type_is_clause_block_surface_only(
-            "ProcessInit"
+            "StandbyInit"
         ));
         assert!(!Checker::builtin_type_is_clause_block_surface_only("Lazy"));
     }

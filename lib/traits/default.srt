@@ -1,0 +1,9 @@
+@doc """
+Standard `Default` trait declaration.
+`default()` constructs the canonical value for its target type. The target is
+selected from an explicit type application or the expected return type.
+"""
+@autoimport
+deftrait Default {
+  def default::<Self>() -> Self
+}

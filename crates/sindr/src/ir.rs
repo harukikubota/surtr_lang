@@ -502,13 +502,13 @@ pub struct RuntimeInitRouteRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeInitPolicy {
     Eager,
-    Lazy,
+    Standby,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeInitResultShape {
     EagerState { result_type: RuntimeTypeRef },
-    LazyProcessInit { result_type: RuntimeTypeRef },
+    StandbyProcessInit { result_type: RuntimeTypeRef },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2382,7 +2382,7 @@ mod tests {
         bytecode.runtime_process_specs = RuntimeProcessSpecTable {
             entries: vec![RuntimeProcessSpec {
                 process_id: 7,
-                type_name: "LazyCache".to_string(),
+                type_name: "StandbyCache".to_string(),
                 kind: RuntimeProcessKind::GenServer,
                 instance: RuntimeProcessInstance::Singleton,
                 state: RuntimeStateSpec {
@@ -2392,10 +2392,10 @@ mod tests {
                 },
                 init: RuntimeInitSpec {
                     callable: RuntimeCallableRef { fun_idx: 0 },
-                    policy: RuntimeInitPolicy::Lazy,
-                    result_shape: RuntimeInitResultShape::LazyProcessInit {
+                    policy: RuntimeInitPolicy::Standby,
+                    result_shape: RuntimeInitResultShape::StandbyProcessInit {
                         result_type: RuntimeTypeRef {
-                            name: "Result<ProcessInit<Int>>".to_string(),
+                            name: "Result<StandbyInit<Int>>".to_string(),
                         },
                     },
                     state_type: RuntimeTypeRef {

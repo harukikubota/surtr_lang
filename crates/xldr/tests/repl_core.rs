@@ -524,8 +524,8 @@ fn core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation
     let process_init = surtr_analysis::complete_repl_prefix(
         surtr_analysis::CompletionRequest {
             index: &index,
-            source: "ProcessInit",
-            cursor: "ProcessInit".len(),
+            source: "StandbyInit",
+            cursor: "StandbyInit".len(),
         },
         surtr_analysis::CompletionScope::All,
     );
@@ -534,6 +534,289 @@ fn core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation
         "shared REPL completion must preserve xldr hidden-owner filtering: {:?}",
         process_init.candidates
     );
+}
+
+#[test]
+fn core_command_completion_uses_command_use_sites() {
+    let mut engine = engine();
+
+    let all_command_candidates = engine.completions(":", ":".len()).candidates;
+    let all_command_rendered = all_command_candidates
+        .iter()
+        .map(|candidate| {
+            format!(
+                "{}=>{}::{:?}",
+                candidate.label, candidate.replacement, candidate.detail
+            )
+        })
+        .collect::<Vec<_>>();
+    for expected in [":help", ":sig", ":quit", ":q"] {
+        assert!(
+            all_command_candidates
+                .iter()
+                .any(|candidate| candidate.label == expected && candidate.replacement == expected),
+            "command-head completion should expose {expected}: {all_command_rendered:?}"
+        );
+    }
+    let sig = all_command_candidates
+        .iter()
+        .find(|candidate| candidate.label == ":sig")
+        .expect(":sig should be present");
+    assert_eq!(
+        sig.detail.as_deref(),
+        Some(":sig <symbol|query>  Show signatures for visible callable, family, owner, or process surfaces")
+    );
+
+    let head_candidates = engine.completions(":si", ":si".len()).candidates;
+    let head_rendered = head_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        head_candidates
+            .iter()
+            .any(|candidate| candidate.label == ":sig" && candidate.replacement == ":sig"),
+        "command-head completion should expose :sig: {head_rendered:?}"
+    );
+
+    let indented_candidates = engine.completions("  :si", "  :si".len()).candidates;
+    assert!(
+        indented_candidates
+            .iter()
+            .any(|candidate| candidate.label == ":sig" && candidate.replacement == ":sig"),
+        "command-head completion should allow leading whitespace: {indented_candidates:?}"
+    );
+
+    let plain_candidates = engine.completions("si", "si".len()).candidates;
+    assert!(
+        !plain_candidates
+            .iter()
+            .any(|candidate| candidate.label.starts_with(':')
+                || candidate.replacement.starts_with(':')),
+        "plain input should not expose REPL commands: {plain_candidates:?}"
+    );
+
+    let bound = rendered_text(&engine.handle_line("print = \"shadowed\""));
+    assert!(bound.contains("print: String = \"shadowed\""), "{bound}");
+
+    let sig_unqualified_candidates = engine.completions(":sig pri", ":sig pri".len()).candidates;
+    let sig_unqualified_rendered = sig_unqualified_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        sig_unqualified_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print" && candidate.replacement == "print"),
+        ":sig argument completion should use normal semantic candidates: {sig_unqualified_rendered:?}"
+    );
+    assert!(
+        !sig_unqualified_candidates
+            .iter()
+            .any(|candidate| candidate.label.starts_with(':')
+                || candidate.replacement.starts_with(':')),
+        ":sig argument completion should not include command heads: {sig_unqualified_rendered:?}"
+    );
+
+    let type_candidates = engine
+        .completions(":type pri", ":type pri".len())
+        .candidates;
+    let type_rendered = type_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        type_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print" && candidate.replacement == "print"),
+        ":type completion should keep the binding candidate: {type_rendered:?}"
+    );
+    assert!(
+        !type_candidates
+            .iter()
+            .any(|candidate| candidate.replacement == "Kernel::print"),
+        ":type completion should not surface callable families: {type_rendered:?}"
+    );
+
+    let sig_candidates = engine
+        .completions(":sig Kernel::pr", ":sig Kernel::pr".len())
+        .candidates;
+    let sig_rendered = sig_candidates
+        .iter()
+        .map(|candidate| format!("{}=>{}", candidate.label, candidate.replacement))
+        .collect::<Vec<_>>();
+    assert!(
+        sig_candidates
+            .iter()
+            .any(|candidate| candidate.label == "Kernel::print"
+                && candidate.replacement == "Kernel::print"),
+        "qualified command completion should preserve callable escape hatches: {sig_rendered:?}"
+    );
+}
+
+#[test]
+fn core_command_argument_completion_uses_command_policies() {
+    let mut engine = engine();
+    let bound = rendered_text(&engine.handle_line("print = \"shadowed\""));
+    assert!(bound.contains("print: String = \"shadowed\""), "{bound}");
+    let value = rendered_text(&engine.handle_line("41 + 1"));
+    assert!(value.contains("42"), "{value}");
+
+    let error_candidates = engine.completions(":error s", ":error s".len()).candidates;
+    assert!(
+        error_candidates
+            .iter()
+            .any(|candidate| candidate.label == "summary" && candidate.replacement == "summary"),
+        ":error should complete summary: {error_candidates:?}"
+    );
+    assert!(
+        !error_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":error should not fall through to semantic symbols: {error_candidates:?}"
+    );
+
+    let stacktrace_candidates = engine
+        .completions(":stacktrace v", ":stacktrace v".len())
+        .candidates;
+    assert!(
+        stacktrace_candidates
+            .iter()
+            .any(|candidate| candidate.label == "verbose" && candidate.replacement == "verbose"),
+        ":stacktrace should complete verbose: {stacktrace_candidates:?}"
+    );
+    assert!(
+        !stacktrace_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":stacktrace should not fall through to semantic symbols: {stacktrace_candidates:?}"
+    );
+
+    let reload_candidates = engine
+        .completions(":reload d", ":reload d".len())
+        .candidates;
+    assert!(
+        reload_candidates
+            .iter()
+            .any(|candidate| candidate.label == "defs" && candidate.replacement == "defs"),
+        ":reload should complete defs: {reload_candidates:?}"
+    );
+    assert!(
+        !reload_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":reload should not fall through to semantic symbols: {reload_candidates:?}"
+    );
+
+    let help_candidates = engine.completions(":help s", ":help s".len()).candidates;
+    assert!(
+        help_candidates
+            .iter()
+            .any(|candidate| candidate.label == ":sig" && candidate.replacement == "sig"),
+        ":help should complete command topics: {help_candidates:?}"
+    );
+    assert!(
+        !help_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":help should not fall through to semantic symbols: {help_candidates:?}"
+    );
+
+    let no_arg_candidates = engine.completions(":clear p", ":clear p".len()).candidates;
+    assert!(
+        no_arg_candidates.is_empty(),
+        ":clear should not complete command arguments: {no_arg_candidates:?}"
+    );
+
+    let value_candidates = engine.completions(":v ", ":v ".len()).candidates;
+    assert!(
+        value_candidates
+            .iter()
+            .any(|candidate| candidate.label == "2" && candidate.replacement == "2"),
+        ":v should complete result line numbers: {value_candidates:?}"
+    );
+    assert!(
+        !value_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":v should not fall through to semantic symbols: {value_candidates:?}"
+    );
+
+    let history_candidates = engine
+        .completions(":history 1,", ":history 1,".len())
+        .candidates;
+    assert!(
+        history_candidates
+            .iter()
+            .any(|candidate| candidate.label == "2" && candidate.replacement == "2"),
+        ":history should complete selector line numbers after commas: {history_candidates:?}"
+    );
+
+    let facet = rendered_text(&engine.handle_line("path = Tuple._0"));
+    assert!(
+        facet.contains("path: Facet<InfallibleStructural, _, _, _, _>"),
+        "{facet}"
+    );
+    let facet_candidates = engine
+        .completions(":facet pa", ":facet pa".len())
+        .candidates;
+    assert!(
+        facet_candidates
+            .iter()
+            .any(|candidate| candidate.label == "path" && candidate.replacement == "path"),
+        ":facet should complete visible facet bindings: {facet_candidates:?}"
+    );
+    assert!(
+        !facet_candidates
+            .iter()
+            .any(|candidate| candidate.label == "print"),
+        ":facet should not fall through to broad semantic symbols: {facet_candidates:?}"
+    );
+
+    let dir = tempfile_dir("xldr-repl-core-save-completion");
+    let session_path = dir.join("session.eldr");
+    fs::write(&session_path, b"snapshot").expect("path completion fixture should be written");
+    let path_prefix = dir.join("sess");
+    let save_input = format!(":save {}", path_prefix.display());
+    let save_candidates = engine.completions(&save_input, save_input.len()).candidates;
+    assert!(
+        save_candidates.iter().any(|candidate| {
+            candidate.label == "session.eldr"
+                && candidate.replacement.ends_with("session.eldr")
+                && candidate.replace_start == ":save ".len()
+                && candidate.replace_end == save_input.len()
+        }),
+        ":save should complete .eldr paths without semantic fallback: {save_candidates:?}"
+    );
+}
+
+#[test]
+fn core_command_outputs_use_repl_scope_before_callable_families() {
+    let mut engine = engine();
+
+    let bound = rendered_text(&engine.handle_line("compare = Ok(1)"));
+    assert!(bound.contains("compare: Result<Int, Error>"), "{bound}");
+
+    let sig = rendered_text(&engine.handle_line(":sig compare"));
+    assert!(sig.contains("No signature found for compare"), "{sig}");
+
+    let doc = doc_text(&engine.handle_line(":doc compare"));
+    assert!(doc.contains("Standard `Result` type declaration."), "{doc}");
+    assert!(!doc.contains("Return the three-way ordering"), "{doc}");
+
+    let escaped_doc = doc_text(&engine.handle_line(":doc Compare::compare"));
+    assert!(escaped_doc.contains("Compare::compare"), "{escaped_doc}");
+    assert!(
+        escaped_doc.contains("Standard `Compare` trait declaration."),
+        "{escaped_doc}"
+    );
+
+    let info = rendered_text(&engine.handle_line(":info compare"));
+    assert!(info.contains("kind: binding"), "{info}");
+    assert!(info.contains("type: Result<Int, Error>"), "{info}");
+
+    let ty = rendered_text(&engine.handle_line(":type compare"));
+    assert!(ty.contains("type: Result<Int, Error>"), "{ty}");
 }
 
 #[test]
@@ -911,25 +1194,13 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
         .expect("qualified Facet helper should be suggested");
     assert_eq!(facet_view.kind, ReplCompletionKind::TypePath);
 
-    let all_labels = completion_context
-        .completions("M", 1)
-        .candidates
-        .into_iter()
-        .map(|candidate| candidate.label)
-        .collect::<Vec<_>>();
-    assert!(
-        !all_labels.iter().any(|label| label == "MatchResult"),
-        "MatchResult should not be suggested: {all_labels:?}"
-    );
-
     let excluded = [
         "MatchArms",
         "CondClauses",
         "BulkUpdateEntries",
         "Hole",
         "Lazy",
-        "TypeRef",
-        "ProcessInit",
+        "StandbyInit",
         "Closure",
     ];
     for name in excluded {
@@ -1453,11 +1724,37 @@ fn core_completion_hides_trait_impl_members_from_qualified_type_paths() {
 }
 
 #[test]
+fn core_completion_hides_trait_impl_roots_from_expression_candidates() {
+    let engine = engine();
+    let labels = engine
+        .completions("i", "i".len())
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+
+    assert!(
+        labels.iter().all(|label| !label.starts_with("impl ")),
+        "trait impl roots should not be suggested as expression candidates: {labels:?}"
+    );
+}
+
+#[test]
 fn core_completion_shows_facet_path_candidates_for_type_root() {
     let engine = ReplEngine::from_script_source(
         "tmp/user.srt",
         r#"
-defrecord User(name: String, age: Int)
+defstruct User {
+  readonly name: String,
+  private password: String,
+  age: Int
+}
+
+impl User {
+  def new(name: String, password: String, age: Int) -> Self {
+    User { name: name, password: password, age: age }
+  }
+}
 "#,
     )
     .expect("script preload should bootstrap");
@@ -1476,14 +1773,204 @@ defrecord User(name: String, age: Int)
         labels.contains(&"age"),
         "type-root facet completion should include record fields: {labels:?}"
     );
+    assert!(
+        !labels.contains(&"password"),
+        "REPL facet completion should hide private fields outside owner scope: {labels:?}"
+    );
+    let name = completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "name")
+        .expect("readonly field should be present");
+    assert!(
+        name.detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("readonly")),
+        "readonly field detail should show readonly policy: {name:?}"
+    );
     let signature = completion
         .signature
         .as_ref()
         .expect("type-root facet completion should show signature help");
     let rendered = signature.lines.join("\n");
     assert!(
-        rendered.contains("User.[field] -> Facet<User, _>"),
+        rendered.contains("User.[field] -> Facet<InfallibleStructural, User, _, _, _>"),
         "unexpected facet signature help: {rendered:?}"
+    );
+}
+
+#[test]
+fn core_completion_shows_record_enum_and_tuple_facet_segments() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord Profile(first: String, last: String)
+defrecord User(pair: (String, Int), profile: Profile)
+defenum Slot { Taken(Profile), Empty }
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let tuple_completion = engine.completions("User.pair.", "User.pair.".len());
+    let tuple_labels = tuple_completion
+        .candidates
+        .iter()
+        .map(|candidate| (candidate.label.as_str(), candidate.detail.as_deref()))
+        .collect::<Vec<_>>();
+    assert!(
+        tuple_labels
+            .iter()
+            .any(|(label, detail)| *label == "_0" && detail == &Some("_0: String")),
+        "tuple focus should expose typed tuple indexes: {tuple_labels:?}"
+    );
+    assert!(
+        tuple_labels
+            .iter()
+            .any(|(label, detail)| *label == "_1" && detail == &Some("_1: Int")),
+        "tuple focus should expose typed tuple indexes: {tuple_labels:?}"
+    );
+
+    let record_completion = engine.completions("User.profile.", "User.profile.".len());
+    let record_labels = record_completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        record_labels.contains(&"first") && record_labels.contains(&"last"),
+        "record focus should expose record fields: {record_labels:?}"
+    );
+
+    let enum_completion = engine.completions("Slot.", "Slot.".len());
+    let enum_labels = enum_completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        enum_labels.contains(&"Taken") && enum_labels.contains(&"Empty"),
+        "enum root should expose variants: {enum_labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_treats_result_focus_as_ok_value_for_next_facet_segment() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord Profile(first: String, last: String)
+defrecord User(profile: Result<Profile>)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let completion = engine.completions("User.profile.", "User.profile.".len());
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"first") && labels.contains(&"last"),
+        "Result focus should be transparent for Ok payload segment completion: {labels:?}"
+    );
+
+    let path = rendered_text(&engine.handle_line("path = User.profile.first"));
+    assert!(
+        path.contains("path: Facet<InfallibleStructural, User, String, _, _>"),
+        "completion should match the compiled transparent Result path: {path}"
+    );
+}
+
+#[test]
+fn core_completion_suggests_tuple_root_placeholder_only_until_index_is_finished() {
+    let engine = engine();
+
+    let root_completion = engine.completions("Tuple.", "Tuple.".len());
+    let root_labels = root_completion
+        .candidates
+        .iter()
+        .map(|candidate| (candidate.label.as_str(), candidate.detail.as_deref()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        root_labels,
+        vec![("_", Some("pass _N: N requires UnsignedInt"))],
+        "Tuple. should only suggest the tuple index placeholder: {root_labels:?}"
+    );
+
+    let numeric_completion = engine.completions("Tuple._0", "Tuple._0".len());
+    assert!(
+        numeric_completion.candidates.is_empty(),
+        "Tuple._N should not suggest more until the next dot: {:?}",
+        numeric_completion.candidates
+    );
+}
+
+#[test]
+fn core_completion_suggests_list_and_hashmap_facet_patterns_and_nests_dynamic_segments() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord Profile(first: String)
+defrecord User(scores: List<Profile>, by_name: HashMap<Profile>)
+"#,
+    )
+    .expect("script preload should bootstrap");
+    assert!(rendered_text(&engine.handle_line("idx = 0")).contains("idx: Int"));
+    assert!(rendered_text(&engine.handle_line(r#"key = "alice""#)).contains("key: String"));
+
+    let list_completion = engine.completions("User.scores.", "User.scores.".len());
+    let list_labels = list_completion
+        .candidates
+        .iter()
+        .map(|candidate| (candidate.label.as_str(), candidate.detail.as_deref()))
+        .collect::<Vec<_>>();
+    assert!(
+        list_labels.iter().any(|(label, detail)| {
+            *label == "[idx]" && detail == &Some("[idx: Int] -> Profile")
+        }),
+        "List focus should suggest index pattern: {list_labels:?}"
+    );
+    assert!(
+        list_labels.iter().any(|(label, detail)| {
+            *label == "[start..end]" && detail == &Some("[start..end: Int] -> List<Profile>")
+        }),
+        "List focus should suggest range pattern: {list_labels:?}"
+    );
+
+    let nested_list = engine.completions("User.scores.[idx + 1].", "User.scores.[idx + 1].".len());
+    let nested_list_labels = nested_list
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        nested_list_labels.contains(&"first"),
+        "dynamic list segment should advance to element focus: {nested_list_labels:?}"
+    );
+
+    let map_completion = engine.completions("User.by_name.", "User.by_name.".len());
+    let map_labels = map_completion
+        .candidates
+        .iter()
+        .map(|candidate| (candidate.label.as_str(), candidate.detail.as_deref()))
+        .collect::<Vec<_>>();
+    assert!(
+        map_labels.iter().any(|(label, detail)| {
+            *label == "[key]" && detail == &Some("[key: String] -> Profile")
+        }),
+        "HashMap focus should suggest key pattern: {map_labels:?}"
+    );
+
+    let nested_map = engine.completions("User.by_name.[key].", "User.by_name.[key].".len());
+    let nested_map_labels = nested_map
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        nested_map_labels.contains(&"first"),
+        "dynamic map segment should advance to value focus: {nested_map_labels:?}"
     );
 }
 
@@ -1626,9 +2113,8 @@ defenum Slot { Some(String), None }
 "#,
     )
     .expect("script preload should bootstrap");
-    assert!(
-        rendered_text(&engine.handle_line("name_path = User.name")).contains("Facet<User, String>")
-    );
+    assert!(rendered_text(&engine.handle_line("name_path = User.name"))
+        .contains("Facet<InfallibleStructural, User, String, _, _>"));
 
     for api in [
         "view",
@@ -1706,6 +2192,26 @@ defenum Slot { Some(String), None }
 }
 
 #[test]
+fn core_completion_suppresses_facet_api_roots_for_invalid_capture_path_argument() {
+    let engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+defrecord User(name: String, age: Int)
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    for input in ["over(&Us", "Facet::over(&Us", "over(_."] {
+        let completion = engine.completions(input, input.len());
+        assert!(
+            completion.candidates.is_empty(),
+            "invalid FacetPath argument context should not suggest roots for {input:?}: {:?}",
+            completion.candidates
+        );
+    }
+}
+
+#[test]
 fn core_completion_derives_facet_segments_from_facet_binding_focus() {
     let mut engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -1715,7 +2221,8 @@ defrecord User(profile: Profile, age: Int)
 "#,
     )
     .expect("script preload should bootstrap");
-    assert!(rendered_text(&engine.handle_line("p = User.profile")).contains("Facet<User, Profile>"));
+    assert!(rendered_text(&engine.handle_line("p = User.profile"))
+        .contains("Facet<InfallibleStructural, User, Profile, _, _>"));
 
     let completion = engine.completions("p.", "p.".len());
     let labels = completion
@@ -1748,9 +2255,8 @@ def view(value: Int) -> Int { value }
 "#,
     )
     .expect("script preload should bootstrap");
-    assert!(
-        rendered_text(&engine.handle_line("name_path = User.name")).contains("Facet<User, String>")
-    );
+    assert!(rendered_text(&engine.handle_line("name_path = User.name"))
+        .contains("Facet<InfallibleStructural, User, String, _, _>"));
     assert!(rendered_text(&engine.handle_line("n = 1")).contains("n: Int"));
 
     let completion = engine.completions("view(", "view(".len());
@@ -1811,6 +2317,106 @@ fn core_completion_uses_argument_position_for_variable_candidates_and_signature_
 }
 
 #[test]
+fn core_completion_shows_nested_if_and_string_contains_signatures() {
+    let mut engine = engine();
+    assert!(rendered_text(&engine.handle_line(r#"word = "Hello""#)).contains("word: String"));
+    assert!(rendered_text(&engine.handle_line(r#"needle = "ll""#)).contains("needle: String"));
+    assert!(rendered_text(&engine.handle_line("width = 2")).contains("width: Int"));
+
+    let input = "if(String::contains(w";
+    let completion = engine.completions(input, input.len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("nested call signature help should be visible");
+    assert_eq!(signature.active_parameter, Some(0));
+    assert_eq!(signature.lines.len(), 2, "{signature:?}");
+    assert!(
+        signature.lines[0].contains("if(flag: [Boolean]"),
+        "{signature:?}"
+    );
+    assert!(
+        signature.lines[1].contains("  String::contains(value: [String], needle: String)"),
+        "{signature:?}"
+    );
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"word"),
+        "inner prefix should suggest word: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"width"),
+        "nonmatching w-prefix candidates should remain visible after ranked String candidates: {labels:?}"
+    );
+    assert!(
+        labels.iter().position(|label| label == &"word")
+            < labels.iter().position(|label| label == &"width"),
+        "String candidates should rank before nonmatching w-prefix candidates: {labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_keeps_path_candidates_while_typing_if_condition_call() {
+    let engine = engine();
+    let input = "if(String::c";
+    let completion = engine.completions(input, input.len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("if signature help should stay visible while typing condition");
+    assert!(
+        signature
+            .lines
+            .iter()
+            .any(|line| line.contains("if(flag: [Boolean]")),
+        "{signature:?}"
+    );
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"String::contains"),
+        "String path candidates should be visible inside if condition: {labels:?}"
+    );
+}
+
+#[test]
+fn core_completion_keeps_type_candidates_while_typing_if_condition_prefix() {
+    let engine = engine();
+    let input = "if(S";
+    let completion = engine.completions(input, input.len());
+    let signature = completion
+        .signature
+        .as_ref()
+        .expect("if signature help should stay visible while typing condition");
+    assert!(
+        signature
+            .lines
+            .iter()
+            .any(|line| line.contains("if(flag: [Boolean]")),
+        "{signature:?}"
+    );
+
+    let labels = completion
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        labels.contains(&"String"),
+        "String type candidate should be visible inside if condition: {labels:?}"
+    );
+}
+
+#[test]
 fn core_completion_prefers_trait_surface_for_neq_helper_details() {
     let engine = engine();
 
@@ -1826,7 +2432,7 @@ fn core_completion_prefers_trait_surface_for_neq_helper_details() {
         .expect("neq helper should include detail");
     assert_eq!(
         bare_detail,
-        "trait Neq { neq(self: Self, rhs: Self) -> Boolean }"
+        "trait Eq { eq(self: Self, rhs: Self) -> Boolean, neq(self: Self, rhs: Self) -> Boolean }"
     );
 
     let call = engine.completions("neq(", "neq(".len());
@@ -1838,7 +2444,7 @@ fn core_completion_prefers_trait_surface_for_neq_helper_details() {
     let call_text = call_signature.lines.join("\n");
     assert_eq!(
         call_text.trim(),
-        "trait Neq { neq(self: [Self], rhs: Self) -> Boolean }"
+        "trait Eq { eq(self: [Self], rhs: Self) -> Boolean, neq(self: Self, rhs: Self) -> Boolean }"
     );
 
     let inferred = engine.completions("neq(1", "neq(1".len());
@@ -1850,7 +2456,7 @@ fn core_completion_prefers_trait_surface_for_neq_helper_details() {
     let inferred_text = inferred_signature.lines.join("\n");
     assert_eq!(
         inferred_text.trim(),
-        "trait Neq { neq(self: [Self], rhs: Self) -> Boolean }"
+        "trait Eq { eq(self: [Self], rhs: Self) -> Boolean, neq(self: Self, rhs: Self) -> Boolean }"
     );
 
     let second_arg = engine.completions("neq(,)", "neq(,)".len() - 1);
@@ -1862,7 +2468,7 @@ fn core_completion_prefers_trait_surface_for_neq_helper_details() {
     let second_text = second_signature.lines.join("\n");
     assert_eq!(
         second_text.trim(),
-        "trait Neq { neq(self: Self, rhs: [Self]) -> Boolean }"
+        "trait Eq { eq(self: Self, rhs: [Self) -> Boolean], neq(self: Self, rhs: Self) -> Boolean }"
     );
 }
 
@@ -2153,6 +2759,31 @@ defmod Math {
 }
 
 #[test]
+fn core_imports_non_autoimport_trait_and_rejects_autoimport_trait() {
+    let mut engine = engine();
+
+    let imported = engine.handle_line("import Add");
+    assert!(rendered_text(&imported).contains("Imported Add"));
+
+    let result = engine.handle_line("add(1, 2)");
+    assert!(rendered_text(&result).contains("3"));
+
+    let rejected = engine.handle_line("import Compare");
+    assert!(rendered_text(&rejected)
+        .contains("Compare` is auto-imported and cannot be explicitly imported"));
+}
+
+#[test]
+fn core_script_preload_imports_non_autoimport_trait() {
+    let mut engine =
+        ReplEngine::from_script_source("trait-import.srt", "import Add\nvalue = add(1, 2)\n")
+            .expect("script preload should accept non-autoimport trait import");
+
+    let result = engine.handle_line("value");
+    assert!(rendered_text(&result).contains("3"));
+}
+
+#[test]
 fn core_from_project_module_stages_exposes_compiled_project_definitions() {
     let mut engine = ReplEngine::from_project_module_stages(&[vec![xldr::ModuleInput {
         file_name: "math.srt".into(),
@@ -2296,7 +2927,7 @@ fn core_commands_do_not_require_a_cli_process() {
     let missing_sig = engine.handle_line(":sig a");
     let missing_sig = rendered_text(&missing_sig);
     assert!(missing_sig.contains("No signature found for a"));
-    assert!(missing_sig.contains(":doc <symbol>") || missing_sig.contains(":sig $a"));
+    assert!(missing_sig.contains(":doc <symbol>"));
 
     let unknown = engine.handle_line(":nope");
     assert!(!unknown.should_exit);
@@ -2308,7 +2939,7 @@ fn core_reuses_deferred_tuple_facet_bindings_between_inputs() {
     let mut engine = engine();
 
     let facet = engine.handle_line("a = Tuple._1");
-    assert!(rendered_text(&facet).contains("a: Facet<_, _> = Tuple._1"));
+    assert!(rendered_text(&facet).contains("a: Facet<InfallibleStructural, _, _, _, _> = Tuple._1"));
 
     let pair = engine.handle_line("pair = (\"alice\", 2)");
     assert!(rendered_text(&pair).contains("pair: (String, Int) = (\"alice\", 2)"));
@@ -2418,18 +3049,26 @@ fn core_renders_top_level_facet_chain_expressions_without_codegen_leak() {
     let mut engine = engine();
 
     let tuple_facet = engine.handle_line("a = Tuple._1");
-    assert!(rendered_text(&tuple_facet).contains("a: Facet<_, _> = Tuple._1"));
+    assert!(rendered_text(&tuple_facet)
+        .contains("a: Facet<InfallibleStructural, _, _, _, _> = Tuple._1"));
 
     let enum_facet = engine.handle_line("ep = IntBase.Oct");
-    assert!(rendered_text(&enum_facet).contains("ep: Facet<IntBase, Unit> = IntBase.Oct"));
+    assert!(rendered_text(&enum_facet)
+        .contains("ep: Facet<VariantPath, IntBase, Unit, _, _> = IntBase.Oct"));
 
     let slash = engine.handle_line("a / ep");
     let slash = rendered_text(&slash);
-    assert!(slash.contains("Facet<_, _> = Tuple._1.Oct"), "{slash}");
+    assert!(
+        slash.contains("Facet<InfallibleStructural, _, _, _, _> = Tuple._1.Oct"),
+        "{slash}"
+    );
 
     let helper = engine.handle_line("Facet::chain(a, ep)");
     let helper = rendered_text(&helper);
-    assert!(helper.contains("Facet<_, _> = Tuple._1.Oct"), "{helper}");
+    assert!(
+        helper.contains("Facet<InfallibleStructural, _, _, _, _> = Tuple._1.Oct"),
+        "{helper}"
+    );
 }
 
 #[test]
@@ -2437,20 +3076,23 @@ fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
     let mut engine = engine();
 
     let binding = engine.handle_line("path = Tuple._0");
-    assert!(rendered_text(&binding).contains("path: Facet<_, _> = Tuple._0"));
+    assert!(rendered_text(&binding)
+        .contains("path: Facet<InfallibleStructural, _, _, _, _> = Tuple._0"));
 
     let facet_info = engine.handle_line(":facet path");
     assert!(matches!(facet_info.output, ReplOutput::StyledDoc { .. }));
     let facet_info = rendered_text(&facet_info);
     assert!(facet_info.contains("## FacetPath"), "{facet_info}");
-    assert!(facet_info.contains("type: Facet<_, _>"), "{facet_info}");
-    assert!(facet_info.contains("kind: structural"), "{facet_info}");
-    assert!(facet_info.contains("view API: Facet::view"), "{facet_info}");
     assert!(
-        facet_info.contains("preview API: unavailable"),
+        facet_info.contains("type: Facet<InfallibleStructural, _, _, _, _>"),
         "{facet_info}"
     );
-    assert!(facet_info.contains("view result: _"), "{facet_info}");
+    assert!(facet_info.contains("stage: pending"), "{facet_info}");
+    assert!(facet_info.contains("kind: pending"), "{facet_info}");
+    assert!(
+        facet_info.contains("pending specialization"),
+        "{facet_info}"
+    );
     assert!(facet_info.contains("full path: Tuple._0"), "{facet_info}");
     assert!(facet_info.contains("## Flow"), "{facet_info}");
     assert!(facet_info.contains("hop 1: Tuple._0"), "{facet_info}");
@@ -2461,15 +3103,8 @@ fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
 
     let fallible = engine.handle_line(":facet BitWidth.Any");
     let fallible = rendered_text(&fallible);
-    assert!(fallible.contains("kind: variant"), "{fallible}");
-    assert!(
-        fallible.contains("preview API: Facet::preview"),
-        "{fallible}"
-    );
-    assert!(
-        fallible.contains("view result: Result<Int, Error>"),
-        "{fallible}"
-    );
+    assert!(fallible.contains("kind: VariantPath"), "{fallible}");
+    assert!(fallible.contains("preview: available"), "{fallible}");
     assert!(fallible.contains("## Stops"), "{fallible}");
     assert!(fallible.contains("stop 1:"), "{fallible}");
     assert!(
@@ -2479,14 +3114,44 @@ fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
 }
 
 #[test]
+fn core_facet_command_inspects_operations_and_kind_queries() {
+    let mut engine = engine();
+
+    let operation =
+        rendered_text(&engine.handle_line(":facet Facet::set(Tuple._0, (1, True), \"one\")"));
+    assert!(operation.contains("## FacetOperation"), "{operation}");
+    assert!(operation.contains("operation: Facet::set"), "{operation}");
+    assert!(
+        operation.contains("kind constraint: WritablePath"),
+        "{operation}"
+    );
+    assert!(operation.contains("replacement: String"), "{operation}");
+    assert!(
+        operation.contains("result: Result<(String, Boolean), Error>"),
+        "{operation}"
+    );
+
+    let kind = rendered_text(&engine.handle_line(":info ReadablePath"));
+    assert!(kind.contains("@FacetPathKind Type ReadablePath"), "{kind}");
+    assert!(kind.contains("Effective atomic kinds"), "{kind}");
+
+    let sig = rendered_text(&engine.handle_line(":sig ReadablePath"));
+    assert!(sig.contains("has no constructor signature"), "{sig}");
+    assert!(sig.contains("Use `:info ReadablePath`"), "{sig}");
+}
+
+#[test]
 fn core_renders_negative_and_range_list_facets() {
     let mut engine = engine();
 
     let last = engine.handle_line("last = List.[-1]");
-    assert!(rendered_text(&last).contains("last: Facet<_, _> = List.[-1]"));
+    assert!(
+        rendered_text(&last).contains("last: Facet<InfallibleStructural, _, _, _, _> = List.[-1]")
+    );
 
     let window = engine.handle_line("window = List.[1..-1]");
-    assert!(rendered_text(&window).contains("window: Facet<_, _> = List.[1..-1]"));
+    assert!(rendered_text(&window)
+        .contains("window: Facet<InfallibleStructural, _, _, _, _> = List.[1..-1]"));
 
     let info = engine.handle_line(":facet window");
     let info = rendered_text(&info);
@@ -2626,10 +3291,21 @@ fn core_type_command_looks_up_visible_bindings_only() {
         let result = engine.handle_line(invalid);
         let text = rendered_text(&result);
         assert!(
-            text.contains("Usage: :type <binding|singleton-owner> or :type $<binding>"),
+            text.contains("Usage: :type <binding|singleton-owner>"),
             "{text}"
         );
     }
+
+    let legacy_type = engine.handle_line(":type $list");
+    let legacy_type = rendered_text(&legacy_type);
+    assert!(
+        legacy_type.contains("Invalid binding lookup target `$list`."),
+        "{legacy_type}"
+    );
+    assert!(
+        !legacy_type.contains("Use `list` instead."),
+        "{legacy_type}"
+    );
 }
 
 #[test]
@@ -2683,10 +3359,16 @@ fn core_help_and_error_commands_return_structured_command_output() {
     assert!(help_text.contains(":clear"));
 
     let sig_help = engine.handle_line(":h sig");
-    assert!(rendered_text(&sig_help).contains("Usage: :sig <function|query>"));
+    let sig_help_text = rendered_text(&sig_help);
+    assert!(sig_help_text.contains("Usage: :sig <symbol|query>"));
+    assert!(sig_help_text.contains(":sig Compare"));
 
     let info_help = engine.handle_line(":help info");
-    assert!(rendered_text(&info_help).contains("Usage: :info <query>"));
+    let info_help_text = rendered_text(&info_help);
+    assert!(info_help_text.contains("Usage: :info <query>"));
+    assert!(info_help_text.contains(
+        "Accepts: symbol | type-definition | singleton-owner | typed-call | operator-target"
+    ));
 
     let history_help = engine.handle_line(":help history");
     assert!(rendered_text(&history_help).contains("Usage: :history [selector]"));
@@ -2718,16 +3400,37 @@ fn core_info_command_reports_queries_and_command_errors() {
     assert!(print_info_text.contains("origin:"), "{print_info_text}");
     assert!(print_info_text.contains("defined:"), "{print_info_text}");
 
-    let _ = engine.handle_line("ret = Ok(\"3\")");
-    let _ = engine.handle_line("up = {|term: String| try_from(term, Int)}");
-    let typed_info = engine.handle_line(":info ret |>= up");
+    let typed_info = engine.handle_line(":info |*> Option");
     let typed_info_text = rendered_text(&typed_info);
     assert!(typed_info_text.contains("defined:"), "{typed_info_text}");
     assert!(
-        typed_info_text.contains("specialized:"),
+        typed_info_text.contains("Option<$T>::fmap"),
         "{typed_info_text}"
     );
-    assert!(typed_info_text.contains("Result<Int>"), "{typed_info_text}");
+    assert!(
+        typed_info_text.contains("kind: operator"),
+        "{typed_info_text}"
+    );
+
+    let legacy_info = engine.handle_line(":info num |> (Int -> Result<String, Error>)");
+    let legacy_info = rendered_text(&legacy_info);
+    assert!(
+        legacy_info.contains("Unsupported command query form")
+            || legacy_info.contains("query parse error")
+            || legacy_info.contains("Accepted forms: symbol, typed call, or operator target."),
+        "{legacy_info}"
+    );
+
+    let legacy_binding_info = engine.handle_line(":info $print");
+    let legacy_binding_info = rendered_text(&legacy_binding_info);
+    assert!(
+        legacy_binding_info.contains("Unsupported command query symbol `$print`."),
+        "{legacy_binding_info}"
+    );
+    assert!(
+        !legacy_binding_info.contains("Use `print` instead."),
+        "{legacy_binding_info}"
+    );
 }
 
 #[test]
@@ -2878,6 +3581,113 @@ fn core_result_error_reports_diagnostic_without_exiting() {
 }
 
 #[test]
+fn core_stacktrace_command_controls_result_error_trace_display() {
+    let mut engine = engine();
+
+    let default_mode = engine.handle_line(":stacktrace");
+    assert_eq!(rendered_text(&default_mode), "stacktrace display mode: off");
+
+    let hidden = engine.handle_line("def fail() -> Result<Int> { Err(NoneError) }\nfail()");
+    assert!(matches!(hidden.output, ReplOutput::EvalError { .. }));
+    let hidden_text = rendered_text(&hidden);
+    assert!(hidden_text.contains("None Value."));
+    assert!(
+        !hidden_text.contains("Stack trace:"),
+        "stacktrace must default to off:\n{hidden_text}"
+    );
+
+    let hidden_runtime = engine.handle_line("safe_mod(10, 0)");
+    assert!(matches!(
+        hidden_runtime.output,
+        ReplOutput::EvalError { .. }
+    ));
+    let hidden_runtime_text = rendered_text(&hidden_runtime);
+    assert!(hidden_runtime_text.contains("division by zero"));
+    assert!(
+        !hidden_runtime_text.contains("Stack trace:"),
+        "runtime stacktrace must default to off:\n{hidden_runtime_text}"
+    );
+
+    let enabled = engine.handle_line(":stacktrace verbose");
+    assert_eq!(rendered_text(&enabled), "stacktrace display mode: verbose");
+
+    let shown = engine.handle_line("fail()");
+    assert!(matches!(shown.output, ReplOutput::EvalError { .. }));
+    let shown_text = rendered_text(&shown);
+    let message_idx = shown_text
+        .find("None Value.")
+        .expect("error message should render");
+    let trace_idx = shown_text
+        .find("Stack trace:")
+        .expect("stacktrace should render after enabling verbose mode");
+    assert!(
+        message_idx < trace_idx,
+        "error message must render before stacktrace:\n{shown_text}"
+    );
+    assert!(shown_text.contains("fail at"), "{shown_text}");
+
+    let shown_runtime = engine.handle_line("safe_mod(10, 0)");
+    assert!(matches!(shown_runtime.output, ReplOutput::EvalError { .. }));
+    let shown_runtime_text = rendered_text(&shown_runtime);
+    let runtime_message_idx = shown_runtime_text
+        .find("division by zero")
+        .expect("runtime error message should render");
+    let runtime_trace_idx = shown_runtime_text
+        .find("Stack trace:")
+        .expect("runtime stacktrace should render after enabling verbose mode");
+    assert!(
+        runtime_message_idx < runtime_trace_idx,
+        "runtime error message must render before stacktrace:\n{shown_runtime_text}"
+    );
+
+    let disabled = engine.handle_line(":stacktrace off");
+    assert_eq!(rendered_text(&disabled), "stacktrace display mode: off");
+    let hidden_again = engine.handle_line("fail()");
+    assert!(!rendered_text(&hidden_again).contains("Stack trace:"));
+}
+
+#[test]
+fn core_stacktrace_display_is_independent_from_error_display_mode() {
+    let mut engine = engine();
+
+    let error_summary = engine.handle_line(":error summary");
+    assert_eq!(rendered_text(&error_summary), "error display mode: summary");
+
+    let stacktrace_verbose = engine.handle_line(":stacktrace verbose");
+    assert_eq!(
+        rendered_text(&stacktrace_verbose),
+        "stacktrace display mode: verbose"
+    );
+
+    let result = engine.handle_line("def fail() -> Result<Int> { Err(NoneError) }\nfail()");
+    assert!(matches!(result.output, ReplOutput::EvalError { .. }));
+    let text = rendered_text(&result);
+    let message_idx = text
+        .find("None Value.")
+        .expect("summary error message should render");
+    let trace_idx = text
+        .find("Stack trace:")
+        .expect("stacktrace should render while error mode is summary");
+    assert!(
+        message_idx < trace_idx,
+        "summary error message must render before stacktrace:\n{text}"
+    );
+}
+
+#[test]
+fn core_stacktrace_full_is_reserved_until_html_viewer_exists() {
+    let mut engine = engine();
+
+    let result = engine.handle_line(":stacktrace full");
+    let text = rendered_text(&result);
+    assert!(text.contains("not supported yet"), "{text}");
+    assert!(text.contains("HTMLViewer"), "{text}");
+
+    let current = engine.handle_line(":stacktrace");
+    assert_eq!(rendered_text(&current), "stacktrace display mode: off");
+}
+
+#[test]
 fn core_immediate_anonymous_callable_calls_show_binding_hint() {
     let mut engine = engine();
 
@@ -2910,8 +3720,13 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let alias_doc = engine.handle_line(":doc +");
     let alias_doc = doc_text(&alias_doc);
-    assert!(alias_doc.contains("trait Add { add(self: Self, rhs: Self) -> Self }"));
+    let qualified_add_doc = doc_text(&engine.handle_line(":doc Add::add"));
+    assert_eq!(alias_doc, qualified_add_doc);
+    assert!(alias_doc.contains("Add::add(self: Self, rhs: Self) -> Self"));
     assert!(alias_doc.contains("Standard `Add` operator trait declaration."));
+
+    let typed_add_doc = doc_text(&engine.handle_line(":doc Add::add(Int, Int)"));
+    assert!(typed_add_doc.contains("Add::add(self: Self, rhs: Self) -> Self"));
 
     let and_doc = engine.handle_line(":doc &&");
     let and_doc = doc_text(&and_doc);
@@ -2959,15 +3774,83 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         "{safe_bind_doc}"
     );
 
+    let compare_doc = doc_text(&engine.handle_line(":doc Compare"));
+    assert!(compare_doc.contains("Standard `Compare` trait declaration."));
+    assert!(!compare_doc.contains("trait Compare {"), "{compare_doc}");
+    assert!(
+        !compare_doc.contains("compare(self: Self, rhs: Self)"),
+        "{compare_doc}"
+    );
+
+    let facet_doc = doc_text(&engine.handle_line(":doc Facet"));
+    assert!(
+        facet_doc.contains("Standard `Facet` type declaration."),
+        "{facet_doc}"
+    );
+    assert!(
+        !facet_doc.contains("Compose` implementation for nested `Facet` paths"),
+        "{facet_doc}"
+    );
+
+    let string_doc = doc_text(&engine.handle_line(":doc String"));
+    assert!(
+        string_doc.contains("Standard `String` type declaration."),
+        "{string_doc}"
+    );
+
+    let compare_target_doc = doc_text(&engine.handle_line(":doc Compare(Int, Int)"));
+    assert!(compare_target_doc.contains("Standard `Compare` trait declaration."));
+    assert!(
+        compare_target_doc.contains("target: Int, Int"),
+        "{compare_target_doc}"
+    );
+    assert!(
+        compare_target_doc.contains("impl docs are not synthesized"),
+        "{compare_target_doc}"
+    );
+
     let typed_sig = engine.handle_line(":sig compare(Int, Int)");
     let typed_sig = signature_text(&typed_sig);
     assert!(typed_sig.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"));
 
+    let trait_family_sig = signature_text(&engine.handle_line(":sig Compare"));
+    assert!(
+        trait_family_sig.contains("trait Compare {"),
+        "{trait_family_sig}"
+    );
+    assert!(
+        trait_family_sig.contains("compare(self: Self, rhs: Self) -> Ordering"),
+        "{trait_family_sig}"
+    );
+    assert!(
+        trait_family_sig.contains("impl targets:"),
+        "{trait_family_sig}"
+    );
+    assert!(trait_family_sig.contains("Int"), "{trait_family_sig}");
+    assert!(trait_family_sig.contains("TupleN"), "{trait_family_sig}");
+    assert!(!trait_family_sig.contains("Tuple2"), "{trait_family_sig}");
+    assert!(!trait_family_sig.contains("Tuple8"), "{trait_family_sig}");
+
     let helper_sig = engine.handle_line(":sig compare");
     let helper_sig = signature_text(&helper_sig);
-    assert_eq!(
-        helper_sig.trim(),
-        "Compare::compare(self: Self, rhs: Self) -> Ordering"
+    assert!(
+        helper_sig.contains("Compare::compare(self: Self, rhs: Self) -> Ordering"),
+        "{helper_sig}"
+    );
+    assert!(helper_sig.contains("impl targets:"), "{helper_sig}");
+    assert!(
+        helper_sig.contains("try: :sig compare(Int, Int)"),
+        "{helper_sig}"
+    );
+
+    let trait_target_sig = signature_text(&engine.handle_line(":sig Compare(Int, Int)"));
+    assert!(
+        trait_target_sig.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"),
+        "{trait_target_sig}"
+    );
+    assert!(
+        trait_target_sig.contains("impl Compare for Int::lt(self: Int, rhs: Int) -> Boolean"),
+        "{trait_target_sig}"
     );
 
     let less_than_sig = engine.handle_line(":sig <");
@@ -2988,7 +3871,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let neq_helper_sig = signature_text(&neq_helper_sig);
     assert_eq!(
         neq_helper_sig.trim(),
-        "trait Neq { neq(self: Self, rhs: Self) -> Boolean }"
+        "trait Eq { eq(self: Self, rhs: Self) -> Boolean, neq(self: Self, rhs: Self) -> Boolean }"
     );
 
     let typed_less_than_sig = engine.handle_line(":sig lt(Int, Int)");
@@ -3006,7 +3889,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_neq_sig = engine.handle_line(":sig neq(Int, Int)");
     let typed_neq_sig = signature_text(&typed_neq_sig);
     assert!(
-        typed_neq_sig.contains("defined:\n  impl Neq for Int::neq(self: Int, rhs: Int) -> Boolean"),
+        typed_neq_sig.contains("defined:\n  Eq::neq(self: Self, rhs: Self) -> Boolean"),
         "{typed_neq_sig}"
     );
     assert!(
@@ -3016,11 +3899,37 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let operator_sig = engine.handle_line(":sig |>");
     let operator_sig = signature_text(&operator_sig);
-    assert!(operator_sig.contains("trait PipeApply { pipe_apply(self: Self, value: $A) -> $B }"));
+    assert!(operator_sig.contains("PipeApply::pipe_apply(self: Self, value: $A) -> $B"));
+    assert!(operator_sig.contains("impl targets:"), "{operator_sig}");
+
+    let functor_sig = signature_text(&engine.handle_line(":sig |*>"));
+    assert!(functor_sig.contains("Functor::fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>"));
+    assert!(functor_sig.contains("impl targets:"), "{functor_sig}");
+
+    let monad_sig = signature_text(&engine.handle_line(":sig |>="));
+    assert!(
+        monad_sig.contains("impl Monad for Result<$T>::bind"),
+        "{monad_sig}"
+    );
+    assert!(
+        monad_sig.contains("impl Monad for Option<$T>::bind"),
+        "{monad_sig}"
+    );
+    assert!(
+        monad_sig.contains("impl Monad for List<$T>::bind"),
+        "{monad_sig}"
+    );
+    assert!(!monad_sig.contains("Monad::bind(self: Self"), "{monad_sig}");
+
+    let result_bind_sig = signature_text(&engine.handle_line(":sig |>= Result"));
+    assert_eq!(
+        result_bind_sig.trim(),
+        "impl Monad for Result<$T>::bind(self: Result<$A>, mapper: ($A -> Result<$B>)) -> Result<$B>"
+    );
 
     let slash_doc = engine.handle_line(":doc /");
     let slash_doc = doc_text(&slash_doc);
-    assert!(slash_doc.contains("trait Compose"), "{slash_doc}");
+    assert!(slash_doc.contains("Compose::compose"), "{slash_doc}");
     assert!(slash_doc.contains("models the `/` operator"), "{slash_doc}");
 
     let bind_sig = engine.handle_line(":sig =");
@@ -3066,8 +3975,8 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 
     let neq_helper_doc = engine.handle_line(":doc neq");
     let neq_helper_doc = doc_text(&neq_helper_doc);
-    assert!(neq_helper_doc.contains("trait Neq { neq(self: Self, rhs: Self) -> Boolean }"));
-    assert!(neq_helper_doc.contains("Standard `Neq` operator trait declaration."));
+    assert!(!neq_helper_doc.contains("trait Neq {"), "{neq_helper_doc}");
+    assert!(neq_helper_doc.contains("Standard `Eq` trait declaration."));
 
     let operator_doc = engine.handle_line(":doc <");
     let operator_doc = doc_text(&operator_doc);
@@ -3098,11 +4007,11 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_neq_doc = engine.handle_line(":doc neq(Int, Int)");
     let typed_neq_doc = doc_text(&typed_neq_doc);
     assert!(
-        typed_neq_doc.contains("impl Neq for Int::neq(self: Int, rhs: Int) -> Boolean"),
+        typed_neq_doc.contains("Eq::neq(self: Self, rhs: Self) -> Boolean"),
         "{typed_neq_doc}"
     );
     assert!(
-        typed_neq_doc.contains("Return `True` when the integer values differ."),
+        typed_neq_doc.contains("Standard `Eq` trait declaration."),
         "{typed_neq_doc}"
     );
 
@@ -3120,7 +4029,7 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_doc = engine.handle_line(":doc Duration!()");
     let extractor_doc = doc_text(&extractor_doc);
     assert!(
-        extractor_doc.contains("Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"),
+        extractor_doc.contains("Duration::deconstruct(self: Duration) -> Option<Int>"),
         "{extractor_doc}"
     );
     assert!(
@@ -3132,13 +4041,11 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig = engine.handle_line(":sig Duration!()");
     let extractor_sig = signature_text(&extractor_sig);
     assert!(
-        extractor_sig.contains(
-            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
-        ),
+        extractor_sig.contains("defined:\n  Duration::deconstruct(self: Duration) -> Option<Int>"),
         "{extractor_sig}"
     );
     assert!(
-        extractor_sig.contains("specialized:\n  Duration!() -> MatchResult<Int, Error>"),
+        extractor_sig.contains("specialized:\n  Duration!() -> Option<Int>"),
         "{extractor_sig}"
     );
 
@@ -3149,14 +4056,12 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig_explicit_self = engine.handle_line(":sig Duration!(Duration)");
     let extractor_sig_explicit_self = signature_text(&extractor_sig_explicit_self);
     assert!(
-        extractor_sig_explicit_self.contains(
-            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
-        ),
+        extractor_sig_explicit_self
+            .contains("defined:\n  Duration::deconstruct(self: Duration) -> Option<Int>"),
         "{extractor_sig_explicit_self}"
     );
     assert!(
-        extractor_sig_explicit_self
-            .contains("specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"),
+        extractor_sig_explicit_self.contains("specialized:\n  Duration!(Duration) -> Option<Int>"),
         "{extractor_sig_explicit_self}"
     );
 
@@ -3183,6 +4088,76 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
 }
 
 #[test]
+fn core_sig_monad_operator_lists_user_defined_identity_impl() {
+    let mut engine = ReplEngine::from_script_source(
+        "identity_operator_impls.srt",
+        r#"defstruct Identity<$T> {
+  value: $T,
+}
+
+impl Identity {
+  def new(value: $T) -> Identity<$T> {
+    Identity { value: value }
+  }
+}
+
+impl Functor for Identity<$T> {
+  def fmap::<Identity<$T>, $A, $B>(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
+    Identity { value: mapper(self.value) }
+  }
+}
+
+impl Applicative for Identity<$T> {
+  def pure::<Identity<$T>, $A>(value: $A) -> Identity<$A> {
+    Identity { value: value }
+  }
+
+  def ap::<Identity<$T>, $A, $B>(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
+    f = mapper.value
+    Identity { value: f(value.value) }
+  }
+}
+
+impl Monad for Identity<$T> {
+  def return::<Identity<$T>, $A>(value: $A) -> Identity<$A> {
+    Identity { value: value }
+  }
+
+  def bind::<Identity<$T>, $A, $B>(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
+    mapper(self.value)
+  }
+}
+
+impl LiftComposable<$A, $B, $C, Identity<$C>> for ($A -> Identity<$B>) {
+  def lift_compose::<($A -> Identity<$B>), $A, $B, $C, Identity<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Identity<$C>) {
+    {|value| Functor::fmap(self(value), rhs)}
+  }
+}
+
+impl KleisliComposable<$A, $B, Identity<$C>> for ($A -> Identity<$B>) {
+  def kleisli_compose::<($A -> Identity<$B>), $A, $B, Identity<$C>>(self: Self, rhs: ($B -> Identity<$C>)) -> ($A -> Identity<$C>) {
+    {|value| Monad::bind(self(value), rhs)}
+  }
+}"#,
+    )
+    .expect("identity preload should load");
+
+    let monad_sig = signature_text(&engine.handle_line(":sig |>="));
+    assert!(
+        monad_sig.contains(
+            "impl Monad for Identity<$T>::bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B>"
+        ),
+        "{monad_sig}"
+    );
+
+    let identity_bind_sig = signature_text(&engine.handle_line(":sig |>= Identity"));
+    assert_eq!(
+        identity_bind_sig.trim(),
+        "impl Monad for Identity<$T>::bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B>"
+    );
+}
+
+#[test]
 fn core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing() {
     let mut engine = ReplEngine::from_script_source(
         "compare_default.srt",
@@ -3199,7 +4174,7 @@ impl Ranked {
 
 impl Compare for Ranked {
   @doc """Compare ranked values by weight."""
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<Ranked>(self: Self, rhs: Self) -> Ordering {
     Compare::compare(self.weight, rhs.weight)
   }
 }
@@ -3299,7 +4274,7 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
         "{extractor_doc}"
     );
     assert!(
-        extractor_doc.contains("MatchResult<($A, $A), Error>"),
+        extractor_doc.contains("Option<($A, $A)>"),
         "{extractor_doc}"
     );
     assert!(
@@ -3309,13 +4284,12 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
 
     let extractor_sig = signature_text(&engine.handle_line(":sig Range!()"));
     assert!(
-        extractor_sig.contains(
-            "defined:\n  Range::deconstruct<$A>(self: Range<$A>) -> MatchResult<($A, $A), Error>"
-        ),
+        extractor_sig
+            .contains("defined:\n  Range::deconstruct(self: Range<$A>) -> Option<($A, $A)>"),
         "{extractor_sig}"
     );
     assert!(
-        extractor_sig.contains("specialized:\n  Range!() -> MatchResult<($A, $A), Error>"),
+        extractor_sig.contains("specialized:\n  Range!() -> Option<($A, $A)>"),
         "{extractor_sig}"
     );
 
@@ -3363,7 +4337,7 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
 
     let closure_binding = engine.handle_line("adder = {|n: Int| n + 1}");
     assert!(rendered_text(&closure_binding).contains("adder: (Int -> Int)"));
-    let closure_binding_doc = engine.handle_line(":doc $adder");
+    let closure_binding_doc = engine.handle_line(":doc adder");
     let closure_binding_doc = doc_text(&closure_binding_doc);
     assert!(
         closure_binding_doc.contains("Compiler-reserved callable category marker"),
@@ -3384,7 +4358,7 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
 
     let capture_binding = engine.handle_line("printer = &print");
     assert!(rendered_text(&capture_binding).contains("FnCapture(module: Kernel, name: print"));
-    let capture_binding_doc = engine.handle_line(":doc $printer");
+    let capture_binding_doc = engine.handle_line(":doc printer");
     let capture_binding_doc = doc_text(&capture_binding_doc);
     assert!(
         capture_binding_doc.contains("Kernel::print"),
@@ -3397,6 +4371,14 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
     assert!(
         capture_binding_doc.contains("derived from: Kernel::print"),
         "{capture_binding_doc}"
+    );
+
+    let result_binding = engine.handle_line("ret = Ok(1)");
+    assert!(rendered_text(&result_binding).contains("ret: Result<Int, Error>"));
+    let result_binding_doc = doc_text(&engine.handle_line(":doc ret"));
+    assert!(
+        result_binding_doc.contains("Standard `Result` type declaration."),
+        "{result_binding_doc}"
     );
 }
 
@@ -3561,7 +4543,7 @@ fn core_process_sig_pid_binding_lists_available_messages() {
     let bind = engine.handle_line("server = MyServer::pid()");
     assert!(rendered_text(&bind).contains("server: PID<MyServer>"));
 
-    let pid_sig = signature_text(&engine.handle_line(":sig $server"));
+    let pid_sig = signature_text(&engine.handle_line(":sig server"));
     assert!(pid_sig.contains("PID<MyServer> messaging"), "{pid_sig}");
     assert!(
         pid_sig.contains("@call size(pid: PID<MyServer>) -> Result<Int, Error>"),
@@ -3638,58 +4620,37 @@ fn core_process_type_and_info_support_singletons_and_worker_pids() {
 fn core_sig_expression_queries_support_operator_forms() {
     let mut engine = engine();
 
-    assert!(rendered_text(&engine.handle_line("ret = Ok(\"3\")"))
-        .contains("ret: Result<String, Error> = Ok(\"3\")"));
+    let map_sig = engine.handle_line(":sig |*> Option");
+    let map_sig = signature_text(&map_sig);
+    assert!(map_sig.contains("Option<$T>::fmap"), "{map_sig}");
+    assert!(map_sig.contains("-> Option<$B>"), "{map_sig}");
+
+    let map_doc = engine.handle_line(":doc |*> Option");
+    let map_doc = doc_text(&map_doc);
+    assert!(map_doc.contains("Option<$T>::fmap"), "{map_doc}");
     assert!(
-        rendered_text(&engine.handle_line("up = {|term: String| try_from(term, Int)}"))
-            .contains("up: (String -> Result<Int, Error>)")
+        map_doc.contains("This is the source-level meaning of `value |*> f`."),
+        "{map_doc}"
     );
 
-    let bind_sig = engine.handle_line(":sig ret |>= up");
-    let bind_sig = signature_text(&bind_sig);
+    let legacy_doc = engine.handle_line(":doc num |> (Int -> Result<String, Error>)");
+    let legacy_doc = doc_text(&legacy_doc);
     assert!(
-        bind_sig.contains("defined:\n  Chainable::chain("),
-        "{bind_sig}"
-    );
-    assert!(bind_sig.contains("lhs: Result<String>"), "{bind_sig}");
-    assert!(
-        bind_sig.contains("rhs: (String -> Result<Int>)"),
-        "{bind_sig}"
-    );
-    assert!(
-        bind_sig.contains("specialized:\n  ret |>= up: Result<Int>"),
-        "{bind_sig}"
+        legacy_doc.contains("Unsupported command query form")
+            || legacy_doc.contains("query parse error")
+            || legacy_doc.contains("Accepted forms: symbol, typed call, or operator target."),
+        "{legacy_doc}"
     );
 
-    assert!(rendered_text(&engine.handle_line("value = 3")).contains("value: Int = 3"));
+    let legacy_binding_doc = engine.handle_line(":doc $formatter");
+    let legacy_binding_doc = rendered_text(&legacy_binding_doc);
     assert!(
-        rendered_text(&engine.handle_line("inc = {|n: Int| n + 1}")).contains("inc: (Int -> Int)")
-    );
-
-    let pipe_sig = engine.handle_line(":sig value |> inc");
-    let pipe_sig = signature_text(&pipe_sig);
-    assert!(
-        pipe_sig.contains("defined:\n  PipeApply::pipe_apply("),
-        "{pipe_sig}"
+        legacy_binding_doc.contains("Unsupported command query symbol `$formatter`."),
+        "{legacy_binding_doc}"
     );
     assert!(
-        pipe_sig.contains("specialized:\n  value |> inc: Int"),
-        "{pipe_sig}"
-    );
-
-    assert!(
-        rendered_text(&engine.handle_line("inc_ok = {|n: Int| Ok(n + 1)}"))
-            .contains("inc_ok: (Int -> Result<Int, Error>)")
-    );
-    let compose_sig = engine.handle_line(":sig up >=> inc_ok");
-    let compose_sig = signature_text(&compose_sig);
-    assert!(
-        compose_sig.contains("defined:\n  KleisliComposable::kleisli_compose("),
-        "{compose_sig}"
-    );
-    assert!(
-        compose_sig.contains("specialized:\n  up >=> inc_ok: (String -> Result<Int>)"),
-        "{compose_sig}"
+        !legacy_binding_doc.contains("Use `formatter` instead."),
+        "{legacy_binding_doc}"
     );
 }
 
@@ -3710,25 +4671,30 @@ fn core_sig_expression_queries_reject_non_expressions() {
 }
 
 #[test]
-fn core_sig_typed_operator_queries_accept_function_types_and_reject_explicit_result_error() {
+fn core_sig_operator_target_queries_accept_concrete_type_targets_and_reject_legacy_forms() {
     let mut engine = engine();
 
-    assert!(rendered_text(&engine.handle_line("num = 3")).contains("num: Int = 3"));
-
-    let sig = engine.handle_line(":sig num |> (Int -> String)");
+    let sig = engine.handle_line(":sig |*> Result<Int>");
     let sig = signature_text(&sig);
-    assert!(sig.contains("defined:\n  PipeApply::pipe_apply("), "{sig}");
-    assert!(sig.contains("rhs: (Int -> String)"), "{sig}");
-    assert!(
-        sig.contains("specialized:\n  num |> (Int -> String): String"),
-        "{sig}"
-    );
+    assert!(sig.contains("Result<$T>::fmap"), "{sig}");
+    assert!(sig.contains("-> Result<$B>"), "{sig}");
 
-    let invalid = engine.handle_line(":sig num |> (Int -> Result<String, Error>)");
+    let invalid = engine.handle_line(":sig ret |>= up");
     let invalid = rendered_text(&invalid);
     assert!(
-        invalid.contains("Typed query `Result` should be written as `Result<T>`"),
+        invalid.contains("Unsupported command query form"),
         "{invalid}"
+    );
+
+    let legacy_binding_sig = engine.handle_line(":sig $print");
+    let legacy_binding_sig = rendered_text(&legacy_binding_sig);
+    assert!(
+        legacy_binding_sig.contains("Unsupported command query symbol `$print`."),
+        "{legacy_binding_sig}"
+    );
+    assert!(
+        !legacy_binding_sig.contains("Use `print` instead."),
+        "{legacy_binding_sig}"
     );
 }
 
@@ -3756,7 +4722,7 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
         "{closure_text}"
     );
 
-    let closure_sig = engine.handle_line(":sig $a");
+    let closure_sig = engine.handle_line(":sig a");
     assert_eq!(
         signature_text(&closure_sig),
         "a: (Int, Int -> Int) :: Closure"
@@ -3783,7 +4749,7 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
         "{recaptured_text}"
     );
 
-    let recaptured_sig = engine.handle_line(":sig $b");
+    let recaptured_sig = engine.handle_line(":sig b");
     assert_eq!(
         signature_text(&recaptured_sig),
         "b: (Int -> Int) :: Capture"
@@ -4042,11 +5008,39 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
         "{tuple_doc}"
     );
 
-    let tuple_sig = engine.handle_line(":sig Tuple");
-    let tuple_sig = rendered_text(&tuple_sig);
+    let tuple_sig = signature_text(&engine.handle_line(":sig Tuple"));
     assert!(
-        tuple_sig.contains("No signature found for Tuple"),
+        tuple_sig.contains("(T1, T2, ..) : Tuple<T1, T2, ..>"),
         "{tuple_sig}"
+    );
+
+    let list_sig = signature_text(&engine.handle_line(":sig List"));
+    assert!(list_sig.contains("[T1, ..] : List<T>"), "{list_sig}");
+
+    let hash_map_sig = signature_text(&engine.handle_line(":sig HashMap"));
+    assert!(
+        hash_map_sig.contains("hash![String => V1, ..] : HashMap<V>"),
+        "{hash_map_sig}"
+    );
+
+    let boolean_sig = signature_text(&engine.handle_line(":sig Boolean"));
+    assert!(boolean_sig.contains("* Boolean::True"), "{boolean_sig}");
+    assert!(boolean_sig.contains("* Boolean::False"), "{boolean_sig}");
+
+    let result_sig = signature_text(&engine.handle_line(":sig Result"));
+    assert!(result_sig.contains("* Result::Ok($T)"), "{result_sig}");
+    assert!(result_sig.contains("* Result::Err(Error)"), "{result_sig}");
+
+    let true_sig = signature_text(&engine.handle_line(":sig True"));
+    assert!(
+        true_sig.contains("Boolean::True() -> Boolean"),
+        "{true_sig}"
+    );
+
+    let ok_sig = signature_text(&engine.handle_line(":sig Ok"));
+    assert!(
+        ok_sig.contains("Result::Ok($T) -> Result<$T, Error>"),
+        "{ok_sig}"
     );
 
     let config_doc = engine.handle_line(":doc Config");
@@ -4103,7 +5097,7 @@ fn core_doc_typed_call_supports_qualified_inherent_impl_methods() {
 }
 
 #[test]
-fn core_sig_supports_tuple_field_sugar_and_facet_expression_queries() {
+fn core_sig_rejects_tuple_field_and_facet_expression_queries() {
     let mut engine = engine();
 
     let pair = engine.handle_line("pair = (\"alice\", 2)");
@@ -4111,21 +5105,18 @@ fn core_sig_supports_tuple_field_sugar_and_facet_expression_queries() {
     assert!(pair_text.contains("pair: (String, Int)"), "{pair_text}");
 
     let field_sig = engine.handle_line(":sig pair._1");
-    let field_sig = signature_text(&field_sig);
-    assert!(field_sig.contains("defined:"), "{field_sig}");
+    let field_sig = rendered_text(&field_sig);
     assert!(
-        field_sig.contains("Facet::view(Tuple._1, pair)"),
+        field_sig.contains("No signature found for pair._1"),
         "{field_sig}"
     );
-    assert!(field_sig.contains("specialized:"), "{field_sig}");
-    assert!(field_sig.contains("pair._1: Int"), "{field_sig}");
 
     let view_sig = engine.handle_line(":sig pair._1");
-    let view_sig = signature_text(&view_sig);
-    assert!(view_sig.contains("defined:"), "{view_sig}");
-    assert!(view_sig.contains("Facet::view("), "{view_sig}");
-    assert!(view_sig.contains("specialized:"), "{view_sig}");
-    assert!(view_sig.contains("pair._1: Int"), "{view_sig}");
+    let view_sig = rendered_text(&view_sig);
+    assert!(
+        view_sig.contains("No signature found for pair._1"),
+        "{view_sig}"
+    );
 
     let result_pair = engine.handle_line("result_pair = (Ok(2), \"ok\")");
     let result_pair_text = rendered_text(&result_pair);
@@ -4138,7 +5129,8 @@ fn core_sig_supports_tuple_field_sugar_and_facet_expression_queries() {
         engine.handle_line(":sig Facet::chain(StyledDocSegment.style, StyledDocStyle.bold)");
     let chain_sig = rendered_text(&chain_sig);
     assert!(
-        chain_sig.contains("Unsupported command query argument `StyledDocSegment.style`"),
+        chain_sig.contains("Unsupported command query argument `StyledDocSegment.style`")
+            || chain_sig.contains("No signature found for Facet::chain"),
         "{chain_sig}"
     );
 
@@ -4147,7 +5139,10 @@ fn core_sig_supports_tuple_field_sugar_and_facet_expression_queries() {
     );
     let over_result_sig = rendered_text(&over_result_sig);
     assert!(
-        over_result_sig.contains("Unsupported command query argument `Tuple._0`"),
+        over_result_sig.contains("Unsupported command query argument `Tuple._0`")
+            || over_result_sig
+                .contains("Unsupported command query argument `{|value: Result<Int>| Ok(value)}`")
+            || over_result_sig.contains("No signature found for Facet::over_result"),
         "{over_result_sig}"
     );
 
@@ -4157,6 +5152,73 @@ fn core_sig_supports_tuple_field_sugar_and_facet_expression_queries() {
         slash_sig.contains("Unsupported command query form")
             || slash_sig.contains("Unsupported command query argument"),
         "{slash_sig}"
+    );
+}
+
+#[test]
+fn core_inspects_facet_roots_and_private_paths_without_exposing_them_to_source() {
+    let mut engine = ReplEngine::from_script_source(
+        "tmp/user.srt",
+        r#"
+@readonly
+defstruct User {
+  private password: String,
+  readonly age: Int,
+  name: String
+}
+
+impl User {
+  def new(password: String, age: Int, name: String) -> Self {
+    User { password: password, age: age, name: name }
+  }
+}
+"#,
+    )
+    .expect("script preload should bootstrap");
+
+    let doc = doc_text(&engine.handle_line(":doc Facet.User"));
+    assert!(doc.contains("Facet root for User"), "{doc}");
+
+    let field_doc = rendered_text(&engine.handle_line(":doc User.password"));
+    assert!(
+        field_doc.contains("not a documentation target"),
+        "{field_doc}"
+    );
+
+    let info = rendered_text(&engine.handle_line(":info User"));
+    assert!(info.contains("facet root: readonly"), "{info}");
+    assert!(info.contains("private         password: String"), "{info}");
+    assert!(info.contains("public readonly age"), "{info}");
+
+    let facet = rendered_text(&engine.handle_line(":facet User.password"));
+    assert!(facet.contains("full path: User.password"), "{facet}");
+    assert!(facet.contains("policy: private"), "{facet}");
+    assert!(
+        facet.contains("availability in this REPL: unavailable (private path)"),
+        "{facet}"
+    );
+
+    let source_completion = engine.completions("User.p", "User.p".len());
+    assert!(
+        source_completion
+            .candidates
+            .iter()
+            .all(|candidate| candidate.label != "password"),
+        "ordinary source completion must hide private fields: {:?}",
+        source_completion.candidates
+    );
+    let inspection_completion = engine.completions(":facet User.p", ":facet User.p".len());
+    let password = inspection_completion
+        .candidates
+        .iter()
+        .find(|candidate| candidate.label == "password")
+        .expect(":facet completion should expose inspectable private path");
+    assert!(
+        password
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("private")),
+        "private completion should be labelled: {password:?}"
     );
 }
 

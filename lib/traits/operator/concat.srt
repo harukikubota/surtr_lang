@@ -12,5 +12,5 @@ xldr(1)> concat("a", "b")
 @autoimport
 deftrait Concat {
   # Combine two values using the module-specific concatenation rule.
-  def concat(self: Self, rhs: Self) -> Self
+  def concat::<Self>(self: Self, rhs: Self) -> Self
 }

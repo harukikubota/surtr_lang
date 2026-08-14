@@ -49,7 +49,7 @@ test("Facet") {
 
     it("stores plain values into Result-backed fields") {
       fixture = demo_fixture()
-      updated =? Facet::set(Tuple._0 / Tuple._1, fixture, "captain")
+      updated =? Facet::set(Tuple._0 / Tuple._1, fixture, Ok("captain"))
       assert_eq("Ok(Ok(\"captain\"))", inspect(updated._0._1))
     }
 
@@ -135,20 +135,12 @@ test("Facet") {
       assert_eq("Option::Some(\"alice\")", inspect(some))
     }
 
-    it("case_set optional skips mismatched cases") {
-      none: Option<String> = Option::None
-      skipped =? Facet::case_set(Option.Some?, none, "alice")
-      assert_eq("Option::None", inspect(skipped))
-    }
-
     it("case_over preserves mismatch policy for plain and result focus") {
       some: Option<Result<String>> = Option::Some(Ok("alice"))
-      none: Option<Result<String>> = Option::None
       changed =? Facet::case_over(Option.Some, some, {|name| Ok(name ++ "!")})
       rewritten =? Facet::case_over(Option.Some, changed, {|value: Result<String>| Ok(value)})
-      skipped =? Facet::case_over(Option.Some?, none, {|name| Ok(name ++ "!")})
       assert_eq("Option::Some(Ok(\"alice!\"))", inspect(rewritten))
-      assert_eq("Option::None", inspect(skipped))
+      none: Option<Result<String>> = Option::None
       assert_err_contains("VariantMismatch", Facet::case_over(Option.Some, none, {|name| Ok(name ++ "!")}))
     }
   }

@@ -17,8 +17,8 @@
 - `Facet::chain(outer, inner)`
 
 `T?` は `Option<T>` に下がります。
-optional field は `Option.Some` / `Option.Some?` を通じて
-`Facet::case_set` / `Facet::case_over` で短く扱えます。
+optional enum selector は廃止され、`Option.Some` のような required selector を
+`Facet::case_set` / `Facet::case_over` で使います。selector mismatch は常に `Err` です。
 `Result` を返す helper と直接つなぎたい field では、
 `Result<T, NoneError>` を明示的に使います。
 
@@ -34,7 +34,7 @@ tuple path は REPL でそのまま試しやすいです。
 `Tuple._N` は `Facet` 文脈の中だけでなく、同一スコープの一時 binding としても
 保持できます。binding は deferred path として扱われ、あとから
 `Facet::view/set/over/over_result` や `/` に渡した時点で concrete な
-`Facet<S, A>` に specialize されます。
+`Facet<K, S, A, T, B>` に specialize されます。deferred binding の `T/B` は `_, _` のままです。
 
 ### get
 
@@ -64,7 +64,7 @@ xldr(4)>
 xldr(1)> pair = ("alice", 42)
 > pair: (String, Int) = ("alice", 42)
 xldr(2)> second = Tuple._1
-> second: Facet<_, _> = Tuple._1
+> second: Facet<InfallibleStructural, _, _, _, _> = Tuple._1
 xldr(3)> print(Facet::view(second, pair))
 42
 xldr(4)>
@@ -126,7 +126,7 @@ users |*> &User.name
 ## `&Type.path` explicit capture
 
 `&User.name` は type-root の FacetPath を unary capture として使う明示形です。
-`User.name` 自体は `Facet<User, String>` の path ですが、`&User.name` は
+`User.name` 自体は `Facet<InfallibleStructural, User, String, _, _>` の path ですが、`&User.name` は
 `(User -> String)` が期待される場所で使う callable になります。
 
 ```surtr
@@ -155,12 +155,11 @@ name_facet = User.name
 
 `Result` field に対しては次も使えます。
 
-- `Facet::set(User.nickname, user, "bob")`
 - `Facet::over(User.nickname, user, normalize)`
 - `Facet::over_result(User.nickname, user, rewrite_result)`
 
-`nickname: Result<String, NoneError>` のような field なら、
-`Facet::set(...)` の plain `"bob"` は `Ok("bob")` として格納されます。
+`nickname: Result<String, NoneError>` のような field を `Facet::set` で置換する場合は
+`Ok("bob")` のような Result 値を渡します。plain payload の暗黙 `Ok` wrap はありません。
 
 ## container path
 
@@ -330,11 +329,11 @@ chain した path は REPL や inspect 表示で canonical path に圧縮され�
 
 ```text
 xldr(1)> outer = User.profile
-> outer: Facet<_, _> = User.profile
+> outer: Facet<InfallibleStructural, _, _, _, _> = User.profile
 xldr(2)> inner = Profile.name
-> inner: Facet<_, _> = Profile.name
+> inner: Facet<InfallibleStructural, _, _, _, _> = Profile.name
 xldr(3)> path = outer / inner
-> path: Facet<_, _> = User.profile.name
+> path: Facet<InfallibleStructural, _, _, _, _> = User.profile.name
 xldr(4)>
 ```
 
@@ -351,7 +350,7 @@ xldr(4)>
 `:type` / `:info` / `:facet` を役割分担して使うのが自然です。
 
 - `:type path`
-  - `Facet<S, A>` または未解決なら `Facet<_, _>` を見る
+  - `Facet<K, S, A, T, B>` または未解決なら `Facet<_, _, _, _, _>` を見る
 - `:info path`
   - type と canonical `full path` を軽く確認する
 - `:facet path`
@@ -361,7 +360,7 @@ xldr(4)>
 
 ```text
 xldr(1)> :facet Expr.Add.value
-type: Facet<Expr, Int>
+type: Facet<VariantPath, Expr, Int, _, _>
 full path: Expr.Add.value
 segments:
 1. Expr.Add
@@ -384,7 +383,7 @@ may stop at:
 
 ```text
 xldr(1)> :facet $result_user_name
-type: Facet<Result<User>, String>
+type: Facet<InfallibleStructural, User, String, _, _>
 full path: User.profile.name
 may stop at:
 1. source - input already starts in Result context
@@ -394,7 +393,7 @@ dynamic container path の任意式は command query surface では扱いませ�
 
 ```text
 xldr(1)> :facet $next_score
-type: Facet<User, Int>
+type: Facet<InfallibleStructural, User, Int, _, _>
 full path: User.scores.[index + 1]
 ```
 
@@ -402,7 +401,7 @@ full path: User.scores.[index + 1]
 
 `Facet::set` と `Facet::over` は `Result<A>` focus に対して少し ergonomic です。
 
-- `set` は plain `A` も受け取り、`Ok(A)` を格納する
+- `set` は Result property 全体を置換し、plain `A` を `Ok(A)` へ暗黙 wrap しない
 - `over` は `A -> Result<A>` updater を受け取り、`Ok(value)` の payload だけ更新する
 - `over_result` は `Result<A> -> Result<Result<A>>` updater を受け取り、`Ok(...)` / `Err(...)` をまとめて更新する
 
@@ -417,7 +416,7 @@ normalized =? Facet::over(User.nickname, user, {|name|
 ```
 
 `String?` / `Option<String>` field で同じことをしたい場合は、
-`Facet::case_over(User.nickname.Some?, user, {|name| Ok(String::trim(name))})`
+`Facet::case_over(User.nickname.Some, user, {|name| Ok(String::trim(name))})`
 のように enum case payload を更新します。
 
 ## 制約
@@ -460,7 +459,7 @@ facet = User.password
 - `var_name.lenspath` は read sugar であって、field access 一般の許可とは同義ではありません。private field は見える範囲でしか path にできず、`value.private_field` も同じ境界で拒否されます。
 - `Tuple._0` のような tuple root は、同一スコープの local binding として保持できます。`Facet::view(...)` や `/` で同じスコープ内に消費してください。
 - chain した path は canonical 表示へ圧縮されるので、`User.profile / Profile.name` を inspect すると `User.profile.name` に見えます。`/` の組み立て履歴そのものは残りません。
-- variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <FacetPath|$binding>` で確認するのが一番わかりやすいです。
+- variant path や `Result<T>` source を含むと、どこで `Result` 化しうるかは `:facet <FacetPath|binding>` で確認するのが一番わかりやすいです。
 - スコープをまたぐときは `Facet` ではなく、`Facet::view(...)` 済みの値を渡します。
 - `Result` を返す updater とつなぐ field には、`Option<T>` より `T?` の方が更新パイプが短くなります。
 - `List.[expr]` / `List.[start..end]` / `HashMap.[expr]` は普通の path では runtime 式を許可しますが、`const Facet<...>` では literal だけに絞られます。

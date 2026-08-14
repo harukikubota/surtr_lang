@@ -47,12 +47,14 @@ pipeline = trim() >> render() # NG
 ## apply 系での call 式
 
 `|>`, `|*>`, `|>=` の右辺では、call 式に左辺値が第 1 引数として注入されます。
+`|*|` は call 式への注入ではなく、文脈内 callable と文脈内 value の適用です。
 
 ```surtr
 value |> add(1)               # => add(value, 1)
 user |> User::get_name()      # => User::get_name(user)
 Ok("42") |*> String::trim()   # => Ok(String::trim("42"))
 Ok(11) |>= require_at_least(10)
+Ok(&inc) |*| Ok(1)
 ```
 
 複数引数でも同じです。
@@ -228,36 +230,17 @@ plus = {|x| x + 1}
 
 ## trailing block
 
-call 式の最終引数がゼロ引数 closure なら、末尾へ外出しして書けます。
+call 式の最終引数がclosure なら、末尾へ外出しして書けます。
 
 ```surtr
 Test::it("increments") {
   print("ok")
 }
+
+List::map([1, 1, 2, 3]) {|num| num + 1 }
 ```
 
 これは通常の call の sugar です。constructor call には使いません。
-
-## よくある迷いどころ
-
-```surtr
-value |> normalize           # NG
-value |> &normalize          # OK
-value |> normalize(10)       # OK
-
-pipeline = parse >=> check   # NG
-pipeline = &parse >=> &check # OK
-
-1 `+` 2                      # OK
-True `Boolean::eqv` False    # OK
-f = `+`                      # NG
-```
-
-見分け方は単純です。
-
-- すぐ実行したいなら call
-- あとで渡したいなら capture / closure
-- 二項 call を中置で読みたければ FuncLiteral
 
 ## 関連ページ
 

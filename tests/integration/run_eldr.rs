@@ -601,6 +601,255 @@ main()
 }
 
 #[test]
+fn run_error_context_verbose_adds_stack_trace_for_err_result() {
+    let temp = unique_temp_dir("surtr_error_context_verbose_err_trace");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def inner() -> Result<Int> {
+  Err(NoneError)
+}
+
+def outer() -> Result<Int> {
+  inner()
+}
+
+outer()
+"#,
+    );
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--error-context",
+            "verbose",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail for Err result\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Stack trace:"), "{stderr}");
+    assert!(stderr.contains("inner"), "{stderr}");
+    assert!(
+        stderr.contains("sample.srt:6:"),
+        "expected stack trace to target inner() call inside outer:\n{stderr}"
+    );
+    assert!(stderr.contains("tail-call"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_error_context_verbose_preserves_inner_trace_through_safebind() {
+    let temp = unique_temp_dir("surtr_error_context_safebind_trace");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def inner() -> Result<Int> {
+  Err(NoneError)
+}
+
+def outer() -> Result<Int> {
+  value =? inner()
+  Ok(value)
+}
+
+def top() -> Result<Int> {
+  value =? outer()
+  Ok(value)
+}
+
+top()
+"#,
+    );
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--error-context",
+            "verbose",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail for Err result\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Stack trace:"), "{stderr}");
+    assert!(
+        stderr.contains("inner at") && stderr.contains("sample.srt:6:"),
+        "expected original inner() call site inside outer to be preserved:\n{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_error_context_verbose_adds_stack_trace_for_builtin_err() {
+    let temp = unique_temp_dir("surtr_error_context_builtin_trace");
+    let source_path = temp.join("sample.srt");
+    write_source(&source_path, "safe_div(1, 0)\n");
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--error-context",
+            "verbose",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail for Err result\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Stack trace:"), "{stderr}");
+    assert!(stderr.contains("safe_div at"), "{stderr}");
+    assert!(stderr.contains("sample.srt:1:1"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_error_context_verbose_does_not_reuse_completed_tail_call_trace() {
+    let temp = unique_temp_dir("surtr_error_context_no_stale_tco_trace");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def spin(n: Int) -> Result<Int> {
+  if(n == 0, Ok(0), spin(n - 1))
+}
+
+def fail_later() -> Result<Int> {
+  Err(NoneError)
+}
+
+spin(3)
+fail_later()
+"#,
+    );
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--error-context",
+            "verbose",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail for Err result\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Stack trace:"), "{stderr}");
+    assert!(stderr.contains("fail_later at"), "{stderr}");
+    assert!(
+        !stderr.contains("spin at"),
+        "completed tail-recursive call must not leak into later error trace:\n{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_error_context_verbose_adds_stack_trace_for_closure_function_err() {
+    let temp = unique_temp_dir("surtr_error_context_closure_trace");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def inner() -> Result<Int> {
+  Err(NoneError)
+}
+
+def apply(f: (-> Result<Int>)) -> Result<Int> {
+  f()
+}
+
+apply(&inner)
+"#,
+    );
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--error-context",
+            "verbose",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail for Err result\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Stack trace:"), "{stderr}");
+    assert!(stderr.contains("inner at"), "{stderr}");
+    assert!(stderr.contains("sample.srt:6:"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_default_error_context_omits_stack_trace_for_err_result() {
+    let temp = unique_temp_dir("surtr_error_context_default_no_trace");
+    let source_path = temp.join("sample.srt");
+    write_source(
+        &source_path,
+        r#"def inner() -> Result<Int> {
+  Err(NoneError)
+}
+
+inner()
+"#,
+    );
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(
+        !output.status.success(),
+        "run source should fail for Err result\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("NoneError"), "{stderr}");
+    assert!(!stderr.contains("Stack trace:"), "{stderr}");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn run_trace_opcode_filter_writes_matching_trace_to_stderr() {
     let temp = unique_temp_dir("surtr_trace_opcode_filter");
     let source_path = temp.join("sample.srt");
@@ -748,7 +997,19 @@ fn run_vm_dump_writes_json_for_err_result_in_error_mode() {
     let temp = unique_temp_dir("surtr_vm_dump_err_result");
     let source_path = temp.join("sample.srt");
     let dump_path = temp.join("vm-dump.json");
-    write_source(&source_path, "safe_div(1, 0)\n");
+    write_source(
+        &source_path,
+        r#"def inner() -> Result<Int> {
+  Err(NoneError)
+}
+
+def outer() -> Result<Int> {
+  inner()
+}
+
+outer()
+"#,
+    );
 
     let output = surtr_command()
         .args([
@@ -775,9 +1036,21 @@ fn run_vm_dump_writes_json_for_err_result_in_error_mode() {
     assert_eq!(dump["result"]["exit_code"], 0);
     assert_eq!(
         dump["result"]["last_value"],
-        "Err(ZeroDivisionError(\"division by zero\"))"
+        "Err(NoneError(\"None Value.\"))"
     );
     assert!(dump["result"]["runtime_error"].is_null());
+    let stack_trace = dump["result"]["error"]
+        .get("stack_trace")
+        .and_then(Value::as_array)
+        .expect("result error should include stack trace array");
+    assert!(
+        stack_trace.iter().any(|frame| frame["function"] == "inner"
+            && frame["location"]["file"]
+                .as_str()
+                .is_some_and(|file| file.ends_with("sample.srt"))
+            && frame["location"]["line"] == 6),
+        "expected dump stack trace to include inner call site, got {stack_trace:?}"
+    );
 
     let _ = fs::remove_dir_all(temp);
 }

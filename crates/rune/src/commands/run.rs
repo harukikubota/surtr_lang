@@ -5,6 +5,7 @@ use std::time::Instant;
 
 use eldr::value::Value;
 use serde_json::{json, Value as JsonValue};
+use sindr::runtime::{RichError, RuntimeStackFrame};
 
 use crate::compile::{
     collect_default_script_compile_sources, compile_source, prepare_script_compile_plan,
@@ -727,6 +728,7 @@ fn emit_verbose_runtime_context(vm: &eldr::VM, error: &eldr::RuntimeError) {
             eprintln!("    {detail}");
         }
     }
+    emit_stack_trace(&error.context.stack_trace);
 }
 
 fn emit_verbose_vm_context(vm: &eldr::VM) {
@@ -750,6 +752,33 @@ fn emit_verbose_vm_context(vm: &eldr::VM) {
     );
     eprintln!("  stack_depth: {}", vm.stack_depth());
     eprintln!("  frame_depth: {}", vm.frame_depth());
+    if let Some(error) = final_rich_error(vm) {
+        emit_stack_trace(&error.stack_trace);
+    }
+}
+
+fn emit_stack_trace(stack_trace: &[RuntimeStackFrame]) {
+    if stack_trace.is_empty() {
+        return;
+    }
+    eprintln!("Stack trace:");
+    for (idx, frame) in stack_trace.iter().take(32).enumerate() {
+        eprintln!("  {}: {}", idx, eldr::format_stack_frame(frame));
+    }
+    if stack_trace.len() > 32 {
+        eprintln!("  ... {} frame(s) omitted", stack_trace.len() - 32);
+    }
+}
+
+fn final_rich_error(vm: &eldr::VM) -> Option<&RichError> {
+    match vm.last_value()? {
+        Value::Error(rich) => Some(rich),
+        Value::Tagged { tag: 1, fields } => match fields.as_slice() {
+            [Value::Error(rich)] => Some(rich),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 fn function_name_for_pc(bytecode: &forge::bytecode::Bytecode, pc: usize) -> Option<String> {
@@ -894,7 +923,19 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
                 "span": [location.span_start, location.span_end]
             })),
             "details": error.context.details,
+            "stack_trace": stack_trace_json(&error.context.stack_trace),
         })),
+        _ => None,
+    };
+    let result_error = match outcome {
+        RuntimeOutcome::ResultErr => final_rich_error(vm).map(|error| {
+            json!({
+                "kind": error.kind,
+                "message": error.visible_message(),
+                "location": location_json(Some(error.primary_location())),
+                "stack_trace": stack_trace_json(&error.stack_trace),
+            })
+        }),
         _ => None,
     };
     let observation = vm.observation().unwrap_or_default();
@@ -907,6 +948,7 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
             "exit_code": vm.exit_code(),
             "last_value": vm.last_value().map(|value| eldr::builtin::inspect_value(vm, value)),
             "runtime_error": runtime_error,
+            "error": result_error,
         },
         "vm": {
             "pc": pc,
@@ -985,7 +1027,7 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
                 "status": process.status,
                 "mailbox_len": process.mailbox_len,
                 "owner": process.owner,
-                "lazy_state_pending": process.lazy_state_pending,
+                "standby_state_pending": process.standby_state_pending,
                 "state_value": process.state_value,
                 "execution_context": process.execution_context.as_ref().map(|context| json!({
                     "pc": context.pc,
@@ -1028,6 +1070,63 @@ fn build_vm_dump_json(vm: &eldr::VM, outcome: &RuntimeOutcome<'_>) -> JsonValue 
     });
     surface_strip_global_prefixes(&mut dump);
     dump
+}
+
+fn stack_trace_json(stack_trace: &[RuntimeStackFrame]) -> JsonValue {
+    JsonValue::Array(
+        stack_trace
+            .iter()
+            .map(|frame| {
+                json!({
+                    "phase": runtime_phase_label(&frame.phase),
+                    "function": frame.function,
+                    "fun_idx": frame.fun_idx,
+                    "call_kind": runtime_call_kind_label(&frame.call_kind),
+                    "location": location_json(frame.location.as_ref()),
+                    "process": frame.process.as_ref().map(|process| json!({
+                        "pid": process.pid,
+                        "process_name": process.process_name,
+                        "trigger": process.trigger,
+                    })),
+                    "tco": frame.tco,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn location_json(location: Option<&sindr::runtime::Location>) -> JsonValue {
+    location
+        .map(|location| {
+            json!({
+                "file": location.file,
+                "func": location.func,
+                "line": location.line,
+                "column": location.column,
+                "span": [location.span_start, location.span_end],
+            })
+        })
+        .unwrap_or(JsonValue::Null)
+}
+
+fn runtime_phase_label(phase: &sindr::runtime::RuntimeExecutionPhase) -> &'static str {
+    match phase {
+        sindr::runtime::RuntimeExecutionPhase::VmInit => "vm_init",
+        sindr::runtime::RuntimeExecutionPhase::Runtime => "runtime",
+    }
+}
+
+fn runtime_call_kind_label(kind: &sindr::runtime::RuntimeCallKind) -> &'static str {
+    match kind {
+        sindr::runtime::RuntimeCallKind::DirectFunction => "direct_function",
+        sindr::runtime::RuntimeCallKind::ClosureFunction => "closure_function",
+        sindr::runtime::RuntimeCallKind::Builtin => "builtin",
+        sindr::runtime::RuntimeCallKind::CallableTemplate => "callable_template",
+        sindr::runtime::RuntimeCallKind::ProcessMessage => "process_message",
+        sindr::runtime::RuntimeCallKind::Task => "task",
+        sindr::runtime::RuntimeCallKind::StandbyInit => "standby_init",
+        sindr::runtime::RuntimeCallKind::EagerInit => "eager_init",
+    }
 }
 
 fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {

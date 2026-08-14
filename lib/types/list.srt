@@ -306,10 +306,36 @@ impl List {
   xldr(1)> List::reduce([1, 2, 3], 0, {|acc, n| acc + n})
   6
   """
-  def reduce(values: List<$A>, init: $B, f: ($B, $A -> $B)) -> $B {
+  def reduce(values: List<$A>, init: $B, f: Reducer<$B, $A>) -> $B {
     match values {
       [] => init,
       [head, ..tail] => reduce(tail, f(init, head), f),
+    }
+  }
+
+  @doc """
+  Fold a list from left to right using a `Monoid` identity and operation.
+  Empty lists return `monoid.empty`.
+  """
+  def fold(values: List<$A>, monoid: Monoid<$A>) -> $A {
+    reduce(values, monoid.empty, monoid.combine)
+  }
+
+  @doc """
+  Map each value and fold the mapped sequence from left to right.
+  """
+  def fold_map(values: List<$A>, monoid: Monoid<$B>, mapper: Mapper<$A, $B>) -> $B {
+    combine = monoid.combine
+    reduce(values, monoid.empty, {|acc, value| combine(acc, mapper(value))})
+  }
+
+  @doc """
+  Reduce a non-empty list from left to right. Empty input returns `Option::None`.
+  """
+  def reduce_with(values: List<$A>, combine: Semigroup<$A>) -> Option<$A> {
+    match values {
+      [] => Option::None,
+      [head, ..tail] => Option::Some(reduce(tail, head, combine)),
     }
   }
 
@@ -464,7 +490,10 @@ impl List {
   xldr(1)> List::max([1, 3, 2])
   Ok(3)
   """
-  def max<$A: Compare>(values: List<$A>) -> Result<$A, NoneError> {
+  def max(values: List<$A>) -> Result<$A, NoneError>
+  where
+    $A: Compare
+  {
     max_by(values, {|left, right| Compare::compare(left, right)})
   }
 
@@ -476,7 +505,10 @@ impl List {
   xldr(1)> List::min([1, 3, 2])
   Ok(1)
   """
-  def min<$A: Compare>(values: List<$A>) -> Result<$A, NoneError> {
+  def min(values: List<$A>) -> Result<$A, NoneError>
+  where
+    $A: Compare
+  {
     min_by(values, {|left, right| Compare::compare(left, right)})
   }
 
@@ -488,7 +520,10 @@ impl List {
   xldr(1)> List::min_max([3, 1, 4, 2])
   Ok((1, 4))
   """
-  def min_max<$A: Compare>(values: List<$A>) -> Result<($A, $A), NoneError> {
+  def min_max(values: List<$A>) -> Result<($A, $A), NoneError>
+  where
+    $A: Compare
+  {
     match values {
       [] => Err(NoneError),
       [head, ..tail] => Ok(_min_max_go(tail, (head, head), &compare)),
@@ -547,7 +582,10 @@ impl List {
   xldr(1)> List::sort([3, 1, 2, 1])
   [1, 1, 2, 3]
   """
-  def sort<$A: Compare>(values: List<$A>) -> List<$A> {
+  def sort(values: List<$A>) -> List<$A>
+  where
+    $A: Compare
+  {
     sort_by(values, {|left, right| Compare::compare(left, right)})
   }
 
@@ -647,19 +685,50 @@ impl List {
 `Functor` implementation for `List`.
 This is the source-level meaning of `values |*> f`.
 """
-impl Functor<$A, $B, List<$B>> for List<$A> {
-  def map(self: Self, f: ($A -> $B)) -> List<$B> {
-    List::map(self, f)
+impl Functor for List<$T> {
+  def fmap(self: List<$A>, mapper: ($A -> $B)) -> List<$B> {
+    List::map(self, mapper)
   }
 }
 
 @doc """
-`Chainable` implementation for `List`.
-This is the source-level meaning of `values |>= f`.
+`Applicative` implementation for `List`.
 """
-impl Chainable<$A, List<$B>> for List<$A> {
-  def chain(self: Self, f: ($A -> List<$B>)) -> List<$B> {
-    List::flat_map(self, f)
+impl Applicative for List<$T> {
+  def pure::<List<$T>>(value: $A) -> List<$A> {
+    [value]
+  }
+
+  def ap(mapper: List<($A -> $B)>, value: List<$A>) -> List<$B> {
+    List::flat_map(mapper, {|f| List::map(value, f)})
+  }
+}
+
+@doc """
+`Monad` implementation for `List`.
+This is the source-level meaning of `values |>= mapper`.
+"""
+impl Monad for List<$T> {
+  def return::<List<$T>>(value: $A) -> List<$A> {
+    [value]
+  }
+
+  def bind(self: List<$A>, mapper: ($A -> List<$B>)) -> List<$B> {
+    List::flat_map(self, mapper)
+  }
+}
+
+@doc """
+`Alternative` implementation for `List`.
+`<|>` concatenates its operands from left to right.
+"""
+impl Alternative for List<$T> {
+  def empty::<List<$T>, $A>() -> List<$A> {
+    []
+  }
+
+  def choose(left: List<$A>, right: List<$A>) -> List<$A> {
+    List::append(left, right)
   }
 }
 
@@ -668,8 +737,8 @@ impl Chainable<$A, List<$B>> for List<$A> {
 This is the source-level meaning of `left >* right` for `List`.
 """
 impl LiftComposable<$A, $B, $C, List<$C>> for ($A -> List<$B>) {
-  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> List<$C>) {
-    {|value| Functor::map(self(value), rhs)}
+  def lift_compose::<($A -> List<$B>), $A, $B, $C, List<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> List<$C>) {
+    {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
@@ -678,7 +747,7 @@ impl LiftComposable<$A, $B, $C, List<$C>> for ($A -> List<$B>) {
 This is the source-level meaning of `left >=> right` for `List`.
 """
 impl KleisliComposable<$A, $B, List<$C>> for ($A -> List<$B>) {
-  def kleisli_compose(self: Self, rhs: ($B -> List<$C>)) -> ($A -> List<$C>) {
-    {|value| Chainable::chain(self(value), rhs)}
+  def kleisli_compose::<($A -> List<$B>), $A, $B, List<$C>>(self: Self, rhs: ($B -> List<$C>)) -> ($A -> List<$C>) {
+    {|value| Monad::bind(self(value), rhs)}
   }
 }

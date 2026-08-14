@@ -464,11 +464,11 @@ pub(crate) fn flow_operator_reason(
         }
         "|>=" => {
             if let Some(got) = message
-                .strip_prefix("`|>=` requires Chainable implementation on the left, got ")
+                .strip_prefix("`|>=` requires Monad implementation on the left, got ")
                 .or_else(|| message.strip_prefix("`|>=` requires Result or List on the left, got "))
             {
                 format!(
-                    "Reason: LHS is {}, but `|>=` requires a Chainable such as Result<A>, List<A>, or Option<A>.",
+                    "Reason: LHS is {}, but `|>=` requires a Monad such as Result<A>, List<A>, or Option<A>.",
                     got
                 )
             } else if let Some(got) =
@@ -581,7 +581,7 @@ pub(crate) fn flow_operator_help(
             "Use `|>=` to bind a function that already returns Result/List/Option.".into()
         }
         "|*>" => "Keep the RHS plain, or switch to `|>=` if it already returns Result/List/Option.".into(),
-        "|>=" if message.contains("requires Chainable implementation")
+        "|>=" if message.contains("requires Monad implementation")
             || message.contains("requires Result or List on the left") =>
         {
             "Use `|>` for a plain value, or make the LHS Result/List/Option.".into()
@@ -596,10 +596,10 @@ pub(crate) fn flow_operator_help(
             "Use `|*>` to map over the Option value, or change the RHS to return Option.".into()
         }
         "|>=" if message.contains("cannot use Option as a standard failure container for Result bind") => {
-            "Convert the Option value explicitly with `from(value, Result)` before binding.".into()
+            "Convert the Option value explicitly with `from::<Result>(value)` before binding.".into()
         }
         "|>=" if message.contains("cannot switch from Result into Option bind context") => {
-            "Wrap the RHS so it converts Option to Result explicitly with `from(value, Result)`.".into()
+            "Wrap the RHS so it converts Option to Result explicitly with `from::<Result>(value)`.".into()
         }
         "|>=" if message.contains("cannot mix Result, List, and Option context") => {
             "Keep the same container family across bind.".into()
@@ -622,4 +622,3 @@ pub(crate) fn flow_operator_help(
         _ => extra.unwrap_or("Check the operator rule against the LHS and RHS types.").into(),
     }
 }
-

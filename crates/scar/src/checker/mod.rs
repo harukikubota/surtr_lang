@@ -59,10 +59,10 @@ mod process_boundary_policy_tests {
     #[test]
     fn process_boundary_only_type_query_uses_builtin_usage_policy() {
         assert!(Checker::builtin_type_is_process_boundary_only(
-            "ProcessInit"
+            "StandbyInit"
         ));
         assert!(Checker::builtin_type_is_process_boundary_only(
-            "Global::ProcessInit"
+            "Global::StandbyInit"
         ));
         assert!(!Checker::builtin_type_is_process_boundary_only("PID"));
         assert!(!Checker::builtin_type_is_process_boundary_only("String"));
@@ -398,6 +398,7 @@ enum TypeSyntaxContext {
     BindingAnnotation,
     FunctionReturn,
     HoleClosureParam,
+    FacetDeferredSlot,
     ExtractorReturn,
     ExtractorBody,
     ErrorMarker,
@@ -407,9 +408,11 @@ enum TypeSyntaxContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitMethodInfo {
     id: ResolvedId,
+    fun_params: Vec<AstTy>,
     type_params: Vec<ResolvedTypeParam>,
     params: Vec<ResolvedFunParam>,
     ret_ty: AstTy,
+    where_clause: Option<TypedWhereClause>,
     attrs: ResolvedDeclAttrs,
     body: Option<Box<Resolved>>,
     span: Span,
@@ -420,6 +423,10 @@ struct TraitMethodInfo {
 struct TraitInfo {
     id: ResolvedId,
     type_params: Vec<ResolvedTypeParam>,
+    where_clause: Option<TypedWhereClause>,
+    constructor_slots: Vec<String>,
+    constructor_root: Option<String>,
+    parents: Vec<ResolvedId>,
     methods: HashMap<String, TraitMethodInfo>,
 }
 
@@ -428,9 +435,11 @@ struct TraitInfo {
 struct TraitImplMethodInfo {
     method_name: String,
     function_id: ResolvedId,
+    fun_params: Vec<AstTy>,
     type_params: Vec<ResolvedTypeParam>,
     params: Vec<ResolvedFunParam>,
     ret_ty: Option<AstTy>,
+    where_clause: Option<TypedWhereClause>,
     body: Box<Resolved>,
     attrs: ResolvedDeclAttrs,
     span: Span,
@@ -448,8 +457,18 @@ struct TraitImplInfo {
     target_name: String,
     target_ast_ty: AstTy,
     target_ty: Ty,
+    where_clause: Option<TypedWhereClause>,
     type_param_vars: Vec<u32>,
+    constructor_slot_vars: Vec<u32>,
+    constructor_slot_positions: Vec<usize>,
     methods: HashMap<String, TraitImplMethodInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SignatureAliasInfo {
+    params: Vec<ResolvedTypeParam>,
+    rhs: AstTy,
+    span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -553,15 +572,21 @@ pub fn typecheck_with_context_with_warnings(
 pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) => true,
-        Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-            type_contains_unresolved_vars(inner)
+        Ty::List(inner) | Ty::Lazy(inner) => type_contains_unresolved_vars(inner),
+        Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
+            items.iter().any(type_contains_unresolved_vars)
         }
-        Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(type_contains_unresolved_vars),
         Ty::Func(params, ret) => {
             params.iter().any(type_contains_unresolved_vars) || type_contains_unresolved_vars(ret)
         }
-        Ty::Facet(source, focus) | Ty::Result(source, focus) => {
+        Ty::Result(source, focus) => {
             type_contains_unresolved_vars(source) || type_contains_unresolved_vars(focus)
+        }
+        Ty::Facet(_, source, focus, update_source, update_focus) => {
+            type_contains_unresolved_vars(source)
+                || type_contains_unresolved_vars(focus)
+                || type_contains_unresolved_vars(update_source)
+                || type_contains_unresolved_vars(update_focus)
         }
         Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
             params.iter().any(type_contains_unresolved_vars) || type_contains_unresolved_vars(ret)
@@ -580,6 +605,9 @@ pub struct TypecheckContext {
     pub runtime_policy: RuntimeSourcePolicy,
     pub enforce_builtin_type_contracts: bool,
     pub allow_error_function_params: bool,
+    /// REPL `:facet` inspects structurally valid paths even when a private
+    /// segment is not consumable from the current source scope.
+    pub allow_private_facet_inspection: bool,
 }
 
 impl Default for TypecheckContext {
@@ -588,6 +616,7 @@ impl Default for TypecheckContext {
             runtime_policy: RuntimeSourcePolicy::script(),
             enforce_builtin_type_contracts: false,
             allow_error_function_params: false,
+            allow_private_facet_inspection: false,
         }
     }
 }
@@ -598,6 +627,7 @@ impl TypecheckContext {
             runtime_policy: policy.runtime_policy,
             enforce_builtin_type_contracts: false,
             allow_error_function_params: false,
+            allow_private_facet_inspection: false,
         }
     }
 }
@@ -843,16 +873,26 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
                 Ty::Lazy(Box::new(inner.clone()))
             }
             "Facet" => {
-                let [source, focus] = args.as_slice() else {
-                    return Err("Facet requires exactly 2 type arguments".into());
+                let [kind, source, focus, update_source, update_focus] = args.as_slice() else {
+                    return Err("Facet requires exactly 5 type arguments".into());
                 };
-                Ty::Facet(Box::new(source.clone()), Box::new(focus.clone()))
-            }
-            "TypeRef" => {
-                let [inner] = args.as_slice() else {
-                    return Err("TypeRef requires exactly 1 type argument".into());
+                // Builtin polymorphic signatures use `$K` / `$L` for the
+                // path-kind position.  `Ty` deliberately keeps Facet's kind
+                // concrete, so use the broad readable capability while the
+                // intrinsic checker preserves the path's actual atomic kind.
+                let kind = match kind {
+                    Ty::Enum(name, _) => crate::types::FacetKind::from_surface_name(&name)
+                        .ok_or_else(|| format!("unknown Facet kind `{name}`"))?,
+                    Ty::Var(_) => crate::types::FacetKind::ReadablePath,
+                    _ => return Err("Facet kind must be a path kind name".into()),
                 };
-                Ty::TypeRef(Box::new(inner.clone()))
+                Ty::Facet(
+                    kind,
+                    Box::new(source.clone()),
+                    Box::new(focus.clone()),
+                    Box::new(update_source.clone()),
+                    Box::new(update_focus.clone()),
+                )
             }
             "PID" => {
                 let [inner] = args.as_slice() else {
@@ -984,17 +1024,20 @@ enum CanonicalTyKey {
     Error,
     Hole,
     Var(u32),
+    SelfApp(Vec<CanonicalTyKey>),
     List(Box<CanonicalTyKey>),
     Tuple(Vec<CanonicalTyKey>),
     Func {
         params: Vec<CanonicalTyKey>,
         ret: Box<CanonicalTyKey>,
     },
-    TypeRef(Box<CanonicalTyKey>),
     Lazy(Box<CanonicalTyKey>),
     Facet {
+        kind: crate::types::FacetKind,
         source: Box<CanonicalTyKey>,
         focus: Box<CanonicalTyKey>,
+        update_source: Box<CanonicalTyKey>,
+        update_focus: Box<CanonicalTyKey>,
     },
     Pid(String),
     BuiltinFunc {
@@ -1041,6 +1084,7 @@ struct PersistentCheckerState {
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    signature_aliases: HashMap<String, SignatureAliasInfo>,
 }
 
 impl PersistentCheckerState {
@@ -1060,6 +1104,7 @@ impl PersistentCheckerState {
             trait_impl_index_by_base_trait: HashMap::new(),
             trait_methods_by_qualified_name: HashMap::new(),
             tyvar_bounds: HashMap::new(),
+            signature_aliases: HashMap::new(),
         }
     }
 
@@ -1079,6 +1124,7 @@ impl PersistentCheckerState {
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
+            signature_aliases: self.signature_aliases.clone(),
             process_specs,
         }
     }
@@ -1101,6 +1147,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             trait_impl_index_by_base_trait: checkpoint.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: checkpoint.trait_methods_by_qualified_name,
             tyvar_bounds: checkpoint.tyvar_bounds,
+            signature_aliases: checkpoint.signature_aliases,
         }
     }
 }
@@ -1123,6 +1170,7 @@ pub struct ScarCheckpoint {
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    signature_aliases: HashMap<String, SignatureAliasInfo>,
     process_specs: Vec<TypedProcessSpec>,
 }
 
@@ -1297,12 +1345,7 @@ impl ScarSession {
                 *stored_fun_idx = fun_idx;
             }
         }
-        for (old_fun_idx, new_fun_idx) in specializable_rekeys {
-            if let Some(mut def) = self.state.specializable_defs.remove(&old_fun_idx) {
-                Self::set_def_fun_idx(&mut def, new_fun_idx);
-                self.state.specializable_defs.insert(new_fun_idx, def);
-            }
-        }
+        self.rekey_specializable_defs(specializable_rekeys);
         for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
@@ -1340,12 +1383,7 @@ impl ScarSession {
             }
         }
 
-        for (old_fun_idx, new_fun_idx) in specializable_rekeys {
-            if let Some(mut def) = self.state.specializable_defs.remove(&old_fun_idx) {
-                Self::set_def_fun_idx(&mut def, new_fun_idx);
-                self.state.specializable_defs.insert(new_fun_idx, def);
-            }
-        }
+        self.rekey_specializable_defs(specializable_rekeys);
         for def in self.state.specializable_defs.values_mut() {
             Self::rewrite_fun_indices_in_node(def, &fun_idx_rewrites);
         }
@@ -1354,6 +1392,28 @@ impl ScarSession {
             &fun_idx_rewrites,
         );
         self.state.env.next_fun_idx = self.state.env.next_fun_idx.max(next_fun_idx);
+    }
+
+    fn rekey_specializable_defs(&mut self, rekeys: Vec<(u32, u32)>) {
+        // Remove every old key before inserting any new key. A new index may
+        // be another definition's old index (for example 451 -> 452 and
+        // 452 -> 453); moving entries one at a time would overwrite the
+        // first entry before it gets moved.
+        let moved = rekeys
+            .into_iter()
+            .filter_map(|(old_fun_idx, new_fun_idx)| {
+                self.state
+                    .specializable_defs
+                    .remove(&old_fun_idx)
+                    .map(|mut def| {
+                        Self::set_def_fun_idx(&mut def, new_fun_idx);
+                        (new_fun_idx, def)
+                    })
+            })
+            .collect::<Vec<_>>();
+        for (new_fun_idx, def) in moved {
+            self.state.specializable_defs.insert(new_fun_idx, def);
+        }
     }
 
     fn rewrite_specialization_fun_indices(
@@ -1407,10 +1467,8 @@ impl ScarSession {
 
     fn rewrite_fun_indices_in_ty(ty: &mut Ty, rewrites: &HashMap<u32, u32>) {
         match ty {
-            Ty::List(inner) | Ty::TypeRef(inner) | Ty::Lazy(inner) => {
-                Self::rewrite_fun_indices_in_ty(inner, rewrites)
-            }
-            Ty::Tuple(items) => {
+            Ty::List(inner) | Ty::Lazy(inner) => Self::rewrite_fun_indices_in_ty(inner, rewrites),
+            Ty::Tuple(items) | Ty::SelfApp(items) => {
                 for item in items {
                     Self::rewrite_fun_indices_in_ty(item, rewrites);
                 }
@@ -1421,9 +1479,11 @@ impl ScarSession {
                 }
                 Self::rewrite_fun_indices_in_ty(ret, rewrites);
             }
-            Ty::Facet(source, focus) => {
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
                 Self::rewrite_fun_indices_in_ty(source, rewrites);
                 Self::rewrite_fun_indices_in_ty(focus, rewrites);
+                Self::rewrite_fun_indices_in_ty(update_source, rewrites);
+                Self::rewrite_fun_indices_in_ty(update_focus, rewrites);
             }
             Ty::BuiltinFunc { params, ret, .. } => {
                 for param in params {
@@ -1573,6 +1633,7 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(&mut arg.expr, rewrites);
                 }
             }
+            TypedInner::EagerBoundary(inner) => Self::rewrite_fun_indices_in_node(inner, rewrites),
             TypedInner::If(cond, then_node, else_node) => {
                 Self::rewrite_fun_indices_in_node(cond, rewrites);
                 Self::rewrite_fun_indices_in_node(then_node, rewrites);
@@ -1655,7 +1716,7 @@ impl ScarSession {
                 }
                 Self::rewrite_fun_indices_in_node(body, rewrites);
             }
-            TypedInner::Def(_, _, type_params, params, ret_ty, body, _) => {
+            TypedInner::Def(_, _, type_params, params, ret_ty, _, body, _) => {
                 for type_param in type_params {
                     let _ = type_param;
                 }
@@ -1680,8 +1741,8 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_node(body, rewrites);
             }
             TypedInner::EnumDef(_, _)
-            | TypedInner::TraitDef(_, _)
-            | TypedInner::TraitImplDef(_, _)
+            | TypedInner::TraitDef(..)
+            | TypedInner::TraitImplDef(..)
             | TypedInner::BuiltinExtractorDecl(_, _, _)
             | TypedInner::StructDef(_, _, _, _, _)
             | TypedInner::RecordDef(_, _, _, _, _) => {}
@@ -1833,6 +1894,31 @@ mod specialization_state_tests {
         }
     }
 
+    fn specializable_def(fun_idx: u32, name: &str, uid: u32) -> TypedNode {
+        let id = resolved_id(name, &format!("Global::{name}"), uid);
+        TypedNode {
+            ty: user_func_ty(fun_idx),
+            span: test_span(),
+            node: TypedInner::Def(
+                fun_idx,
+                id.clone(),
+                Vec::new(),
+                vec![TypedFunParam {
+                    id: resolved_id("value", "", uid + 1000),
+                    ty: Ty::Int,
+                }],
+                Ty::Int,
+                None,
+                Box::new(TypedNode {
+                    ty: Ty::Int,
+                    span: test_span(),
+                    node: TypedInner::Lit(Lit::Int(1.into())),
+                }),
+                spire::ast::Visibility::Public,
+            ),
+        }
+    }
+
     fn specialization_key() -> SpecializationKey {
         SpecializationKey {
             function_name: "Global::helper".to_string(),
@@ -1890,12 +1976,69 @@ mod specialization_state_tests {
             Some(77)
         );
     }
+
+    #[test]
+    fn reconcile_function_indices_moves_colliding_specializable_defs_without_overwrite() {
+        let mut session = ScarSession::new();
+        let eq_id = resolved_id("a_eq", "Global::a_eq", 10);
+        let compare_id = resolved_id("b_compare", "Global::b_compare", 11);
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::a_eq".to_string(), eq_id.clone());
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::b_compare".to_string(), compare_id.clone());
+        session
+            .state
+            .env
+            .vars
+            .insert(eq_id.unique_id, user_func_ty(451));
+        session
+            .state
+            .env
+            .vars
+            .insert(compare_id.unique_id, user_func_ty(452));
+        session
+            .state
+            .specializable_defs
+            .insert(451, specializable_def(451, "a_eq", 10));
+        session
+            .state
+            .specializable_defs
+            .insert(452, specializable_def(452, "b_compare", 11));
+
+        session.reconcile_function_indices([("Global::other", 451)]);
+
+        let names_by_index = session
+            .state
+            .specializable_defs
+            .iter()
+            .map(|(fun_idx, def)| {
+                let TypedInner::Def(_, id, ..) = &def.node else {
+                    panic!("expected function definition");
+                };
+                (*fun_idx, id.qualified_name.clone().unwrap())
+            })
+            .collect::<HashMap<_, _>>();
+        assert_eq!(names_by_index.get(&452), Some(&"Global::a_eq".to_string()));
+        assert_eq!(
+            names_by_index.get(&453),
+            Some(&"Global::b_compare".to_string())
+        );
+    }
 }
 
 struct Checker {
     env: TypeEnv,
     function_return_ty: Option<Ty>,
     local_annotation_tyvars: HashMap<String, Ty>,
+    /// Declaration-owned generic variables are rigid while their body is
+    /// checked. Inference variables may bind to them, but they never bind to a
+    /// concrete type (or to a different signature generic) at the definition
+    /// site.
+    rigid_tyvars: HashSet<u32>,
     current_function_symbol: Option<String>,
     current_impl_struct_target: Option<String>,
     in_extractor_body: bool,
@@ -1910,11 +2053,15 @@ struct Checker {
     specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    signature_aliases: HashMap<String, SignatureAliasInfo>,
+    alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
     allow_error_function_params: bool,
+    allow_private_facet_inspection: bool,
     allow_error_observer_value_use: usize,
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
+    facet_path_kind_decls: HashMap<String, Vec<String>>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
@@ -1975,6 +2122,7 @@ impl Checker {
             env: state.env,
             function_return_ty: None,
             local_annotation_tyvars: HashMap::new(),
+            rigid_tyvars: HashSet::new(),
             current_function_symbol: None,
             current_impl_struct_target: None,
             in_extractor_body: false,
@@ -1989,11 +2137,15 @@ impl Checker {
             specialization_fun_idxs: state.specialization_fun_idxs,
             substitutions: HashMap::new(),
             tyvar_bounds: state.tyvar_bounds,
+            signature_aliases: state.signature_aliases,
+            alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
             allow_error_function_params: context.allow_error_function_params,
+            allow_private_facet_inspection: context.allow_private_facet_inspection,
             allow_error_observer_value_use: 0,
             seen_builtin_type_decls: HashMap::new(),
+            facet_path_kind_decls: HashMap::new(),
             traits: state.traits,
             trait_impls: state.trait_impls,
             trait_impl_index_by_base_trait: state.trait_impl_index_by_base_trait,
@@ -2016,10 +2168,12 @@ impl Checker {
                 runtime_policy: self.runtime_policy.clone(),
                 enforce_builtin_type_contracts: self.enforce_builtin_type_contracts,
                 allow_error_function_params: self.allow_error_function_params,
+                allow_private_facet_inspection: self.allow_private_facet_inspection,
             },
         );
         checker.function_return_ty = self.function_return_ty.clone();
         checker.local_annotation_tyvars = self.local_annotation_tyvars.clone();
+        checker.rigid_tyvars = self.rigid_tyvars.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
         checker.in_extractor_body = self.in_extractor_body;
@@ -2028,6 +2182,7 @@ impl Checker {
         checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
+        checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();
         checker.process_specs = self.process_specs.clone();
         checker.profiler = self.profiler.clone();
@@ -2076,7 +2231,10 @@ impl Checker {
         ));
     }
 
-    fn collect_unused_type_parameter_warnings(&mut self, stmts: &[Resolved]) {
+    fn collect_unused_type_parameter_warnings(
+        &mut self,
+        stmts: &[Resolved],
+    ) -> Result<(), TypeError> {
         for stmt in stmts {
             match stmt {
                 Resolved::StructDef(_, id, type_params, fields, _) => {
@@ -2095,7 +2253,7 @@ impl Checker {
                     }
                     self.warn_unused_type_params(type_params, &used, &id.name);
                 }
-                Resolved::Def(_, id, type_params, params, ret_ty, _, _) => {
+                Resolved::Def(_, id, type_params, params, ret_ty, _, _, _) => {
                     let used = Self::signature_type_param_uses(params, ret_ty.as_ref());
                     self.warn_unused_type_params(type_params, &used, &id.name);
                 }
@@ -2107,16 +2265,73 @@ impl Checker {
                     Self::collect_ast_ty_type_params(ret_ty, &mut used);
                     self.warn_unused_type_params(type_params, &used, &id.name);
                 }
-                Resolved::TraitDef(_, id, type_params, methods, _) => {
+                Resolved::TraitDef(_, id, type_params, _, methods, _) => {
                     let mut trait_used = HashSet::new();
                     for method in methods {
+                        let mut fun_param_slots = HashSet::new();
+                        for fun_param in &method.fun_params {
+                            Self::collect_ast_ty_type_params(fun_param, &mut fun_param_slots);
+                        }
+                        let mut value_param_slots = HashSet::new();
                         for param in &method.params {
                             Self::collect_ast_ty_type_params(&param.ty, &mut trait_used);
+                            Self::collect_ast_ty_type_params(&param.ty, &mut value_param_slots);
                         }
+                        let mut method_input_used = fun_param_slots;
+                        method_input_used.extend(value_param_slots);
+                        let mut method_output_used = HashSet::new();
                         Self::collect_ast_ty_type_params(&method.ret_ty, &mut trait_used);
+                        Self::collect_ast_ty_type_params(&method.ret_ty, &mut method_output_used);
 
-                        let method_used =
-                            Self::signature_type_param_uses(&method.params, Some(&method.ret_ty));
+                        let mut method_used = method_input_used.clone();
+                        method_used.extend(method_output_used.iter().cloned());
+                        if method
+                            .where_clause
+                            .as_ref()
+                            .map(|clause| {
+                                clause.constraints.iter().any(|constraint| {
+                                    let mut vars = HashSet::new();
+                                    Self::collect_ast_ty_type_params(
+                                        &constraint.subject,
+                                        &mut vars,
+                                    );
+                                    vars.into_iter().any(|var| !method_used.contains(&var))
+                                })
+                            })
+                            .unwrap_or(false)
+                        {
+                            return Err(TypeError {
+                                message: format!(
+                                    "Trait method {} has a type variable used only by where constraints",
+                                    method.id.name
+                                ),
+                                span: method.span.clone(),
+                                hint: Some("Add the type variable to FunParams or a value argument.".into()),
+                            });
+                        }
+                        if method_output_used.iter().any(|var| !method_input_used.contains(var)) {
+                            return Err(TypeError {
+                                message: format!(
+                                    "Trait method {} has a type variable that is only present in its return type",
+                                    method.id.name
+                                ),
+                                span: method.span.clone(),
+                                hint: Some("Add the type variable to FunParams or a value argument.".into()),
+                            });
+                        }
+                        if id.name == "Default"
+                            && method.id.name == "default"
+                            && !method.fun_params.iter().any(|param| {
+                                matches!(param, AstTy::Named(_, name) if name == "Self")
+                            })
+                        {
+                            return Err(TypeError {
+                                message: "Default::default must declare Self in FunParams".into(),
+                                span: method.span.clone(),
+                                hint: Some("Use `def default::<Self>() -> Self`.".into()),
+                            });
+                        }
+
                         self.warn_unused_type_params(
                             &method.type_params,
                             &method_used,
@@ -2125,7 +2340,7 @@ impl Checker {
                     }
                     self.warn_unused_type_params(type_params, &trait_used, &id.name);
                 }
-                Resolved::TraitImplDef(_, _, _, _, methods) => {
+                Resolved::TraitImplDef(_, _, _, _, _, methods) => {
                     for method in methods {
                         let used =
                             Self::signature_type_param_uses(&method.params, method.ret_ty.as_ref());
@@ -2139,6 +2354,7 @@ impl Checker {
                 _ => {}
             }
         }
+        Ok(())
     }
 
     fn signature_type_param_uses(
@@ -2153,6 +2369,34 @@ impl Checker {
             Self::collect_ast_ty_type_params(ret_ty, &mut used);
         }
         used
+    }
+
+    fn reject_return_only_signature_slots(
+        params: &[ResolvedFunParam],
+        ret_ty: Option<&AstTy>,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let mut parameter_slots = HashSet::new();
+        for param in params {
+            Self::collect_ast_ty_type_params(&param.ty, &mut parameter_slots);
+        }
+        let mut return_slots = HashSet::new();
+        if let Some(ret_ty) = ret_ty {
+            Self::collect_ast_ty_type_params(ret_ty, &mut return_slots);
+        }
+        if let Some(name) = return_slots.difference(&parameter_slots).next().cloned() {
+            return Err(TypeError {
+                message: format!(
+                    "Signature type slot {name} appears only in the return type and has no introduction site"
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Introduce the slot in an argument or receiver type, or declare it as a trait/constructor slot."
+                        .into(),
+                ),
+            });
+        }
+        Ok(())
     }
 
     fn collect_ast_ty_type_params(ty: &AstTy, used: &mut HashSet<String>) {
@@ -2181,6 +2425,39 @@ impl Checker {
                     Self::collect_ast_ty_type_params(param, used);
                 }
                 Self::collect_ast_ty_type_params(ret, used);
+            }
+        }
+    }
+
+    /// Collect the input/output slots relevant to constructor-trait methods.
+    /// `Self` is a hidden constructor witness in these signatures, while `$A`
+    /// names an element slot.  Ordinary named types are intentionally ignored.
+    fn collect_constructor_signature_slots(ty: &AstTy, used: &mut HashSet<String>) {
+        match ty {
+            AstTy::Named(_, name) => {
+                if name == "Self" || name.starts_with('$') {
+                    used.insert(name.clone());
+                }
+            }
+            AstTy::ImplTrait(_, _) => {}
+            AstTy::Generic(_, name, args) => {
+                if name == "Self" || name.starts_with('$') {
+                    used.insert(name.clone());
+                }
+                for arg in args {
+                    Self::collect_constructor_signature_slots(arg, used);
+                }
+            }
+            AstTy::Tuple(_, items) => {
+                for item in items {
+                    Self::collect_constructor_signature_slots(item, used);
+                }
+            }
+            AstTy::Func(_, params, ret) => {
+                for param in params {
+                    Self::collect_constructor_signature_slots(param, used);
+                }
+                Self::collect_constructor_signature_slots(ret, used);
             }
         }
     }
@@ -2266,6 +2543,7 @@ impl Checker {
                     self.collect_unused_value_warnings_in_node(&arg.expr);
                 }
             }
+            TypedInner::EagerBoundary(inner) => self.collect_unused_value_warnings_in_node(inner),
             TypedInner::If(cond, then_branch, else_branch) => {
                 self.collect_unused_value_warnings_in_node(cond);
                 self.collect_unused_value_warnings_in_node(then_branch);
@@ -2314,7 +2592,7 @@ impl Checker {
                 self.collect_unused_value_warnings_in_node(update_fun);
             }
             TypedInner::DeferrorDef(_, _, _, _, show)
-            | TypedInner::Def(_, _, _, _, _, show, _)
+            | TypedInner::Def(_, _, _, _, _, _, show, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, show, _)
             | TypedInner::Closure(_, _, show) => {
                 self.collect_unused_value_warnings_in_node(show);
@@ -2333,8 +2611,8 @@ impl Checker {
             | TypedInner::FacetPath(_)
             | TypedInner::PendingFacetPath(_)
             | TypedInner::EnumDef(_, _)
-            | TypedInner::TraitDef(_, _)
-            | TypedInner::TraitImplDef(_, _)
+            | TypedInner::TraitDef(..)
+            | TypedInner::TraitImplDef(..)
             | TypedInner::BuiltinExtractorDecl(_, _, _)
             | TypedInner::StructDef(_, _, _, _, _)
             | TypedInner::RecordDef(_, _, _, _, _) => {}
@@ -2347,7 +2625,7 @@ impl Checker {
 
     fn is_lazy_init_function_symbol(&self, symbol: &str) -> bool {
         self.process_specs.iter().any(|spec| {
-            spec.spec.lazy
+            spec.spec.standby
                 && self
                     .function_ids_by_name
                     .get(symbol)
@@ -2364,10 +2642,10 @@ impl Checker {
             Ty::Result(ok, err) => {
                 self.ty_contains_process_init(&ok) || self.ty_contains_process_init(&err)
             }
-            Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => {
-                self.ty_contains_process_init(&inner)
+            Ty::List(inner) | Ty::Lazy(inner) => self.ty_contains_process_init(&inner),
+            Ty::Tuple(items) | Ty::SelfApp(items) => {
+                items.iter().any(|item| self.ty_contains_process_init(item))
             }
-            Ty::Tuple(items) => items.iter().any(|item| self.ty_contains_process_init(item)),
             Ty::Func(params, ret) => {
                 params
                     .iter()
@@ -2392,7 +2670,7 @@ impl Checker {
             | Ty::Hole
             | Ty::Var(_)
             | Ty::Error
-            | Ty::Facet(_, _) => false,
+            | Ty::Facet(..) => false,
         }
     }
 
@@ -2582,11 +2860,11 @@ impl Checker {
                 Ty::Result(ok, _) => ok.as_ref().clone(),
                 other => other,
             };
-            let init_state_ty = if process.spec.lazy {
+            let init_state_ty = if process.spec.standby {
                 self.process_init_state_ty(&init_ok_ty)
                     .ok_or_else(|| TypeError {
                         message: format!(
-                            "Lazy @init for process `{}` must return Result<ProcessInit<State>>",
+                            "Standby @init for process `{}` must return Result<StandbyInit<State>>",
                             process.process_name
                         ),
                         span: Span { start: 0, end: 0 },
@@ -2595,7 +2873,8 @@ impl Checker {
             } else {
                 if self.ty_contains_process_init(&init_ok_ty) {
                     return Err(TypeError {
-                        message: "ProcessInit<T> is only allowed as Lazy @init return type".into(),
+                        message: "StandbyInit<T> is only allowed as Standby @init return type"
+                            .into(),
                         span: Span { start: 0, end: 0 },
                         hint: None,
                     });
@@ -2772,10 +3051,10 @@ impl Checker {
                 self.ty_contains_handler_capability_pid(&ok, slots)
                     || self.ty_contains_handler_capability_pid(&err, slots)
             }
-            Ty::List(inner) | Ty::Lazy(inner) | Ty::TypeRef(inner) => {
+            Ty::List(inner) | Ty::Lazy(inner) => {
                 self.ty_contains_handler_capability_pid(&inner, slots)
             }
-            Ty::Tuple(items) => items
+            Ty::Tuple(items) | Ty::SelfApp(items) => items
                 .iter()
                 .any(|item| self.ty_contains_handler_capability_pid(item, slots)),
             Ty::Func(params, ret) => {
@@ -2804,9 +3083,11 @@ impl Checker {
             | Ty::Unit
             | Ty::Error
             | Ty::Hole => false,
-            Ty::Facet(source, focus) => {
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
                 self.ty_contains_handler_capability_pid(&source, slots)
                     || self.ty_contains_handler_capability_pid(&focus, slots)
+                    || self.ty_contains_handler_capability_pid(&update_source, slots)
+                    || self.ty_contains_handler_capability_pid(&update_focus, slots)
             }
         }
     }
@@ -2898,6 +3179,7 @@ impl Checker {
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
+            signature_aliases: self.signature_aliases.clone(),
         }
     }
 
@@ -2917,6 +3199,7 @@ impl Checker {
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name,
             tyvar_bounds: self.tyvar_bounds,
+            signature_aliases: self.signature_aliases,
         }
     }
 
@@ -2963,13 +3246,15 @@ impl Checker {
         let mut stmt_kind_totals = HashMap::<String, (u64, Duration)>::new();
 
         let result = (|| -> Result<Vec<TypedNode>, TypeError> {
-            self.collect_unused_type_parameter_warnings(&stmts);
+            self.collect_unused_type_parameter_warnings(&stmts)?;
 
             let t = profile_enabled.then(Instant::now);
             self.predeclare_error_types(&stmts);
             if let Some(start) = t {
                 predeclare_error_types_dur = start.elapsed();
             }
+
+            self.predeclare_signature_aliases(&stmts)?;
 
             let t = profile_enabled.then(Instant::now);
             self.predeclare_type_signatures(&stmts)?;
@@ -3012,11 +3297,23 @@ impl Checker {
                 if let Resolved::ConstDef(..) = &stmt {
                     continue;
                 }
-                if let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, methods) =
-                    &stmt
+                if let Resolved::TraitImplDef(
+                    span,
+                    trait_id,
+                    trait_args,
+                    target_ty,
+                    where_clause,
+                    methods,
+                ) = &stmt
                 {
-                    let nodes = self
-                        .check_trait_impl_items(span, trait_id, trait_args, target_ty, methods)?;
+                    let nodes = self.check_trait_impl_items(
+                        span,
+                        trait_id,
+                        trait_args,
+                        target_ty,
+                        where_clause.as_ref(),
+                        methods,
+                    )?;
                     typed.extend(nodes.into_iter().map(|node| {
                         let profile = self.profiler.start();
                         let node = self.resolve_typed_node(node);

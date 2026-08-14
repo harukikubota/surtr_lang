@@ -64,6 +64,7 @@ fn empty_new_def(struct_name: &str, uid: u32) -> Resolved {
             vec![named_ty("$A", 103 + uid as usize)],
             100 + uid as usize,
         )),
+        None,
         Box::new(Resolved::StructLit(
             span(105 + uid as usize, 107 + uid as usize),
             id(struct_name, uid + 1),
@@ -194,11 +195,14 @@ fn trait_head_type_parameter_unused_by_methods_warns_even_with_bound() {
         span(0, 48),
         id("Describe", 30),
         vec![param],
+        None,
         vec![ResolvedTraitMethodSig {
             id: id("Describe::describe", 31),
+            fun_params: Vec::new(),
             type_params: Vec::new(),
             params: Vec::new(),
             ret_ty: named_ty("String", 35),
+            where_clause: None,
             body: None,
             attrs: ResolvedDeclAttrs::default(),
             span: span(18, 42),

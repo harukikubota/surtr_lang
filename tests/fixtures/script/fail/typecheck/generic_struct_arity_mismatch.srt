@@ -4,7 +4,7 @@ defstruct Pair<$A, $B> {
 }
 
 impl Pair {
-  def new<$A, $B>(left: $A, right: $B) -> Pair<$A, $B> {
+  def new(left: $A, right: $B) -> Pair<$A, $B> {
     Pair { left: left, right: right }
   }
 }

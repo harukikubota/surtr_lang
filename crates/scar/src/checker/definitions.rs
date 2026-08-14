@@ -262,8 +262,73 @@ impl Checker {
         span: &Span,
         id: &ResolvedId,
         params: &[String],
-        _attrs: &ResolvedDeclAttrs,
+        attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
+        if let Some(members) = &attrs.facet_path_kind {
+            if attrs.builtin {
+                return Err(TypeError {
+                    message: "@FacetPathKind Type declarations are only allowed in canonical lib/facet.srt".into(),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            if !params.is_empty() {
+                return Err(TypeError {
+                    message: "Facet path kind types cannot have generic parameters".into(),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            let atomic = matches!(
+                id.name.as_str(),
+                "InfallibleStructural" | "FallibleStructural" | "VariantPath"
+            );
+            if members.is_empty() {
+                if !atomic {
+                    return Err(TypeError {
+                        message: format!("Facet path kind `{}` must be an alias or one of the compiler-derived atomic kinds", id.name),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+            } else {
+                if atomic {
+                    return Err(TypeError {
+                        message: format!(
+                            "Atomic Facet path kind `{}` cannot declare an alias RHS",
+                            id.name
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                for member in members {
+                    if !self.facet_path_kind_decls.contains_key(member) {
+                        return Err(TypeError {
+                            message: format!("Facet path kind alias `{}` must reference a previously declared kind; `{member}` is not available", id.name),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+            }
+            if self
+                .facet_path_kind_decls
+                .insert(id.name.clone(), members.clone())
+                .is_some()
+            {
+                return Err(TypeError {
+                    message: format!("Duplicate Facet path kind declaration: {}", id.name),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            return Ok(TypedNode {
+                ty: Ty::Unit,
+                span: span.clone(),
+                node: TypedInner::Lit(Lit::Unit),
+            });
+        }
         let Some(meta) = builtin_type_meta_by_name(Self::surface_name(&id.name)) else {
             return Err(TypeError {
                 message: format!("Unknown builtin type declaration: {}", id.name),
@@ -331,7 +396,11 @@ impl Checker {
             TypeSyntaxContext::ExtractorReturn,
             &mut tyvars,
         )?;
-        self.require_match_result_seq_ty(&ret, &param.id.span, &format!("Extractor {}", id.name))?;
+        self.require_extractor_option_payload_ty(
+            &ret,
+            &param.id.span,
+            &format!("Extractor {}", id.name),
+        )?;
 
         self.env.bind_var(
             id.unique_id,
@@ -598,6 +667,7 @@ impl Checker {
         &mut self,
         local_bindings: &[(u32, Ty)],
         local_annotation_tyvars: HashMap<String, Ty>,
+        rigid_tyvars: HashSet<u32>,
         function_return_ty: Ty,
         function_symbol: String,
         impl_target: Option<String>,
@@ -606,6 +676,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let saved_function_return_ty = self.function_return_ty.clone();
         let saved_local_annotation_tyvars = self.local_annotation_tyvars.clone();
+        let saved_rigid_tyvars = self.rigid_tyvars.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
         let saved_in_extractor_body = self.in_extractor_body;
@@ -615,6 +686,7 @@ impl Checker {
         self.env.push_var_scope();
         self.function_return_ty = Some(function_return_ty);
         self.local_annotation_tyvars = local_annotation_tyvars;
+        self.rigid_tyvars = rigid_tyvars;
         self.current_function_symbol = Some(function_symbol);
         self.current_impl_struct_target = impl_target;
         self.in_extractor_body = in_extractor_body;
@@ -633,6 +705,7 @@ impl Checker {
         self.env.pop_var_scope();
         self.function_return_ty = saved_function_return_ty;
         self.local_annotation_tyvars = saved_local_annotation_tyvars;
+        self.rigid_tyvars = saved_rigid_tyvars;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
         self.in_extractor_body = saved_in_extractor_body;
@@ -649,6 +722,7 @@ impl Checker {
         type_params: &[ResolvedTypeParam],
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
+        where_clause: Option<&ResolvedWhereClause>,
         body: &Resolved,
         attrs: &ResolvedDeclAttrs,
     ) -> Result<TypedNode, TypeError> {
@@ -665,7 +739,7 @@ impl Checker {
             )?;
             if self.ty_contains_process_init(&param_ty) {
                 return Err(TypeError {
-                    message: "ProcessInit<T> is only allowed as Lazy @init return type".into(),
+                    message: "StandbyInit<T> is only allowed as Standby @init return type".into(),
                     span: param.id.span.clone(),
                     hint: None,
                 });
@@ -702,6 +776,7 @@ impl Checker {
             )?,
             None => Ty::Unit,
         };
+        self.apply_resolved_where_trait_bounds(where_clause, &tyvars, None)?;
         if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
                 message:
@@ -770,6 +845,7 @@ impl Checker {
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
             tyvars.clone(),
+            Self::signature_tyvar_ids(&tyvars),
             expected_ret.clone(),
             current_symbol,
             impl_target,
@@ -785,7 +861,8 @@ impl Checker {
         ) {
             return Err(err);
         }
-        if !self.types_compatible(&expected_ret, &typed_body.ty) {
+        let rigid_tyvars = Self::signature_tyvar_ids(&tyvars);
+        if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars) {
             if let Some(err) = self.facet_replace_result_context_error(
                 &typed_body,
                 &expected_ret,
@@ -854,6 +931,7 @@ impl Checker {
                 typed_type_params,
                 typed_params,
                 expected_ret,
+                where_clause.map(TypedWhereClause::from),
                 Box::new(typed_body),
                 attrs.visibility,
             ),
@@ -910,7 +988,7 @@ impl Checker {
                 hint: None,
             });
         }
-        self.require_match_result_seq_ty(
+        self.require_extractor_option_payload_ty(
             &expected_ret,
             &param.id.span,
             &format!("Extractor {}", id.name),
@@ -926,6 +1004,7 @@ impl Checker {
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
             tyvars.clone(),
+            Self::signature_tyvar_ids(&tyvars),
             expected_ret.clone(),
             current_symbol,
             impl_target,
@@ -933,7 +1012,8 @@ impl Checker {
             body,
         )?;
 
-        if !self.types_compatible(&expected_ret, &typed_body.ty) {
+        let rigid_tyvars = Self::signature_tyvar_ids(&tyvars);
+        if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars) {
             let actual_ret = self.resolve_ty(&typed_body.ty);
             let hint = if matches!(actual_ret, Ty::Unit) {
                 self.describe_unit_return_hint(&typed_body)
@@ -996,9 +1076,10 @@ impl Checker {
         trait_id: &ResolvedId,
         trait_args: &[AstTy],
         target_ast_ty: &AstTy,
+        where_clause: Option<&ResolvedWhereClause>,
         _methods: &[ResolvedTraitImplMethod],
     ) -> Result<Vec<TypedNode>, TypeError> {
-        let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
+        let (_, target_ty, _, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
@@ -1037,6 +1118,7 @@ impl Checker {
             node: TypedInner::TraitImplDef(
                 self.trait_instance_key(trait_id, trait_args),
                 target_name.clone(),
+                where_clause.map(TypedWhereClause::from),
             ),
         }];
 
@@ -1056,7 +1138,7 @@ impl Checker {
                         span: method.span.clone(),
                         hint: None,
                     })?;
-            let (param_tys, expected_ret, type_params) = self.resolve_trait_impl_method_signature(
+            let (param_tys, expected_ret, type_params, _) = self.resolve_trait_impl_method_signature(
                 &trait_info,
                 trait_args,
                 &method,
@@ -1086,6 +1168,7 @@ impl Checker {
             let typed_body = self.check_body_in_isolated_scope(
                 &local_bindings,
                 HashMap::new(),
+                type_params.iter().copied().collect(),
                 expected_ret.clone(),
                 method.function_id.name.clone(),
                 impl_target,
@@ -1101,7 +1184,8 @@ impl Checker {
             ) {
                 return Err(err);
             }
-            if !self.types_compatible(&expected_ret, &typed_body.ty) {
+            let rigid_tyvars = type_params.iter().copied().collect::<HashSet<_>>();
+            if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars) {
                 if let Some(err) = self.facet_replace_result_context_error(
                     &typed_body,
                     &expected_ret,
@@ -1161,6 +1245,7 @@ impl Checker {
                     typed_type_params,
                     typed_params,
                     expected_ret,
+                    method.where_clause.clone(),
                     Box::new(typed_body),
                     method.attrs.visibility,
                 ),
@@ -1176,9 +1261,10 @@ impl Checker {
         trait_id: &ResolvedId,
         trait_args: &[AstTy],
         target_ast_ty: &AstTy,
+        where_clause: Option<&ResolvedWhereClause>,
         _methods: &[ResolvedTraitImplMethod],
     ) -> Result<TypedNode, TypeError> {
-        let (_, target_ty, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
+        let (_, target_ty, _, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
@@ -1194,6 +1280,7 @@ impl Checker {
             node: TypedInner::TraitImplDef(
                 self.trait_instance_key(trait_id, trait_args),
                 target_name,
+                where_clause.map(TypedWhereClause::from),
             ),
         })
     }
@@ -1562,7 +1649,20 @@ impl Checker {
         span: &Span,
         id: &ResolvedId,
         args: &[ResolvedRecordLitArg],
+        expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
+        // Closure bodies are checked through `check_node`, but an expected
+        // closure return type is kept separately while that body is checked.
+        // Use it for Result constructors so `Err(error)` can inhabit a nested
+        // Result without constructing `Err(Err(error))`.
+        // An absent call-site expectation means the constructor is
+        // polymorphic, not that it should inherit the enclosing function's
+        // return type.  In particular, `Err(...)` inside a list/tuple or a
+        // nested call must not become `Result<Unit>` merely because the
+        // surrounding function returns `Result<Unit>`.  The fresh Result
+        // success slot below is unified later by the surrounding expression
+        // or by the function body's final return check.
+        let expected = expected.cloned();
         if id.name == "Ok" || id.name == "Err" {
             if args.len() != 1 {
                 return Err(TypeError {
@@ -1573,7 +1673,12 @@ impl Checker {
             }
             let inner = match &args[0] {
                 ResolvedRecordLitArg::Positional(expr) => {
-                    let typed = self.check_node(expr)?;
+                    let inner_expected =
+                        expected.as_ref().and_then(|expected| match self.resolve_ty(expected) {
+                            Ty::Result(ok, _) => Some(ok.as_ref().clone()),
+                            _ => None,
+                        });
+                    let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
                     if self.ty_contains_facet(&typed.ty) {
                         return Err(TypeError {
                             message:
@@ -1597,6 +1702,15 @@ impl Checker {
                 }
             };
             if id.name == "Err" {
+                if matches!(self.resolve_ty(&inner.ty), Ty::Result(_, _)) {
+                    return Err(TypeError {
+                        message: "Nested Result errors are not allowed: use Err(ConcreteError) for the outer failure, or Ok(Err(ConcreteError)) for an inner failure.".into(),
+                        span: inner.span.clone(),
+                        hint: Some(
+                            "Err(...) is lifted to the expected Result nesting; do not write Err(Err(...)).".into(),
+                        ),
+                    });
+                }
                 if !matches!(inner.ty, Ty::Error) {
                     return Err(TypeError {
                         message: "Err(...) requires a concrete deferror value.".into(),
@@ -1620,8 +1734,15 @@ impl Checker {
                     Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error)),
                 )
             } else {
-                let ok_var = self.env.fresh_tyvar();
-                (1u32, Ty::Result(Box::new(ok_var), Box::new(Ty::Error)))
+                let result_ty = expected
+                    .as_ref()
+                    .filter(|ty| matches!(self.resolve_ty(ty), Ty::Result(_, _)))
+                    .map(|ty| self.resolve_ty(ty))
+                    .unwrap_or_else(|| {
+                        let ok_var = self.env.fresh_tyvar();
+                        Ty::Result(Box::new(ok_var), Box::new(Ty::Error))
+                    });
+                (1u32, result_ty)
             };
             return Ok(TypedNode {
                 ty: result_ty,
@@ -1671,7 +1792,17 @@ impl Checker {
                 }
                 let inner = match &args[0] {
                     ResolvedRecordLitArg::Positional(expr) => {
-                        let typed = self.check_node(expr)?;
+                        // Preserve the expected Result payload when this
+                        // constructor was resolved through enum metadata
+                        // (the qualified `Result::Ok` path).  Applicative
+                        // chains rely on this context to infer nested
+                        // closures left-to-right: the first `|*|` fixes the
+                        // mapper input, which then constrains the next one.
+                        let inner_expected = expected.as_ref().and_then(|expected| match self.resolve_ty(expected) {
+                            Ty::Result(ok, _) => Some(ok.as_ref().clone()),
+                            _ => None,
+                        });
+                        let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
                         if self.ty_contains_facet(&typed.ty) {
                             return Err(TypeError {
                                 message:
@@ -1695,6 +1826,15 @@ impl Checker {
                     }
                 };
                 if variant.short_name == "Err" {
+                    if matches!(self.resolve_ty(&inner.ty), Ty::Result(_, _)) {
+                        return Err(TypeError {
+                            message: "Nested Result errors are not allowed: use Err(ConcreteError) for the outer failure, or Ok(Err(ConcreteError)) for an inner failure.".into(),
+                            span: inner.span.clone(),
+                            hint: Some(
+                                "Err(...) is lifted to the expected Result nesting; do not write Err(Err(...)).".into(),
+                            ),
+                        });
+                    }
                     if !matches!(inner.ty, Ty::Error) {
                         return Err(TypeError {
                             message: "Err(...) requires a concrete deferror value.".into(),
@@ -1716,17 +1856,20 @@ impl Checker {
                 let result_ty = if variant.short_name == "Ok" {
                     Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error))
                 } else {
-                    let ok_var = self.env.fresh_tyvar();
-                    Ty::Result(Box::new(ok_var), Box::new(Ty::Error))
+                    expected
+                        .as_ref()
+                        .filter(|ty| matches!(self.resolve_ty(ty), Ty::Result(_, _)))
+                        .map(|ty| self.resolve_ty(ty))
+                        .unwrap_or_else(|| {
+                            let ok_var = self.env.fresh_tyvar();
+                            Ty::Result(Box::new(ok_var), Box::new(Ty::Error))
+                        })
                 };
                 return Ok(TypedNode {
                     ty: result_ty,
                     span: span.clone(),
                     node: TypedInner::ConstructorCall(variant.tag, vec![inner]),
                 });
-            }
-            if Self::surface_name(&variant.enum_name) == "MatchResult" && !self.in_extractor_body {
-                return Err(self.match_result_value_not_allowed_error(span));
             }
             if matches!(
                 Self::surface_name(&variant.enum_name),
@@ -1999,7 +2142,7 @@ impl Checker {
                 })?;
             let new_ty = match new_ty {
                 Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
-                    self.instantiate_builtin_ty(&new_ty)
+                    self.instantiate_callable_ty(&new_ty)
                 }
                 other => other,
             };

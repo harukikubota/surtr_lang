@@ -1,0 +1,1 @@
+def bad(value: Hole) -> Int { 1 }

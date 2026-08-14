@@ -112,13 +112,17 @@ static GLOBAL_COMMANDS: &[(&str, &str)] = &[
     ("help", ":help  — show help"),
     ("doc", ":doc <symbol>  — show docs"),
     ("error", ":error [full|summary]  — set error display mode"),
+    (
+        "stacktrace",
+        ":stacktrace [off|verbose|full]  — set stacktrace display mode",
+    ),
     ("sig", ":sig <function|query>  — show signature"),
     ("info", ":info <query>  — show derived info"),
     (
         "type",
         ":type <binding>  — lookup binding type (annotate unresolved generics before persistence)",
     ),
-    ("facet", ":facet <FacetPath|$binding>  — inspect facet path"),
+    ("facet", ":facet <FacetPath|binding>  — inspect facet path"),
     ("save", ":save <path>  — save session to .eldr"),
     ("vars", ":vars  — list visible value bindings"),
     ("imported", ":imported  — list active imports"),
@@ -607,7 +611,7 @@ pub(super) fn submit_command(
 
     match cmd {
         "q" | "quit" => app.should_quit = true,
-        "help" | "save" | "doc" | "error" | "sig" | "info" | "type" | "facet" => {
+        "help" | "save" | "doc" | "error" | "stacktrace" | "sig" | "info" | "type" | "facet" => {
             let line = if arg.is_empty() {
                 format!(":{cmd}")
             } else {

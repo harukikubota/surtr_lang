@@ -1,0 +1,5 @@
+defmod Api {
+  def ready() -> StandbyInit<Int> {
+    1
+  }
+}

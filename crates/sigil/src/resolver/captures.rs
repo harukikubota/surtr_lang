@@ -34,6 +34,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 }
             }
         }
+        Resolved::TypeApply(_, target, _) => collect_captures_inner(target, bound, free),
         Resolved::Block(_, stmts) => {
             let mut local_bound = bound.clone();
             for stmt in stmts {
@@ -42,7 +43,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                     Resolved::Bind(_, pat, _) | Resolved::SafeBind(_, pat, _) => {
                         collect_bind_pattern_bindings(pat, &mut local_bound);
                     }
-                    Resolved::Def(_, id, _, params, _, _, _) => {
+                    Resolved::Def(_, id, _, params, _, _, _, _) => {
                         local_bound.insert(id.unique_id);
                         for param in params {
                             local_bound.insert(param.id.unique_id);
@@ -66,6 +67,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                         local_bound.insert(param.id.unique_id);
                     }
                     Resolved::BuiltinTypeDecl(_, _, _, _) => {}
+                    Resolved::TypeAlias(_, _, _, _) => {}
                     Resolved::ResultCtorDecl(_, _, _, _, _) => {}
                     Resolved::Closure(_, params, _, _) => {
                         for param in params {
@@ -90,6 +92,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::Pipe(_, left, right)
         | Resolved::ContextMap(_, left, right)
+        | Resolved::ContextApply(_, left, right)
         | Resolved::ContextBind(_, left, right)
         | Resolved::Compose(_, left, right)
         | Resolved::LiftedCompose(_, left, right)
@@ -181,7 +184,6 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::InferredFacetCapture(_, _) => {}
         Resolved::ProcessContextHandler(_, _) => {}
-        Resolved::TypeRefWitness(_, _) => {}
         Resolved::StructLit(_, _, fields) => {
             for field in fields {
                 match field {
@@ -205,17 +207,18 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             }
         }
         Resolved::StructDef(_, _, _, _, _)
-        | Resolved::RecordDef(_, _, _)
+        | Resolved::RecordDef(_, _, _, _)
         | Resolved::DeferrorDef(_, _, _, _)
         | Resolved::EnumDef(_, _, _, _, _)
         | Resolved::ConstDef(_, _, _, _, _)
-        | Resolved::TraitDef(_, _, _, _, _)
-        | Resolved::TraitImplDef(_, _, _, _, _)
+        | Resolved::TraitDef(_, _, _, _, _, _)
+        | Resolved::TraitImplDef(_, _, _, _, _, _)
         | Resolved::BuiltinDecl(_, _, _, _, _)
         | Resolved::BuiltinExtractorDecl(_, _, _, _, _)
         | Resolved::BuiltinTypeDecl(_, _, _, _)
+        | Resolved::TypeAlias(_, _, _, _)
         | Resolved::ResultCtorDecl(_, _, _, _, _) => {}
-        Resolved::Def(_, id, _, params, _, body, _) => {
+        Resolved::Def(_, id, _, params, _, _, body, _) => {
             let mut fun_bound = bound.clone();
             fun_bound.insert(id.unique_id);
             for param in params {

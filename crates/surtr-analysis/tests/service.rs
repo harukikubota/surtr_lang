@@ -5,9 +5,9 @@ use std::sync::Arc;
 use sindr::names::{FacetRootKind, SymbolCapabilities};
 use surtr_analysis::{
     resolve_context, AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisHost, AnalysisMode,
-    AnalysisService, CompletionKind, CompletionScope, CompletionSymbol, ProjectRunnerInput,
-    ProjectRunnerSourceInput, RunnerContext, RunnerSelection, SelectedContext, SemanticIndex,
-    SymbolDisplayMetadata, SymbolSemanticInfo, Utf16Position,
+    AnalysisService, CompletionKind, CompletionSymbol, ProjectRunnerInput,
+    ProjectRunnerSourceInput, ReplCompletionUseSite, RunnerContext, RunnerSelection,
+    SelectedContext, SemanticIndex, SymbolDisplayMetadata, SymbolSemanticInfo, Utf16Position,
 };
 
 #[derive(Debug)]
@@ -1165,7 +1165,7 @@ fn analysis_service_completions_use_facet_api_first_argument_constraints() {
             replacement: "Facet::set".to_string(),
             kind: CompletionKind::FunctionCall,
             detail: Some(
-                "set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>".to_string(),
+                "set(facet: Facet<WritablePath, $S, $A, $T, $B>, source: $S, value: $B) -> Result<$T>".to_string(),
             ),
             documentation: None,
             sort_text: None,
@@ -1204,7 +1204,7 @@ fn analysis_service_completions_use_facet_api_first_argument_constraints() {
             label: "name_path".to_string(),
             replacement: "name_path".to_string(),
             kind: CompletionKind::Variable,
-            detail: Some("Facet<User, String>".to_string()),
+            detail: Some("Facet<InfallibleStructural, User, String, _, _>".to_string()),
             documentation: None,
             sort_text: None,
             origin: None,
@@ -1261,7 +1261,9 @@ fn analysis_service_facet_arg_completion_uses_source_location_root_capabilities(
         label: "Facet::view".to_string(),
         replacement: "Facet::view".to_string(),
         kind: CompletionKind::FunctionCall,
-        detail: Some("view(facet: Facet<$S, $A>, source: $S) -> $A".to_string()),
+        detail: Some(
+            "view(facet: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>".to_string(),
+        ),
         documentation: None,
         sort_text: None,
         origin: None,
@@ -1325,7 +1327,7 @@ fn analysis_service_facet_arg_completion_uses_call_signature_not_name() {
             label: "name_path".to_string(),
             replacement: "name_path".to_string(),
             kind: CompletionKind::Variable,
-            detail: Some("Facet<User, String>".to_string()),
+            detail: Some("Facet<InfallibleStructural, User, String, _, _>".to_string()),
             documentation: None,
             sort_text: None,
             origin: None,
@@ -1403,7 +1405,7 @@ fn analysis_service_repl_assist_uses_repl_scope_and_signature_help() {
             line: 0,
             character: "print(".len() as u32,
         },
-        CompletionScope::VariablesOnly,
+        ReplCompletionUseSite::Input,
     );
 
     assert_eq!(

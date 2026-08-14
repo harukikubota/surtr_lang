@@ -1,4 +1,4 @@
-use sindr::runtime::Location;
+use sindr::runtime::{Location, RuntimeStackFrame};
 
 const RUNTIME_ERROR_KIND_DETAIL_PREFIX: &str = "__surtr_runtime_error_kind=";
 
@@ -44,6 +44,7 @@ pub struct RuntimeErrorContext {
     pub function: Option<String>,
     pub call_site: Option<Location>,
     pub details: Vec<String>,
+    pub stack_trace: Vec<RuntimeStackFrame>,
 }
 
 #[derive(Debug, Clone)]
@@ -161,8 +162,32 @@ pub fn format_runtime_error_verbose(err: &RuntimeError) -> String {
     for detail in &err.context.details {
         lines.push(format!("  detail: {}", detail));
     }
+    if !err.context.stack_trace.is_empty() {
+        lines.push("Stack trace:".into());
+        for (idx, frame) in err.context.stack_trace.iter().enumerate() {
+            lines.push(format!("  {}: {}", idx, format_stack_frame(frame)));
+        }
+    }
 
     lines.join("\n")
+}
+
+pub fn format_stack_frame(frame: &RuntimeStackFrame) -> String {
+    let mut rendered = frame
+        .function
+        .as_deref()
+        .unwrap_or("<top-level>")
+        .to_string();
+    if let Some(location) = frame.location.as_ref() {
+        rendered.push_str(&format!(
+            " at {}:{}:{}",
+            location.file, location.line, location.column
+        ));
+    }
+    if frame.tco {
+        rendered.push_str(" tail-call");
+    }
+    rendered
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -252,6 +277,7 @@ mod tests {
             function: None,
             call_site: None,
             details: vec!["task_id=7".into()],
+            stack_trace: Vec::new(),
         });
 
         assert_eq!(err.kind(), RuntimeErrorKind::TaskTimeout);
@@ -294,6 +320,7 @@ mod tests {
                 span_end: 24,
             }),
             details: vec!["stack_depth=2".into(), "locals_len=1".into()],
+            stack_trace: Vec::new(),
         });
 
         let formatted = format_runtime_error_verbose(&err);

@@ -5,7 +5,7 @@ value. The `|>` operator lowers through this trait.
 """
 deftrait PipeApply<$A, $B> {
   # Apply the receiver callable to `value`.
-  def pipe_apply(self: Self, value: $A) -> $B
+  def pipe_apply::<Self, $A, $B>(self: Self, value: $A) -> $B
 }
 
 @doc """
@@ -13,7 +13,7 @@ deftrait PipeApply<$A, $B> {
 This is the source-level meaning of `value |> f`.
 """
 impl PipeApply<$A, $B> for ($A -> $B) {
-  def pipe_apply(self: Self, value: $A) -> $B {
+  def pipe_apply::<($A -> $B), $A, $B>(self: Self, value: $A) -> $B {
     self(value)
   }
 }

@@ -1,0 +1,7 @@
+mapped = [1, 2] |*> always(10)
+bound = [1, 2] |>= always([10])
+optional = Option::Some(1) |>= always(Option::Some(10))
+
+print(inspect(mapped))
+print(inspect(bound))
+print(inspect(optional))

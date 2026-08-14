@@ -108,25 +108,23 @@ match expr {
 - trait 宣言は `deftrait Name<$T, ...> { ... }` のように型引数を取ってよい
 - trait 実装は `impl Trait for Type { ... }`
 - trait 実装は `impl Trait<Concrete, ...> for Type { ... }` の形も取れる
+- 通常 callable は型引数を明示できない。型スロットは signature の引数型・receiver 型から推論する
+- `::<Int>` は `try_from::<Int>(value)` のような Trait helper の target specialization にだけ使える。`Self` は値引数または期待 callable 型から推論する
+- FunParams は、型変数が value parameter の型から導入できない場合にだけ使う。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で FunParams に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として FunParams に置く
 - trait は method のみを持つ
-- `impl Trait` は parameter 位置のみで使える
-- `-> impl Trait` は未対応
-- `where` clause は未対応
+- 匿名 `impl Trait` 型は使えず、名前付き型変数と `where` clause で制約する
+- `where` clause は宣言・trait・impl に制約を追加する
 - `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
 - 数値 helper は `Int::abs` / `Float::safe_div` のような concrete type owner surface として提供する
 - `Compare` が三値比較の正本で、`< <= > >=` も `Compare` を前提に動く
-- `TypeRef<$T>` は compiler-reserved な target type witness
-- `TypeRef<$T>` は trait head で宣言された型引数に対応するときだけ、trait method parameter 型として使える
-- `TypeRef<$T>` は通常関数の引数型、戻り値型、field、local binding には使えない
 - `Hole` は compiler-reserved な ignored-input callable marker
 - `_` は `Hole` の surface 表記
 - `Hole` / `_` は data type wildcard ではなく、限定された callable surface にだけ現れる
 
 ### `from` / `try_from`
 
-- source 上の呼び出しは `from(value, TargetTy)` / `try_from(value, TargetTy)`
-- 第2引数 `TargetTy` は ordinary expression ではなく型指定スロット
-- 内部的には `TypeRef<TargetTy>` witness として扱う
+- source 上の呼び出しは `from::<TargetTy>(value)` / `try_from::<TargetTy>(value)`
+- `TargetTy` は明示型引数であり runtime の値引数ではない
 - `From<$To>` / `TryFrom<$To>` trait が impl coherence を担う
 
 ### `Result<T>`
@@ -212,6 +210,7 @@ False
 
 - `|>`
 - `|*>`
+- `|*|`
 - `|>=`
 - `>>`
 - `>*`
@@ -278,6 +277,22 @@ Ok(11) |>= require_at_least(10)
 Ok(11) |>= require_at_least(10)   # => require_at_least(11, 10)
 ```
 
+#### `|*|` Applicative ap
+
+`|*|` は `Applicative::ap` の surface syntax です。
+
+- `Result<(A -> B)> |*| Result<A> -> Result<B>`
+- `List<(A -> B)> |*| List<A> -> List<B>`
+- `Option<(A -> B)> |*| Option<A> -> Option<B>`
+
+```surtr
+Ok(&inc) |*| Ok(1)
+Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2)
+```
+
+複数引数の function は `curry()` で明示的にカリー化します。`|*|` は
+左結合で、各段階が callable の次の引数を消費します。
+
 #### `>>` 通常関数合成
 
 `>>` は plain function / closure の合成です。
@@ -333,7 +348,7 @@ value: Int =? parse_int("1")
 - `pattern =? Result<T, E>` は `Ok` を束縛し、`Err` を早期伝播する
 - `pattern =? expr` は SafeBind 対象の失敗しうるパターン入力を扱う
 - 現時点の対象は `Result`、`List`、`String`
-- `Option` は SafeBind 対象ではない。`from(value, Result)` で明示的に変換してから使う
+- `Option` は SafeBind 対象ではない。`from::<Result>(value)` で明示的に変換してから使う
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
 
 #### range literal
@@ -368,8 +383,8 @@ value: Int =? parse_int("1")
 - `&`op`(args...)`` は placeholder capture 規約で lower される
 - bare capture を `inspect` / `to_string` すると、metadata があれば
   `FnCapture(module: M, name: f, signature: sig)` 形式で表示する
-- `Result` と `List` を `|*>`, `|>=`, `>*`, `>=>` で混在させない
-- `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
+- `Result` と `List` を `|*>`, `|*|`, `|>=`, `>*`, `>=>` で混在させない
+- `|>`, `|*>`, `|*|`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
 - unqualified infix `` `on` `` と `` `Function::on` `` は flow より低優先度
 - 結合優先度は `Bind < StdOn < Apply=Compose < Logical < Expr`
 - `Expr` クラスの `+`, `-`, `*`, `++` は同列・左結合
@@ -498,12 +513,13 @@ Surtr では「module の外に生の関数がぶら下がる」モデルを取�
 現在の標準定義ソース層は次の順序でロードされます。
 
 ```text
-Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, From, TryFrom, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Facet, Float, Config, Project, Random, IO] -> ユーザ拡張
+Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, From, TryFrom, Functor, Applicative, Monad, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Option, Task, Facet, Float, Config, Project, Random, IO] -> ユーザ拡張
 ```
 
 ### auto import
 
 - `Bootstrap`, `Kernel` と `@autoimport` 付き標準 `impl Type` owner helper surface / 標準 trait は auto import 対象
+- `Functor`, `Applicative`, `Monad` は auto import 対象であり、`fmap`, `pure`, `ap`, `return`, `bind` を bare 名で呼べる
 - `Bootstrap` / `Kernel` の明示 `import` は compile error
 - それ以外の標準定義ソースは auto import しない
 
@@ -562,7 +578,7 @@ Bootstrap -> [SpecialTypes, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Sho
 @builtin type Result<$T>
 ```
 
-`Unit`, `TypeRef<$T>`, `Hole` は `special_types.srt` に集約します。
+`Unit`, `Hole` は `special_types.srt` に集約します。
 数値 helper は `int.srt` / `float.srt` の `impl Int` / `impl Float` に置きます。
 
 ### import の重複
@@ -628,7 +644,7 @@ defmod Bootstrap {
 - default method body
 - trait inheritance
 - multi-trait bounds
-- return-position `impl Trait`
+- 匿名 `impl Trait` 型（parameter / return / generic argument / impl target component）
 - `where` clauses
 - 型エイリアス / NewType
 - マクロシステム拡張

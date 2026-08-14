@@ -3,8 +3,47 @@ include "./schema/list_schema.srt"
 import ListSchema::{add_one, list_pure, list_step1, list_step2, list_step3};
 import Test;
 
+def map_applicative(value: Applicative<$A>, mapper: ($A -> $B)) -> Applicative<$B> {
+  Functor::fmap(value, mapper)
+}
+
 test("List") {
   describe("helpers") {
+    it("specializes constructor-constrained fmap") {
+      mapped: List<String> = map_applicative([9, 10], &to_string)
+      assert_eq(mapped, ["9", "10"])
+    }
+
+    it("concatenates lists with Alternative choice") {
+      assert_eq([1, 2, 3], [1, 2] <|> [3])
+    }
+
+    it("obeys Alternative identity and associativity laws") {
+      empty: List<Int> = Alternative::empty::<Int>()
+      first: List<Int> = [1]
+      second: List<Int> = [2]
+      third: List<Int> = [3]
+      assert_eq(first, empty <|> first)
+      assert_eq(first, first <|> empty)
+      assert_eq((first <|> second) <|> third, first <|> (second <|> third))
+    }
+
+    it("keeps Monad return equal to Applicative pure") {
+      pure_value: List<Int> = Applicative::pure(4)
+      returned_value: List<Int> = Monad::return(4)
+      assert_eq(pure_value, returned_value)
+    }
+
+    it("folds, maps, and reduces with a Monoid") {
+      sum = Monoid(0, {|left, right| left + right})
+      assert_eq(0, List::fold([], sum))
+      assert_eq(6, List::fold([1, 2, 3], sum))
+      assert_eq(12, List::fold_map([1, 2, 3], sum, {|value| value * 2}))
+      assert_eq(Option::Some(6), List::reduce_with([1, 2, 3], sum.combine))
+      values: List<Int> = []
+      assert_eq(Option::None, List::reduce_with(values, sum.combine))
+    }
+
     it("each runs callbacks from left to right") {
       capture_stdout()
       result = List::each([1, 2, 3], {|n| print("n=#{to_string(n)}")})

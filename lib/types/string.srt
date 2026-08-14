@@ -7,6 +7,10 @@ surface shape for strings.
 """
 @builtin type String
 
+impl Default for String {
+  def default::<String>() -> String { "" }
+}
+
 @doc """
 Concrete string-module error for `String::repeat`.
 Negative counts stay as recoverable values instead of becoming implicit
@@ -30,6 +34,7 @@ Encoding selector for integer-based string conversion helpers.
 `Utf8` treats integers as raw UTF-8 byte values, while `Ascii` restricts the
 sequence to 7-bit ASCII.
 """
+@derive Eq, Compare, Show
 defenum StringEncoding {
   Utf8,
   Ascii,
@@ -523,7 +528,7 @@ impl Show for String {
   xldr(1)> to_string("abc")
   "abc"
   """
-  def to_string(self: Self) -> String {
+  def to_string::<String>(self: Self) -> String {
     self
   }
 }
@@ -532,10 +537,10 @@ impl From<String> for String {
   @doc """
   Return the value unchanged when converting `String` to `String`.
   ## REPL
-  xldr(1)> from("abc", String)
+  xldr(1)> from::<String>("abc")
   "abc"
   """
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from::<String>(self: Self) -> String {
     self
   }
 }
@@ -544,10 +549,10 @@ impl TryFrom<Int> for String {
   @doc """
   Parse the string as an `Int`, returning an error result on invalid input.
   ## REPL
-  xldr(1)> try_from("42", Int)
+  xldr(1)> try_from::<Int>("42")
   Ok(42)
   """
-  def try_from(self: Self, to: TypeRef<Int>) -> Result<Int, Error> {
+  def try_from::<Int>(self: Self) -> Result<Int, Error> {
     String::try_to_int(self)
   }
 }
@@ -556,10 +561,10 @@ impl TryFrom<Boolean> for String {
   @doc """
   Parse the string as a `Boolean`, returning an error result on invalid input.
   ## REPL
-  xldr(1)> try_from("True", Boolean)
+  xldr(1)> try_from::<Boolean>("True")
   Ok(True)
   """
-  def try_from(self: Self, to: TypeRef<Boolean>) -> Result<Boolean, Error> {
+  def try_from::<Boolean>(self: Self) -> Result<Boolean, Error> {
     String::try_to_boolean(self)
   }
 }
@@ -571,17 +576,7 @@ impl Eq for String {
   xldr(1)> eq("a", "a")
   True
   """
-  @builtin def eq(self: Self, rhs: Self) -> Boolean
-}
-
-impl Neq for String {
-  @doc """
-  Return `True` when the string values differ.
-  ## REPL
-  xldr(1)> neq("a", "b")
-  True
-  """
-  @builtin def neq(self: Self, rhs: Self) -> Boolean
+  @builtin def eq::<String>(self: Self, rhs: Self) -> Boolean
 }
 
 impl Concat for String {
@@ -591,5 +586,5 @@ impl Concat for String {
   xldr(1)> concat("ab", "cd")
   "abcd"
   """
-  @builtin def concat(self: Self, rhs: Self) -> Self
+  @builtin def concat::<String>(self: Self, rhs: Self) -> Self
 }

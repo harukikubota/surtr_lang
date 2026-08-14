@@ -1,0 +1,2 @@
+phase: typecheck
+contains: `Hole` is compiler-reserved

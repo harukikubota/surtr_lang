@@ -6,8 +6,8 @@ use surtr_analysis::{
     complete_call_argument, complete_prefix, lookup_symbol_at_cursor,
     rank_completion_candidates_by_expected_type, repl_assist_at_cursor, signature_help_at_cursor,
     CallableSignature, CompletionCandidate, CompletionKind, CompletionOrigin, CompletionRequest,
-    CompletionScope, CompletionSymbol, ReplInputSupportContext, ReplInputSupportUpdate,
-    SemanticIndex, SymbolDisplayMetadata,
+    CompletionScope, CompletionSymbol, ReplCommandUseSite, ReplCompletionUseSite,
+    ReplInputSupportContext, ReplInputSupportUpdate, SemanticIndex, SymbolDisplayMetadata,
 };
 
 #[test]
@@ -754,7 +754,7 @@ fn repl_assist_combines_call_signature_and_argument_variable_completion() {
             source: "print(",
             cursor: "print(".len(),
         },
-        CompletionScope::VariablesOnly,
+        ReplCompletionUseSite::Input,
     );
 
     assert_eq!(assist.active_parameter, Some(0));
@@ -810,7 +810,7 @@ fn repl_assist_preserves_repl_tail_presentation() {
             source: "re",
             cursor: "re".len(),
         },
-        CompletionScope::All,
+        ReplCompletionUseSite::Input,
     );
 
     assert_eq!(assist.signature, None);
@@ -841,12 +841,12 @@ fn repl_input_support_context_accepts_session_updates() {
         }],
     });
 
-    let completion = context.input_support("val", 3, CompletionScope::All);
+    let completion = context.input_support("val", 3, ReplCompletionUseSite::Input);
     assert_eq!(completion.candidates.len(), 1);
     assert_eq!(completion.candidates[0].label, "value");
     assert_eq!(completion.candidates[0].detail.as_deref(), Some("Int"));
 
-    let support = context.input_support("fresh(", "fresh(".len(), CompletionScope::All);
+    let support = context.input_support("fresh(", "fresh(".len(), ReplCompletionUseSite::Input);
     let signature = support
         .signature
         .expect("call signature should be produced by input support core");
@@ -855,6 +855,437 @@ fn repl_input_support_context_accepts_session_updates() {
         vec!["Fresh::fresh(value: [String]) -> Unit".to_string()]
     );
     assert_eq!(signature.active_parameter, Some(0));
+}
+
+#[test]
+fn repl_input_support_context_filters_type_command_candidates_by_use_site() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: vec![
+            CompletionSymbol {
+                label: "count".to_string(),
+                replacement: "count".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("Int".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+            CompletionSymbol {
+                label: "count_up".to_string(),
+                replacement: "count_up".to_string(),
+                kind: CompletionKind::FunctionCall,
+                detail: Some("count_up(value: Int) -> Int".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+            CompletionSymbol {
+                label: "Counter".to_string(),
+                replacement: "Counter".to_string(),
+                kind: CompletionKind::TypeConstructor,
+                detail: Some("Counter".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+        ],
+        callable_signatures: Vec::new(),
+    });
+
+    let input_labels = context
+        .input_support("co", 2, ReplCompletionUseSite::Input)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        input_labels.contains(&"count".to_string())
+            && input_labels.contains(&"count_up".to_string()),
+        "{input_labels:?}"
+    );
+
+    let type_labels = context
+        .input_support(
+            ":type co",
+            ":type co".len(),
+            ReplCompletionUseSite::Command(ReplCommandUseSite::Type),
+        )
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert_eq!(type_labels, vec!["count".to_string()]);
+
+    let owner_labels = context
+        .input_support(
+            ":type Cou",
+            ":type Cou".len(),
+            ReplCompletionUseSite::Command(ReplCommandUseSite::Type),
+        )
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert_eq!(owner_labels, vec!["Counter".to_string()]);
+
+    let special_labels = context
+        .input_support(
+            ":type tr",
+            ":type tr".len(),
+            ReplCompletionUseSite::Command(ReplCommandUseSite::Type),
+        )
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        !special_labels
+            .iter()
+            .any(|label| label == "true" || label == "false"),
+        "{special_labels:?}"
+    );
+}
+
+#[test]
+fn repl_input_support_context_distinguishes_expression_sig_and_type_use_sites() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: vec![
+            CompletionSymbol {
+                label: "count".to_string(),
+                replacement: "count".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("Int".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+            CompletionSymbol {
+                label: "count_up".to_string(),
+                replacement: "count_up".to_string(),
+                kind: CompletionKind::FunctionCall,
+                detail: Some("count_up(value: Int) -> Int".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+        ],
+        callable_signatures: Vec::new(),
+    });
+
+    let expr_labels = context
+        .input_support("co", 2, ReplCompletionUseSite::Input)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        expr_labels.contains(&"count".to_string()) && expr_labels.contains(&"count_up".to_string()),
+        "{expr_labels:?}"
+    );
+
+    let sig_labels = context
+        .input_support(
+            ":sig co",
+            ":sig co".len(),
+            ReplCompletionUseSite::Command(ReplCommandUseSite::Sig),
+        )
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        sig_labels.contains(&"count".to_string()) && sig_labels.contains(&"count_up".to_string()),
+        "{sig_labels:?}"
+    );
+
+    let doc_labels = context
+        .input_support(
+            ":doc co",
+            ":doc co".len(),
+            ReplCompletionUseSite::Command(ReplCommandUseSite::Doc),
+        )
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        doc_labels.contains(&"count".to_string()) && doc_labels.contains(&"count_up".to_string()),
+        "{doc_labels:?}"
+    );
+
+    let info_labels = context
+        .input_support(
+            ":info co",
+            ":info co".len(),
+            ReplCompletionUseSite::Command(ReplCommandUseSite::Info),
+        )
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(
+        info_labels.contains(&"count".to_string()) && info_labels.contains(&"count_up".to_string()),
+        "{info_labels:?}"
+    );
+
+    let type_labels = context
+        .input_support(
+            ":type co",
+            ":type co".len(),
+            ReplCompletionUseSite::Command(ReplCommandUseSite::Type),
+        )
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert_eq!(type_labels, vec!["count".to_string()]);
+}
+
+#[test]
+fn repl_input_support_context_completes_command_heads_and_qualified_callables() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: vec![
+            CompletionSymbol {
+                label: "print".to_string(),
+                replacement: "print".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("String".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+            CompletionSymbol {
+                label: "Kernel::print".to_string(),
+                replacement: "Kernel::print".to_string(),
+                kind: CompletionKind::FunctionCall,
+                detail: Some("Kernel::print(value: String) -> Unit".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+        ],
+        callable_signatures: Vec::new(),
+    });
+
+    assert!(ReplInputSupportContext::should_request(":si", ":si".len()));
+    let head_labels = context
+        .input_support(":si", ":si".len(), ReplCompletionUseSite::CommandHead)
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert!(head_labels.contains(&":sig".to_string()), "{head_labels:?}");
+
+    let qualified_labels = context
+        .input_support(
+            ":sig Kernel::pr",
+            ":sig Kernel::pr".len(),
+            ReplCompletionUseSite::Command(ReplCommandUseSite::Sig),
+        )
+        .candidates
+        .into_iter()
+        .map(|candidate| candidate.label)
+        .collect::<Vec<_>>();
+    assert_eq!(qualified_labels, vec!["Kernel::print".to_string()]);
+}
+
+#[test]
+fn repl_input_support_context_shows_nested_call_signatures_and_inner_candidates() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: vec![
+            CompletionSymbol {
+                label: "word".to_string(),
+                replacement: "word".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("String".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+            CompletionSymbol {
+                label: "width".to_string(),
+                replacement: "width".to_string(),
+                kind: CompletionKind::Variable,
+                detail: Some("Int".to_string()),
+                documentation: None,
+                sort_text: None,
+                origin: None,
+                definition: None,
+                capabilities: None,
+            },
+        ],
+        callable_signatures: vec![
+            CallableSignature {
+                label: "if".to_string(),
+                qualified_name: "if".to_string(),
+                signature: "if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A"
+                    .to_string(),
+            },
+            CallableSignature {
+                label: "String::contains".to_string(),
+                qualified_name: "String::contains".to_string(),
+                signature: "contains(value: String, needle: String) -> Boolean".to_string(),
+            },
+        ],
+    });
+
+    let support = context.input_support(
+        "if(String::contains(w",
+        "if(String::contains(w".len(),
+        ReplCompletionUseSite::Input,
+    );
+    let signature = support
+        .signature
+        .expect("nested call signature help should be produced");
+    assert_eq!(
+        signature.lines,
+        vec![
+            "if(flag: [Boolean], then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A".to_string(),
+            "  String::contains(value: [String], needle: String) -> Boolean".to_string(),
+        ]
+    );
+    assert_eq!(signature.active_parameter, Some(0));
+
+    let labels = support
+        .candidates
+        .iter()
+        .map(|candidate| candidate.label.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(labels, vec!["word", "width"]);
+}
+
+#[test]
+fn repl_input_support_context_drops_inner_signature_after_inner_call_closes() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: Vec::new(),
+        callable_signatures: vec![
+            CallableSignature {
+                label: "if".to_string(),
+                qualified_name: "if".to_string(),
+                signature: "if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A"
+                    .to_string(),
+            },
+            CallableSignature {
+                label: "String::contains".to_string(),
+                qualified_name: "String::contains".to_string(),
+                signature: "contains(value: String, needle: String) -> Boolean".to_string(),
+            },
+        ],
+    });
+
+    let input = "if(String::contains(word, needle), ";
+    let support = context.input_support(input, input.len(), ReplCompletionUseSite::Input);
+    let signature = support
+        .signature
+        .expect("outer call signature help should remain after inner call closes");
+    assert_eq!(
+        signature.lines,
+        vec!["if(flag: Boolean, then_branch: [Lazy<$A>], else_branch: Lazy<$A>) -> $A".to_string()]
+    );
+    assert_eq!(signature.active_parameter, Some(1));
+}
+
+#[test]
+fn repl_input_support_context_keeps_path_candidates_inside_outer_call_arguments() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: vec![CompletionSymbol {
+            label: "String::contains".to_string(),
+            replacement: "String::contains".to_string(),
+            kind: CompletionKind::TypePath,
+            detail: Some("String::contains(value: String, needle: String) -> Boolean".to_string()),
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            definition: None,
+            capabilities: None,
+        }],
+        callable_signatures: vec![
+            CallableSignature {
+                label: "if".to_string(),
+                qualified_name: "if".to_string(),
+                signature: "if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A"
+                    .to_string(),
+            },
+            CallableSignature {
+                label: "String::contains".to_string(),
+                qualified_name: "String::contains".to_string(),
+                signature: "contains(value: String, needle: String) -> Boolean".to_string(),
+            },
+        ],
+    });
+
+    let input = "if(String::c";
+    let support = context.input_support(input, input.len(), ReplCompletionUseSite::Input);
+    assert_eq!(
+        support
+            .signature
+            .as_ref()
+            .expect("outer call signature should remain visible")
+            .lines,
+        vec!["if(flag: [Boolean], then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A".to_string()]
+    );
+    assert!(
+        support
+            .candidates
+            .iter()
+            .any(|candidate| candidate.label == "String::contains"),
+        "path candidates should remain available inside call arguments: {:?}",
+        support.candidates
+    );
+}
+
+#[test]
+fn repl_input_support_context_limits_nested_signature_display_to_two_levels() {
+    let context = ReplInputSupportContext::from_update(ReplInputSupportUpdate {
+        symbols: Vec::new(),
+        callable_signatures: vec![
+            CallableSignature {
+                label: "if".to_string(),
+                qualified_name: "if".to_string(),
+                signature: "if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A"
+                    .to_string(),
+            },
+            CallableSignature {
+                label: "wrap".to_string(),
+                qualified_name: "wrap".to_string(),
+                signature: "wrap(value: Boolean) -> Boolean".to_string(),
+            },
+            CallableSignature {
+                label: "String::contains".to_string(),
+                qualified_name: "String::contains".to_string(),
+                signature: "contains(value: String, needle: String) -> Boolean".to_string(),
+            },
+        ],
+    });
+
+    let input = "if(wrap(String::contains(w";
+    let support = context.input_support(input, input.len(), ReplCompletionUseSite::Input);
+    let signature = support
+        .signature
+        .expect("nested call signature help should be produced");
+    assert_eq!(
+        signature.lines,
+        vec![
+            "wrap(value: [Boolean]) -> Boolean".to_string(),
+            "  String::contains(value: [String], needle: String) -> Boolean".to_string(),
+        ]
+    );
 }
 
 #[test]
@@ -892,7 +1323,7 @@ fn repl_input_support_context_produces_operator_assist_and_ranked_candidates() {
         "1 + ".len()
     ));
 
-    let support = context.input_support("1 + ", "1 + ".len(), CompletionScope::All);
+    let support = context.input_support("1 + ", "1 + ".len(), ReplCompletionUseSite::Input);
     let signature = support
         .signature
         .expect("operator rhs should show signature help");
@@ -1631,7 +2062,7 @@ fn facet_arg_completion_includes_capability_declared_roots_without_detail_heuris
     let mut symbols = vec![completion_symbol(
         "Facet::view",
         CompletionKind::FunctionCall,
-        "Facet::view(path: Facet<$S, $A>, source: $S) -> $A",
+        "Facet::view(path: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>",
     )];
     symbols.extend(
         SemanticIndex::from_declaration_index(&declarations)
@@ -1682,7 +2113,7 @@ fn facet_arg_completion_includes_builtin_path_roots_and_excludes_plain_builtin_t
     let mut symbols = vec![completion_symbol(
         "Facet::view",
         CompletionKind::FunctionCall,
-        "Facet::view(path: Facet<$S, $A>, source: $S) -> $A",
+        "Facet::view(path: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>",
     )];
     symbols.extend(
         SemanticIndex::from_metadata(&docs, &[])

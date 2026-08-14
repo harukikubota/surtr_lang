@@ -82,7 +82,7 @@ pub(crate) fn validate_program_by_context(
 
 fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
     match ast {
-        Ast::Def(_, _, _, _, _, _, _) => Some(TopLevelDeclKind::Def),
+        Ast::Def(_, _, _, _, _, _, _, _) => Some(TopLevelDeclKind::Def),
         Ast::ExtractorDef(_, _, _, _, _, _, _) => Some(TopLevelDeclKind::ExtractorDef),
         Ast::Defmod(_, _, _, _) => Some(TopLevelDeclKind::Defmod),
         Ast::Defagent(_, _, _, _, _) => Some(TopLevelDeclKind::Defagent),
@@ -91,8 +91,8 @@ fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         Ast::DefdynamicSupervisor(_, _, _, _, _) => Some(TopLevelDeclKind::DefdynamicSupervisor),
         Ast::Namespace(_, _, _) => Some(TopLevelDeclKind::Namespace),
         Ast::ImplDef(_, _, _, _) => Some(TopLevelDeclKind::ImplDef),
-        Ast::TraitDef(_, _, _, _, _) => Some(TopLevelDeclKind::TraitDef),
-        Ast::TraitImplDef(_, _, _, _, _, _) => Some(TopLevelDeclKind::TraitImplDef),
+        Ast::TraitDef(_, _, _, _, _, _) => Some(TopLevelDeclKind::TraitDef),
+        Ast::TraitImplDef(_, _, _, _, _, _, _) => Some(TopLevelDeclKind::TraitImplDef),
         Ast::Import(_, _, _) => Some(TopLevelDeclKind::Import),
         Ast::Include(_, _) => Some(TopLevelDeclKind::Include),
         Ast::StructDef(..) => Some(TopLevelDeclKind::StructDef),
@@ -105,6 +105,7 @@ fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         Ast::IntrinsicDecl(_, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
         Ast::BuiltinExtractorDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinExtractorDecl),
         Ast::BuiltinTypeDecl(_, _, _) => Some(TopLevelDeclKind::BuiltinTypeDecl),
+        Ast::TypeAlias(..) => Some(TopLevelDeclKind::TypeAlias),
         Ast::ResultCtorDecl(_, _, _, _, _) => Some(TopLevelDeclKind::BuiltinDecl),
         _ => None,
     }

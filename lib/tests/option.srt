@@ -3,6 +3,22 @@ include "./schema/option_schema.srt"
 import OptionSchema::{ensure_short_name, maybe_profile};
 import Test;
 
+def preserve_applicative(value: Applicative<$A>) -> Applicative<$A> {
+  value
+}
+
+def audit_applicative(value: Applicative) -> Unit {
+  ()
+}
+
+def map_applicative(value: Applicative<$A>, mapper: ($A -> $B)) -> Applicative<$B> {
+  Functor::fmap(value, mapper)
+}
+
+def as_functor(value: Applicative<$A>) -> Functor<$A> {
+  value
+}
+
 test("Option") {
   describe("predicates and constructors") {
     it("reports some and none states") {
@@ -21,23 +37,57 @@ test("Option") {
 
   describe("conversions") {
     it("converts option into result") {
-      assert_eq("Ok(7)", inspect(from(Option::Some(7), Result)))
+      assert_eq("Ok(7)", inspect(from::<Result>(Option::Some(7))))
     }
 
     it("converts none into none error") {
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(from(Option::None, Result)))
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(from::<Result>(Option::None)))
     }
 
     it("converts result into option") {
-      assert_eq("Option::Some(9)", inspect(from(Ok(9), Option)))
+      assert_eq("Option::Some(9)", inspect(from::<Option>(Ok(9))))
     }
 
     it("drops concrete errors when converting err into option") {
-      assert_eq("Option::None", inspect(from(Err(NoneError), Option)))
+      assert_eq("Option::None", inspect(from::<Option>(Err(NoneError))))
     }
   }
 
   describe("trait integrations") {
+    it("specializes constructor-constrained fmap") {
+      mapped: Option<String> = map_applicative(Option::Some(9), &to_string)
+      assert_eq(mapped, Option::Some("9"))
+    }
+
+    it("shares the Functor root with Applicative annotations") {
+      mapped: Option<Int> = as_functor(Option::Some(9))
+      assert_eq(mapped, Option::Some(9))
+    }
+
+    it("chooses the first Some with Alternative") {
+      assert_eq(Option::Some(7), Option::Some(7) <|> Option::Some(9))
+    }
+
+    it("uses the fallback when Option is empty") {
+      assert_eq(Option::Some(9), Option::None <|> Option::Some(9))
+    }
+
+    it("obeys Alternative identity and associativity laws") {
+      empty: Option<Int> = Alternative::empty::<Int>()
+      first: Option<Int> = Option::Some(1)
+      second: Option<Int> = Option::Some(2)
+      third: Option<Int> = Option::Some(3)
+      assert_eq(first, empty <|> first)
+      assert_eq(first, first <|> empty)
+      assert_eq((first <|> second) <|> third, first <|> (second <|> third))
+    }
+
+    it("keeps Monad return equal to Applicative pure") {
+      pure_value: Option<Int> = Applicative::pure(4)
+      returned_value: Option<Int> = Monad::return(4)
+      assert_eq(pure_value, returned_value)
+    }
+
     it("maps with functor operator") {
       assert_eq("Option::Some(8)", inspect(Option::Some(7) |*> {|value| value + 1}))
     }
@@ -76,3 +126,7 @@ test("Option") {
     }
   }
 }
+
+preserved: Option<Int> = preserve_applicative(Option::Some(9))
+assert_eq(preserved, Option::Some(9))
+audit_applicative(Option::Some(9))

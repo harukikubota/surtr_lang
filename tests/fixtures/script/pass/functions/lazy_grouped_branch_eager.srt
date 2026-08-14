@@ -1,0 +1,4 @@
+def selected() -> Unit { print("selected") }
+def eager() -> Unit { print("eager") }
+
+if(True, selected(), (eager()))

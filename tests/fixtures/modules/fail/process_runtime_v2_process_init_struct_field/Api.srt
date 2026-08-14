@@ -1,9 +1,0 @@
-defstruct BoxedInit {
-  value: ProcessInit<Int>,
-}
-
-impl BoxedInit {
-  def new(value: ProcessInit<Int>) -> BoxedInit {
-    BoxedInit { value: value }
-  }
-}

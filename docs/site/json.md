@@ -7,7 +7,7 @@ trait helper で扱います。
 
 - text を JSON にする: `Json::decode(text)`
 - JSON を text にする: `Json::encode(value)`
-- JSON から typed value にする: `JsonValue::decode(json, TargetType)`
+- JSON から typed value にする: `Decode::decode::<TargetType>(json)`
 - typed value を JSON にする: `JsonValue::encode(value)`
 
 `Json` は auto import されません。`Encode` / `Decode` も auto import されないため、
@@ -89,7 +89,7 @@ name =? Json::get(json, "name") |>= JsonValue::decode(String)
 defrecord JsonConfig(name: String, entrypoint: String)
 
 impl Decode<JsonConfig> for JsonValue {
-  def decode(self: Self, to: TypeRef<JsonConfig>) -> Result<JsonConfig, Error> {
+  def decode(self: Self) -> Result<JsonConfig, Error> {
     name =? Json::get(self, "name") |>= JsonValue::decode(String)
     entrypoint =? Json::get(self, "entrypoint") |>= JsonValue::decode(String)
     Ok(JsonConfig(name, entrypoint))
@@ -97,7 +97,7 @@ impl Decode<JsonConfig> for JsonValue {
 }
 
 impl Encode<JsonValue> for JsonConfig {
-  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+  def encode(self: Self) -> Result<JsonValue, Error> {
     Ok(JsonValue::Object(HashMap::from_entries([
       ("name", JsonValue::String(self.name)),
       ("entrypoint", JsonValue::String(self.entrypoint)),
@@ -106,7 +106,7 @@ impl Encode<JsonValue> for JsonConfig {
 }
 
 json =? Json::decode("{\"name\":\"surtr\",\"entrypoint\":\"boot\"}")
-cfg =? JsonValue::decode(json, JsonConfig)
+cfg =? Decode::decode::<JsonConfig>(json)
 roundtrip_json =? JsonValue::encode(cfg)
 roundtrip_text =? Json::encode(roundtrip_json)
 ```
@@ -143,6 +143,6 @@ assert_eq("surtr", text)
 
 ```surtr
 json =? Json::decode("42")
-result = JsonValue::decode(json, String)
+result = Decode::decode::<String>(json)
 assert_eq("JsonDecodeError", Error::kind(Result::err(result)))
 ```

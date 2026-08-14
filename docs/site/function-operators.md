@@ -2,7 +2,7 @@
 
 Surtr には、値の流し込み、文脈付き計算、関数合成を短く書くための関数演算子があります。
 加えて、見た目は近いものの trait 演算子ではない binding form として `=?` もあります。
-このページでは `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?`, `=` をまとめて引けるようにします。
+このページでは `|>`, `|*>`, `|*|`, `|>=`, `>>`, `>*`, `>=>`, `=?`, `=` をまとめて引けるようにします。
 apply 系の詳説は `./pipe-operators.md`、capture 自体の詳説は `./capture-operator.md`、関数コールや closure の総論は `./callables.md` に分けています。
 
 ## 先に覚えるルール
@@ -10,7 +10,7 @@ apply 系の詳説は `./pipe-operators.md`、capture 自体の詳説は `./capt
 - 裸の関数名は関数値になりません。関数値が欲しいときは `&name` を使います
 - `|>` の右辺が call 式なら、左辺値が第 1 引数へ注入されます
 - `>>`, `>*`, `>=>` は compose なので、左右とも関数値でなければなりません
-- `|>`, `|*>`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度、左結合です
+- `|>`, `|*>`, `|*|`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度、左結合です
 - `=` は同じ記号帯ですが expression operator ではなく、束縛構文として別扱いです
 
 ## `=` Bind
@@ -116,7 +116,7 @@ names = users |*> _.name
 `|>=` は文脈を保ったまま次の段階へ渡します。
 
 ```surtr
-try_from("42", Int) |>= require_at_least(10)
+try_from::<Int>("42") |>= require_at_least(10)
 [1, 2, 3] |>= expand()
 Ok(" 42 ") |*> String::trim() |>= try_from(Int)
 ```
@@ -134,6 +134,25 @@ def neighbors(n: Int) -> List<Int> { [n - 1, n, n + 1] }
 
 print(to_string([3, 5] |>= neighbors()))
 ```
+
+## `|*|` Applicative ap
+
+`|*|` は `Applicative::ap` の surface syntax です。左辺は文脈内の
+callable、右辺は同じ文脈の値です。
+
+```surtr
+incremented = Ok(&inc) |*| Ok(2)
+added = Ok(curry(&Add::add)) |*| Ok(1) |*| Ok(2)
+```
+
+型の読み方:
+
+- `Result<(A -> B)> |*| Result<A> -> Result<B>`
+- `List<(A -> B)> |*| List<A> -> List<B>`
+- `Option<(A -> B)> |*| Option<A> -> Option<B>`
+
+複数引数の callable は暗黙にカリー化されません。`curry()` で明示的に
+カリー化すると、左結合の `|*|` を引数ごとに重ねられます。
 
 ## `>>` 通常関数合成
 
@@ -174,7 +193,7 @@ pipeline2 = &parse >* {|n| "#" ++ to_string(n)}
 
 ```surtr
 def parse_int(text: String) -> Result<Int> {
-  try_from(text, Int)
+  try_from::<Int>(text)
 }
 
 def render_int(value: Int) -> String {
@@ -202,7 +221,7 @@ pipeline2 = &parse >=> {|n| require_at_least(n, 10)}
 
 ```surtr
 def parse_int(text: String) -> Result<Int> {
-  try_from(text, Int)
+  try_from::<Int>(text)
 }
 
 def require_small(x: Int) -> Result<Int> {
@@ -219,7 +238,7 @@ pipeline = &parse_int >=> &require_small
 REPL では入力自体は受理しますが、失敗時はエラーを表示してセッションを継続します。
 
 ```surtr
-value: Int =? try_from("1", Int)
+value: Int =? try_from::<Int>("1")
 [head, ..tail] =? [1, 2, 3]
 [first, ..rest] =? "source"
 ```
@@ -230,7 +249,7 @@ value: Int =? try_from("1", Int)
 - `List`
 - `String`
 
-`Option` は `=?` の対象外なので、必要なら `from(value, Result)` で `Result` へ変換してから使います。
+`Option` は `=?` の対象外なので、必要なら `from::<Result>(value)` で `Result` へ変換してから使います。
 たとえば `num: Int =? Option::Some(1)` はエラーです。
 
 `=?` も trait 演算子ではなく、language-level binding form です。
@@ -238,7 +257,6 @@ value: Int =? try_from("1", Int)
 SafeBind の流れは次です。
 
 - RHS が `Err(...)` ならその `Err(...)` を早期リターンします
-- LHS の MatchBlock / Extractor の途中で `Err(...)` が出た場合も早期リターンします
 - LHS のマッチ結果が `NoMatch` なら error 化して早期リターンします
 - LHS には `uncons`、literal match、Extractor を再帰的に書けます
 - 上のチェックが全部成功したときだけ変数が束縛されて続行します
@@ -247,7 +265,7 @@ SafeBind の流れは次です。
 
 ```surtr
 def parse_int(text: String) -> Result<Int> {
-  try_from(text, Int)
+  try_from::<Int>(text)
 }
 
 def require_small(x: Int) -> Result<Int> {
@@ -298,7 +316,7 @@ inc = &`+`(&1, 1)
 
 ## 迷ったときの選び方
 
-- 値から始めるなら apply 系: `|>`, `|*>`, `|>=`
+- 値から始めるなら apply 系: `|>`, `|*>`, `|*|`, `|>=`
 - 関数どうしを先に組み立てるなら compose 系: `>>`, `>*`, `>=>`
 
 ## 関連ページ

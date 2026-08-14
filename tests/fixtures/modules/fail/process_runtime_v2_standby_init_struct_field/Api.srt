@@ -1,0 +1,9 @@
+defstruct BoxedInit {
+  value: StandbyInit<Int>,
+}
+
+impl BoxedInit {
+  def new(value: StandbyInit<Int>) -> BoxedInit {
+    BoxedInit { value: value }
+  }
+}

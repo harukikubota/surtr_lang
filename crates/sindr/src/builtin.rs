@@ -254,47 +254,47 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "view",
         arity: 2,
-        sig_str: "(Facet<$S, $A>, $S) -> Result<$A>",
+        sig_str: "(Facet<ReadablePath, $S, $A, _, _>, $S) -> Result<$A>",
     },
     BuiltinMeta {
         name: "preview",
         arity: 2,
-        sig_str: "(Facet<$S, $A>, $S) -> Result<$A>",
+        sig_str: "(Facet<PreviewPath, $S, $A, _, _>, $S) -> Result<$A>",
     },
     BuiltinMeta {
         name: "__facet_chain",
         arity: 2,
-        sig_str: "(Facet<$S, $A>, Facet<$A, $B>) -> Facet<$S, $B>",
+        sig_str: "(Facet<$K, $S, $A, _, _>, Facet<$L, $A, $B, _, _>) -> Facet<$K, $S, $B, _, _>",
     },
     BuiltinMeta {
         name: "__facet_put",
         arity: 3,
-        sig_str: "(Facet<$S, $A>, $S, $A) -> $S",
+        sig_str: "(Facet<PutPath, $S, $A, $T, $B>, $S, $B) -> $T",
     },
     BuiltinMeta {
         name: "set",
         arity: 3,
-        sig_str: "(Facet<$S, $A>, $S, $A) -> Result<$S>",
+        sig_str: "(Facet<WritablePath, $S, $A, $T, $B>, $S, $B) -> Result<$T>",
     },
     BuiltinMeta {
         name: "over",
         arity: 3,
-        sig_str: "(Facet<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
+        sig_str: "(Facet<WritablePath, $S, $A, $T, $B>, $S, ($A -> Result<$B>)) -> Result<$T>",
     },
     BuiltinMeta {
         name: "over_result",
         arity: 3,
-        sig_str: "(Facet<$S, Result<$A>>, $S, (Result<$A> -> Result<Result<$A>>)) -> Result<$S>",
+        sig_str: "(Facet<WritablePath, $S, Result<$A>, $T, Result<$B>>, $S, (Result<$A> -> Result<Result<$B>>)) -> Result<$T>",
     },
     BuiltinMeta {
         name: "case_set",
         arity: 3,
-        sig_str: "(Facet<$S, $A>, $S, $A) -> Result<$S>",
+        sig_str: "(Facet<CasePath, $S, $A, $T, $B>, $S, $B) -> Result<$T>",
     },
     BuiltinMeta {
         name: "case_over",
         arity: 3,
-        sig_str: "(Facet<$S, $A>, $S, ($A -> Result<$A>)) -> Result<$S>",
+        sig_str: "(Facet<CasePath, $S, $A, $T, $B>, $S, ($A -> Result<$B>)) -> Result<$T>",
     },
     BuiltinMeta {
         name: "__facet_list_get",
@@ -730,17 +730,17 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
     BuiltinMeta {
         name: "Pending",
         arity: 0,
-        sig_str: "() -> ProcessInit<$T>",
+        sig_str: "() -> StandbyInit<$T>",
     },
     BuiltinMeta {
         name: "PendingAfter",
         arity: 1,
-        sig_str: "(Duration) -> ProcessInit<$T>",
+        sig_str: "(Duration) -> StandbyInit<$T>",
     },
     BuiltinMeta {
         name: "Ready",
         arity: 1,
-        sig_str: "($T) -> ProcessInit<$T>",
+        sig_str: "($T) -> StandbyInit<$T>",
     },
     BuiltinMeta {
         name: "__task_call",
@@ -1037,6 +1037,11 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
         arity: 3,
         sig_str: "(String, String, String) -> String",
     },
+    BuiltinMeta {
+        name: "curry",
+        arity: 1,
+        sig_str: "($A) -> $B",
+    },
 ];
 
 /// Function metadata view. Prefer this name when the caller needs runtime
@@ -1129,15 +1134,11 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         params: &["$T"],
     },
     BuiltinTypeMeta {
-        name: TypeName::ProcessInit.as_str(),
+        name: TypeName::StandbyInit.as_str(),
         params: &["$T"],
     },
     BuiltinTypeMeta {
         name: TypeName::Lazy.as_str(),
-        params: &["$T"],
-    },
-    BuiltinTypeMeta {
-        name: TypeName::TypeRef.as_str(),
         params: &["$T"],
     },
     BuiltinTypeMeta {
@@ -1146,7 +1147,7 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     },
     BuiltinTypeMeta {
         name: TypeName::Facet.as_str(),
-        params: &["$S", "$A"],
+        params: &["$K", "$S", "$A", "$T", "$B"],
     },
     BuiltinTypeMeta {
         name: TypeName::Workers.as_str(),
@@ -1315,7 +1316,7 @@ mod tests {
         assert_eq!(BUILTIN_TYPE_HEAD_METAS.len(), BUILTIN_TYPE_METAS.len());
         assert!(BUILTIN_TYPE_HEAD_METAS
             .iter()
-            .any(|meta| meta.name == "ProcessInit"));
+            .any(|meta| meta.name == "StandbyInit"));
     }
 
     #[test]
@@ -1323,7 +1324,7 @@ mod tests {
         assert_eq!(builtin_function_metas()[0].name, "print");
         assert!(builtin_type_head_metas()
             .iter()
-            .any(|meta| meta.name == "ProcessInit"));
+            .any(|meta| meta.name == "StandbyInit"));
     }
 
     #[test]
@@ -1354,7 +1355,7 @@ mod tests {
             builtin_meta_for_decl("put", Some("Facet::put"))
                 .expect("facet put builtin metadata")
                 .sig_str,
-            "(Facet<$S, $A>, $S, $A) -> $S"
+            "(Facet<PutPath, $S, $A, $T, $B>, $S, $B) -> $T"
         );
         assert_eq!(
             builtin_meta_for_decl("replace", Some("Regex::replace"))

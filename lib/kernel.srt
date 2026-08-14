@@ -54,6 +54,11 @@ defmod Kernel {
 
   `if(flag, "ok", err_reason)`
 
+  At a `Lazy<_>` argument, parentheses are an eager boundary. For example,
+  `if(flag, selected(), (prepare()))` evaluates `prepare()` once before the
+  condition selects a branch; without parentheses it evaluates only when the
+  branch is selected.
+
   When the branches both return `Unit`, prefer `if_then(...)` to make the
   intent explicit.
 
@@ -169,6 +174,9 @@ defmod Kernel {
   Call sites may construct a fresh `deferror` or forward an existing `Error`
   value obtained elsewhere.
 
+  Parenthesizing the error expression evaluates it once before the condition
+  is checked.
+
   Ordinary expression form stays available:
   `assert(user.age >= 0, InvalidUserAge(user.age))`
 
@@ -226,13 +234,13 @@ defmod Kernel {
   This alias is MatchBlock-only; expression position keeps list construction
   semantics, so `["t", ..source]` is still a list expression.
 
-  Empty input returns `NoMatch`.
+  Empty input returns `Option::None`.
 
   ## REPL
   xldr(1)> match [1, 2] { [head, ..tail] => to_string(head), [] => "empty", }
   "1"
   """
-  @builtin defextractor uncons(term) -> MatchResult<($Head, $Tail), Error>
+  @builtin defextractor uncons(term: $Tail) -> Option<($Head, $Tail)>
 
   @doc """
   Print a string to stdout.

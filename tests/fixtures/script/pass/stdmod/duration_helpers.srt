@@ -1,5 +1,5 @@
 print(to_string(250ms))
 print(inspect(250ms))
 print(to_string(250ms.millis))
-d: Duration =? try_from(7, Duration)
+d: Duration =? try_from::<Duration>(7)
 print(to_string(d.millis))

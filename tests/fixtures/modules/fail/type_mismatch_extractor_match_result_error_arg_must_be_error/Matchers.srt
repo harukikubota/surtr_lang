@@ -1,5 +1,0 @@
-defmod Matchers {
-  defextractor bad(self: Int) -> MatchResult<Int, Int> {
-    MatchResult::NoMatch
-  }
-}

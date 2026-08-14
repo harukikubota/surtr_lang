@@ -1,6 +1,6 @@
 use scar::typed::{
     OperatorTraitOp, TraitCallOrigin, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode,
-    TypedPattern, TypedProgram,
+    TypedPattern, TypedProgram, TypedWhereConstraintRhs,
 };
 use scar::types::Ty;
 use sigil::resolved::{
@@ -232,8 +232,20 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return as fn(),
     ),
     (
-        "facet_put_rejects_type_changing_tuple_update",
-        facet_put_rejects_type_changing_tuple_update as fn(),
+        "facet_put_supports_type_changing_tuple_update",
+        facet_put_supports_type_changing_tuple_update as fn(),
+    ),
+    (
+        "facet_put_rebuilds_unique_generic_named_type",
+        facet_put_rebuilds_unique_generic_named_type as fn(),
+    ),
+    (
+        "facet_put_rejects_repeated_generic_named_type",
+        facet_put_rejects_repeated_generic_named_type as fn(),
+    ),
+    (
+        "facet_case_set_rebuilds_unique_generic_enum",
+        facet_case_set_rebuilds_unique_generic_enum as fn(),
     ),
     (
         "facet_put_rejects_result_annotation_context",
@@ -256,8 +268,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         optional_type_annotation_rejects_result_value as fn(),
     ),
     (
-        "facet_set_accepts_plain_value_for_result_focus",
-        facet_set_accepts_plain_value_for_result_focus as fn(),
+        "facet_set_rejects_plain_value_for_result_focus",
+        facet_set_rejects_plain_value_for_result_focus as fn(),
     ),
     (
         "facet_shorthand_view_and_mutation_forms_typecheck",
@@ -276,12 +288,20 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_over_accepts_success_updater_for_result_focus as fn(),
     ),
     (
-        "facet_over_rejects_result_container_updater_for_result_focus",
-        facet_over_rejects_result_container_updater_for_result_focus as fn(),
+        "facet_over_allows_result_typed_payload_replacement",
+        facet_over_allows_result_typed_payload_replacement as fn(),
     ),
     (
         "facet_over_result_requires_result_container_updater",
         facet_over_result_requires_result_container_updater as fn(),
+    ),
+    (
+        "nested_result_err_expression_has_dedicated_diagnostic",
+        nested_result_err_expression_has_dedicated_diagnostic as fn(),
+    ),
+    (
+        "nested_result_err_pattern_has_dedicated_diagnostic",
+        nested_result_err_pattern_has_dedicated_diagnostic as fn(),
     ),
     (
         "readonly_facet_view_succeeds_and_preserves_path_metadata",
@@ -447,6 +467,18 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     (
         "generic_user_function_calls_typecheck_inside_script_module_scope",
         generic_user_function_calls_typecheck_inside_script_module_scope as fn(),
+    ),
+    (
+        "where_constraint_kinds_survive_in_typed_metadata",
+        where_constraint_kinds_survive_in_typed_metadata as fn(),
+    ),
+    (
+        "return_only_signature_slots_are_rejected",
+        return_only_signature_slots_are_rejected as fn(),
+    ),
+    (
+        "signature_slots_are_checked_before_definition_bodies",
+        signature_slots_are_checked_before_definition_bodies as fn(),
     ),
     (
         "named_args_user_function_calls_typecheck_inside_script_module_scope",
@@ -922,12 +954,12 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         json_value_encode_source_alias_typechecks as fn(),
     ),
     (
-        "decode_helper_typechecks_format_and_target_witnesses",
-        decode_helper_typechecks_format_and_target_witnesses as fn(),
+        "decode_helper_typechecks_explicit_target",
+        decode_helper_typechecks_explicit_target as fn(),
     ),
     (
-        "decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses",
-        decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses as fn(),
+        "decode_helper_inside_decode_impl_dispatches_by_receiver_and_target",
+        decode_helper_inside_decode_impl_dispatches_by_receiver_and_target as fn(),
     ),
     (
         "decode_helper_allows_same_pattern_recursive_dispatch",
@@ -1715,7 +1747,7 @@ Facet::preview(Expr.Add / Tuple._0, expr)"#,
     let TypedInner::FacetView { path, .. } = &last.node else {
         panic!("expected Facet::preview to lower as a view");
     };
-    assert_eq!(path.path_kind, TypedFacetPathKind::Variant);
+    assert_eq!(path.path_kind, TypedFacetPathKind::VariantPath);
     assert!(matches!(
         &last.ty,
         scar::types::Ty::Result(ok, err)
@@ -1744,7 +1776,7 @@ Facet::preview(Option.Some, value)"#,
     let TypedInner::FacetView { path, .. } = &last.node else {
         panic!("expected Facet::preview to lower as a view");
     };
-    assert_eq!(path.path_kind, TypedFacetPathKind::Variant);
+    assert_eq!(path.path_kind, TypedFacetPathKind::VariantPath);
     assert!(matches!(
         &last.ty,
         scar::types::Ty::Result(ok, err)
@@ -1763,7 +1795,7 @@ Facet::preview(Boolean.True, flag)"#,
     let TypedInner::FacetView { path, .. } = &last.node else {
         panic!("expected Boolean.True to lower as a variant Facet view");
     };
-    assert_eq!(path.path_kind, TypedFacetPathKind::Variant);
+    assert_eq!(path.path_kind, TypedFacetPathKind::VariantPath);
     assert!(matches!(
         &last.ty,
         scar::types::Ty::Result(ok, err)
@@ -1808,7 +1840,7 @@ map_value = score_map.["talk"]"#,
         let TypedInner::FacetView { path, .. } = &rhs.node else {
             panic!("{name} should lower to FacetView, got {:?}", rhs.node);
         };
-        assert_eq!(path.path_kind, TypedFacetPathKind::Structural);
+        assert_eq!(path.path_kind, TypedFacetPathKind::FallibleStructural);
         assert!(path.may_fail, "{name} should be fallible");
     }
 
@@ -2115,7 +2147,13 @@ bad = Facet::set(List.[0..1], values, 9)"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("slice set should require List<A>");
-    assert!(set_err.message.contains("Facet::set value type mismatch"));
+    assert!(
+        set_err.message.contains("Facet::set value type mismatch")
+            || set_err
+                .message
+                .contains("Facet updates through List segments cannot change the element type"),
+        "{set_err:?}"
+    );
 
     let over_err = typecheck_with_rules(
         r#"values = [1, 2, 3]
@@ -2152,7 +2190,7 @@ Facet::set(User.name?, user, "bob")"#,
     .expect_err("optional marker on a field should fail");
     assert!(err
         .message
-        .contains("optional Facet segment requires an enum variant"));
+        .contains("optional Facet selectors are no longer supported"));
 }
 
 fn facet_case_api_requires_enum_path_and_records_modes() {
@@ -2163,7 +2201,7 @@ fn facet_case_api_requires_enum_path_and_records_modes() {
 }
 slot = Slot::Some(Ok("alice"))
 updated =? Facet::case_set(Slot.Some, slot, Ok("bob"))
-overed =? Facet::case_over(Slot.Some?, updated, {|name| Ok(name ++ "!")})
+overed =? Facet::case_over(Slot.Some, updated, {|name| Ok(name ++ "!")})
 Facet::case_over(Slot.Some, overed, {|value: Result<String>| Ok(value)})"#,
     );
     let rendered = format!("{typed:?}");
@@ -2314,17 +2352,58 @@ fn facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return(
         .contains("Tuple._0 requires tuple source context"));
 }
 
-fn facet_put_rejects_type_changing_tuple_update() {
-    let err = typecheck_with_rules(
+fn facet_put_supports_type_changing_tuple_update() {
+    typecheck_with_rules(
         r#"def first(f: (Int -> String)) -> ((Int, Boolean) -> (String, Boolean)) {
   {|pair: (Int, Boolean)| Facet::put(Tuple._0, pair, f(pair._0))}
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("type-changing tuple update should fail for Facet::put");
+    .expect("Facet::put should rebuild a tuple with the replacement type");
+}
+
+fn facet_put_rebuilds_unique_generic_named_type() {
+    typecheck_with_rules(
+        r#"defstruct Box<$A> {
+  value: $A,
+}
+impl Box {
+  def new(value: $A) -> Box<$A> { Box { value: value } }
+}
+updated = Facet::put(Box.value, Box(1), "one")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("Facet::put should rebuild a uniquely parameterized named type");
+}
+
+fn facet_put_rejects_repeated_generic_named_type() {
+    let err = typecheck_with_rules(
+        r#"defstruct Pair<$A> {
+  left: $A,
+  right: $A,
+}
+impl Pair {
+  def new(left: $A, right: $A) -> Pair<$A> { Pair { left: left, right: right } }
+}
+Facet::put(Pair.left, Pair(1, 2), "one")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("a repeated generic parameter must not be rebuilt through one field");
     assert!(err
         .message
-        .contains("Facet::put value type mismatch: expected Int, got String"));
+        .contains("generic parameter occurs outside the updated field"));
+}
+
+fn facet_case_set_rebuilds_unique_generic_enum() {
+    typecheck_with_rules(
+        r#"defenum Slot<$A> {
+  Some($A),
+  None,
+}
+updated = Facet::case_set(Slot.Some, Slot::Some(1), "one")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("Facet::case_set should rebuild a uniquely parameterized enum");
 }
 
 fn facet_put_rejects_result_annotation_context() {
@@ -2407,19 +2486,18 @@ boxed = Boxed(Ok(1))"#,
     );
 }
 
-fn facet_set_accepts_plain_value_for_result_focus() {
-    let typed = typecheck_with_builtin_prelude(
+fn facet_set_rejects_plain_value_for_result_focus() {
+    let resolved = resolve_with_builtin_prelude(
         r#"defrecord User(score: Result<Int>)
 user = User(Err(NoneError))
 Facet::set(User.score, user, 3)"#,
     );
-    let last = typed.last().expect("typed program should not be empty");
-    assert!(matches!(
-        &last.ty,
-        scar::types::Ty::Result(ok, err)
-            if matches!(ok.as_ref(), scar::types::Ty::Record(name, _) if name == "User")
-                && matches!(err.as_ref(), scar::types::Ty::Error)
-    ));
+    let err = typecheck(resolved).expect_err("set must not implicitly wrap a Result focus");
+    assert!(
+        err.message.contains("expected Result<Int>, got Int"),
+        "{}",
+        err.message
+    );
 }
 
 fn facet_shorthand_view_and_mutation_forms_typecheck() {
@@ -2494,17 +2572,14 @@ Facet::over(User.score, user, {|score| Ok(score + 1)})"#,
     assert!(matches!(last.node, TypedInner::FacetOver { .. }));
 }
 
-fn facet_over_rejects_result_container_updater_for_result_focus() {
-    let err = typecheck_with_rules(
+fn facet_over_allows_result_typed_payload_replacement() {
+    typecheck_with_rules(
         r#"defrecord User(score: Result<Int>)
 user = User(Ok(1))
 Facet::over(User.score, user, {|score| Ok(Ok(score))})"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("Result container updater should fail for Facet::over");
-    assert!(err
-        .message
-        .contains("Facet::over update function output mismatch"));
+    .expect("Facet::over should permit changing a Result payload to a Result value");
 }
 
 fn facet_over_result_requires_result_container_updater() {
@@ -2526,6 +2601,36 @@ Facet::over_result(User.score, user, {|score| Ok(1)})"#,
     assert!(err
         .message
         .contains("Facet::over_result update function output mismatch"));
+}
+
+fn nested_result_err_expression_has_dedicated_diagnostic() {
+    let err = typecheck_with_rules(
+        r#"deferror Oops { "oops" }
+value: Result<Result<Int>> = Err(Err(Oops))"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("nested Err expressions must be rejected");
+    assert!(
+        err.message.contains("Nested Result errors are not allowed"),
+        "{err:?}"
+    );
+}
+
+fn nested_result_err_pattern_has_dedicated_diagnostic() {
+    let err = typecheck_with_rules(
+        r#"deferror Oops { "oops" }
+value: Result<Result<Int>> = Err(Oops)
+match value {
+  Err(Err(error)) => Error::message(error)
+  Ok(_) => "ok"
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("nested Err patterns must be rejected");
+    assert!(
+        err.message.contains("Nested Result errors are not allowed in match patterns"),
+        "{err:?}"
+    );
 }
 
 fn readonly_facet_view_succeeds_and_preserves_path_metadata() {
@@ -2751,9 +2856,9 @@ fn facet_const_slash_compose_allows_facet_consts() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord Profile(name: String)
 defrecord User(profile: Profile)
-const USER_PROFILE: Facet<User, Profile> = User.profile
-const PROFILE_NAME: Facet<Profile, String> = Profile.name
-const FULL_NAME: Facet<User, String> = USER_PROFILE / PROFILE_NAME
+const USER_PROFILE: Facet<InfallibleStructural, User, Profile, _, _> = User.profile
+const PROFILE_NAME: Facet<InfallibleStructural, Profile, String, _, _> = Profile.name
+const FULL_NAME: Facet<InfallibleStructural, User, String, _, _> = USER_PROFILE / PROFILE_NAME
 user = User(Profile("alice"))
 Facet::view(FULL_NAME, user)"#,
     );
@@ -2850,7 +2955,7 @@ Ok(User.name)"#,
 fn nested_facet_types_are_rejected_in_function_signatures() {
     let param_err = typecheck_with_rules(
         r#"defrecord User(name: String)
-def bad(values: List<Facet<User, String>>) -> Unit { () }"#,
+def bad(values: List<Facet<InfallibleStructural, User, String, _, _>>) -> Unit { () }"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("nested facet in parameter type should fail");
@@ -2860,7 +2965,7 @@ def bad(values: List<Facet<User, String>>) -> Unit { () }"#,
 
     let ret_err = typecheck_with_rules(
         r#"defrecord User(name: String)
-def bad() -> List<Facet<User, String>> { [] }"#,
+def bad() -> List<Facet<InfallibleStructural, User, String, _, _>> { [] }"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("nested facet in return type should fail");
@@ -3012,7 +3117,7 @@ print(to_string(User.name))"#,
 
     let return_err = typecheck_with_rules(
         r#"defrecord User(name: String)
-def bad() -> Facet<User, String> {
+def bad() -> Facet<InfallibleStructural, User, String, _, _> {
   User.name
 }"#,
         RuntimeSourcePolicy::script(),
@@ -3049,8 +3154,8 @@ impl Single {
 Single { value: value }
   }
 
-  defextractor deconstruct(self: Self) -> MatchResult<Int, Error> {
-MatchResult::Success(self.value)
+  defextractor deconstruct(self: Self) -> Option<Int> {
+Option::Some(self.value)
   }
 }
 
@@ -3074,8 +3179,8 @@ impl User {
   def new(name: String, age: Int) -> Self {
 User { name: name, age: age }
   }
-  defextractor deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
-MatchResult::NoMatch
+  defextractor deconstruct(self: Self) -> Option<(String, Int)> {
+Option::None
   }
 }
 user = User("alice", 30)
@@ -3117,10 +3222,10 @@ fn enum_impl_extractor_can_be_used_in_matchblock() {
   Green,
 }
 impl Light {
-  defextractor stop_code(self: Self) -> MatchResult<Int, Error> {
+  defextractor stop_code(self: Self) -> Option<Int> {
 match self {
-  Light::Red => MatchResult::Success(1),
-  _ => MatchResult::NoMatch,
+  Light::Red => Option::Some(1),
+  _ => Option::None,
 }
   }
 }
@@ -3159,7 +3264,7 @@ fn generic_struct_single_type_param_typechecks() {
   value: $A,
 }
 impl Box {
-  def new<$A>(value: $A) -> Box<$A> {
+  def new(value: $A) -> Box<$A> {
     Box { value: value }
   }
 }
@@ -3192,7 +3297,7 @@ fn generic_struct_two_type_params_typecheck() {
   right: $B,
 }
 impl Pair {
-  def new<$A, $B>(left: $A, right: $B) -> Pair<$A, $B> {
+  def new(left: $A, right: $B) -> Pair<$A, $B> {
     Pair { left: left, right: right }
   }
 }
@@ -3318,7 +3423,7 @@ fn namespaced_type_and_trait_impl_typecheck_inside_script_module_scope() {
 }
 
 impl Show for Auth::User {
-  def to_string(self: Self) -> String { "user" }
+  def to_string::<Auth::User>(self: Self) -> String { "user" }
 }
 
 value: Auth::User = Auth::User("alice")
@@ -3333,7 +3438,7 @@ print(to_string(value))"#,
     assert!(
         typed
             .iter()
-            .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _))),
+            .any(|node| matches!(node.node, TypedInner::TraitImplDef(..))),
         "expected namespaced trait impl to survive typechecking"
     );
 }
@@ -3353,7 +3458,7 @@ impl PairTrait for ($A, $B) {
     assert!(
         typed
             .iter()
-            .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _))),
+            .any(|node| matches!(node.node, TypedInner::TraitImplDef(..))),
         "expected tuple trait impl to survive typechecking"
     );
 }
@@ -3373,7 +3478,7 @@ impl PairTrait for (Int, String) {
     assert!(
         typed
             .iter()
-            .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _))),
+            .any(|node| matches!(node.node, TypedInner::TraitImplDef(..))),
         "expected concrete tuple trait impl to survive typechecking"
     );
 }
@@ -3382,9 +3487,13 @@ fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }
 
-print(to_string(id(1)))
-print(id("ok"))"#,
+left: Int = id(1)
+right: String = id("ok")
+print(to_string(left))
+print(right)"#,
     );
+    assert!(matches!(typed_bind_rhs(&typed, "left").ty, Ty::Int));
+    assert!(matches!(typed_bind_rhs(&typed, "right").ty, Ty::Str));
     assert!(
         typed
             .iter()
@@ -3393,6 +3502,452 @@ print(id("ok"))"#,
             >= 2,
         "expected both generic function call sites to typecheck"
     );
+}
+
+#[test]
+fn where_constraint_kinds_survive_in_typed_metadata() {
+    let typed = typecheck_with_rules(
+        r#"deftrait Marker
+where
+  Self: Type<$Slot>
+{
+  def mark(self: Self) -> Self
+  where
+    Self: Marker
+}
+
+defenum Boxed<$T> {
+  Box($T),
+}
+
+impl Marker for Boxed<$T>
+where
+  $T: Marker.$Slot
+{
+  def mark(self: Self) -> Self
+  where
+    Self: Marker
+  {
+    self
+  }
+}
+
+def keep(value: $A) -> $A
+where
+  $A: Marker + Type<$B> + Marker.$Slot
+{
+  value
+}
+
+kept: Boxed<Int> = keep(Boxed::Box(1))
+marked: Boxed<Int> = Marker::mark(Boxed::Box(1))"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("constraint kinds should survive after semantic validation");
+
+    let where_clause = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Def(_, id, _, _, _, where_clause, _, _) if id.name == "keep" => {
+                where_clause.as_ref()
+            }
+            _ => None,
+        })
+        .expect("typed def should retain its where clause");
+    let bounds = &where_clause.constraints[0].bounds;
+    assert!(matches!(bounds[0], TypedWhereConstraintRhs::Trait(_)));
+    assert!(matches!(
+        bounds[1],
+        TypedWhereConstraintRhs::TypeConstructor { .. }
+    ));
+    assert!(matches!(
+        bounds[2],
+        TypedWhereConstraintRhs::TraitSlot { .. }
+    ));
+
+    let (trait_where, trait_methods) = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::TraitDef(name, where_clause, methods) if name.ends_with("Marker") => {
+                Some((where_clause.as_ref(), methods))
+            }
+            _ => None,
+        })
+        .expect("typed trait should retain metadata");
+    assert!(trait_where.is_some());
+    assert!(trait_methods[0].where_clause.is_some());
+    assert!(typed
+        .iter()
+        .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _, Some(_)))));
+    assert!(typed.iter().any(|node| match &node.node {
+        TypedInner::Def(_, id, _, _, _, Some(_), _, _) => id.name.contains("mark"),
+        _ => false,
+    }));
+}
+
+#[test]
+fn function_where_bounds_propagate_to_generic_call_sites() {
+    let source = r#"deftrait Default {
+  def default::<Self>() -> Self
+}
+
+def make(seed: $A) -> $A
+where
+  $A: Default
+{
+  Default::default()
+}
+"#;
+
+    typecheck_with_rules(
+        &format!("{source}\nvalue: String = make(\"seed\")"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("a call target with the declared where-bound implementation should typecheck");
+
+    let err = typecheck_with_rules(
+        &format!("{source}\nvalue: Boolean = make(True)"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("the generic call must retain and enforce its where bound");
+    assert!(
+        err.message.contains("expected Int") || err.message.contains("Default"),
+        "unexpected diagnostic: {err:?}"
+    );
+}
+
+#[test]
+fn where_clause_does_not_declare_a_new_type_variable() {
+    let err = typecheck_with_rules(
+        r#"deftrait Default {
+  def default::<Self>() -> Self
+}
+
+def id(value: $A) -> $A
+where
+  $B: Default
+{
+  value
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("a where-only type variable must not be introduced implicitly");
+
+    assert!(err
+        .message
+        .contains("does not appear in the declaration signature"));
+    assert!(err
+        .hint
+        .as_deref()
+        .is_some_and(|hint| hint.contains("do not declare type variables")));
+}
+
+#[test]
+fn functor_shaped_self_applications_survive_in_typed_metadata() {
+    let typed = typecheck_with_rules(
+        r#"deftrait FunctorShape
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("Step 4 should preserve higher-kinded Self applications");
+
+    let method = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::TraitDef(name, _, methods) if name.ends_with("FunctorShape") => {
+                methods.iter().find(|method| method.name == "fmap")
+            }
+            _ => None,
+        })
+        .expect("typed trait metadata should retain fmap");
+    assert!(matches!(method.params.first(), Some(Ty::SelfApp(args)) if args.len() == 1));
+    assert!(matches!(method.ret_ty, Ty::SelfApp(ref args) if args.len() == 1));
+}
+
+#[test]
+fn unary_type_constructor_slot_is_inferred_for_trait_impl() {
+    typecheck_with_rules(
+        r#"deftrait FunctorShape
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}
+
+defenum Identity<$T> {
+  Identity($T),
+}
+
+impl FunctorShape for Identity<$T> {
+  def fmap(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
+    match self {
+      Identity::Identity(value) => Identity::Identity(mapper(value)),
+    }
+  }
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("a unary impl target should map its only parameter to the trait slot");
+}
+
+#[test]
+fn multi_parameter_type_constructor_requires_explicit_slot_mapping() {
+    let source = r#"deftrait FunctorShape
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}
+
+defenum Pair<$L, $R> {
+  Pair($L, $R),
+}
+
+impl FunctorShape for Pair<$L, $R> {
+  def fmap(self: Pair<$L, $A>, mapper: ($A -> $B)) -> Pair<$L, $B> {
+    match self {
+      Pair::Pair(left, right) => Pair::Pair(left, mapper(right)),
+    }
+  }
+}"#;
+    let err = typecheck_with_rules(source, RuntimeSourcePolicy::script())
+        .expect_err("a multi-parameter target must name the public constructor slot");
+    assert!(err.message.contains("does not satisfy Type<$A>"), "{err:?}");
+
+    typecheck_with_rules(
+        &source.replace(
+            "impl FunctorShape for Pair<$L, $R> {",
+            "impl FunctorShape for Pair<$L, $R>\nwhere\n  $R: FunctorShape.$A\n{",
+        ),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("an explicit slot mapping should preserve the left capture parameter");
+}
+
+#[test]
+fn type_constructor_constraint_rejects_concrete_and_duplicate_slot_targets() {
+    let trait_source = r#"deftrait FunctorShape
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}
+"#;
+    let concrete = format!(
+        "{trait_source}\nimpl FunctorShape for Int {{\n  def fmap(self: Int, mapper: (Int -> Int)) -> Int {{ self }}\n}}"
+    );
+    let err = typecheck_with_rules(&concrete, RuntimeSourcePolicy::script())
+        .expect_err("a concrete type is not a unary type constructor");
+    assert!(err.message.contains("does not satisfy Type<$A>"), "{err:?}");
+
+    let duplicate = format!(
+        r#"{trait_source}
+defenum Pair<$L, $R> {{
+  Pair($L, $R),
+}}
+impl FunctorShape for Pair<$L, $R>
+where
+  $L: FunctorShape.$A
+  $R: FunctorShape.$A
+{{
+  def fmap(self: Pair<$L, $A>, mapper: ($A -> $B)) -> Pair<$L, $B> {{ self }}
+}}"#
+    );
+    let err = typecheck_with_rules(&duplicate, RuntimeSourcePolicy::script())
+        .expect_err("one constructor slot cannot map to two target parameters");
+    assert!(err.message.contains("mapped more than once"), "{err:?}");
+}
+
+#[test]
+fn parent_trait_constraints_require_matching_impls_and_inherit_slots() {
+    let declarations = r#"deftrait Parent
+where
+  Self: Type<$A>
+{
+  def keep(self: Self<$A>) -> Self<$A>
+}
+
+deftrait Child
+where
+  Self: Parent
+{
+  def child_keep(self: Self<$A>) -> Self<$A>
+}
+
+defenum Identity<$T> {
+  Identity($T),
+}
+"#;
+    let child_impl = r#"impl Child for Identity<$T> {
+  def child_keep(self: Identity<$A>) -> Identity<$A> { self }
+}"#;
+    let err = typecheck_with_rules(
+        &format!("{declarations}\n{child_impl}"),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("a child impl cannot omit its parent impl");
+    assert!(
+        err.message.contains("requires parent impl Parent"),
+        "{err:?}"
+    );
+
+    typecheck_with_rules(
+        &format!(
+            r#"{declarations}
+impl Parent for Identity<$T> {{
+  def keep(self: Identity<$A>) -> Identity<$A> {{ self }}
+}}
+{child_impl}"#
+        ),
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("the child should inherit the parent's unary constructor slot");
+}
+
+#[test]
+fn trait_default_methods_and_private_helpers_are_accepted() {
+    let source = r#"
+deftrait DefaultValue {
+  def value(self: Self) -> Int { helper() }
+  defp helper() -> Int { 42 }
+}
+
+impl DefaultValue for Int {
+  defp helper() -> Int { 7 }
+}
+"#;
+    typecheck_with_rules(source, RuntimeSourcePolicy::script())
+        .expect("default trait methods and impl-private helpers should typecheck");
+}
+
+#[test]
+fn parent_trait_cycles_and_slot_mapping_mismatches_are_rejected() {
+    let cycle = r#"deftrait Left
+where
+  Self: Right
+{
+  def left(self: Self) -> Self
+}
+
+deftrait Right
+where
+  Self: Left
+{
+  def right(self: Self) -> Self
+}"#;
+    let err = typecheck_with_rules(cycle, RuntimeSourcePolicy::script())
+        .expect_err("parent trait cycles must be rejected");
+    assert!(err.message.contains("constraint cycle"), "{err:?}");
+
+    let mismatch = r#"deftrait Parent
+where
+  Self: Type<$A>
+{
+  def keep(self: Self<$A>) -> Self<$A>
+}
+
+deftrait Child
+where
+  Self: Parent
+{
+  def child_keep(self: Self<$A>) -> Self<$A>
+}
+
+defenum Pair<$L, $R> {
+  Pair($L, $R),
+}
+
+impl Parent for Pair<$L, $R>
+where
+  $R: Parent.$A
+{
+  def keep(self: Pair<$L, $A>) -> Pair<$L, $A> { self }
+}
+
+impl Child for Pair<$L, $R>
+where
+  $L: Child.$A
+{
+  def child_keep(self: Pair<$A, $R>) -> Pair<$A, $R> { self }
+}"#;
+    let err = typecheck_with_rules(mismatch, RuntimeSourcePolicy::script())
+        .expect_err("a child must preserve its parent's slot mapping");
+    assert!(
+        err.message.contains("same constructor slot mapping"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn trait_impl_signature_validation_preserves_generic_relationships() {
+    let err = typecheck_with_rules(
+        r#"deftrait Pick {
+  def pick(left: $A, right: $B) -> $A
+}
+
+impl Pick for Int {
+  def pick(left: $A, right: $B) -> $B { right }
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("an impl cannot permute independent method generics");
+    assert!(err.message.contains("incompatible signature"), "{err:?}");
+}
+
+#[test]
+fn trait_impl_method_generics_are_rigid_while_checking_the_body() {
+    let err = typecheck_with_rules(
+        r#"deftrait Keep {
+  def keep(value: $A) -> $A
+}
+
+impl Keep for Int {
+  def keep(value: $A) -> $A { "wrong" }
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("an impl body cannot specialize its method generic to String");
+    assert!(
+        err.message.contains("expected $") && err.message.contains("got String"),
+        "{err:?}"
+    );
+}
+
+fn return_only_signature_slots_are_rejected() {
+    let err = typecheck_with_rules(
+        r#"def nil() -> $A {
+  ""
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("a return-only signature slot must be rejected");
+    assert!(err.message.contains("appears only in the return type"));
+
+    typecheck_with_builtin_prelude(r#"def id(value: $A) -> $A { value }"#);
+}
+
+fn signature_slots_are_checked_before_definition_bodies() {
+    let err = typecheck_with_rules(
+        r#"def wrong(value: $A) -> $B {
+  value
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("a return-only signature slot must be rejected before body checking");
+    assert!(err.message.contains("appears only in the return type"));
+
+    let err = typecheck_with_rules(
+        r#"def identity(value: $A) -> $A { value }
+
+def gen_nil() -> List<$A> { [] }"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("a return-only signature slot must be rejected");
+    assert!(err.message.contains("appears only in the return type"));
 }
 
 fn named_args_user_function_calls_typecheck_inside_script_module_scope() {
@@ -3676,7 +4231,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             sigil::resolved::Resolved::BuiltinDecl(_, id, _, _, _) if id.unique_id == use_uid => {
                 Some(format!("builtin {}", id.name))
             }
-            sigil::resolved::Resolved::Def(_, id, _, _, _, _, _) if id.unique_id == use_uid => {
+            sigil::resolved::Resolved::Def(_, id, _, _, _, _, _, _) if id.unique_id == use_uid => {
                 Some(format!("def {}", id.name))
             }
             sigil::resolved::Resolved::ExtractorDef(_, id, _, _, _, _, _)
@@ -3687,7 +4242,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
             sigil::resolved::Resolved::StructDef(_, id, ..) if id.unique_id == use_uid => {
                 Some(format!("struct {}", id.name))
             }
-            sigil::resolved::Resolved::RecordDef(_, id, _) if id.unique_id == use_uid => {
+            sigil::resolved::Resolved::RecordDef(_, id, _, _) if id.unique_id == use_uid => {
                 Some(format!("record {}", id.name))
             }
             sigil::resolved::Resolved::DeferrorDef(_, id, _, _) if id.unique_id == use_uid => {
@@ -3835,7 +4390,9 @@ guard = assert(False, bad_code())"#,
 fn kernel_and_contract_rejects_eager_signature() {
     let err = typecheck_std_modules_with_overrides(&[(
         "Kernel",
-        r#"defmod Kernel {
+        r#"@autoimport
+defmod Kernel {
+  @builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A
   @builtin def and(left: Boolean, right: Boolean) -> Boolean
 }"#,
     )])
@@ -3852,10 +4409,14 @@ fn special_form_builtin_decl_must_live_under_kernel() {
 
 impl Boolean {
   def not(value: Boolean) -> Boolean {
-if(value, False, True)
+    value
   }
 
   @builtin def and(left: Boolean, right: Boolean) -> Boolean
+}
+
+impl Eq for Boolean {
+  @builtin def eq::<Boolean>(self: Self, rhs: Self) -> Boolean
 }"#,
     )])
     .expect_err("special-form declaration outside Kernel must fail");
@@ -4377,13 +4938,13 @@ bound = parse(1) |>= &stringify"#,
 
     assert!(trait_calls.iter().any(
         |(trait_name, method_name, dispatch, origin, args, result_ty)| {
-            trait_name.starts_with("Functor<")
-                && *method_name == "map"
+            trait_name.ends_with("Functor")
+                && *method_name == "fmap"
                 && matches!(
                     dispatch,
                     scar::typed::TraitDispatch::Static(
                         scar::typed::TraitDispatchTarget::UserFunction { name, .. }
-                    ) if name.ends_with("::map") || name == "map"
+                    ) if name.ends_with("::fmap") || name == "fmap"
                 )
                 && matches!(
                     origin,
@@ -4418,7 +4979,7 @@ fn explicit_functor_call_has_explicit_origin() {
   x + 1
 }
 
-mapped = Functor::map(Ok(1), &inc)"#,
+mapped = Functor::fmap(Ok(1), &inc)"#,
     );
     let rhs = typed
         .iter()
@@ -4433,7 +4994,7 @@ mapped = Functor::map(Ok(1), &inc)"#,
             origin,
             ..
         } => {
-            assert_eq!(method_name, "map");
+            assert_eq!(method_name, "fmap");
             assert_eq!(origin, &TraitCallOrigin::Explicit);
             assert!(matches!(rhs.ty, Ty::Result(_, _)));
         }
@@ -4582,19 +5143,45 @@ fn user_defined_container_can_use_context_operators_via_traits() {
   Box($T),
 }
 
-impl Functor<$A, $B, Boxed<$B>> for Boxed<$A> {
-  def map(self: Self, f: ($A -> $B)) -> Boxed<$B> {
+impl Functor for Boxed<$T> {
+  def fmap::<Boxed<$T>, $A, $B>(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
     match self {
-      Boxed::Box(value) => Boxed::Box(f(value)),
+      Boxed::Box(value) => Boxed::Box(mapper(value)),
     }
   }
 }
 
-impl Chainable<$A, Boxed<$B>> for Boxed<$A> {
-  def chain(self: Self, f: ($A -> Boxed<$B>)) -> Boxed<$B> {
-    match self {
-      Boxed::Box(value) => f(value),
+impl Applicative for Boxed<$T> {
+  def pure::<Boxed<$T>, $A>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
+
+  def ap::<Boxed<$T>, $A, $B>(mapper: Boxed<($A -> $B)>, value: Boxed<$A>) -> Boxed<$B> {
+    match mapper {
+      Boxed::Box(f) => match value {
+        Boxed::Box(inner) => Boxed::Box(f(inner)),
+      },
     }
+  }
+}
+
+impl Monad for Boxed<$T> {
+  def return::<Boxed<$T>, $A>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
+
+  def bind::<Boxed<$T>, $A, $B>(self: Boxed<$A>, mapper: ($A -> Boxed<$B>)) -> Boxed<$B> {
+    match self {
+      Boxed::Box(value) => mapper(value),
+    }
+  }
+}
+
+impl LiftComposable<$A, $B, $C, Boxed<$C>> for ($A -> Boxed<$B>) {
+  def lift_compose::<($A -> Boxed<$B>), $A, $B, $C, Boxed<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Boxed<$C>) {
+    {|value| Functor::fmap(self(value), rhs)}
+  }
+}
+
+impl KleisliComposable<$A, $B, Boxed<$C>> for ($A -> Boxed<$B>) {
+  def kleisli_compose::<($A -> Boxed<$B>), $A, $B, Boxed<$C>>(self: Self, rhs: ($B -> Boxed<$C>)) -> ($A -> Boxed<$C>) {
+    {|value| Monad::bind(self(value), rhs)}
   }
 }
 
@@ -4602,12 +5189,22 @@ def inc(x: Int) -> Int {
   x + 1
 }
 
+def box_inc(x: Int) -> Boxed<Int> {
+  Boxed::Box(x + 1)
+}
+
+def render(x: Int) -> String {
+  to_string(x)
+}
+
 def stringify(x: Int) -> Boxed<String> {
   Boxed::Box(to_string(x))
 }
 
 mapped = Boxed::Box(1) |*> &inc
-bound = Boxed::Box(1) |>= &stringify"#,
+bound = Boxed::Box(1) |>= &stringify
+lifted = &box_inc >* &render
+kleisli = &box_inc >=> &stringify"#,
     );
 
     let boxed_results = typed
@@ -4619,6 +5216,17 @@ bound = Boxed::Box(1) |>= &stringify"#,
         .filter(|ty| matches!(ty, Ty::Enum(name, _) if name == "Boxed" || name == "Global::Boxed"))
         .count();
     assert_eq!(boxed_results, 2);
+    let boxed_function_results = typed
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Bind(_, rhs) => Some(&rhs.ty),
+            _ => None,
+        })
+        .filter(|ty| {
+            matches!(ty, Ty::Func(_, ret) if matches!(ret.as_ref(), Ty::Enum(name, _) if name == "Boxed" || name == "Global::Boxed"))
+        })
+        .count();
+    assert_eq!(boxed_function_results, 2);
 }
 
 fn result_match_wildcard_self_after_ok_can_change_ok_payload_type() {
@@ -4634,7 +5242,7 @@ fn result_match_wildcard_self_after_ok_can_change_ok_payload_type() {
     let typed = typecheck(resolved).expect("Err-proven wildcard arm should typecheck");
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::Def(..))));
 }
 
 fn result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape() {
@@ -4650,7 +5258,7 @@ fn result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape() {
     let typed = typecheck(resolved).expect("Err-proven bind-style wildcard arm should typecheck");
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::Def(..))));
 }
 
 fn result_match_wildcard_self_requires_err_proven_branch() {
@@ -4692,7 +5300,7 @@ fn local_binding_annotation_can_reference_outer_generic_type_param() {
     );
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::Def(..))));
 }
 
 fn closure_param_annotation_can_reference_outer_generic_type_param() {
@@ -4704,12 +5312,12 @@ fn closure_param_annotation_can_reference_outer_generic_type_param() {
     );
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::Def(..))));
 }
 
 fn generic_first_can_inline_tuple_rebuild_with_closure_param_annotation() {
     let typed = typecheck_with_builtin_prelude(
-        r#"def first(f: ($A -> $C)) -> (($A, $B) -> ($C, $B)) {
+        r#"def first(f: ($A -> $C), seed: $B) -> (($A, $B) -> ($C, $B)) {
   {|pair: ($A, $B)|
     (left, right) = pair
     (f(left), right)
@@ -4718,7 +5326,7 @@ fn generic_first_can_inline_tuple_rebuild_with_closure_param_annotation() {
     );
     assert!(typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::Def(_, _, _, _, _, _, _))));
+        .any(|node| matches!(node.node, TypedInner::Def(..))));
 }
 
 fn sibling_closures_keep_substitution_state_local() {
@@ -4931,7 +5539,7 @@ fn generic_struct_bare_annotation_requires_type_args() {
 }
 boxed: Box = Box(1)
 impl Box {
-  def new<$A>(value: $A) -> Box<$A> {
+  def new(value: $A) -> Box<$A> {
     Box { value: value }
   }
 }"#,
@@ -4948,7 +5556,7 @@ fn generic_struct_arity_mismatch_is_rejected() {
 }
 pair: Pair<Int> = Pair(1, 2)
 impl Pair {
-  def new<$A, $B>(left: $A, right: $B) -> Pair<$A, $B> {
+  def new(left: $A, right: $B) -> Pair<$A, $B> {
     Pair { left: left, right: right }
   }
 }"#,
@@ -5259,7 +5867,7 @@ impl BoxedInt {
 }
 
 impl Compare for BoxedInt {
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<BoxedInt>(self: Self, rhs: Self) -> Ordering {
     Compare::compare(self.value, rhs.value)
   }
 }
@@ -5334,6 +5942,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::SafeBind(_, rhs)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+            TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
@@ -5395,7 +6004,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
                 scar::typed::TypedInterpolatedPart::Expr(expr) => has_pending_trait_call(expr),
             }),
             TypedInner::Dbg(args) => args.iter().any(|arg| has_pending_trait_call(&arg.expr)),
-            TypedInner::Def(_, _, _, _, _, body, _)
+            TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
@@ -5412,7 +6021,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
     }
 
     let typed = typecheck_with_builtin_prelude(
-        r#"def double<$N: Add>(x: $N) -> $N { x + x }
+        r#"def double(x: $N) -> $N where $N: Add { x + x }
 a = double(21)
 b = double(1.5)"#,
     );
@@ -5447,6 +6056,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             | TypedInner::SafeBind(_, rhs)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+            TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
             TypedInner::SupervisorAdopt { pid, .. } => has_pending_trait_call(pid),
@@ -5508,7 +6118,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
                 scar::typed::TypedInterpolatedPart::Expr(expr) => has_pending_trait_call(expr),
             }),
             TypedInner::Dbg(args) => args.iter().any(|arg| has_pending_trait_call(&arg.expr)),
-            TypedInner::Def(_, _, _, _, _, body, _)
+            TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
@@ -5542,7 +6152,7 @@ fn generic_struct_constructor_calls_remain_polymorphic_within_one_source() {
   value: $A,
 }
 impl Box {
-  def new<$A>(value: $A) -> Box<$A> {
+  def new(value: $A) -> Box<$A> {
     Box { value: value }
   }
 }
@@ -5742,16 +6352,16 @@ fn bind_operator_missing_impl_lists_available_implementations_in_hint() {
     let err = typecheck(resolved).expect_err("plain lhs bind must fail");
     assert!(err
         .message
-        .contains("`|>=` requires Chainable implementation on the left, got Int"));
+        .contains("`|>=` requires Monad implementation on the left, got Int"));
     let hint = err.hint.as_deref().expect("bind hint");
-    assert!(hint.contains("Chainable is implemented for:"));
-    assert!(hint.contains("List<$A>"));
-    assert!(hint.contains("Option<$A>"));
-    assert!(hint.contains("Result<$A>"));
+    assert!(hint.contains("Monad is implemented for:"));
+    assert!(hint.contains("List<$T>"));
+    assert!(hint.contains("Option<$T>"));
+    assert!(hint.contains("Result<$T>"));
 }
 
 fn from_helper_typechecks_as_generic_trait_call() {
-    let typed = typecheck_with_builtin_prelude(r#"value = from(42, String)"#);
+    let typed = typecheck_with_builtin_prelude(r#"value = from::<String>(42)"#);
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -5776,7 +6386,7 @@ fn from_helper_typechecks_as_generic_trait_call() {
             assert_eq!(method_name, "from");
             assert_eq!(name, "From<String>::Int::from");
             assert_eq!(receiver_ty, &scar::types::Ty::Int);
-            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert_eq!(args.len(), 1);
             assert_eq!(rhs.ty, scar::types::Ty::Str);
         }
         other => panic!("expected trait call, got {:?}", other),
@@ -5784,7 +6394,7 @@ fn from_helper_typechecks_as_generic_trait_call() {
 }
 
 fn try_from_helper_typechecks_as_generic_trait_call() {
-    let typed = typecheck_with_builtin_prelude(r#"value = try_from("42", Int)"#);
+    let typed = typecheck_with_builtin_prelude(r#"value = try_from::<Int>("42")"#);
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -5809,7 +6419,7 @@ fn try_from_helper_typechecks_as_generic_trait_call() {
             assert_eq!(method_name, "try_from");
             assert_eq!(name, "TryFrom<Int>::String::try_from");
             assert_eq!(receiver_ty, &scar::types::Ty::Str);
-            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert_eq!(args.len(), 1);
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
         }
         other => panic!("expected trait call, got {:?}", other),
@@ -5817,7 +6427,7 @@ fn try_from_helper_typechecks_as_generic_trait_call() {
 }
 
 fn encode_helper_typechecks_as_generic_trait_call() {
-    let typed = typecheck_with_builtin_prelude(r#"value = Encode::encode("hello", JsonValue)"#);
+    let typed = typecheck_with_builtin_prelude(r#"value = Encode::encode::<JsonValue>("hello")"#);
     let rhs = typed
         .iter()
         .find_map(|node| match &node.node {
@@ -5842,7 +6452,7 @@ fn encode_helper_typechecks_as_generic_trait_call() {
             assert_eq!(method_name, "encode");
             assert_eq!(name, "Encode<JsonValue>::String::encode");
             assert_eq!(receiver_ty, &scar::types::Ty::Str);
-            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert_eq!(args.len(), 1);
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
         }
         other => panic!("expected trait call, got {:?}", other),
@@ -5861,9 +6471,9 @@ fn json_value_encode_source_alias_typechecks() {
     assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
 }
 
-fn decode_helper_typechecks_format_and_target_witnesses() {
+fn decode_helper_typechecks_explicit_target() {
     let typed = typecheck_with_builtin_prelude(
-        r#"value = JsonValue::decode(JsonValue::String("ok"), String)"#,
+        r#"value = Decode::decode::<String>(JsonValue::String("ok"))"#,
     );
     let rhs = typed
         .iter()
@@ -5891,28 +6501,28 @@ fn decode_helper_typechecks_format_and_target_witnesses() {
             assert!(
                 matches!(receiver_ty, scar::types::Ty::Enum(name, _) if name.ends_with("JsonValue"))
             );
-            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert_eq!(args.len(), 1);
             assert!(matches!(rhs.ty, scar::types::Ty::Result(_, _)));
         }
         other => panic!("expected trait call, got {:?}", other),
     }
 }
 
-fn decode_helper_inside_decode_impl_dispatches_by_receiver_and_witnesses() {
+fn decode_helper_inside_decode_impl_dispatches_by_receiver_and_target() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord JsonSpecConfig(name: String, entrypoint: String)
 
 impl Decode<JsonSpecConfig> for JsonValue {
-  def decode(self: Self, to: TypeRef<JsonSpecConfig>) -> Result<JsonSpecConfig, Error> {
+  def decode::<JsonSpecConfig>(self: Self) -> Result<JsonSpecConfig, Error> {
     name_json =? Json::get(self, "name")
-    name =? JsonValue::decode(name_json, String)
+    name =? Decode::decode::<String>(name_json)
     entry_json =? Json::get(self, "entrypoint")
-    entry =? entry_json |> JsonValue::decode(String)
+    entry =? entry_json |> Decode::decode::<String>
     Ok(JsonSpecConfig(name, entry))
   }
 }
 
-cfg = JsonValue::decode(JsonValue::Null, JsonSpecConfig)"#,
+cfg = Decode::decode::<JsonSpecConfig>(JsonValue::Null)"#,
     );
     let mut calls = Vec::new();
     for node in &typed {
@@ -5947,8 +6557,8 @@ fn decode_helper_allows_same_pattern_recursive_dispatch() {
         r#"defrecord JsonSpecRecursive(value: String)
 
 impl Decode<JsonSpecRecursive> for JsonValue {
-  def decode(self: Self, to: TypeRef<JsonSpecRecursive>) -> Result<JsonSpecRecursive, Error> {
-    JsonValue::decode(self, JsonSpecRecursive)
+  def decode::<JsonSpecRecursive>(self: Self) -> Result<JsonSpecRecursive, Error> {
+    Decode::decode::<JsonSpecRecursive>(self)
   }
 }"#,
     );
@@ -5959,12 +6569,12 @@ fn encode_helper_dispatches_to_receiver_impl_with_json_value_target() {
         r#"defrecord JsonSpecConfig(name: String, entrypoint: String)
 
 impl Encode<JsonValue> for JsonSpecConfig {
-  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
     Ok(JsonValue::String(self.name))
   }
 }
 
-json = Encode::encode(JsonSpecConfig("surtr", "boot"), JsonValue)"#,
+json = Encode::encode::<JsonValue>(JsonSpecConfig("surtr", "boot"))"#,
     );
     let rhs = typed
         .iter()
@@ -5988,7 +6598,7 @@ json = Encode::encode(JsonSpecConfig("surtr", "boot"), JsonValue)"#,
             assert_eq!(trait_name, "Encode<JsonValue>");
             assert_eq!(method_name, "encode");
             assert_eq!(name, "Encode<JsonValue>::Global::JsonSpecConfig::encode");
-            assert!(matches!(args[1].ty, scar::types::Ty::TypeRef(_)));
+            assert_eq!(args.len(), 1);
         }
         other => panic!("expected trait call, got {:?}", other),
     }
@@ -5999,8 +6609,8 @@ fn encode_helper_allows_same_pattern_recursive_dispatch() {
         r#"defrecord JsonSpecRecursive(value: String)
 
 impl Encode<JsonValue> for JsonSpecRecursive {
-  def encode(self: Self, to: TypeRef<JsonValue>) -> Result<JsonValue, Error> {
-    Encode::encode(self, JsonValue)
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
+    Encode::encode::<JsonValue>(self)
   }
 }"#,
     );
@@ -6036,7 +6646,7 @@ fn collect_decode_trait_calls(node: &TypedNode, calls: &mut Vec<(String, Option<
         TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) => {
             collect_decode_trait_calls(rhs, calls);
         }
-        TypedInner::Def(_, _, _, _, _, body, _)
+        TypedInner::Def(_, _, _, _, _, _, body, _)
         | TypedInner::ExtractorDef(_, _, _, _, _, body, _) => {
             collect_decode_trait_calls(body, calls);
         }
@@ -6081,21 +6691,21 @@ fn trait_dispatch_name(dispatch: &scar::typed::TraitDispatch) -> Option<String> 
 }
 
 fn from_helper_suggests_try_from_when_only_fallible_impl_exists() {
-    let resolved = resolve_with_builtin_prelude(r#"value = from("42", Int)"#);
+    let resolved = resolve_with_builtin_prelude(r#"value = from::<Int>("42")"#);
     let err = typecheck(resolved).expect_err("from on fallible conversion must fail");
     assert!(err
         .message
         .contains("String -> Int implements TryFrom, not From"));
-    assert!(err.message.contains("Use try_from(value, Int)."));
+    assert!(err.message.contains("Use try_from::<Int>(value)."));
 }
 
 fn try_from_helper_suggests_from_when_only_infallible_impl_exists() {
-    let resolved = resolve_with_builtin_prelude(r#"value = try_from(42, String)"#);
+    let resolved = resolve_with_builtin_prelude(r#"value = try_from::<String>(42)"#);
     let err = typecheck(resolved).expect_err("try_from on infallible conversion must fail");
     assert!(err
         .message
         .contains("Int -> String implements From, not TryFrom"));
-    assert!(err.message.contains("Use from(value, String)."));
+    assert!(err.message.contains("Use from::<String>(value)."));
 }
 
 fn from_and_try_from_impls_are_mutually_exclusive() {
@@ -6122,35 +6732,35 @@ impl String {
 }
 
 impl Show for String {
-  def to_string(self: Self) -> String {
+  def to_string::<String>(self: Self) -> String {
 inspect(self)
   }
 }
 
 impl From<String> for String {
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from::<String>(self: Self) -> String {
 self
   }
 }
 
 impl TryFrom<Int> for String {
-  def try_from(self: Self, to: TypeRef<Int>) -> Result<Int, Error> {
+  def try_from::<Int>(self: Self) -> Result<Int, Error> {
 Ok(0)
   }
 }
 
 impl From<Int> for String {
-  def from(self: Self, to: TypeRef<Int>) -> Int {
+  def from::<Int>(self: Self) -> Int {
 0
   }
 }
 
 impl Eq for String {
-  def eq(self: Self, rhs: Self) -> Boolean {
+  def eq::<String>(self: Self, rhs: Self) -> Boolean {
 self == rhs
   }
 
-  def neq(self: Self, rhs: Self) -> Boolean {
+  def neq::<String>(self: Self, rhs: Self) -> Boolean {
 self != rhs
   }
 }"#,
@@ -6979,4 +7589,78 @@ value = Result::tap_err(Err(NoneError), id(handler))"#,
     );
     let err = typecheck(resolved).expect_err("Error observer binding must be a direct argument");
     assert!(err.message.contains("Error observer closure cannot escape"));
+}
+
+#[test]
+fn explicit_type_arguments_specialize_functions_trait_calls_and_captures() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<Self, $To>(self: Self) -> $To
+}
+
+impl Convert<Int> for String {
+  def convert::<String, Int>(self: String) -> Int { 1 }
+}
+
+converted: Int = Convert::convert::<Int>("")
+convert_fn: (String -> Int) = &Convert::convert::<Int>
+again: Int = convert_fn("")"#,
+    );
+    assert!(!typed.is_empty());
+}
+
+#[test]
+fn explicit_type_arguments_are_rejected_for_regular_callables() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def identity(value: $A) -> $A { value }
+bad: Int = identity::<Int>(1)"#,
+    );
+    let err = typecheck(resolved).expect_err("regular callables must reject explicit arguments");
+    assert!(
+        err.message.contains("only allowed for trait helpers"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
+    let resolved =
+        resolve_with_builtin_prelude(r#"value = Concat::concat::<String>("left", "right")"#);
+    let err = typecheck(resolved).expect_err("Self must not be supplied as an explicit type input");
+    assert!(
+        err.message
+            .contains("Concat::concat expects 0 explicit type argument(s), got 1"),
+        "{err:?}"
+    );
+
+    let resolved = resolve_with_builtin_prelude(r#"value = TryFrom::try_from::<Int, String>("1")"#);
+    let err = typecheck(resolved).expect_err("trait generics must use their declared arity");
+    assert!(
+        err.message
+            .contains("TryFrom::try_from expects 1 explicit type argument(s), got 2"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn explicit_function_type_arguments_follow_signature_order() {
+    typecheck_with_rules(
+        r#"def pair(left: $A, right: $B) -> ($A, $B) {
+  (left, right)
+}
+
+value: (Int, String) = pair(1, "ok")"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("implicit generic slots should follow their first signature appearance");
+
+    typecheck_with_rules(
+        r#"def reversed(left: $A, right: $B) -> ($A, $B) {
+  (left, right)
+}
+
+value: (String, Int) = reversed("ok", 1)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("declared generic slots should follow their declaration order");
 }

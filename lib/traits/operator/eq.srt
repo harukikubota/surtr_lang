@@ -11,5 +11,10 @@ True
 @autoimport
 deftrait Eq {
   # Return `True` when both values are equal.
-  def eq(self: Self, rhs: Self) -> Boolean
+  def eq::<Self>(self: Self, rhs: Self) -> Boolean
+
+  # Return `True` when both values differ.
+  def neq::<Self>(self: Self, rhs: Self) -> Boolean {
+    Boolean::not(Eq::eq(self, rhs))
+  }
 }

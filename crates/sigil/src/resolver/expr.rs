@@ -6,6 +6,7 @@ use super::scope_init::{
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
+use sindr::names::surface_path_name;
 use spire::ast::{
     AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, BulkUpdatePath, DbgArg, FacetPathSegment,
     HashMapLiteralEntry, InterpolatedPart,
@@ -63,72 +64,6 @@ fn is_synthetic_builtin_symbol_uid(uid: u32) -> bool {
             | BOOLEAN_PRIMITIVE_ROOT_UID
             | FUNCTION_PRIMITIVE_ROOT_UID
     )
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TypeRefHelperSpec {
-    bare_name: &'static str,
-    owner: &'static str,
-    method: &'static str,
-    arity: usize,
-    witness_arg_indices: &'static [usize],
-}
-
-const TYPE_REF_HELPERS: &[TypeRefHelperSpec] = &[
-    TypeRefHelperSpec {
-        bare_name: "from",
-        owner: "From",
-        method: "from",
-        arity: 2,
-        witness_arg_indices: &[1],
-    },
-    TypeRefHelperSpec {
-        bare_name: "try_from",
-        owner: "TryFrom",
-        method: "try_from",
-        arity: 2,
-        witness_arg_indices: &[1],
-    },
-    TypeRefHelperSpec {
-        bare_name: "encode",
-        owner: "Encode",
-        method: "encode",
-        arity: 2,
-        witness_arg_indices: &[1],
-    },
-    TypeRefHelperSpec {
-        bare_name: "decode",
-        owner: "Decode",
-        method: "decode",
-        arity: 2,
-        witness_arg_indices: &[1],
-    },
-];
-
-#[derive(Debug, Clone, Copy)]
-enum TypeRefHelperCall {
-    InScope(&'static TypeRefHelperSpec),
-    ExplicitTrait(&'static TypeRefHelperSpec),
-    JsonValueDecode(&'static TypeRefHelperSpec),
-}
-
-impl TypeRefHelperCall {
-    fn spec(self) -> &'static TypeRefHelperSpec {
-        match self {
-            Self::InScope(spec) | Self::ExplicitTrait(spec) | Self::JsonValueDecode(spec) => spec,
-        }
-    }
-
-    fn allows_canonical_resolution(self) -> bool {
-        !matches!(self, Self::InScope(_))
-    }
-
-    fn helper_owner_hint(self) -> Option<&'static str> {
-        match self {
-            Self::JsonValueDecode(_) => Some("JsonValue"),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -539,6 +474,12 @@ impl Resolver {
                 }
                 Ok(())
             }
+            Ast::TypeApply(_, target, _) => self.collect_capture_placeholders(
+                target,
+                allow_placeholders,
+                inside_placeholder_capture,
+                used,
+            ),
             Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
                 for stmt in stmts {
                     self.collect_capture_placeholders(
@@ -596,6 +537,7 @@ impl Resolver {
             Ast::BinOp(_, _, left, right)
             | Ast::Pipe(_, left, right)
             | Ast::ContextMap(_, left, right)
+            | Ast::ContextApply(_, left, right)
             | Ast::ContextBind(_, left, right)
             | Ast::Compose(_, left, right)
             | Ast::LiftedCompose(_, left, right)
@@ -744,7 +686,7 @@ impl Resolver {
             | Ast::RecordDef(..)
             | Ast::DeferrorDef(_, _, _, _, _)
             | Ast::EnumDef(_, _, _, _, _)
-            | Ast::Def(_, _, _, _, _, _, _)
+            | Ast::Def(..)
             | Ast::ConstDef(_, _, _, _, _)
             | Ast::SupervisorInit(_, _)
             | Ast::ExtractorDef(_, _, _, _, _, _, _)
@@ -752,6 +694,7 @@ impl Resolver {
             | Ast::IntrinsicDecl(_, _, _, _)
             | Ast::BuiltinExtractorDecl(_, _, _, _, _)
             | Ast::BuiltinTypeDecl(_, _, _)
+            | Ast::TypeAlias(_, _, _, _)
             | Ast::ResultCtorDecl(_, _, _, _, _)
             | Ast::Defmod(_, _, _, _)
             | Ast::Defagent(_, _, _, _, _)
@@ -760,8 +703,8 @@ impl Resolver {
             | Ast::DefdynamicSupervisor(_, _, _, _, _)
             | Ast::Namespace(_, _, _)
             | Ast::ImplDef(_, _, _, _)
-            | Ast::TraitDef(_, _, _, _, _)
-            | Ast::TraitImplDef(_, _, _, _, _, _)
+            | Ast::TraitDef(..)
+            | Ast::TraitImplDef(..)
             | Ast::Import(_, _, _)
             | Ast::Include(_, _) => Ok(()),
         }
@@ -1516,89 +1459,6 @@ impl Resolver {
         self.desugar_pipeline_rhs_special_form_partial(rhs)
     }
 
-    fn type_ref_helper_for_call(func: &Ast) -> Option<TypeRefHelperCall> {
-        match func {
-            Ast::Var(_, name) if name == "decode" || name == "encode" => None,
-            Ast::Var(_, name) => TYPE_REF_HELPERS
-                .iter()
-                .find(|spec| spec.bare_name == name.as_str())
-                .map(TypeRefHelperCall::InScope),
-            Ast::Path(_, path) if path.segments.len() >= 2 => {
-                let method = path.segments.last()?;
-                let owner = path.segments.get(path.segments.len() - 2)?;
-                if owner == "JsonValue" && method == "decode" {
-                    return TYPE_REF_HELPERS
-                        .iter()
-                        .find(|spec| spec.owner == "Decode" && spec.method == "decode")
-                        .map(TypeRefHelperCall::JsonValueDecode);
-                }
-                TYPE_REF_HELPERS
-                    .iter()
-                    .find(|spec| spec.owner == owner.as_str() && spec.method == method.as_str())
-                    .map(TypeRefHelperCall::ExplicitTrait)
-            }
-            _ => None,
-        }
-    }
-
-    fn resolve_type_ref_helper_func(
-        &self,
-        span: Span,
-        helper: TypeRefHelperCall,
-    ) -> Option<Resolved> {
-        let spec = helper.spec();
-        let method_alias = format!("{}::{}", spec.owner, spec.method);
-        let scoped_uid = self.scope.lookup(&method_alias);
-        let uid = if helper.allows_canonical_resolution() {
-            scoped_uid
-                .or_else(|| self.declaration_uids.get(&method_alias).copied())
-                .or_else(|| {
-                    let canonical_fq = format!("{}::{}", spec.owner, method_alias);
-                    self.declaration_uids.get(&canonical_fq).copied()
-                })
-                .or_else(|| {
-                    self.declaration_entries
-                        .iter()
-                        .find_map(|(fq_name, entry)| {
-                            (entry.kind == DeclarationKind::TraitMethod
-                                && global_surface_name(&entry.module_path) == spec.owner
-                                && entry.name == method_alias)
-                                .then(|| self.declaration_uids.get(fq_name).copied())
-                                .flatten()
-                        })
-                })
-        } else {
-            scoped_uid
-        }?;
-        let fq_name = self
-            .declaration_fq_name_for_uid(uid)
-            .unwrap_or(method_alias);
-        let is_trait_method = self
-            .declaration_entries
-            .get(&fq_name)
-            .is_some_and(|entry| entry.kind == DeclarationKind::TraitMethod)
-            || self
-                .declaration_uid_kinds
-                .get(&uid)
-                .is_some_and(|kind| *kind == DeclarationKind::TraitMethod);
-        is_trait_method.then(|| {
-            Resolved::Var(
-                span.clone(),
-                ResolvedId {
-                    name: helper
-                        .helper_owner_hint()
-                        .map(|owner| format!("{}::{}", owner, spec.method))
-                        .unwrap_or_else(|| spec.method.into()),
-                    qualified_name: Some(fq_name),
-                    unique_id: uid,
-                    compiler_generated: false,
-                    symbol_info: None,
-                    span,
-                },
-            )
-        })
-    }
-
     fn undefined_callable_arity_message(func: &Ast, arity: usize) -> Option<String> {
         match func {
             Ast::Var(_, name) => Some(format!("Undefined function {}/{}", name, arity)),
@@ -1629,6 +1489,18 @@ impl Resolver {
 
     fn restricted_callable_error_message(&self, fq_name: &str, arity: usize) -> String {
         format!("Function `{fq_name}/{arity}` cannot be called from user code")
+    }
+
+    fn private_callable_error_for_candidate(&self, fq_name: &str, arity: usize) -> Option<String> {
+        let mut candidates = vec![fq_name.to_string()];
+        if !fq_name.starts_with("Global::") {
+            candidates.push(format!("Global::{fq_name}"));
+        }
+        candidates.into_iter().find_map(|candidate| {
+            self.callable_entry_for_name(&candidate)
+                .is_some_and(|entry| entry.visibility == Visibility::Private)
+                .then(|| self.private_callable_error_message(surface_path_name(&candidate), arity))
+        })
     }
 
     fn declaration_entry_for_uid(&self, uid: u32) -> Option<&DeclarationEntry> {
@@ -1686,14 +1558,20 @@ impl Resolver {
         func: &Ast,
         arity: usize,
     ) -> ResolveError {
+        if let Ast::Var(_, name) = func {
+            if let Some(message) = self.private_callable_error_for_candidate(name, arity) {
+                return ResolveError {
+                    message,
+                    span: err.span,
+                    related_labels: Vec::new(),
+                };
+            }
+        }
         if let Ast::Path(_, path) = func {
             let fq_name = path.segments.join("::");
-            if self
-                .callable_entry_for_name(&fq_name)
-                .is_some_and(|entry| entry.visibility == Visibility::Private)
-            {
+            if let Some(message) = self.private_callable_error_for_candidate(&fq_name, arity) {
                 return ResolveError {
-                    message: self.private_callable_error_message(&fq_name, arity),
+                    message,
                     span: err.span,
                     related_labels: Vec::new(),
                 };
@@ -1732,50 +1610,6 @@ impl Resolver {
         }
     }
 
-    fn type_witness_from_expr(expr: Ast) -> Result<AstTy, ResolveError> {
-        match expr {
-            Ast::ConstructorCall(span, name, args) => {
-                if args.is_empty() {
-                    return Ok(AstTy::Named(span, name));
-                }
-                let inner = args
-                    .into_iter()
-                    .map(|arg| match arg {
-                        RecordLitArg::Positional(expr) => Self::type_witness_from_expr(expr),
-                        RecordLitArg::Named(_, expr) => Err(ResolveError {
-                            message: "type witness arguments do not accept named type parameters"
-                                .into(),
-                            span: expr.span().clone(),
-                            related_labels: Vec::new(),
-                        }),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(AstTy::Generic(span, name, inner))
-            }
-            Ast::Path(span, path) => Ok(AstTy::Named(span, path.segments.join("::"))),
-            Ast::Var(span, name) if name == "Unit" => Ok(AstTy::Named(span, name)),
-            Ast::Var(span, name) if name.chars().next().is_some_and(|ch| ch.is_uppercase()) => {
-                Ok(AstTy::Named(span, name))
-            }
-            other => Err(ResolveError {
-                message: "conversion target must be a bare type name such as String or Result<Int>"
-                    .into(),
-                span: other.span().clone(),
-                related_labels: Vec::new(),
-            }),
-        }
-    }
-
-    fn type_witness_span(ast_ty: &AstTy) -> &Span {
-        match ast_ty {
-            AstTy::Named(span, _)
-            | AstTy::Generic(span, _, _)
-            | AstTy::Tuple(span, _)
-            | AstTy::Func(span, _, _)
-            | AstTy::ImplTrait(span, _) => span,
-        }
-    }
-
     pub(super) fn new() -> Self {
         Self {
             scope: initialize_scope(),
@@ -1787,6 +1621,7 @@ impl Resolver {
                 (1, DeclarationKind::ResultCtor),
             ]),
             declaration_hidden_by_uid: HashMap::new(),
+            trait_constructor_slots: HashMap::new(),
             explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
@@ -1807,6 +1642,7 @@ impl Resolver {
                 (1, DeclarationKind::ResultCtor),
             ]),
             declaration_hidden_by_uid: HashMap::new(),
+            trait_constructor_slots: HashMap::new(),
             explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
@@ -2081,10 +1917,12 @@ impl Resolver {
         &mut self,
         stmts: Vec<Ast>,
     ) -> Result<Vec<Resolved>, ResolveError> {
+        let stmts = super::derive::expand_derive_annotations(stmts)?;
         let stmts = self.lower_impl_defs(stmts)?;
         self.explicit_module_imports = Self::collect_explicit_module_imports(&stmts);
         self.validate_auto_import_conflicts(&stmts)?;
         self.predeclare_functions(&stmts)?;
+        self.inherit_trait_constructor_slots(&stmts);
         let mut resolved = Vec::new();
         for stmt in stmts {
             if matches!(stmt, Ast::Import(_, _, _))
@@ -2101,6 +1939,46 @@ impl Resolver {
         validate_trait_impl_pairs_in_nodes(&resolved)?;
         self.predeclared_ids.clear();
         Ok(resolved)
+    }
+
+    fn inherit_trait_constructor_slots(&mut self, stmts: &[Ast]) {
+        let mut parents = Vec::new();
+        for stmt in stmts {
+            let Ast::TraitDef(_, name, _, Some(clause), _, _) = stmt else {
+                continue;
+            };
+            let Some(child_uid) = self.scope.lookup(name) else {
+                continue;
+            };
+            for constraint in &clause.constraints {
+                if !matches!(&constraint.subject, AstTy::Named(_, subject) if subject == "Self") {
+                    continue;
+                }
+                for bound in &constraint.bounds {
+                    let spire::ast::WhereConstraintRhs::Trait(_, parent_name) = bound else {
+                        continue;
+                    };
+                    if let Some(parent_uid) = self.scope.lookup(parent_name) {
+                        parents.push((child_uid, parent_uid));
+                    }
+                }
+            }
+        }
+        loop {
+            let mut changed = false;
+            for (child, parent) in &parents {
+                if self.trait_constructor_slots.contains_key(child) {
+                    continue;
+                }
+                if let Some(slots) = self.trait_constructor_slots.get(parent).cloned() {
+                    self.trait_constructor_slots.insert(*child, slots);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
     }
 
     fn collect_explicit_module_imports(stmts: &[Ast]) -> HashSet<String> {
@@ -2397,6 +2275,20 @@ impl Resolver {
                 related_labels: Vec::new(),
             }),
 
+            Ast::TypeApply(span, target, args) => {
+                let resolved_target = self.resolve_node(*target)?;
+                self.ensure_user_callable_surface(&resolved_target, &span, 0)?;
+                let resolved_args = args
+                    .into_iter()
+                    .map(|arg| self.resolve_type_annotation(arg))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(Resolved::TypeApply(
+                    span,
+                    Box::new(resolved_target),
+                    resolved_args,
+                ))
+            }
+
             Ast::App(span, func, args) => {
                 if let Ast::Var(_, ref name) = *func {
                     if name == "&&" {
@@ -2405,60 +2297,6 @@ impl Resolver {
                     if name == "||" {
                         return self.resolve_logic_call(span, args, LogicKind::Or);
                     }
-                }
-
-                if let Some(helper) = Self::type_ref_helper_for_call(&func) {
-                    let spec = helper.spec();
-                    let resolved_func = self
-                        .resolve_type_ref_helper_func(func.span().clone(), helper)
-                        .map(Ok)
-                        .unwrap_or_else(|| {
-                            self.resolve_node(*func.clone()).map_err(|err| {
-                                self.map_undefined_callable_error(err, &func, args.len())
-                            })
-                        })?;
-                    let direct_arity = args.len();
-                    let injected_receiver = direct_arity + 1 == spec.arity;
-                    if direct_arity != spec.arity && !injected_receiver {
-                        return Err(ResolveError {
-                            message: format!(
-                                "{} expects exactly {} positional arguments",
-                                spec.bare_name, spec.arity
-                            ),
-                            span,
-                            related_labels: Vec::new(),
-                        });
-                    }
-                    let mut resolved_args = Vec::with_capacity(spec.arity);
-                    for (idx, arg) in args.into_iter().enumerate() {
-                        let effective_idx = if injected_receiver { idx + 1 } else { idx };
-                        match arg {
-                            RecordLitArg::Positional(expr)
-                                if spec.witness_arg_indices.contains(&effective_idx) =>
-                            {
-                                let witness_ty = Self::type_witness_from_expr(expr)?;
-                                resolved_args.push(ResolvedRecordLitArg::Positional(
-                                    Resolved::TypeRefWitness(
-                                        Self::type_witness_span(&witness_ty).clone(),
-                                        witness_ty,
-                                    ),
-                                ));
-                            }
-                            RecordLitArg::Positional(expr) => resolved_args
-                                .push(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?)),
-                            RecordLitArg::Named(_, expr) => {
-                                return Err(ResolveError {
-                                    message: format!(
-                                        "{} does not accept named arguments",
-                                        spec.bare_name
-                                    ),
-                                    span: expr.span().clone(),
-                                    related_labels: Vec::new(),
-                                });
-                            }
-                        }
-                    }
-                    return Ok(Resolved::App(span, Box::new(resolved_func), resolved_args));
                 }
 
                 let resolved_func = match self.resolve_node(*func.clone()) {
@@ -2529,6 +2367,13 @@ impl Resolver {
                 let rhs = self.prepare_pipe_rhs(*right)?;
                 let r = self.resolve_node(rhs)?;
                 Ok(Resolved::ContextMap(span, Box::new(l), Box::new(r)))
+            }
+
+            Ast::ContextApply(span, left, right) => {
+                let l = self.resolve_node(*left)?;
+                let rhs = self.prepare_pipe_rhs(*right)?;
+                let r = self.resolve_node(rhs)?;
+                Ok(Resolved::ContextApply(span, Box::new(l), Box::new(r)))
             }
 
             Ast::ContextBind(span, left, right) => {
@@ -2740,7 +2585,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::RecordDef(span, name, fields, _) => {
+            Ast::RecordDef(span, name, fields, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -2769,7 +2614,12 @@ impl Resolver {
                         })
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
-                Ok(Resolved::RecordDef(span, rid, rfields))
+                Ok(Resolved::RecordDef(
+                    span,
+                    rid,
+                    rfields,
+                    resolve_decl_attrs(&attrs),
+                ))
             }
 
             Ast::DeferrorDef(span, name, fields, show_expr, _) => {
@@ -2883,7 +2733,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::Def(span, name, type_params, params, ret_ty, body, attrs) => {
+            Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, attrs) => {
                 let fun_uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -2930,6 +2780,9 @@ impl Resolver {
                     resolved_params,
                     ret_ty
                         .map(|ty| self.resolve_type_annotation(ty))
+                        .transpose()?,
+                    where_clause
+                        .map(|clause| self.resolve_where_clause(clause))
                         .transpose()?,
                     Box::new(resolved_body),
                     resolve_decl_attrs(&attrs),
@@ -3006,7 +2859,7 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
-            Ast::TraitDef(span, name, type_params, methods, attrs) => {
+            Ast::TraitDef(span, name, type_params, where_clause, methods, attrs) => {
                 let qualified_trait_name = self.qualify_current_declaration_name(&name);
                 let trait_uid = self
                     .take_predeclared_id(&name)
@@ -3046,9 +2899,11 @@ impl Resolver {
                 {
                     let spire::ast::TraitMethodSig {
                         name: method_name,
+                        fun_params,
                         type_params,
                         params,
                         ret_ty,
+                        where_clause,
                         body,
                         attrs,
                         span: method_span,
@@ -3078,9 +2933,16 @@ impl Resolver {
                             symbol_info: None,
                             span: method_span.clone(),
                         },
+                        fun_params: fun_params
+                            .into_iter()
+                            .map(|ty| self.resolve_type_annotation(ty))
+                            .collect::<Result<Vec<_>, _>>()?,
                         type_params: self.resolve_type_params(type_params)?,
                         params: resolved_params,
                         ret_ty: self.resolve_type_annotation(ret_ty)?,
+                        where_clause: where_clause
+                            .map(|clause| self.resolve_where_clause(clause))
+                            .transpose()?,
                         body: resolved_body,
                         attrs: resolve_decl_attrs(&attrs),
                         span: method_span,
@@ -3090,18 +2952,29 @@ impl Resolver {
                     span,
                     rid,
                     resolved_type_params,
+                    where_clause
+                        .map(|clause| self.resolve_where_clause(clause))
+                        .transpose()?,
                     resolved_methods,
                     resolve_decl_attrs(&attrs),
                 ))
             }
-            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, _attrs) => {
+            Ast::TraitImplDef(
+                span,
+                trait_name,
+                trait_args,
+                target_ty,
+                where_clause,
+                methods,
+                attrs,
+            ) => {
                 let (trait_uid, qualified_trait_name) =
                     self.resolve_trait_reference(&trait_name, &span)?;
                 let trait_id = ResolvedId {
                     name: trait_name.clone(),
                     qualified_name: Some(qualified_trait_name.clone()),
                     unique_id: trait_uid,
-                    compiler_generated: false,
+                    compiler_generated: attrs.compiler_generated,
                     symbol_info: None,
                     span: span.clone(),
                 };
@@ -3115,6 +2988,7 @@ impl Resolver {
                         type_params,
                         params,
                         ret_ty,
+                        method_where_clause,
                         body,
                         attrs,
                         is_builtin,
@@ -3125,6 +2999,7 @@ impl Resolver {
                             type_params,
                             params,
                             ret_ty,
+                            method_where_clause,
                             body,
                             attrs,
                         ) => (
@@ -3133,6 +3008,7 @@ impl Resolver {
                             type_params,
                             params,
                             ret_ty,
+                            method_where_clause,
                             Some(body),
                             attrs,
                             false,
@@ -3143,6 +3019,7 @@ impl Resolver {
                             Vec::new(),
                             params,
                             ret_ty,
+                            None,
                             None,
                             attrs,
                             true,
@@ -3157,6 +3034,12 @@ impl Resolver {
                             });
                         }
                     };
+                    let fun_params = attrs
+                        .fun_params
+                        .clone()
+                        .into_iter()
+                        .map(|ty| self.resolve_type_annotation(ty))
+                        .collect::<Result<Vec<_>, _>>()?;
                     let qualified_function_name = trait_impl_method_qualified_name(
                         self.current_module_path.as_deref(),
                         &trait_name,
@@ -3211,10 +3094,14 @@ impl Resolver {
                             symbol_info: None,
                             span: method_span.clone(),
                         },
+                        fun_params,
                         type_params: self.resolve_type_params(type_params)?,
                         params: resolved_params,
                         ret_ty: ret_ty
                             .map(|ty| self.resolve_type_annotation(ty))
+                            .transpose()?,
+                        where_clause: method_where_clause
+                            .map(|clause| method_resolver.resolve_where_clause(clause))
                             .transpose()?,
                         body: Box::new(resolved_body),
                         attrs: resolve_decl_attrs(&attrs),
@@ -3231,6 +3118,9 @@ impl Resolver {
                         .map(|arg| self.resolve_type_annotation(arg))
                         .collect::<Result<Vec<_>, _>>()?,
                     resolved_target_ty,
+                    where_clause
+                        .map(|clause| self.resolve_where_clause(clause))
+                        .transpose()?,
                     resolved_methods,
                 ))
             }
@@ -3342,6 +3232,19 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
+            Ast::TypeAlias(span, name, type_params, rhs) => Ok(Resolved::TypeAlias(
+                span,
+                name,
+                type_params
+                    .into_iter()
+                    .map(|param| ResolvedTypeParam {
+                        name: param.name,
+                        bound: param.bound,
+                        span: param.span,
+                    })
+                    .collect(),
+                rhs,
+            )),
             Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)
@@ -3718,6 +3621,84 @@ impl Resolver {
         }
     }
 
+    fn resolve_where_clause(
+        &self,
+        clause: spire::ast::WhereClause,
+    ) -> Result<ResolvedWhereClause, ResolveError> {
+        let constraints = clause
+            .constraints
+            .into_iter()
+            .map(|constraint| {
+                let subject = self.resolve_type_annotation(constraint.subject)?;
+                let bounds = constraint
+                    .bounds
+                    .into_iter()
+                    .map(|bound| match bound {
+                        spire::ast::WhereConstraintRhs::Trait(span, name) => {
+                            let (unique_id, qualified_name) =
+                                self.resolve_trait_reference(&name, &span)?;
+                            Ok(ResolvedWhereConstraintRhs::Trait(ResolvedId {
+                                name,
+                                qualified_name: Some(qualified_name),
+                                unique_id,
+                                compiler_generated: false,
+                                symbol_info: None,
+                                span,
+                            }))
+                        }
+                        spire::ast::WhereConstraintRhs::TypeConstructor(span, slots) => {
+                            Ok(ResolvedWhereConstraintRhs::TypeConstructor {
+                                span,
+                                slots: slots
+                                    .into_iter()
+                                    .map(|slot| self.resolve_type_annotation(slot))
+                                    .collect::<Result<Vec<_>, _>>()?,
+                            })
+                        }
+                        spire::ast::WhereConstraintRhs::TraitSlot(span, owner, slot_name) => {
+                            let (unique_id, qualified_name) =
+                                self.resolve_trait_reference(&owner, &span)?;
+                            let slot_ordinal = self
+                                .trait_constructor_slots
+                                .get(&unique_id)
+                                .and_then(|slots| slots.iter().position(|slot| slot == &slot_name))
+                                .ok_or_else(|| ResolveError {
+                                    message: format!(
+                                        "Trait {} has no constructor slot {}",
+                                        owner, slot_name
+                                    ),
+                                    span: span.clone(),
+                                    related_labels: Vec::new(),
+                                })? as u32;
+                            Ok(ResolvedWhereConstraintRhs::TraitSlot {
+                                trait_id: ResolvedId {
+                                    name: owner,
+                                    qualified_name: Some(qualified_name),
+                                    unique_id,
+                                    compiler_generated: false,
+                                    symbol_info: None,
+                                    span: span.clone(),
+                                },
+                                slot_name,
+                                slot_ordinal,
+                                span,
+                            })
+                        }
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                Ok(ResolvedWhereConstraint {
+                    subject,
+                    bounds,
+                    span: constraint.span,
+                })
+            })
+            .collect::<Result<Vec<_>, ResolveError>>()?;
+        Ok(ResolvedWhereClause {
+            constraints,
+            span: clause.span,
+        })
+    }
+
     fn resolve_trait_reference(
         &self,
         trait_name: &str,
@@ -3757,9 +3738,9 @@ impl Resolver {
 pub(super) fn validate_trait_impl_pairs_in_nodes(
     resolved: &[Resolved],
 ) -> Result<(), ResolveError> {
-    let mut seen_pairs: HashMap<String, Span> = HashMap::new();
+    let mut seen_pairs: HashMap<String, (Span, bool)> = HashMap::new();
     for node in resolved {
-        let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, _) = node else {
+        let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, _, _) = node else {
             continue;
         };
         let trait_name = trait_instance_key(
@@ -3767,12 +3748,13 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
             trait_args,
         );
         let pair_key = format!("{} for {}", trait_name, ast_ty_key(target_ty));
-        if let Some(first_span) = seen_pairs.get(&pair_key) {
+        if let Some((first_span, first_generated)) = seen_pairs.get(&pair_key) {
             return Err(ResolveError {
-                message: format!(
-                    "Multiple trait impl blocks for `{}` are not allowed",
-                    pair_key
-                ),
+                message: if *first_generated || trait_id.compiler_generated {
+                    format!("DerivedImplConflict: multiple trait impl blocks for `{pair_key}`")
+                } else {
+                    format!("Multiple trait impl blocks for `{pair_key}` are not allowed")
+                },
                 span: span.clone(),
                 related_labels: vec![
                     ResolveErrorLabel {
@@ -3786,7 +3768,10 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
                 ],
             });
         } else {
-            seen_pairs.insert(pair_key.clone(), span.clone());
+            seen_pairs.insert(
+                pair_key.clone(),
+                (span.clone(), trait_id.compiler_generated),
+            );
         }
     }
     Ok(())

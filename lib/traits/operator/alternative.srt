@@ -1,0 +1,17 @@
+@doc """
+Standard `Alternative` trait declaration.
+
+`Alternative` extends `Applicative` with an empty contextual value and eager
+choice. The `<|>` operator lowers to `Alternative::choose`.
+"""
+deftrait Alternative
+where
+  Self: Applicative
+{
+  # Construct the identity value for choice. `Self` is selected from the
+  # expected result type and `$A` selects its element type.
+  def empty::<Self, $A>() -> Self<$A>
+
+  # Choose between two values in the same contextual family.
+  def choose(left: Self<$A>, right: Self<$A>) -> Self<$A>
+}

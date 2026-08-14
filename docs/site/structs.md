@@ -24,7 +24,7 @@ impl User {
 欠損可能 field を持たせるときは、`T?` または `Option<T>` を使います。
 `T?` は `Option<T>` に下がる sugar です。
 `Result` を返す helper 関数とつなぐときは、必要に応じて
-`from(value, Result)` / `from(value, Option)` を明示します。
+`from::<Result>(value)` / `from::<Option>(value)` を明示します。
 
 ## 構築ルール
 
@@ -110,8 +110,8 @@ impl User {
     User { name, age }
   }
 
-  defextractor deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
-    MatchResult::Success((self.name, self.age))
+  defextractor deconstruct(self: Self) -> Option<(String, Int)> {
+    Option::Some((self.name, self.age))
   }
 }
 
@@ -207,11 +207,11 @@ defstruct User {
   nickname: String?,
 }
 
-next =? Facet::case_over(User.nickname.Some?, user, normalize_name)
+next =? Facet::case_over(User.nickname.Some, user, normalize_name)
 ```
 
 `nickname: String?` は `Option<String>` と同じなので、
-optional payload を更新するときは `Some` / `Some?` を経由した
+optional payload を更新するときは required `Some` selector を経由した
 `Facet::case_over` / `Facet::case_set` が自然です。
 
 たとえば `impl User` 内で `with_age` を定義して再構築できます。
@@ -242,8 +242,8 @@ match user {
 
 よくある読み方は次の通りです。
 
-- 1値だけ取り出したいなら `MatchResult<Int, Error>` のように 1値を返す
-- 複数値を取り出したいなら tuple にして `MatchResult<(A, B), Error>` を返す
+- 1値だけ取り出したいなら `Option<Int>` のように 1値を返す
+- 複数値を取り出したいなら tuple にして `Option<(A, B)>` を返す
 - pattern 側はその shape に合わせて `User(x)` または `User(x, y)` のように書く
 
 ## 関連ページ

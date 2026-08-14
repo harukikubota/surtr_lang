@@ -1,0 +1,8 @@
+import Matchers::never
+
+def bind() -> Result<Int> {
+  never(value) =? Ok(1)
+  Ok(value)
+}
+
+print(inspect(bind()))

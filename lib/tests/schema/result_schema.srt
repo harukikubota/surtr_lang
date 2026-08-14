@@ -55,7 +55,7 @@ defmod ResultSchema {
   }
 
   def parse_user_id(text: String) -> Result<Int> {
-    try_from(text, Int)
+    try_from::<Int>(text)
   }
 
   def load_user(id: Int) -> Result<User> {

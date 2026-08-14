@@ -137,34 +137,51 @@ impl Parser<'_> {
         }
 
         if matches!(self.peek(), Token::Impl) {
-            self.advance();
-            self.skip_newlines();
-            let (trait_name, trait_span) = self.expect_qualified_ident(2, "trait")?;
-            return Ok(self.parse_optional_type_suffix(AstTy::ImplTrait(
-                Span {
-                    start: sp.start,
-                    end: trait_span.end,
-                },
-                trait_name,
-            )));
+            return Err(ParseError::syntax(
+                "Anonymous `impl Trait` types are not supported; introduce a named type slot and constrain it with `where`",
+                sp,
+            ));
         }
 
         // Named type, possibly with type args: Result<Int>, List<Int>, Option<Int>, ...
         let (name, name_span) = self.expect_qualified_ident(2, "type")?;
         if name == "Self" {
-            if impl_target.is_some() {
-                return Ok(self.parse_optional_type_suffix(AstTy::Named(
-                    Span {
-                        start: sp.start,
-                        end: name_span.end,
-                    },
-                    "Self".to_string(),
-                )));
+            if impl_target.is_none() {
+                return Err(ParseError::syntax(
+                    "`Self` can only be used inside trait or impl declarations",
+                    sp,
+                ));
             }
-            return Err(ParseError::syntax(
-                "`Self` can only be used inside impl methods",
-                sp,
-            ));
+            if matches!(self.peek(), Token::Lt) {
+                return self.with_parse_nesting(sp.clone(), |parser| {
+                    parser.advance();
+                    parser.skip_newlines();
+                    let mut args = vec![parser.parse_type_in_impl_context(impl_target.clone())?];
+                    parser.skip_newlines();
+                    while matches!(parser.peek(), Token::Comma) {
+                        parser.advance();
+                        parser.skip_newlines();
+                        args.push(parser.parse_type_in_impl_context(impl_target.clone())?);
+                        parser.skip_newlines();
+                    }
+                    let end = parser.expect_type_gt()?;
+                    Ok(parser.parse_optional_type_suffix(AstTy::Generic(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        "Self".to_string(),
+                        args,
+                    )))
+                });
+            }
+            return Ok(self.parse_optional_type_suffix(AstTy::Named(
+                Span {
+                    start: sp.start,
+                    end: name_span.end,
+                },
+                "Self".to_string(),
+            )));
         }
         if name == "self" {
             return Err(ParseError::syntax("`self` is not a type name", sp));
@@ -205,6 +222,16 @@ impl Parser<'_> {
     }
 
     pub(super) fn is_self_type(ty: &AstTy) -> bool {
-        matches!(ty, AstTy::Named(_, name) if name == "Self")
+        matches!(ty, AstTy::Named(_, name) | AstTy::Generic(_, name, _) if name == "Self")
+    }
+
+    pub(super) fn is_impl_receiver_type(ty: &AstTy, target: &str) -> bool {
+        let same_target = |name: &str| {
+            name == target
+                || name.rsplit("::").next().unwrap_or(name)
+                    == target.rsplit("::").next().unwrap_or(target)
+        };
+        Self::is_self_type(ty)
+            || matches!(ty, AstTy::Named(_, name) | AstTy::Generic(_, name, _) if same_target(name))
     }
 }

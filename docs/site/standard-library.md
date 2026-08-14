@@ -17,7 +17,7 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 標準定義ソースの初期ロード順は次で固定されています。
 
 ```text
-Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> user source
+Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Applicative, Monad, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> user source
 ```
 
 このうち auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface および標準 trait です。  
@@ -57,7 +57,7 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 ### `SpecialTypes`
 
 - `special_types.srt` に compiler-special builtin type を集約する
-- 現在は `Unit`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `ProcessInit<$T>`, `TypeRef<$T>`, `Hole` をここへ置く
+- 現在は `Unit`, `Closure`, `MatchArms<$Scrutinee, $Result>`, `CondClauses<$Result>`, `BulkUpdateEntries<$State>`, `Lazy<$T>`, `StandbyInit<$T>`, `Hole` をここへ置く
 - `defmod` は持たず、top-level canonical type declaration だけを持つ
 - user-facing な振る舞いは各 trait / callable / module surface 側から現れる
 
@@ -100,9 +100,6 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 @builtin type Unit
 
 // special_types.srt
-@builtin type TypeRef<$T>
-
-// special_types.srt
 @builtin type Hole
 
 // int.srt
@@ -126,26 +123,12 @@ compiler はこの head 自体を契約として扱います。
 - `List` は `List<$A>`
 - `HashMap` は `HashMap<$V>`（key は常に `String`）
 - `Result` は `Result<$T>`
-- `TypeRef` は `TypeRef<$T>`
 - `Hole` は ignored-input callable marker
 
 `Result<T, E>` は builtin type declaration ではなく、戻り値位置での error contract 記法として扱います。
-`TypeRef<$T>` は ordinary value type ではなく、target type witness 専用の
-compiler-reserved builtin type です。
 `Hole` は ordinary data type ではなく、`_` の背後にある callable marker です。
 
-`TypeRef<$T>` の使い道は限定されています。
-
-- trait head で宣言した型引数に対応する witness parameter
-- `From<$To>`, `TryFrom<$To>`, `Decode<$To>` のような target-oriented trait method の parameter
-- `from(value, TargetTy)` / `try_from(value, TargetTy)` の第 2 引数を内部で表す型
-
-逆に、次には使いません。
-
-- 通常の `def` の引数や戻り値
-- field type
-- local binding の型注釈
-- first-class value としての生成・保存・返却
+target-oriented trait の型入力は `from::<Target>(value)` のような明示型引数で指定します。
 
 compiler-special type の詳しい説明は `./special-types.md` を参照してください。
 
@@ -369,7 +352,7 @@ ret = List::reverse(acc)
 @builtin type Err(Error) -> Result<$T>
 ```
 
-現時点でも中心は `Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|>=`, `>*`, `>=>` の言語構文と型規則ですが、
+現時点でも中心は `Ok(...)`, `Err(...)`, `match`, `=?`, `|*>`, `|*|`, `|>=`, `>*`, `>=>` の言語構文と型規則ですが、
 `Result::is_ok(...)` / `Result::is_err(...)` で variant 判定だけを簡潔に書けます。
 
 ## 11. `Option` module の位置づけ
@@ -384,9 +367,9 @@ defenum Option<$T> {
 }
 ```
 
-`Option` は `=?` の対象ではありませんが、`|*>`、`|>=`、`>*`、`>=>` には `Option` 文脈の標準実装があります。
-失敗伝播へ載せたい場合は `from(value, Result)`、値として分岐したい場合は `match` を使います。
-`from(value, Option)` は `Err(_)` を `None` に畳み込む明示変換です。
+`Option` は `=?` の対象ではありませんが、`|*>`、`|*|`、`|>=`、`>*`、`>=>` には `Option` 文脈の標準実装があります。
+失敗伝播へ載せたい場合は `from::<Result>(value)`、値として分岐したい場合は `match` を使います。
+`from::<Option>(value)` は `Err(_)` を `None` に畳み込む明示変換です。
 
 ## Public vs Hidden
 
@@ -426,14 +409,14 @@ user.nickname
 path capability です。
 
 ```surtr
-@builtin type Facet<$S, $A>
+@builtin type Facet<$K, $S, $A, $T, $B>
 ```
 
 読み方は次です。
 
 - `S` は source の型
 - `A` は focus の型
-- `Facet<S, A>` は「`S` の中の `A` を指す path」
+- `Facet<K, S, A, T, B>` は compiler-managed な path capability。`K/S/A` は path 導出、`T/B` は update-side slot を表す
 
 ### path の書き方
 
@@ -455,7 +438,7 @@ Tuple._1
 ```
 
 - `.0`, `.1` ではなく `._0`, `._1`
-- `Tuple._N` は `Facet<(...), ...>` が期待される場所で使うほか、同一スコープの local binding として deferred path に束縛できる
+- `Tuple._N` は `Facet<K, (...), ..., T, B>` が期待される場所で使うほか、同一スコープの local binding として deferred path に束縛できる
 - `_0` 単体は使わない
 
 enum variant path は `Enum.Variant` です。
@@ -607,9 +590,9 @@ name = Facet::view(profile_name, user)
 
 型の並びは次です。
 
-- `outer: Facet<S, A>`
-- `inner: Facet<A, B>`
-- result: `Facet<S, B>`
+- `outer: Facet<K, S, A, _, _>`
+- `inner: Facet<L, A, B, _, _>`
+- result: `Facet<K, S, B, _, _>`
 
 ### Facet のスコープ規約
 
@@ -620,7 +603,7 @@ facet = User.name
 name = Facet::view(facet, user)
 ```
 
-REPL では `:type` / `:info` に加えて `:facet <FacetPath|$binding>` が使えます。
+REPL では `:type` / `:info` に加えて `:facet <FacetPath|binding>` が使えます。
 `type` と `full path` の確認に加えて、variant selector や `Result` source を含む
 path の停止点をまとめて見たいときに使います。
 
@@ -641,6 +624,7 @@ path の停止点をまとめて見たいときに使います。
 |---|---|
 | `x |> f(1)` | call 式への第一引数注入 |
 | `list |*> f()` | `List::map` と同じ方向の変換 |
+| `mapper |*| value` | `Applicative::ap` による文脈内 callable の適用 |
 | `list |>= f()` | `List` の bind 方向の変換 |
 | `&f >* &g` | 文脈付き関数の後ろに pure function をつなぐ lifted compose |
 | `&f >=> &g` | `List` または `Result` を返す関数どうしの Kleisli 合成 |

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Function::curry requires a function value

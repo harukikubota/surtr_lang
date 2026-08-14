@@ -65,24 +65,65 @@ impl Option {
 `Functor` implementation for `Option`.
 This is the source-level meaning of `value |*> f`.
 """
-impl Functor<$A, $B, Option<$B>> for Option<$A> {
-  def map(self: Self, f: ($A -> $B)) -> Option<$B> {
+impl Functor for Option<$T> {
+  def fmap(self: Option<$A>, mapper: ($A -> $B)) -> Option<$B> {
     match self {
-      Option::Some(value) => Option::Some(f(value)),
+      Option::Some(value) => Option::Some(mapper(value)),
       Option::None => Option::None,
     }
   }
 }
 
 @doc """
-`Chainable` implementation for `Option`.
-This is the source-level meaning of `value |>= f`.
+`Applicative` implementation for `Option`.
 """
-impl Chainable<$A, Option<$B>> for Option<$A> {
-  def chain(self: Self, f: ($A -> Option<$B>)) -> Option<$B> {
-    match self {
-      Option::Some(value) => f(value),
+impl Applicative for Option<$T> {
+  def pure::<Option<$T>>(value: $A) -> Option<$A> {
+    Option::Some(value)
+  }
+
+  def ap(mapper: Option<($A -> $B)>, value: Option<$A>) -> Option<$B> {
+    match mapper {
+      Option::Some(f) => match value {
+        Option::Some(inner) => Option::Some(f(inner)),
+        Option::None => Option::None,
+      },
       Option::None => Option::None,
+    }
+  }
+}
+
+@doc """
+`Monad` implementation for `Option`.
+This is the source-level meaning of `value |>= mapper`.
+"""
+impl Monad for Option<$T> {
+  def return::<Option<$T>>(value: $A) -> Option<$A> {
+    Option::Some(value)
+  }
+
+  def bind(self: Option<$A>, mapper: ($A -> Option<$B>)) -> Option<$B> {
+    match self {
+      Option::Some(value) => mapper(value),
+      Option::None => Option::None,
+    }
+  }
+}
+
+@doc """
+`Alternative` implementation for `Option`.
+`<|>` returns the first `Some` value, or its right operand when the left is
+`None`.
+"""
+impl Alternative for Option<$T> {
+  def empty::<Option<$T>, $A>() -> Option<$A> {
+    Option::None
+  }
+
+  def choose(left: Option<$A>, right: Option<$A>) -> Option<$A> {
+    match left {
+      Option::Some(_) => left,
+      Option::None => right,
     }
   }
 }
@@ -92,8 +133,8 @@ impl Chainable<$A, Option<$B>> for Option<$A> {
 This is the source-level meaning of `left >* right` for `Option`.
 """
 impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
-  def lift_compose(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
-    {|value| Functor::map(self(value), rhs)}
+  def lift_compose::<($A -> Option<$B>), $A, $B, $C, Option<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
+    {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
@@ -102,8 +143,8 @@ impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
 This is the source-level meaning of `left >=> right` for `Option`.
 """
 impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
-  def kleisli_compose(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
-    {|value| Chainable::chain(self(value), rhs)}
+  def kleisli_compose::<($A -> Option<$B>), $A, $B, Option<$C>>(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
+    {|value| Monad::bind(self(value), rhs)}
   }
 }
 
@@ -111,10 +152,10 @@ impl From<Result<$T>> for Option<$T> {
   @doc """
   Convert `Option<$T>` into `Result<$T>` using `NoneError` for missing values.
   ## REPL
-  xldr(1)> from(Option::Some(1), Result)
+  xldr(1)> from::<Result>(Option::Some(1))
   Ok(1)
   """
-  def from(self: Self, to: TypeRef<Result<$T>>) -> Result<$T> {
+  def from::<Result<$T>>(self: Self) -> Result<$T> {
     match self {
       Option::Some(value) => Ok(value),
       Option::None => Err(NoneError),
@@ -126,10 +167,10 @@ impl From<Option<$T>> for Result<$T> {
   @doc """
   Convert `Result<$T>` into `Option<$T>`, dropping the concrete error value.
   ## REPL
-  xldr(1)> from(Ok(1), Option)
+  xldr(1)> from::<Option>(Ok(1))
   Option::Some(1)
   """
-  def from(self: Self, to: TypeRef<Option<$T>>) -> Option<$T> {
+  def from::<Option<$T>>(self: Self) -> Option<$T> {
     match self {
       Ok(value) => Option::Some(value),
       Err(_) => Option::None,

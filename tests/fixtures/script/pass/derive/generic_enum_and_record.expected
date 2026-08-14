@@ -1,0 +1,4 @@
+(True, True)
+(Ordering::Less, "Choice::Value(1)")
+(True, True)
+(Ordering::Less, "Point(x: 1, y: 2)")

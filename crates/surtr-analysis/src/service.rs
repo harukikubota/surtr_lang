@@ -11,9 +11,9 @@ use crate::{
     complete_prefix, extract_project_runner_input, lookup_symbol_at_cursor, parse_document,
     parse_document_tolerant, repl_assist_at_cursor, resolve_context, resolve_project_runner_with,
     signature_help_at_cursor, AnalysisContextRequest, AnalysisContextStatus, AnalysisMode,
-    AnalysisSpan, CompletionKind, CompletionRequest, CompletionResponse, CompletionScope,
-    CompletionSymbol, DocumentSnapshot, DocumentStore, LineIndex, ProjectRunnerInput,
-    ProjectRunnerSourceInput, ReplAssist, ResolvedAnalysisContext, RunnerContext, RunnerDiagnostic,
+    AnalysisSpan, CompletionKind, CompletionRequest, CompletionResponse, CompletionSymbol,
+    DocumentSnapshot, DocumentStore, LineIndex, ProjectRunnerInput, ProjectRunnerSourceInput,
+    ReplAssist, ReplCompletionUseSite, ResolvedAnalysisContext, RunnerContext, RunnerDiagnostic,
     RunnerDiagnosticKind, ScriptProjectContext, SelectedContext, SemanticIndex, SourceLocation,
     TextPosition, Utf16Position,
 };
@@ -309,7 +309,7 @@ impl AnalysisService {
         &self,
         snapshot: &AnalysisSnapshot,
         position: Utf16Position,
-        scope: CompletionScope,
+        use_site: ReplCompletionUseSite,
     ) -> ReplAssist {
         let Some(document) = snapshot.active_document.as_ref() else {
             return ReplAssist::default();
@@ -324,7 +324,7 @@ impl AnalysisService {
                 source: &document.text,
                 cursor,
             },
-            scope,
+            use_site,
         )
     }
 

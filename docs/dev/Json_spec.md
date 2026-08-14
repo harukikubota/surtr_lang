@@ -54,20 +54,18 @@ defenum JsonValue {
 
 ```surtr
 deftrait Encode<$To> {
-  def encode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+  def encode(self: Self) -> Result<$To, Error>
 }
 
 deftrait Decode<$To> {
-  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+  def decode(self: Self) -> Result<$To, Error>
 }
 ```
 
-- `JsonValue::decode(value, Target)` の `Target` は `TypeRef` witness slot として解釈する
-- `JsonValue::encode(value)` は標準ライブラリ上の source alias として `Encode::encode(value, JsonValue)` を呼び、`Encode<JsonValue> for typeof(value)` へ dispatch する
-- `value |> JsonValue::decode(Target)` と `value |> JsonValue::encode()` も同じ surface として扱う
-- dispatch は receiver 引数の型と `To` witness で決定し、同じ pattern の再帰的 call も許可する
-- `TypeRef` は trait method / trait impl method signature の witness parameter にだけ現れてよい
-- 通常 `def` の parameter / return / field / local annotation では使えない
+- `Decode::decode::<Target>(value)` は明示型引数で target を指定する
+- `JsonValue::encode(value)` は標準ライブラリ上の source alias として `Encode::encode::<JsonValue>(value)` を呼び、`Encode<JsonValue> for typeof(value)` へ dispatch する
+- `value |> Decode::decode::<Target>` と `value |> JsonValue::encode()` も同じ surface として扱う
+- dispatch は receiver 引数の型と明示された `To` で決定し、同じ pattern の再帰的 call も許可する
 
 ### 1.4 Standard operations
 
@@ -99,16 +97,15 @@ schema-level encode は `impl Encode<JsonValue> for T` を明示実装して書�
 
 ### 2.1 Resolver
 
-- `JsonValue::decode(...)` helper は trait helper として解決し、`JsonValue::encode(...)` は `impl JsonValue` の source alias として解決する
-- helper call の target 引数は `Resolved::TypeRefWitness` に lower する
-- pipeline partial call でも同じ lowering を使う
+- `Decode::decode::<Target>(...)` は明示型適用された trait helper として解決し、`JsonValue::encode(...)` は `impl JsonValue` の source alias として解決する
+- pipeline partial call でも同じ `Resolved::TypeApply` を保持する
 - `Encode::encode` / `Decode::decode` の impl dispatch は通常の trait call と同じ registry を通す
 
 ### 2.2 Typechecker
 
 - helper call は generic trait call として型検査する
 - `|>` と `|>=` の RHS に trait helper partial call が来た場合、LHS の型から受け口を concretize する
-- `Decode::decode` / `Encode::encode` の impl dispatch は receiver 引数の型と `To` の `TypeRef` witness で決定する
+- `Decode::decode` / `Encode::encode` の impl dispatch は receiver 引数の型と明示型引数 `To` で決定する
 - 同じ receiver / `To` pattern の recursive call が現れても compile error にはしない
 - `Decode` は `Facet` を引数に受け取らない
 - `Facet` は decode 前の `JsonValue` inspection、または decode 後の typed value update にだけ使う
@@ -139,7 +136,7 @@ schema-level encode は `impl Encode<JsonValue> for T` を明示実装して書�
 
 compile 側の標準定義ソースロード順は次に固定する。
 
-`Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc] -> [Test] -> ユーザ拡張`
+`Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Applicative, Monad, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc] -> [Test] -> ユーザ拡張`
 
 - `Encode` / `Decode` は `From` / `TryFrom` の後、`Json` の前にロードする
 - `JsonValue` は `Json` module 側で定義し、helper trait 側から参照される

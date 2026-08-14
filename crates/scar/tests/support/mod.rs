@@ -16,8 +16,8 @@ const ADD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/ad
 const SUB_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/sub.srt");
 const MUL_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/mul.srt");
 const SHOW_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/show.srt");
+const DEFAULT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/default.srt");
 const EQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/eq.srt");
-const NEQ_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/neq.srt");
 const COMPARE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/compare.srt");
 const CONCAT_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/concat.srt");
 const FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/from.srt");
@@ -25,7 +25,14 @@ const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/try_fr
 const ENCODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/encode.srt");
 const DECODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/decode.srt");
 const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/functor.srt");
-const CHAINABLE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/chainable.srt");
+const BIFUNCTOR_MODULE_SOURCE: &str =
+    include_str!("../../../../lib/traits/operator/bifunctor.srt");
+const APPLICATIVE_MODULE_SOURCE: &str =
+    include_str!("../../../../lib/traits/operator/applicative.srt");
+const MONAD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/monad.srt");
+const ALTERNATIVE_MODULE_SOURCE: &str =
+    include_str!("../../../../lib/traits/operator/alternative.srt");
+const MONOID_MODULE_SOURCE: &str = include_str!("../../../../lib/types/monoid.srt");
 const PIPE_APPLY_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/pipe_apply.srt");
 const COMPOSE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/compose.srt");
@@ -78,13 +85,14 @@ pub(crate) fn typecheck_with_context(
     session.typecheck_with_context(resolved, context)
 }
 
-fn parse_std_module_stage(
-    source: &str,
-    _fallback_module_path: &str,
-) -> Vec<sigil::StagedModuleAst> {
+fn parse_std_module_stage(source: &str, fallback_module_path: &str) -> Vec<sigil::StagedModuleAst> {
     let ast = spire::parse_with_context(
         source,
-        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+        spire::ParserContext::module(
+            0,
+            (fallback_module_path == "Facet").then(|| fallback_module_path.into()),
+        )
+        .with_rules(spire::ParseRules::std_module()),
     )
     .expect("std module should parse");
 
@@ -178,7 +186,15 @@ fn parse_std_module_stage(
                     process_spec: None,
                 });
             }
-            Ast::TraitImplDef(span, trait_name, trait_args, target_ty, methods, attrs) => {
+            Ast::TraitImplDef(
+                span,
+                trait_name,
+                trait_args,
+                target_ty,
+                where_clause,
+                methods,
+                attrs,
+            ) => {
                 let module_path = match &target_ty {
                     spire::ast::AstTy::Named(_, name)
                     | spire::ast::AstTy::ImplTrait(_, name)
@@ -193,6 +209,7 @@ fn parse_std_module_stage(
                     trait_name,
                     trait_args,
                     target_ty,
+                    where_clause,
                     methods,
                     attrs.clone(),
                 ));
@@ -283,6 +300,7 @@ fn cached_std_prelude() -> &'static CachedStdPrelude {
                     runtime_policy: RuntimeSourcePolicy::std_module(),
                     enforce_builtin_type_contracts: true,
                     allow_error_function_params: true,
+                    allow_private_facet_inspection: false,
                 },
             )
             .expect("std modules should typecheck");
@@ -406,7 +424,6 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             ("Sub", pick_override("Sub", SUB_MODULE_SOURCE, overrides)),
             ("Mul", pick_override("Mul", MUL_MODULE_SOURCE, overrides)),
             ("Eq", pick_override("Eq", EQ_MODULE_SOURCE, overrides)),
-            ("Neq", pick_override("Neq", NEQ_MODULE_SOURCE, overrides)),
             (
                 "Compare",
                 pick_override("Compare", COMPARE_MODULE_SOURCE, overrides),
@@ -416,6 +433,10 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
                 pick_override("Concat", CONCAT_MODULE_SOURCE, overrides),
             ),
             ("Show", pick_override("Show", SHOW_MODULE_SOURCE, overrides)),
+            (
+                "Default",
+                pick_override("Default", DEFAULT_MODULE_SOURCE, overrides),
+            ),
             (
                 "Ordering",
                 pick_override("Ordering", ORDERING_MODULE_SOURCE, overrides),
@@ -442,9 +463,22 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
                 pick_override("Functor", FUNCTOR_MODULE_SOURCE, overrides),
             ),
             (
-                "Chainable",
-                pick_override("Chainable", CHAINABLE_MODULE_SOURCE, overrides),
+                "Bifunctor",
+                pick_override("Bifunctor", BIFUNCTOR_MODULE_SOURCE, overrides),
             ),
+            (
+                "Applicative",
+                pick_override("Applicative", APPLICATIVE_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Monad",
+                pick_override("Monad", MONAD_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Alternative",
+                pick_override("Alternative", ALTERNATIVE_MODULE_SOURCE, overrides),
+            ),
+            ("Monoid", pick_override("Monoid", MONOID_MODULE_SOURCE, overrides)),
             (
                 "PipeApply",
                 pick_override("PipeApply", PIPE_APPLY_MODULE_SOURCE, overrides),
@@ -612,6 +646,7 @@ pub(crate) fn typecheck_with_rules(
             runtime_policy,
             enforce_builtin_type_contracts: false,
             allow_error_function_params: false,
+            allow_private_facet_inspection: false,
         },
     )
 }
@@ -659,6 +694,7 @@ pub(crate) fn typecheck_std_modules_with_overrides(
             runtime_policy: RuntimeSourcePolicy::std_module(),
             enforce_builtin_type_contracts: true,
             allow_error_function_params: true,
+            allow_private_facet_inspection: false,
         },
     )
 }

@@ -1,0 +1,14 @@
+@doc """
+Standard `Monad` trait declaration.
+`Monad` extends `Applicative` with contextual sequencing. The `|>=` operator
+lowers through this trait.
+"""
+@autoimport
+deftrait Monad
+where
+  Self: Applicative
+{
+  def return::<Self>(value: $A) -> Self<$A>
+  # Chain a contextual callable after the contextual receiver.
+  def bind(self: Self<$A>, mapper: ($A -> Self<$B>)) -> Self<$B>
+}

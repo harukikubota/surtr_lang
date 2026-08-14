@@ -1,11 +1,11 @@
 defrecord JsonConfig(name: String, entrypoint: String)
 
 impl Decode<JsonConfig> for JsonValue {
-  def decode(self: Self, to: TypeRef<JsonConfig>) -> Result<JsonConfig, Error> {
+  def decode(self: Self) -> Result<JsonConfig, Error> {
     name_json =? Json::get(self, "name")
-    name =? JsonValue::decode(name_json, String)
+    name =? Decode::decode::<String>(name_json)
     entrypoint_json =? Json::get(self, "entrypoint")
-    entrypoint =? entrypoint_json |> JsonValue::decode(String)
+    entrypoint =? entrypoint_json |> Decode::decode::<String>
     Ok(JsonConfig(name, entrypoint))
   }
 }

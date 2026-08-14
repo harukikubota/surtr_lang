@@ -7,6 +7,14 @@ use super::ast_ty_span;
 use super::context::{DeclLevel, TopLevelDeclKind};
 use super::Parser;
 
+fn where_constraint_rhs_span(rhs: &WhereConstraintRhs) -> &Span {
+    match rhs {
+        WhereConstraintRhs::Trait(span, _)
+        | WhereConstraintRhs::TypeConstructor(span, _)
+        | WhereConstraintRhs::TraitSlot(span, _, _) => span,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentKind {
     ReadOnly,
@@ -54,7 +62,7 @@ impl AgentMeta {
             state: self.state,
             boot: self.boot,
             registry: self.registry,
-            lazy: self.lazy,
+            standby: self.lazy,
             handlers: self.handlers,
             handler_specs: Vec::new(),
             supervisor_policy: None,
@@ -98,9 +106,18 @@ fn parse_doc_attr_in_place(parser: &mut Parser, attrs: &mut DeclAttrs) -> Result
 
 fn make_process_helper_private(def: Ast) -> Ast {
     match def {
-        Ast::Def(span, name, type_params, params, ret_ty, body, mut attrs) => {
+        Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, mut attrs) => {
             attrs.visibility = Visibility::Private;
-            Ast::Def(span, name, type_params, params, ret_ty, body, attrs)
+            Ast::Def(
+                span,
+                name,
+                type_params,
+                params,
+                ret_ty,
+                where_clause,
+                body,
+                attrs,
+            )
         }
         other => other,
     }
@@ -112,7 +129,7 @@ fn private_doc_forbidden_error(span: Span) -> ParseError {
 
 fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
     match ast {
-        Ast::Def(_, _, _, _, _, _, attrs)
+        Ast::Def(_, _, _, _, _, _, _, attrs)
         | Ast::ConstDef(_, _, _, _, attrs)
         | Ast::ExtractorDef(_, _, _, _, _, _, attrs)
         | Ast::BuiltinDecl(_, _, _, _, attrs)
@@ -129,9 +146,9 @@ fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
         | Ast::Defgenserver(_, _, _, _, attrs)
         | Ast::Defsupervisor(_, _, _, _, attrs)
         | Ast::DefdynamicSupervisor(_, _, _, _, attrs)
-        | Ast::TraitDef(_, _, _, _, attrs)
+        | Ast::TraitDef(_, _, _, _, _, attrs)
         | Ast::ImplDef(_, _, _, attrs)
-        | Ast::TraitImplDef(_, _, _, _, _, attrs) => Some(attrs),
+        | Ast::TraitImplDef(_, _, _, _, _, _, attrs) => Some(attrs),
         _ => None,
     }
 }
@@ -146,7 +163,7 @@ enum AgentHandlerKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InitPolicy {
     Eager,
-    Lazy,
+    Standby,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -376,7 +393,7 @@ fn rename_agent_handler(
     inject_process_self: bool,
 ) -> Result<Ast, ParseError> {
     match &mut def {
-        Ast::Def(_, name, _, params, _, body, attrs) => {
+        Ast::Def(_, name, _, params, _, _, body, attrs) => {
             *name = internal_name.to_string();
             attrs.visibility = Visibility::Private;
             if inject_process_self {
@@ -395,7 +412,7 @@ fn rename_agent_handler(
 
 fn def_params(def: &Ast) -> Result<&Vec<FunParam>, ParseError> {
     match def {
-        Ast::Def(_, _, _, params, _, _, _) => Ok(params),
+        Ast::Def(_, _, _, params, _, _, _, _) => Ok(params),
         other => Err(ParseError::syntax(
             "agent lowering expected a function definition",
             other.span().clone(),
@@ -405,7 +422,7 @@ fn def_params(def: &Ast) -> Result<&Vec<FunParam>, ParseError> {
 
 fn def_ret_ty(def: &Ast) -> Result<Option<AstTy>, ParseError> {
     match def {
-        Ast::Def(_, _, _, _, ret_ty, _, _) => Ok(ret_ty.clone()),
+        Ast::Def(_, _, _, _, ret_ty, _, _, _) => Ok(ret_ty.clone()),
         other => Err(ParseError::syntax(
             "agent lowering expected a function definition",
             other.span().clone(),
@@ -415,7 +432,7 @@ fn def_ret_ty(def: &Ast) -> Result<Option<AstTy>, ParseError> {
 
 fn def_name(def: &Ast) -> Result<String, ParseError> {
     match def {
-        Ast::Def(_, name, _, _, _, _, _) => Ok(name.clone()),
+        Ast::Def(_, name, _, _, _, _, _, _) => Ok(name.clone()),
         other => Err(ParseError::syntax(
             "process lowering expected a function definition",
             other.span().clone(),
@@ -425,7 +442,7 @@ fn def_name(def: &Ast) -> Result<String, ParseError> {
 
 fn def_type_params(def: &Ast) -> Result<Vec<TypeParam>, ParseError> {
     match def {
-        Ast::Def(_, _, type_params, _, _, _, _) => Ok(type_params.clone()),
+        Ast::Def(_, _, type_params, _, _, _, _, _) => Ok(type_params.clone()),
         other => Err(ParseError::syntax(
             "agent lowering expected a function definition",
             other.span().clone(),
@@ -519,6 +536,7 @@ fn dummy_process_handler(span: &Span, name: &str) -> Ast {
         Vec::new(),
         Vec::new(),
         Some(unit_ty(span)),
+        None,
         Box::new(Ast::Block(
             span.clone(),
             vec![Ast::Lit(span.clone(), Lit::Unit)],
@@ -629,6 +647,7 @@ fn build_worker_init_route_wrapper(
         def_type_params(init_def)?,
         params,
         Some(result_pid_ty(span, process_name)),
+        None,
         Box::new(body),
         process_route_attrs(true, true),
     ))
@@ -658,6 +677,7 @@ fn build_readonly_get_wrapper(
         def_type_params(get_def)?,
         surface_params,
         def_ret_ty(get_def)?,
+        None,
         Box::new(body),
         process_route_attrs(true, true),
     ))
@@ -678,6 +698,7 @@ fn build_pid_wrapper(span: &Span, lower_module: &str, agent_name: &str) -> Ast {
         Vec::new(),
         Vec::new(),
         Some(pid_ty(span, agent_name)),
+        None,
         Box::new(Ast::Block(
             span.clone(),
             vec![process_pid_call(span, lower_module, agent_name)],
@@ -698,6 +719,7 @@ fn build_singleton_init_route_wrapper(
         Vec::new(),
         Vec::new(),
         Some(pid_ty(span, process_name)),
+        None,
         Box::new(Ast::Block(
             span.clone(),
             vec![process_pid_call(span, lower_module, process_name)],
@@ -725,6 +747,7 @@ fn build_supervisor_spawn_wrapper(span: &Span, supervisor_name: &str) -> Ast {
             span: span.clone(),
         }],
         Some(result_pid_ty(span, "$Process")),
+        None,
         Box::new(Ast::Block(
             span.clone(),
             vec![internal_qualified_call(
@@ -748,6 +771,7 @@ fn build_supervisor_adopt_wrapper(span: &Span, supervisor_name: &str) -> Ast {
             span: span.clone(),
         }],
         Some(result_unit_ty(span)),
+        None,
         Box::new(Ast::Block(
             span.clone(),
             vec![internal_qualified_call(
@@ -767,6 +791,7 @@ fn build_supervisor_status_wrapper(span: &Span, supervisor_name: &str) -> Ast {
         Vec::new(),
         Vec::new(),
         Some(result_named_ty(span, "SupervisorStatus")),
+        None,
         Box::new(Ast::Block(
             span.clone(),
             vec![internal_qualified_call(
@@ -813,6 +838,7 @@ fn build_supervisor_workers_wrapper(span: &Span, supervisor_name: &str) -> Ast {
                 vec![AstTy::Named(span.clone(), "$Process".to_string())],
             )],
         )),
+        None,
         Box::new(Ast::Block(
             span.clone(),
             vec![internal_qualified_call(
@@ -907,6 +933,7 @@ fn build_state_get_wrapper(
         def_type_params(get_def)?,
         surface_params,
         def_ret_ty(get_def)?,
+        None,
         Box::new(body),
         process_route_attrs(true, true),
     ))
@@ -956,6 +983,7 @@ fn build_state_set_wrapper(
         def_type_params(set_def)?,
         surface_params,
         Some(result_unit_ty(span)),
+        None,
         Box::new(body),
         process_route_attrs(true, true),
     ))
@@ -1115,6 +1143,7 @@ fn build_genserver_call_wrapper(
         def_type_params(call_def)?,
         surface_params,
         result_reply_ty_from_call_ret(span, def_ret_ty(call_def)?),
+        None,
         Box::new(body),
         process_route_attrs(true, true),
     ))
@@ -1209,6 +1238,7 @@ fn build_genserver_cast_wrapper(
         def_type_params(cast_def)?,
         surface_params,
         Some(result_unit_ty(span)),
+        None,
         Box::new(body),
         process_route_attrs(true, true),
     ))
@@ -1560,6 +1590,7 @@ impl Parser<'_> {
             let target_ty =
                 Self::canonicalize_impl_target_ty(self.parse_type_in_impl_context(None)?);
             let self_target = self.trait_impl_self_target_name(&target_ty)?;
+            let where_clause = self.parse_optional_where_clause(Some(self_target.clone()))?;
             self.skip_newlines();
             self.expect(&Token::LBrace)?;
             self.skip_newlines();
@@ -1578,9 +1609,9 @@ impl Parser<'_> {
                     }
                     continue;
                 }
-                if !matches!(self.peek(), Token::Def | Token::Annotator(_)) {
+                if !matches!(self.peek(), Token::Def | Token::Defp | Token::Annotator(_)) {
                     return Err(ParseError::syntax(
-                        "trait impl body may only contain `def` declarations",
+                        "trait impl body may only contain `def` / `defp` declarations",
                         self.peek_span(),
                     ));
                 }
@@ -1605,6 +1636,7 @@ impl Parser<'_> {
                 head,
                 trait_args,
                 target_ty,
+                where_clause,
                 methods,
                 attrs,
             ));
@@ -1712,7 +1744,14 @@ impl Parser<'_> {
             }
         };
         let (name, _) = self.expect_ident()?;
+        let fun_params = self.parse_trait_fun_params_for_context(Some(target.to_string()))?;
         let type_params = self.parse_decl_type_params()?;
+        if !type_params.is_empty() {
+            return Err(ParseError::syntax(
+                "Regular function definitions must not declare explicit type parameters; introduce type slots from the signature instead",
+                type_params[0].span.clone(),
+            ));
+        }
         let mut params = Vec::new();
 
         if matches!(self.peek(), Token::Unit) {
@@ -1740,9 +1779,9 @@ impl Parser<'_> {
                             self.advance();
                             self.skip_newlines();
                             let ty = self.parse_type_in_impl_context(Some(target.to_string()))?;
-                            if !Self::is_self_type(&ty) {
+                            if !Self::is_impl_receiver_type(&ty, target) {
                                 return Err(ParseError::syntax(
-                                    "`self` receiver type must be `Self`",
+                                    "`self` receiver type must be `Self` or the impl target type",
                                     ast_ty_span(&ty).clone(),
                                 ));
                             }
@@ -1784,8 +1823,7 @@ impl Parser<'_> {
         } else {
             None
         };
-        self.reject_where_clause()?;
-
+        let where_clause = self.parse_optional_where_clause(Some(target.to_string()))?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.impl_target_stack.push(target.to_string());
@@ -1816,16 +1854,21 @@ impl Parser<'_> {
             type_params,
             params,
             ret_ty,
+            where_clause,
             Box::new(body),
             DeclAttrs {
                 doc: attrs.doc,
                 builtin: attrs.builtin,
+                compiler_generated: attrs.compiler_generated,
+                derives: attrs.derives,
+                facet_path_kind: attrs.facet_path_kind,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
                 readonly: attrs.readonly,
                 visibility,
                 user_importable: attrs.user_importable,
                 user_callable: attrs.user_callable,
+                fun_params,
             },
         );
         let attrs = ast_decl_attrs(&ast).ok_or_else(|| {
@@ -1842,14 +1885,31 @@ impl Parser<'_> {
         &mut self,
         target: &str,
         start: usize,
-        attrs: DeclAttrs,
+        mut attrs: DeclAttrs,
     ) -> Result<Ast, ParseError> {
-        self.expect(&Token::Def)?;
+        attrs.builtin = true;
+        attrs.visibility = match self.peek() {
+            Token::Def => {
+                self.advance();
+                Visibility::Public
+            }
+            Token::Defp => {
+                self.advance();
+                Visibility::Private
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    "Expected `def` or `defp`",
+                    self.peek_span(),
+                ));
+            }
+        };
         let (name, _) = self.expect_builtin_decl_name()?;
+        attrs.fun_params = self.parse_trait_fun_params_for_context(Some(target.to_string()))?;
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
             return Err(ParseError::syntax(
-                "@builtin impl method declarations do not accept method type parameters",
+                "Impl methods must not declare explicit type parameters; introduce type slots from the signature instead",
                 type_params[0].span.clone(),
             ));
         }
@@ -1879,9 +1939,9 @@ impl Parser<'_> {
                             self.advance();
                             self.skip_newlines();
                             let ty = self.parse_type_in_impl_context(Some(target.to_string()))?;
-                            if !Self::is_self_type(&ty) {
+                            if !Self::is_impl_receiver_type(&ty, target) {
                                 return Err(ParseError::syntax(
-                                    "`self` receiver type must be `Self`",
+                                    "`self` receiver type must be `Self` or the impl target type",
                                     ast_ty_span(&ty).clone(),
                                 ));
                             }
@@ -2119,6 +2179,9 @@ impl Parser<'_> {
                     self.parse_builtin_impl_method_decl(target, start, attrs)
                 }
                 Token::Def => self.parse_builtin_decl(start, attrs),
+                Token::Defp if !trait_impl_only => {
+                    self.parse_builtin_impl_method_decl(target, start, attrs)
+                }
                 Token::Defextractor if !trait_impl_only => {
                     self.parse_builtin_extractor_decl(start, attrs)
                 }
@@ -2310,6 +2373,7 @@ impl Parser<'_> {
         self.expect(&Token::Deftrait)?;
         let (name, _) = self.expect_ident()?;
         let type_params = self.parse_decl_type_params()?;
+        let where_clause = self.parse_optional_where_clause(Some("Self".to_string()))?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -2339,9 +2403,9 @@ impl Parser<'_> {
                 }
                 self.skip_newlines();
             }
-            if !matches!(self.peek(), Token::Def) {
+            if !matches!(self.peek(), Token::Def | Token::Defp) {
                 return Err(ParseError::syntax(
-                    "trait body may only contain `def` signatures",
+                    "trait body may only contain `def` / `defp` declarations",
                     self.peek_span(),
                 ));
             }
@@ -2360,6 +2424,7 @@ impl Parser<'_> {
             },
             name,
             type_params,
+            where_clause,
             methods,
             attrs,
         ))
@@ -2371,9 +2436,31 @@ impl Parser<'_> {
         annotator_start: Option<usize>,
     ) -> Result<TraitMethodSig, ParseError> {
         let sp = self.peek_span();
-        self.expect(&Token::Def)?;
+        let visibility = match self.peek() {
+            Token::Def => {
+                self.advance();
+                Visibility::Public
+            }
+            Token::Defp => {
+                self.advance();
+                Visibility::Private
+            }
+            _ => {
+                return Err(ParseError::syntax(
+                    "Expected `def` or `defp`",
+                    self.peek_span(),
+                ));
+            }
+        };
         let (name, _) = self.expect_ident()?;
+        let fun_params = self.parse_trait_fun_params()?;
         let type_params = self.parse_decl_type_params()?;
+        if !type_params.is_empty() {
+            return Err(ParseError::syntax(
+                "Regular function definitions must not declare explicit type parameters; introduce type slots from the signature instead",
+                type_params[0].span.clone(),
+            ));
+        }
         let mut params = Vec::new();
         let self_context = Some("Self".to_string());
 
@@ -2410,14 +2497,14 @@ impl Parser<'_> {
         self.skip_newlines();
         self.expect(&Token::Arrow)?;
         self.skip_newlines();
-        let ret_ty = self.parse_type_in_impl_context(self_context)?;
+        let ret_ty = self.parse_type_in_impl_context(self_context.clone())?;
         if matches!(ret_ty, AstTy::ImplTrait(_, _)) {
             return Err(ParseError::syntax(
                 "return-position `impl Trait` is not supported; name the type parameter explicitly",
                 ast_ty_span(&ret_ty).clone(),
             ));
         }
-        self.reject_where_clause()?;
+        let where_clause = self.parse_optional_where_clause(self_context.clone())?;
 
         let mut lookahead = self.pos;
         while matches!(
@@ -2463,6 +2550,12 @@ impl Parser<'_> {
                 end.end,
             )
         } else {
+            if visibility == Visibility::Private {
+                return Err(ParseError::syntax(
+                    "trait `defp` must have a body",
+                    self.peek_span(),
+                ));
+            }
             let end = if self.pos > 0 {
                 self.tokens[self.pos - 1].span.end
             } else {
@@ -2471,11 +2564,15 @@ impl Parser<'_> {
             (None, end)
         };
 
+        let mut attrs = attrs;
+        attrs.visibility = visibility;
         Ok(TraitMethodSig {
             name,
+            fun_params,
             type_params,
             params,
             ret_ty,
+            where_clause,
             body,
             attrs,
             span: Span {
@@ -2483,6 +2580,39 @@ impl Parser<'_> {
                 end,
             },
         })
+    }
+
+    fn parse_trait_fun_params(&mut self) -> Result<Vec<AstTy>, ParseError> {
+        self.parse_trait_fun_params_for_context(Some("Self".into()))
+    }
+
+    fn parse_trait_fun_params_for_context(
+        &mut self,
+        self_context: Option<String>,
+    ) -> Result<Vec<AstTy>, ParseError> {
+        if !matches!(self.peek(), Token::Colon)
+            || !matches!(self.peek_n(1), Some(Token::Colon))
+            || !matches!(self.peek_n(2), Some(Token::Lt))
+        {
+            return Ok(Vec::new());
+        }
+        self.advance();
+        self.advance();
+        self.advance();
+        self.skip_newlines();
+        let mut params = Vec::new();
+        loop {
+            params.push(self.parse_type_in_impl_context(self_context.clone())?);
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Comma) {
+                self.advance();
+                self.skip_newlines();
+                continue;
+            }
+            self.expect(&Token::Gt)?;
+            break;
+        }
+        Ok(params)
     }
 
     pub(super) fn parse_trait_method_param(
@@ -2929,6 +3059,7 @@ impl Parser<'_> {
             Vec<TypeParam>,
             Vec<FunParam>,
             Option<AstTy>,
+            Option<WhereClause>,
             Visibility,
         ),
         ParseError,
@@ -2946,6 +3077,7 @@ impl Parser<'_> {
             Vec<TypeParam>,
             Vec<FunParam>,
             Option<AstTy>,
+            Option<WhereClause>,
             Visibility,
         ),
         ParseError,
@@ -2976,6 +3108,12 @@ impl Parser<'_> {
             self.ensure_non_const_identifier(&name, name_span.clone(), "Function name")?;
         }
         let type_params = self.parse_decl_type_params()?;
+        if !type_params.is_empty() {
+            return Err(ParseError::syntax(
+                "Regular function definitions must not declare explicit type parameters; introduce type slots from the signature instead",
+                type_params[0].span.clone(),
+            ));
+        }
         let mut params = Vec::new();
         if matches!(self.peek(), Token::Unit) {
             self.advance();
@@ -3020,9 +3158,17 @@ impl Parser<'_> {
             None
         };
 
-        self.reject_where_clause()?;
+        let where_clause = self.parse_optional_where_clause(None)?;
 
-        Ok((sp, name, type_params, params, ret_ty, visibility))
+        Ok((
+            sp,
+            name,
+            type_params,
+            params,
+            ret_ty,
+            where_clause,
+            visibility,
+        ))
     }
 
     pub(super) fn parse_extractor_signature(
@@ -3046,6 +3192,12 @@ impl Parser<'_> {
             self.ensure_non_const_identifier(&name, name_span.clone(), "Extractor name")?;
         }
         let type_params = self.parse_decl_type_params()?;
+        if !type_params.is_empty() {
+            return Err(ParseError::syntax(
+                "Extractor definitions must not declare explicit type parameters; introduce type slots from the signature instead",
+                type_params[0].span.clone(),
+            ));
+        }
         if Self::is_constructor_style_name(&name) {
             return Err(ParseError::syntax(
                 format!(
@@ -3104,6 +3256,156 @@ impl Parser<'_> {
         Ok(())
     }
 
+    pub(super) fn parse_optional_where_clause(
+        &mut self,
+        self_context: Option<String>,
+    ) -> Result<Option<WhereClause>, ParseError> {
+        let mut lookahead = self.pos;
+        while matches!(
+            self.tokens.get(lookahead).map(|token| &token.token),
+            Some(Token::Newline)
+        ) {
+            lookahead += 1;
+        }
+        if !matches!(
+            self.tokens.get(lookahead).map(|token| &token.token),
+            Some(Token::Where)
+        ) {
+            return Ok(None);
+        }
+        self.skip_newlines();
+
+        let start = self.advance().span.start;
+        self.skip_newlines();
+        let mut constraints = Vec::new();
+
+        while !Self::is_where_clause_terminator(self.peek()) {
+            if matches!(self.peek(), Token::Eof) {
+                return Err(ParseError::incomplete(
+                    "where constraint or `{`",
+                    self.peek_span(),
+                ));
+            }
+
+            let subject = self.parse_type_in_impl_context(self_context.clone())?;
+            let constraint_start = ast_ty_span(&subject).start;
+            self.skip_newlines();
+            self.expect(&Token::Colon)?;
+            self.skip_newlines();
+
+            let mut bounds = vec![self.parse_where_constraint_rhs(self_context.clone())?];
+            while matches!(self.peek(), Token::Plus) {
+                self.advance();
+                self.skip_newlines();
+                bounds.push(self.parse_where_constraint_rhs(self_context.clone())?);
+            }
+
+            let end = where_constraint_rhs_span(bounds.last().expect("non-empty bounds")).end;
+            constraints.push(WhereConstraint {
+                subject,
+                bounds,
+                span: Span {
+                    start: constraint_start,
+                    end,
+                },
+            });
+
+            if Self::is_where_clause_terminator(self.peek()) {
+                break;
+            }
+            if !matches!(self.peek(), Token::Newline) {
+                return Err(ParseError::syntax(
+                    "Expected `+`, a new constraint line, or `{` after where constraint",
+                    self.peek_span(),
+                ));
+            }
+            self.skip_newlines();
+        }
+
+        if constraints.is_empty() {
+            return Err(ParseError::syntax(
+                "`where` must contain at least one constraint",
+                self.peek_span(),
+            ));
+        }
+
+        Ok(Some(WhereClause {
+            span: Span {
+                start,
+                end: constraints.last().expect("non-empty constraints").span.end,
+            },
+            constraints,
+        }))
+    }
+
+    fn is_where_clause_terminator(token: &Token) -> bool {
+        matches!(
+            token,
+            Token::LBrace | Token::RBrace | Token::Def | Token::Annotator(_)
+        )
+    }
+
+    fn parse_where_constraint_rhs(
+        &mut self,
+        self_context: Option<String>,
+    ) -> Result<WhereConstraintRhs, ParseError> {
+        let start = self.peek_span().start;
+        if matches!(self.peek(), Token::Type) {
+            self.advance();
+            self.skip_newlines();
+            self.expect(&Token::Lt)?;
+            self.skip_newlines();
+            let mut slots = Vec::new();
+            if matches!(self.peek(), Token::Gt) {
+                return Err(ParseError::syntax(
+                    "`Type` requires at least one constructor slot",
+                    self.peek_span(),
+                ));
+            }
+            loop {
+                slots.push(self.parse_type_in_impl_context(self_context.clone())?);
+                self.skip_newlines();
+                if matches!(self.peek(), Token::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                    continue;
+                }
+                break;
+            }
+            let end = self.expect_type_gt()?;
+            return Ok(WhereConstraintRhs::TypeConstructor(
+                Span {
+                    start,
+                    end: end.end,
+                },
+                slots,
+            ));
+        }
+
+        let (trait_name, trait_span) = self.expect_qualified_ident(2, "trait constraint")?;
+        if matches!(self.peek(), Token::Dot) {
+            self.advance();
+            self.expect(&Token::Dollar)?;
+            let (slot_name, slot_span) = self.expect_ident()?;
+            return Ok(WhereConstraintRhs::TraitSlot(
+                Span {
+                    start,
+                    end: slot_span.end,
+                },
+                trait_name,
+                format!("${slot_name}"),
+            ));
+        }
+
+        Ok(WhereConstraintRhs::Trait(
+            Span {
+                start,
+                end: trait_span.end,
+            },
+            trait_name,
+        ))
+    }
+
     pub(super) fn is_constructor_style_name(name: &str) -> bool {
         name.chars().next().is_some_and(|ch| ch.is_uppercase())
     }
@@ -3112,6 +3414,8 @@ impl Parser<'_> {
         let mut attrs = DeclAttrs::default();
         let mut saw_builtin = false;
         let mut saw_intrinsic = false;
+        let mut saw_facet_path_kind = false;
+        let mut saw_derive = false;
         let mut start_span: Option<Span> = None;
         let mut intrinsic_start_span: Option<Span> = None;
 
@@ -3131,6 +3435,81 @@ impl Parser<'_> {
                         ));
                     }
                     saw_builtin = true;
+                }
+                "derive" => {
+                    if saw_derive {
+                        return Err(ParseError::syntax(
+                            "@derive may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    saw_derive = true;
+                    if !matches!(self.peek(), Token::Ident(_)) {
+                        return Err(ParseError::syntax(
+                            "@derive expects at least one bare trait name",
+                            self.peek_span(),
+                        ));
+                    }
+                    loop {
+                        let trait_name = match self.advance().token {
+                            Token::Ident(name) => name,
+                            _ => unreachable!("derive trait names are checked above"),
+                        };
+                        if attrs.derives.iter().any(|name| name == &trait_name) {
+                            return Err(ParseError::syntax(
+                                format!("DuplicateDerivedTrait: `{trait_name}`"),
+                                self.peek_span(),
+                            ));
+                        }
+                        attrs.derives.push(trait_name);
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::LParen) {
+                            self.advance();
+                            self.skip_newlines();
+                            let variant = match self.advance().token {
+                                Token::Ident(name) => name,
+                                _ => {
+                                    return Err(ParseError::syntax(
+                                        "@derive variant expects a bare name",
+                                        self.peek_span(),
+                                    ))
+                                }
+                            };
+                            self.skip_newlines();
+                            if !matches!(self.peek(), Token::RParen) {
+                                return Err(ParseError::syntax(
+                                    "@derive variant expects `)`",
+                                    self.peek_span(),
+                                ));
+                            }
+                            self.advance();
+                            let last = attrs.derives.last_mut().expect("derive just pushed");
+                            last.push('(');
+                            last.push_str(&variant);
+                            last.push(')');
+                        }
+                        if !matches!(self.peek(), Token::Comma) {
+                            break;
+                        }
+                        self.advance();
+                        self.skip_newlines();
+                        if !matches!(self.peek(), Token::Ident(_)) {
+                            return Err(ParseError::syntax(
+                                "@derive expects a bare trait name after `,`",
+                                self.peek_span(),
+                            ));
+                        }
+                    }
+                }
+                "FacetPathKind" => {
+                    if saw_facet_path_kind {
+                        return Err(ParseError::syntax(
+                            "@FacetPathKind may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    saw_facet_path_kind = true;
+                    attrs.facet_path_kind = Some(Vec::new());
                 }
                 "intrinsic" => {
                     if saw_intrinsic {
@@ -3247,7 +3626,33 @@ impl Parser<'_> {
             .map(|span| span.start)
             .unwrap_or_else(|| self.peek_span().start);
 
-        if saw_intrinsic {
+        if saw_facet_path_kind {
+            if saw_builtin || saw_intrinsic {
+                return Err(ParseError::syntax(
+                    "@FacetPathKind cannot be combined with @builtin or @intrinsic",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
+            if !self
+                .context
+                .parse_rules
+                .allowed_top_level_decl_kinds
+                .allows(super::context::TopLevelDeclKind::BuiltinTypeDecl)
+                || self.context.module_path.as_deref() != Some("Facet")
+            {
+                return Err(ParseError::syntax(
+                    "@FacetPathKind Type declarations are only allowed in canonical standard library source",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
+            if !matches!(self.peek(), Token::Type) {
+                return Err(ParseError::syntax(
+                    "Expected `Type` after @FacetPathKind",
+                    self.peek_span(),
+                ));
+            }
+            self.parse_facet_path_kind_decl(start, attrs)
+        } else if saw_intrinsic {
             let intrinsic_start = intrinsic_start_span
                 .as_ref()
                 .map(|span| span.start)
@@ -3295,6 +3700,17 @@ impl Parser<'_> {
                 )),
             }
         } else {
+            if saw_derive
+                && !matches!(
+                    self.peek(),
+                    Token::Defstruct | Token::Defrecord | Token::Defenum
+                )
+            {
+                return Err(ParseError::syntax(
+                    "DeriveNotAllowed: @derive is only allowed on `defstruct`, `defrecord`, or `defenum`",
+                    start_span.unwrap_or_else(|| self.peek_span()),
+                ));
+            }
             if attrs.hidden {
                 return Err(ParseError::syntax(
                     "@hidden is only allowed together with @builtin in standard/internal source",
@@ -3323,6 +3739,7 @@ impl Parser<'_> {
                 Token::Deferror => self.parse_deferror_def_with_attrs(attrs, Some(start)),
                 Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
                 Token::Defextractor => self.parse_extractor_def_with_attrs(attrs, Some(start)),
+                Token::Type => self.parse_type_alias(),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
                     "@doc / @autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `defagent`, `defstruct`, `defrecord`, `deferror`, `defenum`, `defextractor`, `@builtin type/def/defextractor`, or `@intrinsic def`",
@@ -3330,6 +3747,29 @@ impl Parser<'_> {
                 )),
             }
         }
+    }
+
+    pub(super) fn parse_type_alias(&mut self) -> Result<Ast, ParseError> {
+        let start = self.expect(&Token::Type)?.start;
+        let (name, _) = self.expect_ident()?;
+        let type_params = self.parse_decl_type_params()?;
+        self.skip_newlines();
+        self.expect(&Token::Bind)?;
+        self.skip_newlines();
+        let rhs = self.parse_type()?;
+        if !matches!(rhs, AstTy::Func(..)) {
+            return Err(ParseError::syntax(
+                "type aliases may only name function signatures",
+                ast_ty_span(&rhs).clone(),
+            ));
+        }
+        let end = ast_ty_span(&rhs).end;
+        Ok(Ast::TypeAlias(
+            Span { start, end },
+            name,
+            type_params,
+            rhs,
+        ))
     }
 
     pub(super) fn parse_defagent_default_attrs(&mut self) -> Result<Ast, ParseError> {
@@ -3806,7 +4246,7 @@ impl Parser<'_> {
             state: AstTy::Named(span.clone(), "Unit".to_string()),
             boot: false,
             registry: true,
-            lazy: false,
+            standby: false,
             handlers: Vec::new(),
             handler_specs: Vec::new(),
             supervisor_policy: Some(supervisor_meta.policy),
@@ -3983,10 +4423,10 @@ impl Parser<'_> {
                     let (value, value_span) = self.expect_ident()?;
                     init_policy = Some(match value.as_str() {
                         "Eager" => InitPolicy::Eager,
-                        "Lazy" => InitPolicy::Lazy,
+                        "Standby" => InitPolicy::Standby,
                         _ => {
                             return Err(ParseError::syntax(
-                                "init_policy must be Eager or Lazy",
+                                "init_policy must be Eager or Standby",
                                 value_span,
                             ))
                         }
@@ -4191,7 +4631,7 @@ impl Parser<'_> {
                     state: process_meta.state,
                     boot: false,
                     registry: process_meta.instance == AgentInstance::Singleton,
-                    lazy: process_meta.init_policy == InitPolicy::Lazy,
+                    lazy: process_meta.init_policy == InitPolicy::Standby,
                     handlers: process_meta.handlers,
                 }
             }
@@ -4300,11 +4740,11 @@ impl Parser<'_> {
             start,
             end: end.end,
         };
-        if process_meta.init_policy == InitPolicy::Lazy
+        if process_meta.init_policy == InitPolicy::Standby
             && process_meta.instance != AgentInstance::Singleton
         {
             return Err(ParseError::syntax(
-                "init_policy: Lazy is only allowed for Singleton GenServer",
+                "init_policy: Standby is only allowed for Singleton GenServer",
                 span,
             ));
         }
@@ -4404,7 +4844,7 @@ impl Parser<'_> {
                 state: process_meta.state,
                 boot: false,
                 registry: process_meta.instance == AgentInstance::Singleton,
-                lazy: process_meta.init_policy == InitPolicy::Lazy,
+                standby: process_meta.init_policy == InitPolicy::Standby,
                 handlers: process_meta.handlers,
                 handler_specs: {
                     let mut specs = vec![ProcessRuntimeHandlerSpec {
@@ -4463,6 +4903,13 @@ impl Parser<'_> {
         set: Option<&AgentHandler>,
         span: Span,
     ) -> Result<(), ParseError> {
+        if meta.lazy && meta.instance != AgentInstance::Singleton {
+            return Err(ParseError::syntax(
+                "init_policy: Standby is only allowed for Singleton Agent",
+                span,
+            ));
+        }
+
         match meta.kind {
             AgentKind::ReadOnly => {
                 if set.is_some() {
@@ -4476,12 +4923,6 @@ impl Parser<'_> {
                 if set.is_none() {
                     return Err(ParseError::syntax(
                         "State agents must define an @set handler",
-                        span,
-                    ));
-                }
-                if meta.lazy && meta.instance != AgentInstance::Singleton {
-                    return Err(ParseError::syntax(
-                        "init_policy: Lazy is only allowed for Singleton Agent",
                         span,
                     ));
                 }
@@ -4704,8 +5145,14 @@ impl Parser<'_> {
         start: usize,
         attrs: DeclAttrs,
     ) -> Result<Ast, ParseError> {
-        let (_def_span, name, _type_params, params, ret_ty, _visibility) =
+        let (_def_span, name, _type_params, params, ret_ty, where_clause, _visibility) =
             self.parse_def_signature_with_name_mode(true)?;
+        if let Some(clause) = where_clause {
+            return Err(ParseError::syntax(
+                "@builtin declarations do not accept `where` clauses",
+                clause.span,
+            ));
+        }
 
         let mut lookahead = self.pos;
         while matches!(
@@ -4858,6 +5305,66 @@ impl Parser<'_> {
         ))
     }
 
+    /// Parse the compiler-only `@FacetPathKind Type Name (= A | B)?`
+    /// declaration.  It deliberately reuses the builtin type declaration AST
+    /// shape: the attribute keeps it out of the runtime type namespace.
+    fn parse_facet_path_kind_decl(
+        &mut self,
+        start: usize,
+        attrs: DeclAttrs,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Type)?;
+        self.skip_newlines();
+        let (name, name_span) = self.expect_ident()?;
+        if !name.chars().next().is_some_and(char::is_uppercase) {
+            return Err(ParseError::syntax(
+                "@FacetPathKind Type requires a PascalCase type name",
+                name_span,
+            ));
+        }
+
+        let mut members = Vec::new();
+        if matches!(self.peek(), Token::Bind) {
+            self.advance();
+            self.skip_newlines();
+            loop {
+                let (member, member_span) = self.expect_ident()?;
+                if !member.chars().next().is_some_and(char::is_uppercase) {
+                    return Err(ParseError::syntax(
+                        "Facet path kind aliases may contain only PascalCase kind names",
+                        member_span,
+                    ));
+                }
+                members.push(member);
+                if matches!(self.peek(), Token::Pipe) {
+                    self.advance();
+                    self.skip_newlines();
+                    continue;
+                }
+                break;
+            }
+        }
+        let end = if self.pos > 0 {
+            self.tokens[self.pos - 1].span.end
+        } else {
+            start
+        };
+        let mut attrs = attrs;
+        attrs.facet_path_kind = Some(members);
+        Ok(Ast::BuiltinTypeDecl(
+            Span { start, end },
+            BuiltinTypeHead {
+                span: Span {
+                    start: name_span.start,
+                    end,
+                },
+                name,
+                params: Vec::new(),
+            },
+            attrs,
+        ))
+    }
+
     pub(super) fn parse_result_ctor_builtin_type_decl(
         &mut self,
         start: usize,
@@ -4960,7 +5467,8 @@ impl Parser<'_> {
             return self.parse_result_ctor_decl_with_attrs(attrs, annotator_start);
         }
 
-        let (sp, name, type_params, params, ret_ty, visibility) = self.parse_def_signature()?;
+        let (sp, name, type_params, params, ret_ty, where_clause, visibility) =
+            self.parse_def_signature()?;
         let mut attrs = attrs;
         attrs.visibility = visibility;
         validate_doc_visibility(
@@ -4998,6 +5506,7 @@ impl Parser<'_> {
             type_params,
             params,
             ret_ty,
+            where_clause,
             Box::new(body),
             attrs,
         );

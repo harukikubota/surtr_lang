@@ -5,9 +5,10 @@ pub mod opcode;
 pub mod registry;
 
 pub use codegen::{
-    codegen, codegen_typed_program, compose_bytecode_with_chunk, BindingInfo, ChunkMeta,
-    ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind, ReplFacetInfo,
-    ReplFacetSegmentInfo, ReplTypeKind, TypeDefDisplay,
+    codegen, codegen_typed_program, compose_bytecode_with_chunk, repl_facet_info_for_node,
+    BindingInfo, ChunkMeta, ForgeCheckpoint, ForgeSession, ReplCallableDisplay, ReplCallableKind,
+    ReplFacetInfo, ReplFacetOperation, ReplFacetSegmentInfo, ReplFacetStage, ReplTypeKind,
+    TypeDefDisplay,
 };
 
 #[cfg(test)]
@@ -36,8 +37,8 @@ mod tests {
     const SUB_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/sub.srt");
     const MUL_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/mul.srt");
     const SHOW_MODULE_SOURCE: &str = include_str!("../../../lib/traits/show.srt");
+    const DEFAULT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/default.srt");
     const EQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/eq.srt");
-    const NEQ_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/neq.srt");
     const COMPARE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compare.srt");
     const CONCAT_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/concat.srt");
     const FROM_MODULE_SOURCE: &str = include_str!("../../../lib/traits/from.srt");
@@ -45,8 +46,14 @@ mod tests {
     const ENCODE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/encode.srt");
     const DECODE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/decode.srt");
     const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/functor.srt");
-    const CHAINABLE_MODULE_SOURCE: &str =
-        include_str!("../../../lib/traits/operator/chainable.srt");
+    const BIFUNCTOR_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/bifunctor.srt");
+    const APPLICATIVE_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/applicative.srt");
+    const MONAD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/monad.srt");
+    const ALTERNATIVE_MODULE_SOURCE: &str =
+        include_str!("../../../lib/traits/operator/alternative.srt");
+    const MONOID_MODULE_SOURCE: &str = include_str!("../../../lib/types/monoid.srt");
     const PIPE_APPLY_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/pipe_apply.srt");
     const COMPOSE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/compose.srt");
@@ -79,13 +86,17 @@ mod tests {
 
     fn parse_std_module_stage(
         source: &str,
-        _fallback_module_path: &str,
+        fallback_module_path: &str,
     ) -> Vec<sigil::StagedModuleAst> {
         let ast = spire::parse_with_context(
             source,
-            spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+            spire::ParserContext::module(
+                0,
+                (fallback_module_path == "Facet").then(|| fallback_module_path.into()),
+            )
+            .with_rules(spire::ParseRules::std_module()),
         )
-        .unwrap_or_else(|err| panic!("std module {_fallback_module_path} should parse: {err:?}"));
+        .unwrap_or_else(|err| panic!("std module {fallback_module_path} should parse: {err:?}"));
 
         let shared_imports = ast
             .iter()
@@ -197,17 +208,21 @@ mod tests {
                 ("Sub", SUB_MODULE_SOURCE),
                 ("Mul", MUL_MODULE_SOURCE),
                 ("Eq", EQ_MODULE_SOURCE),
-                ("Neq", NEQ_MODULE_SOURCE),
                 ("Compare", COMPARE_MODULE_SOURCE),
                 ("Concat", CONCAT_MODULE_SOURCE),
                 ("Show", SHOW_MODULE_SOURCE),
+                ("Default", DEFAULT_MODULE_SOURCE),
                 ("Ordering", ORDERING_MODULE_SOURCE),
                 ("From", FROM_MODULE_SOURCE),
                 ("TryFrom", TRY_FROM_MODULE_SOURCE),
                 ("Encode", ENCODE_MODULE_SOURCE),
                 ("Decode", DECODE_MODULE_SOURCE),
                 ("Functor", FUNCTOR_MODULE_SOURCE),
-                ("Chainable", CHAINABLE_MODULE_SOURCE),
+                ("Bifunctor", BIFUNCTOR_MODULE_SOURCE),
+                ("Applicative", APPLICATIVE_MODULE_SOURCE),
+                ("Monad", MONAD_MODULE_SOURCE),
+                ("Alternative", ALTERNATIVE_MODULE_SOURCE),
+                ("Monoid", MONOID_MODULE_SOURCE),
                 ("PipeApply", PIPE_APPLY_MODULE_SOURCE),
                 ("Compose", COMPOSE_MODULE_SOURCE),
                 ("Composable", COMPOSABLE_MODULE_SOURCE),
@@ -222,10 +237,10 @@ mod tests {
                 ("Generator", GENERATOR_MODULE_SOURCE),
                 ("HashMap", HASH_MAP_MODULE_SOURCE),
                 ("Result", RESULT_MODULE_SOURCE),
+                ("Option", OPTION_MODULE_SOURCE),
                 ("Duration", DURATION_MODULE_SOURCE),
                 ("Range", RANGE_MODULE_SOURCE),
                 ("Process", PROCESS_MODULE_SOURCE),
-                ("Option", OPTION_MODULE_SOURCE),
                 ("Facet", LENS_MODULE_SOURCE),
                 ("Float", FLOAT_MODULE_SOURCE),
                 ("Json", JSON_MODULE_SOURCE),
@@ -452,6 +467,7 @@ mod tests {
                 Vec::new(),
                 vec![param.clone()],
                 ty.clone(),
+                None,
                 Box::new(local_var("value", param.id.unique_id, ty)),
                 Visibility::Public,
             ),
@@ -470,6 +486,7 @@ mod tests {
                 Vec::new(),
                 vec![left.clone(), right],
                 Ty::Int,
+                None,
                 Box::new(local_var("left", left.id.unique_id, Ty::Int)),
                 Visibility::Public,
             ),
@@ -681,6 +698,7 @@ mod tests {
                 Vec::new(),
                 Vec::<TypedFunParam>::new(),
                 Ty::Int,
+                None,
                 Box::new(body),
                 Visibility::Public,
             ),
@@ -706,6 +724,7 @@ mod tests {
                     Vec::new(),
                     vec![fun_param("x", 2, Ty::Int), fun_param("y", 3, Ty::Int)],
                     Ty::Int,
+                    None,
                     Box::new(TypedNode {
                         ty: Ty::Int,
                         span: test_span(),
@@ -829,6 +848,7 @@ print(to_string(add(1, 2)))"#,
                 Vec::new(),
                 vec![f.clone(), value.clone()],
                 Ty::Int,
+                None,
                 Box::new(TypedNode {
                     ty: Ty::Int,
                     span: test_span(),
@@ -1429,7 +1449,7 @@ Facet::view(Expr.Add, expr)"#,
     #[test]
     fn bounded_add_generic_helpers_emit_specialized_functions() {
         let bytecode = codegen_source(
-            r#"def double<$N: Add>(x: $N) -> $N { x + x }
+            r#"def double(x: $N) -> $N where $N: Add { x + x }
 a = double(21)
 b = double(1.5)"#,
         );
@@ -1651,17 +1671,17 @@ supervisor_init {
     }
 
     #[test]
-    fn codegen_typed_program_emits_v2_process_spec_for_lazy_process_init() {
+    fn codegen_typed_program_emits_v2_process_spec_for_standby_process_init() {
         let typed = typed_module_program_with_builtin_prelude(
-            r#"defgenserver LazyCache {
+            r#"defgenserver StandbyCache {
   meta {
     instance: Singleton
-    init_policy: Lazy
+    init_policy: Standby
     state: Int
   }
 
   @init
-  def init() -> Result<ProcessInit<Int>> {
+  def init() -> Result<StandbyInit<Int>> {
     Ok(Ready(0))
   }
 
@@ -1678,14 +1698,14 @@ supervisor_init {
             .runtime_process_specs
             .entries
             .iter()
-            .find(|entry| entry.type_name == "Global::LazyCache")
-            .expect("LazyCache runtime process spec");
-        assert_eq!(spec.type_name, "Global::LazyCache");
+            .find(|entry| entry.type_name == "Global::StandbyCache")
+            .expect("StandbyCache runtime process spec");
+        assert_eq!(spec.type_name, "Global::StandbyCache");
         assert_eq!(spec.state.state_type.name, "Int");
-        assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Lazy);
+        assert_eq!(spec.init.policy, sindr::ir::RuntimeInitPolicy::Standby);
         assert!(matches!(
             spec.init.result_shape,
-            sindr::ir::RuntimeInitResultShape::LazyProcessInit { .. }
+            sindr::ir::RuntimeInitResultShape::StandbyProcessInit { .. }
         ));
         assert_eq!(spec.dependencies.handlers.len(), 0);
         assert!(spec.lifecycle.owner.is_none());

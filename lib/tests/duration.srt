@@ -5,7 +5,7 @@ import Test;
 test("Duration") {
   describe("construction") {
     it("supports duration literals and millis access") {
-      d: Duration =? try_from(7, Duration)
+      d: Duration =? try_from::<Duration>(7)
       assert_eq((250ms, 250, 7), (250ms, 250ms.millis, d.millis))
     }
 

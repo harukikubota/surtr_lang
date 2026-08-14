@@ -28,7 +28,6 @@ enum FacetPathInput<'a> {
 struct PreparedFacetInput {
     typed_source: TypedNode,
     source_is_result: bool,
-    source_value_ty: Ty,
     path: TypedFacetPath,
 }
 
@@ -45,18 +44,6 @@ struct ExpectedCallableContract {
 }
 
 impl Checker {
-    pub(super) fn match_result_value_not_allowed_error(&self, span: &Span) -> TypeError {
-        TypeError {
-            message: "MatchResult values are extractor-only and can only be constructed inside extractor definitions"
-                .into(),
-            span: span.clone(),
-            hint: Some(
-                "Use MatchResult::Success, MatchResult::NoMatch, or MatchResult::Err only in a defextractor body. Ordinary APIs should return Result, Option, or a user-defined enum explicitly."
-                    .into(),
-            ),
-        }
-    }
-
     fn parse_tuple_index_name(name: &str) -> Option<usize> {
         let suffix = name.strip_prefix('_')?;
         if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
@@ -164,7 +151,8 @@ impl Checker {
             TypedInner::Dbg(args) => args
                 .iter()
                 .find_map(|arg| self.first_pending_trait_helper(&arg.expr)),
-            TypedInner::Def(_, _, _, _, _, body, _)
+            TypedInner::EagerBoundary(inner) => self.first_pending_trait_helper(inner),
+            TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body) => self.first_pending_trait_helper(body),
             TypedInner::SupervisorSpawn { init, .. } => self.first_pending_trait_helper(init),
@@ -334,6 +322,9 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, TypeError>>()?,
             ),
+            TypedInner::EagerBoundary(inner) => {
+                TypedInner::EagerBoundary(Box::new(self.concretize_pending_trait_calls(*inner)?))
+            }
             TypedInner::If(cond, then_branch, else_branch) => TypedInner::If(
                 Box::new(self.concretize_pending_trait_calls(*cond)?),
                 Box::new(self.concretize_pending_trait_calls(*then_branch)?),
@@ -476,17 +467,25 @@ impl Checker {
                 params,
                 Box::new(self.concretize_pending_trait_calls(*body)?),
             ),
-            TypedInner::Def(fun_idx, id, type_params, params, ret_ty, body, attrs) => {
-                TypedInner::Def(
-                    fun_idx,
-                    id,
-                    type_params,
-                    params,
-                    ret_ty,
-                    Box::new(self.concretize_pending_trait_calls(*body)?),
-                    attrs,
-                )
-            }
+            TypedInner::Def(
+                fun_idx,
+                id,
+                type_params,
+                params,
+                ret_ty,
+                where_clause,
+                body,
+                attrs,
+            ) => TypedInner::Def(
+                fun_idx,
+                id,
+                type_params,
+                params,
+                ret_ty,
+                where_clause,
+                Box::new(self.concretize_pending_trait_calls(*body)?),
+                attrs,
+            ),
             TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, attrs) => {
                 TypedInner::ExtractorDef(
                     fun_idx,
@@ -547,7 +546,7 @@ impl Checker {
                 if let Some(stored_ty) = self.env.lookup_var(id.unique_id).cloned() {
                     let ty = match &stored_ty {
                         Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
-                            self.instantiate_builtin_ty(&stored_ty)
+                            self.instantiate_callable_ty(&stored_ty)
                         }
                         _ => self.resolve_ty(&stored_ty),
                     };
@@ -556,21 +555,28 @@ impl Checker {
                     {
                         return Err(self.error_observer_escape_error(span));
                     }
-                    if matches!(ty, Ty::Facet(_, _)) {
+                    if matches!(ty, Ty::Facet(..)) {
                         if let Some(path) = self.facet_bindings.get(&id.unique_id).cloned() {
                             return Ok(match path {
                                 StoredFacetPath::Concrete(path) => {
                                     let source_ty = self.resolve_ty(&path.source_ty);
                                     let focus_ty = self.resolve_ty(&path.focus_ty);
+                                    let update_source_ty = self.resolve_ty(&path.update_source_ty);
+                                    let update_focus_ty = self.resolve_ty(&path.update_focus_ty);
                                     TypedNode {
                                         ty: Ty::Facet(
+                                            Self::facet_kind_from_path_kind(path.path_kind),
                                             Box::new(source_ty.clone()),
                                             Box::new(focus_ty.clone()),
+                                            Box::new(update_source_ty.clone()),
+                                            Box::new(update_focus_ty.clone()),
                                         ),
                                         span: span.clone(),
                                         node: TypedInner::FacetPath(TypedFacetPath {
                                             source_ty,
                                             focus_ty,
+                                            update_source_ty,
+                                            update_focus_ty,
                                             path_kind: path.path_kind,
                                             may_fail: path.may_fail,
                                             source_readonly_root: path.source_readonly_root,
@@ -634,11 +640,6 @@ impl Checker {
                             node: TypedInner::Lit(Lit::Bool(value)),
                         });
                     }
-                    if Self::surface_name(&variant.enum_name) == "MatchResult"
-                        && !self.in_extractor_body
-                    {
-                        return Err(self.match_result_value_not_allowed_error(span));
-                    }
                     if matches!(
                         Self::surface_name(&variant.enum_name),
                         "StopReply" | "StopReason"
@@ -687,21 +688,8 @@ impl Checker {
                 })
             }
 
-            Resolved::TypeRefWitness(span, ast_ty) => {
-                let target_ty = match ast_ty {
-                    spire::ast::AstTy::Named(_, name) if name == "Result" => {
-                        Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error))
-                    }
-                    spire::ast::AstTy::Named(_, name) if name == "Option" => {
-                        Ty::Enum("Option".into(), vec![self.env.fresh_tyvar()])
-                    }
-                    _ => self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?,
-                };
-                Ok(TypedNode {
-                    ty: Ty::TypeRef(Box::new(target_ty)),
-                    span: span.clone(),
-                    node: TypedInner::Lit(Lit::Unit),
-                })
+            Resolved::TypeApply(span, target, args) => {
+                self.check_explicit_type_apply(span, target, args)
             }
 
             Resolved::Bind(span, pat, rhs) => {
@@ -723,7 +711,8 @@ impl Checker {
                             Self::ast_ty_span(ast_ty),
                         ));
                     }
-                    let typed_rhs = self.check_node_with_expected(rhs, Some(&expected))?;
+                    let mut typed_rhs = self.check_node_with_expected(rhs, Some(&expected))?;
+                    self.apply_facet_annotation(&mut typed_rhs, &expected, span)?;
                     if !self.types_compatible(&expected, &typed_rhs.ty) {
                         if let Some(err) =
                             self.facet_replace_result_context_error(&typed_rhs, &expected, span)
@@ -746,7 +735,7 @@ impl Checker {
                 {
                     return Err(self.pending_trait_helper_error(method_name, pending_span));
                 }
-                let facet_path = if matches!(typed_rhs.ty, Ty::Facet(_, _)) {
+                let facet_path = if matches!(typed_rhs.ty, Ty::Facet(..)) {
                     Some(self.stored_facet_path_from_node(typed_rhs.clone(), span)?)
                 } else {
                     None
@@ -783,6 +772,9 @@ impl Checker {
             Resolved::BinOp(span, op, left, right) => self.check_binop(span, op, left, right),
             Resolved::Pipe(span, left, right) => self.check_pipe(span, left, right),
             Resolved::ContextMap(span, left, right) => self.check_context_map(span, left, right),
+            Resolved::ContextApply(span, left, right) => {
+                self.check_context_apply(span, left, right)
+            }
             Resolved::ContextBind(span, left, right) => self.check_context_bind(span, left, right),
             Resolved::Compose(span, left, right) => self.check_compose(span, left, right),
             Resolved::LiftedCompose(span, left, right) => {
@@ -847,23 +839,7 @@ impl Checker {
                 self.check_process_context_handler(span, slot)
             }
 
-            Resolved::Block(span, stmts) => {
-                let mut typed_stmts = Vec::new();
-                let mut last_ty = Ty::Unit;
-                for s in stmts {
-                    // Inference substitutions are statement-local inside blocks too.
-                    // Otherwise an earlier generic call can monomorphize later siblings.
-                    self.substitutions.clear();
-                    let t = self.check_node(s)?;
-                    last_ty = t.ty.clone();
-                    typed_stmts.push(t);
-                }
-                Ok(TypedNode {
-                    ty: last_ty,
-                    span: span.clone(),
-                    node: TypedInner::Block(typed_stmts),
-                })
-            }
+            Resolved::Block(span, stmts) => self.check_block(span, stmts, None),
 
             Resolved::Semi(span, inner) => {
                 let typed_inner = self.check_node(inner)?;
@@ -877,7 +853,7 @@ impl Checker {
             Resolved::StructDef(span, id, type_params, fields, _) => {
                 self.check_struct_def(span, id, type_params, fields)
             }
-            Resolved::RecordDef(span, id, fields) => self.check_record_def(span, id, fields),
+            Resolved::RecordDef(span, id, fields, _) => self.check_record_def(span, id, fields),
             Resolved::EnumDef(span, id, type_params, variants, attrs) => {
                 self.check_enum_def(span, id, type_params, variants, attrs)
             }
@@ -885,13 +861,22 @@ impl Checker {
                 self.check_struct_lit(span, id, field_vals)
             }
             Resolved::ConstructorCall(span, id, args) => {
-                self.check_constructor_call(span, id, args)
+                self.check_constructor_call(span, id, args, None)
             }
             Resolved::DeferrorDef(span, id, fields, show_expr) => {
                 self.check_deferror_def(span, id, fields, show_expr)
             }
-            Resolved::Def(span, id, type_params, params, ret_ty, body, attrs) => {
-                self.check_def(span, id, type_params, params, ret_ty, body, attrs)
+            Resolved::Def(span, id, type_params, params, ret_ty, where_clause, body, attrs) => {
+                self.check_def(
+                    span,
+                    id,
+                    type_params,
+                    params,
+                    ret_ty,
+                    where_clause.as_ref(),
+                    body,
+                    attrs,
+                )
             }
             Resolved::ConstDef(span, _id, _ast_ty, _value, _) => Ok(TypedNode {
                 ty: Ty::Unit,
@@ -901,19 +886,64 @@ impl Checker {
             Resolved::ExtractorDef(span, id, type_params, param, ret_ty, body, attrs) => {
                 self.check_extractor_def(span, id, type_params, param, ret_ty, body, attrs)
             }
-            Resolved::TraitDef(span, id, _, methods, _) => Ok(TypedNode {
-                ty: Ty::Unit,
-                span: span.clone(),
-                node: TypedInner::TraitDef(
-                    self.trait_key(id),
-                    methods
-                        .iter()
-                        .map(|method| method.id.name.clone())
-                        .collect(),
-                ),
-            }),
-            Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, methods) => {
-                self.check_trait_impl_def(span, trait_id, trait_args, target_ty, methods)
+            Resolved::TraitDef(span, id, _, where_clause, methods, _) => {
+                let trait_key = self.trait_key(id);
+                let trait_info = self.traits.get(&trait_key).cloned().ok_or_else(|| TypeError {
+                    message: format!("Unknown trait: {}", id.name),
+                    span: span.clone(),
+                    hint: None,
+                })?;
+                let deferred_self = self.env.fresh_tyvar();
+                let mut typed_methods = Vec::with_capacity(methods.len());
+                for method in methods {
+                    let method_info = trait_info.methods.get(&method.id.name).ok_or_else(|| {
+                        TypeError {
+                            message: format!("Unknown trait method: {}::{}", id.name, method.id.name),
+                            span: method.span.clone(),
+                            hint: None,
+                        }
+                    })?;
+                    let (params, ret_ty, _, _) = self.resolve_trait_method_signature(
+                        &trait_info,
+                        method_info,
+                        &deferred_self,
+                    )?;
+                    typed_methods.push(TypedTraitMethodInfo {
+                        name: method.id.name.clone(),
+                        params,
+                        ret_ty,
+                        where_clause: method
+                            .where_clause
+                            .as_ref()
+                            .map(TypedWhereClause::from),
+                    });
+                }
+                Ok(TypedNode {
+                    ty: Ty::Unit,
+                    span: span.clone(),
+                    node: TypedInner::TraitDef(
+                        trait_key,
+                        where_clause.as_ref().map(TypedWhereClause::from),
+                        typed_methods,
+                    ),
+                })
+            }
+            Resolved::TraitImplDef(
+                span,
+                trait_id,
+                trait_args,
+                target_ty,
+                where_clause,
+                methods,
+            ) => {
+                self.check_trait_impl_def(
+                    span,
+                    trait_id,
+                    trait_args,
+                    target_ty,
+                    where_clause.as_ref(),
+                    methods,
+                )
             }
             Resolved::BuiltinDecl(span, id, params, ret_ty, _) => {
                 self.check_builtin_decl(span, id, params, ret_ty)
@@ -924,6 +954,11 @@ impl Checker {
             Resolved::BuiltinTypeDecl(span, id, params, attrs) => {
                 self.check_builtin_type_decl(span, id, params, attrs)
             }
+            Resolved::TypeAlias(span, _, _, _) => Ok(TypedNode {
+                ty: Ty::Unit,
+                span: span.clone(),
+                node: TypedInner::Lit(Lit::Unit),
+            }),
             Resolved::ResultCtorDecl(span, id, param_ty, ret_ty, attrs) => {
                 self.check_result_ctor_decl(span, id, param_ty, ret_ty, attrs)
             }
@@ -934,12 +969,46 @@ impl Checker {
         }
     }
 
+    fn check_explicit_type_apply(
+        &mut self,
+        span: &Span,
+        target: &Resolved,
+        args: &[AstTy],
+    ) -> Result<TypedNode, TypeError> {
+        if self.trait_method_ref(target).is_some() {
+            return Err(TypeError {
+                message: "A specialized trait helper needs call or capture context".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Call it with arguments or capture it with an expected callable type.".into(),
+                ),
+            });
+        }
+        let Resolved::Var(_, id) = target else {
+            return Err(TypeError {
+                message: "Explicit type arguments require a named callable".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        let _ = args;
+        Err(TypeError {
+            message: format!(
+                "{} is a regular callable; explicit type arguments are only allowed for trait helpers",
+                id.name
+            ),
+            span: span.clone(),
+            hint: Some("Use the argument and expected result types for ordinary signature slots.".into()),
+        })
+    }
+
     pub(super) fn check_node_with_expected(
         &mut self,
         node: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         match (node, expected) {
+            (Resolved::Block(span, stmts), expected) => self.check_block(span, stmts, expected),
             (Resolved::Closure(span, params, captures, body), Some(expected_ty)) => {
                 self.check_closure(span, params, captures, body, Some(expected_ty))
             }
@@ -955,8 +1024,29 @@ impl Checker {
             (Resolved::ContextMap(span, left, right), Some(expected_ty)) => {
                 self.check_context_map_with_expected(span, left, right, Some(expected_ty))
             }
+            (Resolved::ContextApply(span, left, right), Some(expected_ty)) => {
+                self.check_context_apply_with_expected(span, left, right, Some(expected_ty))
+            }
             (Resolved::ContextBind(span, left, right), Some(expected_ty)) => {
                 self.check_context_bind_with_expected(span, left, right, Some(expected_ty))
+            }
+            // Constructor applications are normally handled by `check_app`
+            // after resolving the callee as a value.  When an enclosing
+            // expression supplies an expected type (notably the mapper side
+            // of `|*|`), route enum constructors directly so their payload
+            // receives that context.  Without this, nested closures are
+            // inferred in isolation and callable type variables remain
+            // unconstrained until a later application.
+            (Resolved::App(span, func, args), Some(expected_ty))
+                if matches!(func.as_ref(), Resolved::Var(_, id)
+                    if id.name == "Ok"
+                        || id.name == "Err"
+                        || self.lookup_enum_variant_by_constructor_id(id.unique_id).is_some()) =>
+            {
+                let Resolved::Var(_, id) = func.as_ref() else {
+                    unreachable!("constructor guard requires a variable callee")
+                };
+                self.check_constructor_call(span, id, args, Some(expected_ty))
             }
             (Resolved::Compose(span, left, right), Some(expected_ty)) => {
                 self.check_compose_with_expected(span, left, right, Some(expected_ty))
@@ -968,9 +1058,32 @@ impl Checker {
                 self.check_kleisli_compose_with_expected(span, left, right, Some(expected_ty))
             }
             (Resolved::App(span, func, args), Some(expected_ty))
+                if self.trait_method_ref(func).is_some() =>
+            {
+                let (id, trait_name, method_name) = self
+                    .trait_method_ref(func)
+                    .expect("guard established a trait method reference");
+                let receiver_owner_hint = id
+                    .name
+                    .strip_suffix(&format!("::{}", method_name))
+                    .filter(|owner| *owner == "JsonValue");
+                self.check_trait_method_call(
+                    span,
+                    &trait_name,
+                    &method_name,
+                    args,
+                    receiver_owner_hint,
+                    Some(expected_ty),
+                    Self::explicit_type_args(func),
+                )
+            }
+            (Resolved::App(span, func, args), Some(expected_ty))
                 if self.is_function_on_callee(func) =>
             {
                 self.check_function_on_with_expected(span, func, args, expected_ty)
+            }
+            (Resolved::ConstructorCall(span, id, args), Some(expected_ty)) => {
+                self.check_constructor_call(span, id, args, Some(expected_ty))
             }
             (Resolved::FieldAccess(span, expr, field), expected_ty) => {
                 self.check_field_access_with_expected(span, expr, field, expected_ty)
@@ -996,6 +1109,95 @@ impl Checker {
             }
             _ => self.check_node(node),
         }
+    }
+
+    fn check_block(
+        &mut self,
+        span: &Span,
+        stmts: &[Resolved],
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let mut typed_stmts = Vec::new();
+        let mut last_ty = Ty::Unit;
+        for (index, stmt) in stmts.iter().enumerate() {
+            // Inference substitutions are statement-local inside blocks too.
+            // Otherwise an earlier generic call can monomorphize later siblings.
+            self.substitutions.clear();
+            let is_last = index + 1 == stmts.len();
+            let typed = if is_last {
+                match expected {
+                    Some(expected_ty) => self.check_node_with_expected(stmt, Some(expected_ty))?,
+                    None => self.check_node(stmt)?,
+                }
+            } else {
+                self.check_node(stmt)?
+            };
+            last_ty = typed.ty.clone();
+            typed_stmts.push(typed);
+        }
+        Ok(TypedNode {
+            ty: last_ty,
+            span: span.clone(),
+            node: TypedInner::Block(typed_stmts),
+        })
+    }
+
+    /// A user-facing Facet annotation describes a path template; it does not
+    /// coerce or select a different path.  Preserve concrete update slots on
+    /// the compile-time path so every later API use can validate them against
+    /// its independently-derived rebuild result.
+    fn apply_facet_annotation(
+        &mut self,
+        typed: &mut TypedNode,
+        expected: &Ty,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let expected = self.resolve_ty(expected);
+        let actual = self.resolve_ty(&typed.ty);
+        let (
+            Ty::Facet(
+                expected_kind,
+                expected_source,
+                expected_focus,
+                expected_update_source,
+                expected_update_focus,
+            ),
+            Ty::Facet(actual_kind, actual_source, actual_focus, _, _),
+        ) = (&expected, &actual)
+        else {
+            return Ok(());
+        };
+
+        if !expected_kind.is_atomic()
+            || expected_kind != actual_kind
+            || !self.types_compatible(expected_source, actual_source)
+            || !self.types_compatible(expected_focus, actual_focus)
+        {
+            return Err(TypeError {
+                message: format!(
+                    "Facet annotation does not match this path: expected {}, got {}",
+                    self.ty_name(&expected),
+                    self.ty_name(&actual)
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Facet K, S, and A are derived from the path and must match exactly.".into(),
+                ),
+            });
+        }
+
+        match &mut typed.node {
+            TypedInner::FacetPath(path) => {
+                path.update_source_ty = expected_update_source.as_ref().clone();
+                path.update_focus_ty = expected_update_focus.as_ref().clone();
+            }
+            // A pending path will be specialized with the annotated source
+            // before it can be bound.  Its update slots remain on `typed.ty`.
+            TypedInner::PendingFacetPath(_) => {}
+            _ => return Ok(()),
+        }
+        typed.ty = expected;
+        Ok(())
     }
 
     pub(super) fn facet_replace_result_context_error(
@@ -1079,10 +1281,19 @@ impl Checker {
         typed: TypedNode,
         span: &Span,
     ) -> Result<StoredFacetPath, TypeError> {
+        let slots = match self.resolve_ty(&typed.ty) {
+            Ty::Facet(_, _, _, update_source, update_focus) => (
+                update_source.as_ref().clone(),
+                update_focus.as_ref().clone(),
+            ),
+            _ => (Ty::Hole, Ty::Hole),
+        };
         match typed.node {
             TypedInner::FacetPath(path) => Ok(StoredFacetPath::Concrete(TypedFacetPath {
                 source_ty: self.resolve_ty(&path.source_ty),
                 focus_ty: self.resolve_ty(&path.focus_ty),
+                update_source_ty: self.resolve_ty(&slots.0),
+                update_focus_ty: self.resolve_ty(&slots.1),
                 path_kind: path.path_kind,
                 may_fail: path.may_fail,
                 source_readonly_root: path.source_readonly_root,
@@ -1165,7 +1376,7 @@ impl Checker {
         rhs: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_rhs = self.check_node(rhs)?;
-        if matches!(typed_rhs.ty, Ty::Facet(_, _)) {
+        if matches!(typed_rhs.ty, Ty::Facet(..)) {
             return Err(TypeError {
                 message: "Facet values cannot be bound with `=?`".into(),
                 span: typed_rhs.span.clone(),
@@ -1256,7 +1467,7 @@ impl Checker {
             | Resolved::Compose(_, _, _)
             | Resolved::LiftedCompose(_, _, _)
             | Resolved::KleisliCompose(_, _, _) => self.check_node(node),
-            Resolved::Var(_, _) | Resolved::Grouped(_, _) => {
+            Resolved::Var(_, _) | Resolved::Grouped(_, _) | Resolved::TypeApply(_, _, _) => {
                 self.check_function_value_operand(node, op_name)
             }
             _ => Err(TypeError {
@@ -1285,7 +1496,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         match node {
             Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => self.check_node(node),
-            Resolved::Var(_, _) | Resolved::Grouped(_, _) => {
+            Resolved::Var(_, _) | Resolved::Grouped(_, _) | Resolved::TypeApply(_, _, _) => {
                 self.check_function_value_operand(node, op_name)
             }
             Resolved::App(span, func, args) => self.check_injected_call(span, func, args, op_name),
@@ -1307,6 +1518,7 @@ impl Checker {
                 | Resolved::Capture(_, _, _)
                 | Resolved::Closure(_, _, _, _)
                 | Resolved::Grouped(_, _)
+                | Resolved::TypeApply(_, _, _)
         )
     }
 
@@ -1570,6 +1782,173 @@ impl Checker {
         )
     }
 
+    fn is_function_curry_callee(&self, func: &Resolved) -> bool {
+        matches!(
+            func,
+            Resolved::Var(_, id)
+                if id.name == "curry"
+                    || id.name == "Function::curry"
+                    || id.qualified_name.as_deref() == Some("Function::curry")
+        )
+    }
+
+    fn curry_source_captures(node: &TypedNode, out: &mut Vec<ResolvedId>) {
+        let mut add = |id: &ResolvedId| {
+            if !out
+                .iter()
+                .any(|existing| existing.unique_id == id.unique_id)
+            {
+                out.push(id.clone());
+            }
+        };
+        match &node.node {
+            TypedInner::Var(id) => add(id),
+            TypedInner::Capture(target, _) => Self::curry_source_captures(target, out),
+            TypedInner::Closure(_, captures, _) => captures.iter().for_each(&mut add),
+            _ => {}
+        }
+    }
+
+    fn check_function_curry(
+        &mut self,
+        span: &Span,
+        _func: &Resolved,
+        args: &[ResolvedRecordLitArg],
+    ) -> Result<TypedNode, TypeError> {
+        let [ResolvedRecordLitArg::Positional(source)] = args else {
+            return Err(TypeError {
+                message: "Function::curry expects exactly one positional callable".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        if matches!(source, Resolved::App(..)) {
+            return Err(TypeError {
+                message: "Function::curry requires a function value, not a function call".into(),
+                span: self.resolved_span(source).clone(),
+                hint: Some(
+                    "Use `&f`, `&Type::method`, a closure, or a bound callable value.".into(),
+                ),
+            });
+        }
+
+        let trait_capture = match source {
+            Resolved::Capture(_, target, _) => self.trait_method_ref(target).is_some(),
+            _ => false,
+        };
+        let typed_source = if trait_capture {
+            // Trait helper captures need a callable context to resolve their
+            // receiver. The current trait-helper surface used by Function is
+            // binary; the resulting signature is then validated below.
+            let expected = Ty::Func(
+                vec![self.env.fresh_tyvar(), self.env.fresh_tyvar()],
+                Box::new(self.env.fresh_tyvar()),
+            );
+            self.check_node_with_expected(source, Some(&expected))?
+        } else {
+            self.check_node(source)?
+        };
+        let source_ty = self.resolve_ty(&typed_source.ty);
+        let (params, ret) = match &source_ty {
+            Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
+            // A named function is only a valid curry input through an explicit
+            // capture. A bare function name must retain the language's existing
+            // function-value restriction.
+            Ty::UserFunc { .. } | Ty::BuiltinFunc { .. } => {
+                return Err(TypeError {
+                    message: "Function::curry requires an explicit function capture".into(),
+                    span: self.resolved_span(source).clone(),
+                    hint: Some(
+                        "Use `curry(&function)` or bind a closure/callable value first.".into(),
+                    ),
+                })
+            }
+            _ => {
+                return Err(TypeError {
+                    message: format!(
+                        "Function::curry requires a function value, got {}",
+                        self.ty_name(&source_ty)
+                    ),
+                    span: typed_source.span.clone(),
+                    hint: None,
+                })
+            }
+        };
+        if params.len() < 2 {
+            return Err(TypeError {
+                message: format!(
+                    "Function::curry requires a function with at least two arguments, got {}",
+                    params.len()
+                ),
+                span: typed_source.span.clone(),
+                hint: None,
+            });
+        }
+
+        let mut source_captures = Vec::new();
+        Self::curry_source_captures(&typed_source, &mut source_captures);
+        let mut parameter_ids = Vec::with_capacity(params.len());
+        for index in 0..params.len() {
+            parameter_ids.push(ResolvedId {
+                name: format!("__curry_arg_{index}"),
+                qualified_name: None,
+                symbol_info: None,
+                unique_id: Self::next_synthetic_range_uid(),
+                compiler_generated: true,
+                span: span.clone(),
+            });
+        }
+
+        let mut callable = typed_source;
+        let mut result_ty = ret;
+        for index in (0..params.len()).rev() {
+            let mut call_args = Vec::with_capacity(params.len());
+            for (arg_index, param_ty) in params.iter().enumerate() {
+                let arg_ty = self.resolve_ty(param_ty);
+                call_args.push(TypedNode {
+                    ty: arg_ty,
+                    span: span.clone(),
+                    node: TypedInner::Var(parameter_ids[arg_index].clone()),
+                });
+            }
+            if index < params.len() - 1 {
+                // The nested closure is already the value produced by the
+                // suffix of the chain; only the outermost body calls the
+                // original callable.
+                call_args.clear();
+            }
+            let body = if index == params.len() - 1 {
+                TypedNode {
+                    ty: self.resolve_ty(&result_ty),
+                    span: span.clone(),
+                    node: TypedInner::App(Box::new(callable.clone()), call_args),
+                }
+            } else {
+                callable
+            };
+            let mut captures = source_captures.clone();
+            captures.extend(parameter_ids[..index].iter().cloned());
+            let closure_ty = Ty::Func(
+                vec![self.resolve_ty(&params[index])],
+                Box::new(self.resolve_ty(&result_ty)),
+            );
+            callable = TypedNode {
+                ty: closure_ty,
+                span: span.clone(),
+                node: TypedInner::Closure(
+                    vec![TypedClosureParam {
+                        id: parameter_ids[index].clone(),
+                        ty: self.resolve_ty(&params[index]),
+                    }],
+                    captures,
+                    Box::new(body),
+                ),
+            };
+            result_ty = callable.ty.clone();
+        }
+        Ok(callable)
+    }
+
     fn check_function_on_with_expected(
         &mut self,
         span: &Span,
@@ -1755,8 +2134,7 @@ impl Checker {
                     None
                 }
             }
-            (Ty::List(expected_inner), Ty::List(actual_inner))
-            | (Ty::TypeRef(expected_inner), Ty::TypeRef(actual_inner)) => {
+            (Ty::List(expected_inner), Ty::List(actual_inner)) => {
                 self.bound_mismatch_message(&expected_inner, &actual_inner)
             }
             (Ty::Tuple(expected_items), Ty::Tuple(actual_items)) => expected_items
@@ -1820,12 +2198,14 @@ impl Checker {
             Resolved::Lit(span, _)
             | Resolved::Var(span, _)
             | Resolved::App(span, _, _)
+            | Resolved::TypeApply(span, _, _)
             | Resolved::Block(span, _)
             | Resolved::Bind(span, _, _)
             | Resolved::SafeBind(span, _, _)
             | Resolved::BinOp(span, _, _, _)
             | Resolved::Pipe(span, _, _)
             | Resolved::ContextMap(span, _, _)
+            | Resolved::ContextApply(span, _, _)
             | Resolved::ContextBind(span, _, _)
             | Resolved::Compose(span, _, _)
             | Resolved::LiftedCompose(span, _, _)
@@ -1853,20 +2233,20 @@ impl Checker {
             | Resolved::ProcessContextHandler(span, _)
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
-            | Resolved::TypeRefWitness(span, _)
             | Resolved::StructDef(span, ..)
-            | Resolved::RecordDef(span, _, _)
+            | Resolved::RecordDef(span, _, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
             | Resolved::EnumDef(span, _, _, _, _)
-            | Resolved::Def(span, _, _, _, _, _, _)
+            | Resolved::Def(span, _, _, _, _, _, _, _)
             | Resolved::ConstDef(span, _, _, _, _)
             | Resolved::ExtractorDef(span, _, _, _, _, _, _)
             | Resolved::BuiltinDecl(span, _, _, _, _)
             | Resolved::BuiltinExtractorDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
+            | Resolved::TypeAlias(span, _, _, _)
             | Resolved::ResultCtorDecl(span, _, _, _, _)
-            | Resolved::TraitDef(span, _, _, _, _)
-            | Resolved::TraitImplDef(span, _, _, _, _)
+            | Resolved::TraitDef(span, _, _, _, _, _)
+            | Resolved::TraitImplDef(span, _, _, _, _, _)
             | Resolved::Closure(span, _, _, _)
             | Resolved::Capture(span, _, _)
             | Resolved::Semi(span, _) => span,
@@ -2094,6 +2474,10 @@ impl Checker {
         &self,
         func: &'a Resolved,
     ) -> Option<(&'a ResolvedId, String, String)> {
+        let func = match func {
+            Resolved::TypeApply(_, target, _) => target.as_ref(),
+            other => other,
+        };
         let Resolved::Var(_, id) = func else {
             return None;
         };
@@ -2103,6 +2487,13 @@ impl Checker {
             .get(qualified_name)?
             .clone();
         Some((id, trait_name, method_name))
+    }
+
+    fn explicit_type_args(func: &Resolved) -> Option<&[AstTy]> {
+        match func {
+            Resolved::TypeApply(_, _, args) => Some(args),
+            _ => None,
+        }
     }
 
     pub(super) fn trait_dispatch_target(
@@ -2326,10 +2717,9 @@ impl Checker {
                 let before = self.substitutions.clone();
                 let target_matches = self.types_compatible(&impl_target, receiver_ty);
                 let args_match = target_matches
-                    && impl_trait_args
-                        .iter()
-                        .zip(requested_trait_args.iter())
-                        .all(|(expected, actual)| self.types_compatible(expected, actual));
+                    && impl_trait_args.iter().zip(requested_trait_args.iter()).all(
+                        |(expected, actual)| self.operator_trait_arg_compatible(expected, actual),
+                    );
                 if !args_match {
                     self.substitutions = before;
                     continue;
@@ -2379,12 +2769,360 @@ impl Checker {
         result
     }
 
+    fn constructor_trait_method_dispatch(
+        &self,
+        method: &TraitImplMethodInfo,
+    ) -> Option<TraitDispatch> {
+        if let Some(dispatch_override) = &method.dispatch_override {
+            return Some(TraitDispatch::Static(dispatch_override.clone()));
+        }
+        let function_key = method
+            .function_id
+            .qualified_name
+            .as_ref()
+            .unwrap_or(&method.function_id.name);
+        let function_id = self.function_ids_by_name.get(function_key)?;
+        let Ty::UserFunc { fun_idx, .. } = self.env.lookup_var(function_id.unique_id)? else {
+            return None;
+        };
+        let display_name = method
+            .function_id
+            .qualified_name
+            .as_deref()
+            .map(|qualified_name| {
+                callable_definition_display_name(qualified_name, &method.function_id.name)
+            })
+            .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
+        Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+            name: display_name,
+            fun_idx: *fun_idx,
+        }))
+    }
+
+    fn constructor_functor_dispatch(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        receiver_ty: &Ty,
+        input_ty: &Ty,
+        output_ty: &Ty,
+    ) -> Option<(TraitDispatch, Ty)> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
+            let method = impl_info.methods.get(method_name)?;
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, receiver_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let slot = impl_info.constructor_slot_vars[0];
+            let Some(fresh_slot) = fresh.get(&slot).cloned() else {
+                self.substitutions = before;
+                continue;
+            };
+            if !self.operator_trait_arg_compatible(&fresh_slot, input_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let mapping = impl_info
+                .type_param_vars
+                .iter()
+                .copied()
+                .map(|var| {
+                    let replacement = if var == slot {
+                        output_ty.clone()
+                    } else {
+                        fresh
+                            .get(&var)
+                            .map(|ty| self.resolve_ty(ty))
+                            .unwrap_or(Ty::Var(var))
+                    };
+                    (var, replacement)
+                })
+                .collect::<HashMap<_, _>>();
+            let result_ty = self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping);
+            let dispatch = self.constructor_trait_method_dispatch(method)?;
+            return Some((dispatch, self.resolve_ty(&result_ty)));
+        }
+        None
+    }
+
+    fn constructor_pure_dispatch(
+        &mut self,
+        trait_name: &str,
+        expected_ty: &Ty,
+        value_ty: &Ty,
+    ) -> Option<TraitDispatch> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
+            let method = impl_info.methods.get("pure")?;
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, expected_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let slot = impl_info.constructor_slot_vars[0];
+            let Some(fresh_slot) = fresh.get(&slot).cloned() else {
+                self.substitutions = before;
+                continue;
+            };
+            if !self.types_compatible(&fresh_slot, value_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            return self.constructor_trait_method_dispatch(method);
+        }
+        None
+    }
+
+    /// Resolve a constructor-style trait method whose receiver (`Self`) only
+    /// appears in the result type.  The method-specific checks are performed
+    /// by the caller; this common part selects the concrete impl target and
+    /// its static dispatch target from the expected result type.
+    fn constructor_target_dispatch(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        expected_ty: &Ty,
+    ) -> Option<TraitDispatch> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                continue;
+            };
+            let Some(method) = impl_info.methods.get(method_name) else {
+                continue;
+            };
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if self.types_compatible(&target, expected_ty) {
+                if let Some(dispatch) = self.constructor_trait_method_dispatch(method) {
+                    return Some(dispatch);
+                }
+            }
+            self.substitutions = before;
+        }
+        None
+    }
+
+    fn constructor_slot_value_dispatch(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        expected_ty: &Ty,
+        value_ty: &Ty,
+    ) -> Option<TraitDispatch> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                continue;
+            };
+            let Some(method) = impl_info.methods.get(method_name) else {
+                continue;
+            };
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, expected_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let slot = impl_info.constructor_slot_vars[0];
+            let Some(slot_ty) = fresh.get(&slot).cloned() else {
+                self.substitutions = before;
+                continue;
+            };
+            if !self.types_compatible(&slot_ty, value_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            return self.constructor_trait_method_dispatch(method);
+        }
+        None
+    }
+
+    fn constructor_slot_type_for(&mut self, trait_name: &str, container_ty: &Ty) -> Option<Ty> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, container_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let slot = impl_info.constructor_slot_vars[0];
+            let slot_ty = fresh.get(&slot).map(|ty| self.resolve_ty(ty));
+            if slot_ty.is_some() {
+                self.substitutions = before;
+                return slot_ty;
+            }
+            self.substitutions = before;
+        }
+        None
+    }
+
+    fn constructor_context_type_for(
+        &mut self,
+        trait_name: &str,
+        container_ty: &Ty,
+        slot_ty: &Ty,
+    ) -> Option<Ty> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, container_ty) {
+                self.substitutions = before;
+                continue;
+            }
+
+            let slot = impl_info.constructor_slot_vars[0];
+            let mapping = impl_info
+                .type_param_vars
+                .iter()
+                .copied()
+                .map(|var| {
+                    let replacement = if var == slot {
+                        slot_ty.clone()
+                    } else {
+                        fresh
+                            .get(&var)
+                            .map(|ty| self.resolve_ty(ty))
+                            .unwrap_or(Ty::Var(var))
+                    };
+                    (var, replacement)
+                })
+                .collect::<HashMap<_, _>>();
+            let context_ty =
+                self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping));
+            self.substitutions = before;
+            return Some(context_ty);
+        }
+        None
+    }
+
+    /// Enumerate the concrete constructor contexts which can carry `slot_ty`.
+    /// This is used when a constructor helper appears on the opposite side of
+    /// an operator and the other operand must provide the missing `Self`.
+    fn constructor_context_candidates(&mut self, trait_name: &str, slot_ty: &Ty) -> Vec<Ty> {
+        let mut candidates = Vec::new();
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                continue;
+            };
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let _target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let slot = impl_info.constructor_slot_vars[0];
+            let mapping = impl_info
+                .type_param_vars
+                .iter()
+                .copied()
+                .map(|var| {
+                    let replacement = if var == slot {
+                        slot_ty.clone()
+                    } else {
+                        fresh
+                            .get(&var)
+                            .map(|ty| self.resolve_ty(ty))
+                            .unwrap_or(Ty::Var(var))
+                    };
+                    (var, replacement)
+                })
+                .collect::<HashMap<_, _>>();
+            candidates.push(
+                self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping)),
+            );
+        }
+        candidates
+    }
+
+    fn constructor_monad_dispatch(
+        &mut self,
+        trait_name: &str,
+        receiver_ty: &Ty,
+        input_ty: &Ty,
+        contextual_output_ty: &Ty,
+    ) -> Option<(TraitDispatch, Ty)> {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
+            let method = impl_info.methods.get("bind")?;
+            if impl_info.constructor_slot_vars.len() != 1 {
+                continue;
+            }
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let before = self.substitutions.clone();
+            if !self.types_compatible(&target, receiver_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let slot = impl_info.constructor_slot_vars[0];
+            let Some(fresh_slot) = fresh.get(&slot).cloned() else {
+                self.substitutions = before;
+                continue;
+            };
+            if !self.operator_trait_arg_compatible(&fresh_slot, input_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let output_slot = self.env.fresh_tyvar();
+            let mapping = impl_info
+                .type_param_vars
+                .iter()
+                .copied()
+                .map(|var| {
+                    let replacement = if var == slot {
+                        output_slot.clone()
+                    } else {
+                        fresh
+                            .get(&var)
+                            .map(|ty| self.resolve_ty(ty))
+                            .unwrap_or(Ty::Var(var))
+                    };
+                    (var, replacement)
+                })
+                .collect::<HashMap<_, _>>();
+            let expected_output = self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping);
+            if !self.types_compatible(&expected_output, contextual_output_ty) {
+                self.substitutions = before;
+                continue;
+            }
+            let dispatch = self.constructor_trait_method_dispatch(method)?;
+            return Some((dispatch, self.resolve_ty(contextual_output_ty)));
+        }
+        None
+    }
+
     fn opposite_conversion_hint(
         &self,
         trait_name: &str,
         method_name: &str,
         receiver_ty: &Ty,
-        typed_args: &[TypedNode],
+        requested_trait_args: &[Ty],
         span: &Span,
     ) -> Option<TypeError> {
         let requested_trait = if self.trait_matches_short_name(trait_name, "From") {
@@ -2400,13 +3138,10 @@ impl Checker {
             "From"
         };
         let receiver_name = self.trait_target_name(receiver_ty)?;
-        let witness_ty = self.resolve_ty(&typed_args.get(1)?.ty);
-        let Ty::TypeRef(target_ty) = witness_ty else {
-            return None;
-        };
+        let target_ty = self.resolve_ty(requested_trait_args.first()?);
         let opposite_trait_key = self.trait_key_by_short_name(opposite_trait)?;
         let opposite_instance_key =
-            self.trait_instance_key_from_tys(&opposite_trait_key, &[target_ty.as_ref().clone()]);
+            self.trait_instance_key_from_tys(&opposite_trait_key, &[target_ty.clone()]);
         if !self
             .trait_impls
             .contains_key(&(opposite_instance_key, receiver_name.clone()))
@@ -2422,7 +3157,7 @@ impl Checker {
         };
         Some(TypeError {
             message: format!(
-                "{} -> {} implements {}, not {}. Use {}(value, {}).",
+                "{} -> {} implements {}, not {}. Use {}::<{}>(value).",
                 receiver_name,
                 target_name,
                 opposite_trait,
@@ -2446,6 +3181,8 @@ impl Checker {
         method_name: &str,
         args: &[ResolvedRecordLitArg],
         receiver_owner_hint: Option<&str>,
+        expected_ret_ty: Option<&Ty>,
+        explicit_type_args: Option<&[AstTy]>,
     ) -> Result<TypedNode, TypeError> {
         if args
             .iter()
@@ -2480,9 +3217,383 @@ impl Checker {
                 hint: None,
             })?;
 
+        let positional_args = args
+            .iter()
+            .filter_map(|arg| match arg {
+                ResolvedRecordLitArg::Positional(expr) => Some(expr),
+                ResolvedRecordLitArg::Named(_, _) => None,
+            })
+            .collect::<Vec<_>>();
+        if self.trait_matches_short_name(trait_name, "Functor")
+            && method_name == "fmap"
+            && positional_args.len() == 2
+        {
+            let mut typed = self.check_context_map(span, positional_args[0], positional_args[1])?;
+            if let TypedInner::TraitCall { origin, .. } = &mut typed.node {
+                *origin = TraitCallOrigin::Explicit;
+            }
+            return Ok(typed);
+        }
+        if self.trait_matches_short_name(trait_name, "Monad")
+            && method_name == "bind"
+            && positional_args.len() == 2
+        {
+            let mut typed =
+                self.check_context_bind(span, positional_args[0], positional_args[1])?;
+            if let TypedInner::TraitCall { origin, .. } = &mut typed.node {
+                *origin = TraitCallOrigin::Explicit;
+            }
+            return Ok(typed);
+        }
+        if self.trait_matches_short_name(trait_name, "Applicative")
+            && method_name == "pure"
+            && positional_args.len() == 1
+        {
+            let expected = expected_ret_ty.ok_or_else(|| TypeError {
+                message: "Applicative::pure requires an expected return type".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Add a result annotation, for example `value: Option<Int> = Applicative::pure(1)`."
+                        .into(),
+                ),
+            })?;
+            let typed_value = self.check_node(positional_args[0])?;
+            let dispatch = self
+                .constructor_pure_dispatch(trait_name, expected, &typed_value.ty)
+                .ok_or_else(|| TypeError {
+                    message: format!(
+                        "Applicative::pure cannot construct {}",
+                        self.ty_name(expected)
+                    ),
+                    span: span.clone(),
+                    hint: Some(self.trait_implementation_summary("Applicative")),
+                })?;
+            return Ok(TypedNode {
+                ty: self.resolve_ty(expected),
+                span: span.clone(),
+                node: TypedInner::TraitCall {
+                    trait_name: trait_name.to_string(),
+                    method_name: "pure".into(),
+                    receiver_ty: self.resolve_ty(expected),
+                    dispatch,
+                    origin: TraitCallOrigin::Explicit,
+                    args: vec![typed_value],
+                },
+            });
+        }
+        if self.trait_matches_short_name(trait_name, "Monad")
+            && method_name == "return"
+            && positional_args.len() == 1
+        {
+            let expected = expected_ret_ty.ok_or_else(|| TypeError {
+                message: "Monad::return requires an expected return type".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Add a result annotation, for example `value: Result<Int> = Monad::return(1)`, or use it in a typed operator context.".into(),
+                ),
+            })?;
+            let typed_value = self.check_node(positional_args[0])?;
+            let dispatch = self
+                .constructor_slot_value_dispatch(trait_name, "return", expected, &typed_value.ty)
+                .ok_or_else(|| TypeError {
+                    message: format!("Monad::return cannot construct {}", self.ty_name(expected)),
+                    span: span.clone(),
+                    hint: Some(self.trait_implementation_summary("Monad")),
+                })?;
+            return Ok(TypedNode {
+                ty: self.resolve_ty(expected),
+                span: span.clone(),
+                node: TypedInner::TraitCall {
+                    trait_name: trait_name.to_string(),
+                    method_name: "return".into(),
+                    receiver_ty: self.resolve_ty(expected),
+                    dispatch,
+                    origin: TraitCallOrigin::Explicit,
+                    args: vec![typed_value],
+                },
+            });
+        }
+        // Generic zero-argument constructor helpers (for example
+        // `Monoid::mempty()`) use the same expected-result dispatch.  Keep
+        // this signature-driven rather than growing another trait-name list.
+        if positional_args.is_empty() {
+            let probe_self = self.env.fresh_tyvar();
+            let (_, probe_ret, _, _) =
+                self.resolve_trait_method_signature(&trait_info, &method, &probe_self)?;
+            if matches!(probe_ret, Ty::SelfApp(_))
+                || (self.trait_matches_short_name(trait_name, "Default")
+                    && method_name == "default"
+                    && explicit_type_args.is_some())
+            {
+                let explicit_target = if self.trait_matches_short_name(trait_name, "Default")
+                    && method_name == "default"
+                {
+                    match explicit_type_args {
+                        Some([arg]) => Some(
+                            self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?,
+                        ),
+                        Some(args) => {
+                            return Err(TypeError {
+                                message: format!(
+                                    "{}::{} expects one explicit target type, got {}",
+                                    trait_name,
+                                    method_name,
+                                    args.len()
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            });
+                        }
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+                let expected = explicit_target.as_ref().or(expected_ret_ty).ok_or_else(|| {
+                    TypeError {
+                        message: format!(
+                            "{}::{} requires an expected return type",
+                            trait_name, method_name
+                        ),
+                        span: span.clone(),
+                        hint: Some(format!(
+                            "Add a type annotation so {}::{} can select a concrete implementation.",
+                            trait_name, method_name
+                        )),
+                    }
+                })?;
+                let dispatch = self
+                    .constructor_target_dispatch(trait_name, method_name, expected)
+                    .ok_or_else(|| TypeError {
+                        message: format!(
+                            "{}::{} cannot construct {}",
+                            trait_name,
+                            method_name,
+                            self.ty_name(expected)
+                        ),
+                        span: span.clone(),
+                        hint: Some(self.trait_implementation_summary(trait_name)),
+                    })?;
+                let typed = TypedNode {
+                    ty: self.resolve_ty(expected),
+                    span: span.clone(),
+                    node: TypedInner::TraitCall {
+                        trait_name: trait_name.to_string(),
+                        method_name: method_name.to_string(),
+                        receiver_ty: self.resolve_ty(expected),
+                        dispatch,
+                        origin: TraitCallOrigin::Explicit,
+                        args: Vec::new(),
+                    },
+                };
+                if let Some(expected_ret_ty) = expected_ret_ty {
+                    if !self.types_compatible(&typed.ty, expected_ret_ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "{}::{} target {} does not match expected return type {}",
+                                trait_name,
+                                method_name,
+                                self.ty_name(&typed.ty),
+                                self.ty_name(expected_ret_ty)
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                }
+                return Ok(typed);
+            }
+        }
+        if self.trait_matches_short_name(trait_name, "Applicative")
+            && method_name == "ap"
+            && positional_args.len() == 2
+        {
+            let typed_mapper = self.check_node(positional_args[0])?;
+            let mapper_inner = self
+                .constructor_slot_type_for(trait_name, &typed_mapper.ty)
+                .ok_or_else(|| TypeError {
+                    message: format!(
+                        "Applicative::ap requires a contextual callable, got {}",
+                        self.ty_name(&typed_mapper.ty)
+                    ),
+                    span: typed_mapper.span.clone(),
+                    hint: None,
+                })?;
+            let (input, output) =
+                self.unary_function_parts(&mapper_inner, "Applicative::ap", span)?;
+            let expected_value_ty = self
+                .constructor_context_type_for(trait_name, &typed_mapper.ty, &input)
+                .ok_or_else(|| TypeError {
+                    message: format!(
+                        "Applicative::ap cannot infer value context from {}",
+                        self.ty_name(&typed_mapper.ty)
+                    ),
+                    span: typed_mapper.span.clone(),
+                    hint: None,
+                })?;
+            let typed_value =
+                self.check_node_with_expected(positional_args[1], Some(&expected_value_ty))?;
+            let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
+            let Some((dispatch, expected_mapper)) = self.constructor_functor_dispatch(
+                trait_name,
+                "ap",
+                &typed_value.ty,
+                &input,
+                &callable_ty,
+            ) else {
+                return Err(TypeError {
+                    message: format!(
+                        "Applicative::ap requires Applicative implementation for {}",
+                        self.ty_name(&typed_value.ty)
+                    ),
+                    span: typed_value.span.clone(),
+                    hint: Some(self.trait_implementation_summary("Applicative")),
+                });
+            };
+            if !self.types_compatible(&expected_mapper, &typed_mapper.ty) {
+                return Err(TypeError {
+                    message: "Applicative::ap requires mapper and value in the same context".into(),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            let (_, result_ty) = self
+                .constructor_functor_dispatch(trait_name, "ap", &typed_value.ty, &input, &output)
+                .expect("the same Applicative impl already matched");
+            return Ok(TypedNode {
+                ty: result_ty,
+                span: span.clone(),
+                node: TypedInner::TraitCall {
+                    trait_name: trait_name.to_string(),
+                    method_name: "ap".into(),
+                    receiver_ty: self.resolve_ty(&typed_value.ty),
+                    dispatch,
+                    origin: TraitCallOrigin::Explicit,
+                    args: vec![typed_mapper, typed_value],
+                },
+            });
+        }
+
+        // A constructor-trait application carries an unresolved constructor
+        // witness. Expand `Self<...>` positions with that same witness, then
+        // defer dispatch until specialization has a concrete receiver. This
+        // is arity-agnostic and therefore also supports Bifunctor.
+        if !trait_info.constructor_slots.is_empty() {
+            if let Some(ResolvedRecordLitArg::Positional(receiver)) = args.first() {
+                let typed_receiver = self.check_node(receiver)?;
+                let receiver_ty = self.resolve_ty(&typed_receiver.ty);
+                if let Ty::SelfApp(items) = &receiver_ty {
+                    if let Some((witness, slots)) = Self::constructor_application_parts(items) {
+                        if slots.len() == trait_info.constructor_slots.len() {
+                            let self_ty = self.env.fresh_tyvar();
+                            let (param_tys, ret_ty, _, _) =
+                                self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
+                            let apply_witness = |ty: Ty| match ty {
+                                Ty::SelfApp(args)
+                                    if Self::constructor_application_parts(&args).is_none() =>
+                                {
+                                    let mut application = vec![Ty::Hole, witness.clone()];
+                                    application.extend(args);
+                                    Ty::SelfApp(application)
+                                }
+                                other => other,
+                            };
+                            let param_tys = param_tys
+                                .into_iter()
+                                .map(apply_witness)
+                                .collect::<Vec<_>>();
+                            let ret_ty = apply_witness(ret_ty);
+                            if args.len() != param_tys.len() {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "{}::{} expects {} argument(s), got {}",
+                                        trait_name,
+                                        method_name,
+                                        param_tys.len(),
+                                        args.len()
+                                    ),
+                                    span: span.clone(),
+                                    hint: None,
+                                });
+                            }
+                            let typed_args = args
+                                .iter()
+                                .zip(param_tys.iter())
+                                .map(|(arg, expected)| match arg {
+                                    ResolvedRecordLitArg::Positional(expr) => {
+                                        self.check_node_with_expected(expr, Some(expected))
+                                    }
+                                    ResolvedRecordLitArg::Named(_, _) => unreachable!(
+                                        "named arguments are rejected before constructor dispatch"
+                                    ),
+                                })
+                                .collect::<Result<Vec<_>, _>>()?;
+                            return Ok(TypedNode {
+                                ty: self.resolve_ty(&ret_ty),
+                                span: span.clone(),
+                                node: TypedInner::TraitCall {
+                                    trait_name: trait_name.to_string(),
+                                    method_name: method_name.to_string(),
+                                    receiver_ty,
+                                    dispatch: TraitDispatch::Pending,
+                                    origin: TraitCallOrigin::Explicit,
+                                    args: typed_args,
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         let self_ty = self.env.fresh_tyvar();
-        let (param_tys, ret_ty, trait_arg_tys) =
+        let (param_tys, ret_ty, trait_arg_tys, explicit_slots) =
             self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
+
+        if let Some(explicit_args) = explicit_type_args {
+            if explicit_args.len() != explicit_slots.len() {
+                return Err(TypeError {
+                    message: format!(
+                        "{}::{} expects {} explicit type argument(s), got {}",
+                        trait_name,
+                        method_name,
+                        explicit_slots.len(),
+                        explicit_args.len()
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            for (slot, arg) in explicit_slots.iter().zip(explicit_args) {
+                let explicit_ty = match arg {
+                    // Conversion traits use a bare constructor name to select
+                    // the destination family (`from::<Result>(...)`).  Keep
+                    // its element slot inferable rather than treating it as
+                    // an invalid un-applied concrete type.
+                    AstTy::Named(_, name) if Self::surface_name(name) == "Result" => {
+                        Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error))
+                    }
+                    AstTy::Named(_, name) if Self::surface_name(name) == "Option" => {
+                        Ty::Enum("Option".into(), vec![self.env.fresh_tyvar()])
+                    }
+                    AstTy::Named(_, name) if Self::surface_name(name) == "List" => {
+                        Ty::List(Box::new(self.env.fresh_tyvar()))
+                    }
+                    _ => self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?,
+                };
+                if !self.types_compatible(slot, &explicit_ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Explicit type argument {} does not match generic slot {}",
+                            self.ty_name(&explicit_ty),
+                            self.ty_name(slot)
+                        ),
+                        span: Self::ast_ty_span(arg).clone(),
+                        hint: None,
+                    });
+                }
+            }
+        }
 
         let trait_display_name = self.trait_display_name(trait_name);
         let trait_impl_summary = self.trait_implementation_summary(trait_name);
@@ -2573,10 +3684,10 @@ impl Checker {
                             hint: trait_hint(self),
                         });
                     }
-                    if self.trait_matches_short_name(trait_name, "Neq") && method_name == "neq" {
+                    if self.trait_matches_short_name(trait_name, "Eq") && method_name == "neq" {
                         return Err(TypeError {
                             message: format!(
-                                "Neq::neq helper cannot compare {} and {}",
+                                "Eq::neq helper cannot compare {} and {}",
                                 left_ty, right_ty
                             ),
                             span: arg.span.clone(),
@@ -2653,7 +3764,7 @@ impl Checker {
             &trait_call_name,
             method_name,
             &receiver_ty,
-            &typed_args,
+            &trait_arg_tys,
             &receiver_span,
         ) {
             if self
@@ -2756,6 +3867,17 @@ impl Checker {
                 ),
                 span: span.clone(),
                 hint: None,
+            });
+        }
+
+        if matches!(self.resolve_ty(&params[0]), Ty::Lazy(_)) {
+            return Err(TypeError {
+                message: "pipe injection into a Lazy parameter is not allowed".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Lazy parameters are evaluated under the callee's control. Bind the value first, then pass that binding explicitly, or use a closure to make the evaluation order explicit."
+                        .into(),
+                ),
             });
         }
 
@@ -2944,7 +4066,7 @@ impl Checker {
             )
         };
         Ok(TypedNode {
-            ty: result_ty,
+            ty: self.resolve_ty(&result_ty),
             span: span.clone(),
             node: TypedInner::TraitCall {
                 trait_name,
@@ -3001,6 +4123,20 @@ impl Checker {
                     self.check_apply_callable(right, "`|>`")?
                 }
             }
+            Resolved::TypeApply(call_span, _, _) => self
+                .check_trait_helper_pipe_callable(
+                    call_span,
+                    right,
+                    &[],
+                    self.resolve_ty(&typed_left.ty),
+                    rhs_ret_expected.clone(),
+                    "`|>`",
+                )?
+                .ok_or_else(|| TypeError {
+                    message: "`|>` requires a specialized trait helper on the right".into(),
+                    span: call_span.clone(),
+                    hint: None,
+                })?,
             _ => self.check_apply_callable(right, "`|>`")?,
         };
         let (param, ret) = self.unary_function_parts(&typed_right.ty, "`|>`", &typed_right.span)?;
@@ -3036,6 +4172,109 @@ impl Checker {
             ret,
             "`|>`",
         )
+    }
+
+    pub(super) fn check_context_apply(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        self.check_context_apply_with_expected(span, left, right, None)
+    }
+
+    fn check_context_apply_with_expected(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+        _expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        // The value determines the applicative context and mapper input.  Check it
+        // first so contextual trait helpers such as `&Add::add` receive the
+        // expected callable type while being resolved.
+        let typed_value = self.check_node(right)?;
+        let value_inner = self
+            .constructor_slot_type_for("Applicative", &typed_value.ty)
+            .ok_or_else(|| TypeError {
+                message: format!(
+                    "`|*|` requires an Applicative value on the right, got {}",
+                    self.ty_name(&typed_value.ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: Some(self.trait_implementation_summary("Applicative")),
+            })?;
+        let output_hint = self.env.fresh_tyvar();
+        let callable_hint = Ty::Func(vec![value_inner.clone()], Box::new(output_hint));
+        let expected_mapper_ty = self
+            .constructor_context_type_for("Applicative", &typed_value.ty, &callable_hint)
+            .ok_or_else(|| TypeError {
+                message: "`|*|` cannot infer mapper context from the value".into(),
+                span: typed_value.span.clone(),
+                hint: None,
+            })?;
+        let typed_mapper = self.check_node_with_expected(left, Some(&expected_mapper_ty))?;
+        let mapper_inner = self
+            .constructor_slot_type_for("Applicative", &typed_mapper.ty)
+            .ok_or_else(|| TypeError {
+                message: format!(
+                    "`|*|` requires a contextual callable on the left, got {}",
+                    self.ty_name(&typed_mapper.ty)
+                ),
+                span: typed_mapper.span.clone(),
+                hint: Some(self.trait_implementation_summary("Applicative")),
+            })?;
+        let (input, output) = self.unary_function_parts(&mapper_inner, "`|*|`", span)?;
+        if !self.types_compatible(&input, &value_inner) {
+            return Err(TypeError {
+                message: "`|*|` mapper input and value type do not match".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
+        let Some((dispatch, expected_mapper)) = self.constructor_functor_dispatch(
+            "Applicative",
+            "ap",
+            &typed_value.ty,
+            &input,
+            &callable_ty,
+        ) else {
+            return Err(TypeError {
+                message: format!(
+                    "`|*|` requires Applicative implementation for {}",
+                    self.ty_name(&typed_value.ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: Some(self.trait_implementation_summary("Applicative")),
+            });
+        };
+        if !self.types_compatible(&expected_mapper, &typed_mapper.ty) {
+            return Err(TypeError {
+                message: "`|*|` requires mapper and value in the same context".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let (_, result_ty) = self
+            .constructor_functor_dispatch("Applicative", "ap", &typed_value.ty, &input, &output)
+            .expect("the same Applicative impl already matched");
+        Ok(TypedNode {
+            ty: result_ty,
+            span: span.clone(),
+            node: TypedInner::TraitCall {
+                trait_name: "Applicative".into(),
+                method_name: "ap".into(),
+                receiver_ty: self.resolve_ty(&typed_value.ty),
+                dispatch,
+                origin: TraitCallOrigin::Operator {
+                    op: OperatorTraitOp::ContextApply,
+                    lhs_ty: self.resolve_ty(&typed_mapper.ty),
+                    rhs_ty: self.resolve_ty(&typed_value.ty),
+                },
+                args: vec![typed_mapper, typed_value],
+            },
+        })
     }
 
     pub(super) fn check_context_map(
@@ -3108,7 +4347,7 @@ impl Checker {
 
         match &receiver_ty {
             Ty::Result(ok, _) => {
-                if !self.types_compatible(ok.as_ref(), &rhs_in) {
+                if !self.callable_accepts_input(&rhs_in, ok.as_ref()) {
                     return Err(TypeError {
                         message: format!(
                             "`|*>` type mismatch: expected {}, got {}",
@@ -3127,7 +4366,7 @@ impl Checker {
                 }
             }
             Ty::List(item) => {
-                if !self.types_compatible(item.as_ref(), &rhs_in) {
+                if !self.callable_accepts_input(&rhs_in, item.as_ref()) {
                     return Err(TypeError {
                         message: format!(
                             "`|*>` type mismatch: expected {}, got {}",
@@ -3146,7 +4385,7 @@ impl Checker {
                 }
             }
             Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
-                if !self.types_compatible(&args[0], &rhs_in) {
+                if !self.callable_accepts_input(&rhs_in, &args[0]) {
                     return Err(TypeError {
                         message: format!(
                             "`|*>` type mismatch: expected {}, got {}",
@@ -3174,13 +4413,43 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        let result_ty = self.env.fresh_tyvar();
-        let requested_trait_args = vec![rhs_in.clone(), rhs_out.clone(), result_ty.clone()];
-        let Some((dispatch, resolved_trait_args)) = self.operator_trait_dispatch_for_args(
+        if let Ty::SelfApp(items) = &receiver_ty {
+            if let Some((witness, [input])) = Self::constructor_application_parts(items) {
+                if !self.callable_accepts_input(&rhs_in, input) {
+                    return Err(TypeError {
+                        message: format!(
+                            "`|*>` type mismatch: expected {}, got {}",
+                            self.ty_name(input),
+                            self.ty_name(&rhs_in)
+                        ),
+                        span: typed_right.span.clone(),
+                        hint: None,
+                    });
+                }
+                return Ok(TypedNode {
+                    ty: Ty::SelfApp(vec![Ty::Hole, witness.clone(), rhs_out.clone()]),
+                    span: span.clone(),
+                    node: TypedInner::TraitCall {
+                        trait_name: functor_trait,
+                        method_name: "fmap".into(),
+                        receiver_ty: receiver_ty.clone(),
+                        dispatch: TraitDispatch::Pending,
+                        origin: TraitCallOrigin::Operator {
+                            op: OperatorTraitOp::PipeMap,
+                            lhs_ty: receiver_ty,
+                            rhs_ty: self.resolve_ty(&typed_right.ty),
+                        },
+                        args: vec![typed_left, typed_right],
+                    },
+                });
+            }
+        }
+        let Some((dispatch, result_ty)) = self.constructor_functor_dispatch(
             &functor_trait,
-            "map",
+            "fmap",
             &receiver_ty,
-            &requested_trait_args,
+            &rhs_in,
+            &rhs_out,
         ) else {
             let functor_summary = self.trait_implementation_summary("Functor");
             return Err(TypeError {
@@ -3202,17 +4471,12 @@ impl Checker {
                 )),
             });
         };
-        let result_ty = resolved_trait_args
-            .get(2)
-            .cloned()
-            .unwrap_or_else(|| self.resolve_ty(&result_ty));
-        let trait_name = self.trait_instance_key_from_tys(&functor_trait, &resolved_trait_args);
         Ok(TypedNode {
             ty: result_ty,
             span: span.clone(),
             node: TypedInner::TraitCall {
-                trait_name,
-                method_name: "map".into(),
+                trait_name: functor_trait,
+                method_name: "fmap".into(),
                 receiver_ty: receiver_ty.clone(),
                 dispatch,
                 origin: TraitCallOrigin::Operator {
@@ -3234,6 +4498,141 @@ impl Checker {
         self.check_context_bind_with_expected(span, left, right, None)
     }
 
+    /// Try the reverse direction for a constructor helper such as
+    /// `Monad::return(1)`.  The helper has no concrete receiver argument, so
+    /// its `Self` can only be selected after the contextual RHS is inspected.
+    /// Candidate probing is deliberately generic over Monad impl targets; the
+    /// same pattern can later be reused by other contextual operators.
+    fn try_check_context_bind_from_constructor(
+        &mut self,
+        span: &Span,
+        left: &Resolved,
+        right: &Resolved,
+    ) -> Result<Option<TypedNode>, TypeError> {
+        let Resolved::App(_, func, args) = left else {
+            return Ok(None);
+        };
+        let Some((_, trait_name, method_name)) = self.trait_method_ref(func) else {
+            return Ok(None);
+        };
+        if !self.trait_matches_short_name(&trait_name, "Monad") || method_name != "return" {
+            return Ok(None);
+        }
+        let [ResolvedRecordLitArg::Positional(value)] = args.as_slice() else {
+            return Ok(None);
+        };
+        let typed_value = self.check_node(value)?;
+        let monad_trait = self
+            .trait_key_by_short_name("Monad")
+            .ok_or_else(|| TypeError {
+                message: "Unknown trait: Monad".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let value_ty = self.resolve_ty(&typed_value.ty);
+
+        for context in self.constructor_context_candidates(&monad_trait, &value_ty) {
+            let checkpoint = self.substitutions.clone();
+            let Some(input_ty) = self.constructor_slot_type_for(&monad_trait, &context) else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            let next_ty = self.env.fresh_tyvar();
+            let Some(ret_ty) = self.constructor_context_type_for(&monad_trait, &context, &next_ty)
+            else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            let contract = self.callable_contract(
+                &input_ty,
+                Some(ret_ty.clone()),
+                ExpectedCallableSlot::Contextual,
+            );
+            let typed_right = match right {
+                Resolved::InferredFacetCapture(_, _)
+                | Resolved::Capture(_, _, _)
+                | Resolved::Closure(_, _, _, _)
+                | Resolved::Grouped(_, _) => {
+                    self.check_apply_callable_with_contract(right, &contract, "`|>=`")
+                }
+                Resolved::App(call_span, rhs_func, rhs_args) => {
+                    if let Some(typed) = self.check_trait_helper_pipe_callable(
+                        call_span,
+                        rhs_func,
+                        rhs_args,
+                        contract.input.clone(),
+                        contract.ret.clone(),
+                        "`|>=`",
+                    )? {
+                        Ok(typed)
+                    } else {
+                        let expected_callable = self.expected_callable_ty(&contract);
+                        self.check_node_with_expected(right, Some(&expected_callable))
+                            .or_else(|_| self.check_apply_callable(right, "`|>=`"))
+                    }
+                }
+                Resolved::TypeApply(call_span, _, _) => self
+                    .check_trait_helper_pipe_callable(
+                        call_span,
+                        right,
+                        &[],
+                        contract.input.clone(),
+                        contract.ret.clone(),
+                        "`|>=`",
+                    )?
+                    .ok_or_else(|| TypeError {
+                        message: "`|>=` requires a specialized trait helper on the right".into(),
+                        span: call_span.clone(),
+                        hint: None,
+                    }),
+                _ => self.check_apply_callable(right, "`|>=`"),
+            };
+            let Ok(typed_right) = typed_right else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            let Ok((rhs_in, rhs_ret)) =
+                self.unary_function_parts(&typed_right.ty, "`|>=`", &typed_right.span)
+            else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            if !self.callable_accepts_input(&rhs_in, &input_ty)
+                || !self.types_compatible(&rhs_ret, &ret_ty)
+            {
+                self.substitutions = checkpoint;
+                continue;
+            }
+            let Ok(typed_left) = self.check_node_with_expected(left, Some(&context)) else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            let Some((dispatch, result_ty)) =
+                self.constructor_monad_dispatch(&monad_trait, &context, &rhs_in, &rhs_ret)
+            else {
+                self.substitutions = checkpoint;
+                continue;
+            };
+            return Ok(Some(TypedNode {
+                ty: result_ty,
+                span: span.clone(),
+                node: TypedInner::TraitCall {
+                    trait_name: monad_trait,
+                    method_name: "bind".into(),
+                    receiver_ty: self.resolve_ty(&context),
+                    dispatch,
+                    origin: TraitCallOrigin::Operator {
+                        op: OperatorTraitOp::PipeBind,
+                        lhs_ty: self.resolve_ty(&typed_left.ty),
+                        rhs_ty: self.resolve_ty(&typed_right.ty),
+                    },
+                    args: vec![typed_left, typed_right],
+                },
+            }));
+        }
+        Ok(None)
+    }
+
     fn check_context_bind_with_expected(
         &mut self,
         span: &Span,
@@ -3241,6 +4640,9 @@ impl Checker {
         right: &Resolved,
         _expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
+        if let Some(typed) = self.try_check_context_bind_from_constructor(span, left, right)? {
+            return Ok(typed);
+        }
         let typed_left = self.check_node(left)?;
         let receiver_ty = self.resolve_ty(&typed_left.ty);
         let trait_helper_contract = match &receiver_ty {
@@ -3290,9 +4692,25 @@ impl Checker {
                 )? {
                     typed
                 } else {
-                    self.check_apply_callable(right, "`|>=`")?
+                    let expected_callable = self.expected_callable_ty(&contract);
+                    self.check_node_with_expected(right, Some(&expected_callable))
+                        .or_else(|_| self.check_apply_callable(right, "`|>=`"))?
                 }
             }
+            (Resolved::TypeApply(call_span, _, _), Some(contract)) => self
+                .check_trait_helper_pipe_callable(
+                    call_span,
+                    right,
+                    &[],
+                    contract.input.clone(),
+                    contract.ret.clone(),
+                    "`|>=`",
+                )?
+                .ok_or_else(|| TypeError {
+                    message: "`|>=` requires a specialized trait helper on the right".into(),
+                    span: call_span.clone(),
+                    hint: None,
+                })?,
             _ => self.check_apply_callable(right, "`|>=`")?,
         };
         let (rhs_in, rhs_ret) =
@@ -3302,7 +4720,7 @@ impl Checker {
             |ty: &Ty| matches!(ty, Ty::Enum(name, _) if Self::surface_name(name) == "Option");
         match (&receiver_ty, self.resolve_ty(&rhs_ret)) {
             (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
-                if !self.types_compatible(ok.as_ref(), &rhs_in)
+                if !self.callable_accepts_input(&rhs_in, ok.as_ref())
                     || !self.types_compatible(err.as_ref(), next_err.as_ref())
                 {
                     return Err(TypeError {
@@ -3310,7 +4728,7 @@ impl Checker {
                         span: span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|>=`",
-                            "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
+                            "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                             &typed_left.ty,
                             &typed_right.ty,
                             Some(format!(
@@ -3324,7 +4742,7 @@ impl Checker {
                 }
             }
             (Ty::List(item), Ty::List(_)) => {
-                if !self.types_compatible(item.as_ref(), &rhs_in) {
+                if !self.callable_accepts_input(&rhs_in, item.as_ref()) {
                     return Err(TypeError {
                         message: format!(
                             "`|>=` type mismatch: expected {}, got {}",
@@ -3334,7 +4752,7 @@ impl Checker {
                         span: typed_right.span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|>=`",
-                            "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
+                            "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                             &typed_left.ty,
                             &typed_right.ty,
                             Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List/Option.".into()),
@@ -3347,7 +4765,7 @@ impl Checker {
                     && args.len() == 1
                     && Self::surface_name(&next_name) == "Option" =>
             {
-                if !self.types_compatible(&args[0], &rhs_in) {
+                if !self.callable_accepts_input(&rhs_in, &args[0]) {
                     return Err(TypeError {
                         message: format!(
                             "`|>=` type mismatch: expected {}, got {}",
@@ -3357,7 +4775,7 @@ impl Checker {
                         span: typed_right.span.clone(),
                         hint: Some(self.operator_rule_hint(
                             "`|>=`",
-                            "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
+                            "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                             &typed_left.ty,
                             &typed_right.ty,
                             Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List/Option.".into()),
@@ -3376,7 +4794,7 @@ impl Checker {
                         &typed_left.ty,
                         &typed_right.ty,
                         Some(
-                            "Option is not standard for failure propagation. Convert explicitly with `from(value, Result)` before using `|>=`, for example `from(option_value, Result) |>= rhs()`.".into(),
+                            "Option is not standard for failure propagation. Convert explicitly with `from::<Result>(value)` before using `|>=`, for example `from::<Result>(option_value) |>= rhs()`.".into(),
                         ),
                     )),
                 });
@@ -3391,7 +4809,7 @@ impl Checker {
                         &typed_left.ty,
                         &typed_right.ty,
                         Some(
-                            "Option is not standard for failure propagation. Convert the RHS explicitly to Result with `from(value, Result)` around the Option result, for example `result_value |>= {|value| from(option_rhs(value), Result)}`.".into(),
+                            "Option is not standard for failure propagation. Convert the RHS explicitly to Result with `from::<Result>(value)` around the Option result, for example `result_value |>= {|value| from::<Result>(option_rhs(value))}`.".into(),
                         ),
                     )),
                 });
@@ -3411,7 +4829,7 @@ impl Checker {
                 span: span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`|>=`",
-                    "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
+                    "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                     &typed_left.ty,
                     &typed_right.ty,
                     Some("Result, List, and Option containers cannot be mixed in one bind operator.".into()),
@@ -3478,51 +4896,42 @@ impl Checker {
             _ => {}
         }
 
-        let chainable_trait =
-            self.trait_key_by_short_name("Chainable")
-                .ok_or_else(|| TypeError {
-                    message: "Unknown trait: Chainable".into(),
-                    span: span.clone(),
-                    hint: None,
-                })?;
-        let requested_trait_args = vec![rhs_in.clone(), self.resolve_ty(&rhs_ret)];
-        let Some((dispatch, resolved_trait_args)) = self.operator_trait_dispatch_for_args(
-            &chainable_trait,
-            "chain",
-            &receiver_ty,
-            &requested_trait_args,
-        ) else {
-            let chainable_summary = self.trait_implementation_summary("Chainable");
+        let monad_trait = self
+            .trait_key_by_short_name("Monad")
+            .ok_or_else(|| TypeError {
+                message: "Unknown trait: Monad".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let Some((dispatch, result_ty)) =
+            self.constructor_monad_dispatch(&monad_trait, &receiver_ty, &rhs_in, &rhs_ret)
+        else {
+            let monad_summary = self.trait_implementation_summary("Monad");
             return Err(TypeError {
                 message: format!(
-                    "`|>=` requires Chainable implementation on the left, got {}",
+                    "`|>=` requires Monad implementation on the left, got {}",
                     self.ty_name(&receiver_ty)
                 ),
                 span: typed_left.span.clone(),
                 hint: Some(self.operator_rule_hint(
                     "`|>=`",
-                    "LHS: Chainable container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
+                    "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
                     &typed_left.ty,
                     &typed_right.ty,
                     Some(format!(
                         "{} The evaluated LHS is {}. Use `|*>` after a contextual value when the RHS is plain.",
-                        chainable_summary,
+                        monad_summary,
                         self.ty_name(&receiver_ty)
                     )),
                 )),
             });
         };
-        let result_ty = resolved_trait_args
-            .get(1)
-            .cloned()
-            .unwrap_or_else(|| self.resolve_ty(&rhs_ret));
-        let trait_name = self.trait_instance_key_from_tys(&chainable_trait, &resolved_trait_args);
         Ok(TypedNode {
             ty: result_ty,
             span: span.clone(),
             node: TypedInner::TraitCall {
-                trait_name,
-                method_name: "compose".into(),
+                trait_name: monad_trait,
+                method_name: "bind".into(),
                 receiver_ty: receiver_ty.clone(),
                 dispatch,
                 origin: TraitCallOrigin::Operator {
@@ -3567,7 +4976,7 @@ impl Checker {
             self.check_compose_callable_with_contract(right, &right_contract, "`>>`")?;
         let (right_in, right_out) =
             self.unary_function_parts(&typed_right.ty, "`>>`", &typed_right.span)?;
-        if !self.types_compatible(&left_out, &right_in) {
+        if !self.callable_accepts_input(&right_in, &left_out) {
             let extra = match self.resolve_ty(&left_out) {
                 Ty::Result(ok, _) if self.resolve_ty(ok.as_ref()) == self.resolve_ty(&right_in) => {
                     Some(format!(
@@ -3692,7 +5101,7 @@ impl Checker {
         }
         match self.resolve_ty(&left_out) {
             Ty::Result(ok, err) => {
-                if !self.types_compatible(ok.as_ref(), &right_in) {
+                if !self.callable_accepts_input(&right_in, ok.as_ref()) {
                     return Err(TypeError {
                         message:
                             "`>*` requires the left contextual output to match the right input type"
@@ -3736,7 +5145,7 @@ impl Checker {
                 )
             }
             Ty::List(item) => {
-                if !self.types_compatible(item.as_ref(), &right_in) {
+                if !self.callable_accepts_input(&right_in, item.as_ref()) {
                     return Err(TypeError {
                         message:
                             "`>*` requires the left contextual output to match the right input type"
@@ -3777,7 +5186,7 @@ impl Checker {
                 )
             }
             Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
-                if !self.types_compatible(&args[0], &right_in) {
+                if !self.callable_accepts_input(&right_in, &args[0]) {
                     return Err(TypeError {
                         message:
                             "`>*` requires the left contextual output to match the right input type"
@@ -3817,20 +5226,45 @@ impl Checker {
                     "`>*`",
                 )
             }
-            _ => Err(TypeError {
-                message: "`>*` requires Result, List, or Option on the left-hand side".into(),
-                span: span.clone(),
-                hint: Some(self.operator_rule_hint(
+            _ => {
+                let mapped_ty = self.env.fresh_tyvar();
+                let result_ty =
+                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(mapped_ty.clone()));
+                let receiver_ty = self.resolve_ty(&typed_left.ty);
+                self.flow_operator_trait_call(
+                    span,
+                    "LiftComposable",
+                    "lift_compose",
+                    &receiver_ty,
+                    vec![
+                        self.resolve_ty(&left_in),
+                        self.resolve_ty(&right_in),
+                        self.resolve_ty(&right_out),
+                        mapped_ty,
+                    ],
+                    OperatorTraitOp::LiftCompose,
+                    vec![typed_left.clone(), typed_right.clone()],
+                    result_ty,
                     "`>*`",
-                    "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    Some(format!(
-                        "The left callable returns {}, so no Result/List/Option container is available at this step. Use `>>` for plain composition; use `|*>` when you already have an evaluated contextual value and want to map a plain RHS over it.",
-                        self.ty_name(&left_out)
-                    )),
-                )),
-            }),
+                )
+                .or_else(|_| {
+                    Err(TypeError {
+                        message: "`>*` requires Result, List, or Option on the left-hand side"
+                            .into(),
+                        span: span.clone(),
+                        hint: Some(self.operator_rule_hint(
+                            "`>*`",
+                            "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some(format!(
+                                "The left callable returns {}, so no Result/List/Option container is available at this step. Use `>>` for plain composition; use `|*>` when you already have an evaluated contextual value and want to map a plain RHS over it.",
+                                self.ty_name(&left_out)
+                            )),
+                        )),
+                    })
+                })
+            }
         }
     }
 
@@ -3916,7 +5350,7 @@ impl Checker {
             self.unary_function_parts(&typed_right.ty, "`>=>`", &typed_right.span)?;
         match (self.resolve_ty(&left_out), self.resolve_ty(&right_out)) {
             (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
-                if !self.types_compatible(ok.as_ref(), &right_in)
+                if !self.callable_accepts_input(&right_in, ok.as_ref())
                     || !self.types_compatible(err.as_ref(), next_err.as_ref())
                 {
                     return Err(TypeError {
@@ -3939,8 +5373,10 @@ impl Checker {
                     Box::new(self.resolve_ty(next_ok.as_ref())),
                     Box::new(self.resolve_ty(err.as_ref())),
                 );
-                let result_ty =
-                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(chained_ty.clone()));
+                let result_ty = Ty::Func(
+                    vec![self.resolve_ty(&left_in)],
+                    Box::new(chained_ty.clone()),
+                );
                 let receiver_ty = self.resolve_ty(&typed_left.ty);
                 self.flow_operator_trait_call(
                     span,
@@ -3959,7 +5395,7 @@ impl Checker {
                 )
             }
             (Ty::List(item), Ty::List(next_item)) => {
-                if !self.types_compatible(item.as_ref(), &right_in) {
+                if !self.callable_accepts_input(&right_in, item.as_ref()) {
                     return Err(TypeError {
                         message: "`>=>` requires matching List element types across both sides"
                             .into(),
@@ -3978,8 +5414,10 @@ impl Checker {
                     });
                 }
                 let chained_ty = Ty::List(Box::new(self.resolve_ty(next_item.as_ref())));
-                let result_ty =
-                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(chained_ty.clone()));
+                let result_ty = Ty::Func(
+                    vec![self.resolve_ty(&left_in)],
+                    Box::new(chained_ty.clone()),
+                );
                 let receiver_ty = self.resolve_ty(&typed_left.ty);
                 self.flow_operator_trait_call(
                     span,
@@ -4003,7 +5441,7 @@ impl Checker {
                     && args.len() == 1
                     && next_args.len() == 1 =>
             {
-                if !self.types_compatible(&args[0], &right_in) {
+                if !self.callable_accepts_input(&right_in, &args[0]) {
                     return Err(TypeError {
                         message: "`>=>` requires matching Option payload types across both sides"
                             .into(),
@@ -4022,8 +5460,10 @@ impl Checker {
                     });
                 }
                 let chained_ty = Ty::Enum(name, vec![self.resolve_ty(&next_args[0])]);
-                let result_ty =
-                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(chained_ty.clone()));
+                let result_ty = Ty::Func(
+                    vec![self.resolve_ty(&left_in)],
+                    Box::new(chained_ty.clone()),
+                );
                 let receiver_ty = self.resolve_ty(&typed_left.ty);
                 self.flow_operator_trait_call(
                     span,
@@ -4041,50 +5481,72 @@ impl Checker {
                     "`>=>`",
                 )
             }
-            _ => Err(TypeError {
-                message: "`>=>` requires matching Result, List, or Option context on both sides".into(),
-                span: span.clone(),
-                hint: Some(self.operator_rule_hint(
+            _ => {
+                let chained_ty = self.resolve_ty(&right_out);
+                let result_ty = Ty::Func(
+                    vec![self.resolve_ty(&left_in)],
+                    Box::new(chained_ty.clone()),
+                );
+                let receiver_ty = self.resolve_ty(&typed_left.ty);
+                self.flow_operator_trait_call(
+                    span,
+                    "KleisliComposable",
+                    "kleisli_compose",
+                    &receiver_ty,
+                    vec![
+                        self.resolve_ty(&left_in),
+                        self.resolve_ty(&right_in),
+                        chained_ty,
+                    ],
+                    OperatorTraitOp::KleisliCompose,
+                    vec![typed_left.clone(), typed_right.clone()],
+                    result_ty,
                     "`>=>`",
-                    "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> Result<C, E>) or (B -> List<C>) or (B -> Option<C>); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    Some(format!(
-                        "Left output is {}; right output is {}. Use `>*` when the left side is contextual but the RHS is plain; use `>>` when both sides are plain.",
-                        self.ty_name(&left_out),
-                        self.ty_name(&right_out)
-                    )),
-                )),
-            }),
+                )
+                .or_else(|_| {
+                    Err(TypeError {
+                        message:
+                            "`>=>` requires matching Result, List, or Option context on both sides"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some(self.operator_rule_hint(
+                            "`>=>`",
+                            "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> Result<C, E>) or (B -> List<C>) or (B -> Option<C>); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
+                            &typed_left.ty,
+                            &typed_right.ty,
+                            Some(format!(
+                                "Left output is {}; right output is {}. Use `>*` when the left side is contextual but the RHS is plain; use `>>` when both sides are plain.",
+                                self.ty_name(&left_out),
+                                self.ty_name(&right_out)
+                            )),
+                        )),
+                    })
+                })
+            }
         }
     }
 
-    pub(super) fn match_result_variant_tags(
-        &self,
-        span: &Span,
-    ) -> Result<(u32, u32, u32), TypeError> {
+    pub(super) fn option_variant_tags(&self, span: &Span) -> Result<(u32, u32, u32), TypeError> {
         let variants = self
-            .lookup_enum_variants_of("MatchResult")
+            .lookup_enum_variants_of("Option")
             .ok_or_else(|| TypeError {
-                message: "MatchResult enum is not available in the current environment".into(),
+                message: "Option enum is not available in the current environment".into(),
                 span: span.clone(),
                 hint: None,
             })?;
-        let mut success_tag = None;
-        let mut no_match_tag = None;
-        let mut err_tag = None;
+        let mut some_tag = None;
+        let mut none_tag = None;
         for variant in variants {
             match variant.short_name.as_str() {
-                "Success" => success_tag = Some(variant.tag),
-                "NoMatch" => no_match_tag = Some(variant.tag),
-                "Err" => err_tag = Some(variant.tag),
+                "Some" => some_tag = Some(variant.tag),
+                "None" => none_tag = Some(variant.tag),
                 _ => {}
             }
         }
-        match (success_tag, no_match_tag, err_tag) {
-            (Some(success), Some(no_match), Some(err)) => Ok((success, no_match, err)),
+        match (some_tag, none_tag) {
+            (Some(some), Some(none)) => Ok((some, none, 0)),
             _ => Err(TypeError {
-                message: "MatchResult enum must define Success, NoMatch, and Err variants".into(),
+                message: "Option enum must define Some and None variants".into(),
                 span: span.clone(),
                 hint: None,
             }),
@@ -4105,7 +5567,7 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        let extractor_ty = self.instantiate_builtin_ty(&extractor_ty);
+        let extractor_ty = self.instantiate_callable_ty(&extractor_ty);
         let (params, ret) = match &extractor_ty {
             Ty::BuiltinFunc { params, ret, .. }
             | Ty::UserFunc { params, ret, .. }
@@ -4134,9 +5596,12 @@ impl Checker {
             });
         }
         let input_ty = params[0].clone();
-        let seq_tys =
-            self.require_match_result_seq_ty(&self.resolve_ty(&ret), span, &extractor_id.name)?;
-        let (success_tag, no_match_tag, err_tag) = self.match_result_variant_tags(span)?;
+        let seq_tys = self.require_extractor_option_payload_ty(
+            &self.resolve_ty(&ret),
+            span,
+            &extractor_id.name,
+        )?;
+        let (success_tag, no_match_tag, err_tag) = self.option_variant_tags(span)?;
         Ok((input_ty, seq_tys, success_tag, no_match_tag, err_tag))
     }
 
@@ -4154,7 +5619,7 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        Ok(self.instantiate_builtin_ty(&extractor_ty))
+        Ok(self.instantiate_callable_ty(&extractor_ty))
     }
 
     pub(super) fn kernel_uncons_id(&self, span: &Span) -> Result<ResolvedId, TypeError> {
@@ -4207,7 +5672,7 @@ impl Checker {
         let (input_ty, seq_tys, success_tag, no_match_tag, err_tag) = if matches!(&extractor_ty, Ty::BuiltinFunc { name, .. } if name == "uncons")
         {
             let (input_ty, seq_tys) = self.uncons_contract_for_input(observed_ty, span)?;
-            let (success_tag, no_match_tag, err_tag) = self.match_result_variant_tags(span)?;
+            let (success_tag, no_match_tag, err_tag) = self.option_variant_tags(span)?;
             (input_ty, seq_tys, success_tag, no_match_tag, err_tag)
         } else {
             self.extractor_contract(extractor_id, span)?
@@ -4222,20 +5687,22 @@ impl Checker {
         ))
     }
 
-    pub(super) fn require_match_result_seq_ty(
+    pub(super) fn require_extractor_option_payload_ty(
         &self,
         ty: &Ty,
         span: &Span,
         context: &str,
     ) -> Result<Vec<Ty>, TypeError> {
         match self.resolve_ty(ty) {
-            Ty::Enum(name, args) if name == "MatchResult" && args.len() == 1 => match &args[0] {
-                Ty::Tuple(items) => Ok(items.clone()),
-                other => Ok(vec![other.clone()]),
-            },
+            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
+                match &args[0] {
+                    Ty::Tuple(items) => Ok(items.clone()),
+                    other => Ok(vec![other.clone()]),
+                }
+            }
             other => Err(TypeError {
                 message: format!(
-                    "{} must return MatchResult<T> or MatchResult<(...)>, got {}",
+                    "{} must return Option<T> or Option<(...)>, got {}",
                     context,
                     self.ty_name(&other)
                 ),
@@ -4515,17 +5982,50 @@ impl Checker {
             .iter()
             .any(|segment| matches!(segment, TypedFacetSegment::Variant { .. }))
         {
-            TypedFacetPathKind::Variant
+            TypedFacetPathKind::VariantPath
+        } else if segments.iter().any(|segment| {
+            matches!(
+                segment,
+                TypedFacetSegment::ListIndex { .. }
+                    | TypedFacetSegment::ListRange { .. }
+                    | TypedFacetSegment::MapKey { .. }
+            )
+        }) {
+            TypedFacetPathKind::FallibleStructural
         } else {
-            TypedFacetPathKind::Structural
+            TypedFacetPathKind::InfallibleStructural
         }
+    }
+
+    fn facet_kind_from_path_kind(path_kind: TypedFacetPathKind) -> crate::types::FacetKind {
+        match path_kind {
+            TypedFacetPathKind::InfallibleStructural => {
+                crate::types::FacetKind::InfallibleStructural
+            }
+            TypedFacetPathKind::FallibleStructural => crate::types::FacetKind::FallibleStructural,
+            TypedFacetPathKind::VariantPath => crate::types::FacetKind::VariantPath,
+        }
+    }
+
+    fn deferred_facet_ty(path_kind: TypedFacetPathKind, source: Ty, focus: Ty) -> Ty {
+        Ty::Facet(
+            Self::facet_kind_from_path_kind(path_kind),
+            Box::new(source),
+            Box::new(focus),
+            Box::new(Ty::Hole),
+            Box::new(Ty::Hole),
+        )
     }
 
     fn pending_facet_node(&mut self, span: &Span, path: PendingFacetPath) -> TypedNode {
         let source_tv = self.env.fresh_tyvar();
         let focus_tv = self.env.fresh_tyvar();
         TypedNode {
-            ty: Ty::Facet(Box::new(source_tv), Box::new(focus_tv)),
+            ty: Self::deferred_facet_ty(
+                TypedFacetPathKind::InfallibleStructural,
+                source_tv,
+                focus_tv,
+            ),
             span: span.clone(),
             node: TypedInner::PendingFacetPath(path),
         }
@@ -4602,7 +6102,8 @@ impl Checker {
                             .into(),
                     span: span.clone(),
                     hint: Some(
-                        "Use Tuple._N only where a Facet<(...), ...> is expected.".into(),
+                        "Use Tuple._N only where a Facet<K, (...), ..., T, B> is expected."
+                            .into(),
                     ),
                 });
             };
@@ -4616,6 +6117,10 @@ impl Checker {
         let mut may_fail = false;
         let mut segments = Vec::with_capacity(path.segments.len());
         for pending_segment in path.segments {
+            if let Ty::Result(ok, _) = self.resolve_ty(&current_source) {
+                current_source = ok.as_ref().clone();
+                may_fail = true;
+            }
             let (segment, focus_ty, segment_may_fail) = self.resolve_facet_segment_for_source_ty(
                 &current_source,
                 &pending_segment,
@@ -4630,6 +6135,8 @@ impl Checker {
         Ok(TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: current_source,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(&segments),
             may_fail,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
@@ -4643,17 +6150,27 @@ impl Checker {
         span: &Span,
         expected_source: Option<&Ty>,
     ) -> Result<TypedFacetPath, TypeError> {
-        if !matches!(typed.ty, Ty::Facet(_, _)) {
+        let facet_ty = self.resolve_ty(&typed.ty);
+        if !matches!(facet_ty, Ty::Facet(..)) {
             return Err(TypeError {
                 message: format!("Expected Facet<...> value, got {}", self.ty_name(&typed.ty)),
                 span: typed.span.clone(),
                 hint: None,
             });
         }
+        let update_slots = match facet_ty {
+            Ty::Facet(_, _, _, update_source, update_focus) => (
+                update_source.as_ref().clone(),
+                update_focus.as_ref().clone(),
+            ),
+            _ => unreachable!("Facet type checked above"),
+        };
         match typed.node {
             TypedInner::FacetPath(path) => Ok(TypedFacetPath {
                 source_ty: self.resolve_ty(&path.source_ty),
                 focus_ty: self.resolve_ty(&path.focus_ty),
+                update_source_ty: self.resolve_ty(&update_slots.0),
+                update_focus_ty: self.resolve_ty(&update_slots.1),
                 path_kind: path.path_kind,
                 may_fail: path.may_fail,
                 source_readonly_root: path.source_readonly_root,
@@ -4679,14 +6196,19 @@ impl Checker {
         right_expr: &Resolved,
         operator_name: &str,
     ) -> Result<TypedNode, TypeError> {
+        self.ensure_deferred_facet_slots(operator_name, &left_path, span)?;
         let expected_right_focus = self.env.fresh_tyvar();
         let expected_right_ty = Ty::Facet(
+            crate::types::FacetKind::ReadablePath,
             Box::new(self.resolve_ty(&left_path.focus_ty)),
             Box::new(expected_right_focus),
+            Box::new(Ty::Hole),
+            Box::new(Ty::Hole),
         );
         let right = self.check_node_with_expected(right_expr, Some(&expected_right_ty))?;
         let right_path =
             self.resolve_facet_path_from_node(right, span, Some(&left_path.focus_ty))?;
+        self.ensure_deferred_facet_slots(operator_name, &right_path, span)?;
 
         if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
             return Err(TypeError {
@@ -4708,19 +6230,25 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
-            path_kind: if left_path.path_kind == TypedFacetPathKind::Variant
-                || right_path.path_kind == TypedFacetPathKind::Variant
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
+            path_kind: if left_path.path_kind == TypedFacetPathKind::VariantPath
+                || right_path.path_kind == TypedFacetPathKind::VariantPath
             {
-                TypedFacetPathKind::Variant
+                TypedFacetPathKind::VariantPath
+            } else if left_path.path_kind == TypedFacetPathKind::FallibleStructural
+                || right_path.path_kind == TypedFacetPathKind::FallibleStructural
+            {
+                TypedFacetPathKind::FallibleStructural
             } else {
-                TypedFacetPathKind::Structural
+                TypedFacetPathKind::InfallibleStructural
             },
             may_fail: left_path.may_fail || right_path.may_fail,
             source_readonly_root: left_path.source_readonly_root,
             segments,
         };
         Ok(TypedNode {
-            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+            ty: Self::deferred_facet_ty(path.path_kind, source_ty, focus_ty),
             span: span.clone(),
             node: TypedInner::FacetPath(path),
         })
@@ -4819,7 +6347,7 @@ impl Checker {
         source_expr: &Resolved,
     ) -> Result<(TypedNode, bool, Ty), TypeError> {
         let typed_source = self.check_node(source_expr)?;
-        if matches!(typed_source.ty, Ty::Facet(_, _)) {
+        if matches!(typed_source.ty, Ty::Facet(..)) {
             return Err(TypeError {
                 message: format!("{} source value cannot be a Facet", op_name),
                 span: typed_source.span.clone(),
@@ -4925,8 +6453,11 @@ impl Checker {
     ) -> Result<TypedFacetPath, TypeError> {
         let expected_focus_ty = self.env.fresh_tyvar();
         let expected_path_ty = Ty::Facet(
+            crate::types::FacetKind::ReadablePath,
             Box::new(self.resolve_ty(source_value_ty)),
             Box::new(expected_focus_ty),
+            Box::new(Ty::Hole),
+            Box::new(Ty::Hole),
         );
         let path_node = self.check_node_with_expected(path_expr, Some(&expected_path_ty))?;
         let path = self.resolve_facet_path_from_node(path_node, span, Some(source_value_ty))?;
@@ -5045,9 +6576,632 @@ impl Checker {
         Ok(PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
             path,
         })
+    }
+
+    fn ensure_deferred_facet_slots(
+        &self,
+        op_name: &str,
+        path: &TypedFacetPath,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if matches!(
+            (&path.update_source_ty, &path.update_focus_ty),
+            (Ty::Hole, Ty::Hole)
+        ) {
+            return Ok(());
+        }
+        Err(TypeError {
+            message: format!("{op_name} requires a Facet with deferred update slots `_, _`"),
+            span: span.clone(),
+            hint: Some("Use a deferred Facet path for read-only consumption.".into()),
+        })
+    }
+
+    fn rebuild_facet_source_type(
+        &mut self,
+        source_ty: &Ty,
+        segments: &[TypedFacetSegment],
+        replacement_ty: &Ty,
+        span: &Span,
+    ) -> Result<Ty, TypeError> {
+        if segments.is_empty() {
+            return Ok(self.resolve_ty(replacement_ty));
+        }
+
+        let source_ty = self.resolve_ty(source_ty);
+        // Result values encountered *inside* a path are transparent to
+        // traversal, but remain part of the rebuilt source shape.
+        if let Ty::Result(ok, err) = source_ty {
+            return Ok(Ty::Result(
+                Box::new(self.rebuild_facet_source_type(&ok, segments, replacement_ty, span)?),
+                err,
+            ));
+        }
+
+        let segment = &segments[0];
+        let rest = &segments[1..];
+        match (source_ty, segment) {
+            (Ty::Tuple(mut items), TypedFacetSegment::Tuple { field_index, .. }) => {
+                let index = *field_index as usize;
+                let Some(field_ty) = items.get(index).cloned() else {
+                    return Err(TypeError {
+                        message: "Facet tuple path is inconsistent with its source type".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                };
+                items[index] =
+                    self.rebuild_facet_source_type(&field_ty, rest, replacement_ty, span)?;
+                Ok(Ty::Tuple(items))
+            }
+            (Ty::Struct(name, mut fields), TypedFacetSegment::Field { field_index, .. }) => {
+                let index = *field_index as usize;
+                let Some((_, field_ty)) = fields.get(index).cloned() else {
+                    return Err(TypeError {
+                        message: "Facet field path is inconsistent with its source type".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                };
+                let rebuilt_field =
+                    self.rebuild_facet_source_type(&field_ty, rest, replacement_ty, span)?;
+                self.ensure_named_facet_rebuild_is_unique(
+                    &name,
+                    index,
+                    &field_ty,
+                    &rebuilt_field,
+                    span,
+                )?;
+                fields[index].1 = rebuilt_field;
+                Ok(Ty::Struct(name, fields))
+            }
+            (Ty::Record(name, mut fields), TypedFacetSegment::Field { field_index, .. }) => {
+                let index = *field_index as usize;
+                let Some((_, field_ty)) = fields.get(index).cloned() else {
+                    return Err(TypeError {
+                        message: "Facet field path is inconsistent with its source type".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                };
+                let rebuilt_field =
+                    self.rebuild_facet_source_type(&field_ty, rest, replacement_ty, span)?;
+                self.ensure_named_facet_rebuild_is_unique(
+                    &name,
+                    index,
+                    &field_ty,
+                    &rebuilt_field,
+                    span,
+                )?;
+                fields[index].1 = rebuilt_field;
+                Ok(Ty::Record(name, fields))
+            }
+            (Ty::List(inner), TypedFacetSegment::ListIndex { .. }) => {
+                let rebuilt = self.rebuild_facet_source_type(&inner, rest, replacement_ty, span)?;
+                if !self.types_compatible(&inner, &rebuilt) {
+                    return Err(TypeError {
+                        message:
+                            "Facet updates through List segments cannot change the element type"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some("Replace with the existing list element type.".into()),
+                    });
+                }
+                Ok(Ty::List(inner))
+            }
+            (Ty::List(inner), TypedFacetSegment::ListRange { .. }) => {
+                let expected = Ty::List(inner.clone());
+                let rebuilt =
+                    self.rebuild_facet_source_type(&expected, rest, replacement_ty, span)?;
+                if !self.types_compatible(&expected, &rebuilt) {
+                    return Err(TypeError {
+                        message:
+                            "Facet updates through List segments cannot change the element type"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some("Replace with the existing list element type.".into()),
+                    });
+                }
+                Ok(Ty::List(inner))
+            }
+            (Ty::Enum(name, args), TypedFacetSegment::MapKey { .. })
+                if Self::surface_name(&name) == "HashMap" && args.len() == 1 =>
+            {
+                let value_ty = args[0].clone();
+                let rebuilt =
+                    self.rebuild_facet_source_type(&value_ty, rest, replacement_ty, span)?;
+                if !self.types_compatible(&value_ty, &rebuilt) {
+                    return Err(TypeError {
+                        message:
+                            "Facet updates through HashMap segments cannot change the value type"
+                                .into(),
+                        span: span.clone(),
+                        hint: Some("Replace with the existing HashMap value type.".into()),
+                    });
+                }
+                Ok(Ty::Enum(name, args))
+            }
+            (
+                source,
+                TypedFacetSegment::Variant {
+                    enum_name,
+                    variant_name,
+                    ..
+                },
+            ) => {
+                let variant = self
+                    .lookup_enum_variant_by_short_name(enum_name, variant_name)
+                    .map(|variant| self.instantiate_enum_variant(&variant))
+                    .ok_or_else(|| TypeError {
+                        message: "Facet enum path is inconsistent with its source type".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                let enum_template = variant.enum_ty.clone();
+                if !self.types_compatible(&variant.enum_ty, &source) {
+                    return Err(TypeError {
+                        message: "Facet enum path is inconsistent with its source type".into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let payload_template = match variant.payload.as_slice() {
+                    [] => Ty::Unit,
+                    [only] => only.clone(),
+                    payload => Ty::Tuple(payload.to_vec()),
+                };
+                let original = self.resolve_ty(&payload_template);
+                let focus =
+                    self.rebuild_facet_source_type(&original, rest, replacement_ty, span)?;
+                if self.resolve_ty(&original) == self.resolve_ty(&focus) {
+                    return Ok(source);
+                }
+                let mut replacements = HashMap::new();
+                self.collect_facet_rebuild_tyvar_replacements(
+                    &payload_template,
+                    &focus,
+                    &mut replacements,
+                    span,
+                )?;
+                self.ensure_enum_facet_rebuild_is_unique(
+                    enum_name,
+                    &enum_template,
+                    &replacements,
+                    span,
+                )?;
+                Ok(self.replace_facet_rebuild_tyvars(&enum_template, &replacements))
+            }
+            _ => Err(TypeError {
+                message: "Facet path is inconsistent with its source type".into(),
+                span: span.clone(),
+                hint: None,
+            }),
+        }
+    }
+
+    fn count_tyvar_occurrences(&self, ty: &Ty, needle: u32) -> usize {
+        match ty {
+            Ty::Var(var) => usize::from(*var == needle),
+            Ty::List(inner) | Ty::Lazy(inner) => self.count_tyvar_occurrences(inner, needle),
+            Ty::Tuple(items) | Ty::SelfApp(items) => items
+                .iter()
+                .map(|item| self.count_tyvar_occurrences(item, needle))
+                .sum(),
+            Ty::Func(params, ret) => {
+                params
+                    .iter()
+                    .map(|param| self.count_tyvar_occurrences(param, needle))
+                    .sum::<usize>()
+                    + self.count_tyvar_occurrences(ret, needle)
+            }
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
+                self.count_tyvar_occurrences(source, needle)
+                    + self.count_tyvar_occurrences(focus, needle)
+                    + self.count_tyvar_occurrences(update_source, needle)
+                    + self.count_tyvar_occurrences(update_focus, needle)
+            }
+            Ty::Result(ok, err) => {
+                self.count_tyvar_occurrences(ok, needle) + self.count_tyvar_occurrences(err, needle)
+            }
+            Ty::Enum(_, args) => args
+                .iter()
+                .map(|arg| self.count_tyvar_occurrences(arg, needle))
+                .sum(),
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+                .iter()
+                .map(|(_, field)| self.count_tyvar_occurrences(field, needle))
+                .sum(),
+            Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
+                params
+                    .iter()
+                    .map(|param| self.count_tyvar_occurrences(param, needle))
+                    .sum::<usize>()
+                    + self.count_tyvar_occurrences(ret, needle)
+            }
+            Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Error
+            | Ty::Hole
+            | Ty::Pid(_) => 0,
+        }
+    }
+
+    fn collect_facet_rebuild_tyvar_replacements(
+        &self,
+        template: &Ty,
+        replacement: &Ty,
+        replacements: &mut HashMap<u32, Ty>,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if self.resolve_ty(template) == self.resolve_ty(replacement) {
+            return Ok(());
+        }
+        match (template, replacement) {
+            (Ty::Var(var), _) => {
+                let replacement = self.resolve_ty(replacement);
+                if let Some(existing) = replacements.get(var) {
+                    if self.resolve_ty(existing) != replacement {
+                        return Err(TypeError {
+                            message: "Facet enum case update would assign incompatible types to the same generic parameter".into(),
+                            span: span.clone(),
+                            hint: Some("A type-changing enum case update must determine each generic parameter exactly once.".into()),
+                        });
+                    }
+                } else {
+                    replacements.insert(*var, replacement);
+                }
+                Ok(())
+            }
+            (Ty::List(template), Ty::List(replacement))
+            | (Ty::Lazy(template), Ty::Lazy(replacement)) => self
+                .collect_facet_rebuild_tyvar_replacements(
+                    template,
+                    replacement,
+                    replacements,
+                    span,
+                ),
+            (Ty::Tuple(templates), Ty::Tuple(replacements_ty))
+            | (Ty::Enum(_, templates), Ty::Enum(_, replacements_ty)) => {
+                if templates.len() != replacements_ty.len() {
+                    return self.facet_rebuild_not_generic_error(span);
+                }
+                for (template, replacement) in templates.iter().zip(replacements_ty) {
+                    self.collect_facet_rebuild_tyvar_replacements(
+                        template,
+                        replacement,
+                        replacements,
+                        span,
+                    )?;
+                }
+                Ok(())
+            }
+            (
+                Ty::Struct(template_name, template_fields),
+                Ty::Struct(replacement_name, replacement_fields),
+            )
+            | (
+                Ty::Record(template_name, template_fields),
+                Ty::Record(replacement_name, replacement_fields),
+            ) if template_name == replacement_name
+                && template_fields.len() == replacement_fields.len() =>
+            {
+                for ((template_name, template), (replacement_name, replacement)) in
+                    template_fields.iter().zip(replacement_fields)
+                {
+                    if template_name != replacement_name {
+                        return self.facet_rebuild_not_generic_error(span);
+                    }
+                    self.collect_facet_rebuild_tyvar_replacements(
+                        template,
+                        replacement,
+                        replacements,
+                        span,
+                    )?;
+                }
+                Ok(())
+            }
+            (
+                Ty::Result(template_ok, template_err),
+                Ty::Result(replacement_ok, replacement_err),
+            ) => {
+                self.collect_facet_rebuild_tyvar_replacements(
+                    template_ok,
+                    replacement_ok,
+                    replacements,
+                    span,
+                )?;
+                self.collect_facet_rebuild_tyvar_replacements(
+                    template_err,
+                    replacement_err,
+                    replacements,
+                    span,
+                )
+            }
+            _ => self.facet_rebuild_not_generic_error(span),
+        }
+    }
+
+    fn facet_rebuild_not_generic_error(&self, span: &Span) -> Result<(), TypeError> {
+        Err(TypeError {
+            message: "Facet cannot change this enum case payload because it does not map to a generic parameter".into(),
+            span: span.clone(),
+            hint: Some("Only uniquely rebuildable generic enum cases support a type-changing Facet update.".into()),
+        })
+    }
+
+    fn ensure_enum_facet_rebuild_is_unique(
+        &self,
+        enum_name: &str,
+        enum_template: &Ty,
+        replacements: &HashMap<u32, Ty>,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let enum_args = match enum_template {
+            Ty::Enum(_, args) => args.iter().collect::<Vec<_>>(),
+            Ty::Result(ok, _) => vec![ok.as_ref()],
+            _ => return self.facet_rebuild_not_generic_error(span),
+        };
+        let variants = self
+            .lookup_enum_variants_of(enum_name)
+            .ok_or_else(|| TypeError {
+                message: "Facet enum path is inconsistent with its source type".into(),
+                span: span.clone(),
+                hint: None,
+            })?;
+        for changed_var in replacements.keys() {
+            let Some(index) = enum_args
+                .iter()
+                .position(|arg| matches!(arg, Ty::Var(var) if *var == *changed_var))
+            else {
+                return self.facet_rebuild_not_generic_error(span);
+            };
+            let Some(original_var) = variants
+                .first()
+                .and_then(|variant| match &variant.enum_ty {
+                    Ty::Enum(_, args) => args.get(index),
+                    Ty::Result(ok, _) if index == 0 => Some(ok.as_ref()),
+                    _ => None,
+                })
+                .and_then(|arg| match arg {
+                    Ty::Var(var) => Some(*var),
+                    _ => None,
+                })
+            else {
+                return self.facet_rebuild_not_generic_error(span);
+            };
+            let occurrences = variants
+                .iter()
+                .flat_map(|variant| variant.payload.iter())
+                .map(|payload| self.count_tyvar_occurrences(payload, original_var))
+                .sum::<usize>();
+            if occurrences != 1 {
+                return Err(TypeError {
+                    message: format!(
+                        "Facet cannot rebuild {} because a generic parameter occurs outside the updated case payload",
+                        Self::surface_name(enum_name)
+                    ),
+                    span: span.clone(),
+                    hint: Some("A type-changing enum case update must determine each generic parameter uniquely.".into()),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn replace_facet_rebuild_tyvars(&self, ty: &Ty, replacements: &HashMap<u32, Ty>) -> Ty {
+        match ty {
+            Ty::Var(var) => replacements
+                .get(var)
+                .cloned()
+                .unwrap_or_else(|| self.resolve_ty(ty)),
+            Ty::List(inner) => Ty::List(Box::new(
+                self.replace_facet_rebuild_tyvars(inner, replacements),
+            )),
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(
+                self.replace_facet_rebuild_tyvars(inner, replacements),
+            )),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.replace_facet_rebuild_tyvars(item, replacements))
+                    .collect(),
+            ),
+            Ty::SelfApp(items) => Ty::SelfApp(
+                items
+                    .iter()
+                    .map(|item| self.replace_facet_rebuild_tyvars(item, replacements))
+                    .collect(),
+            ),
+            Ty::Func(params, ret) => Ty::Func(
+                params
+                    .iter()
+                    .map(|param| self.replace_facet_rebuild_tyvars(param, replacements))
+                    .collect(),
+                Box::new(self.replace_facet_rebuild_tyvars(ret, replacements)),
+            ),
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                kind.clone(),
+                Box::new(self.replace_facet_rebuild_tyvars(source, replacements)),
+                Box::new(self.replace_facet_rebuild_tyvars(focus, replacements)),
+                Box::new(self.replace_facet_rebuild_tyvars(update_source, replacements)),
+                Box::new(self.replace_facet_rebuild_tyvars(update_focus, replacements)),
+            ),
+            Ty::Result(ok, err) => Ty::Result(
+                Box::new(self.replace_facet_rebuild_tyvars(ok, replacements)),
+                Box::new(self.replace_facet_rebuild_tyvars(err, replacements)),
+            ),
+            Ty::Enum(name, args) => Ty::Enum(
+                name.clone(),
+                args.iter()
+                    .map(|arg| self.replace_facet_rebuild_tyvars(arg, replacements))
+                    .collect(),
+            ),
+            Ty::Struct(name, fields) => Ty::Struct(
+                name.clone(),
+                fields
+                    .iter()
+                    .map(|(field, ty)| {
+                        (
+                            field.clone(),
+                            self.replace_facet_rebuild_tyvars(ty, replacements),
+                        )
+                    })
+                    .collect(),
+            ),
+            Ty::Record(name, fields) => Ty::Record(
+                name.clone(),
+                fields
+                    .iter()
+                    .map(|(field, ty)| {
+                        (
+                            field.clone(),
+                            self.replace_facet_rebuild_tyvars(ty, replacements),
+                        )
+                    })
+                    .collect(),
+            ),
+            Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
+                name: name.clone(),
+                params: params
+                    .iter()
+                    .map(|param| self.replace_facet_rebuild_tyvars(param, replacements))
+                    .collect(),
+                ret: Box::new(self.replace_facet_rebuild_tyvars(ret, replacements)),
+            },
+            Ty::UserFunc {
+                fun_idx,
+                type_params,
+                params,
+                ret,
+            } => Ty::UserFunc {
+                fun_idx: *fun_idx,
+                type_params: type_params.clone(),
+                params: params
+                    .iter()
+                    .map(|param| self.replace_facet_rebuild_tyvars(param, replacements))
+                    .collect(),
+                ret: Box::new(self.replace_facet_rebuild_tyvars(ret, replacements)),
+            },
+            _ => ty.clone(),
+        }
+    }
+
+    fn ensure_named_facet_rebuild_is_unique(
+        &self,
+        type_name: &str,
+        field_index: usize,
+        before: &Ty,
+        after: &Ty,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        if self.resolve_ty(before) == self.resolve_ty(after) {
+            return Ok(());
+        }
+        let Some(def) = self.env.lookup_type_def(type_name) else {
+            return Err(TypeError {
+                message: format!(
+                    "Facet cannot derive a rebuilt type for {}",
+                    Self::surface_name(type_name)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        // Concrete named records remain structurally rebuildable.  The
+        // uniqueness constraint matters when a declaration-level generic
+        // parameter would need a new instantiation.
+        if def.type_param_vars.is_empty() {
+            return Ok(());
+        }
+        let mut rebuildable = false;
+        for var in &def.type_param_vars {
+            let selected_count = def
+                .fields
+                .get(field_index)
+                .map(|(_, ty)| self.count_tyvar_occurrences(ty, *var))
+                .unwrap_or(0);
+            if selected_count == 0 {
+                continue;
+            }
+            let other_count = def
+                .fields
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != field_index)
+                .map(|(_, (_, ty))| self.count_tyvar_occurrences(ty, *var))
+                .sum::<usize>();
+            if selected_count == 1 && other_count == 0 {
+                rebuildable = true;
+                continue;
+            }
+            return Err(TypeError {
+                message: format!(
+                    "Facet cannot rebuild {} because a generic parameter occurs outside the updated field",
+                    Self::surface_name(type_name)
+                ),
+                span: span.clone(),
+                hint: Some("Use a path whose replacement determines each changed generic parameter uniquely.".into()),
+            });
+        }
+        if rebuildable {
+            Ok(())
+        } else {
+            Err(TypeError {
+                message: format!(
+                    "Facet cannot rebuild {} because the updated field does not determine a generic parameter",
+                    Self::surface_name(type_name)
+                ),
+                span: span.clone(),
+                hint: Some("Only uniquely rebuildable generic named types support a type-changing Facet update.".into()),
+            })
+        }
+    }
+
+    fn finalize_facet_update(
+        &mut self,
+        path: &mut TypedFacetPath,
+        replacement_ty: &Ty,
+        span: &Span,
+    ) -> Result<Ty, TypeError> {
+        let replacement_ty = self.resolve_ty(replacement_ty);
+        let update_source_ty =
+            self.rebuild_facet_source_type(&path.source_ty, &path.segments, &replacement_ty, span)?;
+
+        if !matches!(path.update_focus_ty, Ty::Hole)
+            && !self.types_compatible(&path.update_focus_ty, &replacement_ty)
+        {
+            return Err(TypeError {
+                message: format!(
+                    "Facet replacement type mismatch: annotation requires {}, got {}",
+                    self.ty_name(&path.update_focus_ty),
+                    self.ty_name(&replacement_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if !matches!(path.update_source_ty, Ty::Hole)
+            && !self.types_compatible(&path.update_source_ty, &update_source_ty)
+        {
+            return Err(TypeError {
+                message: format!(
+                    "Facet rebuilt source type mismatch: annotation requires {}, got {}",
+                    self.ty_name(&path.update_source_ty),
+                    self.ty_name(&update_source_ty)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        path.update_focus_ty = replacement_ty;
+        path.update_source_ty = update_source_ty.clone();
+        Ok(update_source_ty)
     }
 
     fn check_facet_view_intrinsic(
@@ -5063,6 +7217,7 @@ impl Checker {
             path,
             ..
         } = self.prepare_facet_input(span, "Facet::view", &source_expr, path_input)?;
+        self.ensure_deferred_facet_slots("Facet::view", &path, span)?;
 
         let focus_ty = self.resolve_ty(&path.focus_ty);
         let out_ty = if source_is_result || path.may_fail {
@@ -5095,6 +7250,7 @@ impl Checker {
             path,
             ..
         } = self.prepare_facet_input(span, "Facet::preview", &source_expr, path_input)?;
+        self.ensure_deferred_facet_slots("Facet::preview", &path, span)?;
         if !path.has_variant_segment() {
             return Err(TypeError {
                 message: "Facet::preview requires a variant Facet".into(),
@@ -5125,58 +7281,36 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::set", &source_expr, path_input)?;
         self.check_mutating_facet_path_permissions("Facet::set", &path, span)?;
 
-        let resolved_focus_ty = self.resolve_ty(&path.focus_ty);
-        let (typed_value, mode) = if let Ty::Result(ok, _) = &resolved_focus_ty {
-            let typed_value = self.check_node(value_expr)?;
-            if self.types_compatible(&path.focus_ty, &typed_value.ty) {
-                (typed_value, TypedFacetSetMode::Exact)
-            } else if self.types_compatible(ok.as_ref(), &typed_value.ty) {
-                (typed_value, TypedFacetSetMode::WrapPlainResult)
-            } else {
-                return Err(TypeError {
-                    message: format!(
-                        "Facet::set value type mismatch: expected {} or {}, got {}",
-                        self.ty_name(&path.focus_ty),
-                        self.ty_name(ok.as_ref()),
-                        self.ty_name(&typed_value.ty)
-                    ),
-                    span: typed_value.span.clone(),
-                    hint: None,
-                });
-            }
-        } else {
-            let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
-            if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
-                return Err(TypeError {
-                    message: format!(
-                        "Facet::set value type mismatch: expected {}, got {}",
-                        self.ty_name(&path.focus_ty),
-                        self.ty_name(&typed_value.ty)
-                    ),
-                    span: typed_value.span.clone(),
-                    hint: None,
-                });
-            }
-            (typed_value, TypedFacetSetMode::Exact)
-        };
+        let typed_value = self.check_node(value_expr)?;
+        if matches!(self.resolve_ty(&path.focus_ty), Ty::Result(_, _))
+            && !matches!(self.resolve_ty(&typed_value.ty), Ty::Result(_, _))
+        {
+            return Err(TypeError {
+                message: format!(
+                    "Facet::set value type mismatch: expected {}, got {}",
+                    self.ty_name(&path.focus_ty),
+                    self.ty_name(&typed_value.ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: Some("Facet::set replaces a Result property as a whole; use Facet::over to update its Ok payload.".into()),
+            });
+        }
+        let update_source_ty = self.finalize_facet_update(&mut path, &typed_value.ty, span)?;
 
         Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&source_value_ty)),
-                Box::new(Ty::Error),
-            ),
+            ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetSet {
                 source: Box::new(typed_source),
                 path,
                 value: Box::new(typed_value),
                 source_is_result,
-                mode,
+                mode: TypedFacetSetMode::Exact,
             },
         })
     }
@@ -5191,8 +7325,8 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::put", &source_expr, path_input)?;
         if source_is_result {
             return Err(TypeError {
@@ -5210,21 +7344,11 @@ impl Checker {
         }
         self.check_mutating_facet_path_permissions("Facet::put", &path, span)?;
 
-        let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
-        if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
-            return Err(TypeError {
-                message: format!(
-                    "Facet::put value type mismatch: expected {}, got {}",
-                    self.ty_name(&path.focus_ty),
-                    self.ty_name(&typed_value.ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: None,
-            });
-        }
+        let typed_value = self.check_node(value_expr)?;
+        let update_source_ty = self.finalize_facet_update(&mut path, &typed_value.ty, span)?;
 
         Ok(TypedNode {
-            ty: self.resolve_ty(&source_value_ty),
+            ty: update_source_ty,
             span: span.clone(),
             node: TypedInner::FacetSet {
                 source: Box::new(typed_source),
@@ -5246,25 +7370,24 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::over", &source_expr, path_input)?;
         self.check_mutating_facet_path_permissions("Facet::over", &path, span)?;
 
         let typed_update = self.check_node(update_expr)?;
-        let mode = self.check_facet_over_callable(
+        let (mode, replacement_ty) = self.check_facet_over_callable(
             "Facet::over",
             span,
             &path.focus_ty,
             &typed_update,
             false,
+            false,
         )?;
+        let update_source_ty = self.finalize_facet_update(&mut path, &replacement_ty, span)?;
 
         Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&source_value_ty)),
-                Box::new(Ty::Error),
-            ),
+            ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetOver {
                 source: Box::new(typed_source),
@@ -5302,8 +7425,8 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::case_set", &source_expr, path_input)?;
         self.require_enum_facet_path("Facet::case_set", &path, span)?;
         if !path.final_segment_is_variant() {
@@ -5318,24 +7441,11 @@ impl Checker {
         }
         self.check_mutating_facet_path_permissions("Facet::case_set", &path, span)?;
 
-        let typed_value = self.check_node_with_expected(value_expr, Some(&path.focus_ty))?;
-        if !self.types_compatible(&path.focus_ty, &typed_value.ty) {
-            return Err(TypeError {
-                message: format!(
-                    "Facet::case_set value type mismatch: expected {}, got {}",
-                    self.ty_name(&path.focus_ty),
-                    self.ty_name(&typed_value.ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: None,
-            });
-        }
+        let typed_value = self.check_node(value_expr)?;
+        let update_source_ty = self.finalize_facet_update(&mut path, &typed_value.ty, span)?;
 
         Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&source_value_ty)),
-                Box::new(Ty::Error),
-            ),
+            ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetSet {
                 source: Box::new(typed_source),
@@ -5357,32 +7467,36 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::case_over", &source_expr, path_input)?;
         self.require_enum_facet_path("Facet::case_over", &path, span)?;
         self.check_mutating_facet_path_permissions("Facet::case_over", &path, span)?;
 
         let typed_update = self.check_node(update_expr)?;
-        let mode = match self.check_facet_over_callable(
+        let (mode, replacement_ty) = match self.check_facet_over_callable(
             "Facet::case_over",
             span,
             &path.focus_ty,
             &typed_update,
             false,
+            true,
         )? {
-            TypedFacetOverMode::FocusValue => TypedFacetOverMode::CaseFocusValue,
-            TypedFacetOverMode::FocusResult => TypedFacetOverMode::CaseFocusResult,
-            mode @ (TypedFacetOverMode::CaseFocusValue | TypedFacetOverMode::CaseFocusResult) => {
-                mode
+            (TypedFacetOverMode::FocusValue, replacement) => {
+                (TypedFacetOverMode::CaseFocusValue, replacement)
             }
+            (TypedFacetOverMode::FocusResult, replacement) => {
+                (TypedFacetOverMode::CaseFocusResult, replacement)
+            }
+            (
+                mode @ (TypedFacetOverMode::CaseFocusValue | TypedFacetOverMode::CaseFocusResult),
+                replacement,
+            ) => (mode, replacement),
         };
+        let update_source_ty = self.finalize_facet_update(&mut path, &replacement_ty, span)?;
 
         Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&source_value_ty)),
-                Box::new(Ty::Error),
-            ),
+            ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetOver {
                 source: Box::new(typed_source),
@@ -5404,8 +7518,8 @@ impl Checker {
         let PreparedFacetInput {
             typed_source,
             source_is_result,
-            source_value_ty,
-            path,
+            mut path,
+            ..
         } = self.prepare_facet_input(span, "Facet::over_result", &source_expr, path_input)?;
         self.check_mutating_facet_path_permissions("Facet::over_result", &path, span)?;
 
@@ -5420,20 +7534,32 @@ impl Checker {
             });
         }
 
-        let typed_update = self.check_node(update_expr)?;
-        let mode = self.check_facet_over_callable(
+        let inner_ty = self.env.fresh_tyvar();
+        let expected_update = self.callable_contract(
+            &path.focus_ty,
+            Some(Ty::Result(
+                Box::new(Ty::Result(Box::new(inner_ty), Box::new(Ty::Error))),
+                Box::new(Ty::Error),
+            )),
+            ExpectedCallableSlot::Plain,
+        );
+        let typed_update = self.check_apply_callable_with_contract(
+            update_expr,
+            &expected_update,
+            "Facet::over_result",
+        )?;
+        let (mode, replacement_ty) = self.check_facet_over_callable(
             "Facet::over_result",
             span,
             &path.focus_ty,
             &typed_update,
             true,
+            true,
         )?;
+        let update_source_ty = self.finalize_facet_update(&mut path, &replacement_ty, span)?;
 
         Ok(TypedNode {
-            ty: Ty::Result(
-                Box::new(self.resolve_ty(&source_value_ty)),
-                Box::new(Ty::Error),
-            ),
+            ty: Ty::Result(Box::new(update_source_ty), Box::new(Ty::Error)),
             span: span.clone(),
             node: TypedInner::FacetOver {
                 source: Box::new(typed_source),
@@ -5452,7 +7578,8 @@ impl Checker {
         focus_ty: &Ty,
         typed_update: &TypedNode,
         require_result_focus: bool,
-    ) -> Result<TypedFacetOverMode, TypeError> {
+        allow_result_focus_input: bool,
+    ) -> Result<(TypedFacetOverMode, Ty), TypeError> {
         let (in_ty, out_ty) = self.unary_function_parts(&typed_update.ty, op_name, span)?;
         let resolved_focus_ty = self.resolve_ty(focus_ty);
         let value_focus_ty = match &resolved_focus_ty {
@@ -5465,8 +7592,20 @@ impl Checker {
         } else if let Some(value_focus_ty) = &value_focus_ty {
             if self.types_compatible(value_focus_ty, &in_ty) {
                 TypedFacetOverMode::FocusValue
-            } else {
+            } else if allow_result_focus_input {
                 TypedFacetOverMode::FocusResult
+            } else {
+                return Err(TypeError {
+                    message: format!(
+                        "{op_name} update function input mismatch: expected {}, got {}",
+                        self.ty_name(value_focus_ty),
+                        self.ty_name(&in_ty)
+                    ),
+                    span: typed_update.span.clone(),
+                    hint: Some(
+                        "Use Facet::over_result to update the Result property as a whole.".into(),
+                    ),
+                });
             }
         } else {
             TypedFacetOverMode::FocusValue
@@ -5501,19 +7640,17 @@ impl Checker {
                 });
             }
         };
-        let expected_output_ty = match (&mode, &value_focus_ty) {
-            (TypedFacetOverMode::FocusValue, Some(value_focus_ty)) => value_focus_ty,
-            _ => &resolved_focus_ty,
-        };
-        if !self.types_compatible(expected_output_ty, &out_ok) {
+        if require_result_focus && !matches!(out_ok, Ty::Result(_, _)) {
             return Err(TypeError {
                 message: format!(
-                    "{op_name} update function output mismatch: expected {}, got {}",
-                    self.ty_name(expected_output_ty),
-                    self.ty_name(&out_ok)
+                    "{op_name} update function output mismatch: must return Result<Result<...>>, got {}",
+                    self.ty_name(&out_ty)
                 ),
                 span: typed_update.span.clone(),
-                hint: None,
+                hint: Some(
+                    "Return an outer Result for mapper failure and an inner Result property value."
+                        .into(),
+                ),
             });
         }
         if !self.types_compatible(&Ty::Error, &out_err) {
@@ -5527,7 +7664,13 @@ impl Checker {
             });
         }
 
-        Ok(mode)
+        let replacement_ty = match (&mode, &resolved_focus_ty) {
+            (TypedFacetOverMode::FocusValue, Ty::Result(_, err)) => {
+                Ty::Result(Box::new(out_ok), err.clone())
+            }
+            _ => out_ok,
+        };
+        Ok((mode, replacement_ty))
     }
 
     fn readonly_type_name(ty: &Ty) -> Option<&str> {
@@ -5734,6 +7877,9 @@ impl Checker {
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<TypedNode, TypeError> {
+        if self.is_function_curry_callee(func) {
+            return self.check_function_curry(span, func, args);
+        }
         if let Some(typed) = self.try_check_process_intrinsic_app(span, func, args)? {
             return Ok(typed);
         }
@@ -5753,6 +7899,8 @@ impl Checker {
                 &method_name,
                 args,
                 receiver_owner_hint,
+                None,
+                Self::explicit_type_args(func),
             );
         }
 
@@ -5764,6 +7912,22 @@ impl Checker {
 
         let typed_func = self.check_node(func)?;
         let func_ty = self.resolve_ty(&typed_func.ty);
+
+        // A closure parameter may only reveal that it is callable when it is
+        // first applied (for example `g(x)` inside a higher-order closure).
+        // Turn that unconstrained type variable into a callable shape before
+        // checking its arguments so inference can continue recursively.
+        if let Ty::Var(var) = func_ty {
+            if !self.rigid_tyvars.contains(&var) {
+                let params = (0..args.len())
+                    .map(|_| self.env.fresh_tyvar())
+                    .collect::<Vec<_>>();
+                let ret = self.env.fresh_tyvar();
+                if self.bind_tyvar(var, &Ty::Func(params, Box::new(ret))) {
+                    return self.check_app(span, func, args);
+                }
+            }
+        }
 
         match &func_ty {
             Ty::BuiltinFunc { name, params, ret } => {
@@ -6814,7 +8978,22 @@ impl Checker {
                 self.function_return_ty = Some(expected_ret.as_ref().clone());
             }
             let profile = self.profiler.start();
-            let typed_body = self.check_node(body)?;
+            let body_is_result_constructor = match body {
+                Resolved::ConstructorCall(_, _, _) => true,
+                Resolved::App(_, func, _) => {
+                    matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "Ok" || id.name == "Err")
+                }
+                _ => false,
+            };
+            let typed_body = if body_is_result_constructor {
+                if let Some(Ty::Func(_, expected_ret)) = expected {
+                    self.check_node_with_expected(body, Some(expected_ret.as_ref()))?
+                } else {
+                    self.check_node(body)?
+                }
+            } else {
+                self.check_node(body)?
+            };
             self.profiler.finish(ProfileEvent::ClosureBody, profile);
             let typed_body = self.concretize_pending_trait_calls(typed_body)?;
             if expected.is_none() {
@@ -6824,7 +9003,7 @@ impl Checker {
                     return Err(self.pending_trait_helper_error(method_name, pending_span));
                 }
             }
-            if matches!(typed_body.ty, Ty::Facet(_, _)) {
+            if matches!(typed_body.ty, Ty::Facet(..)) {
                 return Err(TypeError {
                     message:
                         "Facet is compile-time only in Stage1 and cannot be returned from closures"
@@ -7011,7 +9190,7 @@ impl Checker {
 
         let typed_target = self.check_node(target)?;
         let target_ty = self.resolve_ty(&typed_target.ty);
-        if let Ty::Facet(source_ty, focus_ty) = &target_ty {
+        if let Ty::Facet(_, source_ty, focus_ty, ..) = &target_ty {
             let view_id = self.runtime_helper_id("Facet::view", span)?;
             let param_uid = Self::next_synthetic_range_uid();
             let param_name = "__facet_capture_arg".to_string();
@@ -7128,8 +9307,28 @@ impl Checker {
             return self.check_slash_compose(span, left, right);
         }
 
-        let typed_left = self.check_node(left)?;
-        let typed_right = self.check_node(right)?;
+        let mut typed_left = self.check_node(left)?;
+        let mut typed_right = self.check_node(right)?;
+        // Constructor-style helpers such as `Monad::return` can leave a
+        // `SelfApp` result until another operand supplies the concrete type.
+        // Operators are compile-time constraints, so either operand may be
+        // used as that expected type without changing runtime evaluation order.
+        if matches!(self.resolve_ty(&typed_left.ty), Ty::SelfApp(_))
+            && !matches!(self.resolve_ty(&typed_right.ty), Ty::SelfApp(_))
+        {
+            if let Ok(candidate) = self.check_node_with_expected(right, Some(&typed_left.ty)) {
+                typed_right = candidate;
+            }
+            if let Ok(candidate) = self.check_node_with_expected(left, Some(&typed_right.ty)) {
+                typed_left = candidate;
+            }
+        } else if matches!(self.resolve_ty(&typed_right.ty), Ty::SelfApp(_))
+            && !matches!(self.resolve_ty(&typed_left.ty), Ty::SelfApp(_))
+        {
+            if let Ok(candidate) = self.check_node_with_expected(right, Some(&typed_left.ty)) {
+                typed_right = candidate;
+            }
+        }
         let lt = self.resolve_ty(&typed_left.ty);
         let rt = self.resolve_ty(&typed_right.ty);
         let compatibility_checkpoint = self.substitutions.clone();
@@ -7216,6 +9415,45 @@ impl Checker {
                 ))
             }
             BinOp::Slash => Err(Self::unsupported_binop_type_error(op, span)),
+            BinOp::Choice => {
+                if !compatible {
+                    self.substitutions = compatibility_checkpoint;
+                    return Err(TypeError {
+                        message: format!(
+                            "`<|>` requires the same type on both sides, but got {} and {}",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt),
+                        ),
+                        span: typed_right.span.clone(),
+                        hint: Some(self.trait_implementation_summary("Alternative")),
+                    });
+                }
+                let receiver_ty = self.resolve_ty(&lt);
+                let alternative_trait = self
+                    .trait_key_by_short_name("Alternative")
+                    .ok_or_else(|| TypeError {
+                        message: "Unknown trait: Alternative".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                let dispatch = self
+                    .trait_dispatch_target(&alternative_trait, "choose", &receiver_ty)
+                    .ok_or_else(|| TypeError {
+                        message: format!("`<|>` is not defined for {}", self.ty_name(&receiver_ty)),
+                        span: typed_right.span.clone(),
+                        hint: Some(self.trait_implementation_summary("Alternative")),
+                    })?;
+                Ok(make_trait_call(
+                    alternative_trait,
+                    "choose",
+                    receiver_ty.clone(),
+                    dispatch,
+                    receiver_ty,
+                    TraitCallOrigin::Explicit,
+                    typed_left,
+                    typed_right,
+                ))
+            }
             BinOp::Eq | BinOp::Neq => {
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
@@ -7242,7 +9480,7 @@ impl Checker {
                 let receiver_ty = self.resolve_ty(&lt);
                 let (trait_short_name, method_name, symbol) = match op {
                     BinOp::Eq => ("Eq", "eq", "=="),
-                    BinOp::Neq => ("Neq", "neq", "!="),
+                    BinOp::Neq => ("Eq", "neq", "!="),
                     _ => return Err(Self::unsupported_binop_type_error(op, span)),
                 };
                 let eq_trait = self
@@ -7391,7 +9629,7 @@ impl Checker {
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
-        if matches!(typed_left.ty, Ty::Facet(_, _)) {
+        if matches!(typed_left.ty, Ty::Facet(..)) {
             return match typed_left.node {
                 TypedInner::FacetPath(path) => self.compose_facet_paths(span, path, right, "`/`"),
                 TypedInner::PendingFacetPath(path) => {
@@ -7925,6 +10163,47 @@ impl Checker {
         })
     }
 
+    /// Typecheck a `Lazy<T>` argument while preserving a source-level pair of
+    /// parentheses as an explicit eager boundary.  An ungrouped argument keeps
+    /// the historical branch convention: a zero-argument callable is invoked
+    /// only if its lazy path is selected.
+    fn check_lazy_argument(
+        &mut self,
+        arg: &Resolved,
+        call_span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        // Sigil lowers a RHS `_1` slot into a synthetic closure parameter.
+        // Detect that parameter here, after the special form's parameter role
+        // is known, so the diagnostic remains a TypeError rather than a
+        // resolver error.
+        if let Resolved::Var(span, id) = arg {
+            if id.name.starts_with("__pipe_slot_") {
+                return Err(TypeError {
+                    message: "pipe injection into a Lazy parameter is not allowed".into(),
+                    span: span.clone(),
+                    hint: Some(
+                        "Lazy parameters are evaluated under the callee's control. Bind the value first, then pass that binding explicitly, or use a closure to make the evaluation order explicit."
+                            .into(),
+                    ),
+                });
+            }
+        }
+        match arg {
+            Resolved::Grouped(span, inner) => {
+                let inner = self.check_node(inner)?;
+                Ok(TypedNode {
+                    ty: inner.ty.clone(),
+                    span: span.clone(),
+                    node: TypedInner::EagerBoundary(Box::new(inner)),
+                })
+            }
+            _ => {
+                let raw = self.check_node(arg)?;
+                Ok(self.maybe_call_zero_arg_function(raw, call_span.clone()))
+            }
+        }
+    }
+
     pub(super) fn check_if(
         &mut self,
         span: &Span,
@@ -7944,13 +10223,11 @@ impl Checker {
             });
         }
 
-        let raw_then = self.check_node(then)?;
-        let typed_then = self.maybe_call_zero_arg_function(raw_then, span.clone());
+        let typed_then = self.check_lazy_argument(then, span)?;
 
         match else_opt {
             Some(else_branch) => {
-                let raw_else = self.check_node(else_branch)?;
-                let typed_else = self.maybe_call_zero_arg_function(raw_else, span.clone());
+                let typed_else = self.check_lazy_argument(else_branch, span)?;
                 if !self.types_compatible(&typed_then.ty, &typed_else.ty) {
                     return Err(TypeError {
                         message: format!(
@@ -8023,8 +10300,7 @@ impl Checker {
             });
         }
 
-        let raw_err = self.check_node(err)?;
-        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        let typed_err = self.check_lazy_argument(err, span)?;
         self.ensure_guard_error_value(&typed_err, "assert")?;
 
         Ok(TypedNode {
@@ -8074,8 +10350,7 @@ impl Checker {
             });
         }
 
-        let raw_err = self.check_node(err)?;
-        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        let typed_err = self.check_lazy_argument(err, span)?;
         self.ensure_guard_error_value(&typed_err, "ensure")?;
 
         Ok(TypedNode {
@@ -8098,9 +10373,8 @@ impl Checker {
         value: &Resolved,
         err: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_value = self.check_result_value(value, "map_err")?;
-        let raw_err = self.check_node(err)?;
-        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        let typed_value = self.check_result_value(value, "map_err", None)?;
+        let typed_err = self.check_lazy_argument(err, span)?;
         self.ensure_result_error_arg(&typed_err, "map_err")?;
 
         Ok(TypedNode {
@@ -8116,9 +10390,8 @@ impl Checker {
         value: &Resolved,
         err: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_value = self.check_result_value(value, "cause")?;
-        let raw_err = self.check_node(err)?;
-        let typed_err = self.maybe_call_zero_arg_function(raw_err, span.clone());
+        let typed_value = self.check_result_value(value, "cause", None)?;
+        let typed_err = self.check_lazy_argument(err, span)?;
         self.ensure_result_error_arg(&typed_err, "cause")?;
 
         Ok(TypedNode {
@@ -8135,22 +10408,13 @@ impl Checker {
         marker: &Resolved,
         handler: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_value = self.check_result_value(value, "recover_kind")?;
-        let value_ty = self.resolve_ty(&typed_value.ty);
-        let Ty::Result(ok_ty, _) = &value_ty else {
-            return Err(TypeError {
-                message: format!(
-                    "recover_kind value must resolve to Result<...>, got {}",
-                    self.ty_name(&value_ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: None,
-            });
-        };
-        let ok_ty = ok_ty.as_ref().clone();
-        let typed_marker = self.check_node(marker)?;
-        let typed_marker = self.maybe_call_zero_arg_function(typed_marker, span.clone());
+        let typed_marker = self.check_lazy_argument(marker, span)?;
         self.ensure_recover_kind_marker(&typed_marker)?;
+        // Infer the success type from the handler before checking a
+        // polymorphic `Err(...)` value.  Otherwise `Err(NoneError)` is
+        // checked without context and its success slot defaults to `Unit`,
+        // rejecting valid handlers such as `Error -> Result<Int>`.
+        let ok_ty = self.env.fresh_tyvar();
         let expected_handler = Ty::Func(
             vec![Ty::Error],
             Box::new(Ty::Result(Box::new(ok_ty.clone()), Box::new(Ty::Error))),
@@ -8179,6 +10443,19 @@ impl Checker {
                 hint: None,
             });
         }
+        let typed_value = self.check_result_value(value, "recover_kind", Some(&ok_ty))?;
+        let value_ty = self.resolve_ty(&typed_value.ty);
+        let Ty::Result(ok_ty, _) = &value_ty else {
+            return Err(TypeError {
+                message: format!(
+                    "recover_kind value must resolve to Result<...>, got {}",
+                    self.ty_name(&value_ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: None,
+            });
+        };
+        let ok_ty = ok_ty.as_ref().clone();
 
         Ok(TypedNode {
             ty: Ty::Result(Box::new(ok_ty), Box::new(Ty::Error)),
@@ -8195,10 +10472,18 @@ impl Checker {
         &mut self,
         value: &Resolved,
         form_name: &str,
+        expected_ok_ty: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let typed_value = self.check_node(value)?;
+        let expected_result_ty = Ty::Result(
+            Box::new(
+                expected_ok_ty
+                    .cloned()
+                    .unwrap_or_else(|| self.env.fresh_tyvar()),
+            ),
+            Box::new(Ty::Error),
+        );
+        let typed_value = self.check_node_with_expected(value, Some(&expected_result_ty))?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        let expected_result_ty = Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error));
         if !self.types_compatible(&expected_result_ty, &value_ty) {
             return Err(TypeError {
                 message: format!(
@@ -8399,17 +10684,18 @@ impl Checker {
                 hint: None,
             });
         };
+        if *optional {
+            return Err(TypeError {
+                message: "optional Facet selectors are no longer supported".into(),
+                span: span.clone(),
+                hint: Some(
+                    "Facet variant selectors are required because an optional mismatch cannot preserve a type-changing rebuild."
+                        .into(),
+                ),
+            });
+        }
         match self.resolve_ty(source_ty) {
             Ty::Tuple(items) => {
-                if *optional {
-                    return Err(TypeError {
-                        message: "optional Facet segment requires an enum variant".into(),
-                        span: span.clone(),
-                        hint: Some(
-                            "Use `?` only on enum case segments such as Option.Some?.".into(),
-                        ),
-                    });
-                }
                 let index = field
                     .strip_prefix('_')
                     .ok_or_else(|| TypeError {
@@ -8445,21 +10731,12 @@ impl Checker {
                 ))
             }
             Ty::Struct(name, fields) | Ty::Record(name, fields) => {
-                if *optional {
-                    return Err(TypeError {
-                        message: "optional Facet segment requires an enum variant".into(),
-                        span: span.clone(),
-                        hint: Some(
-                            "Use `?` only on enum case segments such as Option.Some?.".into(),
-                        ),
-                    });
-                }
                 let field_policy = self.env.field_policy(&name, field);
                 if field_policy.is_some_and(|policy| policy.private) {
                     let display_name = Self::surface_name(&name);
                     let outside_impl =
                         self.current_impl_struct_target.as_deref() != Some(display_name);
-                    if outside_impl {
+                    if outside_impl && !self.allow_private_facet_inspection {
                         return Err(TypeError {
                             message: format!("Field '{}.{}' is private", display_name, field),
                             span: span.clone(),
@@ -8487,6 +10764,7 @@ impl Checker {
                         container_field_count: fields.len() as u32,
                         container_type_name: Self::surface_name(&name).to_string(),
                         readonly: field_policy.is_some_and(|policy| policy.readonly),
+                        private: field_policy.is_some_and(|policy| policy.private),
                         focus_readonly_root: self.ty_is_readonly_root(&field_ty),
                         focus_type_name: Self::readonly_type_name(&self.resolve_ty(&field_ty))
                             .map(str::to_string),
@@ -8608,7 +10886,7 @@ impl Checker {
         };
         let expected_ty = self.resolve_ty(expected_ty);
         let (expected_source, expected_focus) = match expected_ty {
-            Ty::Facet(source, focus) => (source.as_ref().clone(), focus.as_ref().clone()),
+            Ty::Facet(_, source, focus, ..) => (source.as_ref().clone(), focus.as_ref().clone()),
             other => {
                 return Err(TypeError {
                     message: format!(
@@ -8670,7 +10948,9 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
-            path_kind: TypedFacetPathKind::Structural,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![TypedFacetSegment::Tuple {
@@ -8686,7 +10966,7 @@ impl Checker {
         };
 
         Ok(Some(TypedNode {
-            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+            ty: Self::deferred_facet_ty(path.path_kind, source_ty, focus_ty),
             span: span.clone(),
             node: TypedInner::FacetPath(path),
         }))
@@ -8720,7 +11000,7 @@ impl Checker {
         };
         let expected_ty = self.resolve_ty(expected_ty);
         let (expected_source, expected_focus) = match expected_ty {
-            Ty::Facet(source, focus) => (source.as_ref().clone(), focus.as_ref().clone()),
+            Ty::Facet(_, source, focus, ..) => (source.as_ref().clone(), focus.as_ref().clone()),
             other => {
                 return Err(TypeError {
                     message: format!(
@@ -8755,6 +11035,8 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&typed_segment)),
             may_fail,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
@@ -8762,7 +11044,7 @@ impl Checker {
         };
 
         Ok(Some(TypedNode {
-            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+            ty: Self::deferred_facet_ty(path.path_kind, source_ty, focus_ty),
             span: span.clone(),
             node: TypedInner::FacetPath(path),
         }))
@@ -8776,7 +11058,7 @@ impl Checker {
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         let (source_ty, expected_focus_ty) = match expected.map(|ty| self.resolve_ty(ty)) {
-            Some(Ty::Facet(source, focus)) => {
+            Some(Ty::Facet(_, source, focus, ..)) => {
                 (source.as_ref().clone(), Some(focus.as_ref().clone()))
             }
             _ => {
@@ -8803,13 +11085,15 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_ty.clone(),
             focus_ty: focus_ty.clone(),
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
             may_fail,
             source_readonly_root: self.ty_is_readonly_root(&source_ty),
             segments: vec![segment],
         };
         Ok(TypedNode {
-            ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+            ty: Self::deferred_facet_ty(path.path_kind, source_ty, focus_ty),
             span: span.clone(),
             node: TypedInner::FacetPath(path),
         })
@@ -8927,10 +11211,14 @@ impl Checker {
         }
         let typed_expr = self.check_node(expr)?;
 
-        if matches!(typed_expr.ty, Ty::Facet(_, _)) {
+        if matches!(typed_expr.ty, Ty::Facet(..)) {
             let path = self.resolve_facet_path_from_node(typed_expr, span, None)?;
+            let (segment_source_ty, result_transparent) = match self.resolve_ty(&path.focus_ty) {
+                Ty::Result(ok, _) => (ok.as_ref().clone(), true),
+                other => (other, false),
+            };
             let (segment, focus_ty, may_fail) = self.resolve_facet_segment_for_source_ty(
-                &path.focus_ty,
+                &segment_source_ty,
                 &pending_segment,
                 span,
                 true,
@@ -8942,13 +11230,15 @@ impl Checker {
             let combined = TypedFacetPath {
                 source_ty: source_ty.clone(),
                 focus_ty: focus_ty.clone(),
+                update_source_ty: Ty::Hole,
+                update_focus_ty: Ty::Hole,
                 path_kind: Self::facet_path_kind_for_segments(&segments),
-                may_fail: path.may_fail || may_fail,
+                may_fail: path.may_fail || may_fail || result_transparent,
                 source_readonly_root: path.source_readonly_root,
                 segments,
             };
             return Ok(TypedNode {
-                ty: Ty::Facet(Box::new(source_ty), Box::new(focus_ty)),
+                ty: Self::deferred_facet_ty(combined.path_kind, source_ty, focus_ty),
                 span: span.clone(),
                 node: TypedInner::FacetPath(combined),
             });
@@ -8968,6 +11258,8 @@ impl Checker {
         let path = TypedFacetPath {
             source_ty: source_focus_ty,
             focus_ty: focus_ty.clone(),
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
             path_kind: Self::facet_path_kind_for_segments(std::slice::from_ref(&segment)),
             may_fail,
             source_readonly_root: false,
@@ -9129,6 +11421,7 @@ mod tests {
             field_index,
             container_field_count: 1,
             container_type_name: container_type_name.into(),
+            private: false,
             readonly,
             focus_readonly_root,
             focus_type_name: focus_type_name.map(str::to_string),
@@ -9160,7 +11453,9 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Str,
-            path_kind: TypedFacetPathKind::Structural,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,
             segments: vec![
@@ -9201,7 +11496,9 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
-            path_kind: TypedFacetPathKind::Structural,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,
             segments: vec![field_segment(
@@ -9238,7 +11535,9 @@ mod tests {
         let readonly_root_path = TypedFacetPath {
             source_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
             focus_ty: Ty::Str,
-            path_kind: TypedFacetPathKind::Structural,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: true,
             segments: vec![field_segment(
@@ -9264,7 +11563,9 @@ mod tests {
                 )],
             ),
             focus_ty: Ty::Str,
-            path_kind: TypedFacetPathKind::Structural,
+            update_source_ty: Ty::Hole,
+            update_focus_ty: Ty::Hole,
+            path_kind: TypedFacetPathKind::InfallibleStructural,
             may_fail: false,
             source_readonly_root: false,
             segments: vec![

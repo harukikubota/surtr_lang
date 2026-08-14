@@ -1,5 +1,0 @@
-defmod Api {
-  def consume(value: ProcessInit<Int>) -> Int {
-    1
-  }
-}

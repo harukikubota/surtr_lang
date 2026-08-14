@@ -131,7 +131,7 @@ VM 側の責務は次の通り。
 - `RuntimeProcessSpec` に基づく process instance / singleton slot の管理
 - `RuntimeBootPlan` に基づく standard singleton と user singleton の boot
 - `RuntimeHandlerSpec` に基づく Agent / GenServer / Supervisor / Task handler dispatch
-- Lazy init の retry、deadline、Ready 待ち caller の管理
+- Standby init の retry、deadline、Ready 待ち caller の管理
 - `Process::sleep`、Task、call timeout の scheduler-backed waiting / wakeup
 - process-local handler dependency (`ctx.<slot>`) の runtime context 解決
 - `StdIn` / `StdOut` / `StdErr` builtin handler と handler override の適用
@@ -295,7 +295,8 @@ Opcode は以下のカテゴリを持つ。
 - 組込み関数メタデータは単一テーブルで管理する
 - `Bootstrap` module の `@builtin` 宣言はこの共有テーブルに対応する宣言層であり、builtin の追加起点ではない
 - VM は `builtin_id` により実装関数をディスパッチする
-- `Facet::view` / `Facet::preview` / `Facet::put` / `Facet::set` / `Facet::over` / `Facet::over_result` / `Facet::case_set` / `Facet::case_over` / `Facet::chain` / Facet `/` chain は compile-time lowering 対象であり、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
+- `Facet<K, S, A, T, B>` は compile-time capability であり runtime value を持たない。`Facet::view` / `Facet::preview` / `Facet::put` / `Facet::set` / `Facet::over` / `Facet::over_result` / `Facet::case_set` / `Facet::case_over` / `Facet::chain` / Facet `/` chain は compile-time lowering 対象で、runtime builtin として直接到達した場合は防御的に `RuntimeError` とする
+- Facet API が `Result<S, E>` source を受ける場合、VM は `Err(E)` に対して traversal、rebuild、mapper を実行せず同じ error を返す。これは API-level lift であり Facet slot `S` を `Result<S, E>` に変更しない
 - Facet の variant mismatch は `Err(VariantMismatch(detail))` で返し、`detail` には失敗 segment（index と path 表示）を含める
 - Facet の fallible container path segment は internal polymorphic helper `__facet_list_get` / `__facet_list_set` / `__facet_map_get` / `__facet_map_set_existing` に lower し、list miss は `IndexOutOfBounds`、map miss は `KeyNotFound` を `Result` で返す
 - `eprint` は `Error` 値を診断表示し、それ以外の値への適用は VM 側ガード対象とする
@@ -327,7 +328,7 @@ Opcode は以下のカテゴリを持つ。
 - malformed JSON は `Err(JsonParseError(line, column, detail))` を返し、`RuntimeError` にしない
 - `JsonValue` 以外の値が `json_stringify` に渡った場合は `Err(JsonEncodeError(detail))` を返す。`TypeRegistry` 不整合や variant arity 不整合は VM 内部不整合として `RuntimeError` でよい
 
-組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Chainable, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
+組込み宣言の読み込み順序は compile 側で `Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Applicative, Monad, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> ユーザ拡張` に固定される。同一 stage 内の import は file 読み込み順に依存せず compile 側で解決され、later stage 参照は compile error になる。Eldr はこの順序で解決済みの bytecode を受け取る前提とし、VM 内で追加の import 解決は行わない。
 
 ### 7.2 TypeRegistry
 

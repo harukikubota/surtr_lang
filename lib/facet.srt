@@ -1,6 +1,20 @@
+@FacetPathKind Type InfallibleStructural
+@FacetPathKind Type FallibleStructural
+@FacetPathKind Type VariantPath
+
+@FacetPathKind Type ReadablePath =
+  InfallibleStructural | FallibleStructural | VariantPath
+@FacetPathKind Type WritablePath =
+  InfallibleStructural | FallibleStructural | VariantPath
+@FacetPathKind Type PutPath = InfallibleStructural
+@FacetPathKind Type PreviewPath = VariantPath
+@FacetPathKind Type CasePath = VariantPath
+
 @doc """
 Standard `Facet` type declaration.
-`Facet<S, A>` is a compiler-managed path capability from source `S` to focus `A`.
+`Facet<K, S, A, T, B>` is a compiler-managed path capability from source `S`
+to focus `A`; `K` is its compiler-derived path kind and `T`/`B` are the
+updated source/focus types. Use `_, _` for deferred update slots.
 Facet values are same-scope capabilities: bind them locally when useful, then
 consume them in that same scope via
 `Facet::view/preview/put/set/over/over_result/case_set/case_over`.
@@ -8,7 +22,7 @@ consume them in that same scope via
 Use `Facet` when you want to describe "where" inside a value the compiler should
 look or update.
 `Option<T>` fields work naturally with enum-case Facet paths such as
-`Option.Some`, `Option.Some?`, `case_set`, and `case_over`.
+`Option.Some`, `case_set`, and `case_over`.
 When a field should participate in Result-style update flows, use
 `Result<T, NoneError>` explicitly.
 
@@ -36,7 +50,6 @@ Common path forms:
 - nested path: `User.profile / Profile.name`, `User.profile.name`
 - function-form nested path: `Facet::chain(User.profile, Profile.name)`
 - enum variant selector: `Expr.Add`
-- optional enum variant selector: `Expr.Add?`
 - value sugar: `value.segment`
 - shorthand source/path capture: `~value.segment`
 
@@ -68,6 +81,18 @@ decided by the consuming `Facet` operation.
 It cannot be passed as a function argument, returned, captured by a closure, or
 stored inside containers such as `List`, tuples, `Ok(...)`, or `Err(...)`.
 
+## REPL inspection
+
+`:doc Ty` shows the declaration documentation for a type. Use `:doc Facet.Ty`
+for the generic Facet-root explanation, `:info Ty` for its field policies, and
+`:facet Ty.path` for one path's structural details.
+
+`:info Ty` is definition inspection and includes private fields. `:facet` can
+inspect a private path such as `User.password` and reports that it is unavailable
+to the current REPL scope; this does not make the path usable in ordinary source.
+Fields are not standalone documentation or signature targets, so `:doc Ty.field`
+and `:sig Ty.field` guide to `:info Ty` or `:facet Ty.field`.
+
 Private field paths are validated when a facet path segment is formed.
 Outside the owning `impl Type` / `impl Trait for Type`, both `User.secret` and
 `value.secret` are compile errors.
@@ -93,7 +118,8 @@ Container bracket expressions follow these additional rules:
 - `const Facet<...>` accepts only literal bracket segments such as `List.[0]`,
   `List.[-1]`, `List.[1..3]`, and `HashMap.["talk"]`
 """
-@builtin type Facet<$S, $A>
+
+@builtin type Facet<$K, $S, $A, $T, $B>
 
 @autoimport
 impl Facet {
@@ -146,7 +172,7 @@ impl Facet {
   xldr(1)> Facet::view(BitWidth.Any, BitWidth::Any(5))
   Ok(5)
   """
-  @builtin def view(facet: Facet<$S, $A>, source: $S) -> Result<$A>
+  @builtin def view(facet: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>
 
   @doc """
   Preview the focus at a variant Facet from `source`.
@@ -161,7 +187,7 @@ impl Facet {
   remains the Facet execution context: `Ok(value)` continues through the path,
   and `Err(error)` propagates unchanged.
   """
-  @builtin def preview(facet: Facet<$S, $A>, source: $S) -> Result<$A>
+  @builtin def preview(facet: Facet<PreviewPath, $S, $A, _, _>, source: $S) -> Result<$A>
 
   @doc """
   Put `value` at `facet` in plain `source`.
@@ -189,17 +215,15 @@ impl Facet {
   xldr(3)> Facet::put(~pair._1, 99)
   ("alice", 99)
   """
-  @builtin def put(facet: Facet<$S, $A>, source: $S, value: $A) -> $S
+  @builtin def put(facet: Facet<PutPath, $S, $A, $T, $B>, source: $S, value: $B) -> $T
 
   @doc """
   Replace the focus at `facet` in `source` with `value`.
   Returns the updated source wrapped in `Result`.
 
   Use `set` when you already have the replacement value.
-  When the focus is `Result<$A>`, `set` also accepts a plain `$A` and stores it
-  as `Ok($A)`.
-  This is especially useful for fields declared explicitly as
-  `Result<T, NoneError>`.
+  `set` always receives the replacement focus type exactly. It does not wrap a
+  plain payload in `Ok(...)`; use `over` to update a Result payload.
 
   Readonly rules:
 
@@ -230,18 +254,17 @@ impl Facet {
   xldr(1)> bw2 =? Facet::set(BitWidth.Any, BitWidth::Any(5), 7)
   > bw2: BitWidth = BitWidth::Any(7)
   """
-  @builtin def set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>
+  @builtin def set(facet: Facet<WritablePath, $S, $A, $T, $B>, source: $S, value: $B) -> Result<$T>
 
   @doc """
   Replace the payload of the final enum case at `facet`.
   `case_set` is valid only when the Facet path contains an enum selector and
   the final segment is that enum case.
 
-  Required enum segments return `Err(VariantMismatch(...))` when the source is
-  on another variant. Optional enum segments such as `Option.Some?` skip a
-  variant mismatch and return the original source unchanged.
+  Enum segments are required and return `Err(VariantMismatch(...))` when the
+  source is on another variant.
   """
-  @builtin def case_set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>
+  @builtin def case_set(facet: Facet<CasePath, $S, $A, $T, $B>, source: $S, value: $B) -> Result<$T>
 
   @doc """
   Update the focus at `facet` in `source` with `update_fun`.
@@ -277,7 +300,7 @@ impl Facet {
   xldr(1)> bw2 =? Facet::over(BitWidth.Any, BitWidth::Any(7), {|n| Ok(n + 1)})
   > bw2: BitWidth = BitWidth::Any(8)
   """
-  @builtin def over(facet: Facet<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
+  @builtin def over(facet: Facet<WritablePath, $S, $A, $T, $B>, source: $S, update_fun: ($A -> Result<$B>)) -> Result<$T>
 
   @doc """
   Update a `Result<$A>` focus as a whole.
@@ -296,13 +319,11 @@ impl Facet {
   Dynamic list/map bracket expressions follow the same type rules as `view` and
   `over`.
   """
-  @builtin def over_result(facet: Facet<$S, Result<$A>>, source: $S, update_fun: (Result<$A> -> Result<Result<$A>>)) -> Result<$S>
+  @builtin def over_result(facet: Facet<WritablePath, $S, Result<$A>, $T, Result<$B>>, source: $S, update_fun: (Result<$A> -> Result<Result<$B>>)) -> Result<$T>
 
   @doc """
   Update a focus reached through an enum case path.
-  `case_over` requires at least one enum selector in the Facet path. Optional
-  selectors such as `Option.Some?` skip mismatches and leave the source
-  unchanged.
+  `case_over` requires at least one required enum selector in the Facet path.
 
   `case_over` accepts both plain and `Result` focus.
   When the focus is plain `$A`, `update_fun` receives `$A` and returns
@@ -311,7 +332,7 @@ impl Facet {
   payload as `$A` or the whole `Result<$A>`.
   Payload-style updaters skip `Err(err)` and leave that branch unchanged.
   """
-  @builtin def case_over(facet: Facet<$S, $A>, source: $S, update_fun: ($A -> Result<$A>)) -> Result<$S>
+  @builtin def case_over(facet: Facet<CasePath, $S, $A, $T, $B>, source: $S, update_fun: ($A -> Result<$B>)) -> Result<$T>
 
   @doc """
   Bulk update special form.
@@ -381,9 +402,9 @@ impl Facet {
 
   The types must line up:
 
-  - `outer: Facet<S, A>`
-  - `inner: Facet<A, B>`
-  - result: `Facet<S, B>`
+  - `outer: Facet<K, S, A, _, _>`
+  - `inner: Facet<L, A, B, _, _>`
+  - result: `Facet<K, S, B, _, _>`
 
   This is the canonical path-composition API.
 
@@ -399,7 +420,7 @@ impl Facet {
   path2 = outer / inner
   path = Facet::chain(outer, inner)
   """
-  @builtin def chain(outer: Facet<$S, $A>, inner: Facet<$A, $B>) -> Facet<$S, $B>
+  @builtin def chain(outer: Facet<$K, $S, $A, _, _>, inner: Facet<$L, $A, $B, _, _>) -> Facet<$K, $S, $B, _, _>
 }
 
 @doc """
@@ -408,11 +429,11 @@ This is the source-level meaning of `left / right` for Facet values.
 
 The surface contract is expressed through `Compose::compose`.
 """
-impl Compose<Facet<$A, $B>, Facet<$S, $B>> for Facet<$S, $A> {
+impl Compose<Facet<$L, $A, $B, _, _>, Facet<$K, $S, $B, _, _>> for Facet<$K, $S, $A, _, _> {
   @doc """
   Compose the receiver path before `rhs`.
   `left / right` and `Compose::compose(left, right)` follow this contract.
   `Facet::chain(left, right)` remains the canonical helper form.
   """
-  @builtin def compose(self: Self, rhs: Facet<$A, $B>) -> Facet<$S, $B>
+  @builtin def compose::<Facet<$K, $S, $A, _, _>, Facet<$L, $A, $B, _, _>, Facet<$K, $S, $B, _, _>>(self: Self, rhs: Facet<$L, $A, $B, _, _>) -> Facet<$K, $S, $B, _, _>
 }

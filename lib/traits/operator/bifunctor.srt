@@ -1,0 +1,16 @@
+@doc """
+Standard `Bifunctor` trait declaration.
+`Bifunctor` maps both element slots of a binary type constructor without
+introducing a runtime trait representation.
+"""
+@autoimport
+deftrait Bifunctor
+where
+  Self: Type<$A, $B>
+{
+  def bimap(
+    self: Self<$A, $B>,
+    map_left: Mapper<$A, $C>,
+    map_right: Mapper<$B, $D>
+  ) -> Self<$C, $D>
+}

@@ -98,22 +98,16 @@ defmod Function {
   def apply(f: ($A -> $B), value: $A) -> $B { f(value) }
 
   @doc """
-  Convert a binary callable into a curried callable.
+  Convert a callable with two or more arguments into a curried callable.
 
   ## REPL
   xldr(1)> add = {|left: Int, right: Int| left + right}
-  xldr(2)> curried = curry(add)
+  xldr(2)> curried = curry(&add)
   xldr(3)> add_two = curried(2)
   xldr(4)> add_two(5)
   7
   """
-  def curry(f: ($A, $B -> $C)) -> ($A -> ($B -> $C)) {
-    {|left|
-      {|right|
-        f(left, right)
-      }
-    }
-  }
+  @builtin def curry(fun: $Fun) -> $Curried
 
   @doc """
   Convert a curried callable into a binary callable.

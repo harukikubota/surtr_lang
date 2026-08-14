@@ -1,17 +1,16 @@
 @doc """
 Standard `Decode` trait declaration.
 `Decode<$To>` converts `Self` into `$To`.
-The `to` parameter is a signature-level TypeRef witness slot and is not meant
-to be observed at runtime.
+Choose the decoded target with an explicit type argument.
 Format-specific value owners such as `JsonValue` expose their own helper
-surface, for example `JsonValue::decode(value, Target)`.
+surface, for example `Decode::decode::<Target>(value)`.
 
 ## REPL
 xldr(1)> json =? Json::decode("{\"name\":\"surtr\"}")
-xldr(2)> JsonValue::decode(json, String)
+xldr(2)> Decode::decode::<String>(json)
 Ok(Object(hash!["name" => String("surtr")]))
 """
 deftrait Decode<$To> {
   # Convert the value into the requested target type.
-  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
+  def decode::<$To>(self: Self) -> Result<$To, Error>
 }

@@ -130,7 +130,7 @@ fn type_error_spec_by_id_adds_extractor_context_blocks() {
     let main_id = sources.register("main.srt", main_source);
     let kernel_id = sources.register(
         "lib/kernel.srt",
-        "@builtin defextractor uncons(term) -> MatchResult<($Head, $Tail), Error>",
+        "@builtin defextractor uncons(term) -> Option<($Head, $Tail)>",
     );
     let err = TypeError {
         message: "Extractor uncons expects List<...> or String, got Boolean".into(),
@@ -204,7 +204,7 @@ fn parse_error_spec_labels_return_position_impl_trait() {
 
 #[test]
 fn parse_error_spec_labels_where_clause_staging() {
-    let source = "def double<$N>(x: $N) -> $N where $N: Show { x + x }";
+    let source = "def double(x: $N) -> $N where $N: Show { x + x }";
     let spec = parse_error_spec(
         source,
         "`where` clauses are staged and not implemented yet",

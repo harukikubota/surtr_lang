@@ -7,6 +7,8 @@ use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
 pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
     pub builtin: bool,
+    pub derives: Vec<String>,
+    pub facet_path_kind: Option<Vec<String>>,
     pub hidden: bool,
     pub readonly: bool,
     pub visibility: Visibility,
@@ -19,6 +21,8 @@ impl Default for ResolvedDeclAttrs {
         Self {
             doc: None,
             builtin: false,
+            derives: Vec::new(),
+            facet_path_kind: None,
             hidden: false,
             readonly: false,
             visibility: Visibility::Public,
@@ -93,6 +97,9 @@ pub enum Resolved {
     /// Function application
     App(Span, Box<Resolved>, Vec<ResolvedRecordLitArg>),
 
+    /// Explicit generic-slot application.
+    TypeApply(Span, Box<Resolved>, Vec<AstTy>),
+
     /// Block of statements
     Block(Span, Vec<Resolved>),
 
@@ -110,6 +117,9 @@ pub enum Resolved {
 
     /// Context map
     ContextMap(Span, Box<Resolved>, Box<Resolved>),
+
+    /// Applicative application
+    ContextApply(Span, Box<Resolved>, Box<Resolved>),
 
     /// Context bind
     ContextBind(Span, Box<Resolved>, Box<Resolved>),
@@ -189,10 +199,6 @@ pub enum Resolved {
     /// Constructor call: `Point(1.0, 2.0)`
     ConstructorCall(Span, ResolvedId, Vec<ResolvedRecordLitArg>),
 
-    /// Compiler-synthesized target-type witness used only for conversion
-    /// surfaces such as `from(value, String)`.
-    TypeRefWitness(Span, AstTy),
-
     /// Struct definition (passed through for Scar)
     StructDef(
         Span,
@@ -203,7 +209,7 @@ pub enum Resolved {
     ),
 
     /// Record definition (passed through for Scar)
-    RecordDef(Span, ResolvedId, Vec<ResolvedField>),
+    RecordDef(Span, ResolvedId, Vec<ResolvedField>, ResolvedDeclAttrs),
 
     /// Error type definition
     DeferrorDef(Span, ResolvedId, Vec<ResolvedField>, Box<Resolved>),
@@ -224,6 +230,7 @@ pub enum Resolved {
         Vec<ResolvedTypeParam>,
         Vec<ResolvedFunParam>,
         Option<AstTy>,
+        Option<ResolvedWhereClause>,
         Box<Resolved>,
         ResolvedDeclAttrs,
     ),
@@ -252,6 +259,7 @@ pub enum Resolved {
         Span,
         ResolvedId,
         Vec<ResolvedTypeParam>,
+        Option<ResolvedWhereClause>,
         Vec<ResolvedTraitMethodSig>,
         ResolvedDeclAttrs,
     ),
@@ -262,6 +270,7 @@ pub enum Resolved {
         ResolvedId,
         Vec<AstTy>,
         AstTy,
+        Option<ResolvedWhereClause>,
         Vec<ResolvedTraitImplMethod>,
     ),
 
@@ -284,6 +293,9 @@ pub enum Resolved {
 
     /// Builtin type declaration
     BuiltinTypeDecl(Span, ResolvedId, Vec<Symbol>, ResolvedDeclAttrs),
+
+    /// Compile-time-only alias for a function signature.
+    TypeAlias(Span, Symbol, Vec<ResolvedTypeParam>, AstTy),
 
     /// Declaration-only Result constructor contract from std modules.
     ///
@@ -394,21 +406,53 @@ pub struct ResolvedEnumVariant {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedTraitMethodSig {
     pub id: ResolvedId,
+    pub fun_params: Vec<AstTy>,
     pub type_params: Vec<ResolvedTypeParam>,
     pub params: Vec<ResolvedFunParam>,
     pub ret_ty: AstTy,
+    pub where_clause: Option<ResolvedWhereClause>,
     pub body: Option<Box<Resolved>>,
     pub attrs: ResolvedDeclAttrs,
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedWhereClause {
+    pub constraints: Vec<ResolvedWhereConstraint>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedWhereConstraint {
+    pub subject: AstTy,
+    pub bounds: Vec<ResolvedWhereConstraintRhs>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ResolvedWhereConstraintRhs {
+    Trait(ResolvedId),
+    TypeConstructor {
+        span: Span,
+        slots: Vec<AstTy>,
+    },
+    TraitSlot {
+        trait_id: ResolvedId,
+        slot_name: Symbol,
+        slot_ordinal: u32,
+        span: Span,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedTraitImplMethod {
     pub method_name: Symbol,
     pub function_id: ResolvedId,
+    pub fun_params: Vec<AstTy>,
     pub type_params: Vec<ResolvedTypeParam>,
     pub params: Vec<ResolvedFunParam>,
     pub ret_ty: Option<AstTy>,
+    pub where_clause: Option<ResolvedWhereClause>,
     pub body: Box<Resolved>,
     pub attrs: ResolvedDeclAttrs,
     pub span: Span,

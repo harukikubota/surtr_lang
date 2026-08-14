@@ -571,7 +571,7 @@ fn repl_colorizes_sig_command_signature() {
 #[test]
 fn repl_sig_expression_query_flows_through_cli_presentation() {
     let output = run_repl_session(
-        "ret = Ok(\"3\")\nup = {|term: String| try_from(term, Int)}\n:sig ret |>= up\n:quit\n",
+        "ret = Ok(\"3\")\nup = {|term: String| try_from::<Int>(term)}\n:sig ret |>= up\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -580,11 +580,14 @@ fn repl_sig_expression_query_flows_through_cli_presentation() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("defined:"));
-    assert!(stdout.contains("Chainable::chain("));
-    assert!(stdout.contains("specialized:"));
-    assert!(stdout.contains("ret |>= up: Result<Int>"));
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(combined.contains("Unsupported command query form."));
+    assert!(combined.contains("operator target"));
+    assert!(!combined.contains("ret |>= up: Result<Int>"));
 }
 
 #[test]
@@ -623,6 +626,46 @@ fn repl_rejects_persisting_unresolved_result_value_binding() {
     );
     assert!(combined.contains("ret = todo()"), "{combined}");
     assert!(!combined.contains("ret: Result<_, Error>"), "{combined}");
+}
+
+#[test]
+fn repl_rejects_direct_generator_bridge_builtin_call() {
+    let output = run_repl_session("Generator::gen_make(3, [1, 2])\n:quit\n");
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
+    let combined = format!("{stdout}\n{stderr}");
+
+    assert!(combined.contains("Generator::gen_make/2"), "{combined}");
+    assert!(combined.contains("is private"), "{combined}");
+    assert!(
+        !combined.contains("Cannot persist binding with unresolved type variable."),
+        "{combined}"
+    );
+}
+
+#[test]
+fn repl_persists_public_generator_bindings() {
+    let output = run_repl_session(
+        "g = Generator::range(1, 3)\n:type g\nGenerator::idx(g)\nGenerator::to_list(g)\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
+    assert!(
+        stdout.contains("g: Generator<Int, Int> = (0, [1, 2, 3])"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("type: Generator<Int, Int>"), "{stdout}");
+    assert!(
+        stdout.contains("\n0\n") || stdout.contains("> 0"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("[1, 2, 3]"), "{stdout}");
 }
 
 #[test]
@@ -674,7 +717,8 @@ fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("trait PipeApply { pipe_apply(self: Self, value: $A) -> $B }"));
+    assert!(stdout.contains("PipeApply::pipe_apply(self: Self, value: $A) -> $B"));
+    assert!(stdout.contains("impl targets:"));
     assert!(stdout.contains("specialized:"));
     assert!(stdout.contains("id(Int) -> Int"));
 }
@@ -736,17 +780,17 @@ fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
         stdout
-            .matches("Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>")
+            .matches("Duration::deconstruct(self: Duration) -> Option<Int>")
             .count()
             >= 3,
         "{stdout}"
     );
     assert!(
-        stdout.contains("specialized:\n  Duration!() -> MatchResult<Int, Error>"),
+        stdout.contains("specialized:\n  Duration!() -> Option<Int>"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"),
+        stdout.contains("specialized:\n  Duration!(Duration) -> Option<Int>"),
         "{stdout}"
     );
 }
@@ -772,13 +816,13 @@ fn repl_range_constructor_and_extractor_queries_render_through_cli() {
         "{stdout}"
     );
     assert!(stdout.contains("Range::deconstruct"), "{stdout}");
-    assert!(stdout.contains("MatchResult<($A, $A), Error>"), "{stdout}");
+    assert!(stdout.contains("Option<($A, $A)>"), "{stdout}");
     assert!(
         stdout.contains("Deconstruct a `Range` into `(min, max)` in pattern position."),
         "{stdout}"
     );
     assert!(
-        stdout.contains("specialized:\n  Range!() -> MatchResult<($A, $A), Error>"),
+        stdout.contains("specialized:\n  Range!() -> Option<($A, $A)>"),
         "{stdout}"
     );
 }
@@ -810,7 +854,7 @@ fn repl_sig_enum_rejects_extra_input_with_shared_message() {
 #[test]
 fn repl_info_renders_styled_summary_for_queries() {
     let output = run_repl_session_with_color(
-        "ret = Ok(\"3\")\nup = {|term: String| try_from(term, Int)}\n:info ret |>= up\n:quit\n",
+        "ret = Ok(\"3\")\nup = {|term: String| try_from::<Int>(term)}\n:info ret |>= up\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -819,13 +863,16 @@ fn repl_info_renders_styled_summary_for_queries() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\u{1b}["));
-    let plain = strip_ansi(&stdout);
-    assert!(plain.contains("kind:"), "{plain}");
-    assert!(plain.contains("defined:"), "{plain}");
-    assert!(plain.contains("specialized:"), "{plain}");
-    assert!(plain.contains("Result<Int>"), "{plain}");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(combined.contains("\u{1b}["));
+    let plain = strip_ansi(&combined);
+    assert!(plain.contains("Unsupported command query form."), "{plain}");
+    assert!(plain.contains("operator target"), "{plain}");
+    assert!(!plain.contains("ret |>= up: Result<Int>"), "{plain}");
 }
 
 #[test]
@@ -869,7 +916,7 @@ fn repl_sig_missing_symbol_prints_guidance() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(stdout.contains("No signature found for a"));
-    assert!(stdout.contains(":sig $a") || stdout.contains(":doc <symbol>"));
+    assert!(stdout.contains(":doc <symbol>"));
 }
 
 #[test]
@@ -1242,7 +1289,7 @@ supervisor_init {
             "--script",
             script_path.to_str().expect("script path must be utf-8"),
         ],
-        ":doc MyServer::pid\n:sig MyServer::pid\n:sig MyServer\nserver = MyServer::pid()\n:sig $server\n:type server\n:info server\n:quit\n",
+        ":doc MyServer::pid\n:sig MyServer::pid\n:sig MyServer\nserver = MyServer::pid()\n:sig server\n:type server\n:info server\n:quit\n",
     );
     assert!(
         output.status.success(),
@@ -1344,7 +1391,10 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     assert!(stdout.contains("Tuple._0"), "{stdout}");
     assert!(stdout.contains("Tuple._1"), "{stdout}");
-    assert!(stdout.contains("No signature found for Tuple"), "{stdout}");
+    assert!(
+        stdout.contains("(T1, T2, ..) : Tuple<T1, T2, ..>"),
+        "{stdout}"
+    );
     assert!(stdout.contains("defstruct Config"), "{stdout}");
     assert!(stdout.contains("defstruct StyledDocStyle"), "{stdout}");
     assert!(stdout.contains("StyledDocStyle::new("), "{stdout}");
@@ -1353,7 +1403,10 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     assert!(stdout.contains("No docs found for add"), "{stdout}");
     assert!(stdout.contains("Imported Add::add"), "{stdout}");
     assert!(stdout.contains("Add::add"), "{stdout}");
-    assert!(stdout.contains("pair._1: Int"), "{stdout}");
+    assert!(
+        stdout.contains("No signature found for pair._1"),
+        "{stdout}"
+    );
     assert!(
         stderr.contains("Unsupported command query argument `Tuple._0`"),
         "{stderr}"
@@ -1363,7 +1416,7 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
 #[test]
 fn repl_colorizes_closure_doc_footer_and_type_output() {
     let output =
-        run_repl_session_with_color("c = {|x: Int, y: Int| x + y}\n:doc $c\n:type c\n:quit\n");
+        run_repl_session_with_color("c = {|x: Int, y: Int| x + y}\n:doc c\n:type c\n:quit\n");
     assert!(
         output.status.success(),
         "repl failed\nstdout:\n{}\nstderr:\n{}",
@@ -1392,19 +1445,19 @@ fn repl_supports_deferred_lens_bindings_and_lens_command() {
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-    assert!(stdout.contains("a: Facet<_, _> = Tuple._1"), "{stdout}");
+    assert!(
+        stdout.contains("a: Facet<InfallibleStructural, _, _, _, _> = Tuple._1"),
+        "{stdout}"
+    );
     assert!(stdout.contains("2"), "{stdout}");
     assert!(stdout.contains("FacetPath"), "{stdout}");
-    assert!(stdout.contains("view result: _"), "{stdout}");
+    assert!(stdout.contains("replacement focus: _"), "{stdout}");
     assert!(stdout.contains("full path: Tuple._1"), "{stdout}");
     assert!(stdout.contains("Flow"), "{stdout}");
     assert!(stdout.contains("hop 1: Tuple._1"), "{stdout}");
     assert!(stdout.contains("Stops"), "{stdout}");
     assert!(stdout.contains("stop 1:"), "{stdout}");
-    assert!(
-        stdout.contains("view result: Result<Int, Error>"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("kind: VariantPath"), "{stdout}");
     assert!(
         stdout.contains("variant mismatch returns Result"),
         "{stdout}"
@@ -1424,11 +1477,17 @@ fn repl_renders_top_level_lens_chain_expressions() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
-        stdout.contains("ep: Facet<IntBase, Unit> = IntBase.Oct"),
+        stdout.contains("ep: Facet<VariantPath, IntBase, Unit, _, _> = IntBase.Oct"),
         "{stdout}"
     );
-    assert!(stdout.contains("a: Facet<_, _> = Tuple._1"), "{stdout}");
-    assert!(stdout.contains("Facet<_, _> = Tuple._1.Oct"), "{stdout}");
+    assert!(
+        stdout.contains("a: Facet<InfallibleStructural, _, _, _, _> = Tuple._1"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Facet<InfallibleStructural, _, _, _, _> = Tuple._1.Oct"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -1457,6 +1516,58 @@ fn repl_reports_return_mismatch_for_concretized_trait_helper_closure() {
     assert!(
         !combined.contains("could not use the current closure constraints"),
         "trait helper should have concretized before return mismatch:\n{}",
+        combined
+    );
+}
+
+#[test]
+fn repl_propagates_apply_context_into_nested_pure() {
+    let output = run_repl_session(
+        "l: Result<(Int -> Int)> = Applicative::pure({|n| n + 10})\nApplicative::ap(l, Applicative::pure(10))\n:quit\n",
+    );
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = strip_ansi(&combined);
+    assert!(
+        combined.contains("Ok(20)"),
+        "nested pure should inherit apply context, got:\n{}",
+        combined
+    );
+    assert!(
+        !combined.contains("Applicative::pure requires an expected return type"),
+        "nested pure unexpectedly lost its expected type:\n{}",
+        combined
+    );
+}
+
+#[test]
+fn repl_infers_monad_return_context_from_bind_rhs() {
+    let output = run_repl_session("Monad::return(1) |>= {|n| Ok(10 + n)}\n:quit\n");
+    assert!(
+        output.status.success(),
+        "repl failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = strip_ansi(&format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    ));
+    assert!(combined.contains("Ok(11)"), "got:\n{}", combined);
+    assert!(
+        !combined.contains("requires an expected return type"),
+        "constructor helper lost RHS context:\n{}",
         combined
     );
 }

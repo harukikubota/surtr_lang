@@ -3,7 +3,7 @@ defstruct Slug {
 }
 
 impl From<Slug> for String {
-  def from(self: Self, to: TypeRef<Slug>) -> Slug {
+  def from(self: Self) -> Slug {
     Slug::new(String::replace(String::trim(self), " ", "-"))
   }
 }

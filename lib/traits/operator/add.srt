@@ -10,5 +10,5 @@ xldr(1)> Add::add(1, 2)
 """
 deftrait Add {
   # Return the addition result.
-  def add(self: Self, rhs: Self) -> Self
+  def add::<Self>(self: Self, rhs: Self) -> Self
 }

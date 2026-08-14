@@ -23,10 +23,10 @@ Coverage runner:
   - Runner: `./target/debug/surtr test spec`
 - `tests/fixtures/script/pass/**.srt` + `.expected`
   - Script-mode success fixtures for file boundary, stdmod, JSON, string, process-runtime, and usecase behavior
-  - Runner: `tests/integration/run_srt.rs` (`run_srt::spec_fixtures_bucket_0..3`)
+  - Runner: `tests/integration/run_srt.rs` (`run_srt::spec_fixtures_bucket_0..7`)
 - `tests/fixtures/script/fail/**.srt` + `.error`
   - Script-mode compile error fixtures (`phase` and `contains` expectations)
-  - Runner: `tests/integration/run_srt.rs` (`run_srt::compile_error_fixtures_bucket_0..3`)
+  - Runner: `tests/integration/run_srt.rs` (`run_srt::compile_error_fixtures_bucket_0..15`)
 - `tests/fixtures/modules/pass/**/entry.srt` + `entry.expected`
   - Multi-source module behavior fixtures
   - Runner: `tests/integration/module_import_fixtures.rs` (`module_spec_fixtures_bucket_0..3`)

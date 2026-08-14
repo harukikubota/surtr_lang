@@ -389,7 +389,7 @@ fn type_error_spec_splits_multiline_annotation_mismatch() {
 fn render_flow_operator_error_keeps_actual_types_out_of_help() {
     let source = "bad = 1 |>= &inc";
     let err = TypeError {
-            message: "`|>=` requires Chainable implementation on the left, got Int".into(),
+            message: "`|>=` requires Monad implementation on the left, got Int".into(),
             span: Span { start: 6, end: 7 },
             hint: Some(
                 "`|>=` signature rule: LHS: Result<A, E> or List<A>; RHS: (A -> Result<B, E>) or (A -> List<B>); result: Result<B, E> or List<B>. LHS: Int. RHS: (Int -> Result<Int>). Operators share precedence and resolve left-to-right, so LHS is the type produced so far."
@@ -405,7 +405,7 @@ fn render_flow_operator_error_keeps_actual_types_out_of_help() {
     assert!(rendered_plain.contains("OP rule: Result<A> |>= (A -> Result<B>) -> Result<B>"));
     assert!(rendered_plain.contains("Step: Int |>= (Int -> Result<Int>) -> Result<Int>"));
     assert!(rendered_plain.contains(
-        "Reason: LHS is Int, but `|>=` requires a Chainable such as Result<A>, List<A>, or Option<A>."
+        "Reason: LHS is Int, but `|>=` requires a Monad such as Result<A>, List<A>, or Option<A>."
     ));
     assert_eq!(
         spec.help.as_deref(),
@@ -709,7 +709,7 @@ fn source_signature_caption_handles_defmod_and_impls() {
     );
 
     let trait_impl_source = r#"impl From<String> for Int {
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from(self: Self) -> String {
     inspect(self)
   }
 }"#;
@@ -719,6 +719,6 @@ fn source_signature_caption_handles_defmod_and_impls() {
     assert_eq!(
         source_signature_caption(trait_impl_source, &trait_impl_lines, trait_impl_sig, "from")
             .as_deref(),
-        Some("impl From<String> for Int { def from(self: Self, to: TypeRef<String>) -> String }")
+        Some("impl From<String> for Int { def from(self: Self) -> String }")
     );
 }

@@ -1,2 +1,2 @@
-print(inspect(from(Boxed::Box(5), Option)))
-print(inspect(from(Boxed::Box("ok"), Option)))
+print(inspect(from::<Option<Int>>(Boxed::Box(5))))
+print(inspect(from::<Option<String>>(Boxed::Box("ok"))))

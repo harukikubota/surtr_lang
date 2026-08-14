@@ -200,7 +200,7 @@ defstruct Box<$A> {
 }
 
 impl Box {
-  def new<$A: Compare>(value: $A) -> Box<$A> {
+  def new(value: $A) -> Box<$A> where $A: Compare {
     Box { value }
   }
 }
@@ -350,7 +350,7 @@ import Test;
 test("String") {
   describe("TryFrom") {
     it("parses ints through the assertion pipeline") {
-      try_from("1", Int) |>= assert_eq(1)
+      try_from::<Int>("1") |>= assert_eq(1)
     }
   }
 }

@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
-use sigil::resolved::{Resolved, ResolvedId, ResolvedProcessHandlerUid, ResolvedProcessSpec};
+use sigil::resolved::{
+    Resolved, ResolvedId, ResolvedProcessHandlerUid, ResolvedProcessSpec, ResolvedWhereClause,
+    ResolvedWhereConstraintRhs,
+};
 use sindr::primitives::SurtrInt;
-use spire::ast::{BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, Visibility};
+use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, Visibility};
 
 use crate::types::Ty;
 
@@ -18,6 +21,87 @@ pub struct TypedProgram {
     pub nodes: Vec<TypedNode>,
     pub process_specs: Vec<TypedProcessSpec>,
     pub boot_plan: SupervisorInitSpec,
+}
+
+/// A declaration-level constraint clause preserved by Scar. Constructor
+/// arity, slot mappings, parent-trait closure, and signature trait bounds are
+/// validated while declarations are predeclared and checked.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedWhereClause {
+    pub constraints: Vec<TypedWhereConstraint>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedWhereConstraint {
+    pub subject: AstTy,
+    pub bounds: Vec<TypedWhereConstraintRhs>,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum TypedWhereConstraintRhs {
+    Trait(ResolvedId),
+    TypeConstructor {
+        span: Span,
+        slots: Vec<AstTy>,
+    },
+    TraitSlot {
+        trait_id: ResolvedId,
+        slot_name: String,
+        slot_ordinal: u32,
+        span: Span,
+    },
+}
+
+impl From<&ResolvedWhereClause> for TypedWhereClause {
+    fn from(clause: &ResolvedWhereClause) -> Self {
+        Self {
+            constraints: clause
+                .constraints
+                .iter()
+                .map(|constraint| TypedWhereConstraint {
+                    subject: constraint.subject.clone(),
+                    bounds: constraint
+                        .bounds
+                        .iter()
+                        .map(|bound| match bound {
+                            ResolvedWhereConstraintRhs::Trait(id) => {
+                                TypedWhereConstraintRhs::Trait(id.clone())
+                            }
+                            ResolvedWhereConstraintRhs::TypeConstructor { span, slots } => {
+                                TypedWhereConstraintRhs::TypeConstructor {
+                                    span: span.clone(),
+                                    slots: slots.clone(),
+                                }
+                            }
+                            ResolvedWhereConstraintRhs::TraitSlot {
+                                trait_id,
+                                slot_name,
+                                slot_ordinal,
+                                span,
+                            } => TypedWhereConstraintRhs::TraitSlot {
+                                trait_id: trait_id.clone(),
+                                slot_name: slot_name.clone(),
+                                slot_ordinal: *slot_ordinal,
+                                span: span.clone(),
+                            },
+                        })
+                        .collect(),
+                    span: constraint.span.clone(),
+                })
+                .collect(),
+            span: clause.span.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedTraitMethodInfo {
+    pub name: String,
+    pub params: Vec<Ty>,
+    pub ret_ty: Ty,
+    pub where_clause: Option<TypedWhereClause>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -121,6 +205,7 @@ pub enum TraitCallOrigin {
 pub enum OperatorTraitOp {
     PipeApply,
     PipeMap,
+    ContextApply,
     PipeBind,
     SlashCompose,
     Compose,
@@ -144,6 +229,7 @@ pub enum TypedFacetSegment {
         container_field_count: u32,
         container_type_name: String,
         readonly: bool,
+        private: bool,
         focus_readonly_root: bool,
         focus_type_name: Option<String>,
     },
@@ -196,23 +282,17 @@ pub struct TypedFieldPolicy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypedFacetPathKind {
-    Structural,
-    Variant,
+    InfallibleStructural,
+    FallibleStructural,
+    VariantPath,
 }
 
 impl TypedFacetPathKind {
-    pub fn from_may_fail(may_fail: bool) -> Self {
-        if may_fail {
-            Self::Variant
-        } else {
-            Self::Structural
-        }
-    }
-
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Structural => "structural",
-            Self::Variant => "variant",
+            Self::InfallibleStructural => "InfallibleStructural",
+            Self::FallibleStructural => "FallibleStructural",
+            Self::VariantPath => "VariantPath",
         }
     }
 }
@@ -221,6 +301,11 @@ impl TypedFacetPathKind {
 pub struct TypedFacetPath {
     pub source_ty: Ty,
     pub focus_ty: Ty,
+    /// Update-side slots carried by a concrete Facet annotation.  Both are
+    /// `Hole` for a deferred path, so consuming the same binding can derive a
+    /// fresh replacement type each time.
+    pub update_source_ty: Ty,
+    pub update_focus_ty: Ty,
     pub path_kind: TypedFacetPathKind,
     pub may_fail: bool,
     pub source_readonly_root: bool,
@@ -278,7 +363,6 @@ pub enum PendingFacetSegment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypedFacetSetMode {
     Exact,
-    WrapPlainResult,
     CaseSet,
 }
 
@@ -318,6 +402,8 @@ pub enum TypedInner {
     TupleLiteral(Vec<TypedNode>),
     InterpolatedStr(Vec<TypedInterpolatedPart>),
     Dbg(Vec<TypedDbgArg>),
+    /// An explicit parenthesized eager boundary at a `Lazy<T>` argument site.
+    EagerBoundary(Box<TypedNode>),
     If(Box<TypedNode>, Box<TypedNode>, Option<Box<TypedNode>>),
     Assert(Box<TypedNode>, Box<TypedNode>),
     Ensure(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
@@ -412,11 +498,12 @@ pub enum TypedInner {
         Vec<TypedTypeParam>,
         Vec<TypedFunParam>,
         Ty,
+        Option<TypedWhereClause>,
         Box<TypedNode>,
         Visibility,
     ),
 
-    /// Extractor definition — function-shaped runtime entry with MatchResult return type.
+    /// Extractor definition — function-shaped runtime entry with Option return type.
     ExtractorDef(
         u32,
         ResolvedId,
@@ -428,10 +515,10 @@ pub enum TypedInner {
     ),
 
     /// Trait definition metadata.
-    TraitDef(String, Vec<String>),
+    TraitDef(String, Option<TypedWhereClause>, Vec<TypedTraitMethodInfo>),
 
     /// Trait impl metadata.
-    TraitImplDef(String, String),
+    TraitImplDef(String, String, Option<TypedWhereClause>),
 
     /// Builtin extractor declaration.
     BuiltinExtractorDecl(ResolvedId, Ty, Ty),
@@ -483,6 +570,7 @@ pub enum TypedPattern {
         extractor_ty: Ty,
         success_tag: u32,
         no_match_tag: u32,
+        /// Retained for typed-IR compatibility; Option lowering ignores it.
         err_tag: u32,
         seq_tys: Vec<Ty>,
         items: Vec<TypedPattern>,
@@ -531,6 +619,7 @@ pub enum TypedMatchPattern {
         extractor_ty: Ty,
         success_tag: u32,
         no_match_tag: u32,
+        /// Retained for typed-IR compatibility; Option lowering ignores it.
         err_tag: u32,
         seq_tys: Vec<Ty>,
         items: Vec<TypedMatchPattern>,

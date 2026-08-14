@@ -213,7 +213,6 @@ pub struct BuiltinTypeUsagePolicy {
     pub type_annotation_allowed: bool,
     pub signature_allowed: bool,
     pub runtime_value_allowed: bool,
-    pub type_ref_witness_allowed: bool,
     pub process_boundary_allowed: bool,
     pub facet_value_forbidden_in_stage1: bool,
     pub clause_block_surface_only: bool,
@@ -225,7 +224,6 @@ impl BuiltinTypeUsagePolicy {
         type_annotation_allowed: bool,
         signature_allowed: bool,
         runtime_value_allowed: bool,
-        type_ref_witness_allowed: bool,
         process_boundary_allowed: bool,
         facet_value_forbidden_in_stage1: bool,
         clause_block_surface_only: bool,
@@ -235,7 +233,6 @@ impl BuiltinTypeUsagePolicy {
             type_annotation_allowed,
             signature_allowed,
             runtime_value_allowed,
-            type_ref_witness_allowed,
             process_boundary_allowed,
             facet_value_forbidden_in_stage1,
             clause_block_surface_only,
@@ -244,19 +241,19 @@ impl BuiltinTypeUsagePolicy {
     }
 
     pub const fn ordinary_runtime_type() -> Self {
-        Self::new(true, true, true, false, true, false, false, false)
+        Self::new(true, true, true, true, false, false, false)
     }
 
     pub const fn compiler_surface_only() -> Self {
-        Self::new(false, false, false, false, false, true, false, false)
+        Self::new(false, false, false, false, true, false, false)
     }
 
     pub const fn clause_block_surface_only() -> Self {
-        Self::new(false, false, false, false, false, true, true, false)
+        Self::new(false, false, false, false, true, true, false)
     }
 
     pub const fn lazy_signature_surface_only() -> Self {
-        Self::new(false, false, false, false, false, true, false, true)
+        Self::new(false, false, false, false, true, false, true)
     }
 }
 
@@ -282,9 +279,8 @@ pub enum TypeName {
     Generator,
     Result,
     Duration,
-    ProcessInit,
+    StandbyInit,
     Lazy,
-    TypeRef,
     Hole,
     Facet,
     Pid,
@@ -316,9 +312,8 @@ impl TypeName {
             Self::Generator => "Generator",
             Self::Result => "Result",
             Self::Duration => "Duration",
-            Self::ProcessInit => "ProcessInit",
+            Self::StandbyInit => "StandbyInit",
             Self::Lazy => "Lazy",
-            Self::TypeRef => "TypeRef",
             Self::Hole => "Hole",
             Self::Facet => "Facet",
             Self::Pid => "PID",
@@ -336,13 +331,12 @@ impl TypeName {
     pub const fn supports_inherent_impl(self) -> bool {
         !matches!(
             self,
-            Self::TypeRef
-                | Self::Hole
+            Self::Hole
                 | Self::Closure
                 | Self::MatchArms
                 | Self::CondClauses
                 | Self::BulkUpdateEntries
-                | Self::ProcessInit
+                | Self::StandbyInit
                 | Self::Lazy
                 | Self::Pid
                 | Self::FileHandle
@@ -351,22 +345,17 @@ impl TypeName {
 
     pub const fn usage_policy(self) -> BuiltinTypeUsagePolicy {
         match self {
-            Self::TypeRef => {
-                BuiltinTypeUsagePolicy::new(false, false, false, true, false, false, false, false)
-            }
-            Self::ProcessInit => {
-                BuiltinTypeUsagePolicy::new(false, false, false, false, true, false, false, false)
+            Self::StandbyInit => {
+                BuiltinTypeUsagePolicy::new(false, false, false, true, false, false, false)
             }
             Self::Lazy => BuiltinTypeUsagePolicy::lazy_signature_surface_only(),
             Self::Hole | Self::Closure => BuiltinTypeUsagePolicy::compiler_surface_only(),
             Self::MatchArms | Self::CondClauses | Self::BulkUpdateEntries => {
                 BuiltinTypeUsagePolicy::clause_block_surface_only()
             }
-            Self::Facet => {
-                BuiltinTypeUsagePolicy::new(true, true, true, false, true, true, false, false)
-            }
+            Self::Facet => BuiltinTypeUsagePolicy::new(true, true, true, true, true, false, false),
             Self::Pid | Self::Workers | Self::WorkerLease | Self::TaskHandle => {
-                BuiltinTypeUsagePolicy::new(true, true, true, false, true, false, false, false)
+                BuiltinTypeUsagePolicy::new(true, true, true, true, false, false, false)
             }
             _ => BuiltinTypeUsagePolicy::ordinary_runtime_type(),
         }
@@ -394,9 +383,8 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "Generator" => Some(TypeName::Generator),
         "Result" => Some(TypeName::Result),
         "Duration" => Some(TypeName::Duration),
-        "ProcessInit" => Some(TypeName::ProcessInit),
+        "StandbyInit" => Some(TypeName::StandbyInit),
         "Lazy" => Some(TypeName::Lazy),
-        "TypeRef" => Some(TypeName::TypeRef),
         "Hole" => Some(TypeName::Hole),
         "Facet" => Some(TypeName::Facet),
         "PID" => Some(TypeName::Pid),
@@ -430,9 +418,8 @@ pub const fn canonical_builtin_type_has_surface_declaration(type_name: TypeName)
             | TypeName::HashMap
             | TypeName::Generator
             | TypeName::Result
-            | TypeName::ProcessInit
+            | TypeName::StandbyInit
             | TypeName::Lazy
-            | TypeName::TypeRef
             | TypeName::Hole
             | TypeName::Facet
             | TypeName::Workers
@@ -481,7 +468,7 @@ pub fn reserved_owner_surface_name_constraint(
     }
 
     let type_name = builtin_type_name(surface_name)?;
-    if surface_name != TypeName::ProcessInit.as_str()
+    if surface_name != TypeName::StandbyInit.as_str()
         && canonical_builtin_type_has_surface_declaration(type_name)
     {
         return Some(ReservedOwnerSurfaceNameConstraint {
@@ -687,26 +674,20 @@ mod tests {
         );
 
         assert!(
-            reserved_owner_surface_name_constraint("ProcessInit").is_none(),
-            "ProcessInit owner remains allowed for runtime init lowering"
+            reserved_owner_surface_name_constraint("StandbyInit").is_none(),
+            "StandbyInit owner remains allowed for runtime init lowering"
         );
     }
 
     #[test]
-    fn builtin_type_usage_policy_separates_annotation_and_witness_capabilities() {
+    fn builtin_type_usage_policy_separates_annotation_and_special_capabilities() {
         let string = builtin_type_usage_policy("String").expect("String should be known");
         assert!(string.type_annotation_allowed);
         assert!(string.signature_allowed);
         assert!(string.runtime_value_allowed);
-        assert!(!string.type_ref_witness_allowed);
-
-        let type_ref = builtin_type_usage_policy("TypeRef").expect("TypeRef should be known");
-        assert!(!type_ref.type_annotation_allowed);
-        assert!(!type_ref.runtime_value_allowed);
-        assert!(type_ref.type_ref_witness_allowed);
 
         let process_init =
-            builtin_type_usage_policy("ProcessInit").expect("ProcessInit should be known");
+            builtin_type_usage_policy("StandbyInit").expect("StandbyInit should be known");
         assert!(!process_init.type_annotation_allowed);
         assert!(process_init.process_boundary_allowed);
 

@@ -2,7 +2,7 @@
 Standard `Duration` data type.
 `Duration` is an opaque millisecond span used by process and task APIs.
 The field stays private so callers construct validated values through `Duration(...)`
-or `try_from(..., Duration)`, while the `100ms` literal remains syntax sugar.
+or `try_from::<Duration>(...)`, while the `100ms` literal remains syntax sugar.
 
 ## REPL
 xldr(1)> 250ms
@@ -48,7 +48,7 @@ impl Duration {
   xldr(2)> Duration::sub(10ms, 20ms)
   Err(InvalidDuration("duration subtraction would be negative: 10ms - 20ms"))
   """
-  def sub(self: Self, rhs: Self) -> Result<Self, Error> {
+  def sub::<Duration>(self: Self, rhs: Self) -> Result<Self, Error> {
     if(
       self.millis < rhs.millis,
       Err(InvalidDuration("duration subtraction would be negative: " ++ to_string(self.millis) ++ "ms - " ++ to_string(rhs.millis) ++ "ms")),
@@ -63,8 +63,8 @@ impl Duration {
   xldr(1)> match 20ms { Duration(ms) => ms }
   20
   """
-  defextractor deconstruct(self: Self) -> MatchResult<Int, Error> {
-    MatchResult::Success(self.millis)
+  defextractor deconstruct(self: Self) -> Option<Int> {
+    Option::Some(self.millis)
   }
 }
 
@@ -75,7 +75,7 @@ impl Add for Duration {
   xldr(1)> 10ms + 20ms
   30ms
   """
-  def add(self: Self, rhs: Self) -> Self {
+  def add::<Duration>(self: Self, rhs: Self) -> Self {
     Duration { millis: self.millis + rhs.millis }
   }
 }
@@ -87,20 +87,8 @@ impl Eq for Duration {
   xldr(1)> 10ms == 10ms
   True
   """
-  def eq(self: Self, rhs: Self) -> Boolean {
+  def eq::<Duration>(self: Self, rhs: Self) -> Boolean {
     self.millis == rhs.millis
-  }
-}
-
-impl Neq for Duration {
-  @doc """
-  Return `True` when the durations differ.
-  ## REPL
-  xldr(1)> 10ms != 20ms
-  True
-  """
-  def neq(self: Self, rhs: Self) -> Boolean {
-    self.millis != rhs.millis
   }
 }
 
@@ -111,7 +99,7 @@ impl Compare for Duration {
   xldr(1)> compare(10ms, 20ms)
   Ordering::Less
   """
-  def compare(self: Self, rhs: Self) -> Ordering {
+  def compare::<Duration>(self: Self, rhs: Self) -> Ordering {
     if(
       self.millis < rhs.millis,
       Ordering::Less,
@@ -128,7 +116,7 @@ impl Show for Duration {
   xldr(1)> to_string(250ms)
   "250ms"
   """
-  def to_string(self: Self) -> String {
+  def to_string::<Duration>(self: Self) -> String {
     inspect(self)
   }
 }
@@ -140,12 +128,12 @@ impl TryFrom<Duration> for Int {
   Prefer the literal form or constructor sugar in ordinary code.
 
   ## REPL
-  xldr(1)> try_from(10, Duration)
+  xldr(1)> try_from::<Duration>(10)
   Ok(10ms)
   xldr(2)> Duration(10)
   Ok(10ms)
   """
-  def try_from(self: Self, to: TypeRef<Duration>) -> Result<Duration, Error> {
+  def try_from::<Duration>(self: Self) -> Result<Duration, Error> {
     Duration(self)
   }
 }

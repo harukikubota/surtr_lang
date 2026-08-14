@@ -8,7 +8,7 @@ def keep(value: Result<String>) -> Result<Result<String>> { Ok(value) }
 values = [10, 20]
 map = HashMap::from_entries([("talk", 80)])
 pair = ("alice", 42)
-book = ScoreBook(values, map, Option::None)
+book = ScoreBook(values, map, Option::Some("guest"))
 
 print(inspect(Facet::view(Tuple._1, pair)))
 print(inspect(Facet::view(List.[1], values)))
@@ -28,26 +28,22 @@ print(inspect(get_talk(map)))
 book2 =? Facet::set(ScoreBook.scores.[0], book, 99)
 book3 =? Facet::over(ScoreBook.by_kind.["talk"], book2, &inc)
 book4 =? Facet::case_set(ScoreBook.nick.Some, book3, "alice")
-book5 =? Facet::case_over(ScoreBook.nick.Some?, book4, &bang)
-book6 =? Facet::case_over(ScoreBook.nick.Some?, ScoreBook(book5.scores, book5.by_kind, Option::None), &bang)
+book5 =? Facet::case_over(ScoreBook.nick.Some, book4, &bang)
 
 print(inspect(book5.scores))
 print(inspect(HashMap::get(book5.by_kind, "talk")))
 print(inspect(book5.nick))
-print(inspect(book6.nick))
 
 book7 =? Facet::bulk_update(book5) {
   scores.[1] <- set(25)
   by_kind.["talk"] <- over(&inc)
-  nick.Some? <- case_over(&bang)
+  nick.Some <- case_over(&bang)
 }
 result_book = ResultBook(Option::Some(Ok("alice")))
 result_book2 =? Facet::case_over(ResultBook.nick.Some, result_book, &bang)
 result_book3 =? Facet::case_over(ResultBook.nick.Some, result_book2, &keep)
-result_book4 =? Facet::case_over(ResultBook.nick.Some, ResultBook(Option::Some(Err(NoneError))), &bang)
 
 print(inspect(book7.scores))
 print(inspect(HashMap::get(book7.by_kind, "talk")))
 print(inspect(book7.nick))
 print(inspect(result_book3.nick))
-print(inspect(result_book4.nick))

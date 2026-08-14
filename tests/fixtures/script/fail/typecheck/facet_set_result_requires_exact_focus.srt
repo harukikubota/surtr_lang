@@ -1,0 +1,3 @@
+defrecord User(score: Result<Int>)
+user = User(Ok(1))
+bad = Facet::set(User.score, user, 2)

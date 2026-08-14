@@ -75,10 +75,11 @@ xldr(3)>
 
 ## 関連ページ
 
+- Lazy 引数と括弧の評価順: `./lazy-evaluation.md`
 - pattern 利用は `./pattern-matching.md`
 - extractor 利用は `./extractors.md`
 - 標準定義ソース全体は `./standard-modules.md`
-- `TypeRef` / `Hole` / `Unit` は `./special-types.md`
+- `Hole` / `Unit` は `./special-types.md`
 
 ## 確認したソース
 
@@ -88,4 +89,5 @@ xldr(3)>
 ## 躓きやすいポイント
 
 - `if`, `if_then`, `and`, `or` は call-style に見えても、評価規則は compiler が special-form 的に扱います。
+- Lazy 引数位置の `(expr)` は eager boundary です。選択前に `expr` を一度評価するため、短絡を保ちたい branch / RHS に不要な括弧を付けないでください。
 - `uncons` は通常関数呼び出しとしてではなく、主に `match` / `=?` 側の分解契約として読むと理解しやすいです。

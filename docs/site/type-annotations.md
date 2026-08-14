@@ -35,16 +35,19 @@ inc_fn: (Int -> Int) = &inc
 
 ## generic annotation
 
-generic parameter は `$` 付きで書きます。
+signature slot は `$` 付きで書きます。通常の `def` に型引数リストは書きません。
 
 ```surtr
-def id<$A>(value: $A) -> $A { value }
+def id(value: $A) -> $A { value }
 ```
 
 trait bound を付けるときは次の形です。
 
 ```surtr
-def twice<$N: Add>(x: $N) -> $N {
+def twice(x: $N) -> $N
+where
+  $N: Add
+{
   Add::add(x, x)
 }
 ```
@@ -65,50 +68,29 @@ def parse_bool(text: String) -> Result<Boolean> {
 
 補助表記として `Result<T, E>` が現れることがありますが、builtin type head の中心は `Result<T>` です。
 
-## `impl Trait` parameter
+## Trait 制約
 
-parameter 位置では `impl Trait` が使えます。
+匿名 `impl Trait` 型は使いません。名前付き signature slot と `where` clause で制約を記述します。
 
 ```surtr
-def show_value(x: impl Show) -> String {
+def show_value(x: $T) -> String
+where
+  $T: Show
+{
   to_string(x)
 }
 ```
 
-現時点では次は未対応です。
+## 明示型引数
 
-- `-> impl Trait`
-- `where` clause
-
-## `TypeRef<$T>`
-
-`TypeRef<$T>` は ordinary value type ではありません。  
-target-oriented trait method の witness としてだけ使います。
+変換先など、値引数だけでは決まらない型は `::<...>` で指定します。
 
 ```surtr
-@builtin type TypeRef<$T>
-
-deftrait From<$To> {
-  def from(self: Self, to: TypeRef<$To>) -> $To
-}
-
-deftrait TryFrom<$To> {
-  def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}
+text = from::<String>(42)
+number =? try_from::<Int>("42")
 ```
 
-### 使ってよい場所
-
-- trait head で宣言した型引数に対応する trait method parameter
-- それに対応する `impl Trait for Type` 側の method parameter
-
-### 使わない場所
-
-- 通常の `def` の引数型
-- 通常の `def` の戻り値型
-- field type
-- local binding の型注釈
-- first-class value としての生成・返却・保存
+明示型引数は runtime の値ではなく、Trait helper の target specialization にだけ使う型入力です。通常関数の型スロットは signature から導入し、`id::<Int>(1)` や `&id::<Int>` は書けません。
 
 ## 空リスト
 
@@ -124,14 +106,14 @@ names: List<String> = []
 呼び出し surface では target type を value ではなく型スロットとして読みます。
 
 ```text
-xldr(1)> print(from(42, String))
+xldr(1)> print(from::<String>(42))
 42
 xldr(2)>
 ```
 
 この `String` は ordinary value ではなく、変換先型の指定です。
 
-`TypeRef<$T>` の詳しい背景と利用境界は `./special-types.md` を参照してください。
+compiler-special type の利用境界は `./special-types.md` を参照してください。
 
 ## `_` / `Hole`
 
@@ -168,5 +150,5 @@ keep_one: (_ -> Int) = always(1)
 
 ## 躓きやすいポイント
 
-- `TypeRef<$T>` は通常の型注釈には使えず、target-oriented trait method parameter 専用です。
+- target-oriented trait の型入力は `::<...>` で指定し、値引数として型名を渡しません。
 - 空リスト `[]` は要素型が見えないため、文脈が弱い場所では型注釈を付ける前提で読むと混乱しにくいです。

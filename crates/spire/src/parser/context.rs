@@ -36,6 +36,7 @@ pub(crate) enum TopLevelDeclKind {
     BuiltinDecl,
     BuiltinExtractorDecl,
     BuiltinTypeDecl,
+    TypeAlias,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +82,7 @@ const SCRIPT_TOP_LEVEL_DECLS: &[TopLevelDeclKind] = &[
     TopLevelDeclKind::RecordDef,
     TopLevelDeclKind::DeferrorDef,
     TopLevelDeclKind::EnumDef,
+    TopLevelDeclKind::TypeAlias,
 ];
 
 const MODULE_TOP_LEVEL_DECLS: &[TopLevelDeclKind] = &[
@@ -98,6 +100,7 @@ const MODULE_TOP_LEVEL_DECLS: &[TopLevelDeclKind] = &[
     TopLevelDeclKind::RecordDef,
     TopLevelDeclKind::DeferrorDef,
     TopLevelDeclKind::EnumDef,
+    TopLevelDeclKind::TypeAlias,
     TopLevelDeclKind::ConstDef,
     TopLevelDeclKind::SupervisorInit,
 ];
@@ -118,6 +121,7 @@ const PROJECT_TOP_LEVEL_DECLS: &[TopLevelDeclKind] = &[
     TopLevelDeclKind::RecordDef,
     TopLevelDeclKind::DeferrorDef,
     TopLevelDeclKind::EnumDef,
+    TopLevelDeclKind::TypeAlias,
     TopLevelDeclKind::ConstDef,
     TopLevelDeclKind::SupervisorInit,
 ];
@@ -137,10 +141,12 @@ const STD_MODULE_TOP_LEVEL_DECLS: &[TopLevelDeclKind] = &[
     TopLevelDeclKind::RecordDef,
     TopLevelDeclKind::DeferrorDef,
     TopLevelDeclKind::EnumDef,
+    TopLevelDeclKind::TypeAlias,
     TopLevelDeclKind::ConstDef,
     TopLevelDeclKind::BuiltinDecl,
     TopLevelDeclKind::BuiltinExtractorDecl,
     TopLevelDeclKind::BuiltinTypeDecl,
+    TopLevelDeclKind::TypeAlias,
 ];
 
 const MODULE_MEMBER_DECLS: &[TopLevelDeclKind] = &[
@@ -149,6 +155,7 @@ const MODULE_MEMBER_DECLS: &[TopLevelDeclKind] = &[
     TopLevelDeclKind::ExtractorDef,
     TopLevelDeclKind::TraitDef,
     TopLevelDeclKind::TraitImplDef,
+    TopLevelDeclKind::TypeAlias,
 ];
 
 const STD_MODULE_MEMBER_DECLS: &[TopLevelDeclKind] = &[
@@ -160,6 +167,7 @@ const STD_MODULE_MEMBER_DECLS: &[TopLevelDeclKind] = &[
     TopLevelDeclKind::BuiltinDecl,
     TopLevelDeclKind::BuiltinExtractorDecl,
     TopLevelDeclKind::BuiltinTypeDecl,
+    TopLevelDeclKind::TypeAlias,
 ];
 
 const REPL_CHUNK_DECLS: &[TopLevelDeclKind] = &[TopLevelDeclKind::Def, TopLevelDeclKind::Import];

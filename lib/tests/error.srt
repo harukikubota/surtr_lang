@@ -37,7 +37,7 @@ test("Error") {
         Ok(_) => assert_true(False),
         Err(err) => assert_eq(
           ("NoneError(\"None Value.\")", "NoneError(\"None Value.\")"),
-          (to_string(err), from(err, String)),
+          (to_string(err), from::<String>(err)),
         ),
       }
     }

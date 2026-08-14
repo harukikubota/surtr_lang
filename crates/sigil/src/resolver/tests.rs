@@ -123,7 +123,7 @@ def main() -> Int { help() }
         .any(|stmt| matches!(stmt, Ast::Import(_, _, _))));
     assert!(remaining_ast
         .iter()
-        .any(|stmt| matches!(stmt, Ast::Def(_, _, _, _, _, _, _))));
+        .any(|stmt| matches!(stmt, Ast::Def(..))));
 }
 
 #[test]
@@ -735,8 +735,8 @@ impl User {
     self
   }
 
-  defextractor deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
-    MatchResult::NoMatch
+  defextractor deconstruct(self: Self) -> Option<(String, Int)> {
+    Option::None
   }
 }"#,
             "",
@@ -777,8 +777,8 @@ fn test_precollect_impl_extractors_for_enum_types() {
 }
 
 impl Light {
-  defextractor stop_code(self: Self) -> MatchResult<Int, Error> {
-    MatchResult::NoMatch
+  defextractor stop_code(self: Self) -> Option<Int> {
+    Option::None
   }
 }"#,
             "",
@@ -1015,7 +1015,7 @@ fn test_parallel_stage_resolve_rebases_local_ids() {
     let local_ids = resolved
         .iter()
         .filter_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, body, _) if id.name == "value" => first_bind_id(body),
+            Resolved::Def(_, id, _, _, _, _, body, _) if id.name == "value" => first_bind_id(body),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1303,16 +1303,171 @@ impl Add for Int {
     let resolved = resolve(ast).expect("trait nodes should resolve");
     assert!(matches!(
         &resolved[0],
-        Resolved::TraitDef(_, id, _, methods, _)
+        Resolved::TraitDef(_, id, _, _, methods, _)
             if id.name == "Add"
                 && methods.len() == 1
                 && methods[0].id.qualified_name.as_deref() == Some("Add::add")
     ));
     assert!(matches!(
         &resolved[1],
-        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), methods)
+        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), _, methods)
             if id.name == "Add" && target == "Global::Int" && methods.len() == 1
     ));
+}
+
+#[test]
+fn test_resolve_where_clauses_preserve_constraint_kinds_and_trait_ids() {
+    let ast = parse_module_ast(
+        r#"deftrait Equal {
+  def equal(self: Self, rhs: Self) -> Boolean
+}
+
+deftrait Functor
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+  where
+    $A: Equal
+}
+
+def identity(value: $A) -> $A
+where
+  $A: Equal
+{
+  value
+}
+
+defstruct Boxed<$T> {
+  value: $T,
+}
+
+impl Functor for Boxed<$T>
+where
+  $T: Functor.$A
+{
+  def fmap(self: Self, mapper: ($A -> $B)) -> Boxed<$B>
+  where
+    $B: Equal
+  {
+    Boxed { value: mapper(self.value) }
+  }
+}"#,
+        "WhereConstraints",
+    );
+
+    let resolved = resolve(ast).expect("where clauses should resolve");
+    let equal_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, _, _, _) if id.name == "Equal" => Some(id.clone()),
+            _ => None,
+        })
+        .expect("Equal trait id");
+
+    let functor_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, where_clause, methods, _) if id.name == "Functor" => {
+                let clause = where_clause.as_ref().expect("Functor where clause");
+                assert!(matches!(
+                    clause.constraints[0].bounds.as_slice(),
+                    [ResolvedWhereConstraintRhs::TypeConstructor { slots, .. }]
+                        if matches!(slots.as_slice(), [AstTy::Named(_, slot)] if slot == "$A")
+                ));
+                let method_clause = methods[0]
+                    .where_clause
+                    .as_ref()
+                    .expect("trait method where clause");
+                assert!(matches!(
+                    method_clause.constraints[0].bounds.as_slice(),
+                    [ResolvedWhereConstraintRhs::Trait(bound_id)]
+                        if bound_id.unique_id == equal_id.unique_id
+                ));
+                Some(id.clone())
+            }
+            _ => None,
+        })
+        .expect("Functor trait id");
+
+    let function_clause = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, where_clause, _, _) if id.name == "identity" => {
+                where_clause.as_ref()
+            }
+            _ => None,
+        })
+        .expect("function where clause");
+    assert!(matches!(
+        function_clause.constraints[0].bounds.as_slice(),
+        [ResolvedWhereConstraintRhs::Trait(bound_id)]
+            if bound_id.unique_id == equal_id.unique_id
+    ));
+
+    let impl_clause = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, id, _, _, where_clause, _)
+                if id.unique_id == functor_id.unique_id =>
+            {
+                where_clause.as_ref()
+            }
+            _ => None,
+        })
+        .expect("trait impl where clause");
+    assert!(matches!(
+        impl_clause.constraints[0].bounds.as_slice(),
+        [ResolvedWhereConstraintRhs::TraitSlot {
+            trait_id,
+            slot_name,
+            slot_ordinal,
+            ..
+        }] if trait_id.unique_id == functor_id.unique_id && slot_name == "$A" && *slot_ordinal == 0
+    ));
+
+    let impl_method_clause = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, id, _, _, _, methods)
+                if id.unique_id == functor_id.unique_id =>
+            {
+                methods[0].where_clause.as_ref()
+            }
+            _ => None,
+        })
+        .expect("trait impl method where clause");
+    assert!(matches!(
+        impl_method_clause.constraints[0].bounds.as_slice(),
+        [ResolvedWhereConstraintRhs::Trait(bound_id)]
+            if bound_id.unique_id == equal_id.unique_id
+    ));
+}
+
+#[test]
+fn test_resolve_rejects_unknown_trait_constructor_slot() {
+    let ast = parse_module_ast(
+        r#"deftrait Functor
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}
+
+defenum Boxed<$T> {
+  Box($T),
+}
+
+impl Functor for Boxed<$T>
+where
+  $T: Functor.$Missing
+{
+  def fmap(self: Self, mapper: ($A -> $B)) -> Boxed<$B> { self }
+}"#,
+        "UnknownTraitSlot",
+    );
+    let err = resolve(ast).expect_err("unknown constructor slots must fail during resolution");
+    assert!(err.message.contains("has no constructor slot $Missing"));
 }
 
 #[test]
@@ -1332,7 +1487,7 @@ fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
     let resolved = resolve(ast).expect("trait default bodies should resolve");
 
     match &resolved[0] {
-        Resolved::TraitDef(_, id, _, methods, _) => {
+        Resolved::TraitDef(_, id, _, _, methods, _) => {
             assert_eq!(id.name, "Metric");
             assert_eq!(methods.len(), 2);
             assert_eq!(methods[0].attrs.doc.as_deref(), Some("Delegates to abs."));
@@ -1374,7 +1529,7 @@ impl Add for Int {
     let resolved = resolve(ast).expect("trait impl builtin method should resolve");
     assert!(matches!(
         &resolved[1],
-        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), methods)
+        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), _, methods)
             if id.name == "Add"
                 && target == "Global::Int"
                 && methods.len() == 1
@@ -1517,6 +1672,60 @@ fn test_hidden_builtin_decl_resolution_preserves_hidden_attr() {
 }
 
 #[test]
+fn test_private_builtin_impl_member_is_private_surface() {
+    let module_stages = vec![vec![staged_module(
+        "Generator",
+        parse_module_ast(
+            r#"@builtin type Generator<$State, $Item>
+impl Generator {
+  @builtin defp gen_make(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
+  def from_list(items: List<$Item>) -> Generator<Unit, $Item> {
+    gen_make(0, items)
+  }
+}"#,
+            "Generator",
+        ),
+    )]];
+
+    resolve_user_with_modules("g = Generator::from_list([1, 2])", &module_stages)
+        .expect("public wrapper should resolve private builtin within the same impl");
+
+    let err = resolve_user_with_modules("g = Generator::gen_make(0, [1, 2])", &module_stages)
+        .expect_err("private builtin direct call should fail");
+
+    assert!(err.message.contains("Generator::gen_make/2"));
+    assert!(
+        err.message.contains("is private"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
+fn test_private_builtin_impl_member_import_is_rejected() {
+    let module_stages = vec![vec![staged_module(
+        "Generator",
+        parse_module_ast(
+            r#"@builtin type Generator<$State, $Item>
+impl Generator {
+  @builtin defp gen_make(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
+}"#,
+            "Generator",
+        ),
+    )]];
+
+    let err = resolve_user_with_modules("import Generator::gen_make", &module_stages)
+        .expect_err("private builtin import should fail");
+
+    assert!(
+        err.message
+            .contains("Import target `Generator::gen_make` is private"),
+        "actual error: {}",
+        err.message
+    );
+}
+
+#[test]
 fn test_duration_literal_resolves_as_compiler_generated_struct_lit() {
     let ast = spire::parse_with_context(
         r#"defstruct Duration { private millis: Int }
@@ -1572,7 +1781,7 @@ impl User {
     let lowered = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, body, _)
+            Resolved::Def(_, id, _, _, _, _, body, _)
                 if id.qualified_name.as_deref() == Some("Global::User::new") =>
             {
                 Some(body.as_ref())
@@ -1739,7 +1948,7 @@ def parse_base(base: IntBase) -> Int {
     let decl_uid = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, _, _)
+            Resolved::Def(_, id, _, _, _, _, _, _)
                 if id.qualified_name.as_deref() == Some("Global::IntBase::radix") =>
             {
                 Some(id.unique_id)
@@ -1751,7 +1960,7 @@ def parse_base(base: IntBase) -> Int {
     let call_uid = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, body, _) if id.name == "parse_base" => {
+            Resolved::Def(_, id, _, _, _, _, body, _) if id.name == "parse_base" => {
                 assert_eq!(
                     id.qualified_name.as_deref(),
                     Some("Global::Int::parse_base")
@@ -1850,7 +2059,7 @@ print(to_string(1))"#,
     )
     .unwrap();
     match &resolved[0] {
-        Resolved::Def(_, id, type_params, params, ret_ty, body, attrs) => {
+        Resolved::Def(_, id, type_params, params, ret_ty, _, body, attrs) => {
             assert_eq!(id.name, "add");
             assert!(type_params.is_empty());
             assert_eq!(params.len(), 2);
@@ -2213,6 +2422,27 @@ deftrait Eq {
 }
 
 #[test]
+fn derive_expands_struct_into_trait_impl_nodes() {
+    let resolved = parse_and_resolve(
+        r#"def if(flag: Boolean, then_branch: $A, else_branch: $A) -> $A { then_branch }
+deftrait Eq {
+  def eq(self: Self, rhs: Self) -> Boolean
+}
+@derive Eq
+defstruct User { name: String }
+"#,
+    )
+    .expect("derive should resolve");
+
+    assert!(matches!(resolved[2], Resolved::StructDef(..)));
+    assert!(matches!(
+        resolved[3],
+        Resolved::TraitImplDef(_, ref trait_id, _, _, _, _)
+            if trait_id.name == "Eq"
+    ));
+}
+
+#[test]
 fn test_neq_helper_resolves_via_autoimport_trait() {
     let module_stages = vec![vec![staged_module(
         "Neq",
@@ -2380,393 +2610,6 @@ deftrait Concat {
 }
 
 #[test]
-fn test_from_helper_lowers_second_arg_to_type_ref_witness() {
-    let module_stages = vec![vec![staged_module(
-        "From",
-        parse_module_ast(
-            r#"@autoimport
-deftrait From<$To> {
-  def from(self: Self, to: TypeRef<$To>) -> $To
-}"#,
-            "From",
-        ),
-    )]];
-
-    let resolved = resolve_user_with_modules(r#"x = from(1, String)"#, &module_stages)
-        .expect("from helper should resolve");
-    let bind = resolved
-        .iter()
-        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
-        .expect("user bind should exist");
-    match bind {
-        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::App(_, func, args) => {
-                assert_eq!(args.len(), 2);
-                match func.as_ref() {
-                    Resolved::Var(_, id) => {
-                        assert_eq!(id.name, "from");
-                        assert_eq!(id.qualified_name.as_deref(), Some("From::From::from"));
-                    }
-                    other => panic!("expected helper var, got {:?}", other),
-                }
-                match &args[1] {
-                    ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
-                        assert!(matches!(ty, AstTy::Named(_, name) if name == "String"));
-                    }
-                    other => panic!("expected type witness, got {:?}", other),
-                }
-            }
-            other => panic!("expected app, got {:?}", other),
-        },
-        _ => panic!("Expected Bind"),
-    }
-}
-
-#[test]
-fn test_try_from_helper_named_args_are_rejected() {
-    let module_stages = vec![vec![staged_module(
-        "TryFrom",
-        parse_module_ast(
-            r#"@autoimport
-deftrait TryFrom<$To> {
-  def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}"#,
-            "TryFrom",
-        ),
-    )]];
-
-    let err = resolve_user_with_modules(r#"x = try_from(value: "42", to: Int)"#, &module_stages)
-        .expect_err("named args must fail");
-    assert!(err
-        .message
-        .contains("try_from does not accept named arguments"));
-}
-
-#[test]
-fn test_try_from_helper_resolves_inside_zero_arg_closure() {
-    let module_stages = vec![vec![staged_module(
-        "TryFrom",
-        parse_module_ast(
-            r#"@autoimport
-deftrait TryFrom<$To> {
-  def try_from(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}"#,
-            "TryFrom",
-        ),
-    )]];
-
-    let resolved = resolve_user_with_modules(r#"f = {|| try_from("42", Int)}"#, &module_stages)
-        .expect("try_from helper should resolve inside closure");
-    let bind = resolved
-        .iter()
-        .find(|node| matches!(node, Resolved::Bind(_, _, _)))
-        .expect("user bind should exist");
-    match bind {
-        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Closure(_, params, _, body) => {
-                assert!(params.is_empty());
-                match body.as_ref() {
-                    Resolved::App(_, func, args) => {
-                        assert_eq!(args.len(), 2);
-                        match func.as_ref() {
-                            Resolved::Var(_, id) => {
-                                assert_eq!(id.name, "try_from");
-                                assert_eq!(
-                                    id.qualified_name.as_deref(),
-                                    Some("TryFrom::TryFrom::try_from")
-                                );
-                            }
-                            other => panic!("expected helper var, got {:?}", other),
-                        }
-                    }
-                    other => panic!("expected app body, got {:?}", other),
-                }
-            }
-            other => panic!("expected closure, got {:?}", other),
-        },
-        other => panic!("expected bind, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_decode_helper_lowers_format_and_target_args_to_type_ref_witnesses() {
-    let module_stages = vec![vec![staged_module(
-        "Decode",
-        parse_module_ast(
-            r#"deftrait Decode<$To> {
-  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}"#,
-            "Decode",
-        ),
-    )]];
-
-    let resolved = resolve_user_with_modules(
-        r#"json = "{}"
-value = Decode::decode(json, Config)"#,
-        &module_stages,
-    )
-    .expect("decode helper should resolve");
-    let bind = resolved
-        .iter()
-        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "value"))
-        .expect("value bind should exist");
-    match bind {
-        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::App(_, func, args) => {
-                assert_eq!(args.len(), 2);
-                match func.as_ref() {
-                    Resolved::Var(_, id) => {
-                        assert_eq!(id.name, "decode");
-                        assert_eq!(id.qualified_name.as_deref(), Some("Decode::Decode::decode"));
-                    }
-                    other => panic!("expected helper var, got {:?}", other),
-                }
-                assert!(matches!(
-                    &args[0],
-                    ResolvedRecordLitArg::Positional(Resolved::Var(_, id)) if id.name == "json"
-                ));
-                match &args[1] {
-                    ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
-                        assert!(matches!(ty, AstTy::Named(_, name) if name == "Config"));
-                    }
-                    other => panic!("expected target type witness, got {:?}", other),
-                }
-            }
-            other => panic!("expected app, got {:?}", other),
-        },
-        _ => panic!("Expected Bind"),
-    }
-}
-
-#[test]
-fn test_decode_helper_inside_decode_impl_uses_trait_helper_not_current_method() {
-    let module_stages = vec![vec![staged_module(
-        "Decode",
-        parse_module_ast(
-            r#"deftrait Decode<$To> {
-  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}"#,
-            "Decode",
-        ),
-    )]];
-
-    let resolved = resolve_user_with_modules(
-        r#"impl Decode<Config> for JsonValue {
-  def decode(self: Self, to: TypeRef<Config>) -> Result<Config, Error> {
-    name = JsonValue::decode(self, String)
-    entry = self |> JsonValue::decode(String)
-    name
-  }
-}"#,
-        &module_stages,
-    )
-    .expect("decode helper inside Decode impl should resolve");
-    let method_body = resolved
-        .iter()
-        .find_map(|node| match node {
-            Resolved::TraitImplDef(_, _, _, _, methods) => methods.first().map(|m| m.body.as_ref()),
-            _ => None,
-        })
-        .expect("trait impl method body should exist");
-    let Resolved::Block(_, stmts) = method_body else {
-        panic!("expected block body, got {:?}", method_body);
-    };
-
-    let [Resolved::Bind(_, _, name_rhs), Resolved::Bind(_, _, entry_rhs), ..] = stmts.as_slice()
-    else {
-        panic!("expected name and entry bindings, got {:?}", stmts);
-    };
-
-    assert_decode_helper_call_targets_trait_method(name_rhs.as_ref(), 2);
-    match entry_rhs.as_ref() {
-        Resolved::Pipe(_, _, right) => {
-            assert_decode_helper_call_targets_trait_method(right.as_ref(), 1);
-        }
-        other => panic!("expected pipeline decode helper, got {:?}", other),
-    }
-}
-
-fn assert_decode_helper_call_targets_trait_method(node: &Resolved, arity: usize) {
-    match node {
-        Resolved::App(_, func, args) => {
-            assert_eq!(args.len(), arity);
-            match func.as_ref() {
-                Resolved::Var(_, id) => {
-                    assert_eq!(id.name, "JsonValue::decode");
-                    assert_eq!(id.qualified_name.as_deref(), Some("Decode::Decode::decode"));
-                }
-                other => panic!("expected decode helper var, got {:?}", other),
-            }
-            let target_idx = arity - 1;
-            assert!(matches!(
-                &args[target_idx],
-                ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, AstTy::Named(_, name)))
-                    if name == "String"
-            ));
-        }
-        other => panic!("expected decode helper call, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_encode_helper_lowers_pipeline_partial_format_arg_to_type_ref_witness() {
-    let module_stages = vec![vec![staged_module(
-        "Encode",
-        parse_module_ast(
-            r#"deftrait Encode<$To> {
-  def encode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}"#,
-            "Encode",
-        ),
-    )]];
-
-    let resolved = resolve_user_with_modules(
-        r#"value = "hello"
-text = value |> Encode::encode(JsonValue)"#,
-        &module_stages,
-    )
-    .expect("encode pipeline helper should resolve");
-    let bind = resolved
-        .iter()
-        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "text"))
-        .expect("text bind should exist");
-    match bind {
-        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Pipe(_, _, right) => match right.as_ref() {
-                Resolved::App(_, func, args) => {
-                    assert_eq!(args.len(), 1);
-                    match func.as_ref() {
-                        Resolved::Var(_, id) => {
-                            assert_eq!(id.name, "encode");
-                            assert_eq!(
-                                id.qualified_name.as_deref(),
-                                Some("Encode::Encode::encode")
-                            );
-                        }
-                        other => panic!("expected helper var, got {:?}", other),
-                    }
-                    match &args[0] {
-                        ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, ty)) => {
-                            assert!(matches!(ty, AstTy::Named(_, name) if name == "JsonValue"));
-                        }
-                        other => panic!("expected format type witness, got {:?}", other),
-                    }
-                }
-                other => panic!("expected app on pipeline rhs, got {:?}", other),
-            },
-            other => panic!("expected pipe, got {:?}", other),
-        },
-        _ => panic!("Expected Bind"),
-    }
-}
-
-#[test]
-fn test_json_value_decode_helper_lowers_target_arg_to_type_ref_witness() {
-    let module_stages = vec![vec![staged_module(
-        "Decode",
-        parse_module_ast(
-            r#"deftrait Decode<$To> {
-  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}"#,
-            "Decode",
-        ),
-    )]];
-
-    let resolved = resolve_user_with_modules(
-        r#"json = "{}"
-value = JsonValue::decode(json, String)
-entry = json |> JsonValue::decode(String)"#,
-        &module_stages,
-    )
-    .expect("JsonValue::decode helper should resolve");
-
-    let value_bind = resolved
-        .iter()
-        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "value"))
-        .expect("value bind should exist");
-    match value_bind {
-        Resolved::Bind(_, _, rhs) => {
-            assert_json_value_decode_helper_call(rhs.as_ref(), 2);
-        }
-        _ => panic!("Expected Bind"),
-    }
-
-    let entry_bind = resolved
-        .iter()
-        .find(|node| matches!(node, Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "entry"))
-        .expect("entry bind should exist");
-    match entry_bind {
-        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Pipe(_, _, right) => {
-                assert_json_value_decode_helper_call(right.as_ref(), 1);
-            }
-            other => panic!("expected pipeline decode helper, got {:?}", other),
-        },
-        _ => panic!("Expected Bind"),
-    }
-}
-
-fn assert_json_value_decode_helper_call(node: &Resolved, arity: usize) {
-    match node {
-        Resolved::App(_, func, args) => {
-            assert_eq!(args.len(), arity);
-            match func.as_ref() {
-                Resolved::Var(_, id) => {
-                    assert_eq!(id.name, "JsonValue::decode");
-                    assert_eq!(id.qualified_name.as_deref(), Some("Decode::Decode::decode"));
-                }
-                other => panic!("expected decode helper var, got {:?}", other),
-            }
-            let target_idx = arity - 1;
-            assert!(matches!(
-                &args[target_idx],
-                ResolvedRecordLitArg::Positional(Resolved::TypeRefWitness(_, AstTy::Named(_, name)))
-                    if name == "String"
-            ));
-        }
-        other => panic!("expected decode helper call, got {:?}", other),
-    }
-}
-
-#[test]
-fn test_decode_and_encode_are_not_bare_helpers_without_autoimport() {
-    let module_stages = vec![
-        vec![staged_module(
-            "Decode",
-            parse_module_ast(
-                r#"deftrait Decode<$To> {
-  def decode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}"#,
-                "Decode",
-            ),
-        )],
-        vec![staged_module(
-            "Encode",
-            parse_module_ast(
-                r#"deftrait Encode<$To> {
-  def encode(self: Self, to: TypeRef<$To>) -> Result<$To, Error>
-}"#,
-                "Encode",
-            ),
-        )],
-    ];
-
-    let decode_err = resolve_user_with_modules(r#"value = decode("{}", String)"#, &module_stages)
-        .expect_err("bare decode should not resolve without @autoimport");
-    assert!(
-        decode_err.message.contains("Undefined function decode/2"),
-        "unexpected error: {decode_err:?}"
-    );
-
-    let encode_err = resolve_user_with_modules(r#"value = encode("{}")"#, &module_stages)
-        .expect_err("bare encode should not resolve without @autoimport");
-    assert!(
-        encode_err.message.contains("Undefined function encode/1"),
-        "unexpected error: {encode_err:?}"
-    );
-}
-
-#[test]
 fn test_and_named_arg_is_error() {
     let err =
         parse_and_resolve("x = and(left: True, right: False)").expect_err("named args must fail");
@@ -2863,7 +2706,7 @@ def add(x: Int, y: Int) -> Int { x + y }"#,
     };
 
     let def_id = match &resolved[1] {
-        Resolved::Def(_, id, _, _, _, _, _) => id.unique_id,
+        Resolved::Def(_, id, _, _, _, _, _, _) => id.unique_id,
         _ => panic!("Expected Def"),
     };
 
@@ -2914,7 +2757,7 @@ defrecord Point(x: Float, y: Float)"#,
     };
 
     let def_id = match &resolved[1] {
-        Resolved::RecordDef(_, id, _) => id.unique_id,
+        Resolved::RecordDef(_, id, _, _) => id.unique_id,
         _ => panic!("Expected RecordDef"),
     };
 
@@ -2976,8 +2819,8 @@ deferror NotFound(code: String) {
                     }
                     _ => Vec::new(),
                 },
-                Resolved::Def(_, id, _, _, _, _, _)
-                | Resolved::RecordDef(_, id, _)
+                Resolved::Def(_, id, _, _, _, _, _, _)
+                | Resolved::RecordDef(_, id, _, _)
                 | Resolved::StructDef(_, id, ..)
                 | Resolved::DeferrorDef(_, id, _, _) => vec![id.unique_id],
                 _ => Vec::new(),
@@ -3852,7 +3695,7 @@ print(to_string(add(7, 3)))"#,
     let helper_add_uid = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, _, _)
+            Resolved::Def(_, id, _, _, _, _, _, _)
                 if id.qualified_name.as_deref() == Some("Helper::add") =>
             {
                 Some(id.unique_id)
@@ -3986,7 +3829,7 @@ value = add1(41)"#,
     let mut user_def_uid = None;
     let mut user_param_uid = None;
     for node in &resolved {
-        if let Resolved::Def(_, id, _, params, _, _, _) = node {
+        if let Resolved::Def(_, id, _, params, _, _, _, _) = node {
             match id.qualified_name.as_deref() {
                 Some("Helper::keep") => {
                     helper_param_uid = params.first().map(|param| param.id.unique_id);
@@ -4183,7 +4026,7 @@ fn test_sigil_session_allows_top_level_shadowing_of_imported_name() {
     let resolved = session.resolve(ast).expect("resolve failed");
 
     let def_id = match &resolved[0] {
-        Resolved::Def(_, id, _, _, _, _, _) => id.unique_id,
+        Resolved::Def(_, id, _, _, _, _, _, _) => id.unique_id,
         other => panic!("Expected Def, got {:?}", other),
     };
 
@@ -4444,7 +4287,7 @@ deferror Oops(reason: String) { reason }"#,
     }
 
     match &resolved[1] {
-        Resolved::RecordDef(_, id, _) => {
+        Resolved::RecordDef(_, id, _, _) => {
             let info = id.symbol_info.as_ref().expect("record should carry info");
             assert_eq!(info.identity, TypeIdentity::Record);
             assert!(info.capabilities.type_annotation);
@@ -4541,7 +4384,7 @@ fn resolves_container_root_facet_paths() {
     let module_stages = vec![vec![staged_module(
         "Facet",
         parse_module_ast(
-            r#"@builtin def view(facet: Facet<$S, $A>, source: $S) -> Result<$A>"#,
+            r#"@builtin def view(facet: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>"#,
             "Facet",
         ),
     )]];
@@ -4572,8 +4415,8 @@ fn resolves_bulk_update_case_actions_as_facet_calls() {
     let module_stages = vec![vec![staged_module(
         "Facet",
         parse_module_ast(
-            r#"@builtin def case_set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>
-@builtin def set(facet: Facet<$S, $A>, source: $S, value: $A) -> Result<$S>"#,
+            r#"@builtin def case_set(facet: Facet<CasePath, $S, $A, $T, $B>, source: $S, value: $B) -> Result<$T>
+@builtin def set(facet: Facet<WritablePath, $S, $A, $T, $B>, source: $S, value: $B) -> Result<$T>"#,
             "Facet",
         ),
     )]];
@@ -5615,7 +5458,7 @@ def parse() -> Int { add(7, 3) }"#,
     let helper_add_uid = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, _, _)
+            Resolved::Def(_, id, _, _, _, _, _, _)
                 if id.qualified_name.as_deref() == Some("Helper::add") =>
             {
                 Some(id.unique_id)
@@ -5625,7 +5468,7 @@ def parse() -> Int { add(7, 3) }"#,
         .expect("helper add should be resolved");
 
     let parser_add_uid = resolved.iter().find_map(|node| match node {
-        Resolved::Def(_, id, _, _, _, body, _)
+        Resolved::Def(_, id, _, _, _, _, body, _)
             if id.qualified_name.as_deref() == Some("Parser::parse") =>
         {
             find_called_uid(body.as_ref(), "add")
@@ -5796,7 +5639,7 @@ fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_parameter() 
     let pipe_rhs = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::Def(_, id, _, _, _, body, _) if id.name == "apply" => find_pipe_rhs(body),
+            Resolved::Def(_, id, _, _, _, _, body, _) if id.name == "apply" => find_pipe_rhs(body),
             _ => None,
         })
         .expect("expected pipe rhs inside apply body");
@@ -5814,5 +5657,36 @@ fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_parameter() 
             "expected ordinary app on shadowed parameter rhs, got {:?}",
             other
         ),
+    }
+}
+
+#[test]
+fn explicit_type_apply_resolves_callable_identity_and_type_arguments() {
+    let resolved = parse_and_resolve(
+        r#"def identity(value: $A) -> $A { value }
+value = identity::<Int>(1)
+fn = &identity::<Int>"#,
+    )
+    .expect("explicit type application should resolve");
+
+    let def_id = match &resolved[0] {
+        Resolved::Def(_, id, ..) => id.unique_id,
+        other => panic!("expected definition, got {other:?}"),
+    };
+    for node in [&resolved[1], &resolved[2]] {
+        let Resolved::Bind(_, _, rhs) = node else {
+            panic!("expected binding, got {node:?}");
+        };
+        let applied = match rhs.as_ref() {
+            Resolved::App(_, callee, _) => callee.as_ref(),
+            Resolved::Capture(_, target, _) => target.as_ref(),
+            other => panic!("expected call or capture, got {other:?}"),
+        };
+        assert!(matches!(
+            applied,
+            Resolved::TypeApply(_, target, args)
+                if matches!(target.as_ref(), Resolved::Var(_, id) if id.unique_id == def_id)
+                    && matches!(args.as_slice(), [AstTy::Named(_, name)] if name == "Int")
+        ));
     }
 }

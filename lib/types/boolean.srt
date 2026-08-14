@@ -64,7 +64,7 @@ impl Show for Boolean {
   xldr(1)> to_string(True)
   "True"
   """
-  def to_string(self: Self) -> String {
+  def to_string::<Boolean>(self: Self) -> String {
     inspect(self)
   }
 }
@@ -73,10 +73,10 @@ impl From<Boolean> for Boolean {
   @doc """
   Return the value unchanged when converting `Boolean` to `Boolean`.
   ## REPL
-  xldr(1)> from(True, Boolean)
+  xldr(1)> from::<Boolean>(True)
   True
   """
-  def from(self: Self, to: TypeRef<Boolean>) -> Boolean {
+  def from::<Boolean>(self: Self) -> Boolean {
     self
   }
 }
@@ -85,10 +85,10 @@ impl From<String> for Boolean {
   @doc """
   Convert `Boolean` into its standard string representation.
   ## REPL
-  xldr(1)> from(True, String)
+  xldr(1)> from::<String>(True)
   "True"
   """
-  def from(self: Self, to: TypeRef<String>) -> String {
+  def from::<String>(self: Self) -> String {
     to_string(self)
   }
 }
@@ -100,15 +100,5 @@ impl Eq for Boolean {
   xldr(1)> eq(True, True)
   True
   """
-  @builtin def eq(self: Self, rhs: Self) -> Boolean
-}
-
-impl Neq for Boolean {
-  @doc """
-  Return `True` when the boolean values differ.
-  ## REPL
-  xldr(1)> neq(True, False)
-  True
-  """
-  @builtin def neq(self: Self, rhs: Self) -> Boolean
+  @builtin def eq::<Boolean>(self: Self, rhs: Self) -> Boolean
 }

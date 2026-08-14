@@ -23,12 +23,20 @@ pub enum Visibility {
 pub struct DeclAttrs {
     pub doc: Option<String>,
     pub builtin: bool,
+    pub compiler_generated: bool,
+    /// Traits requested by a single `@derive` annotation.
+    pub derives: Vec<Symbol>,
+    /// Compiler declaration for a Facet path kind. These declarations are
+    /// accepted only from the canonical standard-library Facet source.
+    pub facet_path_kind: Option<Vec<Symbol>>,
     pub auto_import: bool,
     pub hidden: bool,
     pub readonly: bool,
     pub visibility: Visibility,
     pub user_importable: bool,
     pub user_callable: bool,
+    /// Impl-method dispatch slots, populated only for trait impl methods.
+    pub fun_params: Vec<AstTy>,
 }
 
 impl Default for DeclAttrs {
@@ -36,12 +44,16 @@ impl Default for DeclAttrs {
         Self {
             doc: None,
             builtin: false,
+            compiler_generated: false,
+            derives: Vec::new(),
+            facet_path_kind: None,
             auto_import: false,
             hidden: false,
             readonly: false,
             visibility: Visibility::Public,
             user_importable: true,
             user_callable: true,
+            fun_params: Vec::new(),
         }
     }
 }
@@ -71,7 +83,7 @@ pub struct ProcessSpec {
     pub state: AstTy,
     pub boot: bool,
     pub registry: bool,
-    pub lazy: bool,
+    pub standby: bool,
     pub handlers: Vec<ProcessHandlerDependency>,
     pub handler_specs: Vec<ProcessRuntimeHandlerSpec>,
     #[serde(default)]
@@ -238,6 +250,7 @@ pub enum BinOp {
     Lte,
     Gte,
     Concat,
+    Choice,
 }
 
 // ── Type annotations (surface syntax) ──
@@ -254,6 +267,32 @@ pub enum AstTy {
     Tuple(Span, Vec<AstTy>),
     /// `(-> T)`, `(A -> B)`, `(A, B -> C)`
     Func(Span, Vec<AstTy>, Box<AstTy>),
+}
+
+/// A declaration-level `where` clause.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhereClause {
+    pub constraints: Vec<WhereConstraint>,
+    pub span: Span,
+}
+
+/// One constrained subject, for example `$A: Eq + Concat`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WhereConstraint {
+    pub subject: AstTy,
+    pub bounds: Vec<WhereConstraintRhs>,
+    pub span: Span,
+}
+
+/// The right-hand side of a `where` constraint.
+#[derive(Debug, Clone, PartialEq)]
+pub enum WhereConstraintRhs {
+    /// An ordinary trait requirement such as `Eq`.
+    Trait(Span, Symbol),
+    /// A type-constructor shape requirement such as `Type<$A>`.
+    TypeConstructor(Span, Vec<AstTy>),
+    /// A trait constructor-slot projection such as `Functor.$A`.
+    TraitSlot(Span, Symbol, Symbol),
 }
 
 // ── Patterns ──
@@ -425,9 +464,12 @@ pub struct FunParam {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitMethodSig {
     pub name: Symbol,
+    /// Explicit dispatch type slots written as `method::<Self, $A>`.
+    pub fun_params: Vec<AstTy>,
     pub type_params: Vec<TypeParam>,
     pub params: Vec<FunParam>,
     pub ret_ty: AstTy,
+    pub where_clause: Option<WhereClause>,
     pub body: Option<Box<Ast>>,
     pub attrs: DeclAttrs,
     pub span: Span,
@@ -527,6 +569,9 @@ pub enum Ast {
     /// Function application: `print("hello")`, `to_string(42)`, `add(y: 2, x: 1)`
     App(Span, Box<Ast>, Vec<RecordLitArg>),
 
+    /// Explicit generic-slot application: `identity::<Int>`, `Trait::method::<Int>`
+    TypeApply(Span, Box<Ast>, Vec<AstTy>),
+
     /// Statement sequence used by declaration bodies and lowered closure bodies.
     Block(Span, Vec<Ast>),
 
@@ -544,6 +589,9 @@ pub enum Ast {
 
     /// Context-preserving map: `value |*> f`
     ContextMap(Span, Box<Ast>, Box<Ast>),
+
+    /// Applicative application: `mapper |*| value`
+    ContextApply(Span, Box<Ast>, Box<Ast>),
 
     /// Context-preserving bind: `value |>= f`
     ContextBind(Span, Box<Ast>, Box<Ast>),
@@ -624,6 +672,7 @@ pub enum Ast {
         Vec<TypeParam>,
         Vec<FunParam>,
         Option<AstTy>,
+        Option<WhereClause>,
         Box<Ast>,
         DeclAttrs,
     ),
@@ -655,6 +704,9 @@ pub enum Ast {
     /// Builtin type declaration: `@builtin type Int`
     BuiltinTypeDecl(Span, BuiltinTypeHead, DeclAttrs),
 
+    /// Compile-time-only alias for a function signature.
+    TypeAlias(Span, Symbol, Vec<TypeParam>, AstTy),
+
     /// Declaration-only Result constructor contracts used by std modules.
     ///
     /// Surface syntax is intentionally special-cased:
@@ -681,12 +733,27 @@ pub enum Ast {
     ImplDef(Span, Symbol, Vec<Ast>, DeclAttrs),
 
     /// Trait definition: `deftrait Add { def add(self: Self, rhs: Self) -> Self }`
-    TraitDef(Span, Symbol, Vec<TypeParam>, Vec<TraitMethodSig>, DeclAttrs),
+    TraitDef(
+        Span,
+        Symbol,
+        Vec<TypeParam>,
+        Option<WhereClause>,
+        Vec<TraitMethodSig>,
+        DeclAttrs,
+    ),
 
     /// Trait impl definition:
     /// `impl Describable for Int { ... }`
     /// `impl From<String> for Int { ... }`
-    TraitImplDef(Span, Symbol, Vec<AstTy>, AstTy, Vec<Ast>, DeclAttrs),
+    TraitImplDef(
+        Span,
+        Symbol,
+        Vec<AstTy>,
+        AstTy,
+        Option<WhereClause>,
+        Vec<Ast>,
+        DeclAttrs,
+    ),
 
     /// Import declaration
     Import(Span, AstPath, ImportSpec),

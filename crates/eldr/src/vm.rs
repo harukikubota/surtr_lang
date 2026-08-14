@@ -11,7 +11,9 @@ use sindr::names::IMPLICIT_ROOT_NAMESPACE_PREFIX;
 use sindr::primitives::{int, SurtrInt, ToPrimitive, Zero};
 use sindr::runtime::{
     Callable, CallableMetadata, CallableOrigin, CallableTarget, FileHandleValue, ListHandle,
-    Location, PidHandle, RichError, TypeRegistry, Value, WorkerLeaseHandle, WorkersHandle,
+    Location, PidHandle, RichError, RuntimeCallKind, RuntimeExecutionPhase,
+    RuntimeProcessTraceContext, RuntimeStackFrame, TypeRegistry, Value, WorkerLeaseHandle,
+    WorkersHandle,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fs::{File, OpenOptions};
@@ -23,6 +25,8 @@ use std::env;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+const MAX_TAIL_CALL_TRACE_BREADCRUMBS: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmTestEventKind {
@@ -116,6 +120,8 @@ struct CallFrame {
     return_pc: usize,
     stack_base: usize,
     call_site: Option<(u32, u32)>,
+    trace_frame: Option<RuntimeStackFrame>,
+    tail_call_breadcrumb_base_len: usize,
     locals: Vec<Value>,
 }
 
@@ -123,6 +129,7 @@ struct CallFrame {
 struct VmCheckpoint {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
+    tail_call_breadcrumbs: VecDeque<RuntimeStackFrame>,
     pc: usize,
     exit_code: i32,
     last_result: Option<Value>,
@@ -286,7 +293,7 @@ pub struct VmProcessInstanceSnapshot {
     pub status: String,
     pub mailbox_len: usize,
     pub owner: Option<u64>,
-    pub lazy_state_pending: bool,
+    pub standby_state_pending: bool,
     pub state_value: Option<String>,
     pub execution_context: Option<VmExecutionContextSnapshot>,
 }
@@ -495,7 +502,7 @@ struct ProcessInstance {
     state_value: Option<Value>,
     owner: Option<u64>,
     lifecycle_sink: Option<LifecycleSink>,
-    lazy_state_pending: bool,
+    standby_state_pending: bool,
 }
 
 #[allow(dead_code)]
@@ -541,6 +548,7 @@ enum ProcessMailboxMessage {
 struct ExecutionContext {
     stack: Vec<Value>,
     frames: Vec<CallFrame>,
+    tail_call_breadcrumbs: VecDeque<RuntimeStackFrame>,
     pc: usize,
     target: ExecutionTarget,
 }
@@ -595,8 +603,8 @@ fn parse_handler_target_identity(identity: &str) -> (&str, Vec<(String, String)>
     (name, args)
 }
 
-fn runtime_spec_is_lazy(spec: &RuntimeProcessSpec) -> bool {
-    matches!(spec.init.policy, RuntimeInitPolicy::Lazy)
+fn runtime_spec_is_standby(spec: &RuntimeProcessSpec) -> bool {
+    matches!(spec.init.policy, RuntimeInitPolicy::Standby)
 }
 
 #[allow(dead_code)]
@@ -818,6 +826,8 @@ pub struct VM {
     stack: Vec<Value>,
     /// Call stack / locals frames
     frames: Vec<CallFrame>,
+    /// Logical caller frames overwritten by TCO, newest at the back.
+    tail_call_breadcrumbs: VecDeque<RuntimeStackFrame>,
     /// Program counter (used by full-program `run`)
     pc: usize,
     /// Source code (for eprint / ariadne)
@@ -871,8 +881,11 @@ impl VM {
                 return_pc: 0,
                 stack_base: 0,
                 call_site: None,
+                trace_frame: None,
+                tail_call_breadcrumb_base_len: 0,
                 locals: vec![Value::Unit; num_locals],
             }],
+            tail_call_breadcrumbs: VecDeque::new(),
             pc: 0,
             source: None,
             source_file: None,
@@ -1368,6 +1381,15 @@ impl VM {
 
     pub fn runtime_error_location(&self) -> Option<Location> {
         let (span_start, span_end) = self.current_frame().ok()?.call_site?;
+        self.location_for_span(span_start, span_end, "<runtime>")
+    }
+
+    fn location_for_span(
+        &self,
+        span_start: u32,
+        span_end: u32,
+        func: impl Into<String>,
+    ) -> Option<Location> {
         let file = self
             .source_file()
             .map(str::to_string)
@@ -1378,12 +1400,157 @@ impl VM {
             .unwrap_or((0, 0));
         Some(Location {
             file,
-            func: "<runtime>".into(),
+            func: func.into(),
             line,
             column,
             span_start,
             span_end,
         })
+    }
+
+    pub(crate) fn current_stack_trace_snapshot(&self) -> Vec<RuntimeStackFrame> {
+        let mut stack_trace = Vec::new();
+        let mut breadcrumb_upper = self.tail_call_breadcrumbs.len();
+        for frame in self.frames.iter().rev() {
+            if let Some(trace_frame) = frame.trace_frame.clone() {
+                stack_trace.push(trace_frame);
+            }
+            let breadcrumb_start = frame.tail_call_breadcrumb_base_len.min(breadcrumb_upper);
+            stack_trace.extend(
+                self.tail_call_breadcrumbs
+                    .range(breadcrumb_start..breadcrumb_upper)
+                    .rev()
+                    .cloned(),
+            );
+            breadcrumb_upper = breadcrumb_start;
+        }
+        stack_trace
+    }
+
+    fn stack_trace_snapshot_without_head_function(&self, function: &str) -> Vec<RuntimeStackFrame> {
+        let mut stack_trace = self.current_stack_trace_snapshot();
+        let function_tail = function.rsplit("::").next();
+        if stack_trace.first().is_some_and(|frame| {
+            frame
+                .function
+                .as_deref()
+                .and_then(|name| name.rsplit("::").next())
+                == function_tail
+        }) {
+            stack_trace.remove(0);
+        }
+        stack_trace
+    }
+
+    fn function_trace_name(&self, entry: &FunctionEntry) -> String {
+        entry
+            .qualified_name
+            .as_deref()
+            .and_then(|name| name.rsplit("::").next())
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("fun#{}", entry.fun_idx))
+    }
+
+    fn trace_frame_for_call(
+        &self,
+        entry: &FunctionEntry,
+        call_kind: RuntimeCallKind,
+        span_start: u32,
+        span_end: u32,
+        tco: bool,
+    ) -> RuntimeStackFrame {
+        let function = self.function_trace_name(entry);
+        RuntimeStackFrame {
+            phase: RuntimeExecutionPhase::Runtime,
+            function: Some(function.clone()),
+            fun_idx: Some(entry.fun_idx),
+            call_kind,
+            location: self.location_for_span(span_start, span_end, function),
+            process: None,
+            tco,
+        }
+    }
+
+    fn trace_frame_for_builtin(
+        &self,
+        builtin_name: &str,
+        span_start: u32,
+        span_end: u32,
+    ) -> RuntimeStackFrame {
+        RuntimeStackFrame {
+            phase: RuntimeExecutionPhase::Runtime,
+            function: Some(builtin_name.to_string()),
+            fun_idx: None,
+            call_kind: RuntimeCallKind::Builtin,
+            location: self.location_for_span(span_start, span_end, builtin_name),
+            process: None,
+            tco: false,
+        }
+    }
+
+    fn trace_frame_for_callable_template(
+        &self,
+        template_id: u32,
+        span_start: u32,
+        span_end: u32,
+    ) -> RuntimeStackFrame {
+        let function = self
+            .callable_template(template_id)
+            .ok()
+            .and_then(|template| template.metadata.name.clone())
+            .unwrap_or_else(|| format!("template#{}", template_id));
+        RuntimeStackFrame {
+            phase: RuntimeExecutionPhase::Runtime,
+            function: Some(function.clone()),
+            fun_idx: None,
+            call_kind: RuntimeCallKind::CallableTemplate,
+            location: self.location_for_span(span_start, span_end, function),
+            process: None,
+            tco: false,
+        }
+    }
+
+    fn trace_frame_for_task(
+        &self,
+        function: impl Into<String>,
+        span_start: u32,
+        span_end: u32,
+    ) -> RuntimeStackFrame {
+        let function = function.into();
+        RuntimeStackFrame {
+            phase: RuntimeExecutionPhase::Runtime,
+            function: Some(function.clone()),
+            fun_idx: None,
+            call_kind: RuntimeCallKind::Task,
+            location: self.location_for_span(span_start, span_end, function),
+            process: None,
+            tco: false,
+        }
+    }
+
+    fn task_mode_trace_name(mode: TaskMode) -> &'static str {
+        match mode {
+            TaskMode::Call => "Task::call",
+            TaskMode::Async => "Task::async",
+            TaskMode::Launch => "Task::launch",
+            TaskMode::Cast => "Task::cast",
+        }
+    }
+
+    fn record_tail_call_breadcrumb(&mut self) {
+        let Some(mut frame) = self
+            .current_frame()
+            .ok()
+            .and_then(|frame| frame.trace_frame.clone())
+        else {
+            return;
+        };
+        frame.tco = true;
+        if self.tail_call_breadcrumbs.len() >= MAX_TAIL_CALL_TRACE_BREADCRUMBS {
+            self.tail_call_breadcrumbs.pop_front();
+        }
+        self.tail_call_breadcrumbs.push_back(frame);
     }
 
     fn runtime_error_context(&self, pc: usize, opcode: &Opcode) -> RuntimeErrorContext {
@@ -1414,6 +1581,7 @@ impl VM {
             function: current_function,
             call_site: self.runtime_error_location(),
             details,
+            stack_trace: self.current_stack_trace_snapshot(),
         }
     }
 
@@ -1434,6 +1602,9 @@ impl VM {
         }
         if err_context.call_site.is_some() {
             context.call_site = err_context.call_site;
+        }
+        if !err_context.stack_trace.is_empty() {
+            context.stack_trace = err_context.stack_trace;
         }
         context.details.extend(err_context.details);
         RuntimeError {
@@ -1826,6 +1997,52 @@ impl VM {
         RuntimeError::new(format!("process `{process_name}` failed to boot: {detail}"))
     }
 
+    fn with_vm_init_process_context(
+        mut err: RuntimeError,
+        process_name: &str,
+        init_policy: &str,
+        trigger: &str,
+    ) -> RuntimeError {
+        err.context.details.push("phase=VM::Init".into());
+        err.context
+            .details
+            .push(format!("process_name={process_name}"));
+        err.context
+            .details
+            .push(format!("init_policy={init_policy}"));
+        err.context.details.push(format!("trigger={trigger}"));
+        err
+    }
+
+    fn duration_millis(&self, value: &Value, context: &str) -> Result<u64, RuntimeError> {
+        let Value::Tagged { tag, fields } = value else {
+            return Err(RuntimeError::process_init_failed(format!(
+                "{context} expects Duration, got {value:?}"
+            )));
+        };
+        let Some(entry) = self.type_registry().lookup(*tag) else {
+            return Err(RuntimeError::process_init_failed(format!(
+                "{context} references unknown Duration tag {tag}"
+            )));
+        };
+        if !entry.name.ends_with("Duration") {
+            return Err(RuntimeError::process_init_failed(format!(
+                "{context} expects Duration, got {}",
+                entry.name
+            )));
+        }
+        let Some(Value::Int(ms)) = fields.first() else {
+            return Err(RuntimeError::process_init_failed(format!(
+                "{context} expects Duration milliseconds payload, got {fields:?}"
+            )));
+        };
+        ms.to_u64().ok_or_else(|| {
+            RuntimeError::process_init_failed(format!(
+                "{context} duration is out of range for u64 milliseconds: {ms}"
+            ))
+        })
+    }
+
     fn ensure_root_supervisor_booted(&mut self) -> Result<(), RuntimeError> {
         if self.process_runtime.root_supervisor.boot_completed {
             return Ok(());
@@ -1911,7 +2128,7 @@ impl VM {
                     .root_supervisor
                     .boot_failures
                     .insert(spec.type_name.clone(), detail.clone());
-                return Err(self.boot_failure_error(&spec.type_name, &detail));
+                return Err(err);
             }
         }
 
@@ -2015,44 +2232,100 @@ impl VM {
         }
 
         let init_started = Instant::now();
-        let init_result = self.invoke_callable_isolated_sync(
-            self.callable_for_function(spec.init.callable.fun_idx),
-            Vec::new(),
-        )?;
-        if let Some(timeout_ms) = timeout_ms {
+        let timeout_ms = timeout_ms.unwrap_or(
+            self.bytecode
+                .runtime_boot_plan
+                .runtime_limits
+                .default_init_timeout_ms,
+        );
+        let mut retry_ms = self
+            .bytecode
+            .runtime_boot_plan
+            .runtime_limits
+            .pending_initial_retry_ms;
+        let max_retry_ms = self
+            .bytecode
+            .runtime_boot_plan
+            .runtime_limits
+            .pending_max_retry_ms;
+        let init_policy = if runtime_spec_is_standby(&spec) {
+            "Standby"
+        } else {
+            "Eager"
+        };
+        let mut trigger = "boot";
+
+        let state = loop {
             if init_started.elapsed().as_millis() > u128::from(timeout_ms) {
                 let detail = format!("init timed out after {timeout_ms}ms");
                 self.process_runtime
                     .root_supervisor
                     .boot_failures
                     .insert(canonical_name.clone(), detail.clone());
-                return Err(self.boot_failure_error(process_name, &detail));
+                return Err(Self::with_vm_init_process_context(
+                    RuntimeError::process_init_timeout(format!(
+                        "process `{process_name}` failed to boot: {detail}"
+                    )),
+                    process_name,
+                    init_policy,
+                    trigger,
+                ));
             }
-        }
-        let state = match decode_vm_result(init_result, "__root_boot", "init")? {
-            Ok(value) if runtime_spec_is_lazy(&spec) => match decode_process_init(value)? {
-                ProcessInitOutcome::Ready(state) => state,
-                ProcessInitOutcome::Pending | ProcessInitOutcome::PendingAfter(_) => {
-                    let detail = "lazy init remained pending during boot".to_string();
+
+            let init_result = self
+                .invoke_callable_isolated_sync(
+                    self.callable_for_function(spec.init.callable.fun_idx),
+                    Vec::new(),
+                )
+                .map_err(|err| {
+                    Self::with_vm_init_process_context(err, process_name, init_policy, trigger)
+                })?;
+            match decode_vm_result(init_result, "__root_boot", "init").map_err(|err| {
+                Self::with_vm_init_process_context(err, process_name, init_policy, trigger)
+            })? {
+                Ok(value) if runtime_spec_is_standby(&spec) => {
+                    match decode_standby_init(value).map_err(|err| {
+                        Self::with_vm_init_process_context(err, process_name, init_policy, trigger)
+                    })? {
+                        StandbyInitOutcome::Ready(state) => break state,
+                        StandbyInitOutcome::Pending => {
+                            let sleep_ms = retry_ms.min(max_retry_ms).min(timeout_ms);
+                            retry_ms = retry_ms.saturating_mul(2).min(max_retry_ms);
+                            std::thread::sleep(Duration::from_millis(sleep_ms));
+                            trigger = "standby_retry";
+                        }
+                        StandbyInitOutcome::PendingAfter(duration) => {
+                            let requested_ms = self
+                                .duration_millis(&duration, "StandbyInit::PendingAfter")
+                                .map_err(|err| {
+                                    Self::with_vm_init_process_context(
+                                        err,
+                                        process_name,
+                                        init_policy,
+                                        trigger,
+                                    )
+                                })?;
+                            std::thread::sleep(Duration::from_millis(requested_ms.min(timeout_ms)));
+                            trigger = "standby_retry";
+                        }
+                    }
+                }
+                Ok(state) => break state,
+                Err(err) => {
+                    let detail = err.visible_message().to_string();
                     self.process_runtime
                         .root_supervisor
                         .boot_failures
                         .insert(canonical_name.clone(), detail.clone());
-                    return Err(RuntimeError::process_init_timeout(format!(
-                        "process `{process_name}` failed to boot: {detail}"
-                    )));
+                    return Err(Self::with_vm_init_process_context(
+                        RuntimeError::process_init_failed(format!(
+                            "process `{process_name}` failed to boot: {detail}"
+                        )),
+                        process_name,
+                        init_policy,
+                        trigger,
+                    ));
                 }
-            },
-            Ok(state) => state,
-            Err(err) => {
-                let detail = err.visible_message().to_string();
-                self.process_runtime
-                    .root_supervisor
-                    .boot_failures
-                    .insert(canonical_name.clone(), detail.clone());
-                return Err(RuntimeError::process_init_failed(format!(
-                    "process `{process_name}` failed to boot: {detail}"
-                )));
             }
         };
 
@@ -2061,46 +2334,6 @@ impl VM {
             .singleton_by_name
             .insert(canonical_name, pid);
         Ok(pid)
-    }
-
-    fn materialize_lazy_process_state(&mut self, pid: u64) -> Result<Option<Value>, RuntimeError> {
-        let Some(entry) = self.process_runtime.processes.get(&pid).cloned() else {
-            return Err(RuntimeError::new(format!(
-                "process {} disappeared while materializing state",
-                pid
-            )));
-        };
-
-        if !entry.lazy_state_pending {
-            return Ok(entry.state_value);
-        }
-
-        let Some(spec) = self.process_runtime.spec_for_id(entry.spec_id).cloned() else {
-            return Err(RuntimeError::new(format!(
-                "process {} references unknown spec {}",
-                pid, entry.spec_id
-            )));
-        };
-
-        let init_result = self.invoke_callable_isolated_sync(
-            self.callable_for_function(spec.init.callable.fun_idx),
-            Vec::new(),
-        )?;
-        let state = match decode_vm_result(init_result, "__process_state", "init")? {
-            Ok(state) => state,
-            Err(err) => return Ok(Some(err_vm_result(err))),
-        };
-
-        let Some(entry) = self.process_runtime.processes.get_mut(&pid) else {
-            return Err(RuntimeError::new(format!(
-                "process {} disappeared after lazy init",
-                pid
-            )));
-        };
-        entry.state_value = Some(state.clone());
-        entry.lazy_state_pending = false;
-        entry.status = ProcessStatus::Runnable;
-        Ok(Some(ok_vm_result(state)))
     }
 
     pub(crate) fn process_singleton_pid(
@@ -2582,10 +2815,11 @@ impl VM {
         if let Some(state) = entry.state_value.clone() {
             return Ok(ok_vm_result(state));
         }
-        if entry.lazy_state_pending {
-            return self
-                .materialize_lazy_process_state(pid.id)?
-                .ok_or_else(|| RuntimeError::new(format!("lazy process {} lost state", pid.id)));
+        if entry.standby_state_pending {
+            return Err(RuntimeError::process_init_failed(format!(
+                "standby process {} reached runtime before init completed",
+                pid.id
+            )));
         }
         Ok(err_vm_result(self.process_error(
             "ProcessStateUnavailable",
@@ -2632,7 +2866,7 @@ impl VM {
             )));
         };
         entry.state_value = Some(next_state);
-        entry.lazy_state_pending = false;
+        entry.standby_state_pending = false;
         Ok(ok_vm_result(Value::Unit))
     }
 
@@ -2856,7 +3090,7 @@ impl VM {
             entry.mailbox.clear();
             entry.execution_context = None;
             entry.state_value = None;
-            entry.lazy_state_pending = false;
+            entry.standby_state_pending = false;
         }
         resumed
     }
@@ -3215,10 +3449,10 @@ impl VM {
         };
         let pid = self.process_runtime.next_pid;
         self.process_runtime.next_pid += 1;
-        let lazy_state_pending = self
+        let standby_state_pending = self
             .process_runtime
             .spec_for_id(spec_id)
-            .is_some_and(runtime_spec_is_lazy)
+            .is_some_and(runtime_spec_is_standby)
             && state.is_none();
         self.process_runtime.processes.insert(
             pid,
@@ -3231,7 +3465,7 @@ impl VM {
                 state_value: state,
                 owner,
                 lifecycle_sink,
-                lazy_state_pending,
+                standby_state_pending,
             },
         );
         Ok(pid)
@@ -3246,7 +3480,24 @@ impl VM {
             span_start: 0,
             span_end: 0,
         });
-        RichError::new(kind, message, location, None)
+        let mut stack_trace = self.current_stack_trace_snapshot();
+        stack_trace.insert(
+            0,
+            RuntimeStackFrame {
+                phase: RuntimeExecutionPhase::Runtime,
+                function: Some("<process>".into()),
+                fun_idx: None,
+                call_kind: RuntimeCallKind::ProcessMessage,
+                location: Some(location.clone()),
+                process: Some(RuntimeProcessTraceContext {
+                    pid: None,
+                    process_name: None,
+                    trigger: Some(kind.to_string()),
+                }),
+                tco: false,
+            },
+        );
+        RichError::new(kind, message, location, None).with_stack_trace(stack_trace)
     }
 
     #[allow(dead_code)]
@@ -3481,7 +3732,7 @@ impl VM {
                         status: process.status.label().into(),
                         mailbox_len: process.mailbox.len(),
                         owner: process.owner,
-                        lazy_state_pending: process.lazy_state_pending,
+                        standby_state_pending: process.standby_state_pending,
                         state_value: process
                             .state_value
                             .as_ref()
@@ -3803,6 +4054,7 @@ impl VM {
         VmCheckpoint {
             stack: self.stack.clone(),
             frames: self.frames.clone(),
+            tail_call_breadcrumbs: self.tail_call_breadcrumbs.clone(),
             pc: self.pc,
             exit_code: self.exit_code,
             last_result: self.last_result.clone(),
@@ -3837,6 +4089,7 @@ impl VM {
     fn rollback_to_checkpoint(&mut self, checkpoint: VmCheckpoint) {
         self.stack = checkpoint.stack;
         self.frames = checkpoint.frames;
+        self.tail_call_breadcrumbs = checkpoint.tail_call_breadcrumbs;
         self.pc = checkpoint.pc;
         self.exit_code = checkpoint.exit_code;
         self.last_result = checkpoint.last_result;
@@ -3989,6 +4242,7 @@ impl VM {
         ProcessExecutionContext {
             stack: self.stack.clone(),
             frames: self.frames.clone(),
+            tail_call_breadcrumbs: self.tail_call_breadcrumbs.clone(),
             pc,
             target,
         }
@@ -3998,6 +4252,7 @@ impl VM {
     fn restore_execution_context(&mut self, context: ProcessExecutionContext) {
         self.stack = context.stack;
         self.frames = context.frames;
+        self.tail_call_breadcrumbs = context.tail_call_breadcrumbs;
         self.pc = context.pc;
     }
 
@@ -4543,10 +4798,22 @@ impl VM {
                     Err(err) => return StepOutcome::RuntimeError(err),
                 };
                 let stack_base = self.stack.len();
+                let call_site = self.current_frame().ok().and_then(|frame| frame.call_site);
+                let trace_frame = call_site.map(|(span_start, span_end)| {
+                    self.trace_frame_for_call(
+                        &entry,
+                        RuntimeCallKind::ClosureFunction,
+                        span_start,
+                        span_end,
+                        false,
+                    )
+                });
                 self.frames.push(CallFrame {
                     return_pc: usize::MAX,
                     stack_base,
-                    call_site: self.current_frame().ok().and_then(|frame| frame.call_site),
+                    call_site,
+                    trace_frame,
+                    tail_call_breadcrumb_base_len: self.tail_call_breadcrumbs.len(),
                     locals,
                 });
 
@@ -4673,6 +4940,11 @@ impl VM {
         value: &Value,
         timeout_ms: Option<u64>,
     ) -> Result<Value, RuntimeError> {
+        let await_trace_label = if timeout_ms.is_some() {
+            "Task::await_timeout"
+        } else {
+            "Task::await"
+        };
         match value {
             Value::TaskHandle(future_id) => {
                 let completion_future = match timeout_ms {
@@ -4681,10 +4953,11 @@ impl VM {
                         .allocate_future_after(None, timeout_ms, true),
                     None => self.process_runtime.allocate_future(None, None, false),
                 };
-                self.await_task_completion(
+                let value = self.await_task_completion(
                     completion_future,
                     StepOutcome::Halt(Value::PendingFuture(*future_id)),
-                )
+                )?;
+                Ok(self.prepend_task_trace_to_err_result(value, await_trace_label))
             }
             Value::PendingFuture(future_id) => {
                 let completion_future = match timeout_ms {
@@ -4693,13 +4966,32 @@ impl VM {
                         .allocate_future_after(None, timeout_ms, true),
                     None => self.process_runtime.allocate_future(None, None, false),
                 };
-                self.await_task_completion(
+                let value = self.await_task_completion(
                     completion_future,
                     StepOutcome::Halt(Value::PendingFuture(*future_id)),
-                )
+                )?;
+                Ok(self.prepend_task_trace_to_err_result(value, await_trace_label))
             }
             other => Ok(other.clone()),
         }
+    }
+
+    fn prepend_task_trace_to_err_result(&self, value: Value, function: &str) -> Value {
+        let Value::Tagged { tag: 1, fields } = value else {
+            return value;
+        };
+        let [Value::Error(rich)] = fields.as_slice() else {
+            return Value::Tagged { tag: 1, fields };
+        };
+        let Some((span_start, span_end)) =
+            self.current_frame().ok().and_then(|frame| frame.call_site)
+        else {
+            return Value::Tagged { tag: 1, fields };
+        };
+        let mut rich = (**rich).clone();
+        rich.stack_trace
+            .insert(0, self.trace_frame_for_task(function, span_start, span_end));
+        err_vm_result(rich)
     }
 
     fn ready_future_value(&self, future_id: FutureId) -> Option<Value> {
@@ -4766,6 +5058,30 @@ impl VM {
     }
 
     pub(crate) fn invoke_task_with_timeout(
+        &mut self,
+        callable: Callable,
+        mode: TaskMode,
+        timeout_ms: Option<u64>,
+    ) -> Result<Value, RuntimeError> {
+        let frame_idx = self
+            .frames
+            .len()
+            .checked_sub(1)
+            .ok_or_else(|| RuntimeError::new("Frame stack underflow"))?;
+        let previous_trace_frame = self.frames[frame_idx].trace_frame.clone();
+        if let Some((span_start, span_end)) = self.frames[frame_idx].call_site {
+            self.frames[frame_idx].trace_frame = Some(self.trace_frame_for_task(
+                Self::task_mode_trace_name(mode),
+                span_start,
+                span_end,
+            ));
+        }
+        let result = self.invoke_task_with_timeout_inner(callable, mode, timeout_ms);
+        self.frames[frame_idx].trace_frame = previous_trace_frame;
+        result
+    }
+
+    fn invoke_task_with_timeout_inner(
         &mut self,
         callable: Callable,
         mode: TaskMode,
@@ -4874,6 +5190,8 @@ impl VM {
             .frames
             .pop()
             .ok_or_else(|| RuntimeError::new("Return with empty frame stack"))?;
+        self.tail_call_breadcrumbs
+            .truncate(frame.tail_call_breadcrumb_base_len);
         self.stack.truncate(frame.stack_base);
         self.stack.push(ret);
         *pc = frame.return_pc;
@@ -5915,9 +6233,11 @@ impl VM {
                         self.frames.len()
                     ),
                 );
-                let result = self.with_call_site(Some((span_start, span_end)), |vm| {
-                    call_builtin(vm, builtin_id, args)
-                })?;
+                let trace_frame = self.trace_frame_for_builtin(builtin_name, span_start, span_end);
+                let result =
+                    self.with_call_site(Some((span_start, span_end)), Some(trace_frame), |vm| {
+                        call_builtin(vm, builtin_id, args)
+                    })?;
                 let pending_future = match result {
                     Value::PendingFuture(future_id) => Some(future_id),
                     _ => None,
@@ -5977,15 +6297,33 @@ impl VM {
                     ),
                 );
                 if tail_call {
+                    let trace_frame = self.trace_frame_for_call(
+                        &entry,
+                        RuntimeCallKind::DirectFunction,
+                        span_start,
+                        span_end,
+                        true,
+                    );
+                    self.record_tail_call_breadcrumb();
                     self.reuse_current_frame_for_call(locals, Some((span_start, span_end)))?;
+                    self.current_frame_mut()?.trace_frame = Some(trace_frame);
                     self.observe_tail_call_optimized();
                 } else {
                     let return_pc = *pc;
                     let stack_base = self.stack.len();
+                    let trace_frame = self.trace_frame_for_call(
+                        &entry,
+                        RuntimeCallKind::DirectFunction,
+                        span_start,
+                        span_end,
+                        false,
+                    );
                     self.frames.push(CallFrame {
                         return_pc,
                         stack_base,
                         call_site: Some((span_start, span_end)),
+                        trace_frame: Some(trace_frame),
+                        tail_call_breadcrumb_base_len: self.tail_call_breadcrumbs.len(),
                         locals,
                     });
                 }
@@ -6030,12 +6368,12 @@ impl VM {
                     span_start,
                     span_end,
                 };
-                self.stack.push(Value::Error(Box::new(RichError::new(
-                    template.kind.clone(),
-                    message,
-                    location,
-                    None,
-                ))));
+                self.stack.push(Value::Error(Box::new(
+                    RichError::new(template.kind.clone(), message, location, None)
+                        .with_stack_trace(
+                            self.stack_trace_snapshot_without_head_function(&template.kind),
+                        ),
+                )));
             }
             Opcode::MakeErrorLiteral {
                 kind_const_idx,
@@ -6075,22 +6413,26 @@ impl VM {
                     .source()
                     .map(|source| line_column_for_offset(source, 0))
                     .unwrap_or((0, 0));
-                self.stack.push(Value::Error(Box::new(RichError::new(
-                    kind,
-                    message,
-                    Location {
-                        file: self
-                            .source_file()
-                            .map(|s| s.to_string())
-                            .unwrap_or_else(|| "<repl>".to_string()),
-                        func: "<pattern>".into(),
-                        line,
-                        column,
-                        span_start: 0,
-                        span_end: 0,
-                    },
-                    None,
-                ))));
+                let stack_trace = self.stack_trace_snapshot_without_head_function(&kind);
+                self.stack.push(Value::Error(Box::new(
+                    RichError::new(
+                        kind,
+                        message,
+                        Location {
+                            file: self
+                                .source_file()
+                                .map(|s| s.to_string())
+                                .unwrap_or_else(|| "<repl>".to_string()),
+                            func: "<pattern>".into(),
+                            line,
+                            column,
+                            span_start: 0,
+                            span_end: 0,
+                        },
+                        None,
+                    )
+                    .with_stack_trace(stack_trace),
+                )));
             }
 
             Opcode::CaptureClosure(num_captured) => {
@@ -6154,9 +6496,13 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
-                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
-                            call_builtin(vm, builtin_id, full_args)
-                        })?;
+                        let trace_frame =
+                            self.trace_frame_for_builtin(builtin_name, span_start, span_end);
+                        let result = self.with_call_site(
+                            Some((span_start, span_end)),
+                            Some(trace_frame),
+                            |vm| call_builtin(vm, builtin_id, full_args),
+                        )?;
                         let pending_future = match result {
                             Value::PendingFuture(future_id) => Some(future_id),
                             _ => None,
@@ -6205,18 +6551,36 @@ impl VM {
                             ),
                         );
                         if tail_call {
+                            let trace_frame = self.trace_frame_for_call(
+                                &entry,
+                                RuntimeCallKind::ClosureFunction,
+                                span_start,
+                                span_end,
+                                true,
+                            );
+                            self.record_tail_call_breadcrumb();
                             self.reuse_current_frame_for_call(
                                 locals,
                                 Some((span_start, span_end)),
                             )?;
+                            self.current_frame_mut()?.trace_frame = Some(trace_frame);
                             self.observe_tail_call_optimized();
                         } else {
                             let return_pc = *pc;
                             let stack_base = self.stack.len();
+                            let trace_frame = self.trace_frame_for_call(
+                                &entry,
+                                RuntimeCallKind::ClosureFunction,
+                                span_start,
+                                span_end,
+                                false,
+                            );
                             self.frames.push(CallFrame {
                                 return_pc,
                                 stack_base,
                                 call_site: Some((span_start, span_end)),
+                                trace_frame: Some(trace_frame),
+                                tail_call_breadcrumb_base_len: self.tail_call_breadcrumbs.len(),
                                 locals,
                             });
                         }
@@ -6234,13 +6598,22 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
-                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
-                            vm.invoke_callable_template_sync(
-                                template_id,
-                                lexical_captures.clone(),
-                                args.clone(),
-                            )
-                        })?;
+                        let trace_frame = self.trace_frame_for_callable_template(
+                            template_id,
+                            span_start,
+                            span_end,
+                        );
+                        let result = self.with_call_site(
+                            Some((span_start, span_end)),
+                            Some(trace_frame),
+                            |vm| {
+                                vm.invoke_callable_template_sync(
+                                    template_id,
+                                    lexical_captures.clone(),
+                                    args.clone(),
+                                )
+                            },
+                        )?;
                         let pending_future = match result {
                             Value::PendingFuture(future_id) => Some(future_id),
                             _ => None,
@@ -6294,9 +6667,13 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
-                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
-                            call_builtin(vm, builtin_id, full_args)
-                        })?;
+                        let trace_frame =
+                            self.trace_frame_for_builtin(builtin_name, span_start, span_end);
+                        let result = self.with_call_site(
+                            Some((span_start, span_end)),
+                            Some(trace_frame),
+                            |vm| call_builtin(vm, builtin_id, full_args),
+                        )?;
                         let pending_future = match result {
                             Value::PendingFuture(future_id) => Some(future_id),
                             _ => None,
@@ -6338,7 +6715,16 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
+                        let trace_frame = self.trace_frame_for_call(
+                            &entry,
+                            RuntimeCallKind::ClosureFunction,
+                            span_start,
+                            span_end,
+                            true,
+                        );
+                        self.record_tail_call_breadcrumb();
                         self.reuse_current_frame_for_call(locals, Some((span_start, span_end)))?;
+                        self.current_frame_mut()?.trace_frame = Some(trace_frame);
                         self.observe_tail_call_optimized();
                         *pc = entry.entry_pc as usize;
                     }
@@ -6354,13 +6740,22 @@ impl VM {
                                 self.frames.len()
                             ),
                         );
-                        let result = self.with_call_site(Some((span_start, span_end)), |vm| {
-                            vm.invoke_callable_template_sync(
-                                template_id,
-                                lexical_captures.clone(),
-                                args.clone(),
-                            )
-                        })?;
+                        let trace_frame = self.trace_frame_for_callable_template(
+                            template_id,
+                            span_start,
+                            span_end,
+                        );
+                        let result = self.with_call_site(
+                            Some((span_start, span_end)),
+                            Some(trace_frame),
+                            |vm| {
+                                vm.invoke_callable_template_sync(
+                                    template_id,
+                                    lexical_captures.clone(),
+                                    args.clone(),
+                                )
+                            },
+                        )?;
                         let pending_future = match result {
                             Value::PendingFuture(future_id) => Some(future_id),
                             _ => None,
@@ -6598,6 +6993,7 @@ impl VM {
     fn with_call_site<T>(
         &mut self,
         call_site: Option<(u32, u32)>,
+        trace_frame: Option<RuntimeStackFrame>,
         f: impl FnOnce(&mut Self) -> Result<T, RuntimeError>,
     ) -> Result<T, RuntimeError> {
         let frame_idx = self
@@ -6606,15 +7002,23 @@ impl VM {
             .checked_sub(1)
             .ok_or_else(|| RuntimeError::new("Frame stack underflow"))?;
         let previous = self.frames[frame_idx].call_site;
+        let previous_trace_frame = self.frames[frame_idx].trace_frame.clone();
         self.frames[frame_idx].call_site = call_site;
+        if trace_frame.is_some() {
+            self.frames[frame_idx].trace_frame = trace_frame;
+        }
         let result = f(self);
         let result = result.map_err(|mut err| {
             if err.context.call_site.is_none() {
                 err.context.call_site = self.runtime_error_location();
             }
+            if err.context.stack_trace.is_empty() {
+                err.context.stack_trace = self.current_stack_trace_snapshot();
+            }
             err
         });
         self.frames[frame_idx].call_site = previous;
+        self.frames[frame_idx].trace_frame = previous_trace_frame;
         result
     }
 
@@ -7062,31 +7466,31 @@ fn decode_ok_pid_result(value: Value) -> Option<PidHandle> {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum ProcessInitOutcome {
+enum StandbyInitOutcome {
     Pending,
     PendingAfter(Value),
     Ready(Value),
 }
 
-fn decode_process_init(value: Value) -> Result<ProcessInitOutcome, RuntimeError> {
+fn decode_standby_init(value: Value) -> Result<StandbyInitOutcome, RuntimeError> {
     match value {
-        Value::Tagged { tag: 0, fields } if fields.is_empty() => Ok(ProcessInitOutcome::Pending),
+        Value::Tagged { tag: 0, fields } if fields.is_empty() => Ok(StandbyInitOutcome::Pending),
         Value::Tagged { tag: 1, fields } => match fields.as_slice() {
-            [duration] => Ok(ProcessInitOutcome::PendingAfter(duration.clone())),
+            [duration] => Ok(StandbyInitOutcome::PendingAfter(duration.clone())),
             other => Err(RuntimeError::process_init_failed(format!(
-                "ProcessInit::PendingAfter expects one Duration field, got {}",
+                "StandbyInit::PendingAfter expects one Duration field, got {}",
                 other.len()
             ))),
         },
         Value::Tagged { tag: 2, fields } => match fields.as_slice() {
-            [state] => Ok(ProcessInitOutcome::Ready(state.clone())),
+            [state] => Ok(StandbyInitOutcome::Ready(state.clone())),
             other => Err(RuntimeError::process_init_failed(format!(
-                "ProcessInit::Ready expects one state field, got {}",
+                "StandbyInit::Ready expects one state field, got {}",
                 other.len()
             ))),
         },
         other => Err(RuntimeError::process_init_failed(format!(
-            "lazy init expects ProcessInit value, got {:?}",
+            "standby init expects StandbyInit value, got {:?}",
             other
         ))),
     }
@@ -7112,6 +7516,7 @@ mod tests {
         ProcessRunOutcome, ProcessStatus, ProcessWaitReason, RuntimeOutputEvent, StepOutcome,
         TaskMode, VmFileError, VmFileMode, VmObservationOptions, VmRuntimeOutputEventSnapshot, VM,
     };
+    use crate::error::RuntimeErrorKind;
     use sindr::ir::{
         BootEntrySource, Bytecode, BytecodeChunk, CallableTemplate, CallableTemplateArg,
         CallableTemplateComposeFlavor, CallableTemplateDirectTarget, CallableTemplateKind,
@@ -7124,9 +7529,10 @@ mod tests {
     };
     use sindr::primitives::int;
     use sindr::runtime::{
-        Callable, CallableMetadata, CallableTarget, Location, PidHandle, RichError, TypeEntry,
-        TypeKind, TypeRegistry, Value,
+        Callable, CallableMetadata, CallableTarget, Location, PidHandle, RichError,
+        RuntimeCallKind, TypeEntry, TypeKind, TypeRegistry, Value,
     };
+    use std::collections::VecDeque;
     use std::fs;
     use std::path::PathBuf;
     fn base_bytecode(opcodes: Vec<Opcode>) -> Bytecode {
@@ -7167,7 +7573,7 @@ mod tests {
         let state_type = RuntimeTypeRef { name: "Int".into() };
         let result_type = RuntimeTypeRef {
             name: if lazy {
-                "Result<ProcessInit<Int>, Error>".into()
+                "Result<StandbyInit<Int>, Error>".into()
             } else {
                 "Result<Int, Error>".into()
             },
@@ -7218,12 +7624,12 @@ mod tests {
                     fun_idx: init_fun_idx,
                 },
                 policy: if lazy {
-                    RuntimeInitPolicy::Lazy
+                    RuntimeInitPolicy::Standby
                 } else {
                     RuntimeInitPolicy::Eager
                 },
                 result_shape: if lazy {
-                    RuntimeInitResultShape::LazyProcessInit {
+                    RuntimeInitResultShape::StandbyProcessInit {
                         result_type: result_type.clone(),
                     }
                 } else {
@@ -7288,6 +7694,8 @@ mod tests {
             return_pc: 0,
             stack_base: 0,
             call_site: None,
+            trace_frame: None,
+            tail_call_breadcrumb_base_len: 0,
             locals: vec![Value::Unit; num_locals],
         }
     }
@@ -7296,6 +7704,7 @@ mod tests {
         ExecutionContext {
             stack: Vec::new(),
             frames: vec![root_frame(num_locals)],
+            tail_call_breadcrumbs: VecDeque::new(),
             pc,
             target: ExecutionTarget::TopLevel,
         }
@@ -7756,9 +8165,12 @@ mod tests {
                     return_pc: usize::MAX,
                     stack_base: 0,
                     call_site: None,
+                    trace_frame: None,
+                    tail_call_breadcrumb_base_len: 0,
                     locals: Vec::new(),
                 },
             ],
+            tail_call_breadcrumbs: VecDeque::new(),
             pc: 1,
             target: ExecutionTarget::FrameDepth(1),
         };
@@ -8294,7 +8706,7 @@ mod tests {
         assert!(instance.execution_context.is_none());
         assert_eq!(instance.state_value, Some(Value::Int(int(41))));
         assert_eq!(instance.owner, None);
-        assert!(!instance.lazy_state_pending);
+        assert!(!instance.standby_state_pending);
     }
 
     #[test]
@@ -9122,6 +9534,61 @@ mod tests {
     }
 
     #[test]
+    fn task_awaited_err_keeps_task_body_and_await_trace() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Halt,
+            Opcode::LoadConst(0),
+            Opcode::MakeErrorLiteral {
+                kind_const_idx: 1,
+                message_const_idx: 2,
+            },
+            Opcode::StructNew { field_count: 1 },
+            Opcode::Return,
+        ]);
+        bytecode.constants = vec![
+            Constant::Tag(1),
+            Constant::Str("Boom".into()),
+            Constant::Str("task failed".into()),
+        ];
+        bytecode.functions = vec![function_entry(0, 1, 0, 0, Some("Main::task_body"))];
+        let mut vm =
+            VM::new(bytecode).with_source("Task::async(body)\n".into(), "sample.srt".into());
+        vm.frames[0].call_site = Some((0, 17));
+        let callable = vm.callable_for_function(0);
+
+        let task = vm
+            .invoke_task(callable, TaskMode::Async)
+            .expect("task async should return a handle");
+        let value = vm
+            .await_task_handle(&task, None)
+            .expect("awaiting task handle should finish");
+
+        let Value::Tagged { tag: 1, fields } = value else {
+            panic!("task should resolve Err(Error)");
+        };
+        let Some(Value::Error(rich)) = fields.first() else {
+            panic!("task Err should contain RichError");
+        };
+        let frame_names: Vec<_> = rich
+            .stack_trace
+            .iter()
+            .filter_map(|frame| frame.function.as_deref())
+            .collect();
+        assert_eq!(frame_names, vec!["Task::await", "task_body", "Task::async"]);
+        assert_eq!(
+            rich.stack_trace
+                .iter()
+                .map(|frame| frame.call_kind.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                RuntimeCallKind::Task,
+                RuntimeCallKind::ClosureFunction,
+                RuntimeCallKind::Task
+            ]
+        );
+    }
+
+    #[test]
     fn task_launch_returns_before_sleep_future_resolves() {
         let mut bytecode = base_bytecode(vec![
             Opcode::Halt,
@@ -9408,7 +9875,7 @@ mod tests {
             .get(&pid)
             .expect("booted singleton process should exist");
         assert_eq!(instance.state_value, Some(Value::Int(int(41))));
-        assert!(!instance.lazy_state_pending);
+        assert!(!instance.standby_state_pending);
     }
 
     #[test]
@@ -9502,7 +9969,7 @@ mod tests {
     }
 
     #[test]
-    fn lazy_singleton_decodes_ready_state_during_boot() {
+    fn standby_singleton_decodes_ready_state_during_boot() {
         let bytecode = singleton_boot_bytecode(
             "Env",
             RuntimeProcessKind::Agent,
@@ -9539,7 +10006,50 @@ mod tests {
             .get(&pid)
             .expect("lazy singleton process should exist after boot");
         assert_eq!(instance.state_value, Some(Value::Str("ready".into())));
-        assert!(!instance.lazy_state_pending);
+        assert!(!instance.standby_state_pending);
+    }
+
+    #[test]
+    fn standby_singleton_pending_times_out_during_boot() {
+        let mut bytecode = singleton_boot_bytecode(
+            "Env",
+            RuntimeProcessKind::Agent,
+            true,
+            true,
+            vec![
+                Opcode::LoadConst(0),
+                Opcode::LoadConst(1),
+                Opcode::StructNew { field_count: 0 },
+                Opcode::StructNew { field_count: 1 },
+                Opcode::Return,
+            ],
+            vec![Constant::Tag(0), Constant::Tag(0)],
+        );
+        bytecode.runtime_boot_plan.singletons[0].init_timeout_ms = 1;
+        bytecode
+            .runtime_boot_plan
+            .runtime_limits
+            .pending_initial_retry_ms = 1;
+        bytecode
+            .runtime_boot_plan
+            .runtime_limits
+            .pending_max_retry_ms = 1;
+        let mut vm = VM::new(bytecode);
+
+        let err = vm
+            .ensure_root_supervisor_booted()
+            .expect_err("pending standby singleton should time out during VM init");
+
+        assert_eq!(err.kind(), RuntimeErrorKind::ProcessInitTimeout);
+        assert!(err.message.contains("Env"));
+        assert!(err.context.details.contains(&"phase=VM::Init".into()));
+        assert!(err.context.details.contains(&"process_name=Env".into()));
+        assert!(err.context.details.contains(&"init_policy=Standby".into()));
+        assert!(err
+            .context
+            .details
+            .contains(&"trigger=standby_retry".into()));
+        assert!(!vm.process_runtime.singleton_by_name.contains_key("Env"));
     }
 
     #[test]
@@ -9571,6 +10081,10 @@ mod tests {
             .expect_err("boot should fail");
         assert!(err.message.contains("Broken"));
         assert!(err.message.contains("bad boot"));
+        assert!(err.context.details.contains(&"phase=VM::Init".into()));
+        assert!(err.context.details.contains(&"process_name=Broken".into()));
+        assert!(err.context.details.contains(&"init_policy=Eager".into()));
+        assert!(err.context.details.contains(&"trigger=boot".into()));
         assert!(!vm.process_runtime.singleton_by_name.contains_key("Broken"));
         assert_eq!(
             vm.process_runtime
@@ -10652,6 +11166,81 @@ mod tests {
         let bytecode = base_bytecode(vec![Opcode::ListEmpty, Opcode::ListHead, Opcode::Halt]);
         let err = VM::new(bytecode).run().expect_err("must fail");
         assert!(err.message.contains("ListHead on empty list"));
+    }
+
+    #[test]
+    fn runtime_error_context_includes_stack_trace_for_direct_call() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::Call {
+                fun_idx: 0,
+                arity: 0,
+                span_start: 0,
+                span_end: 7,
+            },
+            Opcode::Halt,
+            Opcode::ListEmpty,
+            Opcode::ListHead,
+            Opcode::Return,
+        ]);
+        bytecode.functions = vec![function_entry(0, 2, 0, 0, Some("Main::inner"))];
+        let err = VM::new(bytecode)
+            .with_source("inner()\n".into(), "sample.srt".into())
+            .run()
+            .expect_err("must fail");
+
+        assert!(err.message.contains("ListHead on empty list"));
+        assert_eq!(err.context.stack_trace.len(), 1);
+        let frame = &err.context.stack_trace[0];
+        assert_eq!(frame.function.as_deref(), Some("inner"));
+        assert_eq!(
+            frame.location.as_ref().map(|location| {
+                (
+                    location.file.as_str(),
+                    location.line,
+                    location.column,
+                    location.span_start,
+                    location.span_end,
+                )
+            }),
+            Some(("sample.srt", 1, 1, 0, 7))
+        );
+    }
+
+    #[test]
+    fn builtin_runtime_error_context_includes_builtin_stack_trace() {
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::CallBuiltin {
+                builtin_id: builtin_id("len"),
+                arity: 1,
+                span_start: 0,
+                span_end: 7,
+            },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Int(int(1))];
+        let err = VM::new(bytecode)
+            .with_source("len([])\n".into(), "sample.srt".into())
+            .run()
+            .expect_err("must fail");
+
+        assert!(err.message.contains("len expects List"));
+        assert_eq!(err.context.stack_trace.len(), 1);
+        let frame = &err.context.stack_trace[0];
+        assert_eq!(frame.function.as_deref(), Some("len"));
+        assert_eq!(frame.call_kind, RuntimeCallKind::Builtin);
+        assert_eq!(
+            frame.location.as_ref().map(|location| {
+                (
+                    location.file.as_str(),
+                    location.line,
+                    location.column,
+                    location.span_start,
+                    location.span_end,
+                )
+            }),
+            Some(("sample.srt", 1, 1, 0, 7))
+        );
     }
 
     #[test]
