@@ -1,5 +1,7 @@
 # 型コンストラクタ trait と代数 API の改修案
 
+> impl coherence、generic overlap、call-site 型推論の規範は [`trait_coherence_and_callsite_inference_revision.md`](./trait_coherence_and_callsite_inference_revision.md) に従う。本書の「specialization」は concrete constructor witness の確定を意味し、overlapping impl の優先順位を意味しない。
+
 ## 目的
 
 既存の `Type<$A>` constructor slot、trait 継承、compile-time trait dispatch を使い、
