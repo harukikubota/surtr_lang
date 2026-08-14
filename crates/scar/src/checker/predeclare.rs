@@ -2622,10 +2622,20 @@ impl Checker {
 
                 if self.canonical_where_clause_key(
                     trait_method.where_clause.as_ref(),
-                    &trait_method.type_params,
+                    &Self::method_constraint_vars(
+                        &trait_method.params,
+                        &trait_method.ret_ty,
+                        &trait_method.fun_params,
+                        &trait_method.type_params,
+                    ),
                 ) != self.canonical_where_clause_key(
                     impl_method.where_clause.as_ref(),
-                    &impl_method.type_params,
+                    &Self::method_constraint_vars(
+                        &impl_method.params,
+                        impl_method.ret_ty.as_ref().unwrap_or(&trait_method.ret_ty),
+                        &impl_method.fun_params,
+                        &impl_method.type_params,
+                    ),
                 )
                 {
                     return Err(TypeError {
@@ -2743,13 +2753,8 @@ impl Checker {
     fn canonical_where_clause_key(
         &self,
         clause: Option<&TypedWhereClause>,
-        type_params: &[ResolvedTypeParam],
+        vars: &HashMap<String, usize>,
     ) -> Option<String> {
-        let vars = type_params
-            .iter()
-            .enumerate()
-            .map(|(ordinal, param)| (param.name.as_str(), ordinal))
-            .collect::<HashMap<_, _>>();
         let canonical_ty = |ty: &AstTy| Self::canonical_constraint_ty_key(ty, &vars);
         clause.map(|clause| {
             let mut constraints = clause
@@ -2796,10 +2801,53 @@ impl Checker {
         })
     }
 
-    fn canonical_constraint_ty_key(ty: &AstTy, vars: &HashMap<&str, usize>) -> String {
+    fn method_constraint_vars(
+        params: &[ResolvedFunParam],
+        ret: &AstTy,
+        fun_params: &[AstTy],
+        type_params: &[ResolvedTypeParam],
+    ) -> HashMap<String, usize> {
+        let mut names = type_params
+            .iter()
+            .map(|param| param.name.clone())
+            .collect::<Vec<_>>();
+        for ty in params.iter().map(|param| &param.ty).chain(std::iter::once(ret)).chain(fun_params) {
+            Self::collect_constraint_var_names(ty, &mut names);
+        }
+        names
+            .into_iter()
+            .filter(|name| name.starts_with('$'))
+            .enumerate()
+            .map(|(ordinal, name)| (name, ordinal))
+            .collect()
+    }
+
+    fn collect_constraint_var_names(ty: &AstTy, names: &mut Vec<String>) {
+        match ty {
+            AstTy::Named(_, name) => {
+                if name.starts_with('$') && !names.iter().any(|known| known == name) {
+                    names.push(name.clone());
+                }
+            }
+            AstTy::Generic(_, _, args) | AstTy::Tuple(_, args) => {
+                for arg in args {
+                    Self::collect_constraint_var_names(arg, names);
+                }
+            }
+            AstTy::Func(_, params, ret) => {
+                for param in params {
+                    Self::collect_constraint_var_names(param, names);
+                }
+                Self::collect_constraint_var_names(ret, names);
+            }
+            AstTy::ImplTrait(..) => {}
+        }
+    }
+
+    fn canonical_constraint_ty_key(ty: &AstTy, vars: &HashMap<String, usize>) -> String {
         match ty {
             AstTy::Named(_, name) => vars
-                .get(name.as_str())
+                .get(name)
                 .map(|ordinal| format!("Var({ordinal})"))
                 .unwrap_or_else(|| format!("Named({})", Self::surface_name(name))),
             AstTy::ImplTrait(_, name) => format!("Impl({})", Self::surface_name(name)),
