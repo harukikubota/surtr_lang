@@ -1756,10 +1756,7 @@ impl Checker {
         let receiver_ty = self.resolve_ty(ty);
         if let Ty::Var(var) = receiver_ty {
             if self.rigid_tyvars.contains(&var) {
-                return self
-                    .tyvar_bound_names(var)
-                    .iter()
-                    .any(|bound| bound == trait_name);
+                return self.rigid_tyvar_entails_trait(var, trait_name, &mut HashSet::new());
             }
             // An unbound inference variable is deliberately deferred.  This
             // must not manufacture a new bound; a later binding will run the
@@ -1805,6 +1802,42 @@ impl Checker {
         })();
         visiting.remove(&key);
         result
+    }
+
+    /// Check declared bounds (including trait inheritance) without adding a
+    /// constraint to the signature variable. This is also used by parent
+    /// coverage, where the child impl's where clause is temporarily supplied
+    /// as a proof environment.
+    fn rigid_tyvar_entails_trait(
+        &self,
+        var: u32,
+        requested: &str,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
+        self.tyvar_bound_names(var)
+            .iter()
+            .any(|bound| self.trait_bound_entails(bound, requested, visiting))
+    }
+
+    fn trait_bound_entails(
+        &self,
+        bound: &str,
+        requested: &str,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
+        if bound == requested {
+            return true;
+        }
+        if !visiting.insert(bound.to_string()) {
+            return false;
+        }
+        let entails = self.traits.get(bound).is_some_and(|trait_info| {
+            trait_info.parents.iter().any(|parent| {
+                self.trait_bound_entails(&self.trait_key(parent), requested, visiting)
+            })
+        });
+        visiting.remove(bound);
+        entails
     }
 
     fn impl_where_obligations_hold(
