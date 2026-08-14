@@ -1,0 +1,23 @@
+deftrait First {
+  def first(self: Self) -> String
+}
+
+deftrait Second {
+  def second(self: Self) -> String
+}
+
+impl First for Int
+where
+  Self: Second
+{
+  def first(self: Int) -> String { "first" }
+}
+
+impl Second for Int
+where
+  Self: First
+{
+  def second(self: Int) -> String { "second" }
+}
+
+print(First::first(1))

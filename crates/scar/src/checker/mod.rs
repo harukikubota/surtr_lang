@@ -2071,6 +2071,7 @@ struct Checker {
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+    trait_obligation_cycle: Option<String>,
     profiler: TypecheckProfiler,
     process_handler_dependencies: HashMap<String, HashMap<String, String>>,
     process_specs: Vec<TypedProcessSpec>,
@@ -2156,6 +2157,7 @@ impl Checker {
             trait_impls: state.trait_impls,
             trait_impl_index_by_base_trait: state.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: state.trait_methods_by_qualified_name,
+            trait_obligation_cycle: None,
             profiler: TypecheckProfiler::new_from_env(),
             process_handler_dependencies: HashMap::new(),
             process_specs: Vec::new(),
@@ -2187,6 +2189,7 @@ impl Checker {
         checker.facet_bindings = self.facet_bindings.clone();
         checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
+        checker.trait_obligation_cycle = self.trait_obligation_cycle.clone();
         checker.constructor_capabilities = self.constructor_capabilities.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();

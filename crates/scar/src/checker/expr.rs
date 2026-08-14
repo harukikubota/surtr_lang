@@ -4169,13 +4169,13 @@ impl Checker {
                 &trait_arg_tys,
             )
             .ok_or_else(|| TypeError {
-                message: format!(
+                message: self.trait_obligation_cycle.clone().unwrap_or_else(|| format!(
                     "{}::{} requires a receiver type implementing {}, got {}",
                     trait_call_display_name,
                     method_name,
                     trait_call_display_name,
                     self.ty_name(&receiver_ty)
-                ),
+                )),
                 span: receiver_span,
                 hint: combine_hint_parts(&[
                     Some(trait_signature_hint(self)),

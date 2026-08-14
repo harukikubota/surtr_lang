@@ -1769,6 +1769,11 @@ impl Checker {
 
         let key = (trait_name.to_string(), self.ty_name(&receiver_ty));
         if !visiting.insert(key.clone()) {
+            self.trait_obligation_cycle = Some(format!(
+                "CyclicTraitObligation: {} for {}",
+                self.trait_display_name(trait_name),
+                self.ty_name(&receiver_ty)
+            ));
             return false;
         }
         let result = (|| {
