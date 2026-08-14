@@ -2620,8 +2620,13 @@ impl Checker {
                     });
                 }
 
-                if Self::where_clause_key(trait_method.where_clause.as_ref())
-                    != Self::where_clause_key(impl_method.where_clause.as_ref())
+                if self.canonical_where_clause_key(
+                    trait_method.where_clause.as_ref(),
+                    &trait_method.type_params,
+                ) != self.canonical_where_clause_key(
+                    impl_method.where_clause.as_ref(),
+                    &impl_method.type_params,
+                )
                 {
                     return Err(TypeError {
                         message: format!(
@@ -2733,13 +2738,25 @@ impl Checker {
         Ok(())
     }
 
-    fn where_clause_key(clause: Option<&TypedWhereClause>) -> Option<String> {
+    /// Constraint equality for trait methods is alpha-equivalence, not a
+    /// comparison of source generic spellings or declaration order.
+    fn canonical_where_clause_key(
+        &self,
+        clause: Option<&TypedWhereClause>,
+        type_params: &[ResolvedTypeParam],
+    ) -> Option<String> {
+        let vars = type_params
+            .iter()
+            .enumerate()
+            .map(|(ordinal, param)| (param.name.as_str(), ordinal))
+            .collect::<HashMap<_, _>>();
+        let canonical_ty = |ty: &AstTy| Self::canonical_constraint_ty_key(ty, &vars);
         clause.map(|clause| {
-            clause
+            let mut constraints = clause
                 .constraints
                 .iter()
                 .map(|constraint| {
-                    let bounds = constraint
+                    let mut bounds = constraint
                         .bounds
                         .iter()
                         .map(|bound| match bound {
@@ -2751,7 +2768,7 @@ impl Checker {
                                 "type:{}",
                                 slots
                                     .iter()
-                                    .map(Self::ast_ty_key)
+                                    .map(&canonical_ty)
                                     .collect::<Vec<_>>()
                                     .join(",")
                             ),
@@ -2767,13 +2784,51 @@ impl Checker {
                                 slot_ordinal
                             ),
                         })
-                        .collect::<Vec<_>>()
-                        .join("+");
-                    format!("{}:{}", Self::ast_ty_key(&constraint.subject), bounds)
+                        .collect::<Vec<_>>();
+                    bounds.sort();
+                    bounds.dedup();
+                    format!("{}:{}", canonical_ty(&constraint.subject), bounds.join("+"))
                 })
-                .collect::<Vec<_>>()
-                .join(";")
+                .collect::<Vec<_>>();
+            constraints.sort();
+            constraints.dedup();
+            constraints.join(";")
         })
+    }
+
+    fn canonical_constraint_ty_key(ty: &AstTy, vars: &HashMap<&str, usize>) -> String {
+        match ty {
+            AstTy::Named(_, name) => vars
+                .get(name.as_str())
+                .map(|ordinal| format!("Var({ordinal})"))
+                .unwrap_or_else(|| format!("Named({})", Self::surface_name(name))),
+            AstTy::ImplTrait(_, name) => format!("Impl({})", Self::surface_name(name)),
+            AstTy::Generic(_, name, args) => format!(
+                "Generic({};{})",
+                Self::surface_name(name),
+                args.iter()
+                    .map(|arg| Self::canonical_constraint_ty_key(arg, vars))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            AstTy::Tuple(_, items) => format!(
+                "Tuple({})",
+                items
+                    .iter()
+                    .map(|item| Self::canonical_constraint_ty_key(item, vars))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            AstTy::Func(_, params, ret) => format!(
+                "Func({}->{})",
+                params
+                    .iter()
+                    .map(|param| Self::canonical_constraint_ty_key(param, vars))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                Self::canonical_constraint_ty_key(ret, vars)
+            ),
+        }
     }
 
     fn validate_parent_impl_chain(
