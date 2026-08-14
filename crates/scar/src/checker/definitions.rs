@@ -1655,9 +1655,14 @@ impl Checker {
         // closure return type is kept separately while that body is checked.
         // Use it for Result constructors so `Err(error)` can inhabit a nested
         // Result without constructing `Err(Err(error))`.
-        let expected = expected
-            .cloned()
-            .or_else(|| self.function_return_ty.clone());
+        // An absent call-site expectation means the constructor is
+        // polymorphic, not that it should inherit the enclosing function's
+        // return type.  In particular, `Err(...)` inside a list/tuple or a
+        // nested call must not become `Result<Unit>` merely because the
+        // surrounding function returns `Result<Unit>`.  The fresh Result
+        // success slot below is unified later by the surrounding expression
+        // or by the function body's final return check.
+        let expected = expected.cloned();
         if id.name == "Ok" || id.name == "Err" {
             if args.len() != 1 {
                 return Err(TypeError {

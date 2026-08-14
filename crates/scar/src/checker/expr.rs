@@ -839,23 +839,7 @@ impl Checker {
                 self.check_process_context_handler(span, slot)
             }
 
-            Resolved::Block(span, stmts) => {
-                let mut typed_stmts = Vec::new();
-                let mut last_ty = Ty::Unit;
-                for s in stmts {
-                    // Inference substitutions are statement-local inside blocks too.
-                    // Otherwise an earlier generic call can monomorphize later siblings.
-                    self.substitutions.clear();
-                    let t = self.check_node(s)?;
-                    last_ty = t.ty.clone();
-                    typed_stmts.push(t);
-                }
-                Ok(TypedNode {
-                    ty: last_ty,
-                    span: span.clone(),
-                    node: TypedInner::Block(typed_stmts),
-                })
-            }
+            Resolved::Block(span, stmts) => self.check_block(span, stmts, None),
 
             Resolved::Semi(span, inner) => {
                 let typed_inner = self.check_node(inner)?;
@@ -1024,6 +1008,7 @@ impl Checker {
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         match (node, expected) {
+            (Resolved::Block(span, stmts), expected) => self.check_block(span, stmts, expected),
             (Resolved::Closure(span, params, captures, body), Some(expected_ty)) => {
                 self.check_closure(span, params, captures, body, Some(expected_ty))
             }
@@ -1124,6 +1109,37 @@ impl Checker {
             }
             _ => self.check_node(node),
         }
+    }
+
+    fn check_block(
+        &mut self,
+        span: &Span,
+        stmts: &[Resolved],
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let mut typed_stmts = Vec::new();
+        let mut last_ty = Ty::Unit;
+        for (index, stmt) in stmts.iter().enumerate() {
+            // Inference substitutions are statement-local inside blocks too.
+            // Otherwise an earlier generic call can monomorphize later siblings.
+            self.substitutions.clear();
+            let is_last = index + 1 == stmts.len();
+            let typed = if is_last {
+                match expected {
+                    Some(expected_ty) => self.check_node_with_expected(stmt, Some(expected_ty))?,
+                    None => self.check_node(stmt)?,
+                }
+            } else {
+                self.check_node(stmt)?
+            };
+            last_ty = typed.ty.clone();
+            typed_stmts.push(typed);
+        }
+        Ok(TypedNode {
+            ty: last_ty,
+            span: span.clone(),
+            node: TypedInner::Block(typed_stmts),
+        })
     }
 
     /// A user-facing Facet annotation describes a path template; it does not
@@ -8962,7 +8978,22 @@ impl Checker {
                 self.function_return_ty = Some(expected_ret.as_ref().clone());
             }
             let profile = self.profiler.start();
-            let typed_body = self.check_node(body)?;
+            let body_is_result_constructor = match body {
+                Resolved::ConstructorCall(_, _, _) => true,
+                Resolved::App(_, func, _) => {
+                    matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "Ok" || id.name == "Err")
+                }
+                _ => false,
+            };
+            let typed_body = if body_is_result_constructor {
+                if let Some(Ty::Func(_, expected_ret)) = expected {
+                    self.check_node_with_expected(body, Some(expected_ret.as_ref()))?
+                } else {
+                    self.check_node(body)?
+                }
+            } else {
+                self.check_node(body)?
+            };
             self.profiler.finish(ProfileEvent::ClosureBody, profile);
             let typed_body = self.concretize_pending_trait_calls(typed_body)?;
             if expected.is_none() {
