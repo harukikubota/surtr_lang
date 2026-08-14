@@ -15,6 +15,10 @@ def map_applicative(value: Applicative<$A>, mapper: ($A -> $B)) -> Applicative<$
   Functor::fmap(value, mapper)
 }
 
+def as_functor(value: Applicative<$A>) -> Functor<$A> {
+  value
+}
+
 test("Option") {
   describe("predicates and constructors") {
     it("reports some and none states") {
@@ -53,6 +57,11 @@ test("Option") {
     it("specializes constructor-constrained fmap") {
       mapped: Option<String> = map_applicative(Option::Some(9), &to_string)
       assert_eq(mapped, Option::Some("9"))
+    }
+
+    it("shares the Functor root with Applicative annotations") {
+      mapped: Option<Int> = as_functor(Option::Some(9))
+      assert_eq(mapped, Option::Some(9))
     }
 
     it("chooses the first Some with Alternative") {

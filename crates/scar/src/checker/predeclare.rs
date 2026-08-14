@@ -2226,11 +2226,12 @@ impl Checker {
                 );
             }
             self.traits.insert(
-                trait_key,
+                trait_key.clone(),
                 TraitInfo {
                     id: id.clone(),
                     type_params: type_params.clone(),
                     where_clause: where_clause.as_ref().map(TypedWhereClause::from),
+                    constructor_root: (!constructor_slots.is_empty()).then_some(trait_key),
                     constructor_slots,
                     parents,
                     methods: method_map,

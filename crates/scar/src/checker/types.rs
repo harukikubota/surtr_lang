@@ -36,6 +36,20 @@ impl Checker {
         }
     }
 
+    fn constructor_root_trait_key(&self, trait_key: &str) -> Option<String> {
+        let trait_info = self.traits.get(trait_key)?;
+        if let Some(root) = &trait_info.constructor_root {
+            return Some(root.clone());
+        }
+        trait_info.parents.iter().find_map(|parent| {
+            let parent_key = parent
+                .qualified_name
+                .as_deref()
+                .unwrap_or(parent.name.as_str());
+            self.constructor_root_trait_key(parent_key)
+        })
+    }
+
     pub(super) fn constructor_application_slots(ty: &Ty) -> Option<Vec<Ty>> {
         match ty {
             Ty::List(inner) => Some(vec![inner.as_ref().clone()]),
@@ -1023,7 +1037,11 @@ impl Checker {
                         });
                     }
                     let witness = tyvars
-                        .entry(format!("@constructor-witness:{trait_key}"))
+                        .entry(format!(
+                            "@constructor-witness:{}",
+                            self.constructor_root_trait_key(trait_key)
+                                .unwrap_or_else(|| trait_key.clone())
+                        ))
                         .or_insert_with(|| self.env.fresh_tyvar())
                         .clone();
                     return Ok(Ty::SelfApp(vec![Ty::Hole, witness]));
@@ -1049,7 +1067,11 @@ impl Checker {
                         });
                     }
                     let witness = tyvars
-                        .entry(format!("@constructor-witness:{trait_key}"))
+                        .entry(format!(
+                            "@constructor-witness:{}",
+                            self.constructor_root_trait_key(trait_key)
+                                .unwrap_or_else(|| trait_key.clone())
+                        ))
                         .or_insert_with(|| self.env.fresh_tyvar())
                         .clone();
                     let mut application = vec![Ty::Hole, witness];
