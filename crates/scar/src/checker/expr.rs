@@ -3459,8 +3459,22 @@ impl Checker {
                 });
             }
             for (slot, arg) in explicit_slots.iter().zip(explicit_args) {
-                let explicit_ty =
-                    self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?;
+                let explicit_ty = match arg {
+                    // Conversion traits use a bare constructor name to select
+                    // the destination family (`from::<Result>(...)`).  Keep
+                    // its element slot inferable rather than treating it as
+                    // an invalid un-applied concrete type.
+                    AstTy::Named(_, name) if Self::surface_name(name) == "Result" => {
+                        Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error))
+                    }
+                    AstTy::Named(_, name) if Self::surface_name(name) == "Option" => {
+                        Ty::Enum("Option".into(), vec![self.env.fresh_tyvar()])
+                    }
+                    AstTy::Named(_, name) if Self::surface_name(name) == "List" => {
+                        Ty::List(Box::new(self.env.fresh_tyvar()))
+                    }
+                    _ => self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?,
+                };
                 if !self.types_compatible(slot, &explicit_ty) {
                     return Err(TypeError {
                         message: format!(

@@ -2406,7 +2406,10 @@ impl Checker {
                     &trait_head_mapping,
                     &constructor_slot_vars,
                 )?;
-                if !trait_method.fun_params.is_empty() && impl_method.fun_params.is_empty() {
+                if !trait_info.constructor_slots.is_empty()
+                    && !trait_method.fun_params.is_empty()
+                    && impl_method.fun_params.is_empty()
+                {
                     return Err(TypeError {
                         message: format!(
                             "Trait impl method {}::{} must declare FunParams",
@@ -2420,7 +2423,9 @@ impl Checker {
                     self.alpha_normalized_signature(&trait_fun_params, &Ty::Unit);
                 let impl_fun_params_signature =
                     self.alpha_normalized_signature(&impl_fun_params, &Ty::Unit);
-                if trait_fun_params_signature != impl_fun_params_signature {
+                if !trait_info.constructor_slots.is_empty()
+                    && trait_fun_params_signature != impl_fun_params_signature
+                {
                     return Err(TypeError {
                         message: format!(
                             "Trait impl method {}::{} has incompatible FunParams (expected [{}], got [{}])",

@@ -2267,14 +2267,17 @@ impl Checker {
                 Resolved::TraitDef(_, id, type_params, _, methods, _) => {
                     let mut trait_used = HashSet::new();
                     for method in methods {
-                        let mut method_input_used = HashSet::new();
+                        let mut fun_param_slots = HashSet::new();
                         for fun_param in &method.fun_params {
-                            Self::collect_ast_ty_type_params(fun_param, &mut method_input_used);
+                            Self::collect_ast_ty_type_params(fun_param, &mut fun_param_slots);
                         }
+                        let mut value_param_slots = HashSet::new();
                         for param in &method.params {
                             Self::collect_ast_ty_type_params(&param.ty, &mut trait_used);
-                            Self::collect_ast_ty_type_params(&param.ty, &mut method_input_used);
+                            Self::collect_ast_ty_type_params(&param.ty, &mut value_param_slots);
                         }
+                        let mut method_input_used = fun_param_slots;
+                        method_input_used.extend(value_param_slots);
                         let mut method_output_used = HashSet::new();
                         Self::collect_ast_ty_type_params(&method.ret_ty, &mut trait_used);
                         Self::collect_ast_ty_type_params(&method.ret_ty, &mut method_output_used);

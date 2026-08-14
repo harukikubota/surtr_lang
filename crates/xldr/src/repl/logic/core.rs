@@ -8623,6 +8623,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::IntrinsicDecl(span, _, _, _)
         | Ast::BuiltinExtractorDecl(span, _, _, _, _)
         | Ast::BuiltinTypeDecl(span, _, _)
+        | Ast::TypeAlias(span, _, _, _)
         | Ast::ResultCtorDecl(span, _, _, _, _)
         | Ast::Defmod(span, _, _, _)
         | Ast::Defagent(span, _, _, _, _)
