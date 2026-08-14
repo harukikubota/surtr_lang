@@ -10342,7 +10342,7 @@ impl Checker {
         value: &Resolved,
         err: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_value = self.check_result_value(value, "map_err")?;
+        let typed_value = self.check_result_value(value, "map_err", None)?;
         let typed_err = self.check_lazy_argument(err, span)?;
         self.ensure_result_error_arg(&typed_err, "map_err")?;
 
@@ -10359,7 +10359,7 @@ impl Checker {
         value: &Resolved,
         err: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_value = self.check_result_value(value, "cause")?;
+        let typed_value = self.check_result_value(value, "cause", None)?;
         let typed_err = self.check_lazy_argument(err, span)?;
         self.ensure_result_error_arg(&typed_err, "cause")?;
 
@@ -10377,21 +10377,13 @@ impl Checker {
         marker: &Resolved,
         handler: &Resolved,
     ) -> Result<TypedNode, TypeError> {
-        let typed_value = self.check_result_value(value, "recover_kind")?;
-        let value_ty = self.resolve_ty(&typed_value.ty);
-        let Ty::Result(ok_ty, _) = &value_ty else {
-            return Err(TypeError {
-                message: format!(
-                    "recover_kind value must resolve to Result<...>, got {}",
-                    self.ty_name(&value_ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: None,
-            });
-        };
-        let ok_ty = ok_ty.as_ref().clone();
         let typed_marker = self.check_lazy_argument(marker, span)?;
         self.ensure_recover_kind_marker(&typed_marker)?;
+        // Infer the success type from the handler before checking a
+        // polymorphic `Err(...)` value.  Otherwise `Err(NoneError)` is
+        // checked without context and its success slot defaults to `Unit`,
+        // rejecting valid handlers such as `Error -> Result<Int>`.
+        let ok_ty = self.env.fresh_tyvar();
         let expected_handler = Ty::Func(
             vec![Ty::Error],
             Box::new(Ty::Result(Box::new(ok_ty.clone()), Box::new(Ty::Error))),
@@ -10420,6 +10412,19 @@ impl Checker {
                 hint: None,
             });
         }
+        let typed_value = self.check_result_value(value, "recover_kind", Some(&ok_ty))?;
+        let value_ty = self.resolve_ty(&typed_value.ty);
+        let Ty::Result(ok_ty, _) = &value_ty else {
+            return Err(TypeError {
+                message: format!(
+                    "recover_kind value must resolve to Result<...>, got {}",
+                    self.ty_name(&value_ty)
+                ),
+                span: typed_value.span.clone(),
+                hint: None,
+            });
+        };
+        let ok_ty = ok_ty.as_ref().clone();
 
         Ok(TypedNode {
             ty: Ty::Result(Box::new(ok_ty), Box::new(Ty::Error)),
@@ -10436,10 +10441,18 @@ impl Checker {
         &mut self,
         value: &Resolved,
         form_name: &str,
+        expected_ok_ty: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let typed_value = self.check_node(value)?;
+        let expected_result_ty = Ty::Result(
+            Box::new(
+                expected_ok_ty
+                    .cloned()
+                    .unwrap_or_else(|| self.env.fresh_tyvar()),
+            ),
+            Box::new(Ty::Error),
+        );
+        let typed_value = self.check_node_with_expected(value, Some(&expected_result_ty))?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        let expected_result_ty = Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error));
         if !self.types_compatible(&expected_result_ty, &value_ty) {
             return Err(TypeError {
                 message: format!(

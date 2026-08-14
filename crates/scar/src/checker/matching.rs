@@ -7,7 +7,19 @@ impl Checker {
         scrutinee: &Resolved,
         arms: &[ResolvedMatchArm],
     ) -> Result<TypedNode, TypeError> {
-        let typed_scrut = self.check_node(scrutinee)?;
+        // A polymorphic constructor used as the scrutinee (for example
+        // `Err(NoneError)`) cannot be inferred in isolation: without an
+        // expected type its payload type defaults to `Unit`.  Match patterns
+        // are an equally valid source of constraints, so seed the scrutinee
+        // from the first informative pattern and let arm bindings/body
+        // expressions refine the fresh variables it contains.
+        let pattern_hint = arms
+            .iter()
+            .find_map(|arm| self.infer_match_pattern_ty(&arm.pattern));
+        let typed_scrut = match pattern_hint.as_ref() {
+            Some(expected) => self.check_node_with_expected(scrutinee, Some(expected))?,
+            None => self.check_node(scrutinee)?,
+        };
         let mut typed_arms = Vec::new();
         let mut result_ty: Option<Ty> = None;
 
@@ -54,6 +66,64 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::Match(Box::new(typed_scrut), typed_arms),
         })
+    }
+
+    /// Infer a type skeleton from a pattern before the scrutinee is checked.
+    /// Binding variables deliberately become fresh inference variables.  The
+    /// arm body can then constrain them (e.g. `print(name)` constrains `name`
+    /// to `String`) and that constraint flows back into the scrutinee type.
+    fn infer_match_pattern_ty(&mut self, pat: &ResolvedPattern) -> Option<Ty> {
+        match pat {
+            ResolvedPattern::Var(_) | ResolvedPattern::Wildcard(_) | ResolvedPattern::Pin(_) => {
+                None
+            }
+            ResolvedPattern::Annotated(_, ast_ty) => self
+                .resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())
+                .ok(),
+            ResolvedPattern::As(inner, _, alias_ty) => alias_ty
+                .as_ref()
+                .and_then(|ast_ty| {
+                    self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())
+                        .ok()
+                })
+                .or_else(|| self.infer_match_pattern_ty(inner)),
+            ResolvedPattern::BoolLit(_, _) => Some(Ty::Bool),
+            ResolvedPattern::IntLit(_, _) => Some(Ty::Int),
+            ResolvedPattern::StrLit(_, _) => Some(Ty::Str),
+            ResolvedPattern::DurationLit(_, _) => Some(Ty::Struct("Duration".into(), Vec::new())),
+            ResolvedPattern::Tuple(items) => Some(Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| {
+                        self.infer_match_pattern_ty(item)
+                            .unwrap_or_else(|| self.env.fresh_tyvar())
+                    })
+                    .collect(),
+            )),
+            ResolvedPattern::Or(items) => items
+                .iter()
+                .find_map(|item| self.infer_match_pattern_ty(item)),
+            // These patterns are also valid string patterns (`[]` is the
+            // empty string and cons is string decomposition), so they are
+            // ambiguous without a scrutinee hint.
+            ResolvedPattern::ListNil(_) | ResolvedPattern::ListCons(_, _) => None,
+            ResolvedPattern::Constructor(id, _) => match id.name.as_str() {
+                "Ok" | "Result::Ok" => Some(Ty::Result(
+                    Box::new(self.env.fresh_tyvar()),
+                    Box::new(Ty::Error),
+                )),
+                "Err" | "Result::Err" => Some(Ty::Result(
+                    Box::new(self.env.fresh_tyvar()),
+                    Box::new(Ty::Error),
+                )),
+                _ => self
+                    .lookup_enum_variant_by_constructor_id(id.unique_id)
+                    .map(|variant| self.instantiate_enum_variant(&variant).enum_ty),
+            },
+            // Extractor patterns need the scrutinee type supplied by the
+            // extractor contract; they remain checked by the normal path.
+            ResolvedPattern::Extractor(_, _) => None,
+        }
     }
 
     fn can_coerce_err_only_result_self_arm(
