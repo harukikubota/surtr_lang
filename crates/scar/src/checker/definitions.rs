@@ -1764,7 +1764,17 @@ impl Checker {
                 }
                 let inner = match &args[0] {
                     ResolvedRecordLitArg::Positional(expr) => {
-                        let typed = self.check_node(expr)?;
+                        // Preserve the expected Result payload when this
+                        // constructor was resolved through enum metadata
+                        // (the qualified `Result::Ok` path).  Applicative
+                        // chains rely on this context to infer nested
+                        // closures left-to-right: the first `|*|` fixes the
+                        // mapper input, which then constrains the next one.
+                        let inner_expected = expected.and_then(|expected| match self.resolve_ty(expected) {
+                            Ty::Result(ok, _) => Some(ok.as_ref().clone()),
+                            _ => None,
+                        });
+                        let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
                         if self.ty_contains_facet(&typed.ty) {
                             return Err(TypeError {
                                 message:

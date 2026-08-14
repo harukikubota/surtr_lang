@@ -1045,6 +1045,24 @@ impl Checker {
             (Resolved::ContextBind(span, left, right), Some(expected_ty)) => {
                 self.check_context_bind_with_expected(span, left, right, Some(expected_ty))
             }
+            // Constructor applications are normally handled by `check_app`
+            // after resolving the callee as a value.  When an enclosing
+            // expression supplies an expected type (notably the mapper side
+            // of `|*|`), route enum constructors directly so their payload
+            // receives that context.  Without this, nested closures are
+            // inferred in isolation and callable type variables remain
+            // unconstrained until a later application.
+            (Resolved::App(span, func, args), Some(expected_ty))
+                if matches!(func.as_ref(), Resolved::Var(_, id)
+                    if id.name == "Ok"
+                        || id.name == "Err"
+                        || self.lookup_enum_variant_by_constructor_id(id.unique_id).is_some()) =>
+            {
+                let Resolved::Var(_, id) = func.as_ref() else {
+                    unreachable!("constructor guard requires a variable callee")
+                };
+                self.check_constructor_call(span, id, args, Some(expected_ty))
+            }
             (Resolved::Compose(span, left, right), Some(expected_ty)) => {
                 self.check_compose_with_expected(span, left, right, Some(expected_ty))
             }
@@ -7865,6 +7883,22 @@ impl Checker {
 
         let typed_func = self.check_node(func)?;
         let func_ty = self.resolve_ty(&typed_func.ty);
+
+        // A closure parameter may only reveal that it is callable when it is
+        // first applied (for example `g(x)` inside a higher-order closure).
+        // Turn that unconstrained type variable into a callable shape before
+        // checking its arguments so inference can continue recursively.
+        if let Ty::Var(var) = func_ty {
+            if !self.rigid_tyvars.contains(&var) {
+                let params = (0..args.len())
+                    .map(|_| self.env.fresh_tyvar())
+                    .collect::<Vec<_>>();
+                let ret = self.env.fresh_tyvar();
+                if self.bind_tyvar(var, &Ty::Func(params, Box::new(ret))) {
+                    return self.check_app(span, func, args);
+                }
+            }
+        }
 
         match &func_ty {
             Ty::BuiltinFunc { name, params, ret } => {

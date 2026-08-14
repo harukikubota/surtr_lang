@@ -409,7 +409,7 @@ impl Functor for Result<$T> {
 `Applicative` implementation for `Result`.
 """
 impl Applicative for Result<$T> {
-  def pure::<Result<$T>>(value: $A) -> Result<$A> {
+  def pure::<Result<$A>>(value: $A) -> Result<$A> {
     Ok(value)
   }
 

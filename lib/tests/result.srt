@@ -441,7 +441,7 @@ test("Result") {
 
     # u <*> pure(y) == pure(\f -> f(y)) <*> u
     it("interchange holds") {
-      u: Result<(Int -> Int)> = Ok(&safe_inc)
+      u: Result<(Int -> Int)> = Ok(&inc)
       left = u |*| Ok(2)
       right = Ok({|f| f(2)}) |*| u
       assert_eq(left, right)
@@ -449,8 +449,8 @@ test("Result") {
 
     # pure(.) <*> u <*> v <*> w == u <*> (v <*> w)
     it("composition holds") {
-      u: Result<(Int -> Int)> = Ok(&safe_inc)
-      v: Result<(Int -> Int)> = Ok(&safe_double_under_limit)
+      u: Result<(Int -> Int)> = Ok(&inc)
+      v: Result<(Int -> Int)> = Ok(&add2(&1, 10))
       w: Result<Int> = Ok(2)
       left = Ok({|f| {|g| {|x| f(g(x))}}}) |*| u |*| v |*| w
       right = u |*| (v |*| w)
