@@ -29,7 +29,7 @@ impl Checker {
     // A constructor-trait application is encoded as `SelfApp(Hole, witness,
     // slots...)`.  Plain `SelfApp(slots...)` remains the trait-metadata form.
     // Keeping both in the existing type variant avoids leaking a runtime type.
-    fn constructor_application_parts(items: &[Ty]) -> Option<(&Ty, &[Ty])> {
+    pub(super) fn constructor_application_parts(items: &[Ty]) -> Option<(&Ty, &[Ty])> {
         match items {
             [Ty::Hole, witness, slots @ ..] => Some((witness, slots)),
             _ => None,
