@@ -3565,6 +3565,17 @@ second: String = id("t")"#,
     assert!(matches!(typed_bind_rhs(&typed, "second").ty, Ty::Str));
 }
 
+#[test]
+fn unbound_generic_argument_synthesizes_closure_shape() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def box(value: $A) -> $A { value }
+increment = box({|n: Int| n + 1})
+result: Int = increment(1)"#,
+    );
+
+    assert!(matches!(typed_bind_rhs(&typed, "result").ty, Ty::Int));
+}
+
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }
