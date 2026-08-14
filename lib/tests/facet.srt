@@ -49,7 +49,7 @@ test("Facet") {
 
     it("stores plain values into Result-backed fields") {
       fixture = demo_fixture()
-      updated =? Facet::set(Tuple._0 / Tuple._1, fixture, "captain")
+      updated =? Facet::set(Tuple._0 / Tuple._1, fixture, Ok("captain"))
       assert_eq("Ok(Ok(\"captain\"))", inspect(updated._0._1))
     }
 

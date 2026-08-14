@@ -296,6 +296,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_over_result_requires_result_container_updater as fn(),
     ),
     (
+        "nested_result_err_expression_has_dedicated_diagnostic",
+        nested_result_err_expression_has_dedicated_diagnostic as fn(),
+    ),
+    (
+        "nested_result_err_pattern_has_dedicated_diagnostic",
+        nested_result_err_pattern_has_dedicated_diagnostic as fn(),
+    ),
+    (
         "readonly_facet_view_succeeds_and_preserves_path_metadata",
         readonly_facet_view_succeeds_and_preserves_path_metadata as fn(),
     ),
@@ -2593,6 +2601,36 @@ Facet::over_result(User.score, user, {|score| Ok(1)})"#,
     assert!(err
         .message
         .contains("Facet::over_result update function output mismatch"));
+}
+
+fn nested_result_err_expression_has_dedicated_diagnostic() {
+    let err = typecheck_with_rules(
+        r#"deferror Oops { "oops" }
+value: Result<Result<Int>> = Err(Err(Oops))"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("nested Err expressions must be rejected");
+    assert!(
+        err.message.contains("Nested Result errors are not allowed"),
+        "{err:?}"
+    );
+}
+
+fn nested_result_err_pattern_has_dedicated_diagnostic() {
+    let err = typecheck_with_rules(
+        r#"deferror Oops { "oops" }
+value: Result<Result<Int>> = Err(Oops)
+match value {
+  Err(Err(error)) => Error::message(error)
+  Ok(_) => "ok"
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("nested Err patterns must be rejected");
+    assert!(
+        err.message.contains("Nested Result errors are not allowed in match patterns"),
+        "{err:?}"
+    );
 }
 
 fn readonly_facet_view_succeeds_and_preserves_path_metadata() {

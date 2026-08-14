@@ -1651,6 +1651,13 @@ impl Checker {
         args: &[ResolvedRecordLitArg],
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
+        // Closure bodies are checked through `check_node`, but an expected
+        // closure return type is kept separately while that body is checked.
+        // Use it for Result constructors so `Err(error)` can inhabit a nested
+        // Result without constructing `Err(Err(error))`.
+        let expected = expected
+            .cloned()
+            .or_else(|| self.function_return_ty.clone());
         if id.name == "Ok" || id.name == "Err" {
             if args.len() != 1 {
                 return Err(TypeError {
@@ -1662,7 +1669,7 @@ impl Checker {
             let inner = match &args[0] {
                 ResolvedRecordLitArg::Positional(expr) => {
                     let inner_expected =
-                        expected.and_then(|expected| match self.resolve_ty(expected) {
+                        expected.as_ref().and_then(|expected| match self.resolve_ty(expected) {
                             Ty::Result(ok, _) => Some(ok.as_ref().clone()),
                             _ => None,
                         });
@@ -1690,6 +1697,15 @@ impl Checker {
                 }
             };
             if id.name == "Err" {
+                if matches!(self.resolve_ty(&inner.ty), Ty::Result(_, _)) {
+                    return Err(TypeError {
+                        message: "Nested Result errors are not allowed: use Err(ConcreteError) for the outer failure, or Ok(Err(ConcreteError)) for an inner failure.".into(),
+                        span: inner.span.clone(),
+                        hint: Some(
+                            "Err(...) is lifted to the expected Result nesting; do not write Err(Err(...)).".into(),
+                        ),
+                    });
+                }
                 if !matches!(inner.ty, Ty::Error) {
                     return Err(TypeError {
                         message: "Err(...) requires a concrete deferror value.".into(),
@@ -1713,8 +1729,15 @@ impl Checker {
                     Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error)),
                 )
             } else {
-                let ok_var = self.env.fresh_tyvar();
-                (1u32, Ty::Result(Box::new(ok_var), Box::new(Ty::Error)))
+                let result_ty = expected
+                    .as_ref()
+                    .filter(|ty| matches!(self.resolve_ty(ty), Ty::Result(_, _)))
+                    .map(|ty| self.resolve_ty(ty))
+                    .unwrap_or_else(|| {
+                        let ok_var = self.env.fresh_tyvar();
+                        Ty::Result(Box::new(ok_var), Box::new(Ty::Error))
+                    });
+                (1u32, result_ty)
             };
             return Ok(TypedNode {
                 ty: result_ty,
@@ -1770,7 +1793,7 @@ impl Checker {
                         // chains rely on this context to infer nested
                         // closures left-to-right: the first `|*|` fixes the
                         // mapper input, which then constrains the next one.
-                        let inner_expected = expected.and_then(|expected| match self.resolve_ty(expected) {
+                        let inner_expected = expected.as_ref().and_then(|expected| match self.resolve_ty(expected) {
                             Ty::Result(ok, _) => Some(ok.as_ref().clone()),
                             _ => None,
                         });
@@ -1798,6 +1821,15 @@ impl Checker {
                     }
                 };
                 if variant.short_name == "Err" {
+                    if matches!(self.resolve_ty(&inner.ty), Ty::Result(_, _)) {
+                        return Err(TypeError {
+                            message: "Nested Result errors are not allowed: use Err(ConcreteError) for the outer failure, or Ok(Err(ConcreteError)) for an inner failure.".into(),
+                            span: inner.span.clone(),
+                            hint: Some(
+                                "Err(...) is lifted to the expected Result nesting; do not write Err(Err(...)).".into(),
+                            ),
+                        });
+                    }
                     if !matches!(inner.ty, Ty::Error) {
                         return Err(TypeError {
                             message: "Err(...) requires a concrete deferror value.".into(),
@@ -1819,8 +1851,14 @@ impl Checker {
                 let result_ty = if variant.short_name == "Ok" {
                     Ty::Result(Box::new(inner.ty.clone()), Box::new(Ty::Error))
                 } else {
-                    let ok_var = self.env.fresh_tyvar();
-                    Ty::Result(Box::new(ok_var), Box::new(Ty::Error))
+                    expected
+                        .as_ref()
+                        .filter(|ty| matches!(self.resolve_ty(ty), Ty::Result(_, _)))
+                        .map(|ty| self.resolve_ty(ty))
+                        .unwrap_or_else(|| {
+                            let ok_var = self.env.fresh_tyvar();
+                            Ty::Result(Box::new(ok_var), Box::new(Ty::Error))
+                        })
                 };
                 return Ok(TypedNode {
                     ty: result_ty,

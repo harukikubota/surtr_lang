@@ -489,6 +489,17 @@ impl Checker {
                 Ok(TypedMatchPattern::Or(typed_items))
             }
             ResolvedPattern::Constructor(ctor_id, inner_pats) => {
+                if matches!(self.resolve_ty(expected_ty), Ty::Error)
+                    && matches!(ctor_id.name.as_str(), "Err" | "Result::Err")
+                {
+                    return Err(TypeError {
+                        message: "Nested Result errors are not allowed in match patterns: use Err(error) for the outer failure, or Ok(Err(error)) for an inner failure.".into(),
+                        span: ctor_id.span.clone(),
+                        hint: Some(
+                            "Err matches the Result layer being inspected; do not write Err(Err(...)).".into(),
+                        ),
+                    });
+                }
                 if matches!(expected_ty, Ty::Error)
                     && self.env.is_error_constructor(ctor_id.unique_id)
                 {

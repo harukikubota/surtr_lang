@@ -7518,7 +7518,20 @@ impl Checker {
             });
         }
 
-        let typed_update = self.check_node(update_expr)?;
+        let inner_ty = self.env.fresh_tyvar();
+        let expected_update = self.callable_contract(
+            &path.focus_ty,
+            Some(Ty::Result(
+                Box::new(Ty::Result(Box::new(inner_ty), Box::new(Ty::Error))),
+                Box::new(Ty::Error),
+            )),
+            ExpectedCallableSlot::Plain,
+        );
+        let typed_update = self.check_apply_callable_with_contract(
+            update_expr,
+            &expected_update,
+            "Facet::over_result",
+        )?;
         let (mode, replacement_ty) = self.check_facet_over_callable(
             "Facet::over_result",
             span,
