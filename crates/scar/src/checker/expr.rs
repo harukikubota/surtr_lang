@@ -852,7 +852,7 @@ impl Checker {
                 self.check_recover_kind(span, value, marker, handler)
             }
 
-            Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms),
+            Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms, None),
 
             Resolved::FieldAccess(span, expr, field) => self.check_field_access(span, expr, field),
             Resolved::FacetSegmentAccess(span, expr, segment) => {
@@ -1074,57 +1074,6 @@ impl Checker {
             (Resolved::Capture(span, target, args), Some(expected_ty)) => {
                 self.check_capture(span, target, args, Some(expected_ty))
             }
-            (Resolved::ListLiteral(span, elems), Some(expected_ty)) => {
-                let expected_ty = self.resolve_ty(expected_ty);
-                let Ty::List(element_ty) = expected_ty else {
-                    return self.check_list_literal(span, elems);
-                };
-                let typed_elems = elems
-                    .iter()
-                    .map(|elem| self.check_node_with_expected(elem, Some(element_ty.as_ref())))
-                    .collect::<Result<Vec<_>, _>>()?;
-                for typed in &typed_elems {
-                    self.ensure_no_runtime_facet_value(typed, "List literal")?;
-                    if !self.types_compatible(element_ty.as_ref(), &typed.ty) {
-                        return Err(TypeError {
-                            message: format!(
-                                "expected {}, got {}",
-                                self.ty_name(element_ty.as_ref()),
-                                self.ty_name(&typed.ty)
-                            ),
-                            span: typed.span.clone(),
-                            hint: Some("All list elements must have the same type".into()),
-                        });
-                    }
-                }
-                Ok(TypedNode {
-                    ty: Ty::List(element_ty),
-                    span: span.clone(),
-                    node: TypedInner::ListLiteral(typed_elems),
-                })
-            }
-            (Resolved::TupleLiteral(span, elems), Some(expected_ty)) => {
-                let expected_ty = self.resolve_ty(expected_ty);
-                let Ty::Tuple(item_tys) = expected_ty else {
-                    return self.check_tuple_literal(span, elems);
-                };
-                if elems.len() != item_tys.len() {
-                    return self.check_tuple_literal(span, elems);
-                }
-                let typed_elems = elems
-                    .iter()
-                    .zip(item_tys.iter())
-                    .map(|(elem, expected)| self.check_node_with_expected(elem, Some(expected)))
-                    .collect::<Result<Vec<_>, _>>()?;
-                for typed in &typed_elems {
-                    self.ensure_no_runtime_facet_value(typed, "Tuple literal")?;
-                }
-                Ok(TypedNode {
-                    ty: Ty::Tuple(item_tys),
-                    span: span.clone(),
-                    node: TypedInner::TupleLiteral(typed_elems),
-                })
-            }
             (Resolved::InferredFacetCapture(span, segments), Some(expected_ty)) => {
                 self.check_inferred_facet_capture(span, segments, expected_ty)
             }
@@ -1139,6 +1088,12 @@ impl Checker {
             }
             (Resolved::ContextBind(span, left, right), Some(expected_ty)) => {
                 self.check_context_bind_with_expected(span, left, right, Some(expected_ty))
+            }
+            (Resolved::If(span, cond, then, else_opt), Some(expected_ty)) => {
+                self.check_if_with_expected(span, cond, then, else_opt, expected_ty)
+            }
+            (Resolved::Match(span, scrutinee, arms), Some(expected_ty)) => {
+                self.check_match(span, scrutinee, arms, Some(expected_ty))
             }
             // Constructor applications are normally handled by `check_app`
             // after resolving the callee as a value.  When an enclosing
@@ -10313,6 +10268,76 @@ impl Checker {
                 Ok(self.maybe_call_zero_arg_function(raw, call_span.clone()))
             }
         }
+    }
+
+    fn check_lazy_argument_with_expected(
+        &mut self,
+        arg: &Resolved,
+        expected: &Ty,
+        call_span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        match arg {
+            Resolved::Grouped(span, inner) => {
+                let inner = self.check_node_with_expected(inner, Some(expected))?;
+                Ok(TypedNode {
+                    ty: inner.ty.clone(),
+                    span: span.clone(),
+                    node: TypedInner::EagerBoundary(Box::new(inner)),
+                })
+            }
+            _ => {
+                let raw = self.check_node_with_expected(arg, Some(expected))?;
+                Ok(self.maybe_call_zero_arg_function(raw, call_span.clone()))
+            }
+        }
+    }
+
+    fn check_if_with_expected(
+        &mut self,
+        span: &Span,
+        cond: &Resolved,
+        then: &Resolved,
+        else_opt: &Option<Box<Resolved>>,
+        expected: &Ty,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_cond = self.check_node(cond)?;
+        if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "if condition must be Boolean, got {}",
+                    self.ty_name(&typed_cond.ty)
+                ),
+                span: typed_cond.span.clone(),
+                hint: None,
+            });
+        }
+        let typed_then = self.check_lazy_argument_with_expected(then, expected, span)?;
+        let typed_else = else_opt
+            .as_ref()
+            .map(|branch| self.check_lazy_argument_with_expected(branch, expected, span))
+            .transpose()?;
+        if let Some(typed_else) = &typed_else {
+            if !self.types_compatible(expected, &typed_else.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "if branches have different types: {} and {}",
+                        self.ty_name(expected),
+                        self.ty_name(&typed_else.ty)
+                    ),
+                    span: typed_else.span.clone(),
+                    hint: None,
+                });
+            }
+        }
+        Ok(TypedNode {
+            ty: self.resolve_ty(expected),
+            span: span.clone(),
+            node: TypedInner::If(
+                Box::new(typed_cond),
+                Box::new(typed_then),
+                typed_else.map(Box::new),
+            ),
+        })
     }
 
     pub(super) fn check_if(

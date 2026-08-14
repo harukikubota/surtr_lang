@@ -3576,6 +3576,20 @@ result: Int = increment(1)"#,
     assert!(matches!(typed_bind_rhs(&typed, "result").ty, Ty::Int));
 }
 
+#[test]
+fn expected_type_flows_to_if_and_match_branches() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"chooser: (Int -> Int) = if(True, {|n: Int| n + 1}, {|n: Int| n - 1})
+matched: (Int -> Int) = match True {
+  True => {|n: Int| n + 1},
+  False => {|n: Int| n - 1},
+}
+result: Int = chooser(1) + matched(1)"#,
+    );
+
+    assert!(matches!(typed_bind_rhs(&typed, "result").ty, Ty::Int));
+}
+
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }
