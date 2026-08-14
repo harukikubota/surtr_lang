@@ -1099,14 +1099,8 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        let impl_key = (
-            self.trait_instance_key(trait_id, trait_args),
-            target_name.clone(),
-        );
         let impl_info = self
-            .trait_impls
-            .get(&impl_key)
-            .cloned()
+            .trait_impl_for_head(trait_id, trait_args, target_ast_ty)
             .ok_or_else(|| TypeError {
                 message: format!("Unknown trait impl {} for {}", trait_id.name, target_name),
                 span: span.clone(),
@@ -1138,13 +1132,14 @@ impl Checker {
                         span: method.span.clone(),
                         hint: None,
                     })?;
-            let (param_tys, expected_ret, type_params, _) = self.resolve_trait_impl_method_signature(
-                &trait_info,
-                trait_args,
-                &method,
-                target_ast_ty,
-                &trait_method.ret_ty,
-            )?;
+            let (param_tys, expected_ret, type_params, _) = self
+                .resolve_trait_impl_method_signature(
+                    &trait_info,
+                    trait_args,
+                    &method,
+                    target_ast_ty,
+                    &trait_method.ret_ty,
+                )?;
 
             let mut typed_params = Vec::new();
             let mut local_bindings = Vec::new();
@@ -1674,10 +1669,12 @@ impl Checker {
             let inner = match &args[0] {
                 ResolvedRecordLitArg::Positional(expr) => {
                     let inner_expected =
-                        expected.as_ref().and_then(|expected| match self.resolve_ty(expected) {
-                            Ty::Result(ok, _) => Some(ok.as_ref().clone()),
-                            _ => None,
-                        });
+                        expected
+                            .as_ref()
+                            .and_then(|expected| match self.resolve_ty(expected) {
+                                Ty::Result(ok, _) => Some(ok.as_ref().clone()),
+                                _ => None,
+                            });
                     let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
                     if self.ty_contains_facet(&typed.ty) {
                         return Err(TypeError {
@@ -1798,9 +1795,11 @@ impl Checker {
                         // chains rely on this context to infer nested
                         // closures left-to-right: the first `|*|` fixes the
                         // mapper input, which then constrains the next one.
-                        let inner_expected = expected.as_ref().and_then(|expected| match self.resolve_ty(expected) {
-                            Ty::Result(ok, _) => Some(ok.as_ref().clone()),
-                            _ => None,
+                        let inner_expected = expected.as_ref().and_then(|expected| {
+                            match self.resolve_ty(expected) {
+                                Ty::Result(ok, _) => Some(ok.as_ref().clone()),
+                                _ => None,
+                            }
                         });
                         let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
                         if self.ty_contains_facet(&typed.ty) {

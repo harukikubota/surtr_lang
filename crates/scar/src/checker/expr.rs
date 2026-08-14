@@ -3140,12 +3140,13 @@ impl Checker {
         let receiver_name = self.trait_target_name(receiver_ty)?;
         let target_ty = self.resolve_ty(requested_trait_args.first()?);
         let opposite_trait_key = self.trait_key_by_short_name(opposite_trait)?;
-        let opposite_instance_key =
-            self.trait_instance_key_from_tys(&opposite_trait_key, &[target_ty.clone()]);
-        if !self
-            .trait_impls
-            .contains_key(&(opposite_instance_key, receiver_name.clone()))
-        {
+        let receiver_ty = self.resolve_ty(receiver_ty);
+        let has_opposite_impl = self.trait_impls.values().any(|impl_info| {
+            self.trait_key(&impl_info.trait_id) == opposite_trait_key
+                && impl_info.trait_arg_tys == [target_ty.clone()]
+                && impl_info.target_ty == receiver_ty
+        });
+        if !has_opposite_impl {
             return None;
         }
 

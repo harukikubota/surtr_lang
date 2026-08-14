@@ -2628,7 +2628,8 @@ match value {
     )
     .expect_err("nested Err patterns must be rejected");
     assert!(
-        err.message.contains("Nested Result errors are not allowed in match patterns"),
+        err.message
+            .contains("Nested Result errors are not allowed in match patterns"),
         "{err:?}"
     );
 }
@@ -3481,6 +3482,73 @@ impl PairTrait for (Int, String) {
             .any(|node| matches!(node.node, TypedInner::TraitImplDef(..))),
         "expected concrete tuple trait impl to survive typechecking"
     );
+}
+
+#[test]
+fn overlapping_trait_impl_patterns_are_rejected_before_codegen() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Mark<$T> {
+  def mark::<$T>(self: Self) -> String
+}
+
+impl Mark<$A> for String {
+  def mark::<$A>(self: String) -> String { "any" }
+}
+
+impl Mark<List<$A>> for String {
+  def mark::<List<$A>>(self: String) -> String { "list" }
+}"#,
+    );
+
+    let err = typecheck(resolved).expect_err("overlapping impls must be rejected by Scar");
+    assert!(
+        err.message.contains("Overlapping trait impls for Mark"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn disjoint_specializations_with_the_same_nominal_target_typecheck() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Mark<$T> {
+  def mark::<$T>(self: Self) -> String
+}
+
+impl Mark<Int> for List<Int> {
+  def mark::<Int>(self: List<Int>) -> String { "int" }
+}
+
+impl Mark<Int> for List<String> {
+  def mark::<Int>(self: List<String>) -> String { "string" }
+}"#,
+    );
+
+    let typed = typecheck(resolved).expect("disjoint impl patterns should coexist");
+    assert_eq!(
+        typed
+            .iter()
+            .filter(|node| matches!(node.node, TypedInner::TraitImplDef(..)))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn conversion_impl_exclusivity_ignores_generic_parameter_names() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct LocalBox<$A> { value: $A }
+
+impl From<$A> for LocalBox<$A> {
+  def from::<$A>(self: LocalBox<$A>) -> $A { self.value }
+}
+
+impl TryFrom<$T> for LocalBox<$T> {
+  def try_from::<$T>(self: LocalBox<$T>) -> Result<$T, Error> { Ok(self.value) }
+}"#,
+    );
+
+    let err = typecheck(resolved).expect_err("From and TryFrom patterns must be exclusive");
+    assert!(err.message.contains("cannot both be implemented"), "{err:?}");
 }
 
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {

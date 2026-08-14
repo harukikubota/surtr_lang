@@ -14,9 +14,13 @@ impl Checker {
             let Resolved::TypeAlias(span, name, params, rhs) = stmt else {
                 continue;
             };
-            if self.signature_aliases.contains_key(name) || self.env.lookup_type_def(name).is_some() {
+            if self.signature_aliases.contains_key(name) || self.env.lookup_type_def(name).is_some()
+            {
                 return Err(TypeError {
-                    message: format!("Duplicate visible type name `{}` in the flat type namespace", name),
+                    message: format!(
+                        "Duplicate visible type name `{}` in the flat type namespace",
+                        name
+                    ),
                     span: span.clone(),
                     hint: None,
                 });
@@ -25,9 +29,14 @@ impl Checker {
             Self::collect_ast_ty_type_params(rhs, &mut used);
             if let Some(param) = params.iter().find(|param| !used.contains(&param.name)) {
                 return Err(TypeError {
-                    message: format!("Type alias {} has an unused type parameter {}", name, param.name),
+                    message: format!(
+                        "Type alias {} has an unused type parameter {}",
+                        name, param.name
+                    ),
                     span: param.span.clone(),
-                    hint: Some("Every alias type parameter must appear in its function signature.".into()),
+                    hint: Some(
+                        "Every alias type parameter must appear in its function signature.".into(),
+                    ),
                 });
             }
             self.signature_aliases.insert(
@@ -1101,6 +1110,65 @@ impl Checker {
         }
     }
 
+    /// Storage identity retains the complete impl head.  The base trait stays
+    /// in the first key slot so candidate lookup remains inexpensive, while
+    /// concrete specializations such as `List<Int>` and `List<String>` no
+    /// longer overwrite each other merely because they share a nominal head.
+    fn trait_impl_storage_key(
+        &self,
+        trait_id: &ResolvedId,
+        trait_args: &[AstTy],
+        target_ast_ty: &AstTy,
+    ) -> TraitImplKey {
+        (
+            self.trait_key(trait_id),
+            format!(
+                "{} for {}",
+                trait_args
+                    .iter()
+                    .map(Self::ast_ty_key)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                Self::ast_ty_key(target_ast_ty)
+            ),
+        )
+    }
+
+    /// Coherence is deliberately independent of dispatch ordering.  Impl
+    /// head variables are allocated independently when their heads are
+    /// resolved, so unifying both argument lists and targets in one temporary
+    /// substitution environment is an alpha-renaming-safe overlap test.
+    fn trait_impl_patterns_overlap(
+        &mut self,
+        left_args: &[Ty],
+        left_target: &Ty,
+        right_args: &[Ty],
+        right_target: &Ty,
+    ) -> bool {
+        if left_args.len() != right_args.len() {
+            return false;
+        }
+        let before = self.substitutions.clone();
+        self.substitutions.clear();
+        let overlap = left_args
+            .iter()
+            .zip(right_args)
+            .all(|(left, right)| self.types_compatible(left, right))
+            && self.types_compatible(left_target, right_target);
+        self.substitutions = before;
+        overlap
+    }
+
+    pub(super) fn trait_impl_for_head(
+        &self,
+        trait_id: &ResolvedId,
+        trait_args: &[AstTy],
+        target_ast_ty: &AstTy,
+    ) -> Option<TraitImplInfo> {
+        let storage_key = self.trait_impl_storage_key(trait_id, trait_args, target_ast_ty);
+        self.trait_impls.get(&storage_key).cloned()
+    }
+
     pub(super) fn trait_display_name(&self, trait_name: &str) -> String {
         let (base, suffix) = trait_name
             .split_once('<')
@@ -1619,11 +1687,11 @@ impl Checker {
             targets.insert((*target).to_string());
         }
         let match_exact = trait_name.contains('<');
-        for ((impl_trait_name, _target_name), info) in &self.trait_impls {
+        for info in self.trait_impls.values() {
             let matches = if match_exact {
-                impl_trait_name == trait_name
+                self.trait_instance_key(&info.trait_id, &info.trait_args) == trait_name
             } else {
-                self.trait_matches_short_name(impl_trait_name, trait_name)
+                self.trait_matches_short_name(&self.trait_key(&info.trait_id), trait_name)
             };
             if matches {
                 if let Some(display) = Self::public_trait_target_display(info) {
@@ -1673,12 +1741,6 @@ impl Checker {
     }
 
     pub(super) fn trait_impl_exists(&mut self, trait_name: &str, ty: &Ty) -> bool {
-        if self.trait_target_name(ty).is_some_and(|target_name| {
-            self.trait_impls
-                .contains_key(&(trait_name.into(), target_name))
-        }) {
-            return true;
-        }
         if !trait_name.contains('<') {
             let receiver_ty = self.resolve_ty(ty);
             for impl_key in self.trait_impl_candidate_keys(trait_name) {
@@ -2167,10 +2229,7 @@ impl Checker {
                             &mut value_param_slots,
                         );
                     }
-                    if let Some(slot) = fun_param_slots
-                        .intersection(&value_param_slots)
-                        .next()
-                    {
+                    if let Some(slot) = fun_param_slots.intersection(&value_param_slots).next() {
                         return Err(TypeError {
                             message: format!(
                                 "Constructor trait method {} introduces {} through both FunParams and value arguments",
@@ -2498,6 +2557,30 @@ impl Checker {
                 }
             }
 
+            let existing_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
+            for existing in existing_impls {
+                if self.trait_key(&existing.trait_id) != trait_key {
+                    continue;
+                }
+                if self.trait_impl_patterns_overlap(
+                    &trait_arg_tys,
+                    &target_ty,
+                    &existing.trait_arg_tys,
+                    &existing.target_ty,
+                ) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Overlapping trait impls for {}: {} and {}",
+                            trait_id.name,
+                            Self::surface_ast_ty_key(target_ast_ty),
+                            Self::surface_ast_ty_key(&existing.target_ast_ty)
+                        ),
+                        span: span.clone(),
+                        hint: Some("Trait impl patterns must be structurally disjoint; Surtr does not use specialization or declaration-order dispatch.".into()),
+                    });
+                }
+            }
+
             let exclusive_peer = if self.trait_matches_short_name(&trait_key, "From") {
                 self.trait_key_by_short_name("TryFrom")
             } else if self.trait_matches_short_name(&trait_key, "TryFrom") {
@@ -2506,32 +2589,32 @@ impl Checker {
                 None
             };
             if let Some(peer_trait_key) = exclusive_peer {
-                let peer_instance_key = if trait_args.is_empty() {
-                    peer_trait_key.clone()
-                } else {
-                    format!(
-                        "{}<{}>",
-                        peer_trait_key,
-                        trait_args
-                            .iter()
-                            .map(Self::ast_ty_key)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                if self
+                let peers = self
                     .trait_impls
-                    .contains_key(&(peer_instance_key.clone(), target_name.clone()))
-                {
+                    .values()
+                    .filter(|existing| self.trait_key(&existing.trait_id) == peer_trait_key)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let peer = peers.into_iter().find(|existing| {
+                    self.trait_impl_patterns_overlap(
+                        &trait_arg_tys,
+                        &target_ty,
+                        &existing.trait_arg_tys,
+                        &existing.target_ty,
+                    )
+                });
+                if let Some(existing) = peer {
                     return Err(TypeError {
                         message: format!(
                             "{} and {} cannot both be implemented for {} -> {}",
                             trait_id.name,
-                            peer_trait_key
+                            existing
+                                .trait_id
+                                .name
                                 .rsplit("::")
                                 .next()
-                                .unwrap_or(&peer_trait_key),
-                            target_name,
+                                .unwrap_or(&existing.trait_id.name),
+                            Self::surface_ast_ty_key(target_ast_ty),
                             trait_args
                                 .iter()
                                 .map(Self::ast_ty_key)
@@ -2544,7 +2627,7 @@ impl Checker {
                 }
             }
 
-            let impl_key = (trait_instance_key.clone(), target_name.clone());
+            let impl_key = self.trait_impl_storage_key(trait_id, trait_args, target_ast_ty);
             self.trait_impls.insert(
                 impl_key.clone(),
                 TraitImplInfo {
@@ -2616,7 +2699,7 @@ impl Checker {
     }
 
     fn validate_parent_impl_chain(
-        &self,
+        &mut self,
         child_impl: &TraitImplInfo,
         visiting: &mut HashSet<(String, String)>,
     ) -> Result<(), TypeError> {
@@ -2625,7 +2708,7 @@ impl Checker {
         if !visiting.insert(visit_key.clone()) {
             return Ok(());
         }
-        let Some(child_trait) = self.traits.get(&child_trait_key) else {
+        let Some(child_trait) = self.traits.get(&child_trait_key).cloned() else {
             return Ok(());
         };
         for parent in &child_trait.parents {
@@ -2645,10 +2728,25 @@ impl Checker {
                     hint: None,
                 });
             }
-            let parent_impl_key = (parent_key.clone(), child_impl.target_name.clone());
-            let parent_impl = self
+            let parent_candidates = self
                 .trait_impls
-                .get(&parent_impl_key)
+                .values()
+                .filter(|impl_info| {
+                    self.trait_key(&impl_info.trait_id) == parent_key
+                        && impl_info.trait_arg_tys.is_empty()
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let parent_impl = parent_candidates
+                .into_iter()
+                .find(|impl_info| {
+                    self.trait_impl_patterns_overlap(
+                        &[],
+                        &child_impl.target_ty,
+                        &[],
+                        &impl_info.target_ty,
+                    )
+                })
                 .ok_or_else(|| TypeError {
                     message: format!(
                         "Trait impl {} for {} requires parent impl {} for the same target",
@@ -2667,7 +2765,7 @@ impl Checker {
                     hint: None,
                 });
             }
-            self.validate_parent_impl_chain(parent_impl, visiting)?;
+            self.validate_parent_impl_chain(&parent_impl, visiting)?;
         }
         visiting.remove(&visit_key);
         Ok(())
@@ -2683,8 +2781,8 @@ impl Checker {
             };
             let (_, target_ty, _, _) =
                 self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
-            let target_name =
-                self.trait_target_name(&target_ty).ok_or_else(|| {
+            self.trait_target_name(&target_ty)
+                .ok_or_else(|| {
                     TypeError {
                 message:
                     "trait impl target must be a concrete named type, tuple type, or function type"
@@ -2693,8 +2791,11 @@ impl Checker {
                 hint: None,
             }
                 })?;
-            trait_impl_keys_in_stmts
-                .insert((self.trait_instance_key(trait_id, trait_args), target_name));
+            trait_impl_keys_in_stmts.insert(self.trait_impl_storage_key(
+                trait_id,
+                trait_args,
+                target_ast_ty,
+            ));
         }
 
         for stmt in stmts {
@@ -2904,21 +3005,21 @@ impl Checker {
 
         let mut trait_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
         trait_impls.sort_by(|left, right| {
-            let left_key = (
-                self.trait_instance_key(&left.trait_id, &left.trait_args),
-                left.target_name.clone(),
-            );
-            let right_key = (
-                self.trait_instance_key(&right.trait_id, &right.trait_args),
-                right.target_name.clone(),
+            let left_key =
+                self.trait_impl_storage_key(&left.trait_id, &left.trait_args, &left.target_ast_ty);
+            let right_key = self.trait_impl_storage_key(
+                &right.trait_id,
+                &right.trait_args,
+                &right.target_ast_ty,
             );
             left_key.cmp(&right_key)
         });
 
         for trait_impl in trait_impls {
-            let impl_key = (
-                self.trait_instance_key(&trait_impl.trait_id, &trait_impl.trait_args),
-                trait_impl.target_name.clone(),
+            let impl_key = self.trait_impl_storage_key(
+                &trait_impl.trait_id,
+                &trait_impl.trait_args,
+                &trait_impl.target_ast_ty,
             );
             if !trait_impl_keys_in_stmts.contains(&impl_key) {
                 continue;
