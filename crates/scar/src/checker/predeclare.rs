@@ -2954,9 +2954,6 @@ impl Checker {
         parent_impl: &TraitImplInfo,
         child_impl: &TraitImplInfo,
     ) -> bool {
-        if parent_impl.constructor_slot_positions != child_impl.constructor_slot_positions {
-            return false;
-        }
         let before_substitutions = self.substitutions.clone();
         let before_rigid = self.rigid_tyvars.clone();
         let mut child_vars = Vec::new();
