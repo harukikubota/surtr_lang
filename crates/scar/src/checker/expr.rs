@@ -1074,6 +1074,68 @@ impl Checker {
             (Resolved::Capture(span, target, args), Some(expected_ty)) => {
                 self.check_capture(span, target, args, Some(expected_ty))
             }
+            (Resolved::ListLiteral(span, elems), Some(expected_ty)) => {
+                let expected_ty = self.resolve_ty(expected_ty);
+                let Ty::List(element_ty) = expected_ty else {
+                    return self.check_list_literal(span, elems);
+                };
+                let typed_elems = elems
+                    .iter()
+                    .map(|elem| self.check_node_with_expected(elem, Some(element_ty.as_ref())))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for typed in &typed_elems {
+                    self.ensure_no_runtime_facet_value(typed, "List literal")?;
+                    if !self.types_compatible(element_ty.as_ref(), &typed.ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "expected {}, got {}",
+                                self.ty_name(element_ty.as_ref()),
+                                self.ty_name(&typed.ty)
+                            ),
+                            span: typed.span.clone(),
+                            hint: Some("All list elements must have the same type".into()),
+                        });
+                    }
+                }
+                Ok(TypedNode {
+                    ty: Ty::List(element_ty),
+                    span: span.clone(),
+                    node: TypedInner::ListLiteral(typed_elems),
+                })
+            }
+            (Resolved::TupleLiteral(span, elems), Some(expected_ty)) => {
+                let expected_ty = self.resolve_ty(expected_ty);
+                let Ty::Tuple(item_tys) = expected_ty else {
+                    return self.check_tuple_literal(span, elems);
+                };
+                if elems.len() != item_tys.len() {
+                    return self.check_tuple_literal(span, elems);
+                }
+                let typed_elems = elems
+                    .iter()
+                    .zip(item_tys.iter())
+                    .map(|(elem, expected)| self.check_node_with_expected(elem, Some(expected)))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for (expected, typed) in item_tys.iter().zip(&typed_elems) {
+                    self.ensure_no_runtime_facet_value(typed, "Tuple literal")?;
+                    if !self.types_compatible(expected, &typed.ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "expected {}, got {}",
+                                self.ty_name(expected),
+                                self.ty_name(&typed.ty)
+                            ),
+                            span: typed.span.clone(),
+                            hint: Some("Tuple elements must match their expected types".into()),
+                        });
+                    }
+                }
+                Ok(TypedNode {
+                    ty: Ty::Tuple(item_tys),
+                    span: span.clone(),
+                    node: TypedInner::TupleLiteral(typed_elems),
+                })
+            }
             (Resolved::InferredFacetCapture(span, segments), Some(expected_ty)) => {
                 self.check_inferred_facet_capture(span, segments, expected_ty)
             }
