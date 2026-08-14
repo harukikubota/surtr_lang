@@ -1355,7 +1355,7 @@ impl Checker {
         let mut ordered = Vec::new();
         let mut seen = HashSet::new();
         match &def.node {
-            TypedInner::Def(_, _, type_params, params, ret_ty, _, body, _) => {
+            TypedInner::Def(_, _, type_params, params, ret_ty, _, _body, _) => {
                 for type_param in type_params {
                     if type_param.bound.is_some() && seen.insert(type_param.ty_var) {
                         ordered.push(type_param.ty_var);
@@ -1365,9 +1365,11 @@ impl Checker {
                     self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
                 }
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
-                self.collect_bound_tyvars_in_node(body, &mut ordered, &mut seen);
+                // Function-local inference variables can carry trait bounds,
+                // but callers cannot infer them from a call site. Only the
+                // declared signature determines a valid specialization key.
             }
-            TypedInner::ExtractorDef(_, _, type_params, param, ret_ty, body, _) => {
+            TypedInner::ExtractorDef(_, _, type_params, param, ret_ty, _body, _) => {
                 for type_param in type_params {
                     if type_param.bound.is_some() && seen.insert(type_param.ty_var) {
                         ordered.push(type_param.ty_var);
@@ -1375,13 +1377,14 @@ impl Checker {
                 }
                 self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
-                self.collect_bound_tyvars_in_node(body, &mut ordered, &mut seen);
+                // See `Def` above: exclude function-local inference variables.
             }
             _ => {}
         }
         ordered
     }
 
+    #[allow(dead_code)]
     fn collect_bound_tyvars_in_node(
         &self,
         node: &TypedNode,
