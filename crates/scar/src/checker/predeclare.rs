@@ -1865,36 +1865,6 @@ impl Checker {
         Ok((params, ret, trait_args, explicit_slots))
     }
 
-    fn resolve_trait_method_fun_params(
-        &mut self,
-        trait_info: &TraitInfo,
-        method: &TraitMethodInfo,
-        self_ty: &Ty,
-        trait_head_vars: &[Ty],
-        trait_head_mapping: &HashMap<u32, Ty>,
-        constructor_slot_vars: &[u32],
-    ) -> Result<Vec<Ty>, TypeError> {
-        let mut tyvars = HashMap::new();
-        for (param, var) in trait_info.type_params.iter().zip(trait_head_vars) {
-            tyvars.insert(param.name.clone(), var.clone());
-        }
-        self.seed_signature_type_params(&method.type_params, &mut tyvars);
-        method
-            .fun_params
-            .iter()
-            .map(|param| {
-                let ty = self.resolve_trait_signature_ast_ty_in_context(
-                    param,
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    &mut tyvars,
-                )?;
-                let ty = self.substitute_ty_with_mapping(&ty, trait_head_mapping);
-                self.expand_trait_self_apps(ty, self_ty, constructor_slot_vars)
-            })
-            .collect()
-    }
-
     fn expand_trait_self_apps(
         &self,
         ty: Ty,
@@ -2449,7 +2419,6 @@ impl Checker {
 
                 let (trait_params, trait_ret, trait_head_vars, _) =
                     self.resolve_trait_method_signature(&trait_info, trait_method, &target_ty)?;
-                let trait_head_vars_for_fun_params = trait_head_vars.clone();
                 let trait_head_mapping = trait_head_vars
                     .into_iter()
                     .zip(trait_arg_tys.iter().cloned())
@@ -2468,59 +2437,13 @@ impl Checker {
                 let trait_ret = self.substitute_ty_with_mapping(&trait_ret, &trait_head_mapping);
                 let trait_ret =
                     self.expand_trait_self_apps(trait_ret, &target_ty, &constructor_slot_vars)?;
-                let (impl_params, impl_ret, _, impl_fun_params) = self.resolve_trait_impl_method_signature(
+                let (impl_params, impl_ret, _, _) = self.resolve_trait_impl_method_signature(
                     &trait_info,
                     trait_args,
                     impl_method,
                     target_ast_ty,
                     &trait_method.ret_ty,
                 )?;
-
-                let trait_fun_params = self.resolve_trait_method_fun_params(
-                    &trait_info,
-                    trait_method,
-                    &target_ty,
-                    &trait_head_vars_for_fun_params,
-                    &trait_head_mapping,
-                    &constructor_slot_vars,
-                )?;
-                if !trait_info.constructor_slots.is_empty()
-                    && !trait_method.fun_params.is_empty()
-                    && impl_method.fun_params.is_empty()
-                {
-                    return Err(TypeError {
-                        message: format!(
-                            "Trait impl method {}::{} must declare FunParams",
-                            trait_id.name, method_name
-                        ),
-                        span: impl_method.span.clone(),
-                        hint: Some("Declare the target-replaced slots with `::<...>`.".into()),
-                    });
-                }
-                let trait_fun_params_signature =
-                    self.alpha_normalized_signature(&trait_fun_params, &Ty::Unit);
-                let impl_fun_params_signature =
-                    self.alpha_normalized_signature(&impl_fun_params, &Ty::Unit);
-                if !trait_info.constructor_slots.is_empty()
-                    && !trait_method.fun_params.is_empty()
-                    && trait_fun_params_signature != impl_fun_params_signature
-                {
-                    return Err(TypeError {
-                        message: format!(
-                            "Trait impl method {}::{} has incompatible FunParams (expected [{}], got [{}])",
-                            trait_id.name,
-                            method_name,
-                            trait_fun_params.iter().map(|ty| self.ty_name(ty)).collect::<Vec<_>>().join(", "),
-                            impl_fun_params.iter().map(|ty| self.ty_name(ty)).collect::<Vec<_>>().join(", ")
-                        ),
-                        span: impl_method.span.clone(),
-                        hint: Some(format!(
-                            "Expected [{}], got [{}]",
-                            trait_fun_params.iter().map(|ty| self.ty_name(ty)).collect::<Vec<_>>().join(", "),
-                            impl_fun_params.iter().map(|ty| self.ty_name(ty)).collect::<Vec<_>>().join(", ")
-                        )),
-                    });
-                }
 
                 if trait_params.len() != impl_params.len() {
                     return Err(TypeError {
