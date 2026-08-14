@@ -19,7 +19,10 @@ use support::*;
 
 const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
 
-const SURFACE_WORKER_COUNT: usize = 1;
+// Cases are independent and each uses an isolated Scar session. Keep the
+// per-bucket wall time below nextest's slow timeout without oversubscribing
+// the runner (reserved in .config/nextest.toml).
+const SURFACE_WORKER_COUNT: usize = 4;
 const SURFACE_BUCKET_COUNT: usize = 32;
 
 const SURFACE_CASES: &[(&str, fn())] = &[

@@ -19,6 +19,14 @@ default-filter = 'test(/^run_eldr::/) | test(/^build_roundtrip::/) | test(/^repl
 filter = 'test(/^run_eldr::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
 threads-required = 2
 
+[[profile.default.overrides]]
+filter = 'test(/^typecheck_surface_bucket_/)'
+threads-required = 4
+
 [[profile.ci.overrides]]
 filter = 'test(/^run_eldr::/) | test(/^build_roundtrip::/) | test(/^repl::/) | test(/^test_command::/) | test(/^tui::/)'
 threads-required = 2
+
+[[profile.ci.overrides]]
+filter = 'test(/^typecheck_surface_bucket_/)'
+threads-required = 4
