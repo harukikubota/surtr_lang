@@ -3015,10 +3015,6 @@ impl Checker {
                     continue;
                 };
                 let trait_key = self.trait_key(trait_id);
-                if let Ty::Var(var) = concrete {
-                    self.register_tyvar_bounds(var, &[trait_key]);
-                    continue;
-                }
                 if !self.trait_impl_exists(&trait_key, &concrete) {
                     return false;
                 }

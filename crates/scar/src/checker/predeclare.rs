@@ -1741,26 +1741,100 @@ impl Checker {
     }
 
     pub(super) fn trait_impl_exists(&mut self, trait_name: &str, ty: &Ty) -> bool {
-        if !trait_name.contains('<') {
-            let receiver_ty = self.resolve_ty(ty);
-            for impl_key in self.trait_impl_candidate_keys(trait_name) {
-                let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+        self.trait_obligation_satisfied(trait_name, ty, &mut HashSet::new())
+    }
+
+    /// Prove a trait obligation without changing the caller's bound
+    /// environment.  A candidate is applicable only after every obligation
+    /// in its own `where` clause has been proved as well.
+    fn trait_obligation_satisfied(
+        &mut self,
+        trait_name: &str,
+        ty: &Ty,
+        visiting: &mut HashSet<(String, String)>,
+    ) -> bool {
+        let receiver_ty = self.resolve_ty(ty);
+        if let Ty::Var(var) = receiver_ty {
+            if self.rigid_tyvars.contains(&var) {
+                return self
+                    .tyvar_bound_names(var)
+                    .iter()
+                    .any(|bound| bound == trait_name);
+            }
+            // An unbound inference variable is deliberately deferred.  This
+            // must not manufacture a new bound; a later binding will run the
+            // same solver against its concrete type.
+            return true;
+        }
+
+        let key = (trait_name.to_string(), self.ty_name(&receiver_ty));
+        if !visiting.insert(key.clone()) {
+            return false;
+        }
+        let result = (|| {
+            if !trait_name.contains('<') {
+                for impl_key in self.trait_impl_candidate_keys(trait_name) {
+                    let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                        continue;
+                    };
+                    if !impl_info.trait_arg_tys.is_empty() {
+                        continue;
+                    }
+                    let mut fresh = HashMap::new();
+                    let impl_target =
+                        self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+                    let before = self.substitutions.clone();
+                    let target_matches = self.types_compatible(&impl_target, &receiver_ty);
+                    let applicable = target_matches
+                        && self.impl_where_obligations_hold(&impl_info, &fresh, visiting);
+                    self.substitutions = before;
+                    if applicable {
+                        return true;
+                    }
+                }
+            }
+            self.compiler_trait_impl_exists(trait_name, &receiver_ty)
+        })();
+        visiting.remove(&key);
+        result
+    }
+
+    fn impl_where_obligations_hold(
+        &mut self,
+        impl_info: &TraitImplInfo,
+        fresh: &HashMap<u32, Ty>,
+        visiting: &mut HashSet<(String, String)>,
+    ) -> bool {
+        let Some(where_clause) = &impl_info.where_clause else {
+            return true;
+        };
+        for constraint in &where_clause.constraints {
+            let subject_ty = match &constraint.subject {
+                AstTy::Named(_, subject) if subject == "Self" => {
+                    self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, fresh))
+                }
+                AstTy::Named(_, subject) => {
+                    let Some(original_var) = impl_info.type_param_vars_by_name.get(subject) else {
+                        return false;
+                    };
+                    let Some(instantiated) = fresh.get(original_var) else {
+                        return false;
+                    };
+                    self.resolve_ty(instantiated)
+                }
+                _ => return false,
+            };
+            for bound in &constraint.bounds {
+                let TypedWhereConstraintRhs::Trait(trait_id) = bound else {
                     continue;
                 };
-                if !impl_info.trait_arg_tys.is_empty() {
-                    continue;
-                }
-                let mut fresh = HashMap::new();
-                let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-                let before = self.substitutions.clone();
-                let target_matches = self.types_compatible(&impl_target, &receiver_ty);
-                self.substitutions = before;
-                if target_matches {
-                    return true;
+                let trait_key = self.trait_key(trait_id);
+                if !self.trait_obligation_satisfied(&trait_key, &subject_ty, visiting) {
+                    return false;
                 }
             }
         }
-        self.compiler_trait_impl_exists(trait_name, ty)
+        true
     }
 
     pub(super) fn trait_dispatch_override(
@@ -2092,6 +2166,7 @@ impl Checker {
         method: &TraitImplMethodInfo,
         target_ast_ty: &AstTy,
         fallback_ret_ty: &AstTy,
+        impl_where_clause: Option<&TypedWhereClause>,
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>, Vec<Ty>), TypeError> {
         if trait_info.type_params.len() != trait_args.len() {
             return Err(TypeError {
@@ -2159,6 +2234,7 @@ impl Checker {
             &mut tyvars,
         )?;
         self.apply_typed_where_trait_bounds(method.where_clause.as_ref(), &tyvars, Some(&self_ty))?;
+        self.apply_typed_where_trait_bounds(impl_where_clause, &tyvars, Some(&self_ty))?;
         let mut type_params = Vec::new();
         for ty in tyvars.values() {
             Self::collect_ty_vars(ty, &mut type_params);
@@ -2503,6 +2579,7 @@ impl Checker {
                     impl_method,
                     target_ast_ty,
                     &trait_method.ret_ty,
+                    where_clause.as_ref().map(TypedWhereClause::from).as_ref(),
                 )?;
 
                 if trait_params.len() != impl_params.len() {
@@ -2740,14 +2817,7 @@ impl Checker {
                 .collect::<Vec<_>>();
             let parent_impl = parent_candidates
                 .into_iter()
-                .find(|impl_info| {
-                    self.trait_impl_patterns_overlap(
-                        &[],
-                        &child_impl.target_ty,
-                        &[],
-                        &impl_info.target_ty,
-                    )
-                })
+                .find(|impl_info| self.parent_impl_covers_child(impl_info, child_impl))
                 .ok_or_else(|| TypeError {
                     message: format!(
                         "Trait impl {} for {} requires parent impl {} for the same target",
@@ -2770,6 +2840,35 @@ impl Checker {
         }
         visiting.remove(&visit_key);
         Ok(())
+    }
+
+    /// Parent-trait validation is universal: every instance described by the
+    /// child head (under the child's declared bounds) must be described by a
+    /// single parent impl.  It is not the existential overlap test used for
+    /// coherence.
+    fn parent_impl_covers_child(
+        &mut self,
+        parent_impl: &TraitImplInfo,
+        child_impl: &TraitImplInfo,
+    ) -> bool {
+        if parent_impl.constructor_slot_positions != child_impl.constructor_slot_positions {
+            return false;
+        }
+        let before_substitutions = self.substitutions.clone();
+        let before_rigid = self.rigid_tyvars.clone();
+        let mut child_vars = Vec::new();
+        Self::collect_ty_vars(&child_impl.target_ty, &mut child_vars);
+        self.rigid_tyvars.extend(child_vars);
+
+        let mut fresh = HashMap::new();
+        let parent_target = self.instantiate_ty_with_fresh(&parent_impl.target_ty, &mut fresh);
+        let head_covers = self.types_compatible(&parent_target, &child_impl.target_ty);
+        let obligations_hold = head_covers
+            && self.impl_where_obligations_hold(parent_impl, &fresh, &mut HashSet::new());
+
+        self.substitutions = before_substitutions;
+        self.rigid_tyvars = before_rigid;
+        obligations_hold
     }
 
     pub(super) fn predeclare_functions(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
@@ -3061,6 +3160,7 @@ impl Checker {
                     method,
                     &trait_impl.target_ast_ty,
                     &trait_method.ret_ty,
+                    trait_impl.where_clause.as_ref(),
                 )?;
                 let param_names = method
                     .params

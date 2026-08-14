@@ -1164,6 +1164,7 @@ impl Checker {
                     &method,
                     target_ast_ty,
                     &trait_method.ret_ty,
+                    impl_info.where_clause.as_ref(),
                 )?;
 
             let mut typed_params = Vec::new();

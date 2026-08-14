@@ -1,0 +1,18 @@
+deftrait Parent {
+  def parent(self: Self) -> String
+}
+
+deftrait Child
+where
+  Self: Parent
+{
+  def child(self: Self) -> String
+}
+
+impl Parent for List<Int> {
+  def parent(self: List<Int>) -> String { "parent" }
+}
+
+impl Child for List<$A> {
+  def child(self: List<$A>) -> String { "child" }
+}

@@ -1,0 +1,18 @@
+deftrait Marker {
+  def mark(self: Self) -> String
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+impl Use for List<$A>
+where
+  $A: Marker
+{
+  def use(self: List<$A>) -> String { "used" }
+}
+
+def hidden_bound(values: List<$A>) -> String {
+  Use::use(values)
+}
