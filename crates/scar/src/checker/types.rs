@@ -26,6 +26,19 @@ impl<'a> SignatureTyMode<'a> {
 }
 
 impl Checker {
+    pub(super) fn constructor_trait_key_for_ast_ty(&self, ast_ty: &AstTy) -> Option<String> {
+        let name = match ast_ty {
+            AstTy::Named(_, name) | AstTy::Generic(_, name, _) => Self::surface_name(name),
+            _ => return None,
+        };
+        self.traits
+            .iter()
+            .find(|(_, info)| {
+                !info.constructor_slots.is_empty() && Self::surface_name(&info.id.name) == name
+            })
+            .map(|(key, _)| key.clone())
+    }
+
     // A constructor-trait application is encoded as `SelfApp(Hole, witness,
     // slots...)`.  Plain `SelfApp(slots...)` remains the trait-metadata form.
     // Keeping both in the existing type variant avoids leaking a runtime type.

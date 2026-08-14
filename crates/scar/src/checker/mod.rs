@@ -2054,6 +2054,10 @@ struct Checker {
     specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    /// Static constructor-trait capabilities attached to abstract bindings.
+    /// These are intentionally binding-local: constructor roots may share a
+    /// witness while different bindings expose different trait capabilities.
+    constructor_capabilities: HashMap<u32, String>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
@@ -2138,6 +2142,7 @@ impl Checker {
             specialization_fun_idxs: state.specialization_fun_idxs,
             substitutions: HashMap::new(),
             tyvar_bounds: state.tyvar_bounds,
+            constructor_capabilities: HashMap::new(),
             signature_aliases: state.signature_aliases,
             alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
@@ -2182,6 +2187,7 @@ impl Checker {
         checker.facet_bindings = self.facet_bindings.clone();
         checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
+        checker.constructor_capabilities = self.constructor_capabilities.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();

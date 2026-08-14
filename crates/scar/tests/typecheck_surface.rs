@@ -3958,6 +3958,64 @@ impl Parent for Identity<$T> {{
 }
 
 #[test]
+fn concrete_constructor_implementation_can_be_passed_to_parent_or_child_trait() {
+    typecheck_with_rules(
+        r#"
+def take_applicative(value: Applicative<$A>) -> Unit { () }
+def take_functor(value: Functor<$A>) -> Unit { () }
+
+take_applicative(Option::Some(1))
+take_functor(Option::Some(1))
+"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("a concrete Option value should satisfy either constructor trait");
+}
+
+#[test]
+fn abstract_applicative_cannot_use_monad_helper_but_concrete_option_can() {
+    let err = typecheck_with_rules(
+        r#"
+def invalid(value: Applicative<$A>) -> Applicative<$A> {
+  Monad::bind(value, {|n| value})
+}
+"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("an Applicative binding must not expose Monad operations");
+    assert!(
+        err.message.contains("Monad::bind is not available")
+            && err.message.contains("Applicative"),
+        "{err:?}"
+    );
+
+    typecheck_with_rules(
+        r#"
+def valid(value: Option<$A>) -> Option<$A> {
+  Monad::bind(value, {|n| value})
+}
+
+valid(Option::Some(1))
+"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("a concrete Option binding must expose its Monad implementation");
+
+    typecheck_with_rules(
+        r#"
+def preserve_applicative2(value: Applicative<Int>) -> Applicative<String> {
+  ret: Option<Int> = value
+  Monad::bind(ret, {|num| Option::Some(to_string(num))})
+}
+
+preserve_applicative2(Option::Some(1))
+"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("an explicitly narrowed Option should support concrete Monad dispatch");
+}
+
+#[test]
 fn trait_default_methods_and_private_helpers_are_accepted() {
     let source = r#"
 deftrait DefaultValue {

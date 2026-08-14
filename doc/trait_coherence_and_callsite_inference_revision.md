@@ -396,7 +396,7 @@ cargo nextest run --workspace
 - `docs/site/trait-system.md` / `docs/site/trait-impls.md` / `docs/site/language-reference.md`: impl の交差規則、conversion 排他、method 一意性と「宣言順・specialization なし」を利用者向けに説明
 - `docs/site/callables.md`: local callable の call-site polymorphism と closure/literal 引数推論を説明
 - `docs/site/type-annotations.md`: expected type の内向き伝播と空 literal の制約を説明
-- `doc/type_constructor_traits_proposal.md`: constructor witness の concrete specialization と overlapping impl の優先順位を区別する
+- `doc/要件定義v9.md`: constructor witness の concrete specialization と overlapping impl の優先順位を区別する
 
 ## 10. 実装順と完了条件
 

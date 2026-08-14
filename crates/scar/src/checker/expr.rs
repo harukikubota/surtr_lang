@@ -99,6 +99,130 @@ impl Checker {
         }
     }
 
+    fn constructor_capability_allows(
+        &self,
+        actual: &str,
+        required: &str,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
+        if actual == required || !visiting.insert(actual.to_string()) {
+            return actual == required;
+        }
+        let allowed = self.traits.get(actual).is_some_and(|info| {
+            info.parents.iter().any(|parent| {
+                let parent_key = parent
+                    .qualified_name
+                    .as_deref()
+                    .unwrap_or(parent.name.as_str());
+                self.constructor_capability_allows(parent_key, required, visiting)
+            })
+        });
+        visiting.remove(actual);
+        allowed
+    }
+
+    fn check_constructor_capability(
+        &self,
+        required_trait: &str,
+        method_name: &str,
+        arg: &TypedNode,
+    ) -> Result<(), TypeError> {
+        let TypedInner::Var(id) = &arg.node else {
+            return Ok(());
+        };
+        let Some(actual_trait) = self.constructor_capabilities.get(&id.unique_id) else {
+            return Ok(());
+        };
+        let Some(required_info) = self.traits.get(required_trait) else {
+            return Ok(());
+        };
+        if required_info.constructor_slots.is_empty() {
+            return Ok(());
+        }
+        let mut visiting = HashSet::new();
+        if self.constructor_capability_allows(actual_trait, required_trait, &mut visiting) {
+            return Ok(());
+        }
+        Err(TypeError {
+            message: format!(
+                "{}::{} is not available for a value constrained by {}",
+                Self::surface_name(required_trait),
+                method_name,
+                Self::surface_name(actual_trait)
+            ),
+            span: arg.span.clone(),
+            hint: Some(format!(
+                "Use a concrete constructor type or a parameter constrained by {}.",
+                Self::surface_name(required_trait)
+            )),
+        })
+    }
+
+    pub(super) fn constructor_annotation_compatible(
+        &mut self,
+        trait_key: &str,
+        expected: &Ty,
+        actual: &Ty,
+        source_capability: Option<&str>,
+    ) -> bool {
+        let expected = self.resolve_ty(expected);
+        let actual = self.resolve_ty(actual);
+        let (abstract_ty, concrete_ty, abstract_is_actual) = match (&expected, &actual) {
+            (Ty::SelfApp(expected_items), concrete)
+                if Self::constructor_application_parts(expected_items).is_some() =>
+            {
+                (&expected, concrete, false)
+            }
+            (concrete, Ty::SelfApp(actual_items))
+                if Self::constructor_application_parts(actual_items).is_some() =>
+            {
+                (&actual, concrete, true)
+            }
+            _ => return false,
+        };
+        let Ty::SelfApp(items) = abstract_ty else {
+            return false;
+        };
+        let Some((_, abstract_slots)) = Self::constructor_application_parts(items) else {
+            return false;
+        };
+        let Some(concrete_slots) = Self::constructor_application_slots(concrete_ty) else {
+            return false;
+        };
+        if abstract_slots.len() != concrete_slots.len() {
+            return false;
+        }
+
+        let capability_ok = if abstract_is_actual {
+            let Some(source_capability) = source_capability else {
+                return false;
+            };
+            let mut visiting = HashSet::new();
+            self.constructor_capability_allows(source_capability, trait_key, &mut visiting)
+                && self.trait_impl_exists(source_capability, concrete_ty)
+        } else {
+            self.trait_impl_exists(trait_key, concrete_ty)
+        };
+        if !capability_ok {
+            return false;
+        }
+
+        let substitutions = self.substitutions.clone();
+        let slots_ok = abstract_slots
+            .iter()
+            .zip(concrete_slots.iter())
+            .all(|(expected_slot, actual_slot)| self.types_compatible(expected_slot, actual_slot));
+        self.substitutions = substitutions;
+        slots_ok
+    }
+
+    fn constructor_capability_for_node(&self, node: &TypedNode) -> Option<String> {
+        let TypedInner::Var(id) = &node.node else {
+            return None;
+        };
+        self.constructor_capabilities.get(&id.unique_id).cloned()
+    }
+
     fn first_pending_trait_helper<'a>(&self, node: &'a TypedNode) -> Option<(&'a str, &'a Span)> {
         match &node.node {
             TypedInner::TraitCall {
@@ -751,15 +875,31 @@ impl Checker {
                     let mut typed_rhs = self.check_node_with_expected(rhs, Some(&expected))?;
                     self.apply_facet_annotation(&mut typed_rhs, &expected, span)?;
                     if !self.types_compatible(&expected, &typed_rhs.ty) {
-                        if let Some(err) =
-                            self.facet_replace_result_context_error(&typed_rhs, &expected, span)
-                        {
-                            return Err(err);
-                        }
-                        if let Some(err) =
-                            self.plain_value_result_context_error(&expected, &typed_rhs.ty, span)
-                        {
-                            return Err(err);
+                        let source_capability = self.constructor_capability_for_node(&typed_rhs);
+                        let constructor_coercion = self
+                            .constructor_trait_key_for_ast_ty(ast_ty)
+                            .or_else(|| source_capability.clone())
+                            .is_some_and(|trait_key| {
+                                self.constructor_annotation_compatible(
+                                    &trait_key,
+                                    &expected,
+                                    &typed_rhs.ty,
+                                    source_capability.as_deref(),
+                                )
+                            });
+                        if constructor_coercion {
+                            typed_rhs.ty = expected.clone();
+                        } else {
+                            if let Some(err) = self
+                                .facet_replace_result_context_error(&typed_rhs, &expected, span)
+                            {
+                                return Err(err);
+                            }
+                            if let Some(err) = self
+                                .plain_value_result_context_error(&expected, &typed_rhs.ty, span)
+                            {
+                                return Err(err);
+                            }
                         }
                     }
                     typed_rhs
@@ -788,6 +928,17 @@ impl Checker {
                 self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
+                if let ResolvedPattern::Annotated(_, ast_ty) = pat {
+                    if let Some(capability) = self.constructor_trait_key_for_ast_ty(ast_ty) {
+                        match &typed_pat {
+                            TypedPattern::Var(_, id) | TypedPattern::As(_, _, id) => {
+                                self.constructor_capabilities
+                                    .insert(id.unique_id, capability);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
                 if !matches!(pat, ResolvedPattern::Annotated(..))
                     && matches!(typed_rhs.node, TypedInner::Closure(..))
                 {
@@ -3434,6 +3585,11 @@ impl Checker {
             && positional_args.len() == 2
         {
             let mut typed = self.check_context_map(span, positional_args[0], positional_args[1])?;
+            if let TypedInner::TraitCall { args, .. } = &typed.node {
+                if let Some(receiver) = args.first() {
+                    self.check_constructor_capability(trait_name, method_name, receiver)?;
+                }
+            }
             if let TypedInner::TraitCall { origin, .. } = &mut typed.node {
                 *origin = TraitCallOrigin::Explicit;
             }
@@ -3443,8 +3599,15 @@ impl Checker {
             && method_name == "bind"
             && positional_args.len() == 2
         {
+            let typed_receiver = self.check_node(positional_args[0])?;
+            self.check_constructor_capability(trait_name, method_name, &typed_receiver)?;
             let mut typed =
                 self.check_context_bind(span, positional_args[0], positional_args[1])?;
+            if let TypedInner::TraitCall { args, .. } = &typed.node {
+                if let Some(receiver) = args.first() {
+                    self.check_constructor_capability(trait_name, method_name, receiver)?;
+                }
+            }
             if let TypedInner::TraitCall { origin, .. } = &mut typed.node {
                 *origin = TraitCallOrigin::Explicit;
             }
@@ -3614,6 +3777,7 @@ impl Checker {
             && positional_args.len() == 2
         {
             let typed_mapper = self.check_node(positional_args[0])?;
+            self.check_constructor_capability(trait_name, method_name, &typed_mapper)?;
             let mapper_inner = self
                 .constructor_slot_type_for(trait_name, &typed_mapper.ty)
                 .ok_or_else(|| TypeError {
@@ -3638,6 +3802,7 @@ impl Checker {
                 })?;
             let typed_value =
                 self.check_node_with_expected(positional_args[1], Some(&expected_value_ty))?;
+            self.check_constructor_capability(trait_name, method_name, &typed_value)?;
             let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
             let Some((dispatch, expected_mapper)) = self.constructor_functor_dispatch(
                 trait_name,
@@ -3849,6 +4014,10 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, _>>()?;
         self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
+
+        if let Some(receiver) = typed_args.first() {
+            self.check_constructor_capability(trait_name, method_name, receiver)?;
+        }
 
         if let Some(owner_hint) = receiver_owner_hint {
             if let Some(receiver) = typed_args.first() {

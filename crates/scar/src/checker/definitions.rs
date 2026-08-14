@@ -666,6 +666,7 @@ impl Checker {
     fn check_body_in_isolated_scope(
         &mut self,
         local_bindings: &[(u32, Ty)],
+        local_capabilities: &[(u32, String)],
         local_annotation_tyvars: HashMap<String, Ty>,
         rigid_tyvars: HashSet<u32>,
         function_return_ty: Ty,
@@ -682,6 +683,7 @@ impl Checker {
         let saved_in_extractor_body = self.in_extractor_body;
         let saved_closure_depth = self.closure_depth;
         let saved_facet_bindings = self.facet_bindings.clone();
+        let saved_constructor_capabilities = self.constructor_capabilities.clone();
 
         self.env.push_var_scope();
         self.function_return_ty = Some(function_return_ty);
@@ -692,6 +694,10 @@ impl Checker {
         self.in_extractor_body = in_extractor_body;
         for (unique_id, ty) in local_bindings {
             self.env.bind_var(*unique_id, ty.clone());
+        }
+        for (unique_id, capability) in local_capabilities {
+            self.constructor_capabilities
+                .insert(*unique_id, capability.clone());
         }
 
         // Function and trait method bodies are embedded in a top-level typed
@@ -711,6 +717,7 @@ impl Checker {
         self.in_extractor_body = saved_in_extractor_body;
         self.closure_depth = saved_closure_depth;
         self.facet_bindings = saved_facet_bindings;
+        self.constructor_capabilities = saved_constructor_capabilities;
 
         result
     }
@@ -728,6 +735,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let mut typed_params = Vec::new();
         let mut local_bindings = Vec::new();
+        let mut local_capabilities = Vec::new();
         let mut tyvars = HashMap::new();
         self.seed_signature_type_params(type_params, &mut tyvars);
 
@@ -762,6 +770,9 @@ impl Checker {
                 });
             }
             local_bindings.push((param.id.unique_id, param_ty.clone()));
+            if let Some(capability) = self.constructor_trait_key_for_ast_ty(&param.ty) {
+                local_capabilities.push((param.id.unique_id, capability));
+            }
             typed_params.push(TypedFunParam {
                 id: param.id.clone(),
                 ty: param_ty.clone(),
@@ -844,6 +855,7 @@ impl Checker {
         });
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
+            &local_capabilities,
             tyvars.clone(),
             Self::signature_tyvar_ids(&tyvars),
             expected_ret.clone(),
@@ -862,7 +874,19 @@ impl Checker {
             return Err(err);
         }
         let rigid_tyvars = Self::signature_tyvar_ids(&tyvars);
-        if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars) {
+        let return_constructor_coercion = ret_ty.as_ref().and_then(|ast_ty| {
+            self.constructor_trait_key_for_ast_ty(ast_ty)
+        }).is_some_and(|trait_key| {
+            self.constructor_annotation_compatible(
+                &trait_key,
+                &expected_ret,
+                &typed_body.ty,
+                None,
+            )
+        });
+        if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars)
+            && !return_constructor_coercion
+        {
             if let Some(err) = self.facet_replace_result_context_error(
                 &typed_body,
                 &expected_ret,
@@ -1003,6 +1027,7 @@ impl Checker {
         });
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
+            &[],
             tyvars.clone(),
             Self::signature_tyvar_ids(&tyvars),
             expected_ret.clone(),
@@ -1162,6 +1187,7 @@ impl Checker {
                 .then_some(Self::surface_name(&target_name).to_string());
             let typed_body = self.check_body_in_isolated_scope(
                 &local_bindings,
+                &[],
                 HashMap::new(),
                 type_params.iter().copied().collect(),
                 expected_ret.clone(),
