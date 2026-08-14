@@ -105,7 +105,7 @@ pub struct EnumVariantInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct VarScopeFrame {
     touched: HashSet<u32>,
-    undo: Vec<(u32, Option<Ty>)>,
+    undo: Vec<(u32, Option<Ty>, Option<TypeScheme>)>,
 }
 
 /// Type environment — tracks variable types and type definitions.
@@ -170,7 +170,11 @@ impl TypeEnv {
             if frame.touched.insert(unique_id) {
                 frame
                     .undo
-                    .push((unique_id, self.vars.get(&unique_id).cloned()));
+                    .push((
+                        unique_id,
+                        self.vars.get(&unique_id).cloned(),
+                        self.schemes.get(&unique_id).cloned(),
+                    ));
             }
         }
         self.vars.insert(unique_id, ty);
@@ -198,11 +202,16 @@ impl TypeEnv {
         let Some(frame) = self.var_scope_frames.pop() else {
             return;
         };
-        for (unique_id, old) in frame.undo.into_iter().rev() {
+        for (unique_id, old, old_scheme) in frame.undo.into_iter().rev() {
             if let Some(old_ty) = old {
                 self.vars.insert(unique_id, old_ty);
             } else {
                 self.vars.remove(&unique_id);
+            }
+            if let Some(old_scheme) = old_scheme {
+                self.schemes.insert(unique_id, old_scheme);
+            } else {
+                self.schemes.remove(&unique_id);
             }
         }
     }
