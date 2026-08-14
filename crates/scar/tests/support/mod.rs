@@ -25,6 +25,8 @@ const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/try_fr
 const ENCODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/encode.srt");
 const DECODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/decode.srt");
 const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/functor.srt");
+const BIFUNCTOR_MODULE_SOURCE: &str =
+    include_str!("../../../../lib/traits/operator/bifunctor.srt");
 const APPLICATIVE_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/applicative.srt");
 const MONAD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/monad.srt");
@@ -459,6 +461,10 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             (
                 "Functor",
                 pick_override("Functor", FUNCTOR_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Bifunctor",
+                pick_override("Bifunctor", BIFUNCTOR_MODULE_SOURCE, overrides),
             ),
             (
                 "Applicative",

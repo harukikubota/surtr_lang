@@ -3440,6 +3440,78 @@ impl Checker {
             });
         }
 
+        // A constructor-trait application carries an unresolved constructor
+        // witness. Expand `Self<...>` positions with that same witness, then
+        // defer dispatch until specialization has a concrete receiver. This
+        // is arity-agnostic and therefore also supports Bifunctor.
+        if !trait_info.constructor_slots.is_empty() {
+            if let Some(ResolvedRecordLitArg::Positional(receiver)) = args.first() {
+                let typed_receiver = self.check_node(receiver)?;
+                let receiver_ty = self.resolve_ty(&typed_receiver.ty);
+                if let Ty::SelfApp(items) = &receiver_ty {
+                    if let Some((witness, slots)) = Self::constructor_application_parts(items) {
+                        if slots.len() == trait_info.constructor_slots.len() {
+                            let self_ty = self.env.fresh_tyvar();
+                            let (param_tys, ret_ty, _, _) =
+                                self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
+                            let apply_witness = |ty: Ty| match ty {
+                                Ty::SelfApp(args)
+                                    if Self::constructor_application_parts(&args).is_none() =>
+                                {
+                                    let mut application = vec![Ty::Hole, witness.clone()];
+                                    application.extend(args);
+                                    Ty::SelfApp(application)
+                                }
+                                other => other,
+                            };
+                            let param_tys = param_tys
+                                .into_iter()
+                                .map(apply_witness)
+                                .collect::<Vec<_>>();
+                            let ret_ty = apply_witness(ret_ty);
+                            if args.len() != param_tys.len() {
+                                return Err(TypeError {
+                                    message: format!(
+                                        "{}::{} expects {} argument(s), got {}",
+                                        trait_name,
+                                        method_name,
+                                        param_tys.len(),
+                                        args.len()
+                                    ),
+                                    span: span.clone(),
+                                    hint: None,
+                                });
+                            }
+                            let typed_args = args
+                                .iter()
+                                .zip(param_tys.iter())
+                                .map(|(arg, expected)| match arg {
+                                    ResolvedRecordLitArg::Positional(expr) => {
+                                        self.check_node_with_expected(expr, Some(expected))
+                                    }
+                                    ResolvedRecordLitArg::Named(_, _) => unreachable!(
+                                        "named arguments are rejected before constructor dispatch"
+                                    ),
+                                })
+                                .collect::<Result<Vec<_>, _>>()?;
+                            return Ok(TypedNode {
+                                ty: self.resolve_ty(&ret_ty),
+                                span: span.clone(),
+                                node: TypedInner::TraitCall {
+                                    trait_name: trait_name.to_string(),
+                                    method_name: method_name.to_string(),
+                                    receiver_ty,
+                                    dispatch: TraitDispatch::Pending,
+                                    origin: TraitCallOrigin::Explicit,
+                                    args: typed_args,
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         let self_ty = self.env.fresh_tyvar();
         let (param_tys, ret_ty, trait_arg_tys, explicit_slots) =
             self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
