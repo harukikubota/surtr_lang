@@ -459,6 +459,7 @@ struct TraitImplInfo {
     target_ty: Ty,
     where_clause: Option<TypedWhereClause>,
     type_param_vars: Vec<u32>,
+    type_param_vars_by_name: HashMap<String, u32>,
     constructor_slot_vars: Vec<u32>,
     constructor_slot_positions: Vec<usize>,
     methods: HashMap<String, TraitImplMethodInfo>,

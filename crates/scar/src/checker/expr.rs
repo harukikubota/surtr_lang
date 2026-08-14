@@ -2754,6 +2754,10 @@ impl Checker {
                     self.substitutions = before;
                     continue;
                 }
+                if !self.impl_where_obligations_satisfied(&impl_info, &fresh) {
+                    self.substitutions = before;
+                    continue;
+                }
 
                 if let Some(dispatch_override) = &method.dispatch_override {
                     return Some(TraitDispatch::Static(dispatch_override.clone()));
@@ -2799,6 +2803,45 @@ impl Checker {
         self.profiler
             .finish(ProfileEvent::GenericTraitCandidateScan, profile);
         result
+    }
+
+    fn impl_where_obligations_satisfied(
+        &mut self,
+        impl_info: &TraitImplInfo,
+        fresh: &HashMap<u32, Ty>,
+    ) -> bool {
+        let Some(where_clause) = &impl_info.where_clause else {
+            return true;
+        };
+        for constraint in &where_clause.constraints {
+            let AstTy::Named(_, subject) = &constraint.subject else {
+                return false;
+            };
+            let Some(original_var) = impl_info.type_param_vars_by_name.get(subject) else {
+                return false;
+            };
+            let Some(instantiated) = fresh.get(original_var) else {
+                return false;
+            };
+            let concrete = self.resolve_ty(instantiated);
+            for bound in &constraint.bounds {
+                let TypedWhereConstraintRhs::Trait(trait_id) = bound else {
+                    // Constructor and slot obligations are validated when the
+                    // impl head is declared. They do not establish runtime
+                    // dispatch applicability in V1.
+                    continue;
+                };
+                let trait_key = self.trait_key(trait_id);
+                if let Ty::Var(var) = concrete {
+                    self.register_tyvar_bounds(var, &[trait_key]);
+                    continue;
+                }
+                if !self.trait_impl_exists(&trait_key, &concrete) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn specializable_fun_idx_for_function_key(&self, function_key: &str) -> Option<u32> {

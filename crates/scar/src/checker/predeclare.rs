@@ -2639,6 +2639,7 @@ impl Checker {
                     target_ty,
                     where_clause: where_clause.as_ref().map(TypedWhereClause::from),
                     type_param_vars,
+                    type_param_vars_by_name: target_param_vars,
                     constructor_slot_vars,
                     constructor_slot_positions,
                     methods: method_map,

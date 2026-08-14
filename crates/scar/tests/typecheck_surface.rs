@@ -3590,6 +3590,35 @@ result: Int = chooser(1) + matched(1)"#,
     assert!(matches!(typed_bind_rhs(&typed, "result").ty, Ty::Int));
 }
 
+#[test]
+fn trait_dispatch_rejects_impl_with_unsatisfied_where_obligation() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> Self
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+impl Use for List<$A>
+where
+  $A: Marker
+{
+  def use(self: List<$A>) -> String { "usable" }
+}
+
+values: List<Int> = [1]
+result = Use::use(values)"#,
+    );
+
+    let err = typecheck(resolved).expect_err("unsatisfied impl bound must reject dispatch");
+    assert!(
+        err.message.contains("requires a receiver type implementing Use"),
+        "{err:?}"
+    );
+}
+
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }
