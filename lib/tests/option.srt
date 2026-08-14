@@ -38,6 +38,24 @@ test("Option") {
   }
 
   describe("trait integrations") {
+    it("chooses the first Some with Alternative") {
+      assert_eq(Option::Some(7), Option::Some(7) <|> Option::Some(9))
+    }
+
+    it("uses the fallback when Option is empty") {
+      assert_eq(Option::Some(9), Option::None <|> Option::Some(9))
+    }
+
+    it("obeys Alternative identity and associativity laws") {
+      empty: Option<Int> = Alternative::empty::<Int>()
+      first: Option<Int> = Option::Some(1)
+      second: Option<Int> = Option::Some(2)
+      third: Option<Int> = Option::Some(3)
+      assert_eq(first, empty <|> first)
+      assert_eq(first, first <|> empty)
+      assert_eq((first <|> second) <|> third, first <|> (second <|> third))
+    }
+
     it("maps with functor operator") {
       assert_eq("Option::Some(8)", inspect(Option::Some(7) |*> {|value| value + 1}))
     }

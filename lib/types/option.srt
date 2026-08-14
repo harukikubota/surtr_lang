@@ -111,6 +111,24 @@ impl Monad for Option<$T> {
 }
 
 @doc """
+`Alternative` implementation for `Option`.
+`<|>` returns the first `Some` value, or its right operand when the left is
+`None`.
+"""
+impl Alternative for Option<$T> {
+  def empty::<Option<$T>, $A>() -> Option<$A> {
+    Option::None
+  }
+
+  def choose::<Option<$T>, $A>(left: Option<$A>, right: Option<$A>) -> Option<$A> {
+    match left {
+      Option::Some(_) => left,
+      Option::None => right,
+    }
+  }
+}
+
+@doc """
 `LiftComposable` implementation for `Option`-returning unary functions.
 This is the source-level meaning of `left >* right` for `Option`.
 """

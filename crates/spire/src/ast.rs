@@ -250,6 +250,7 @@ pub enum BinOp {
     Lte,
     Gte,
     Concat,
+    Choice,
 }
 
 // ── Type annotations (surface syntax) ──

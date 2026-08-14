@@ -68,6 +68,7 @@ pub enum Token {
     PipeMap,          // |*>
     PipeApplyContext, // |*|
     PipeBind,         // |>=
+    Choice,           // <|>
     Compose,          // >>
     LiftCompose,      // >*
     KleisliCompose,   // >=>

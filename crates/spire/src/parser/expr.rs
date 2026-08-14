@@ -24,6 +24,7 @@ enum FlowOpKind {
     Compose,
     LiftCompose,
     KleisliCompose,
+    Choice,
 }
 
 impl Parser<'_> {
@@ -97,6 +98,7 @@ impl Parser<'_> {
             Token::Compose => Some(FlowOpKind::Compose),
             Token::LiftCompose => Some(FlowOpKind::LiftCompose),
             Token::KleisliCompose => Some(FlowOpKind::KleisliCompose),
+            Token::Choice => Some(FlowOpKind::Choice),
             _ => None,
         }
     }
@@ -141,14 +143,33 @@ impl Parser<'_> {
     pub(super) fn parse_flow_expr(&mut self) -> Result<Ast, ParseError> {
         let mut left = self.parse_and_or_expr()?;
         loop {
-            self.skip_newlines_before_flow_op();
+            // Choice deliberately does not inherit flow's newline-continuation
+            // rule: `<|>` must remain on a single source line.
+            if !matches!(self.peek(), Token::Newline) {
+                // Already at an operator or ordinary expression token.
+            } else {
+                let save = self.pos;
+                self.skip_newlines_before_flow_op();
+                if matches!(self.peek(), Token::Choice) {
+                    self.pos = save;
+                    break;
+                }
+            }
 
             let next = match Self::flow_op_kind(self.peek()) {
                 Some(kind) => kind,
                 None => break,
             };
             self.advance();
-            self.skip_newlines();
+            if matches!(next, FlowOpKind::Choice) && matches!(self.peek(), Token::Newline) {
+                return Err(ParseError::syntax(
+                    "`<|>` must have its right operand on the same line",
+                    self.peek_span(),
+                ));
+            }
+            if !matches!(next, FlowOpKind::Choice) {
+                self.skip_newlines();
+            }
             let right = self.parse_and_or_expr()?;
             let span = Span {
                 start: left.span().start,
@@ -168,6 +189,7 @@ impl Parser<'_> {
                 FlowOpKind::KleisliCompose => {
                     Ast::KleisliCompose(span, Box::new(left), Box::new(right))
                 }
+                FlowOpKind::Choice => Ast::BinOp(span, BinOp::Choice, Box::new(left), Box::new(right)),
             };
         }
         Ok(left)

@@ -197,6 +197,13 @@ const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
+        file_name: "traits/operator/alternative.srt",
+        module_path: "Alternative",
+        source: include_str!("../../../lib/traits/operator/alternative.srt"),
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
         file_name: "traits/operator/pipe_apply.srt",
         module_path: "PipeApply",
         source: include_str!("../../../lib/traits/operator/pipe_apply.srt"),

@@ -693,6 +693,20 @@ impl Monad for List<$T> {
 }
 
 @doc """
+`Alternative` implementation for `List`.
+`<|>` concatenates its operands from left to right.
+"""
+impl Alternative for List<$T> {
+  def empty::<List<$T>, $A>() -> List<$A> {
+    []
+  }
+
+  def choose::<List<$T>, $A>(left: List<$A>, right: List<$A>) -> List<$A> {
+    List::append(left, right)
+  }
+}
+
+@doc """
 `LiftComposable` implementation for `List`-returning unary functions.
 This is the source-level meaning of `left >* right` for `List`.
 """

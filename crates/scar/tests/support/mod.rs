@@ -28,6 +28,8 @@ const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operato
 const APPLICATIVE_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/applicative.srt");
 const MONAD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/monad.srt");
+const ALTERNATIVE_MODULE_SOURCE: &str =
+    include_str!("../../../../lib/traits/operator/alternative.srt");
 const PIPE_APPLY_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/pipe_apply.srt");
 const COMPOSE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/compose.srt");
@@ -464,6 +466,10 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             (
                 "Monad",
                 pick_override("Monad", MONAD_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Alternative",
+                pick_override("Alternative", ALTERNATIVE_MODULE_SOURCE, overrides),
             ),
             (
                 "PipeApply",

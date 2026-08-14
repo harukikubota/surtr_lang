@@ -9214,6 +9214,45 @@ impl Checker {
                 ))
             }
             BinOp::Slash => Err(Self::unsupported_binop_type_error(op, span)),
+            BinOp::Choice => {
+                if !compatible {
+                    self.substitutions = compatibility_checkpoint;
+                    return Err(TypeError {
+                        message: format!(
+                            "`<|>` requires the same type on both sides, but got {} and {}",
+                            self.ty_name(&lt),
+                            self.ty_name(&rt),
+                        ),
+                        span: typed_right.span.clone(),
+                        hint: Some(self.trait_implementation_summary("Alternative")),
+                    });
+                }
+                let receiver_ty = self.resolve_ty(&lt);
+                let alternative_trait = self
+                    .trait_key_by_short_name("Alternative")
+                    .ok_or_else(|| TypeError {
+                        message: "Unknown trait: Alternative".into(),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                let dispatch = self
+                    .trait_dispatch_target(&alternative_trait, "choose", &receiver_ty)
+                    .ok_or_else(|| TypeError {
+                        message: format!("`<|>` is not defined for {}", self.ty_name(&receiver_ty)),
+                        span: typed_right.span.clone(),
+                        hint: Some(self.trait_implementation_summary("Alternative")),
+                    })?;
+                Ok(make_trait_call(
+                    alternative_trait,
+                    "choose",
+                    receiver_ty.clone(),
+                    dispatch,
+                    receiver_ty,
+                    TraitCallOrigin::Explicit,
+                    typed_left,
+                    typed_right,
+                ))
+            }
             BinOp::Eq | BinOp::Neq => {
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
