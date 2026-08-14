@@ -26,6 +26,56 @@ impl<'a> SignatureTyMode<'a> {
 }
 
 impl Checker {
+    // A constructor-trait application is encoded as `SelfApp(Hole, witness,
+    // slots...)`.  Plain `SelfApp(slots...)` remains the trait-metadata form.
+    // Keeping both in the existing type variant avoids leaking a runtime type.
+    fn constructor_application_parts(items: &[Ty]) -> Option<(&Ty, &[Ty])> {
+        match items {
+            [Ty::Hole, witness, slots @ ..] => Some((witness, slots)),
+            _ => None,
+        }
+    }
+
+    fn constructor_application_slots(ty: &Ty) -> Option<Vec<Ty>> {
+        match ty {
+            Ty::List(inner) => Some(vec![inner.as_ref().clone()]),
+            Ty::Result(ok, _) => Some(vec![ok.as_ref().clone()]),
+            Ty::Enum(_, args) => Some(args.clone()),
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => {
+                Some(fields.iter().map(|(_, ty)| ty.clone()).collect())
+            }
+            _ => None,
+        }
+    }
+
+    fn apply_constructor_application(witness: &Ty, slots: &[Ty]) -> Option<Ty> {
+        match witness {
+            Ty::List(_) if slots.len() == 1 => Some(Ty::List(Box::new(slots[0].clone()))),
+            Ty::Result(_, err) if slots.len() == 1 => {
+                Some(Ty::Result(Box::new(slots[0].clone()), err.clone()))
+            }
+            Ty::Enum(name, args) if args.len() == slots.len() => {
+                Some(Ty::Enum(name.clone(), slots.to_vec()))
+            }
+            Ty::Struct(name, fields) if fields.len() == slots.len() => Some(Ty::Struct(
+                name.clone(),
+                fields
+                    .iter()
+                    .zip(slots)
+                    .map(|((field, _), ty)| (field.clone(), ty.clone()))
+                    .collect(),
+            )),
+            Ty::Record(name, fields) if fields.len() == slots.len() => Some(Ty::Record(
+                name.clone(),
+                fields
+                    .iter()
+                    .zip(slots)
+                    .map(|((field, _), ty)| (field.clone(), ty.clone()))
+                    .collect(),
+            )),
+            _ => None,
+        }
+    }
     fn resolve_signature_alias(
         &mut self,
         span: &Span,
@@ -962,6 +1012,36 @@ impl Checker {
                 if let Some(alias) = self.resolve_signature_alias(span, name, args, context, tyvars, mode)? {
                     return Ok(alias);
                 }
+                if let Some((trait_key, trait_info)) = self.traits.iter().find(|(key, info)| {
+                    !info.constructor_slots.is_empty()
+                        && (Self::surface_name(key) == Self::surface_name(name)
+                            || Self::surface_name(&info.id.name) == Self::surface_name(name))
+                }) {
+                    if args.len() != trait_info.constructor_slots.len() {
+                        return Err(TypeError {
+                            message: format!(
+                                "Constructor trait {} requires {} slot argument(s), got {}",
+                                Self::surface_name(name), trait_info.constructor_slots.len(), args.len()
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    let witness = tyvars
+                        .entry(format!("@constructor-witness:{trait_key}"))
+                        .or_insert_with(|| self.env.fresh_tyvar())
+                        .clone();
+                    let mut application = vec![Ty::Hole, witness];
+                    for arg in args {
+                        application.push(self.resolve_signature_like_ast_ty_in_context(
+                            arg,
+                            TypeSyntaxContext::General,
+                            tyvars,
+                            mode,
+                        )?);
+                    }
+                    return Ok(Ty::SelfApp(application));
+                }
             }
             _ => {}
         }
@@ -1457,6 +1537,37 @@ impl Checker {
                             .zip(b.iter())
                             .all(|(left, right)| self.types_compatible(left, right))
                 }
+                (Ty::SelfApp(a), Ty::SelfApp(b))
+                    if Self::constructor_application_parts(a).is_some()
+                        && Self::constructor_application_parts(b).is_some() =>
+                {
+                    let (left_witness, left_slots) =
+                        Self::constructor_application_parts(a).expect("checked above");
+                    let (right_witness, right_slots) =
+                        Self::constructor_application_parts(b).expect("checked above");
+                    left_slots.len() == right_slots.len()
+                        && self.types_compatible(left_witness, right_witness)
+                        && left_slots.iter().zip(right_slots.iter()).all(|(left, right)| {
+                            self.types_compatible(left, right)
+                        })
+                }
+                (Ty::SelfApp(a), other) if Self::constructor_application_parts(a).is_some() => {
+                    let (witness, expected_slots) =
+                        Self::constructor_application_parts(a).expect("checked above");
+                    if !self.types_compatible(witness, other) {
+                        false
+                    } else {
+                        Self::constructor_application_slots(other).is_some_and(|actual_slots| {
+                            actual_slots.len() == expected_slots.len()
+                                && expected_slots.iter().zip(actual_slots.iter()).all(
+                                    |(expected, actual)| self.types_compatible(expected, actual),
+                                )
+                        })
+                    }
+                }
+                (other, Ty::SelfApp(b)) if Self::constructor_application_parts(b).is_some() => {
+                    self.types_compatible(&Ty::SelfApp(b.clone()), other)
+                }
                 (Ty::SelfApp(a), Ty::SelfApp(b)) => {
                     a.len() == b.len()
                         && a.iter()
@@ -1653,7 +1764,13 @@ impl Checker {
             ),
             Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.resolve_ty(item)).collect()),
             Ty::SelfApp(items) => {
-                Ty::SelfApp(items.iter().map(|item| self.resolve_ty(item)).collect())
+                let resolved = items.iter().map(|item| self.resolve_ty(item)).collect::<Vec<_>>();
+                if let Some((witness, slots)) = Self::constructor_application_parts(&resolved) {
+                    if let Some(applied) = Self::apply_constructor_application(witness, slots) {
+                        return self.resolve_ty(&applied);
+                    }
+                }
+                Ty::SelfApp(resolved)
             }
             Ty::Func(params, ret) => Ty::Func(
                 params.iter().map(|param| self.resolve_ty(param)).collect(),

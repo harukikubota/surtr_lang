@@ -3,6 +3,10 @@ include "./schema/option_schema.srt"
 import OptionSchema::{ensure_short_name, maybe_profile};
 import Test;
 
+def preserve_applicative(value: Applicative<$A>) -> Applicative<$A> {
+  value
+}
+
 test("Option") {
   describe("predicates and constructors") {
     it("reports some and none states") {
@@ -100,3 +104,6 @@ test("Option") {
     }
   }
 }
+
+preserved: Option<Int> = preserve_applicative(Option::Some(9))
+assert_eq(preserved, Option::Some(9))
