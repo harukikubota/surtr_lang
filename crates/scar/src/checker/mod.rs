@@ -1226,6 +1226,42 @@ impl ScarSession {
             .map(|output| output.value)
     }
 
+    /// Typechecks a one-shot compile suffix without cloning the persistent
+    /// session state. On error the session contains the partially checked
+    /// state; incremental callers must use the transactional API above and
+    /// roll back their checkpoint instead.
+    pub fn typecheck_staged_program_in_place_with_context(
+        &mut self,
+        program: sigil::ResolvedStagedProgram,
+        context: TypecheckContext,
+    ) -> Result<TypedProgram, TypeError> {
+        let process_specs = program
+            .process_specs
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<TypedProcessSpec>>();
+        let state = std::mem::replace(&mut self.state, PersistentCheckerState::new());
+        let mut checker = Checker::with_persistent_state(state, context);
+        checker.set_process_handler_dependencies(&process_specs);
+        checker.boot_plan = program.boot_plan.clone();
+        let nodes = match checker.check_program(program.resolved) {
+            Ok(nodes) => nodes,
+            Err(error) => {
+                self.process_specs = checker.process_specs.clone();
+                self.state = checker.into_persistent_state();
+                return Err(error);
+            }
+        };
+        let persisted_process_specs = checker.process_specs.clone();
+        self.state = checker.into_persistent_state();
+        self.process_specs = persisted_process_specs;
+        Ok(TypedProgram {
+            nodes,
+            process_specs,
+            boot_plan: program.boot_plan,
+        })
+    }
+
     pub fn typecheck_staged_program_with_context_with_warnings(
         &mut self,
         program: sigil::ResolvedStagedProgram,
@@ -1261,6 +1297,32 @@ impl ScarSession {
     ) -> Result<Vec<TypedNode>, TypeError> {
         self.typecheck_with_context_with_warnings(resolved, context)
             .map(|output| output.value)
+    }
+
+    /// Typechecks a one-shot compile suffix without cloning the persistent
+    /// session state. On error the session contains the partially checked
+    /// state; incremental callers must use the transactional API above and
+    /// roll back their checkpoint instead.
+    pub fn typecheck_in_place_with_context(
+        &mut self,
+        resolved: Vec<Resolved>,
+        context: TypecheckContext,
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        let state = std::mem::replace(&mut self.state, PersistentCheckerState::new());
+        let mut checker = Checker::with_persistent_state(state, context);
+        checker.set_process_handler_dependencies(self.process_specs.as_slice());
+        let typed = match checker.check_program(resolved) {
+            Ok(typed) => typed,
+            Err(error) => {
+                self.process_specs = checker.process_specs.clone();
+                self.state = checker.into_persistent_state();
+                return Err(error);
+            }
+        };
+        let persisted_process_specs = checker.process_specs.clone();
+        self.state = checker.into_persistent_state();
+        self.process_specs = persisted_process_specs;
+        Ok(typed)
     }
 
     pub fn typecheck_with_context_with_warnings(

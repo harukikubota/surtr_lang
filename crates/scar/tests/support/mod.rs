@@ -82,7 +82,7 @@ pub(crate) fn typecheck_with_context(
     context: TypecheckContext,
 ) -> Result<Vec<TypedNode>, scar::error::TypeError> {
     let mut session = session_from_cached_std_prelude();
-    session.typecheck_with_context(resolved, context)
+    session.typecheck_in_place_with_context(resolved, context)
 }
 
 fn parse_std_module_stage(source: &str, fallback_module_path: &str) -> Vec<sigil::StagedModuleAst> {

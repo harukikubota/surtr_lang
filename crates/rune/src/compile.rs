@@ -373,7 +373,7 @@ fn build_cached_script_compile_prefix(
         let resume_state = resolved.resume_state;
         let mut scar_session = std_snapshot.compile_prefix().restored_scar_session();
         let typed = scar_session
-            .typecheck_staged_program_with_context(
+            .typecheck_staged_program_in_place_with_context(
                 resolved,
                 script_prefix_typecheck_context(env.compile_unit_kind()),
             )
@@ -591,7 +591,7 @@ pub(crate) fn compile_source(
         .unwrap_or_else(|| std_snapshot.compile_prefix());
     let mut scar_session = active_prefix.restored_scar_session();
     let typed = scar_session
-        .typecheck_staged_program_with_context(
+        .typecheck_staged_program_in_place_with_context(
             resolved,
             scar::TypecheckContext::from_source_policy(source_kind.policy(
                 compile_unit_kind,

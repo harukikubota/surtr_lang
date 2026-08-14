@@ -101,7 +101,7 @@ pub(super) fn compile_sources_with_mode(
         .unwrap_or(0);
     scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
     let typed = scar_session
-        .typecheck_staged_program_with_context(
+        .typecheck_staged_program_in_place_with_context(
             resolved,
             compile_chunk_typecheck_context_for_mode(mode),
         )
