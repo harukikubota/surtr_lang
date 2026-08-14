@@ -1044,7 +1044,7 @@ impl Checker {
         }
     }
 
-    fn canonical_ty_key(&self, ty: &Ty) -> CanonicalTyKey {
+    pub(super) fn canonical_ty_key(&self, ty: &Ty) -> CanonicalTyKey {
         match self.resolve_ty(ty) {
             Ty::Int => CanonicalTyKey::Int,
             Ty::Float => CanonicalTyKey::Float,

@@ -1751,7 +1751,7 @@ impl Checker {
         &mut self,
         trait_name: &str,
         ty: &Ty,
-        visiting: &mut HashSet<(String, String)>,
+        visiting: &mut HashSet<ObligationKey>,
     ) -> bool {
         let receiver_ty = self.resolve_ty(ty);
         if let Ty::Var(var) = receiver_ty {
@@ -1767,7 +1767,10 @@ impl Checker {
             return true;
         }
 
-        let key = (trait_name.to_string(), self.ty_name(&receiver_ty));
+        let key = ObligationKey {
+            trait_name: trait_name.to_string(),
+            target: self.canonical_ty_key(&receiver_ty),
+        };
         if !visiting.insert(key.clone()) {
             self.trait_obligation_cycle = Some(format!(
                 "CyclicTraitObligation: {} for {}",
@@ -1808,7 +1811,7 @@ impl Checker {
         &mut self,
         impl_info: &TraitImplInfo,
         fresh: &HashMap<u32, Ty>,
-        visiting: &mut HashSet<(String, String)>,
+        visiting: &mut HashSet<ObligationKey>,
     ) -> bool {
         let Some(where_clause) = &impl_info.where_clause else {
             return true;
@@ -2961,9 +2964,31 @@ impl Checker {
     ) -> bool {
         let before_substitutions = self.substitutions.clone();
         let before_rigid = self.rigid_tyvars.clone();
+        let before_bounds = self.tyvar_bounds.clone();
         let mut child_vars = Vec::new();
         Self::collect_ty_vars(&child_impl.target_ty, &mut child_vars);
         self.rigid_tyvars.extend(child_vars);
+        // Coverage is quantified over the child impl's instances. Its where
+        // clause is therefore an assumption available while proving the
+        // parent's requirements, but must not escape into the checker-wide
+        // declaration environment.
+        if let Some(where_clause) = &child_impl.where_clause {
+            for constraint in &where_clause.constraints {
+                let AstTy::Named(_, subject) = &constraint.subject else {
+                    continue;
+                };
+                let Some(var) = child_impl.type_param_vars_by_name.get(subject) else {
+                    continue;
+                };
+                for bound in &constraint.bounds {
+                    let TypedWhereConstraintRhs::Trait(trait_id) = bound else {
+                        continue;
+                    };
+                    let trait_key = self.trait_key(trait_id);
+                    self.register_tyvar_bound(*var, &trait_key);
+                }
+            }
+        }
 
         let mut fresh = HashMap::new();
         let parent_target = self.instantiate_ty_with_fresh(&parent_impl.target_ty, &mut fresh);
@@ -2973,6 +2998,7 @@ impl Checker {
 
         self.substitutions = before_substitutions;
         self.rigid_tyvars = before_rigid;
+        self.tyvar_bounds = before_bounds;
         obligations_hold
     }
 

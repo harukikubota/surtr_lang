@@ -508,13 +508,7 @@ impl Checker {
     pub(super) fn tyvar_has_bound(&self, var: u32, trait_name: &str) -> bool {
         self.tyvar_bounds
             .get(&var)
-            .is_some_and(|bounds| {
-                bounds.iter().any(|bound| {
-                    bound == trait_name
-                        || (!bound.contains('<')
-                            && Self::base_trait_key(bound) == Self::base_trait_key(trait_name))
-                })
-            })
+            .is_some_and(|bounds| bounds.iter().any(|bound| bound == trait_name))
     }
 
     pub(super) fn lit_type(&self, lit: &Lit) -> Ty {

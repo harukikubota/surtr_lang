@@ -174,10 +174,7 @@ impl JsonValue {
   This source-level alias fixes the JSON target and dispatches through
   `Encode<JsonValue> for typeof(value)`.
   """
-  def encode::<JsonValue>(value: $T) -> Result<JsonValue, Error>
-  where
-    $T: Encode
-  {
+  def encode::<JsonValue>(value: $T) -> Result<JsonValue, Error> {
     Encode::encode::<JsonValue>(value)
   }
 }

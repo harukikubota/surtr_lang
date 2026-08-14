@@ -1069,6 +1069,15 @@ enum CanonicalTyKey {
     },
 }
 
+/// Solver identity is structural. In particular, two applications of the
+/// same generic struct with different field types must not collapse to the
+/// display name used in diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ObligationKey {
+    trait_name: String,
+    target: CanonicalTyKey,
+}
+
 #[derive(Debug, Clone)]
 struct PersistentCheckerState {
     env: TypeEnv,

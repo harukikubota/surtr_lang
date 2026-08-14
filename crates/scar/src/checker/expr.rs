@@ -2817,7 +2817,7 @@ impl Checker {
         let receiver_ty = self.resolve_ty(receiver_ty);
         let result = match receiver_ty {
             Ty::Var(var) => {
-                if !self.rigid_tyvars.contains(&var) {
+                if !self.rigid_tyvars.contains(&var) || trait_name.contains('<') {
                     Some(TraitDispatch::Pending)
                 } else if self.tyvar_has_bound(var, trait_name)
                     || self.tyvar_satisfies_compiler_trait(var, trait_name)
@@ -4135,7 +4135,8 @@ impl Checker {
         let trait_call_summary = self.trait_implementation_summary(&trait_call_name);
         let receiver_ty = self.resolve_ty(&self_ty);
         if let Ty::Var(var) = receiver_ty {
-            if self.rigid_tyvars.contains(&var)
+            if !trait_call_name.contains('<')
+                && self.rigid_tyvars.contains(&var)
                 && !self.tyvar_has_bound(var, &trait_call_name)
                 && !self.tyvar_satisfies_compiler_trait(var, &trait_call_name)
             {
@@ -4152,7 +4153,7 @@ impl Checker {
                     )),
                 });
             }
-            if !self.rigid_tyvars.contains(&var) {
+            if !trait_call_name.contains('<') && !self.rigid_tyvars.contains(&var) {
                 let obligations = self.pending_trait_obligations.entry(var).or_default();
                 if !obligations.contains(&trait_call_name) {
                     obligations.push(trait_call_name.clone());

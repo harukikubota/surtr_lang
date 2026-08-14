@@ -3681,6 +3681,46 @@ result = call(1)"#,
     );
 }
 
+#[test]
+fn child_impl_where_assumptions_cover_parent_impl_requirements() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Eq {
+  def eq(self: Self, other: Self) -> Boolean
+}
+
+deftrait Show {
+  def show(self: Self) -> String
+}
+
+deftrait Parent {
+  def parent(self: Self) -> String
+}
+
+deftrait Child
+where
+  Self: Parent
+{
+  def child(self: Self) -> String
+}
+
+impl Parent for List<$A>
+where
+  $A: Eq
+{
+  def parent(self: List<$A>) -> String { "parent" }
+}
+
+impl Child for List<$A>
+where
+  $A: Eq + Show
+{
+  def child(self: List<$A>) -> String { "child" }
+}"#,
+    );
+
+    typecheck(resolved).expect("a stronger child where clause must cover the parent impl");
+}
+
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }
