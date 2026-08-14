@@ -3222,10 +3222,16 @@ impl Checker {
     }
 
     pub(super) fn trait_impl_candidate_keys(&self, trait_name: &str) -> Vec<TraitImplKey> {
+        let base = Self::base_trait_key(trait_name);
+        if let Some(keys) = self.trait_impl_index_by_base_trait.get(base) {
+            return keys.clone();
+        }
+        let surface_base = Self::surface_name(base);
         self.trait_impl_index_by_base_trait
-            .get(Self::base_trait_key(trait_name))
-            .cloned()
-            .unwrap_or_default()
+            .iter()
+            .filter(|(key, _)| Self::surface_name(key) == surface_base)
+            .flat_map(|(_, keys)| keys.iter().cloned())
+            .collect()
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {

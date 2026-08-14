@@ -366,6 +366,19 @@ impl Checker {
                 Some(expected) => self.check_node_with_expected(&arm.body, Some(expected))?,
                 None => self.check_node(&arm.body)?,
             };
+            if let Some(expected) = expected {
+                if !self.types_compatible(expected, &typed_body.ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Match arm type mismatch: expected {}, got {}",
+                            self.ty_name(&self.resolve_ty(expected)),
+                            self.ty_name(&typed_body.ty)
+                        ),
+                        span: typed_body.span.clone(),
+                        hint: None,
+                    });
+                }
+            }
             // Do not normalize env bindings or typed guard/body subtrees in this
             // scoped arm. The env frame is discarded below, and the containing
             // TypedInner::Match is normalized once at the program boundary.

@@ -1079,6 +1079,9 @@ impl Checker {
                 let Ty::List(element_ty) = expected_ty else {
                     return self.check_list_literal(span, elems);
                 };
+                if matches!(self.resolve_ty(element_ty.as_ref()), Ty::Var(_)) {
+                    return self.check_list_literal(span, elems);
+                }
                 let typed_elems = elems
                     .iter()
                     .map(|elem| self.check_node_with_expected(elem, Some(element_ty.as_ref())))
@@ -1088,7 +1091,7 @@ impl Checker {
                     if !self.types_compatible(element_ty.as_ref(), &typed.ty) {
                         return Err(TypeError {
                             message: format!(
-                                "expected {}, got {}",
+                                "expected List<{}>, got List<{}>",
                                 self.ty_name(element_ty.as_ref()),
                                 self.ty_name(&typed.ty)
                             ),
@@ -1109,6 +1112,16 @@ impl Checker {
                     return self.check_tuple_literal(span, elems);
                 };
                 if elems.len() != item_tys.len() {
+                    return self.check_tuple_literal(span, elems);
+                }
+                if item_tys
+                    .iter()
+                    .any(|item_ty| matches!(self.resolve_ty(item_ty), Ty::Var(_)))
+                {
+                    // A partially unknown tuple shape must be synthesized as
+                    // a whole. The enclosing container will then unify it
+                    // with the generic expected element type, retaining the
+                    // normal outer diagnostic for malformed literals.
                     return self.check_tuple_literal(span, elems);
                 }
                 let typed_elems = elems
@@ -2726,14 +2739,16 @@ impl Checker {
     ) -> Option<TraitDispatch> {
         let profile = self.profiler.start();
         let result = (|| {
-            for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let candidate_keys = self.trait_impl_candidate_keys(trait_name);
+            let instance_matches = requested_trait_args.is_empty() && trait_name.contains('<');
+            for impl_key in candidate_keys {
                 let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
                     continue;
                 };
                 let Some(method) = impl_info.methods.get(method_name) else {
                     continue;
                 };
-                if impl_info.trait_arg_tys.len() != requested_trait_args.len() {
+                if !instance_matches && impl_info.trait_arg_tys.len() != requested_trait_args.len() {
                     continue;
                 }
                 let mut fresh = HashMap::new();
@@ -2745,11 +2760,25 @@ impl Checker {
                     .collect::<Vec<_>>();
                 let before = self.substitutions.clone();
                 let target_matches = self.types_compatible(&impl_target, receiver_ty);
-                let args_match = target_matches
-                    && impl_trait_args
-                        .iter()
-                        .zip(requested_trait_args.iter())
-                        .all(|(expected, actual)| self.types_compatible(expected, actual));
+                // A pending trait call is revisited after specialization with
+                // its fully-rendered instance name (for example
+                // `Encode<JsonValue>`), but its parsed argument types are no
+                // longer present in `TypedInner::TraitCall`.  Keep that exact
+                // instance constraint instead of treating it as the arity-0
+                // `Encode` trait.
+                let args_match = if instance_matches {
+                    target_matches
+                        && self.trait_display_name(
+                            &self.trait_instance_key(&impl_info.trait_id, &impl_info.trait_args),
+                        ) == self.trait_display_name(trait_name)
+                } else {
+                    target_matches
+                        && impl_trait_args.len() == requested_trait_args.len()
+                        && impl_trait_args
+                            .iter()
+                            .zip(requested_trait_args.iter())
+                            .all(|(expected, actual)| self.types_compatible(expected, actual))
+                };
                 if !args_match {
                     self.substitutions = before;
                     continue;
@@ -2814,16 +2843,21 @@ impl Checker {
             return true;
         };
         for constraint in &where_clause.constraints {
-            let AstTy::Named(_, subject) = &constraint.subject else {
-                return false;
+            let concrete = match &constraint.subject {
+                AstTy::Named(_, subject) if subject == "Self" => self.resolve_ty(
+                    &self.substitute_ty_with_mapping(&impl_info.target_ty, fresh),
+                ),
+                AstTy::Named(_, subject) => {
+                    let Some(original_var) = impl_info.type_param_vars_by_name.get(subject) else {
+                        return false;
+                    };
+                    let Some(instantiated) = fresh.get(original_var) else {
+                        return false;
+                    };
+                    self.resolve_ty(instantiated)
+                }
+                _ => return false,
             };
-            let Some(original_var) = impl_info.type_param_vars_by_name.get(subject) else {
-                return false;
-            };
-            let Some(instantiated) = fresh.get(original_var) else {
-                return false;
-            };
-            let concrete = self.resolve_ty(instantiated);
             for bound in &constraint.bounds {
                 let TypedWhereConstraintRhs::Trait(trait_id) = bound else {
                     // Constructor and slot obligations are validated when the
@@ -10417,16 +10451,37 @@ impl Checker {
             });
         }
         let typed_then = self.check_lazy_argument_with_expected(then, expected, span)?;
+        if !self.types_compatible(expected, &typed_then.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "if branches have different types: {} and {}",
+                    self.ty_name(&self.resolve_ty(expected)),
+                    self.ty_name(&typed_then.ty)
+                ),
+                span: typed_then.span.clone(),
+                hint: None,
+            });
+        }
         let typed_else = else_opt
             .as_ref()
             .map(|branch| self.check_lazy_argument_with_expected(branch, expected, span))
             .transpose()?;
+        if typed_else.is_none() && !self.types_compatible(expected, &Ty::Unit) {
+            return Err(TypeError {
+                message: format!(
+                    "expected {}, got Unit",
+                    self.ty_name(&self.resolve_ty(expected))
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
         if let Some(typed_else) = &typed_else {
             if !self.types_compatible(expected, &typed_else.ty) {
                 return Err(TypeError {
                     message: format!(
                         "if branches have different types: {} and {}",
-                        self.ty_name(expected),
+                        self.ty_name(&self.resolve_ty(expected)),
                         self.ty_name(&typed_else.ty)
                     ),
                     span: typed_else.span.clone(),
