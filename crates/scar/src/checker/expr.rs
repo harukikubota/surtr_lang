@@ -1,4 +1,5 @@
 use super::*;
+use crate::env::TypeScheme;
 use sindr::names::FacetRootKind;
 use sindr::primitives::int;
 use spire::ast::Symbol;
@@ -44,6 +45,38 @@ struct ExpectedCallableContract {
 }
 
 impl Checker {
+    fn generalize_local_callable_binding(&mut self, pattern: &TypedPattern) {
+        let (TypedPattern::Var(_, id) | TypedPattern::As(_, _, id)) = pattern else {
+            return;
+        };
+        let Some(ty) = self.env.lookup_var(id.unique_id).cloned() else {
+            return;
+        };
+        let ty = self.resolve_ty(&ty);
+        let quantified = (0..self.env.next_tyvar)
+            .filter(|var| {
+                !self.rigid_tyvars.contains(var)
+                    && self.ty_contains_var(&ty, *var)
+                    && !self.env.vars.iter().any(|(other_id, other_ty)| {
+                        *other_id != id.unique_id && self.ty_contains_var(other_ty, *var)
+                    })
+            })
+            .collect::<Vec<_>>();
+        if !quantified.is_empty() {
+            self.env
+                .bind_var_scheme(id.unique_id, TypeScheme { ty, quantified });
+        }
+    }
+
+    fn instantiate_local_callable_scheme(&mut self, scheme: &TypeScheme) -> Ty {
+        let mapping = scheme
+            .quantified
+            .iter()
+            .map(|var| (*var, self.env.fresh_tyvar()))
+            .collect::<HashMap<_, _>>();
+        self.substitute_ty_with_mapping(&scheme.ty, &mapping)
+    }
+
     fn parse_tuple_index_name(name: &str) -> Option<usize> {
         let suffix = name.strip_prefix('_')?;
         if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
@@ -544,11 +577,15 @@ impl Checker {
                 }
 
                 if let Some(stored_ty) = self.env.lookup_var(id.unique_id).cloned() {
-                    let ty = match &stored_ty {
-                        Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
-                            self.instantiate_callable_ty(&stored_ty)
+                    let ty = if let Some(scheme) = self.env.lookup_scheme(id.unique_id).cloned() {
+                        self.instantiate_local_callable_scheme(&scheme)
+                    } else {
+                        match &stored_ty {
+                            Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
+                                self.instantiate_callable_ty(&stored_ty)
+                            }
+                            _ => self.resolve_ty(&stored_ty),
                         }
-                        _ => self.resolve_ty(&stored_ty),
                     };
                     if self.error_observer_bindings.contains(&id.unique_id)
                         && self.allow_error_observer_value_use == 0
@@ -751,6 +788,11 @@ impl Checker {
                 self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
+                if !matches!(pat, ResolvedPattern::Annotated(..))
+                    && matches!(typed_rhs.node, TypedInner::Closure(..))
+                {
+                    self.generalize_local_callable_binding(&typed_pat);
+                }
                 if let Some(path) = &facet_path {
                     self.bind_facet_pattern_bindings(&typed_pat, path, span)?;
                 } else {

@@ -3551,6 +3551,20 @@ impl TryFrom<$T> for LocalBox<$T> {
     assert!(err.message.contains("cannot both be implemented"), "{err:?}");
 }
 
+#[test]
+fn local_callable_is_instantiated_at_each_call_site() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"id = {|x| x}
+pair: (Int, String) = (id(1), id("s"))
+first: Int = id(2)
+second: String = id("t")"#,
+    );
+
+    assert!(matches!(typed_bind_rhs(&typed, "pair").ty, Ty::Tuple(_)));
+    assert!(matches!(typed_bind_rhs(&typed, "first").ty, Ty::Int));
+    assert!(matches!(typed_bind_rhs(&typed, "second").ty, Ty::Str));
+}
+
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }
