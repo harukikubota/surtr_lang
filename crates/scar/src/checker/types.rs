@@ -508,7 +508,13 @@ impl Checker {
     pub(super) fn tyvar_has_bound(&self, var: u32, trait_name: &str) -> bool {
         self.tyvar_bounds
             .get(&var)
-            .is_some_and(|bounds| bounds.iter().any(|bound| bound == trait_name))
+            .is_some_and(|bounds| {
+                bounds.iter().any(|bound| {
+                    bound == trait_name
+                        || (!bound.contains('<')
+                            && Self::base_trait_key(bound) == Self::base_trait_key(trait_name))
+                })
+            })
     }
 
     pub(super) fn lit_type(&self, lit: &Lit) -> Ty {
@@ -1724,6 +1730,11 @@ impl Checker {
             false
         } else {
             let var_bounds = self.tyvar_bound_names(var);
+            let pending_obligations = self
+                .pending_trait_obligations
+                .get(&var)
+                .cloned()
+                .unwrap_or_default();
             match &ty {
                 Ty::Var(other) => {
                     let mut combined = var_bounds;
@@ -1735,15 +1746,29 @@ impl Checker {
                     combined.sort();
                     self.tyvar_bounds.insert(var, combined.clone());
                     self.tyvar_bounds.insert(*other, combined);
+                    let pending = self.pending_trait_obligations.entry(*other).or_default();
+                    for obligation in pending_obligations {
+                        if !pending.contains(&obligation) {
+                            pending.push(obligation);
+                        }
+                    }
                 }
                 _ => {
                     if !self.ty_satisfies_bounds(&ty, &var_bounds) {
                         self.profiler.finish(ProfileEvent::BindTyVar, profile);
                         return false;
                     }
+                    if !pending_obligations
+                        .iter()
+                        .all(|obligation| self.trait_impl_exists(obligation, &ty))
+                    {
+                        self.profiler.finish(ProfileEvent::BindTyVar, profile);
+                        return false;
+                    }
                 }
             }
             self.substitutions.insert(var, ty);
+            self.pending_trait_obligations.remove(&var);
             true
         };
         self.profiler.finish(ProfileEvent::BindTyVar, profile);

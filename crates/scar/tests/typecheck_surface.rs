@@ -3632,6 +3632,55 @@ result = Use::use(values)"#,
     );
 }
 
+#[test]
+fn direct_trait_call_on_rigid_generic_requires_declared_bound() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> String
+}
+
+def hidden(value: $A) -> String {
+  Marker::mark(value)
+}"#,
+    );
+
+    let err = typecheck(resolved).expect_err("undeclared generic bound must be rejected");
+    assert!(err.message.contains("MissingGenericBound"), "{err:?}");
+    assert!(err.message.contains("must implement Marker"), "{err:?}");
+}
+
+#[test]
+fn deferred_trait_obligation_is_checked_when_closure_argument_is_bound() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> String
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+defstruct ObligationBox<$A> {
+  value: $A
+}
+
+impl Use for ObligationBox<$A>
+where
+  $A: Marker
+{
+  def use(self: ObligationBox<$A>) -> String { "used" }
+}
+
+call = {|value| Use::use(ObligationBox(value))}
+result = call(1)"#,
+    );
+
+    assert!(
+        typecheck(resolved).is_err(),
+        "binding the deferred receiver to Int must re-check its Marker obligation"
+    );
+}
+
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }
