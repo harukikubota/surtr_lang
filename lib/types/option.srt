@@ -66,7 +66,7 @@ impl Option {
 This is the source-level meaning of `value |*> f`.
 """
 impl Functor for Option<$T> {
-  def fmap::<Option<$T>, $A, $B>(self: Option<$A>, mapper: ($A -> $B)) -> Option<$B> {
+  def fmap(self: Option<$A>, mapper: ($A -> $B)) -> Option<$B> {
     match self {
       Option::Some(value) => Option::Some(mapper(value)),
       Option::None => Option::None,
@@ -78,11 +78,11 @@ impl Functor for Option<$T> {
 `Applicative` implementation for `Option`.
 """
 impl Applicative for Option<$T> {
-  def pure::<Option<$T>, $A>(value: $A) -> Option<$A> {
+  def pure::<Option<$T>>(value: $A) -> Option<$A> {
     Option::Some(value)
   }
 
-  def ap::<Option<$T>, $A, $B>(mapper: Option<($A -> $B)>, value: Option<$A>) -> Option<$B> {
+  def ap(mapper: Option<($A -> $B)>, value: Option<$A>) -> Option<$B> {
     match mapper {
       Option::Some(f) => match value {
         Option::Some(inner) => Option::Some(f(inner)),
@@ -98,11 +98,11 @@ impl Applicative for Option<$T> {
 This is the source-level meaning of `value |>= mapper`.
 """
 impl Monad for Option<$T> {
-  def return::<Option<$T>, $A>(value: $A) -> Option<$A> {
+  def return::<Option<$T>>(value: $A) -> Option<$A> {
     Option::Some(value)
   }
 
-  def bind::<Option<$T>, $A, $B>(self: Option<$A>, mapper: ($A -> Option<$B>)) -> Option<$B> {
+  def bind(self: Option<$A>, mapper: ($A -> Option<$B>)) -> Option<$B> {
     match self {
       Option::Some(value) => mapper(value),
       Option::None => Option::None,
@@ -120,7 +120,7 @@ impl Alternative for Option<$T> {
     Option::None
   }
 
-  def choose::<Option<$T>, $A>(left: Option<$A>, right: Option<$A>) -> Option<$A> {
+  def choose(left: Option<$A>, right: Option<$A>) -> Option<$A> {
     match left {
       Option::Some(_) => left,
       Option::None => right,

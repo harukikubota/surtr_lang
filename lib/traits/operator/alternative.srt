@@ -13,5 +13,5 @@ where
   def empty::<Self, $A>() -> Self<$A>
 
   # Choose between two values in the same contextual family.
-  def choose::<Self, $A>(left: Self<$A>, right: Self<$A>) -> Self<$A>
+  def choose(left: Self<$A>, right: Self<$A>) -> Self<$A>
 }

@@ -27,9 +27,9 @@ where
 {
   # Lift a plain value into the context. This is the applicative identity
   # used when a computation needs a contextual value without effects.
-  def pure::<Self, $A>(value: $A) -> Self<$A>
+  def pure::<Self>(value: $A) -> Self<$A>
 
   # Apply a contextual callable to a contextual value. With a curried mapper,
   # repeated calls consume arguments from left to right.
-  def ap::<Self, $A, $B>(mapper: Self<($A -> $B)>, value: Self<$A>) -> Self<$B>
+  def ap(mapper: Self<($A -> $B)>, value: Self<$A>) -> Self<$B>
 }

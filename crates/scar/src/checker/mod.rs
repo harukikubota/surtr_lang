@@ -2428,6 +2428,39 @@ impl Checker {
         }
     }
 
+    /// Collect the input/output slots relevant to constructor-trait methods.
+    /// `Self` is a hidden constructor witness in these signatures, while `$A`
+    /// names an element slot.  Ordinary named types are intentionally ignored.
+    fn collect_constructor_signature_slots(ty: &AstTy, used: &mut HashSet<String>) {
+        match ty {
+            AstTy::Named(_, name) => {
+                if name == "Self" || name.starts_with('$') {
+                    used.insert(name.clone());
+                }
+            }
+            AstTy::ImplTrait(_, _) => {}
+            AstTy::Generic(_, name, args) => {
+                if name == "Self" || name.starts_with('$') {
+                    used.insert(name.clone());
+                }
+                for arg in args {
+                    Self::collect_constructor_signature_slots(arg, used);
+                }
+            }
+            AstTy::Tuple(_, items) => {
+                for item in items {
+                    Self::collect_constructor_signature_slots(item, used);
+                }
+            }
+            AstTy::Func(_, params, ret) => {
+                for param in params {
+                    Self::collect_constructor_signature_slots(param, used);
+                }
+                Self::collect_constructor_signature_slots(ret, used);
+            }
+        }
+    }
+
     fn warn_unused_type_params(
         &mut self,
         type_params: &[ResolvedTypeParam],

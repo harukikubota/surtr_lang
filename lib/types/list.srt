@@ -686,7 +686,7 @@ impl List {
 This is the source-level meaning of `values |*> f`.
 """
 impl Functor for List<$T> {
-  def fmap::<List<$T>, $A, $B>(self: List<$A>, mapper: ($A -> $B)) -> List<$B> {
+  def fmap(self: List<$A>, mapper: ($A -> $B)) -> List<$B> {
     List::map(self, mapper)
   }
 }
@@ -695,11 +695,11 @@ impl Functor for List<$T> {
 `Applicative` implementation for `List`.
 """
 impl Applicative for List<$T> {
-  def pure::<List<$T>, $A>(value: $A) -> List<$A> {
+  def pure::<List<$T>>(value: $A) -> List<$A> {
     [value]
   }
 
-  def ap::<List<$T>, $A, $B>(mapper: List<($A -> $B)>, value: List<$A>) -> List<$B> {
+  def ap(mapper: List<($A -> $B)>, value: List<$A>) -> List<$B> {
     List::flat_map(mapper, {|f| List::map(value, f)})
   }
 }
@@ -709,11 +709,11 @@ impl Applicative for List<$T> {
 This is the source-level meaning of `values |>= mapper`.
 """
 impl Monad for List<$T> {
-  def return::<List<$T>, $A>(value: $A) -> List<$A> {
+  def return::<List<$T>>(value: $A) -> List<$A> {
     [value]
   }
 
-  def bind::<List<$T>, $A, $B>(self: List<$A>, mapper: ($A -> List<$B>)) -> List<$B> {
+  def bind(self: List<$A>, mapper: ($A -> List<$B>)) -> List<$B> {
     List::flat_map(self, mapper)
   }
 }
@@ -727,7 +727,7 @@ impl Alternative for List<$T> {
     []
   }
 
-  def choose::<List<$T>, $A>(left: List<$A>, right: List<$A>) -> List<$A> {
+  def choose(left: List<$A>, right: List<$A>) -> List<$A> {
     List::append(left, right)
   }
 }

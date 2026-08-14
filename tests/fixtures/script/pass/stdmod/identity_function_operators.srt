@@ -9,28 +9,28 @@ impl Identity {
 }
 
 impl Functor for Identity<$T> {
-  def fmap::<Identity<$T>, $A, $B>(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
+  def fmap(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
     Identity { value: mapper(self.value) }
   }
 }
 
 impl Applicative for Identity<$T> {
-  def pure::<Identity<$T>, $A>(value: $A) -> Identity<$A> {
+  def pure::<Identity<$T>>(value: $A) -> Identity<$A> {
     Identity { value: value }
   }
 
-  def ap::<Identity<$T>, $A, $B>(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
+  def ap(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
     f = mapper.value
     Identity { value: f(value.value) }
   }
 }
 
 impl Monad for Identity<$T> {
-  def return::<Identity<$T>, $A>(value: $A) -> Identity<$A> {
+  def return::<Identity<$T>>(value: $A) -> Identity<$A> {
     Identity { value: value }
   }
 
-  def bind::<Identity<$T>, $A, $B>(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
+  def bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
     mapper(self.value)
   }
 }

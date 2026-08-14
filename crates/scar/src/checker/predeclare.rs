@@ -2154,6 +2154,84 @@ impl Checker {
             let trait_key = self.trait_key(id);
             let constructor_slots = self.trait_constructor_slots(id, where_clause.as_ref())?;
             let parents = Self::trait_parents(where_clause.as_ref());
+            if !constructor_slots.is_empty() && !type_params.is_empty() {
+                return Err(TypeError {
+                    message: format!(
+                        "Constructor trait {} cannot declare trait type parameter(s)",
+                        id.name
+                    ),
+                    span: id.span.clone(),
+                    hint: Some(
+                        "Put element slots in `Self: Type<$A, ...>` and introduce them through method inputs."
+                            .into(),
+                    ),
+                });
+            }
+            let mut direct_parents = HashSet::new();
+            for parent in &parents {
+                let key = parent
+                    .qualified_name
+                    .as_deref()
+                    .unwrap_or(parent.name.as_str());
+                if !direct_parents.insert(key.to_string()) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Trait {} declares parent {} more than once",
+                            id.name, parent.name
+                        ),
+                        span: parent.span.clone(),
+                        hint: None,
+                    });
+                }
+            }
+            if !constructor_slots.is_empty() {
+                for method in methods {
+                    let mut fun_param_slots = HashSet::new();
+                    for fun_param in &method.fun_params {
+                        Self::collect_constructor_signature_slots(fun_param, &mut fun_param_slots);
+                    }
+                    let mut value_param_slots = HashSet::new();
+                    for param in &method.params {
+                        Self::collect_constructor_signature_slots(
+                            &param.ty,
+                            &mut value_param_slots,
+                        );
+                    }
+                    if let Some(slot) = fun_param_slots
+                        .intersection(&value_param_slots)
+                        .next()
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "Constructor trait method {} introduces {} through both FunParams and value arguments",
+                                method.id.name, slot
+                            ),
+                            span: method.span.clone(),
+                            hint: Some(
+                                "Introduce each type variable through exactly one input channel."
+                                    .into(),
+                            ),
+                        });
+                    }
+                    let mut input_slots = fun_param_slots;
+                    input_slots.extend(value_param_slots);
+                    let mut return_slots = HashSet::new();
+                    Self::collect_constructor_signature_slots(&method.ret_ty, &mut return_slots);
+                    if let Some(slot) = return_slots.difference(&input_slots).next() {
+                        return Err(TypeError {
+                            message: format!(
+                                "Constructor trait method {} has {} only in its return type",
+                                method.id.name, slot
+                            ),
+                            span: method.span.clone(),
+                            hint: Some(
+                                "Introduce the type variable through FunParams or a value argument."
+                                    .into(),
+                            ),
+                        });
+                    }
+                }
+            }
             let mut method_map = HashMap::new();
             for method in methods {
                 if let Some(qualified_name) = &method.id.qualified_name {
@@ -2424,6 +2502,7 @@ impl Checker {
                 let impl_fun_params_signature =
                     self.alpha_normalized_signature(&impl_fun_params, &Ty::Unit);
                 if !trait_info.constructor_slots.is_empty()
+                    && !trait_method.fun_params.is_empty()
                     && trait_fun_params_signature != impl_fun_params_signature
                 {
                     return Err(TypeError {
