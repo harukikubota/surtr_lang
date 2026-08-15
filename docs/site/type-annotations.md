@@ -81,6 +81,8 @@ where
 }
 ```
 
+型引数を持つ制約は `$T: Encode<String>` のように書きます。Trait 名だけでなく型引数も制約の一部です。generic receiver で Trait helper を使うには、その helper が要求する bound を明示します。詳しくは [`trait-system.md`](./trait-system.md) を参照してください。
+
 ## 明示型引数
 
 変換先など、値引数だけでは決まらない型は `::<...>` で指定します。

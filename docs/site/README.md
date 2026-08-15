@@ -12,6 +12,7 @@ REPL は起動時に標準定義ソースと preload を読み切る OnceRead un
 - [各種定義と使い方](./definitions-and-usage.md)
 - [型注釈](./type-annotations.md)
 - [Special Types](./special-types.md)
+- [Trait システム](./trait-system.md)
 - [トレイト実装](./trait-impls.md)
 - [`@derive`](./derive.md)
 - [構造体](./structs.md)

@@ -177,6 +177,8 @@ values = wrap([1, 2, 3])
 
 通常 call、constructor、Trait helper、apply、compose は同じ引数推論規則を使います。expected type が既知なら list の各要素、tuple の各 slot、`if` の全 branch、`match` の全 arm へ伝播します。空 collection など式だけでは型を一意にできない場合は、引き続き型注釈が必要です。
 
+Trait helper を generic receiver に使う場合の必要な `where` bound は、[`trait-system.md`](./trait-system.md) を参照してください。
+
 関数演算子の右辺にもそのまま置けます。
 
 ```surtr

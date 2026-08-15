@@ -83,6 +83,7 @@ cargo clean
   - [Standard modules](./docs/site/standard-modules.md)
   - [Definitions and usage](./docs/site/definitions-and-usage.md)
   - [Type annotations](./docs/site/type-annotations.md)
+  - [Trait system](./docs/site/trait-system.md)
   - [Trait impls](./docs/site/trait-impls.md)
   - [Lens](./docs/site/lens.md)
   - [Kernel](./docs/site/kernel.md)

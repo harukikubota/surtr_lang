@@ -115,6 +115,10 @@ match expr {
 - `::<Int>` は `try_from::<Int>(value)` のような Trait helper の target specialization にだけ使える。`Self` は値引数または期待 callable 型から推論する
 - FunParams は、型変数が value parameter の型から導入できない場合にだけ使う。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で FunParams に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として FunParams に置く
 - trait は method のみを持つ
+- parameterized bound は `$A: Trait<Arg, ...>` と書く。Trait 名と全ての型引数が一致して初めて同じ bound である
+- generic receiver の Trait 呼び出しには、signature 上で宣言した `where` bound が必要である。呼び出しから implicit bound は追加されない
+- body を持つ Trait method は default method として override でき、`where Self: Parent` は parent Trait を要求する
+- Trait の詳細な利用規則は [`trait-system.md`](./trait-system.md)、実装例は [`trait-impls.md`](./trait-impls.md) を参照する
 - 匿名 `impl Trait` 型は使えず、名前付き型変数と `where` clause で制約する
 - `where` clause は宣言・trait・impl に制約を追加する
 - `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
@@ -645,14 +649,10 @@ defmod Bootstrap {
 このリファレンスでは扱わないもの:
 
 - associated types / associated consts
-- default method body
-- trait inheritance
-- multi-trait bounds
 - 匿名 `impl Trait` 型（parameter / return / generic argument / impl target component）
-- `where` clauses
 - 型エイリアス / NewType
 - マクロシステム拡張
 - 並列コンパイル
 - 高度なモジュールシステム拡張
 
-正本としての詳細仕様は [要件定義v9](../../doc/要件定義v9.md) を参照してください。
+Trait system の利用規則は [Trait システム](./trait-system.md) と [Trait Impls](./trait-impls.md) を正本とします。その他の全体要件は [要件定義v9](../../doc/要件定義v9.md) を参照してください。
