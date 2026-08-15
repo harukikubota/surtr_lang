@@ -56,9 +56,10 @@ impl Checker {
         }
         trait_info.parents.iter().find_map(|parent| {
             let parent_key = parent
+                .trait_id
                 .qualified_name
                 .as_deref()
-                .unwrap_or(parent.name.as_str());
+                .unwrap_or(parent.trait_id.name.as_str());
             self.constructor_root_trait_key(parent_key)
         })
     }

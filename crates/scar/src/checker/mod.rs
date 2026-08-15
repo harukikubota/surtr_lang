@@ -426,8 +426,14 @@ struct TraitInfo {
     where_clause: Option<TypedWhereClause>,
     constructor_slots: Vec<String>,
     constructor_root: Option<String>,
-    parents: Vec<ResolvedId>,
+    parents: Vec<TraitParent>,
     methods: HashMap<String, TraitMethodInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TraitParent {
+    trait_id: ResolvedId,
+    args: Vec<AstTy>,
 }
 
 #[allow(dead_code)]

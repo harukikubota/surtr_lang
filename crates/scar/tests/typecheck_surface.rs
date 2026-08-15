@@ -3769,6 +3769,55 @@ where
     typecheck(resolved).expect("a child Self assumption must cover the parent requirement");
 }
 
+#[test]
+fn parameterized_parent_trait_coverage_uses_the_child_trait_arguments() {
+    let covered = resolve_with_builtin_prelude(
+        r#"deftrait Parent<$Tag> {
+  def parent(self: Self) -> String
+}
+
+deftrait Child<$Tag>
+where
+  Self: Parent<$Tag>
+{
+  def child(self: Self) -> String
+}
+
+impl Parent<Int> for List<$A> {
+  def parent(self: List<$A>) -> String { "parent" }
+}
+
+impl Child<Int> for List<$A> {
+  def child(self: List<$A>) -> String { "child" }
+}"#,
+    );
+    typecheck(covered).expect("Child<Int> must require and find Parent<Int>");
+
+    let mismatched = resolve_with_builtin_prelude(
+        r#"deftrait Parent<$Tag> {
+  def parent(self: Self) -> String
+}
+
+deftrait Child<$Tag>
+where
+  Self: Parent<$Tag>
+{
+  def child(self: Self) -> String
+}
+
+impl Parent<String> for List<$A> {
+  def parent(self: List<$A>) -> String { "parent" }
+}
+
+impl Child<Int> for List<$A> {
+  def child(self: List<$A>) -> String { "child" }
+}"#,
+    );
+    let err = typecheck(mismatched)
+        .expect_err("Parent<String> cannot cover Child<Int>'s Parent<Int> requirement");
+    assert!(err.message.contains("requires parent impl Parent"), "{err:?}");
+}
+
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }

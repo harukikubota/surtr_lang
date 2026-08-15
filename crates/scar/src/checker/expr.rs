@@ -131,9 +131,10 @@ impl Checker {
         let allowed = self.traits.get(actual).is_some_and(|info| {
             info.parents.iter().any(|parent| {
                 let parent_key = parent
+                    .trait_id
                     .qualified_name
                     .as_deref()
-                    .unwrap_or(parent.name.as_str());
+                    .unwrap_or(parent.trait_id.name.as_str());
                 self.constructor_capability_allows(parent_key, required, visiting)
             })
         });

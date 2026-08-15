@@ -1446,7 +1446,7 @@ impl Checker {
         Ok(slots.unwrap_or_default())
     }
 
-    fn trait_parents(where_clause: Option<&ResolvedWhereClause>) -> Vec<ResolvedId> {
+    fn trait_parents(where_clause: Option<&ResolvedWhereClause>) -> Vec<TraitParent> {
         let Some(clause) = where_clause else {
             return Vec::new();
         };
@@ -1458,7 +1458,10 @@ impl Checker {
             })
             .flat_map(|constraint| constraint.bounds.iter())
             .filter_map(|bound| match bound {
-                ResolvedWhereConstraintRhs::Trait { trait_id, .. } => Some(trait_id.clone()),
+                ResolvedWhereConstraintRhs::Trait { trait_id, args } => Some(TraitParent {
+                    trait_id: trait_id.clone(),
+                    args: args.clone(),
+                }),
                 _ => None,
             })
             .collect()
@@ -1493,9 +1496,10 @@ impl Checker {
             let mut slots = info.constructor_slots.clone();
             for parent in &info.parents {
                 let parent_key = parent
+                    .trait_id
                     .qualified_name
                     .clone()
-                    .unwrap_or_else(|| parent.name.clone());
+                    .unwrap_or_else(|| parent.trait_id.name.clone());
                 let parent_slots = visit(&parent_key, traits, visiting, resolved)?;
                 if slots.is_empty() {
                     slots = parent_slots;
@@ -1505,7 +1509,7 @@ impl Checker {
                             "Trait {} exposes {} constructor slot(s), but parent {} exposes {}",
                             info.id.name,
                             slots.len(),
-                            parent.name,
+                            parent.trait_id.name,
                             parent_slots.len()
                         ),
                         span: info.id.span.clone(),
@@ -1835,18 +1839,6 @@ impl Checker {
         self.trait_obligation_satisfied_with_args(trait_name, trait_args, ty, &mut HashSet::new())
     }
 
-    /// Prove a trait obligation without changing the caller's bound
-    /// environment.  A candidate is applicable only after every obligation
-    /// in its own `where` clause has been proved as well.
-    fn trait_obligation_satisfied(
-        &mut self,
-        trait_name: &str,
-        ty: &Ty,
-        visiting: &mut HashSet<ObligationKey>,
-    ) -> bool {
-        self.trait_obligation_satisfied_with_args(trait_name, &[], ty, visiting)
-    }
-
     /// Solver identity is the resolved trait base plus its argument vector;
     /// formatted instance names are diagnostics only.
     fn trait_obligation_satisfied_with_args(
@@ -1956,7 +1948,7 @@ impl Checker {
         }
         let entails = self.traits.get(bound).is_some_and(|trait_info| {
             trait_info.parents.iter().any(|parent| {
-                self.trait_bound_entails(&self.trait_key(parent), requested, visiting)
+                self.trait_bound_entails(&self.trait_key(&parent.trait_id), requested, visiting)
             })
         });
         visiting.remove(bound);
@@ -2484,16 +2476,17 @@ impl Checker {
             let mut direct_parents = HashSet::new();
             for parent in &parents {
                 let key = parent
+                    .trait_id
                     .qualified_name
                     .as_deref()
-                    .unwrap_or(parent.name.as_str());
+                    .unwrap_or(parent.trait_id.name.as_str());
                 if !direct_parents.insert(key.to_string()) {
                     return Err(TypeError {
                         message: format!(
                             "Trait {} declares parent {} more than once",
-                            id.name, parent.name
+                            id.name, parent.trait_id.name
                         ),
-                        span: parent.span.clone(),
+                        span: parent.trait_id.span.clone(),
                         hint: None,
                     });
                 }
@@ -3103,38 +3096,40 @@ impl Checker {
             return Ok(());
         };
         for parent in &child_trait.parents {
-            let parent_key = self.trait_key(parent);
+            let parent_key = self.trait_key(&parent.trait_id);
             let parent_trait = self.traits.get(&parent_key).ok_or_else(|| TypeError {
-                message: format!("Unknown parent trait: {}", parent.name),
-                span: parent.span.clone(),
+                message: format!("Unknown parent trait: {}", parent.trait_id.name),
+                span: parent.trait_id.span.clone(),
                 hint: None,
             })?;
-            if !parent_trait.type_params.is_empty() {
+            if parent_trait.type_params.len() != parent.args.len() {
                 return Err(TypeError {
                     message: format!(
-                        "Parent trait {} requires type arguments and cannot be used as a bare parent constraint",
-                        parent.name
+                        "Parent trait {} expects {} type argument(s), got {}",
+                        parent.trait_id.name,
+                        parent_trait.type_params.len(),
+                        parent.args.len()
                     ),
-                    span: parent.span.clone(),
+                    span: parent.trait_id.span.clone(),
                     hint: None,
                 });
             }
+            let parent_args = self.instantiate_child_parent_args(&child_trait, child_impl, parent)?;
             let parent_candidates = self
                 .trait_impls
                 .values()
                 .filter(|impl_info| {
                     self.trait_key(&impl_info.trait_id) == parent_key
-                        && impl_info.trait_arg_tys.is_empty()
                 })
                 .cloned()
                 .collect::<Vec<_>>();
             let parent_impl = parent_candidates
                 .into_iter()
-                .find(|impl_info| self.parent_impl_covers_child(impl_info, child_impl))
+                .find(|impl_info| self.parent_impl_covers_child(impl_info, &parent_args, child_impl))
                 .ok_or_else(|| TypeError {
                     message: format!(
                         "Trait impl {} for {} requires parent impl {} for the same target",
-                        child_impl.trait_id.name, child_impl.target_name, parent.name
+                        child_impl.trait_id.name, child_impl.target_name, parent.trait_id.name
                     ),
                     span: child_impl.trait_id.span.clone(),
                     hint: None,
@@ -3143,7 +3138,7 @@ impl Checker {
                 return Err(TypeError {
                     message: format!(
                         "Trait impl {} for {} must use the same constructor slot mapping as parent {}",
-                        child_impl.trait_id.name, child_impl.target_name, parent.name
+                        child_impl.trait_id.name, child_impl.target_name, parent.trait_id.name
                     ),
                     span: child_impl.trait_id.span.clone(),
                     hint: None,
@@ -3162,12 +3157,16 @@ impl Checker {
     fn parent_impl_covers_child(
         &mut self,
         parent_impl: &TraitImplInfo,
+        requested_parent_args: &[Ty],
         child_impl: &TraitImplInfo,
     ) -> bool {
         let before_substitutions = self.substitutions.clone();
         let before_rigid = self.rigid_tyvars.clone();
         let mut child_vars = Vec::new();
         Self::collect_ty_vars(&child_impl.target_ty, &mut child_vars);
+        for arg in &child_impl.trait_arg_tys {
+            Self::collect_ty_vars(arg, &mut child_vars);
+        }
         self.rigid_tyvars.extend(child_vars);
         // Coverage is quantified over the child impl's instances. Its where
         // clause is therefore an assumption available while proving the
@@ -3175,13 +3174,51 @@ impl Checker {
         // declaration environment.
         let mut fresh = HashMap::new();
         let parent_target = self.instantiate_ty_with_fresh(&parent_impl.target_ty, &mut fresh);
-        let head_covers = self.types_compatible(&parent_target, &child_impl.target_ty);
+        let parent_args = parent_impl
+            .trait_arg_tys
+            .iter()
+            .map(|arg| self.instantiate_ty_with_fresh(arg, &mut fresh))
+            .collect::<Vec<_>>();
+        let head_covers = parent_args.len() == requested_parent_args.len()
+            && parent_args
+                .iter()
+                .zip(requested_parent_args)
+                .all(|(candidate, requested)| self.types_compatible(candidate, requested))
+            && self.types_compatible(&parent_target, &child_impl.target_ty);
         let obligations_hold =
             head_covers && self.parent_where_is_entailed_by_child(parent_impl, child_impl, &fresh);
 
         self.substitutions = before_substitutions;
         self.rigid_tyvars = before_rigid;
         obligations_hold
+    }
+
+    fn instantiate_child_parent_args(
+        &mut self,
+        child_trait: &TraitInfo,
+        child_impl: &TraitImplInfo,
+        parent: &TraitParent,
+    ) -> Result<Vec<Ty>, TypeError> {
+        let mut tyvars = child_trait
+            .type_params
+            .iter()
+            .zip(child_impl.trait_arg_tys.iter())
+            .map(|(param, ty)| (param.name.clone(), ty.clone()))
+            .collect::<HashMap<_, _>>();
+        parent
+            .args
+            .iter()
+            .map(|arg| {
+                self.resolve_signature_like_ast_ty_in_context(
+                    arg,
+                    TypeSyntaxContext::General,
+                    &mut tyvars,
+                    SignatureTyMode::Trait {
+                        self_ty: &child_impl.target_ty,
+                    },
+                )
+            })
+            .collect()
     }
 
     /// Prove a parent's `where` requirements from the child's declared
@@ -3216,13 +3253,19 @@ impl Checker {
             };
 
             constraint.bounds.iter().all(|bound| {
-                let TypedWhereConstraintRhs::Trait { trait_id, .. } = bound else {
+                let TypedWhereConstraintRhs::Trait { trait_id, args } = bound else {
                     return true;
                 };
                 let required = self.trait_key(trait_id);
-                self.child_where_entails(child_impl, &parent_subject, &required)
-                    || self.trait_obligation_satisfied(
+                let Ok(required_args) =
+                    self.instantiate_impl_where_trait_args(parent_impl, fresh, args)
+                else {
+                    return false;
+                };
+                self.child_where_entails(child_impl, &parent_subject, &required, &required_args)
+                    || self.trait_obligation_satisfied_with_args(
                         &required,
+                        &required_args,
                         &parent_subject,
                         &mut HashSet::new(),
                     )
@@ -3235,6 +3278,7 @@ impl Checker {
         child_impl: &TraitImplInfo,
         subject: &Ty,
         required: &str,
+        required_args: &[Ty],
     ) -> bool {
         let Some(child_where) = &child_impl.where_clause else {
             return false;
@@ -3250,11 +3294,27 @@ impl Checker {
             };
             self.resolve_ty(&child_subject) == self.resolve_ty(subject)
                 && constraint.bounds.iter().any(|bound| match bound {
-                    TypedWhereConstraintRhs::Trait { trait_id, .. } => self.trait_bound_entails(
-                        &self.trait_key(trait_id),
-                        required,
-                        &mut HashSet::new(),
-                    ),
+                    TypedWhereConstraintRhs::Trait { trait_id, args } => {
+                        let child_args = self.instantiate_impl_where_trait_args(
+                            child_impl,
+                            &child_impl
+                                .type_param_vars
+                                .iter()
+                                .map(|var| (*var, Ty::Var(*var)))
+                                .collect(),
+                            args,
+                        );
+                        self.trait_key(trait_id) == required
+                            && child_args.is_ok_and(|child_args| {
+                                child_args.len() == required_args.len()
+                                    && child_args.iter().zip(required_args).all(
+                                        |(child, required)| {
+                                            self.canonical_ty_key(child)
+                                                == self.canonical_ty_key(required)
+                                        },
+                                    )
+                            })
+                    }
                     _ => false,
                 })
         })
