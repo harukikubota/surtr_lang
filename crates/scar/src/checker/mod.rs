@@ -465,6 +465,15 @@ struct TraitImplInfo {
     methods: HashMap<String, TraitImplMethodInfo>,
 }
 
+/// A trait requirement kept in inference state.  Keep the trait identity and
+/// its type arguments separate so parameterized bounds are not collapsed into
+/// a display string while an inference variable remains unresolved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct PendingTraitObligation {
+    trait_id: String,
+    args: Vec<Ty>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignatureAliasInfo {
     params: Vec<ResolvedTypeParam>,
@@ -2128,7 +2137,7 @@ struct Checker {
     /// Obligations discovered while an inference variable is still unbound.
     /// These are deliberately separate from signature bounds: solving an
     /// expression must never strengthen a declaration-owned generic.
-    pending_trait_obligations: HashMap<u32, Vec<String>>,
+    pending_trait_obligations: HashMap<u32, Vec<PendingTraitObligation>>,
     /// Static constructor-trait capabilities attached to abstract bindings.
     /// These are intentionally binding-local: constructor roots may share a
     /// witness while different bindings expose different trait capabilities.

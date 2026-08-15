@@ -1770,7 +1770,11 @@ impl Checker {
                     }
                     if !pending_obligations
                         .iter()
-                        .all(|obligation| self.trait_impl_exists(obligation, &ty))
+                        .all(|obligation| {
+                            let trait_key = self
+                                .trait_instance_key_from_tys(&obligation.trait_id, &obligation.args);
+                            self.trait_impl_exists(&trait_key, &ty)
+                        })
                     {
                         self.profiler.finish(ProfileEvent::BindTyVar, profile);
                         return false;

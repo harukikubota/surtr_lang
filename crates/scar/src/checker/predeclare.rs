@@ -1777,8 +1777,12 @@ impl Checker {
             // must not manufacture a new bound; a later binding will run the
             // same solver against its concrete type.
             let pending = self.pending_trait_obligations.entry(var).or_default();
-            if !pending.iter().any(|obligation| obligation == trait_name) {
-                pending.push(trait_name.to_string());
+            let obligation = PendingTraitObligation {
+                trait_id: trait_name.to_string(),
+                args: Vec::new(),
+            };
+            if !pending.contains(&obligation) {
+                pending.push(obligation);
             }
             return true;
         }

@@ -4164,8 +4164,12 @@ impl Checker {
             }
             if !self.rigid_tyvars.contains(&var) {
                 let obligations = self.pending_trait_obligations.entry(var).or_default();
-                if !obligations.contains(&trait_call_name) {
-                    obligations.push(trait_call_name.clone());
+                let obligation = PendingTraitObligation {
+                    trait_id: trait_name.to_string(),
+                    args: trait_arg_tys.clone(),
+                };
+                if !obligations.contains(&obligation) {
+                    obligations.push(obligation);
                 }
             }
         }
