@@ -1955,7 +1955,7 @@ impl Resolver {
                     continue;
                 }
                 for bound in &constraint.bounds {
-                    let spire::ast::WhereConstraintRhs::Trait(_, parent_name) = bound else {
+                    let spire::ast::WhereConstraintRhs::Trait(_, parent_name, _) = bound else {
                         continue;
                     };
                     if let Some(parent_uid) = self.scope.lookup(parent_name) {
@@ -3642,17 +3642,23 @@ impl Resolver {
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        spire::ast::WhereConstraintRhs::Trait(span, name) => {
+                        spire::ast::WhereConstraintRhs::Trait(span, name, args) => {
                             let (unique_id, qualified_name) =
                                 self.resolve_trait_reference(&name, &span)?;
-                            Ok(ResolvedWhereConstraintRhs::Trait(ResolvedId {
-                                name,
-                                qualified_name: Some(qualified_name),
-                                unique_id,
-                                compiler_generated: false,
-                                symbol_info: None,
-                                span,
-                            }))
+                            Ok(ResolvedWhereConstraintRhs::Trait {
+                                trait_id: ResolvedId {
+                                    name,
+                                    qualified_name: Some(qualified_name),
+                                    unique_id,
+                                    compiler_generated: false,
+                                    symbol_info: None,
+                                    span,
+                                },
+                                args: args
+                                    .into_iter()
+                                    .map(|arg| self.resolve_type_annotation(arg))
+                                    .collect::<Result<Vec<_>, ResolveError>>()?,
+                            })
                         }
                         spire::ast::WhereConstraintRhs::TypeConstructor(span, slots) => {
                             Ok(ResolvedWhereConstraintRhs::TypeConstructor {

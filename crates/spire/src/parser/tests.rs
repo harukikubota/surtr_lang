@@ -1533,7 +1533,7 @@ where
     assert!(matches!(&constraint.subject, AstTy::Named(_, name) if name == "$A"));
     assert!(matches!(
         constraint.bounds.as_slice(),
-        [WhereConstraintRhs::Trait(_, eq), WhereConstraintRhs::Trait(_, concat)]
+        [WhereConstraintRhs::Trait(_, eq, _), WhereConstraintRhs::Trait(_, concat, _)]
             if eq.ends_with("Eq") && concat.ends_with("Concat")
     ));
 }
@@ -5250,7 +5250,7 @@ namespace Auth {
     assert!(matches!(
         clause.constraints[0].bounds.as_slice(),
         [
-            WhereConstraintRhs::Trait(_, trait_name),
+            WhereConstraintRhs::Trait(_, trait_name, _),
             WhereConstraintRhs::TraitSlot(_, owner, slot)
         ] if trait_name == "Equal" && owner == "Functor" && slot == "$A"
     ));

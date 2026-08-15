@@ -431,7 +431,10 @@ pub struct ResolvedWhereConstraint {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResolvedWhereConstraintRhs {
-    Trait(ResolvedId),
+    Trait {
+        trait_id: ResolvedId,
+        args: Vec<AstTy>,
+    },
     TypeConstructor {
         span: Span,
         slots: Vec<AstTy>,

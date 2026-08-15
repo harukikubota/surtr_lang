@@ -349,7 +349,7 @@ fn format_where_clause(where_clause: Option<&WhereClause>) -> String {
                 .bounds
                 .iter()
                 .map(|bound| match bound {
-                    WhereConstraintRhs::Trait(_, name) => name.clone(),
+                    WhereConstraintRhs::Trait(_, name, _) => name.clone(),
                     WhereConstraintRhs::TypeConstructor(_, slots) => format!(
                         "Type<{}>",
                         slots

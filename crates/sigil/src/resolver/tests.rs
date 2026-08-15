@@ -1415,7 +1415,7 @@ where
                     .expect("trait method where clause");
                 assert!(matches!(
                     method_clause.constraints[0].bounds.as_slice(),
-                    [ResolvedWhereConstraintRhs::Trait(bound_id)]
+                    [ResolvedWhereConstraintRhs::Trait { trait_id: bound_id, .. }]
                         if bound_id.unique_id == equal_id.unique_id
                 ));
                 Some(id.clone())
@@ -1435,7 +1435,7 @@ where
         .expect("function where clause");
     assert!(matches!(
         function_clause.constraints[0].bounds.as_slice(),
-        [ResolvedWhereConstraintRhs::Trait(bound_id)]
+        [ResolvedWhereConstraintRhs::Trait { trait_id: bound_id, .. }]
             if bound_id.unique_id == equal_id.unique_id
     ));
 
@@ -1473,7 +1473,7 @@ where
         .expect("trait impl method where clause");
     assert!(matches!(
         impl_method_clause.constraints[0].bounds.as_slice(),
-        [ResolvedWhereConstraintRhs::Trait(bound_id)]
+        [ResolvedWhereConstraintRhs::Trait { trait_id: bound_id, .. }]
             if bound_id.unique_id == equal_id.unique_id
     ));
 }

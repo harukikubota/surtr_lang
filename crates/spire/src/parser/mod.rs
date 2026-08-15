@@ -664,8 +664,14 @@ fn qualify_namespace_where_clause(
                         .bounds
                         .into_iter()
                         .map(|bound| match bound {
-                            WhereConstraintRhs::Trait(span, name) => {
-                                Ok(WhereConstraintRhs::Trait(span, name))
+                            WhereConstraintRhs::Trait(span, name, args) => {
+                                Ok(WhereConstraintRhs::Trait(
+                                    span,
+                                    name,
+                                    args.into_iter()
+                                        .map(|arg| qualify_namespace_type(arg, namespace))
+                                        .collect::<Result<Vec<_>, ParseError>>()?,
+                                ))
                             }
                             WhereConstraintRhs::TypeConstructor(span, slots) => {
                                 Ok(WhereConstraintRhs::TypeConstructor(
@@ -1309,9 +1315,12 @@ fn rewrite_process_owner_where_clause(
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        WhereConstraintRhs::Trait(span, name) => WhereConstraintRhs::Trait(
+                        WhereConstraintRhs::Trait(span, name, args) => WhereConstraintRhs::Trait(
                             span,
                             rewrite_process_owner_symbol(name, old_name, new_name),
+                            args.into_iter()
+                                .map(|arg| rewrite_process_owner_ty(arg, old_name, new_name))
+                                .collect(),
                         ),
                         WhereConstraintRhs::TypeConstructor(span, slots) => {
                             WhereConstraintRhs::TypeConstructor(
@@ -1530,9 +1539,13 @@ fn shift_where_clause(clause: WhereClause, delta: usize) -> WhereClause {
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        WhereConstraintRhs::Trait(span, name) => {
-                            WhereConstraintRhs::Trait(shift_span(span, delta), name)
-                        }
+                        WhereConstraintRhs::Trait(span, name, args) => WhereConstraintRhs::Trait(
+                            shift_span(span, delta),
+                            name,
+                            args.into_iter()
+                                .map(|arg| shift_ast_ty(arg, delta))
+                                .collect(),
+                        ),
                         WhereConstraintRhs::TypeConstructor(span, slots) => {
                             WhereConstraintRhs::TypeConstructor(
                                 shift_span(span, delta),

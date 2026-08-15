@@ -921,8 +921,8 @@ fn rewrite_self_where_clause(
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        spire::ast::WhereConstraintRhs::Trait(span, name) => {
-                            spire::ast::WhereConstraintRhs::Trait(span, name)
+                        spire::ast::WhereConstraintRhs::Trait(span, name, args) => {
+                            spire::ast::WhereConstraintRhs::Trait(span, name, args)
                         }
                         spire::ast::WhereConstraintRhs::TypeConstructor(span, slots) => {
                             spire::ast::WhereConstraintRhs::TypeConstructor(

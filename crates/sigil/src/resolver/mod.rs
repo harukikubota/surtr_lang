@@ -171,7 +171,7 @@ fn collect_staged_trait_constructor_slots(
                                     .collect(),
                             );
                         }
-                        spire::ast::WhereConstraintRhs::Trait(_, parent_name) => {
+                        spire::ast::WhereConstraintRhs::Trait(_, parent_name, _) => {
                             if let Some(parent_uid) = lookup_uid(parent_name, &module.module_path) {
                                 parents.push((uid, parent_uid));
                             }
@@ -590,7 +590,9 @@ fn rebase_where_clause(clause: &mut ResolvedWhereClause, base: u32, offset: u32)
     for constraint in &mut clause.constraints {
         for bound in &mut constraint.bounds {
             match bound {
-                ResolvedWhereConstraintRhs::Trait(id) => rebase_resolved_id(id, base, offset),
+                ResolvedWhereConstraintRhs::Trait { trait_id, .. } => {
+                    rebase_resolved_id(trait_id, base, offset)
+                }
                 ResolvedWhereConstraintRhs::TraitSlot { trait_id, .. } => {
                     rebase_resolved_id(trait_id, base, offset)
                 }

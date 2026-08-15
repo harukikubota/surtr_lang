@@ -2,7 +2,7 @@ use super::*;
 use sindr::names::{builtin_type_name, builtin_type_usage_policy, TypeName};
 
 #[derive(Clone, Copy)]
-enum SignatureTyMode<'a> {
+pub(super) enum SignatureTyMode<'a> {
     Normal,
     Trait { self_ty: &'a Ty },
     Builtin,
@@ -119,7 +119,9 @@ impl Checker {
             return Err(TypeError {
                 message: format!(
                     "Type alias {} requires {} type argument(s), got {}",
-                    Self::surface_name(name), alias.params.len(), args.len()
+                    Self::surface_name(name),
+                    alias.params.len(),
+                    args.len()
                 ),
                 span: span.clone(),
                 hint: None,
@@ -506,9 +508,12 @@ impl Checker {
     }
 
     pub(super) fn tyvar_has_bound(&self, var: u32, trait_name: &str) -> bool {
-        self.tyvar_bounds
-            .get(&var)
-            .is_some_and(|bounds| bounds.iter().any(|bound| bound == trait_name))
+        self.tyvar_bounds.get(&var).is_some_and(|bounds| {
+            bounds.iter().any(|bound| {
+                bound == trait_name
+                    || self.trait_display_name(bound) == self.trait_display_name(trait_name)
+            })
+        })
     }
 
     pub(super) fn lit_type(&self, lit: &Lit) -> Ty {
@@ -1022,7 +1027,7 @@ impl Checker {
         }
     }
 
-    fn resolve_signature_like_ast_ty_in_context(
+    pub(super) fn resolve_signature_like_ast_ty_in_context(
         &mut self,
         ast_ty: &AstTy,
         context: TypeSyntaxContext,
@@ -1031,7 +1036,9 @@ impl Checker {
     ) -> Result<Ty, TypeError> {
         match ast_ty {
             AstTy::Named(span, name) => {
-                if let Some(alias) = self.resolve_signature_alias(span, name, &[], context, tyvars, mode)? {
+                if let Some(alias) =
+                    self.resolve_signature_alias(span, name, &[], context, tyvars, mode)?
+                {
                     return Ok(alias);
                 }
                 if let Some((trait_key, _trait_info)) = self.traits.iter().find(|(key, info)| {
@@ -1039,7 +1046,10 @@ impl Checker {
                         && (Self::surface_name(key) == Self::surface_name(name)
                             || Self::surface_name(&info.id.name) == Self::surface_name(name))
                 }) {
-                    if !matches!(context, TypeSyntaxContext::General | TypeSyntaxContext::BindingAnnotation) {
+                    if !matches!(
+                        context,
+                        TypeSyntaxContext::General | TypeSyntaxContext::BindingAnnotation
+                    ) {
                         return Err(TypeError {
                             message: format!(
                                 "Bare constructor trait {} is only allowed for a value parameter or local binding",
@@ -1061,7 +1071,9 @@ impl Checker {
                 }
             }
             AstTy::Generic(span, name, args) => {
-                if let Some(alias) = self.resolve_signature_alias(span, name, args, context, tyvars, mode)? {
+                if let Some(alias) =
+                    self.resolve_signature_alias(span, name, args, context, tyvars, mode)?
+                {
                     return Ok(alias);
                 }
                 if let Some((trait_key, trait_info)) = self.traits.iter().find(|(key, info)| {
@@ -1073,7 +1085,9 @@ impl Checker {
                         return Err(TypeError {
                             message: format!(
                                 "Constructor trait {} requires {} slot argument(s), got {}",
-                                Self::surface_name(name), trait_info.constructor_slots.len(), args.len()
+                                Self::surface_name(name),
+                                trait_info.constructor_slots.len(),
+                                args.len()
                             ),
                             span: span.clone(),
                             hint: None,
@@ -1536,144 +1550,146 @@ impl Checker {
         let profile = self.profiler.start();
         let expected = self.resolve_ty(expected);
         let got = self.resolve_ty(got);
-        let result =
-            match (&expected, &got) {
-                (Ty::Hole, Ty::Hole) => true,
-                (Ty::Var(left), Ty::Var(right)) => match (
-                    self.rigid_tyvars.contains(left),
-                    self.rigid_tyvars.contains(right),
-                ) {
-                    (true, true) => left == right,
-                    (true, false) => self.bind_tyvar(*right, &Ty::Var(*left)),
-                    (false, true) => self.bind_tyvar(*left, &Ty::Var(*right)),
-                    (false, false) => self.bind_tyvar(*left, &Ty::Var(*right)),
-                },
-                (Ty::Var(var), _) if self.rigid_tyvars.contains(var) => false,
-                (_, Ty::Var(var)) if self.rigid_tyvars.contains(var) => false,
-                (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
-                (Ty::Int, Ty::Int)
-                | (Ty::Float, Ty::Float)
-                | (Ty::Str, Ty::Str)
-                | (Ty::Bool, Ty::Bool)
-                | (Ty::Unit, Ty::Unit)
-                | (Ty::Error, Ty::Error) => true,
-                (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
-                (Ty::Lazy(a), Ty::Lazy(b)) => self.types_compatible(a, b),
-                (Ty::Pid(a), Ty::Pid(b)) => {
-                    Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
-                        || a.starts_with('$')
-                        || b.starts_with('$')
-                }
-                (Ty::Pid(expected_process), Ty::Enum(name, args))
-                    if name == "WorkerLease" && args.len() == 1 =>
-                {
-                    match args.first() {
-                        Some(Ty::Pid(actual_process)) => {
-                            Self::canonical_user_type_name(expected_process)
-                                == Self::canonical_user_type_name(actual_process)
-                                || expected_process.starts_with('$')
-                                || actual_process.starts_with('$')
-                        }
-                        _ => false,
+        let result = match (&expected, &got) {
+            (Ty::Hole, Ty::Hole) => true,
+            (Ty::Var(left), Ty::Var(right)) => match (
+                self.rigid_tyvars.contains(left),
+                self.rigid_tyvars.contains(right),
+            ) {
+                (true, true) => left == right,
+                (true, false) => self.bind_tyvar(*right, &Ty::Var(*left)),
+                (false, true) => self.bind_tyvar(*left, &Ty::Var(*right)),
+                (false, false) => self.bind_tyvar(*left, &Ty::Var(*right)),
+            },
+            (Ty::Var(var), _) if self.rigid_tyvars.contains(var) => false,
+            (_, Ty::Var(var)) if self.rigid_tyvars.contains(var) => false,
+            (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
+            (Ty::Int, Ty::Int)
+            | (Ty::Float, Ty::Float)
+            | (Ty::Str, Ty::Str)
+            | (Ty::Bool, Ty::Bool)
+            | (Ty::Unit, Ty::Unit)
+            | (Ty::Error, Ty::Error) => true,
+            (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
+            (Ty::Lazy(a), Ty::Lazy(b)) => self.types_compatible(a, b),
+            (Ty::Pid(a), Ty::Pid(b)) => {
+                Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
+                    || a.starts_with('$')
+                    || b.starts_with('$')
+            }
+            (Ty::Pid(expected_process), Ty::Enum(name, args))
+                if name == "WorkerLease" && args.len() == 1 =>
+            {
+                match args.first() {
+                    Some(Ty::Pid(actual_process)) => {
+                        Self::canonical_user_type_name(expected_process)
+                            == Self::canonical_user_type_name(actual_process)
+                            || expected_process.starts_with('$')
+                            || actual_process.starts_with('$')
                     }
+                    _ => false,
                 }
-                (
-                    Ty::Facet(kind_a, src_a, focus_a, update_src_a, update_focus_a),
-                    Ty::Facet(kind_b, src_b, focus_b, update_src_b, update_focus_b),
-                ) => {
-                    kind_a.accepts(*kind_b)
-                        && self.types_compatible(src_a, src_b)
-                        && self.types_compatible(focus_a, focus_b)
-                        && self.types_compatible(update_src_a, update_src_b)
-                        && self.types_compatible(update_focus_a, update_focus_b)
-                }
-                (Ty::Tuple(a), Ty::Tuple(b)) => {
-                    a.len() == b.len()
-                        && a.iter()
-                            .zip(b.iter())
-                            .all(|(left, right)| self.types_compatible(left, right))
-                }
-                (Ty::SelfApp(a), Ty::SelfApp(b))
-                    if Self::constructor_application_parts(a).is_some()
-                        && Self::constructor_application_parts(b).is_some() =>
-                {
-                    let (left_witness, left_slots) =
-                        Self::constructor_application_parts(a).expect("checked above");
-                    let (right_witness, right_slots) =
-                        Self::constructor_application_parts(b).expect("checked above");
-                    left_slots.len() == right_slots.len()
-                        && self.types_compatible(left_witness, right_witness)
-                        && left_slots.iter().zip(right_slots.iter()).all(|(left, right)| {
-                            self.types_compatible(left, right)
+            }
+            (
+                Ty::Facet(kind_a, src_a, focus_a, update_src_a, update_focus_a),
+                Ty::Facet(kind_b, src_b, focus_b, update_src_b, update_focus_b),
+            ) => {
+                kind_a.accepts(*kind_b)
+                    && self.types_compatible(src_a, src_b)
+                    && self.types_compatible(focus_a, focus_b)
+                    && self.types_compatible(update_src_a, update_src_b)
+                    && self.types_compatible(update_focus_a, update_focus_b)
+            }
+            (Ty::Tuple(a), Ty::Tuple(b)) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|(left, right)| self.types_compatible(left, right))
+            }
+            (Ty::SelfApp(a), Ty::SelfApp(b))
+                if Self::constructor_application_parts(a).is_some()
+                    && Self::constructor_application_parts(b).is_some() =>
+            {
+                let (left_witness, left_slots) =
+                    Self::constructor_application_parts(a).expect("checked above");
+                let (right_witness, right_slots) =
+                    Self::constructor_application_parts(b).expect("checked above");
+                left_slots.len() == right_slots.len()
+                    && self.types_compatible(left_witness, right_witness)
+                    && left_slots
+                        .iter()
+                        .zip(right_slots.iter())
+                        .all(|(left, right)| self.types_compatible(left, right))
+            }
+            (Ty::SelfApp(a), other) if Self::constructor_application_parts(a).is_some() => {
+                let (witness, expected_slots) =
+                    Self::constructor_application_parts(a).expect("checked above");
+                if !self.types_compatible(witness, other) {
+                    false
+                } else {
+                    expected_slots.is_empty()
+                        || Self::constructor_application_slots(other).is_some_and(|actual_slots| {
+                            actual_slots.len() == expected_slots.len()
+                                && expected_slots.iter().zip(actual_slots.iter()).all(
+                                    |(expected, actual)| self.types_compatible(expected, actual),
+                                )
                         })
                 }
-                (Ty::SelfApp(a), other) if Self::constructor_application_parts(a).is_some() => {
-                    let (witness, expected_slots) =
-                        Self::constructor_application_parts(a).expect("checked above");
-                    if !self.types_compatible(witness, other) {
-                        false
-                    } else {
-                        expected_slots.is_empty()
-                            || Self::constructor_application_slots(other).is_some_and(|actual_slots| {
-                                actual_slots.len() == expected_slots.len()
-                                    && expected_slots.iter().zip(actual_slots.iter()).all(
-                                        |(expected, actual)| self.types_compatible(expected, actual),
-                                    )
-                            })
-                    }
-                }
-                (other, Ty::SelfApp(b)) if Self::constructor_application_parts(b).is_some() => {
-                    self.types_compatible(&Ty::SelfApp(b.clone()), other)
-                }
-                (Ty::SelfApp(a), Ty::SelfApp(b)) => {
-                    a.len() == b.len()
-                        && a.iter()
-                            .zip(b.iter())
-                            .all(|(left, right)| self.types_compatible(left, right))
-                }
-                (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
-                    a_params.len() == b_params.len()
-                        && a_params
-                            .iter()
-                            .zip(b_params.iter())
-                            .all(|(a, b)| self.types_compatible(a, b))
-                        && self.types_compatible(a_ret, b_ret)
-                }
-                (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
-                    self.types_compatible(ok1, ok2) && self.types_compatible(err1, err2)
-                }
-                (Ty::Struct(n1, fields1), Ty::Struct(n2, fields2)) => {
-                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                        && (fields1.is_empty()
-                            || fields2.is_empty()
-                            || (fields1.len() == fields2.len()
-                                && fields1.iter().zip(fields2).all(
-                                    |((name1, ty1), (name2, ty2))| {
-                                        name1 == name2 && self.types_compatible(ty1, ty2)
-                                    },
-                                )))
-                }
-                (Ty::Record(n1, fields1), Ty::Record(n2, fields2)) => {
-                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                        && (fields1.is_empty()
-                            || fields2.is_empty()
-                            || (fields1.len() == fields2.len()
-                                && fields1.iter().zip(fields2).all(
-                                    |((name1, ty1), (name2, ty2))| {
-                                        name1 == name2 && self.types_compatible(ty1, ty2)
-                                    },
-                                )))
-                }
-                (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
-                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                        && args1.len() == args2.len()
-                        && args1
-                            .iter()
-                            .zip(args2.iter())
-                            .all(|(left, right)| self.types_compatible(left, right))
-                }
-                _ => false,
-            };
+            }
+            (other, Ty::SelfApp(b)) if Self::constructor_application_parts(b).is_some() => {
+                self.types_compatible(&Ty::SelfApp(b.clone()), other)
+            }
+            (Ty::SelfApp(a), Ty::SelfApp(b)) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|(left, right)| self.types_compatible(left, right))
+            }
+            (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
+                a_params.len() == b_params.len()
+                    && a_params
+                        .iter()
+                        .zip(b_params.iter())
+                        .all(|(a, b)| self.types_compatible(a, b))
+                    && self.types_compatible(a_ret, b_ret)
+            }
+            (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
+                self.types_compatible(ok1, ok2) && self.types_compatible(err1, err2)
+            }
+            (Ty::Struct(n1, fields1), Ty::Struct(n2, fields2)) => {
+                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                    && (fields1.is_empty()
+                        || fields2.is_empty()
+                        || (fields1.len() == fields2.len()
+                            && fields1
+                                .iter()
+                                .zip(fields2)
+                                .all(|((name1, ty1), (name2, ty2))| {
+                                    name1 == name2 && self.types_compatible(ty1, ty2)
+                                })))
+            }
+            (Ty::Record(n1, fields1), Ty::Record(n2, fields2)) => {
+                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                    && (fields1.is_empty()
+                        || fields2.is_empty()
+                        || (fields1.len() == fields2.len()
+                            && fields1
+                                .iter()
+                                .zip(fields2)
+                                .all(|((name1, ty1), (name2, ty2))| {
+                                    name1 == name2 && self.types_compatible(ty1, ty2)
+                                })))
+            }
+            (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
+                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                    && args1.len() == args2.len()
+                    && args1
+                        .iter()
+                        .zip(args2.iter())
+                        .all(|(left, right)| self.types_compatible(left, right))
+            }
+            _ => false,
+        };
         self.profiler.finish(ProfileEvent::TypesCompatible, profile);
         result
     }
@@ -1840,7 +1856,10 @@ impl Checker {
             ),
             Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.resolve_ty(item)).collect()),
             Ty::SelfApp(items) => {
-                let resolved = items.iter().map(|item| self.resolve_ty(item)).collect::<Vec<_>>();
+                let resolved = items
+                    .iter()
+                    .map(|item| self.resolve_ty(item))
+                    .collect::<Vec<_>>();
                 if let Some((witness, slots)) = Self::constructor_application_parts(&resolved) {
                     if let Some(applied) = Self::apply_constructor_application(witness, slots) {
                         return self.resolve_ty(&applied);
@@ -2320,7 +2339,11 @@ impl Checker {
                     .join(", ")
             ),
             Ty::Result(ok, _) => format!("Result<{}>", self.ty_name(ok)),
-            Ty::Var(n) => format!("${}", n),
+            Ty::Var(n) => self
+                .local_annotation_tyvars
+                .iter()
+                .find_map(|(name, ty)| matches!(ty, Ty::Var(var) if var == n).then(|| name.clone()))
+                .unwrap_or_else(|| "the inferred argument type".into()),
             Ty::Struct(name, _) | Ty::Record(name, _) => Self::surface_name(name).to_string(),
             Ty::Enum(name, args) => {
                 if args.is_empty() {

@@ -96,7 +96,8 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
             metas.push(meta);
         }
         for meta in metas {
-            if meta.default_variant.is_some() && !matches!(meta.generator, DeriveGenerator::Default) {
+            if meta.default_variant.is_some() && !matches!(meta.generator, DeriveGenerator::Default)
+            {
                 return Err(ResolveError {
                     message: format!("DeriveVariantNotAllowed: {}", meta.trait_name.as_str()),
                     span: span.clone(),
@@ -432,6 +433,7 @@ fn make_derived_impl(
                     bounds: vec![WhereConstraintRhs::Trait(
                         span.clone(),
                         trait_name.as_str().into(),
+                        Vec::new(),
                     )],
                     span: span.clone(),
                 })
@@ -440,7 +442,10 @@ fn make_derived_impl(
         }),
     };
     let mut params = Vec::new();
-    if !matches!(generator, DeriveGenerator::InspectShow | DeriveGenerator::Default) {
+    if !matches!(
+        generator,
+        DeriveGenerator::InspectShow | DeriveGenerator::Default
+    ) {
         params.push(FunParam {
             name: "self".into(),
             ty: named(span, "Self"),

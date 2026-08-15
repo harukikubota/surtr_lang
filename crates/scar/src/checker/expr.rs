@@ -2817,7 +2817,7 @@ impl Checker {
         let receiver_ty = self.resolve_ty(receiver_ty);
         let result = match receiver_ty {
             Ty::Var(var) => {
-                if !self.rigid_tyvars.contains(&var) || trait_name.contains('<') {
+                if !self.rigid_tyvars.contains(&var) {
                     Some(TraitDispatch::Pending)
                 } else if self.tyvar_has_bound(var, trait_name)
                     || self.tyvar_satisfies_compiler_trait(var, trait_name)
@@ -2911,7 +2911,8 @@ impl Checker {
                 let Some(method) = impl_info.methods.get(method_name) else {
                     continue;
                 };
-                if !instance_matches && impl_info.trait_arg_tys.len() != requested_trait_args.len() {
+                if !instance_matches && impl_info.trait_arg_tys.len() != requested_trait_args.len()
+                {
                     continue;
                 }
                 let mut fresh = HashMap::new();
@@ -3007,9 +3008,9 @@ impl Checker {
         };
         for constraint in &where_clause.constraints {
             let concrete = match &constraint.subject {
-                AstTy::Named(_, subject) if subject == "Self" => self.resolve_ty(
-                    &self.substitute_ty_with_mapping(&impl_info.target_ty, fresh),
-                ),
+                AstTy::Named(_, subject) if subject == "Self" => {
+                    self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, fresh))
+                }
                 AstTy::Named(_, subject) => {
                     let Some(original_var) = impl_info.type_param_vars_by_name.get(subject) else {
                         return false;
@@ -3022,7 +3023,7 @@ impl Checker {
                 _ => return false,
             };
             for bound in &constraint.bounds {
-                let TypedWhereConstraintRhs::Trait(trait_id) = bound else {
+                let TypedWhereConstraintRhs::Trait { trait_id, .. } = bound else {
                     // Constructor and slot obligations are validated when the
                     // impl head is declared. They do not establish runtime
                     // dispatch applicability in V1.
@@ -3705,9 +3706,9 @@ impl Checker {
                     && method_name == "default"
                 {
                     match explicit_type_args {
-                        Some([arg]) => Some(
-                            self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?,
-                        ),
+                        Some([arg]) => {
+                            Some(self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?)
+                        }
                         Some(args) => {
                             return Err(TypeError {
                                 message: format!(
@@ -3725,8 +3726,10 @@ impl Checker {
                 } else {
                     None
                 };
-                let expected = explicit_target.as_ref().or(expected_ret_ty).ok_or_else(|| {
-                    TypeError {
+                let expected = explicit_target
+                    .as_ref()
+                    .or(expected_ret_ty)
+                    .ok_or_else(|| TypeError {
                         message: format!(
                             "{}::{} requires an expected return type",
                             trait_name, method_name
@@ -3736,8 +3739,7 @@ impl Checker {
                             "Add a type annotation so {}::{} can select a concrete implementation.",
                             trait_name, method_name
                         )),
-                    }
-                })?;
+                    })?;
                 let dispatch = self
                     .constructor_target_dispatch(trait_name, method_name, expected)
                     .ok_or_else(|| TypeError {
@@ -3864,8 +3866,11 @@ impl Checker {
                     if let Some((witness, slots)) = Self::constructor_application_parts(items) {
                         if slots.len() == trait_info.constructor_slots.len() {
                             let self_ty = self.env.fresh_tyvar();
-                            let (param_tys, ret_ty, _, _) =
-                                self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
+                            let (param_tys, ret_ty, _, _) = self.resolve_trait_method_signature(
+                                &trait_info,
+                                &method,
+                                &self_ty,
+                            )?;
                             let apply_witness = |ty: Ty| match ty {
                                 Ty::SelfApp(args)
                                     if Self::constructor_application_parts(&args).is_none() =>
@@ -3876,10 +3881,8 @@ impl Checker {
                                 }
                                 other => other,
                             };
-                            let param_tys = param_tys
-                                .into_iter()
-                                .map(apply_witness)
-                                .collect::<Vec<_>>();
+                            let param_tys =
+                                param_tys.into_iter().map(apply_witness).collect::<Vec<_>>();
                             let ret_ty = apply_witness(ret_ty);
                             if args.len() != param_tys.len() {
                                 return Err(TypeError {
@@ -4135,8 +4138,7 @@ impl Checker {
         let trait_call_summary = self.trait_implementation_summary(&trait_call_name);
         let receiver_ty = self.resolve_ty(&self_ty);
         if let Ty::Var(var) = receiver_ty {
-            if !trait_call_name.contains('<')
-                && self.rigid_tyvars.contains(&var)
+            if self.rigid_tyvars.contains(&var)
                 && !self.tyvar_has_bound(var, &trait_call_name)
                 && !self.tyvar_satisfies_compiler_trait(var, &trait_call_name)
             {
@@ -4146,14 +4148,18 @@ impl Checker {
                         self.ty_name(&receiver_ty),
                         trait_call_display_name
                     ),
-                    span: typed_args.first().map(|arg| arg.span.clone()).unwrap_or_else(|| span.clone()),
+                    span: typed_args
+                        .first()
+                        .map(|arg| arg.span.clone())
+                        .unwrap_or_else(|| span.clone()),
                     hint: Some(format!(
                         "Add `where {}: {}` to this declaration.",
-                        self.ty_name(&receiver_ty), trait_call_display_name
+                        self.ty_name(&receiver_ty),
+                        trait_call_display_name
                     )),
                 });
             }
-            if !trait_call_name.contains('<') && !self.rigid_tyvars.contains(&var) {
+            if !self.rigid_tyvars.contains(&var) {
                 let obligations = self.pending_trait_obligations.entry(var).or_default();
                 if !obligations.contains(&trait_call_name) {
                     obligations.push(trait_call_name.clone());
@@ -4194,13 +4200,15 @@ impl Checker {
                 &trait_arg_tys,
             )
             .ok_or_else(|| TypeError {
-                message: self.trait_obligation_cycle.clone().unwrap_or_else(|| format!(
-                    "{}::{} requires a receiver type implementing {}, got {}",
-                    trait_call_display_name,
-                    method_name,
-                    trait_call_display_name,
-                    self.ty_name(&receiver_ty)
-                )),
+                message: self.trait_obligation_cycle.clone().unwrap_or_else(|| {
+                    format!(
+                        "{}::{} requires a receiver type implementing {}, got {}",
+                        trait_call_display_name,
+                        method_name,
+                        trait_call_display_name,
+                        self.ty_name(&receiver_ty)
+                    )
+                }),
                 span: receiver_span,
                 hint: combine_hint_parts(&[
                     Some(trait_signature_hint(self)),
@@ -9834,13 +9842,13 @@ impl Checker {
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
-                let alternative_trait = self
-                    .trait_key_by_short_name("Alternative")
-                    .ok_or_else(|| TypeError {
-                        message: "Unknown trait: Alternative".into(),
-                        span: span.clone(),
-                        hint: None,
-                    })?;
+                let alternative_trait =
+                    self.trait_key_by_short_name("Alternative")
+                        .ok_or_else(|| TypeError {
+                            message: "Unknown trait: Alternative".into(),
+                            span: span.clone(),
+                            hint: None,
+                        })?;
                 let dispatch = self
                     .trait_dispatch_target(&alternative_trait, "choose", &receiver_ty)
                     .ok_or_else(|| TypeError {

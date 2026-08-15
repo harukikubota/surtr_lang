@@ -3548,7 +3548,10 @@ impl TryFrom<$T> for LocalBox<$T> {
     );
 
     let err = typecheck(resolved).expect_err("From and TryFrom patterns must be exclusive");
-    assert!(err.message.contains("cannot both be implemented"), "{err:?}");
+    assert!(
+        err.message.contains("cannot both be implemented"),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -3627,7 +3630,8 @@ result = Use::use(values)"#,
 
     let err = typecheck(resolved).expect_err("unsatisfied impl bound must reject dispatch");
     assert!(
-        err.message.contains("requires a receiver type implementing Use"),
+        err.message
+            .contains("requires a receiver type implementing Use"),
         "{err:?}"
     );
 }
@@ -3837,7 +3841,7 @@ marked: Boxed<Int> = Marker::mark(Boxed::Box(1))"#,
         })
         .expect("typed def should retain its where clause");
     let bounds = &where_clause.constraints[0].bounds;
-    assert!(matches!(bounds[0], TypedWhereConstraintRhs::Trait(_)));
+    assert!(matches!(bounds[0], TypedWhereConstraintRhs::Trait { .. }));
     assert!(matches!(
         bounds[1],
         TypedWhereConstraintRhs::TypeConstructor { .. }
@@ -4117,8 +4121,7 @@ def invalid(value: Applicative<$A>) -> Applicative<$A> {
     )
     .expect_err("an Applicative binding must not expose Monad operations");
     assert!(
-        err.message.contains("Monad::bind is not available")
-            && err.message.contains("Applicative"),
+        err.message.contains("Monad::bind is not available") && err.message.contains("Applicative"),
         "{err:?}"
     );
 
@@ -4252,7 +4255,7 @@ impl Keep for Int {
     )
     .expect_err("an impl body cannot specialize its method generic to String");
     assert!(
-        err.message.contains("expected $") && err.message.contains("got String"),
+        err.message.contains("expected $A") && err.message.contains("got String"),
         "{err:?}"
     );
 }
@@ -7960,6 +7963,39 @@ bad: Int = identity::<Int>(1)"#,
         err.message.contains("only allowed for trait helpers"),
         "{err:?}"
     );
+}
+
+#[test]
+fn parameterized_trait_bound_controls_rigid_generic_dispatch() {
+    let missing = resolve_with_builtin_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<Self, $To>(self: Self) -> $To
+}
+
+def hidden(value: $A) -> Int {
+  Convert::convert::<Int>(value)
+}"#,
+    );
+    let err = typecheck(missing).expect_err("missing parameterized bound must be rejected");
+    assert!(err.message.contains("MissingGenericBound"), "{err:?}");
+    assert!(
+        err.message.contains("$A must implement Convert<Int>"),
+        "{err:?}"
+    );
+
+    let bounded = resolve_with_builtin_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<Self, $To>(self: Self) -> $To
+}
+
+def hidden(value: $A) -> Int
+where
+  $A: Convert<Int>
+{
+  Convert::convert::<Int>(value)
+}"#,
+    );
+    typecheck(bounded).expect("matching parameterized bound must permit dispatch");
 }
 
 #[test]

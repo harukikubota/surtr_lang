@@ -1,3 +1,4 @@
+use super::types::SignatureTyMode;
 use super::*;
 use sindr::builtin::builtin_type_meta_by_name;
 use sindr::names::builtin_type_usage_policy;
@@ -94,8 +95,22 @@ impl Checker {
         &mut self,
         subject: &Ty,
         trait_id: &ResolvedId,
+        args: &[AstTy],
+        tyvars: &HashMap<String, Ty>,
     ) -> Result<(), TypeError> {
-        let trait_key = self.trait_key(trait_id);
+        let mut bound_tyvars = tyvars.clone();
+        let trait_args = args
+            .iter()
+            .map(|arg| {
+                self.resolve_signature_like_ast_ty_in_context(
+                    arg,
+                    TypeSyntaxContext::General,
+                    &mut bound_tyvars,
+                    SignatureTyMode::Normal,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let trait_key = self.trait_instance_key_from_tys(&self.trait_key(trait_id), &trait_args);
         match self.resolve_ty(subject) {
             Ty::Var(var) => {
                 self.register_tyvar_bound(var, &trait_key);
@@ -125,8 +140,8 @@ impl Checker {
                 &constraint.span,
             )?;
             for bound in &constraint.bounds {
-                if let ResolvedWhereConstraintRhs::Trait(trait_id) = bound {
-                    self.apply_where_trait_bound(&subject, trait_id)?;
+                if let ResolvedWhereConstraintRhs::Trait { trait_id, args } = bound {
+                    self.apply_where_trait_bound(&subject, trait_id, args, tyvars)?;
                 }
             }
         }
@@ -150,8 +165,8 @@ impl Checker {
                 &constraint.span,
             )?;
             for bound in &constraint.bounds {
-                if let TypedWhereConstraintRhs::Trait(trait_id) = bound {
-                    self.apply_where_trait_bound(&subject, trait_id)?;
+                if let TypedWhereConstraintRhs::Trait { trait_id, args } = bound {
+                    self.apply_where_trait_bound(&subject, trait_id, args, tyvars)?;
                 }
             }
         }
@@ -1376,7 +1391,7 @@ impl Checker {
             })
             .flat_map(|constraint| constraint.bounds.iter())
             .filter_map(|bound| match bound {
-                ResolvedWhereConstraintRhs::Trait(parent) => Some(parent.clone()),
+                ResolvedWhereConstraintRhs::Trait { trait_id, .. } => Some(trait_id.clone()),
                 _ => None,
             })
             .collect()
@@ -1781,25 +1796,31 @@ impl Checker {
             return false;
         }
         let result = (|| {
-            if !trait_name.contains('<') {
-                for impl_key in self.trait_impl_candidate_keys(trait_name) {
-                    let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
-                        continue;
-                    };
-                    if !impl_info.trait_arg_tys.is_empty() {
-                        continue;
-                    }
-                    let mut fresh = HashMap::new();
-                    let impl_target =
-                        self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-                    let before = self.substitutions.clone();
-                    let target_matches = self.types_compatible(&impl_target, &receiver_ty);
-                    let applicable = target_matches
-                        && self.impl_where_obligations_hold(&impl_info, &fresh, visiting);
-                    self.substitutions = before;
-                    if applicable {
-                        return true;
-                    }
+            for impl_key in self.trait_impl_candidate_keys(trait_name) {
+                let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                    continue;
+                };
+                let mut fresh = HashMap::new();
+                let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+                let impl_trait_args = impl_info
+                    .trait_arg_tys
+                    .iter()
+                    .map(|arg| self.instantiate_ty_with_fresh(arg, &mut fresh))
+                    .collect::<Vec<_>>();
+                let impl_trait = self.trait_instance_key_from_tys(
+                    &self.trait_key(&impl_info.trait_id),
+                    &impl_trait_args,
+                );
+                if self.trait_display_name(&impl_trait) != self.trait_display_name(trait_name) {
+                    continue;
+                }
+                let before = self.substitutions.clone();
+                let target_matches = self.types_compatible(&impl_target, &receiver_ty);
+                let applicable = target_matches
+                    && self.impl_where_obligations_hold(&impl_info, &fresh, visiting);
+                self.substitutions = before;
+                if applicable {
+                    return true;
                 }
             }
             self.compiler_trait_impl_exists(trait_name, &receiver_ty)
@@ -1870,7 +1891,7 @@ impl Checker {
                 _ => return false,
             };
             for bound in &constraint.bounds {
-                let TypedWhereConstraintRhs::Trait(trait_id) = bound else {
+                let TypedWhereConstraintRhs::Trait { trait_id, .. } = bound else {
                     continue;
                 };
                 let trait_key = self.trait_key(trait_id);
@@ -2681,8 +2702,7 @@ impl Checker {
                         &impl_method.fun_params,
                         &impl_method.type_params,
                     ),
-                )
-                {
+                ) {
                     return Err(TypeError {
                         message: format!(
                             "Trait impl method {}::{} has incompatible trait constraints",
@@ -2810,7 +2830,7 @@ impl Checker {
                         .bounds
                         .iter()
                         .map(|bound| match bound {
-                            TypedWhereConstraintRhs::Trait(id) => format!(
+                            TypedWhereConstraintRhs::Trait { trait_id: id, .. } => format!(
                                 "trait:{}",
                                 id.qualified_name.as_deref().unwrap_or(&id.name)
                             ),
@@ -2856,7 +2876,12 @@ impl Checker {
             .iter()
             .map(|param| param.name.clone())
             .collect::<Vec<_>>();
-        for ty in params.iter().map(|param| &param.ty).chain(std::iter::once(ret)).chain(fun_params) {
+        for ty in params
+            .iter()
+            .map(|param| &param.ty)
+            .chain(std::iter::once(ret))
+            .chain(fun_params)
+        {
             Self::collect_constraint_var_names(ty, &mut names);
         }
         names
@@ -3051,7 +3076,7 @@ impl Checker {
             };
 
             constraint.bounds.iter().all(|bound| {
-                let TypedWhereConstraintRhs::Trait(trait_id) = bound else {
+                let TypedWhereConstraintRhs::Trait { trait_id, .. } = bound else {
                     return true;
                 };
                 let required = self.trait_key(trait_id);
@@ -3085,7 +3110,7 @@ impl Checker {
             };
             self.resolve_ty(&child_subject) == self.resolve_ty(subject)
                 && constraint.bounds.iter().any(|bound| match bound {
-                    TypedWhereConstraintRhs::Trait(trait_id) => self.trait_bound_entails(
+                    TypedWhereConstraintRhs::Trait { trait_id, .. } => self.trait_bound_entails(
                         &self.trait_key(trait_id),
                         required,
                         &mut HashSet::new(),

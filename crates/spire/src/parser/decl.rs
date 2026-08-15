@@ -9,7 +9,7 @@ use super::Parser;
 
 fn where_constraint_rhs_span(rhs: &WhereConstraintRhs) -> &Span {
     match rhs {
-        WhereConstraintRhs::Trait(span, _)
+        WhereConstraintRhs::Trait(span, _, _)
         | WhereConstraintRhs::TypeConstructor(span, _)
         | WhereConstraintRhs::TraitSlot(span, _, _) => span,
     }
@@ -3397,12 +3397,28 @@ impl Parser<'_> {
             ));
         }
 
+        let mut trait_args = Vec::new();
+        let mut end = trait_span.end;
+        if matches!(self.peek(), Token::Lt) {
+            self.advance();
+            self.skip_newlines();
+            loop {
+                trait_args.push(self.parse_type_in_impl_context(self_context.clone())?);
+                self.skip_newlines();
+                if matches!(self.peek(), Token::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                    continue;
+                }
+                break;
+            }
+            end = self.expect_type_gt()?.end;
+        }
+
         Ok(WhereConstraintRhs::Trait(
-            Span {
-                start,
-                end: trait_span.end,
-            },
+            Span { start, end },
             trait_name,
+            trait_args,
         ))
     }
 
@@ -3764,12 +3780,7 @@ impl Parser<'_> {
             ));
         }
         let end = ast_ty_span(&rhs).end;
-        Ok(Ast::TypeAlias(
-            Span { start, end },
-            name,
-            type_params,
-            rhs,
-        ))
+        Ok(Ast::TypeAlias(Span { start, end }, name, type_params, rhs))
     }
 
     pub(super) fn parse_defagent_default_attrs(&mut self) -> Result<Ast, ParseError> {
