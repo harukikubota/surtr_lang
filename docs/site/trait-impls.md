@@ -8,13 +8,15 @@ Surtr の trait system は V1 です。
 標準 trait は大きく 3 層に分けて読むと分かりやすいです。
 
 - capability trait
-  - `Show`, `Compare`, `From`, `TryFrom`
+  - `Show`, `Compare`, `Default`, `From`, `TryFrom`
 - operator dispatch trait
   - `Add`, `Sub`, `Mul`, `Eq`, `Neq`, `Concat`
   - `Functor`, `Applicative`, `Monad`, `PipeApply`, `Compose`, `Composable`, `LiftComposable`, `KleisliComposable`
 
 `Compare` は新しい API が三値比較を要求するときの正本です。`< <= > >=` も公開 surface では `Compare` によって意味づけられます。  
 数値 helper は generic trait ではなく、`Int::abs` / `Float::safe_div` のような concrete type owner surface として提供します。
+
+`Default::default::<T>() -> T` は runtime value parameter を取らず、expected return type または明示型引数から target type を決めます。`@derive Default` は field / payload の default 値を使う実装を生成しますが、constructor の検証処理や型固有の不変条件を代替しません。
 
 ## 宣言側
 

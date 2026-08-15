@@ -2,7 +2,7 @@ use super::*;
 use sindr::derive::{derive_trait_meta, DeriveGenerator, DeriveTraitMeta, FieldTraitRequirement};
 use spire::ast::{
     AstMatchArm, AstPath, AstPattern, AstTy, DeclAttrs, EnumVariant, FunParam, Lit, RecordLitArg,
-    Span, TypeParam, WhereClause, WhereConstraint, WhereConstraintRhs,
+    Span, StructLitField, TypeParam, WhereClause, WhereConstraint, WhereConstraintRhs,
 };
 
 pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
@@ -384,12 +384,17 @@ fn make_derived_impl(
         ),
         DeriveGenerator::Default => {
             let body = if variants.is_empty() {
-                constructor(
-                    span,
-                    name,
+                Ast::StructLit(
+                    span.clone(),
+                    name.to_string(),
                     fields
                         .iter()
-                        .map(|_| call(span, &["Default", "default"], Vec::new()))
+                        .map(|(field_name, _)| {
+                            StructLitField::Explicit(
+                                field_name.clone(),
+                                call(span, &["Default", "default"], Vec::new()),
+                            )
+                        })
                         .collect(),
                 )
             } else {

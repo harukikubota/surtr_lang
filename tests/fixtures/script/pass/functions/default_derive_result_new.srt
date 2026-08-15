@@ -1,0 +1,19 @@
+@derive Default
+defstruct Amount {
+  value: Int
+}
+
+impl Amount {
+  def new(value: Int) -> Result<Amount, InvalidAmountError> {
+    Err(InvalidAmountError(value))
+  }
+}
+
+deferror InvalidAmountError(value: Int) { "Invalid amount: #{value}" }
+
+def main() -> Unit {
+  amount: Amount = default()
+  print(to_string(amount.value))
+}
+
+main()

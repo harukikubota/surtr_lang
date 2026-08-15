@@ -162,6 +162,34 @@ parameter、戻り値をまとめて alpha-normalize して比較する。FunPar
 signature slot との関係が trait contract と異なれば incompatible signature とする。derive が生成する
 `Show` / `Eq` / `Compare` method も、receiver/value parameter が `Self` を導入するため FunParams を生成しない。
 
+### 4.2 `Default` derive の生成境界
+
+`Default` trait の標準契約は次で固定する。
+
+```surtr
+deftrait Default {
+  def default::<Self>() -> Self
+}
+```
+
+`Self` は runtime value parameter ではなく、FunParams から導入する dispatch target である。したがって
+`Default::default` の戻り値は常に `Self` でなければならず、`Result<Self, Error>` などへ変更してはならない。
+
+`@derive Default` の resolver expansion は次の規則に従う。
+
+- struct は各 field を `Default::default()` で埋めた struct literal を生成する。record は常に public な field を持つ
+  unprotected aggregate として、同じ field-by-field construction を行う。
+- enum は選択した variant を直接構築し、payload を `Default::default()` で埋める。
+- structの生成で `Type(...)` や `Type::new(...)` の constructor surface を呼び出してはならない。
+- struct literal は `impl Type` の同型メソッド本体内だけで許可されるため、struct の derive 生成コードは型所有者側の
+  自動生成として扱う。record にはこの値保護境界を適用しない。
+- derive は型固有の不変条件を検査・推論しない。各 field の default 値で構築してよいことを、型定義者が
+  `@derive Default` によって明示的に許可する。
+
+特に constructor が `Result<Self, Error>` を返す型でも、derive 側は constructor の戻り値を unwrap / match
+して `Self` を取り出す経路を作らない。constructor の検証契約と field default の妥当性は別責任であり、default
+値が不正になり得る型は `Default` を derive してはならない。
+
 pending obligation、substitution、declared bound、source generic name は次のすべてで整合して移動する。
 
 - inference variable の unify / concrete bind（失敗時 rollback を含む）
