@@ -3664,6 +3664,12 @@ defstruct ObligationBox<$A> {
   value: $A
 }
 
+impl ObligationBox {
+  def new(value: $A) -> ObligationBox<$A> {
+    ObligationBox { value: value }
+  }
+}
+
 impl Use for ObligationBox<$A>
 where
   $A: Marker
@@ -3675,9 +3681,11 @@ call = {|value| Use::use(ObligationBox(value))}
 result = call(1)"#,
     );
 
+    let err = typecheck(resolved)
+        .expect_err("binding the deferred receiver to Int must re-check its Marker obligation");
     assert!(
-        typecheck(resolved).is_err(),
-        "binding the deferred receiver to Int must re-check its Marker obligation"
+        err.message.contains("Argument type mismatch"),
+        "unexpected phase-boundary diagnostic: {err:?}"
     );
 }
 

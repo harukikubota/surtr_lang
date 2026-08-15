@@ -1761,6 +1761,10 @@ impl Checker {
             // An unbound inference variable is deliberately deferred.  This
             // must not manufacture a new bound; a later binding will run the
             // same solver against its concrete type.
+            let pending = self.pending_trait_obligations.entry(var).or_default();
+            if !pending.iter().any(|obligation| obligation == trait_name) {
+                pending.push(trait_name.to_string());
+            }
             return true;
         }
 

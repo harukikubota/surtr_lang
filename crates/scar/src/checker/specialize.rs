@@ -1452,7 +1452,103 @@ impl Checker {
                 self.collect_pending_trait_receiver_tyvars_in_node(left, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(right, ordered, seen);
             }
-            _ => {}
+            TypedInner::HashMapLiteral(entries) => {
+                for (key, value) in entries {
+                    self.collect_pending_trait_receiver_tyvars_in_node(key, ordered, seen);
+                    self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
+                }
+            }
+            TypedInner::InterpolatedStr(parts) => {
+                for part in parts {
+                    if let TypedInterpolatedPart::Expr(expr) = part {
+                        self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
+                    }
+                }
+            }
+            TypedInner::Dbg(args) => {
+                for arg in args {
+                    self.collect_pending_trait_receiver_tyvars_in_node(&arg.expr, ordered, seen);
+                }
+            }
+            TypedInner::EagerBoundary(inner)
+            | TypedInner::FieldAccess(inner, _)
+            | TypedInner::SupervisorSpawn { init: inner, .. }
+            | TypedInner::SupervisorAdopt { pid: inner, .. }
+            | TypedInner::FacetView { source: inner, .. } => {
+                self.collect_pending_trait_receiver_tyvars_in_node(inner, ordered, seen)
+            }
+            TypedInner::If(cond, then_branch, else_branch) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(cond, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(then_branch, ordered, seen);
+                if let Some(branch) = else_branch {
+                    self.collect_pending_trait_receiver_tyvars_in_node(branch, ordered, seen);
+                }
+            }
+            TypedInner::Assert(cond, err) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(cond, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
+            }
+            TypedInner::Ensure(value, pred, err) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(pred, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
+            }
+            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
+            }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(marker, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(handler, ordered, seen);
+            }
+            TypedInner::Match(scrutinee, arms) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(scrutinee, ordered, seen);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_pending_trait_receiver_tyvars_in_node(guard, ordered, seen);
+                    }
+                    self.collect_pending_trait_receiver_tyvars_in_node(&arm.body, ordered, seen);
+                }
+            }
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
+                self.collect_pending_trait_receiver_tyvars_in_node(init, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(strategy, ordered, seen);
+            }
+            TypedInner::FacetSet { source, value, .. } => {
+                self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
+            }
+            TypedInner::FacetOver { source, update_fun, .. } => {
+                self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(update_fun, ordered, seen);
+            }
+            TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
+                for field in fields {
+                    self.collect_pending_trait_receiver_tyvars_in_node(field, ordered, seen);
+                }
+            }
+            TypedInner::DeferrorDef(_, _, _, _, show) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(show, ordered, seen)
+            }
+            TypedInner::Def(_, _, _, _, _, _, body, _)
+            | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
+            | TypedInner::Closure(_, _, body) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
+            }
+            TypedInner::Lit(_)
+            | TypedInner::Var(_)
+            | TypedInner::ListNil
+            | TypedInner::BuiltinExtractorDecl(..)
+            | TypedInner::StructDef(..)
+            | TypedInner::RecordDef(..)
+            | TypedInner::EnumDef(..)
+            | TypedInner::TraitDef(..)
+            | TypedInner::TraitImplDef(..)
+            | TypedInner::SupervisorStatus { .. }
+            | TypedInner::ProcessContextHandler { .. }
+            | TypedInner::FacetPath(_)
+            | TypedInner::PendingFacetPath(_) => {}
         }
     }
 
