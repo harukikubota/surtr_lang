@@ -4255,7 +4255,9 @@ impl Keep for Int {
     )
     .expect_err("an impl body cannot specialize its method generic to String");
     assert!(
-        err.message.contains("expected $A") && err.message.contains("got String"),
+        !err.message.contains("expected $")
+            && err.message.contains("expected the inferred argument type")
+            && err.message.contains("got String"),
         "{err:?}"
     );
 }
