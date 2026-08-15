@@ -3026,14 +3026,19 @@ impl Checker {
                 _ => return false,
             };
             for bound in &constraint.bounds {
-                let TypedWhereConstraintRhs::Trait { trait_id, .. } = bound else {
+                let TypedWhereConstraintRhs::Trait { trait_id, args } = bound else {
                     // Constructor and slot obligations are validated when the
                     // impl head is declared. They do not establish runtime
                     // dispatch applicability in V1.
                     continue;
                 };
                 let trait_key = self.trait_key(trait_id);
-                if !self.trait_impl_exists(&trait_key, &concrete) {
+                let Ok(trait_args) =
+                    self.instantiate_impl_where_trait_args(impl_info, fresh, args)
+                else {
+                    return false;
+                };
+                if !self.trait_impl_exists_for_args(&trait_key, &trait_args, &concrete) {
                     return false;
                 }
             }

@@ -8057,6 +8057,89 @@ where
 }
 
 #[test]
+fn impl_where_obligations_match_parameterized_trait_arguments() {
+    let satisfied = resolve_with_builtin_prelude(
+        r#"deftrait Marker<$Tag> {
+  def mark(self: Self) -> String
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+impl Marker<Int> for Int {
+  def mark(self: Int) -> String { "int" }
+}
+
+impl Use for List<$A>
+where
+  $A: Marker<Int>
+{
+  def use(self: List<$A>) -> String { "used" }
+}
+
+value: List<Int> = [1]
+result = Use::use(value)"#,
+    );
+    typecheck(satisfied).expect("the exact parameterized obligation must be proved");
+
+    let mismatched = resolve_with_builtin_prelude(
+        r#"deftrait Marker<$Tag> {
+  def mark(self: Self) -> String
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+impl Marker<String> for Int {
+  def mark(self: Int) -> String { "string" }
+}
+
+impl Use for List<$A>
+where
+  $A: Marker<Int>
+{
+  def use(self: List<$A>) -> String { "used" }
+}
+
+value: List<Int> = [1]
+result = Use::use(value)"#,
+    );
+    let err = typecheck(mismatched)
+        .expect_err("a same-name trait with different arguments must not prove an obligation");
+    assert!(
+        err.message.contains("requires a receiver type implementing Use"),
+        "{err:?}"
+    );
+
+    let generic = resolve_with_builtin_prelude(
+        r#"deftrait Marker<$Tag> {
+  def mark(self: Self) -> String
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+impl Marker<$Tag> for Int {
+  def mark(self: Int) -> String { "generic" }
+}
+
+impl Use for List<$A>
+where
+  $A: Marker<String>
+{
+  def use(self: List<$A>) -> String { "used" }
+}
+
+value: List<Int> = [1]
+result = Use::use(value)"#,
+    );
+    typecheck(generic).expect("a generic trait argument must unify with the requested argument");
+}
+
+#[test]
 fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
     let resolved =
         resolve_with_builtin_prelude(r#"value = Concat::concat::<String>("left", "right")"#);

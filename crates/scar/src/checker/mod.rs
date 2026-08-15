@@ -1084,6 +1084,7 @@ enum CanonicalTyKey {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ObligationKey {
     trait_name: String,
+    trait_args: Vec<CanonicalTyKey>,
     target: CanonicalTyKey,
 }
 

@@ -1823,7 +1823,16 @@ impl Checker {
     }
 
     pub(super) fn trait_impl_exists(&mut self, trait_name: &str, ty: &Ty) -> bool {
-        self.trait_obligation_satisfied(trait_name, ty, &mut HashSet::new())
+        self.trait_impl_exists_for_args(trait_name, &[], ty)
+    }
+
+    pub(super) fn trait_impl_exists_for_args(
+        &mut self,
+        trait_name: &str,
+        trait_args: &[Ty],
+        ty: &Ty,
+    ) -> bool {
+        self.trait_obligation_satisfied_with_args(trait_name, trait_args, ty, &mut HashSet::new())
     }
 
     /// Prove a trait obligation without changing the caller's bound
@@ -1835,10 +1844,23 @@ impl Checker {
         ty: &Ty,
         visiting: &mut HashSet<ObligationKey>,
     ) -> bool {
+        self.trait_obligation_satisfied_with_args(trait_name, &[], ty, visiting)
+    }
+
+    /// Solver identity is the resolved trait base plus its argument vector;
+    /// formatted instance names are diagnostics only.
+    fn trait_obligation_satisfied_with_args(
+        &mut self,
+        trait_name: &str,
+        trait_args: &[Ty],
+        ty: &Ty,
+        visiting: &mut HashSet<ObligationKey>,
+    ) -> bool {
         let receiver_ty = self.resolve_ty(ty);
         if let Ty::Var(var) = receiver_ty {
+            let requested = self.trait_instance_key_from_tys(trait_name, trait_args);
             if self.rigid_tyvars.contains(&var) {
-                return self.rigid_tyvar_entails_trait(var, trait_name, &mut HashSet::new());
+                return self.rigid_tyvar_entails_trait(var, &requested, &mut HashSet::new());
             }
             // An unbound inference variable is deliberately deferred.  This
             // must not manufacture a new bound; a later binding will run the
@@ -1846,7 +1868,7 @@ impl Checker {
             let pending = self.pending_trait_obligations.entry(var).or_default();
             let obligation = PendingTraitObligation {
                 trait_id: trait_name.to_string(),
-                args: Vec::new(),
+                args: trait_args.to_vec(),
             };
             if !pending.contains(&obligation) {
                 pending.push(obligation);
@@ -1856,12 +1878,16 @@ impl Checker {
 
         let key = ObligationKey {
             trait_name: trait_name.to_string(),
+            trait_args: trait_args
+                .iter()
+                .map(|arg| self.canonical_ty_key(arg))
+                .collect(),
             target: self.canonical_ty_key(&receiver_ty),
         };
         if !visiting.insert(key.clone()) {
             self.trait_obligation_cycle = Some(format!(
                 "CyclicTraitObligation: {} for {}",
-                self.trait_display_name(trait_name),
+                self.trait_display_name(&self.trait_instance_key_from_tys(trait_name, trait_args)),
                 self.ty_name(&receiver_ty)
             ));
             return false;
@@ -1878,11 +1904,12 @@ impl Checker {
                     .iter()
                     .map(|arg| self.instantiate_ty_with_fresh(arg, &mut fresh))
                     .collect::<Vec<_>>();
-                let impl_trait = self.trait_instance_key_from_tys(
-                    &self.trait_key(&impl_info.trait_id),
-                    &impl_trait_args,
-                );
-                if self.trait_display_name(&impl_trait) != self.trait_display_name(trait_name) {
+                if impl_trait_args.len() != trait_args.len()
+                    || !impl_trait_args
+                        .iter()
+                        .zip(trait_args)
+                        .all(|(candidate, requested)| self.types_compatible(candidate, requested))
+                {
                     continue;
                 }
                 let before = self.substitutions.clone();
@@ -1962,16 +1989,58 @@ impl Checker {
                 _ => return false,
             };
             for bound in &constraint.bounds {
-                let TypedWhereConstraintRhs::Trait { trait_id, .. } = bound else {
+                let TypedWhereConstraintRhs::Trait { trait_id, args } = bound else {
                     continue;
                 };
                 let trait_key = self.trait_key(trait_id);
-                if !self.trait_obligation_satisfied(&trait_key, &subject_ty, visiting) {
+                let Ok(trait_args) =
+                    self.instantiate_impl_where_trait_args(impl_info, fresh, args)
+                else {
+                    return false;
+                };
+                if !self.trait_obligation_satisfied_with_args(
+                    &trait_key,
+                    &trait_args,
+                    &subject_ty,
+                    visiting,
+                ) {
                     return false;
                 }
             }
         }
         true
+    }
+
+    /// Instantiate a bound using the same fresh mapping used for the impl
+    /// head.  This keeps `$T` in `Marker<$T> for Int` tied to both the
+    /// requested trait argument and all nested where obligations.
+    pub(super) fn instantiate_impl_where_trait_args(
+        &mut self,
+        impl_info: &TraitImplInfo,
+        fresh: &HashMap<u32, Ty>,
+        args: &[AstTy],
+    ) -> Result<Vec<Ty>, TypeError> {
+        let mut tyvars = impl_info
+            .type_param_vars_by_name
+            .iter()
+            .filter_map(|(name, original)| {
+                fresh
+                    .get(original)
+                    .cloned()
+                    .map(|ty| (name.clone(), ty))
+            })
+            .collect::<HashMap<_, _>>();
+        let self_ty = self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, fresh));
+        args.iter()
+            .map(|arg| {
+                self.resolve_signature_like_ast_ty_in_context(
+                    arg,
+                    TypeSyntaxContext::General,
+                    &mut tyvars,
+                    SignatureTyMode::Trait { self_ty: &self_ty },
+                )
+            })
+            .collect()
     }
 
     pub(super) fn trait_dispatch_override(
