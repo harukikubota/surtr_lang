@@ -690,7 +690,7 @@ impl Resolver {
             | Ast::ConstDef(_, _, _, _, _)
             | Ast::SupervisorInit(_, _)
             | Ast::ExtractorDef(_, _, _, _, _, _, _)
-            | Ast::BuiltinDecl(_, _, _, _, _)
+            | Ast::BuiltinDecl(..)
             | Ast::IntrinsicDecl(_, _, _, _)
             | Ast::BuiltinExtractorDecl(_, _, _, _, _)
             | Ast::BuiltinTypeDecl(_, _, _)
@@ -1928,7 +1928,7 @@ impl Resolver {
             if matches!(stmt, Ast::Import(_, _, _))
                 || matches!(stmt, Ast::SupervisorInit(_, _))
                 || matches!(stmt, Ast::IntrinsicDecl(_, _, _, _))
-                || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _) if is_doc_only_builtin_decl(name))
+                || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _, _) if is_doc_only_builtin_decl(name))
             {
                 // `import` declarations are consumed by resolver-side module/import handling.
                 // Until full module resolution lands, they are intentionally no-op here.
@@ -3021,13 +3021,20 @@ impl Resolver {
                             attrs,
                             false,
                         ),
-                        Ast::BuiltinDecl(method_span, method_name, params, ret_ty, attrs) => (
+                        Ast::BuiltinDecl(
+                            method_span,
+                            method_name,
+                            params,
+                            ret_ty,
+                            method_where_clause,
+                            attrs,
+                        ) => (
                             method_span,
                             method_name,
                             Vec::new(),
                             params,
                             ret_ty,
-                            None,
+                            method_where_clause,
                             None,
                             attrs,
                             true,
@@ -3133,7 +3140,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => {
+            Ast::BuiltinDecl(span, name, params, ret_ty, where_clause, attrs) => {
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let is_io_builtin =
                     sindr::builtin::builtin_meta_for_decl(&name, Some(&qualified_name)).is_some();
@@ -3180,6 +3187,9 @@ impl Resolver {
                     resolved_params,
                     ret_ty
                         .map(|ty| self.resolve_type_annotation(ty))
+                        .transpose()?,
+                    where_clause
+                        .map(|clause| self.resolve_where_clause(clause))
                         .transpose()?,
                     resolve_decl_attrs(&attrs),
                 ))

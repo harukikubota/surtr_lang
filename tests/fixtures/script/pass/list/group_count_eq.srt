@@ -1,0 +1,1 @@
+print(inspect(List::group_count([1, 1, 2])))

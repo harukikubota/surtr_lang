@@ -131,6 +131,7 @@ impl Checker {
         id: &ResolvedId,
         params: &[ResolvedFunParam],
         ret_ty: &Option<AstTy>,
+        where_clause: Option<&ResolvedWhereClause>,
     ) -> Result<TypedNode, TypeError> {
         let is_kernel_is_match = id.name == "is_match"
             && Self::surface_qualified_name(id.qualified_name.as_deref())
@@ -177,6 +178,17 @@ impl Checker {
             )?,
             None => Ty::Unit,
         };
+
+        if let Some(clause) = where_clause {
+            self.builtin_contracts.insert(
+                id.unique_id,
+                BuiltinContract {
+                    where_clause: TypedWhereClause::from(clause),
+                    type_vars: tyvars.clone(),
+                    param_tys: param_tys.clone(),
+                },
+            );
+        }
 
         self.env.bind_var(
             id.unique_id,

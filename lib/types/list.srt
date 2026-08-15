@@ -660,6 +660,8 @@ impl List {
   [(1, 2), (2, 3)]
   """
   @builtin def group_count(values: List<$A>) -> List<($A, Int)>
+  where
+    $A: Eq
 
   @doc """
   Remove duplicate values while keeping the first-seen order.
@@ -667,7 +669,10 @@ impl List {
   xldr(1)> List::dedup([1, 1, 2, 2, 3])
   [1, 2, 3]
   """
-  def dedup(values: List<$A>) -> List<$A> {
+  def dedup(values: List<$A>) -> List<$A>
+  where
+    $A: Eq
+  {
     _dedup_groups(group_count(values))
   }
 

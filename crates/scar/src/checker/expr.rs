@@ -1162,8 +1162,8 @@ impl Checker {
                     methods,
                 )
             }
-            Resolved::BuiltinDecl(span, id, params, ret_ty, _) => {
-                self.check_builtin_decl(span, id, params, ret_ty)
+            Resolved::BuiltinDecl(span, id, params, ret_ty, where_clause, _) => {
+                self.check_builtin_decl(span, id, params, ret_ty, where_clause.as_ref())
             }
             Resolved::BuiltinExtractorDecl(span, id, param, ret_ty, _) => {
                 self.check_builtin_extractor_decl(span, id, param, ret_ty)
@@ -2545,7 +2545,7 @@ impl Checker {
             | Resolved::Def(span, _, _, _, _, _, _, _)
             | Resolved::ConstDef(span, _, _, _, _)
             | Resolved::ExtractorDef(span, _, _, _, _, _, _)
-            | Resolved::BuiltinDecl(span, _, _, _, _)
+            | Resolved::BuiltinDecl(span, _, _, _, _, _)
             | Resolved::BuiltinExtractorDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
             | Resolved::TypeAlias(span, _, _, _)
@@ -8356,20 +8356,39 @@ impl Checker {
 
         match &func_ty {
             Ty::BuiltinFunc { name, params, ret } => {
+                let builtin_uid = match &typed_func.node {
+                    TypedInner::Var(id) => Some(id.unique_id),
+                    _ => None,
+                };
                 let callable_hint = if let TypedInner::Var(id) = &typed_func.node {
                     Some(self.call_target_signature_hint_for_id(id, params, ret.as_ref()))
                 } else {
                     Some(self.call_target_signature_hint(name, params, ret.as_ref(), None))
                 };
+                let unconstrained_arg_params = builtin_uid
+                    .filter(|uid| self.builtin_contracts.contains_key(uid))
+                    .map(|_| vec![Ty::Hole; params.len()]);
                 let typed_args = self.typecheck_positional_call_args(
                     span,
                     name,
-                    params,
+                    unconstrained_arg_params.as_deref().unwrap_or(params),
                     args,
                     callable_hint.clone(),
                     format!("{} does not accept named arguments", name),
                 )?;
                 self.ensure_no_runtime_facet_args(&typed_args, span, name)?;
+                if let Some(uid) = builtin_uid {
+                    for (param, arg) in params.iter().zip(&typed_args) {
+                        if !self.types_compatible(param, &arg.ty) {
+                            return Err(TypeError {
+                                message: self.argument_type_mismatch_message(param, &arg.ty),
+                                span: arg.span.clone(),
+                                hint: callable_hint.clone(),
+                            });
+                        }
+                    }
+                    self.check_builtin_contract(uid, name, &typed_args, span)?;
+                }
 
                 if name == "__process_self" {
                     let Some(process_name) = self.current_process_name() else {
@@ -8507,6 +8526,69 @@ impl Checker {
                 hint: None,
             }),
         }
+    }
+
+    fn check_builtin_contract(
+        &mut self,
+        uid: u32,
+        builtin_name: &str,
+        args: &[TypedNode],
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let Some(contract) = self.builtin_contracts.get(&uid).cloned() else {
+            return Ok(());
+        };
+        let mut type_vars = contract.type_vars;
+        for (expected, actual) in contract
+            .param_tys
+            .iter()
+            .zip(args.iter().map(|arg| &arg.ty))
+        {
+            let _ = self.types_compatible(expected, actual);
+        }
+        for constraint in contract.where_clause.constraints {
+            let subject = self.resolve_builtin_ast_ty_in_context(
+                &constraint.subject,
+                TypeSyntaxContext::General,
+                &mut type_vars,
+            )?;
+            for bound in constraint.bounds {
+                let TypedWhereConstraintRhs::Trait { trait_id, args } = bound else {
+                    continue;
+                };
+                let trait_key = self.trait_key(&trait_id);
+                let trait_args = args
+                    .iter()
+                    .map(|arg| {
+                        self.resolve_builtin_ast_ty_in_context(
+                            arg,
+                            TypeSyntaxContext::General,
+                            &mut type_vars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let subject = self.resolve_ty(&subject);
+                let satisfied = self.trait_impl_exists_for_args(&trait_key, &trait_args, &subject);
+                if !satisfied {
+                    return Err(TypeError {
+                        message: format!(
+                            "Builtin {} requires {} for {}, got {}",
+                            builtin_name,
+                            self.trait_display_name(&trait_key),
+                            self.ty_name(&subject),
+                            self.ty_name(&subject),
+                        ),
+                        span: span.clone(),
+                        hint: Some(format!(
+                            "Add a {} implementation for {} or use a type that already implements it.",
+                            self.trait_display_name(&trait_key),
+                            self.ty_name(&subject),
+                        )),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     fn typecheck_positional_call_args(

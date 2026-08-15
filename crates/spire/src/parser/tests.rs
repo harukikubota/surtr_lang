@@ -970,7 +970,7 @@ impl Int {
             assert_eq!(target, "Global::Int");
             assert!(matches!(
                 methods.as_slice(),
-                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Generic(_, ret, _)), attrs)]
+                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Generic(_, ret, _)), _, attrs)]
                     if name == "safe_mod"
                     && ret == "Result"
                     && attrs.doc.as_deref() == Some("Builtin int helper.")
@@ -1104,7 +1104,7 @@ fn test_trait_impl_accepts_builtin_def_method() {
             assert_eq!(target, "Global::Int");
             assert!(matches!(
                 methods.as_slice(),
-                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Named(_, ret)), _)]
+                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Named(_, ret)), _, _)]
                     if name == "add" && ret == "Self"
             ));
         }
@@ -1719,7 +1719,7 @@ fn test_builtin_decl() {
     )
     .expect("std module should accept builtin declarations");
     match &ast[0] {
-        Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
+        Ast::BuiltinDecl(_, name, params, ret_ty, _, attrs) => {
             assert_eq!(name, "to_string");
             assert_eq!(params.len(), 1);
             assert_eq!(
@@ -1737,6 +1737,20 @@ fn test_builtin_decl() {
         }
         _ => panic!("Expected BuiltinDecl"),
     }
+}
+
+#[test]
+fn test_builtin_decl_accepts_where_clause() {
+    let ast = parse_with_context(
+        "@builtin def group_count(values: List<$A>) -> List<($A, Int)>\nwhere\n  $A: Eq\n@doc \"\"\"next\"\"\"\n@builtin def zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>",
+        ParserContext::module(1, Some("List".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect("constrained builtin declarations should parse");
+    let [Ast::BuiltinDecl(_, _, _, _, Some(clause), _), Ast::BuiltinDecl(..)] = ast.as_slice()
+    else {
+        panic!("expected constrained builtin followed by builtin declaration");
+    };
+    assert_eq!(clause.constraints.len(), 1);
 }
 
 #[test]
@@ -1809,7 +1823,7 @@ fn test_hidden_annotates_builtin_decl() {
 
     assert!(matches!(
         ast.as_slice(),
-        [Ast::BuiltinDecl(_, name, _, _, DeclAttrs { hidden: true, .. })]
+        [Ast::BuiltinDecl(_, name, _, _, _, DeclAttrs { hidden: true, .. })]
             if name == "__process_sleep"
     ));
 }
@@ -1842,7 +1856,7 @@ fn test_hidden_builtin_impl_member_parses() {
             assert_eq!(target, "Global::Task");
             assert!(matches!(
                 &body[0],
-                Ast::BuiltinDecl(_, name, _, _, DeclAttrs { hidden: true, .. })
+                Ast::BuiltinDecl(_, name, _, _, _, DeclAttrs { hidden: true, .. })
                     if name == "__task_call"
             ));
         }
@@ -1868,6 +1882,7 @@ fn test_private_builtin_impl_member_parses() {
                 Ast::BuiltinDecl(
                     _,
                     name,
+                    _,
                     _,
                     _,
                     DeclAttrs {
@@ -2120,7 +2135,7 @@ fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
             assert_eq!(name, "Global::Kernel");
             assert!(matches!(
                 &body[0],
-                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
+                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _, _)
                     if builtin_name == "if" && params.len() == 3 && ret == "$A"
             ));
         }
@@ -2144,12 +2159,12 @@ fn test_builtin_import_decl_accepts_keyword_name_in_std_module_member() {
             assert_eq!(name, "Global::Bootstrap");
             assert!(matches!(
                 &body[0],
-                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
+                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _, _)
                     if builtin_name == "import" && params.is_empty() && ret == "Unit"
             ));
             assert!(matches!(
                 &body[1],
-                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
+                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _, _)
                     if builtin_name == "include" && params.len() == 1 && ret == "Unit"
             ));
         }
@@ -5116,7 +5131,7 @@ fn test_std_module_compile_unit_accepts_builtin_decl() {
     .expect("std module compile unit should accept builtin declarations");
     assert!(
         matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Global::Bootstrap"
-            && matches!(body.as_slice(), [Ast::BuiltinDecl(_, _, _, _, _)]))
+            && matches!(body.as_slice(), [Ast::BuiltinDecl(..)]))
     );
 }
 

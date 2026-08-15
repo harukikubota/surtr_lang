@@ -1664,7 +1664,7 @@ fn test_builtin_decl_resolution() {
         .resolve_program(ast)
         .expect("builtin declaration should resolve");
     match &resolved[0] {
-        Resolved::BuiltinDecl(_, id, params, ret_ty, attrs) => {
+        Resolved::BuiltinDecl(_, id, params, ret_ty, _, attrs) => {
             assert_eq!(id.name, "print");
             assert_eq!(id.unique_id, 2); // 0=Ok, 1=Err, 2=print
             assert_eq!(params.len(), 1);
@@ -1697,7 +1697,7 @@ fn test_hidden_builtin_decl_resolution_preserves_hidden_attr() {
         .resolve_program(ast)
         .expect("hidden builtin declaration should resolve");
     match &resolved[0] {
-        Resolved::BuiltinDecl(_, id, _, _, attrs) => {
+        Resolved::BuiltinDecl(_, id, _, _, _, attrs) => {
             assert_eq!(id.name, "__process_sleep");
             assert!(attrs.hidden);
         }

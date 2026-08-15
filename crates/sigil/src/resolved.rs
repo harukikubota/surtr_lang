@@ -280,6 +280,7 @@ pub enum Resolved {
         ResolvedId,
         Vec<ResolvedFunParam>,
         Option<AstTy>,
+        Option<ResolvedWhereClause>,
         ResolvedDeclAttrs,
     ),
 

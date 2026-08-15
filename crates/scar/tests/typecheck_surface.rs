@@ -4625,7 +4625,9 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
     let colliding_defs = resolved
         .iter()
         .filter_map(|node| match node {
-            sigil::resolved::Resolved::BuiltinDecl(_, id, _, _, _) if id.unique_id == use_uid => {
+            sigil::resolved::Resolved::BuiltinDecl(_, id, _, _, _, _)
+                if id.unique_id == use_uid =>
+            {
                 Some(format!("builtin {}", id.name))
             }
             sigil::resolved::Resolved::Def(_, id, _, _, _, _, _, _) if id.unique_id == use_uid => {

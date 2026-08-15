@@ -744,7 +744,7 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
                     | Ast::ExtractorDef(..)
                     | Ast::TraitDef(..)
                     | Ast::TraitImplDef(..)
-                    | Ast::BuiltinDecl(_, _, _, _, _)
+                    | Ast::BuiltinDecl(..)
                     | Ast::StructDef(..)
                     | Ast::RecordDef(..)
                     | Ast::DeferrorDef(_, _, _, _, _)

@@ -8619,7 +8619,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::ConstDef(span, _, _, _, _)
         | Ast::SupervisorInit(span, _)
         | Ast::ExtractorDef(span, _, _, _, _, _, _)
-        | Ast::BuiltinDecl(span, _, _, _, _)
+        | Ast::BuiltinDecl(span, ..)
         | Ast::IntrinsicDecl(span, _, _, _)
         | Ast::BuiltinExtractorDecl(span, _, _, _, _)
         | Ast::BuiltinTypeDecl(span, _, _)

@@ -3383,7 +3383,7 @@ impl Checker {
 
         for stmt in stmts {
             match stmt {
-                Resolved::BuiltinDecl(_, id, params, ret_ty, _) => {
+                Resolved::BuiltinDecl(_, id, params, ret_ty, where_clause, _) => {
                     self.register_function_id(id);
                     let mut tyvars = HashMap::new();
                     let param_tys = params
@@ -3404,6 +3404,16 @@ impl Checker {
                         )?,
                         None => Ty::Unit,
                     };
+                    if let Some(clause) = where_clause {
+                        self.builtin_contracts.insert(
+                            id.unique_id,
+                            BuiltinContract {
+                                where_clause: TypedWhereClause::from(clause),
+                                type_vars: tyvars.clone(),
+                                param_tys: param_tys.clone(),
+                            },
+                        );
+                    }
                     self.env.bind_var(
                         id.unique_id,
                         Ty::BuiltinFunc {

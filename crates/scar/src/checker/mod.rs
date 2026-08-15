@@ -481,6 +481,13 @@ struct PendingTraitObligation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+struct BuiltinContract {
+    where_clause: TypedWhereClause,
+    type_vars: HashMap<String, Ty>,
+    param_tys: Vec<Ty>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignatureAliasInfo {
     params: Vec<ResolvedTypeParam>,
     rhs: AstTy,
@@ -1101,6 +1108,7 @@ struct PersistentCheckerState {
     facet_bindings: HashMap<u32, StoredFacetPath>,
     error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
+    builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
@@ -1121,6 +1129,7 @@ impl PersistentCheckerState {
             facet_bindings: HashMap::new(),
             error_observer_bindings: HashSet::new(),
             user_func_params: HashMap::new(),
+            builtin_contracts: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
             specializable_defs: HashMap::new(),
@@ -1141,6 +1150,7 @@ impl PersistentCheckerState {
             facet_bindings: self.facet_bindings.clone(),
             error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
+            builtin_contracts: self.builtin_contracts.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
@@ -1164,6 +1174,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             facet_bindings: checkpoint.facet_bindings,
             error_observer_bindings: checkpoint.error_observer_bindings,
             user_func_params: checkpoint.user_func_params,
+            builtin_contracts: checkpoint.builtin_contracts,
             impl_method_uids: checkpoint.impl_method_uids,
             function_ids_by_name: checkpoint.function_ids_by_name,
             specializable_defs: checkpoint.specializable_defs,
@@ -1186,6 +1197,8 @@ pub struct ScarCheckpoint {
     #[serde(default)]
     error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
+    #[serde(default)]
+    builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
@@ -2135,6 +2148,7 @@ struct Checker {
     error_observer_bindings: HashSet<u32>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
+    builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
@@ -2228,6 +2242,7 @@ impl Checker {
             error_observer_bindings: state.error_observer_bindings,
             consts: state.consts,
             user_func_params: state.user_func_params,
+            builtin_contracts: state.builtin_contracts,
             impl_method_uids: state.impl_method_uids,
             function_ids_by_name: state.function_ids_by_name,
             specializable_defs: state.specializable_defs,
@@ -3348,6 +3363,7 @@ impl Checker {
             facet_bindings: self.facet_bindings.clone(),
             error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
+            builtin_contracts: self.builtin_contracts.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
@@ -3368,6 +3384,7 @@ impl Checker {
             facet_bindings: self.facet_bindings,
             error_observer_bindings: self.error_observer_bindings,
             user_func_params: self.user_func_params,
+            builtin_contracts: self.builtin_contracts,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,
             specializable_defs: self.specializable_defs,

@@ -783,9 +783,12 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_resolved_node(&mut method.body, base, offset);
             }
         }
-        Resolved::BuiltinDecl(_, id, params, _, _) => {
+        Resolved::BuiltinDecl(_, id, params, _, where_clause, _) => {
             rebase_resolved_id(id, base, offset);
             rebase_fun_params(params, base, offset);
+            if let Some(clause) = where_clause {
+                rebase_where_clause(clause, base, offset);
+            }
         }
         Resolved::BuiltinExtractorDecl(_, id, param, _, _) => {
             rebase_resolved_id(id, base, offset);

@@ -56,7 +56,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                         local_bound.insert(id.unique_id);
                         local_bound.insert(param.id.unique_id);
                     }
-                    Resolved::BuiltinDecl(_, id, params, _, _) => {
+                    Resolved::BuiltinDecl(_, id, params, _, _, _) => {
                         local_bound.insert(id.unique_id);
                         for param in params {
                             local_bound.insert(param.id.unique_id);
@@ -213,7 +213,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         | Resolved::ConstDef(_, _, _, _, _)
         | Resolved::TraitDef(_, _, _, _, _, _)
         | Resolved::TraitImplDef(_, _, _, _, _, _)
-        | Resolved::BuiltinDecl(_, _, _, _, _)
+        | Resolved::BuiltinDecl(..)
         | Resolved::BuiltinExtractorDecl(_, _, _, _, _)
         | Resolved::BuiltinTypeDecl(_, _, _, _)
         | Resolved::TypeAlias(_, _, _, _)

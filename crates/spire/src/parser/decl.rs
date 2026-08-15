@@ -132,7 +132,7 @@ fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
         Ast::Def(_, _, _, _, _, _, _, attrs)
         | Ast::ConstDef(_, _, _, _, attrs)
         | Ast::ExtractorDef(_, _, _, _, _, _, attrs)
-        | Ast::BuiltinDecl(_, _, _, _, attrs)
+        | Ast::BuiltinDecl(_, _, _, _, _, attrs)
         | Ast::IntrinsicDecl(_, _, _, attrs)
         | Ast::BuiltinExtractorDecl(_, _, _, _, attrs)
         | Ast::BuiltinTypeDecl(_, _, attrs)
@@ -2012,6 +2012,7 @@ impl Parser<'_> {
             name,
             params,
             ret_ty,
+            None,
             attrs,
         ))
     }
@@ -3319,7 +3320,12 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             }
+            let newline_pos = self.pos;
             self.skip_newlines();
+            if Self::is_where_clause_terminator(self.peek()) && self.pos > newline_pos {
+                self.pos -= 1;
+                break;
+            }
         }
 
         if constraints.is_empty() {
@@ -3341,7 +3347,7 @@ impl Parser<'_> {
     fn is_where_clause_terminator(token: &Token) -> bool {
         matches!(
             token,
-            Token::LBrace | Token::RBrace | Token::Def | Token::Annotator(_)
+            Token::Eof | Token::LBrace | Token::RBrace | Token::Def | Token::Annotator(_)
         )
     }
 
@@ -5158,12 +5164,6 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let (_def_span, name, _type_params, params, ret_ty, where_clause, _visibility) =
             self.parse_def_signature_with_name_mode(true)?;
-        if let Some(clause) = where_clause {
-            return Err(ParseError::syntax(
-                "@builtin declarations do not accept `where` clauses",
-                clause.span,
-            ));
-        }
 
         let mut lookahead = self.pos;
         while matches!(
@@ -5194,6 +5194,7 @@ impl Parser<'_> {
             name,
             params,
             ret_ty,
+            where_clause,
             attrs,
         ))
     }

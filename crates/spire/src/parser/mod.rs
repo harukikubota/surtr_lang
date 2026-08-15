@@ -1139,7 +1139,7 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                 attrs,
             )
         }
-        Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
+        Ast::BuiltinDecl(span, name, params, ret_ty, where_clause, attrs) => Ast::BuiltinDecl(
             span,
             name,
             params
@@ -1151,6 +1151,7 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                 })
                 .collect(),
             ret_ty.map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+            where_clause,
             attrs,
         ),
         Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
@@ -2171,7 +2172,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 shift_decl_attrs(attrs),
             )
         }
-        Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
+        Ast::BuiltinDecl(span, name, params, ret_ty, where_clause, attrs) => Ast::BuiltinDecl(
             shift_span(span, delta),
             name,
             params
@@ -2179,6 +2180,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|p| shift_fun_param(p, delta))
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
+            where_clause.map(|clause| shift_where_clause(clause, delta)),
             shift_decl_attrs(attrs),
         ),
         Ast::IntrinsicDecl(span, name, signature, attrs) => Ast::IntrinsicDecl(
@@ -2415,7 +2417,7 @@ impl Ast {
             | Ast::ConstDef(s, _, _, _, _)
             | Ast::SupervisorInit(s, _)
             | Ast::ExtractorDef(s, _, _, _, _, _, _)
-            | Ast::BuiltinDecl(s, _, _, _, _)
+            | Ast::BuiltinDecl(s, ..)
             | Ast::IntrinsicDecl(s, _, _, _)
             | Ast::BuiltinExtractorDecl(s, _, _, _, _)
             | Ast::BuiltinTypeDecl(s, _, _)

@@ -694,7 +694,14 @@ pub enum Ast {
     ),
 
     /// Builtin declaration: `@builtin def print(a: String) -> Unit`
-    BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>, DeclAttrs),
+    BuiltinDecl(
+        Span,
+        Symbol,
+        Vec<FunParam>,
+        Option<AstTy>,
+        Option<WhereClause>,
+        DeclAttrs,
+    ),
 
     /// Display-only intrinsic declaration: `@intrinsic def dbg!(values: *$A) -> Unit`
     IntrinsicDecl(Span, Symbol, String, DeclAttrs),
