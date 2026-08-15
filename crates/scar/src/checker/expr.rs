@@ -3034,8 +3034,7 @@ impl Checker {
                     continue;
                 };
                 let trait_key = self.trait_key(trait_id);
-                let Ok(trait_args) =
-                    self.instantiate_impl_where_trait_args(impl_info, fresh, args)
+                let Ok(trait_args) = self.instantiate_impl_where_trait_args(impl_info, fresh, args)
                 else {
                     return false;
                 };

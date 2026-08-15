@@ -2412,7 +2412,10 @@ impl Checker {
                                 hint: Some("Add the type variable to FunParams or a value argument.".into()),
                             });
                         }
-                        if method_output_used.iter().any(|var| !method_input_used.contains(var)) {
+                        if method_output_used
+                            .iter()
+                            .any(|var| !method_input_used.contains(var))
+                        {
                             return Err(TypeError {
                                 message: format!(
                                     "Trait method {} has a type variable that is only present in its return type",
@@ -2424,9 +2427,9 @@ impl Checker {
                         }
                         if id.name == "Default"
                             && method.id.name == "default"
-                            && !method.fun_params.iter().any(|param| {
-                                matches!(param, AstTy::Named(_, name) if name == "Self")
-                            })
+                            && !method.fun_params.iter().any(
+                                |param| matches!(param, AstTy::Named(_, name) if name == "Self"),
+                            )
                         {
                             return Err(TypeError {
                                 message: "Default::default must declare Self in FunParams".into(),

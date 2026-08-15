@@ -1769,16 +1769,9 @@ impl Checker {
                         self.profiler.finish(ProfileEvent::BindTyVar, profile);
                         return false;
                     }
-                    if !pending_obligations
-                        .iter()
-                        .all(|obligation| {
-                            self.trait_impl_exists_for_args(
-                                &obligation.trait_id,
-                                &obligation.args,
-                                &ty,
-                            )
-                        })
-                    {
+                    if !pending_obligations.iter().all(|obligation| {
+                        self.trait_impl_exists_for_args(&obligation.trait_id, &obligation.args, &ty)
+                    }) {
                         self.profiler.finish(ProfileEvent::BindTyVar, profile);
                         return false;
                     }

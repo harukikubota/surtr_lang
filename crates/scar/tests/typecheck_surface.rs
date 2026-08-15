@@ -3815,7 +3815,10 @@ impl Child<Int> for List<$A> {
     );
     let err = typecheck(mismatched)
         .expect_err("Parent<String> cannot cover Child<Int>'s Parent<Int> requirement");
-    assert!(err.message.contains("requires parent impl Parent"), "{err:?}");
+    assert!(
+        err.message.contains("requires parent impl Parent"),
+        "{err:?}"
+    );
 }
 
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
@@ -8158,7 +8161,8 @@ result = Use::use(value)"#,
     let err = typecheck(mismatched)
         .expect_err("a same-name trait with different arguments must not prove an obligation");
     assert!(
-        err.message.contains("requires a receiver type implementing Use"),
+        err.message
+            .contains("requires a receiver type implementing Use"),
         "{err:?}"
     );
 

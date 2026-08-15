@@ -25,8 +25,7 @@ const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/try_fr
 const ENCODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/encode.srt");
 const DECODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/decode.srt");
 const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/functor.srt");
-const BIFUNCTOR_MODULE_SOURCE: &str =
-    include_str!("../../../../lib/traits/operator/bifunctor.srt");
+const BIFUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/bifunctor.srt");
 const APPLICATIVE_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/applicative.srt");
 const MONAD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/monad.srt");
@@ -290,7 +289,10 @@ fn cached_std_prelude() -> &'static CachedStdPrelude {
         let declaration_index = sigil::precollect_declaration_index(&module_stages)
             .expect("std modules should precollect");
         let std_resolved = sigil::resolve_staged_program_with_state(
-            &module_stages, Vec::new(), &declaration_index, None,
+            &module_stages,
+            Vec::new(),
+            &declaration_index,
+            None,
         )
         .expect("std modules should resolve");
         let resolved_len = std_resolved.resolved.len();
@@ -482,7 +484,10 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
                 "Alternative",
                 pick_override("Alternative", ALTERNATIVE_MODULE_SOURCE, overrides),
             ),
-            ("Monoid", pick_override("Monoid", MONOID_MODULE_SOURCE, overrides)),
+            (
+                "Monoid",
+                pick_override("Monoid", MONOID_MODULE_SOURCE, overrides),
+            ),
             (
                 "PipeApply",
                 pick_override("PipeApply", PIPE_APPLY_MODULE_SOURCE, overrides),

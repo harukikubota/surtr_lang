@@ -168,13 +168,11 @@ impl TypeEnv {
     pub fn bind_var(&mut self, unique_id: u32, ty: Ty) {
         if let Some(frame) = self.var_scope_frames.last_mut() {
             if frame.touched.insert(unique_id) {
-                frame
-                    .undo
-                    .push((
-                        unique_id,
-                        self.vars.get(&unique_id).cloned(),
-                        self.schemes.get(&unique_id).cloned(),
-                    ));
+                frame.undo.push((
+                    unique_id,
+                    self.vars.get(&unique_id).cloned(),
+                    self.schemes.get(&unique_id).cloned(),
+                ));
             }
         }
         self.vars.insert(unique_id, ty);

@@ -874,16 +874,17 @@ impl Checker {
             return Err(err);
         }
         let rigid_tyvars = Self::signature_tyvar_ids(&tyvars);
-        let return_constructor_coercion = ret_ty.as_ref().and_then(|ast_ty| {
-            self.constructor_trait_key_for_ast_ty(ast_ty)
-        }).is_some_and(|trait_key| {
-            self.constructor_annotation_compatible(
-                &trait_key,
-                &expected_ret,
-                &typed_body.ty,
-                None,
-            )
-        });
+        let return_constructor_coercion = ret_ty
+            .as_ref()
+            .and_then(|ast_ty| self.constructor_trait_key_for_ast_ty(ast_ty))
+            .is_some_and(|trait_key| {
+                self.constructor_annotation_compatible(
+                    &trait_key,
+                    &expected_ret,
+                    &typed_body.ty,
+                    None,
+                )
+            });
         if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars)
             && !return_constructor_coercion
         {

@@ -189,7 +189,9 @@ impl Parser<'_> {
                 FlowOpKind::KleisliCompose => {
                     Ast::KleisliCompose(span, Box::new(left), Box::new(right))
                 }
-                FlowOpKind::Choice => Ast::BinOp(span, BinOp::Choice, Box::new(left), Box::new(right)),
+                FlowOpKind::Choice => {
+                    Ast::BinOp(span, BinOp::Choice, Box::new(left), Box::new(right))
+                }
             };
         }
         Ok(left)

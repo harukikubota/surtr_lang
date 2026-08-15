@@ -1365,11 +1365,7 @@ impl Checker {
                     self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
                 }
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(
-                    _body,
-                    &mut ordered,
-                    &mut seen,
-                );
+                self.collect_pending_trait_receiver_tyvars_in_node(_body, &mut ordered, &mut seen);
                 // Function-local inference variables can carry trait bounds,
                 // but callers cannot infer them from a call site. Only the
                 // declared signature determines a valid specialization key.
@@ -1382,11 +1378,7 @@ impl Checker {
                 }
                 self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
-                self.collect_pending_trait_receiver_tyvars_in_node(
-                    _body,
-                    &mut ordered,
-                    &mut seen,
-                );
+                self.collect_pending_trait_receiver_tyvars_in_node(_body, &mut ordered, &mut seen);
                 // See `Def` above: exclude function-local inference variables.
             }
             _ => {}
@@ -1519,7 +1511,9 @@ impl Checker {
                 self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
             }
-            TypedInner::FacetOver { source, update_fun, .. } => {
+            TypedInner::FacetOver {
+                source, update_fun, ..
+            } => {
                 self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
                 self.collect_pending_trait_receiver_tyvars_in_node(update_fun, ordered, seen);
             }
