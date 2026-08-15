@@ -3454,6 +3454,12 @@ impl Checker {
             if let Some(start) = t {
                 specialize_program_dur = start.elapsed();
             }
+            if let Some((method_name, span)) = specialized
+                .iter()
+                .find_map(|node| self.first_pending_trait_helper(node))
+            {
+                return Err(self.pending_trait_helper_error(method_name, span));
+            }
             self.collect_unused_value_warnings_in_sequence(&specialized);
             Ok(specialized)
         })();

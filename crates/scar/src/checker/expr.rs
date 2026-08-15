@@ -105,7 +105,7 @@ impl Checker {
         suffix.parse::<usize>().ok()
     }
 
-    fn pending_trait_helper_error(&self, method_name: &str, span: &Span) -> TypeError {
+    pub(super) fn pending_trait_helper_error(&self, method_name: &str, span: &Span) -> TypeError {
         TypeError {
             message: format!(
                 "Trait helper `{}` could not be concretized for this callable binding",
@@ -243,7 +243,10 @@ impl Checker {
         self.constructor_capabilities.get(&id.unique_id).cloned()
     }
 
-    fn first_pending_trait_helper<'a>(&self, node: &'a TypedNode) -> Option<(&'a str, &'a Span)> {
+    pub(super) fn first_pending_trait_helper<'a>(
+        &self,
+        node: &'a TypedNode,
+    ) -> Option<(&'a str, &'a Span)> {
         match &node.node {
             TypedInner::TraitCall {
                 method_name,
