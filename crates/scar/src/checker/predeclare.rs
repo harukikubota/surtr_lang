@@ -2997,7 +2997,6 @@ impl Checker {
     ) -> bool {
         let before_substitutions = self.substitutions.clone();
         let before_rigid = self.rigid_tyvars.clone();
-        let before_bounds = self.tyvar_bounds.clone();
         let mut child_vars = Vec::new();
         Self::collect_ty_vars(&child_impl.target_ty, &mut child_vars);
         self.rigid_tyvars.extend(child_vars);
@@ -3005,34 +3004,91 @@ impl Checker {
         // clause is therefore an assumption available while proving the
         // parent's requirements, but must not escape into the checker-wide
         // declaration environment.
-        if let Some(where_clause) = &child_impl.where_clause {
-            for constraint in &where_clause.constraints {
-                let AstTy::Named(_, subject) = &constraint.subject else {
-                    continue;
-                };
-                let Some(var) = child_impl.type_param_vars_by_name.get(subject) else {
-                    continue;
-                };
-                for bound in &constraint.bounds {
-                    let TypedWhereConstraintRhs::Trait(trait_id) = bound else {
-                        continue;
-                    };
-                    let trait_key = self.trait_key(trait_id);
-                    self.register_tyvar_bound(*var, &trait_key);
-                }
-            }
-        }
-
         let mut fresh = HashMap::new();
         let parent_target = self.instantiate_ty_with_fresh(&parent_impl.target_ty, &mut fresh);
         let head_covers = self.types_compatible(&parent_target, &child_impl.target_ty);
-        let obligations_hold = head_covers
-            && self.impl_where_obligations_hold(parent_impl, &fresh, &mut HashSet::new());
+        let obligations_hold =
+            head_covers && self.parent_where_is_entailed_by_child(parent_impl, child_impl, &fresh);
 
         self.substitutions = before_substitutions;
         self.rigid_tyvars = before_rigid;
-        self.tyvar_bounds = before_bounds;
         obligations_hold
+    }
+
+    /// Prove a parent's `where` requirements from the child's declared
+    /// assumptions.  This is deliberately a local proof environment: unlike
+    /// the old implementation it never writes assumptions into
+    /// `tyvar_bounds`, where they could accidentally affect another impl.
+    fn parent_where_is_entailed_by_child(
+        &mut self,
+        parent_impl: &TraitImplInfo,
+        child_impl: &TraitImplInfo,
+        fresh: &HashMap<u32, Ty>,
+    ) -> bool {
+        let Some(parent_where) = &parent_impl.where_clause else {
+            return true;
+        };
+
+        parent_where.constraints.iter().all(|constraint| {
+            let parent_subject =
+                match &constraint.subject {
+                    AstTy::Named(_, subject) if subject == "Self" => Some(self.resolve_ty(
+                        &self.substitute_ty_with_mapping(&parent_impl.target_ty, fresh),
+                    )),
+                    AstTy::Named(_, subject) => parent_impl
+                        .type_param_vars_by_name
+                        .get(subject)
+                        .and_then(|var| fresh.get(var))
+                        .map(|ty| self.resolve_ty(ty)),
+                    _ => None,
+                };
+            let Some(parent_subject) = parent_subject else {
+                return false;
+            };
+
+            constraint.bounds.iter().all(|bound| {
+                let TypedWhereConstraintRhs::Trait(trait_id) = bound else {
+                    return true;
+                };
+                let required = self.trait_key(trait_id);
+                self.child_where_entails(child_impl, &parent_subject, &required)
+                    || self.trait_obligation_satisfied(
+                        &required,
+                        &parent_subject,
+                        &mut HashSet::new(),
+                    )
+            })
+        })
+    }
+
+    fn child_where_entails(
+        &mut self,
+        child_impl: &TraitImplInfo,
+        subject: &Ty,
+        required: &str,
+    ) -> bool {
+        let Some(child_where) = &child_impl.where_clause else {
+            return false;
+        };
+        child_where.constraints.iter().any(|constraint| {
+            let child_subject = match &constraint.subject {
+                AstTy::Named(_, name) if name == "Self" => child_impl.target_ty.clone(),
+                AstTy::Named(_, name) => match child_impl.type_param_vars_by_name.get(name) {
+                    Some(var) => Ty::Var(*var),
+                    None => return false,
+                },
+                _ => return false,
+            };
+            self.resolve_ty(&child_subject) == self.resolve_ty(subject)
+                && constraint.bounds.iter().any(|bound| match bound {
+                    TypedWhereConstraintRhs::Trait(trait_id) => self.trait_bound_entails(
+                        &self.trait_key(trait_id),
+                        required,
+                        &mut HashSet::new(),
+                    ),
+                    _ => false,
+                })
+        })
     }
 
     pub(super) fn predeclare_functions(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {

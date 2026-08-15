@@ -3721,6 +3721,42 @@ where
     typecheck(resolved).expect("a stronger child where clause must cover the parent impl");
 }
 
+#[test]
+fn child_impl_self_where_assumption_covers_parent_requirement() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> String
+}
+
+deftrait Parent {
+  def parent(self: Self) -> String
+}
+
+deftrait Child
+where
+  Self: Parent
+{
+  def child(self: Self) -> String
+}
+
+impl Parent for List<$A>
+where
+  Self: Marker
+{
+  def parent(self: List<$A>) -> String { "parent" }
+}
+
+impl Child for List<$A>
+where
+  Self: Marker
+{
+  def child(self: List<$A>) -> String { "child" }
+}"#,
+    );
+
+    typecheck(resolved).expect("a child Self assumption must cover the parent requirement");
+}
+
 fn generic_user_function_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def id(x: $A) -> $A { x }
