@@ -8017,6 +8017,46 @@ where
 }
 
 #[test]
+fn parameterized_trait_bounds_validate_arity_and_generic_scope() {
+    let arity = resolve_with_builtin_prelude(
+        r#"deftrait Marker<$A> {
+  def mark(self: Self) -> String
+}
+
+def broken(value: $A) -> String
+where
+  $A: Marker<Int, String>
+{
+  "broken"
+}"#,
+    );
+    let err = typecheck(arity).expect_err("trait bound arity must be checked");
+    assert!(
+        err.message
+            .contains("Trait Marker expects 1 type argument(s), got 2"),
+        "{err:?}"
+    );
+
+    let scope = resolve_with_builtin_prelude(
+        r#"deftrait Marker<$A> {
+  def mark(self: Self) -> String
+}
+
+def broken(value: $A) -> String
+where
+  $A: Marker<List<$B>>
+{
+  "broken"
+}"#,
+    );
+    let err = typecheck(scope).expect_err("where clauses must not declare nested variables");
+    assert!(
+        err.message.contains("type variable `$B` does not appear"),
+        "{err:?}"
+    );
+}
+
+#[test]
 fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
     let resolved =
         resolve_with_builtin_prelude(r#"value = Concat::concat::<String>("left", "right")"#);

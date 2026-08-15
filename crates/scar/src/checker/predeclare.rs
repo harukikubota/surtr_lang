@@ -97,20 +97,42 @@ impl Checker {
         trait_id: &ResolvedId,
         args: &[AstTy],
         tyvars: &HashMap<String, Ty>,
+        self_ty: Option<&Ty>,
     ) -> Result<(), TypeError> {
-        let mut bound_tyvars = tyvars.clone();
+        let trait_key = self.trait_key(trait_id);
+        let trait_info = self.traits.get(&trait_key).ok_or_else(|| TypeError {
+            message: format!("Unknown trait: {}", trait_id.name),
+            span: trait_id.span.clone(),
+            hint: None,
+        })?;
+        if args.len() != trait_info.type_params.len() {
+            return Err(TypeError {
+                message: format!(
+                    "Trait {} expects {} type argument(s), got {}",
+                    trait_id.name,
+                    trait_info.type_params.len(),
+                    args.len()
+                ),
+                span: trait_id.span.clone(),
+                hint: None,
+            });
+        }
         let trait_args = args
             .iter()
             .map(|arg| {
+                self.validate_where_bound_arg_scope(arg, tyvars, self_ty)?;
                 self.resolve_signature_like_ast_ty_in_context(
                     arg,
                     TypeSyntaxContext::General,
-                    &mut bound_tyvars,
-                    SignatureTyMode::Normal,
+                    &mut tyvars.clone(),
+                    match self_ty {
+                        Some(self_ty) => SignatureTyMode::Trait { self_ty },
+                        None => SignatureTyMode::Normal,
+                    },
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let trait_key = self.trait_instance_key_from_tys(&self.trait_key(trait_id), &trait_args);
+        let trait_key = self.trait_instance_key_from_tys(&trait_key, &trait_args);
         match self.resolve_ty(subject) {
             Ty::Var(var) => {
                 self.register_tyvar_bound(var, &trait_key);
@@ -120,6 +142,51 @@ impl Checker {
             // validation. Signature where clauses primarily add bounds to
             // variables that must survive instantiation at call sites.
             _ => Ok(()),
+        }
+    }
+
+    /// A where clause refines variables introduced by its owner; it never
+    /// introduces a new one.  Check this before normal signature lowering,
+    /// whose general-purpose mode is allowed to allocate fresh variables for
+    /// declarations that are still being assembled.
+    fn validate_where_bound_arg_scope(
+        &self,
+        ast_ty: &AstTy,
+        tyvars: &HashMap<String, Ty>,
+        self_ty: Option<&Ty>,
+    ) -> Result<(), TypeError> {
+        match ast_ty {
+            AstTy::Named(span, name) if name == "Self" => {
+                if self_ty.is_some() {
+                    Ok(())
+                } else {
+                    Err(TypeError {
+                        message: "`Self` is only available in trait and trait impl where clauses"
+                            .into(),
+                        span: span.clone(),
+                        hint: None,
+                    })
+                }
+            }
+            AstTy::Named(span, name) if name.starts_with('$') && !tyvars.contains_key(name) => {
+                Err(TypeError {
+                    message: format!(
+                        "where clause type variable `{name}` does not appear in the declaration signature"
+                    ),
+                    span: span.clone(),
+                    hint: Some("where clauses add constraints; they do not declare type variables".into()),
+                })
+            }
+            AstTy::Named(..) | AstTy::ImplTrait(..) => Ok(()),
+            AstTy::Generic(_, _, args) | AstTy::Tuple(_, args) => args
+                .iter()
+                .try_for_each(|arg| self.validate_where_bound_arg_scope(arg, tyvars, self_ty)),
+            AstTy::Func(_, params, ret) => {
+                for param in params {
+                    self.validate_where_bound_arg_scope(param, tyvars, self_ty)?;
+                }
+                self.validate_where_bound_arg_scope(ret, tyvars, self_ty)
+            }
         }
     }
 
@@ -141,7 +208,7 @@ impl Checker {
             )?;
             for bound in &constraint.bounds {
                 if let ResolvedWhereConstraintRhs::Trait { trait_id, args } = bound {
-                    self.apply_where_trait_bound(&subject, trait_id, args, tyvars)?;
+                    self.apply_where_trait_bound(&subject, trait_id, args, tyvars, self_ty)?;
                 }
             }
         }
@@ -166,7 +233,7 @@ impl Checker {
             )?;
             for bound in &constraint.bounds {
                 if let TypedWhereConstraintRhs::Trait { trait_id, args } = bound {
-                    self.apply_where_trait_bound(&subject, trait_id, args, tyvars)?;
+                    self.apply_where_trait_bound(&subject, trait_id, args, tyvars, self_ty)?;
                 }
             }
         }
