@@ -1,11 +1,11 @@
 deftrait Mark<$T> {
-  def mark::<$T>(self: Self) -> String
+  def mark(self: Self) -> String
 }
 
 impl Mark<$A> for String {
-  def mark::<$A>(self: String) -> String { "any" }
+  def mark(self: String) -> String { "any" }
 }
 
 impl Mark<List<$A>> for String {
-  def mark::<List<$A>>(self: String) -> String { "list" }
+  def mark(self: String) -> String { "list" }
 }

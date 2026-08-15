@@ -3424,7 +3424,7 @@ fn namespaced_type_and_trait_impl_typecheck_inside_script_module_scope() {
 }
 
 impl Show for Auth::User {
-  def to_string::<Auth::User>(self: Self) -> String { "user" }
+  def to_string(self: Self) -> String { "user" }
 }
 
 value: Auth::User = Auth::User("alice")
@@ -3488,15 +3488,15 @@ impl PairTrait for (Int, String) {
 fn overlapping_trait_impl_patterns_are_rejected_before_codegen() {
     let resolved = resolve_with_builtin_prelude(
         r#"deftrait Mark<$T> {
-  def mark::<$T>(self: Self) -> String
+  def mark(self: Self) -> String
 }
 
 impl Mark<$A> for String {
-  def mark::<$A>(self: String) -> String { "any" }
+  def mark(self: String) -> String { "any" }
 }
 
 impl Mark<List<$A>> for String {
-  def mark::<List<$A>>(self: String) -> String { "list" }
+  def mark(self: String) -> String { "list" }
 }"#,
     );
 
@@ -3511,15 +3511,15 @@ impl Mark<List<$A>> for String {
 fn disjoint_specializations_with_the_same_nominal_target_typecheck() {
     let resolved = resolve_with_builtin_prelude(
         r#"deftrait Mark<$T> {
-  def mark::<$T>(self: Self) -> String
+  def mark(self: Self) -> String
 }
 
 impl Mark<Int> for List<Int> {
-  def mark::<Int>(self: List<Int>) -> String { "int" }
+  def mark(self: List<Int>) -> String { "int" }
 }
 
 impl Mark<Int> for List<String> {
-  def mark::<Int>(self: List<String>) -> String { "string" }
+  def mark(self: List<String>) -> String { "string" }
 }"#,
     );
 
@@ -4813,7 +4813,7 @@ impl Boolean {
 }
 
 impl Eq for Boolean {
-  @builtin def eq::<Boolean>(self: Self, rhs: Self) -> Boolean
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
 }"#,
     )])
     .expect_err("special-form declaration outside Kernel must fail");
@@ -5541,7 +5541,7 @@ fn user_defined_container_can_use_context_operators_via_traits() {
 }
 
 impl Functor for Boxed<$T> {
-  def fmap::<Boxed<$T>, $A, $B>(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
+  def fmap(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
     match self {
       Boxed::Box(value) => Boxed::Box(mapper(value)),
     }
@@ -5549,9 +5549,9 @@ impl Functor for Boxed<$T> {
 }
 
 impl Applicative for Boxed<$T> {
-  def pure::<Boxed<$T>, $A>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
+  def pure::<Boxed<$T>>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
 
-  def ap::<Boxed<$T>, $A, $B>(mapper: Boxed<($A -> $B)>, value: Boxed<$A>) -> Boxed<$B> {
+  def ap(mapper: Boxed<($A -> $B)>, value: Boxed<$A>) -> Boxed<$B> {
     match mapper {
       Boxed::Box(f) => match value {
         Boxed::Box(inner) => Boxed::Box(f(inner)),
@@ -5561,9 +5561,9 @@ impl Applicative for Boxed<$T> {
 }
 
 impl Monad for Boxed<$T> {
-  def return::<Boxed<$T>, $A>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
+  def return::<Boxed<$T>>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
 
-  def bind::<Boxed<$T>, $A, $B>(self: Boxed<$A>, mapper: ($A -> Boxed<$B>)) -> Boxed<$B> {
+  def bind(self: Boxed<$A>, mapper: ($A -> Boxed<$B>)) -> Boxed<$B> {
     match self {
       Boxed::Box(value) => mapper(value),
     }
@@ -5571,13 +5571,13 @@ impl Monad for Boxed<$T> {
 }
 
 impl LiftComposable<$A, $B, $C, Boxed<$C>> for ($A -> Boxed<$B>) {
-  def lift_compose::<($A -> Boxed<$B>), $A, $B, $C, Boxed<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Boxed<$C>) {
+  def lift_compose::<$A, Boxed<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Boxed<$C>) {
     {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
 impl KleisliComposable<$A, $B, Boxed<$C>> for ($A -> Boxed<$B>) {
-  def kleisli_compose::<($A -> Boxed<$B>), $A, $B, Boxed<$C>>(self: Self, rhs: ($B -> Boxed<$C>)) -> ($A -> Boxed<$C>) {
+  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Boxed<$C>)) -> ($A -> Boxed<$C>) {
     {|value| Monad::bind(self(value), rhs)}
   }
 }
@@ -6264,7 +6264,7 @@ impl BoxedInt {
 }
 
 impl Compare for BoxedInt {
-  def compare::<BoxedInt>(self: Self, rhs: Self) -> Ordering {
+  def compare(self: Self, rhs: Self) -> Ordering {
     Compare::compare(self.value, rhs.value)
   }
 }
@@ -7129,7 +7129,7 @@ impl String {
 }
 
 impl Show for String {
-  def to_string::<String>(self: Self) -> String {
+  def to_string(self: Self) -> String {
 inspect(self)
   }
 }
@@ -7153,11 +7153,11 @@ impl From<Int> for String {
 }
 
 impl Eq for String {
-  def eq::<String>(self: Self, rhs: Self) -> Boolean {
+  def eq(self: Self, rhs: Self) -> Boolean {
 self == rhs
   }
 
-  def neq::<String>(self: Self, rhs: Self) -> Boolean {
+  def neq(self: Self, rhs: Self) -> Boolean {
 self != rhs
   }
 }"#,
@@ -7992,11 +7992,11 @@ value = Result::tap_err(Err(NoneError), id(handler))"#,
 fn explicit_type_arguments_specialize_functions_trait_calls_and_captures() {
     let typed = typecheck_with_builtin_prelude(
         r#"deftrait Convert<$To> {
-  def convert::<Self, $To>(self: Self) -> $To
+  def convert::<$To>(self: Self) -> $To
 }
 
 impl Convert<Int> for String {
-  def convert::<String, Int>(self: String) -> Int { 1 }
+  def convert::<Int>(self: String) -> Int { 1 }
 }
 
 converted: Int = Convert::convert::<Int>("")
@@ -8023,7 +8023,7 @@ bad: Int = identity::<Int>(1)"#,
 fn parameterized_trait_bound_controls_rigid_generic_dispatch() {
     let missing = resolve_with_builtin_prelude(
         r#"deftrait Convert<$To> {
-  def convert::<Self, $To>(self: Self) -> $To
+  def convert::<$To>(self: Self) -> $To
 }
 
 def hidden(value: $A) -> Int {
@@ -8039,7 +8039,7 @@ def hidden(value: $A) -> Int {
 
     let mismatched = resolve_with_builtin_prelude(
         r#"deftrait Convert<$To> {
-  def convert::<Self, $To>(self: Self) -> $To
+  def convert::<$To>(self: Self) -> $To
 }
 
 def hidden(value: $A) -> Int
@@ -8055,7 +8055,7 @@ where
 
     let bounded = resolve_with_builtin_prelude(
         r#"deftrait Convert<$To> {
-  def convert::<Self, $To>(self: Self) -> $To
+  def convert::<$To>(self: Self) -> $To
 }
 
 def hidden(value: $A) -> Int
@@ -8210,6 +8210,71 @@ fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
             .contains("TryFrom::try_from expects 1 explicit type argument(s), got 2"),
         "{err:?}"
     );
+}
+
+#[test]
+fn trait_method_type_slots_have_one_input_channel_and_funparams_flow_to_return() {
+    let duplicated = resolve_with_builtin_prelude(
+        r#"deftrait DuplicateInput {
+  def duplicate::<$A>(value: $A) -> $A
+}"#,
+    );
+    let err = typecheck(duplicated).expect_err("a slot cannot use both input channels");
+    assert!(
+        err.message
+            .contains("introduces $A through both FunParams and value arguments"),
+        "{err:?}"
+    );
+
+    let unconsumed_fun_param = resolve_with_builtin_prelude(
+        r#"deftrait UnconsumedFunParam<$A> {
+  def render::<$A>(self: Self) -> String
+}"#,
+    );
+    let err = typecheck(unconsumed_fun_param)
+        .expect_err("a FunParams slot must be represented by the return type");
+    assert!(
+        err.message
+            .contains("declares $A in FunParams but does not use it in its return type"),
+        "{err:?}"
+    );
+
+    let return_only = resolve_with_builtin_prelude(
+        r#"deftrait ReturnOnly {
+  def make() -> $A
+}"#,
+    );
+    let err = typecheck(return_only).expect_err("a return-only slot has no input introduction");
+    assert!(
+        err.message.contains("has $A only in its return type"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn trait_impl_funparams_must_match_the_trait_slots() {
+    let matching = resolve_with_builtin_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<$To>(self: Self) -> $To
+}
+
+impl Convert<Int> for String {
+  def convert::<Int>(self: String) -> Int { 1 }
+}"#,
+    );
+    typecheck(matching).expect("the impl must repeat the trait's target slot");
+
+    let omitted = resolve_with_builtin_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<$To>(self: Self) -> $To
+}
+
+impl Convert<Int> for String {
+  def convert(self: String) -> Int { 1 }
+}"#,
+    );
+    let err = typecheck(omitted).expect_err("an impl cannot omit a required FunParams slot");
+    assert!(err.message.contains("incompatible signature"), "{err:?}");
 }
 
 #[test]

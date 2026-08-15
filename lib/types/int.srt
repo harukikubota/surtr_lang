@@ -814,7 +814,7 @@ impl Add for Int {
   xldr(1)> Add::add(1, 2)
   3
   """
-  @builtin def add::<Int>(self: Self, rhs: Self) -> Self
+  @builtin def add(self: Self, rhs: Self) -> Self
 }
 
 impl Sub for Int {
@@ -824,7 +824,7 @@ impl Sub for Int {
   xldr(1)> Sub::sub(5, 2)
   3
   """
-  @builtin def sub::<Int>(self: Self, rhs: Self) -> Self
+  @builtin def sub(self: Self, rhs: Self) -> Self
 }
 
 impl Mul for Int {
@@ -834,7 +834,7 @@ impl Mul for Int {
   xldr(1)> Mul::mul(3, 4)
   12
   """
-  @builtin def mul::<Int>(self: Self, rhs: Self) -> Self
+  @builtin def mul(self: Self, rhs: Self) -> Self
 }
 
 impl Show for Int {
@@ -844,7 +844,7 @@ impl Show for Int {
   xldr(1)> to_string(42)
   "42"
   """
-  def to_string::<Int>(self: Self) -> String {
+  def to_string(self: Self) -> String {
     inspect(self)
   }
 }
@@ -880,7 +880,7 @@ impl Eq for Int {
   xldr(1)> eq(2, 2)
   True
   """
-  @builtin def eq::<Int>(self: Self, rhs: Self) -> Boolean
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Compare for Int {
@@ -890,7 +890,7 @@ impl Compare for Int {
   xldr(1)> compare(1, 2)
   Ordering::Less
   """
-  @builtin def compare::<Int>(self: Self, rhs: Self) -> Ordering
+  @builtin def compare(self: Self, rhs: Self) -> Ordering
 
   @doc """
   Return `True` when the left integer is strictly less than the right integer.
@@ -898,7 +898,7 @@ impl Compare for Int {
   xldr(1)> lt(1, 2)
   True
   """
-  @builtin def lt::<Int>(self: Self, rhs: Self) -> Boolean
+  @builtin def lt(self: Self, rhs: Self) -> Boolean
 
   @doc """
   Return `True` when the left integer is less than or equal to the right integer.
@@ -906,7 +906,7 @@ impl Compare for Int {
   xldr(1)> lte(2, 2)
   True
   """
-  @builtin def lte::<Int>(self: Self, rhs: Self) -> Boolean
+  @builtin def lte(self: Self, rhs: Self) -> Boolean
 
   @doc """
   Return `True` when the left integer is strictly greater than the right integer.
@@ -914,7 +914,7 @@ impl Compare for Int {
   xldr(1)> gt(3, 2)
   True
   """
-  @builtin def gt::<Int>(self: Self, rhs: Self) -> Boolean
+  @builtin def gt(self: Self, rhs: Self) -> Boolean
 
   @doc """
   Return `True` when the left integer is greater than or equal to the right integer.
@@ -922,5 +922,5 @@ impl Compare for Int {
   xldr(1)> gte(2, 2)
   True
   """
-  @builtin def gte::<Int>(self: Self, rhs: Self) -> Boolean
+  @builtin def gte(self: Self, rhs: Self) -> Boolean
 }

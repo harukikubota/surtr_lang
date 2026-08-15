@@ -19,7 +19,7 @@ impl Add for Int {
 
 `Self` は Trait の実装対象型を表す。`Int` のように target が非 generic なら、`Self` に型引数を付けない。
 
-FunParams は、型変数が value parameter の型から導入できない場合に使う。`Self` が `self` などの引数位置に現れる method は FunParams を必要としない。trait 宣言に FunParams がある場合だけ、impl 側で trait head と impl target による置換形を宣言する。
+FunParams は、型変数が value parameter の型から導入できない場合に使い、その型変数は戻り値にも現れなければならない。`Self` が `self` などの引数位置に現れる method は FunParams を必要としない。trait 宣言に FunParams がある場合だけ、impl 側で trait head と impl target による置換形を宣言する。
 
 ```surtr
 deftrait TryFrom<$To> {

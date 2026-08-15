@@ -133,6 +133,35 @@ child impl target に lower する。head coverage、constructor slot mapping、
 `where` bound を登録する前に、resolved Trait の存在、argument arity、argument 内 generic の scope、`Self` の
 owner target への lowering、nested type 内までの再帰検査を行う。where clause が未知の type variable を導入してはならない。
 
+### 4.1 Trait method の入力型スロット
+
+Trait method の `Self` と `$...` 型変数は、型入力を導入するチャネルを 1 つだけ持つ。Scar は trait を
+predeclare する前に、FunParams（`def method::<...>`）と value parameter の型を再帰走査して次を `TypeError`
+として検査する。
+
+- 同じ型変数が FunParams と value parameter の両方に現れてはならない。`Eq::eq::<Self>(self: Self, ...)`
+  は不正であり、`Eq::eq(self: Self, ...)` と書く。
+- FunParams に現れる型変数は戻り値にも現れなければならない。値引数から導入できない result/target slot を
+  explicit specialization として observable に保つためである。
+- 戻り値に現れる型変数は、FunParams または value parameter のどちらかで導入されなければならない。
+  return-only slot は推論・dispatch の入力を持たないため不正とする。
+- value parameter で導入した型変数は戻り値に現れてもよいが、現れる必要はない。
+
+```surtr
+deftrait Show {
+  def to_string(self: Self) -> String
+}
+
+deftrait TryFrom<$To> {
+  def try_from::<$To>(self: Self) -> Result<$To, Error>
+}
+```
+
+trait impl method は trait head と impl target を代入・`Self` application を展開した後の FunParams、value
+parameter、戻り値をまとめて alpha-normalize して比較する。FunParams の個数、順序、型構造、または他の
+signature slot との関係が trait contract と異なれば incompatible signature とする。derive が生成する
+`Show` / `Eq` / `Compare` method も、receiver/value parameter が `Self` を導入するため FunParams を生成しない。
+
 pending obligation、substitution、declared bound、source generic name は次のすべてで整合して移動する。
 
 - inference variable の unify / concrete bind（失敗時 rollback を含む）

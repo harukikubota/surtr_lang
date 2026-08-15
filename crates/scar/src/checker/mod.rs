@@ -2371,6 +2371,7 @@ impl Checker {
                 Resolved::TraitDef(_, id, type_params, _, methods, _) => {
                     let mut trait_used = HashSet::new();
                     for method in methods {
+                        Self::validate_trait_method_input_slots(method)?;
                         let mut fun_param_slots = HashSet::new();
                         for fun_param in &method.fun_params {
                             Self::collect_ast_ty_type_params(fun_param, &mut fun_param_slots);
@@ -2406,19 +2407,6 @@ impl Checker {
                             return Err(TypeError {
                                 message: format!(
                                     "Trait method {} has a type variable used only by where constraints",
-                                    method.id.name
-                                ),
-                                span: method.span.clone(),
-                                hint: Some("Add the type variable to FunParams or a value argument.".into()),
-                            });
-                        }
-                        if method_output_used
-                            .iter()
-                            .any(|var| !method_input_used.contains(var))
-                        {
-                            return Err(TypeError {
-                                message: format!(
-                                    "Trait method {} has a type variable that is only present in its return type",
                                     method.id.name
                                 ),
                                 span: method.span.clone(),
@@ -2475,6 +2463,90 @@ impl Checker {
             Self::collect_ast_ty_type_params(ret_ty, &mut used);
         }
         used
+    }
+
+    /// Trait type slots have exactly one input introduction channel: either
+    /// explicit `::<...>` FunParams or value parameters. A FunParam slot must
+    /// also flow into the return type, so explicit specialization is observable
+    /// in the method contract.
+    fn validate_trait_method_input_slots(method: &ResolvedTraitMethodSig) -> Result<(), TypeError> {
+        let mut fun_param_slots = HashSet::new();
+        for fun_param in &method.fun_params {
+            Self::collect_trait_method_slots(fun_param, &mut fun_param_slots);
+        }
+        let mut value_param_slots = HashSet::new();
+        for param in &method.params {
+            Self::collect_trait_method_slots(&param.ty, &mut value_param_slots);
+        }
+        if let Some(slot) = fun_param_slots.intersection(&value_param_slots).next() {
+            return Err(TypeError {
+                message: format!(
+                    "Trait method {} introduces {slot} through both FunParams and value arguments",
+                    method.id.name
+                ),
+                span: method.span.clone(),
+                hint: Some(
+                    "Introduce each type variable through exactly one input channel.".into(),
+                ),
+            });
+        }
+
+        let mut return_slots = HashSet::new();
+        Self::collect_trait_method_slots(&method.ret_ty, &mut return_slots);
+        if let Some(slot) = fun_param_slots.difference(&return_slots).next() {
+            return Err(TypeError {
+                message: format!(
+                    "Trait method {} declares {slot} in FunParams but does not use it in its return type",
+                    method.id.name
+                ),
+                span: method.span.clone(),
+                hint: Some("FunParams type variables must appear in the return type.".into()),
+            });
+        }
+
+        let mut input_slots = fun_param_slots;
+        input_slots.extend(value_param_slots);
+        if let Some(slot) = return_slots.difference(&input_slots).next() {
+            return Err(TypeError {
+                message: format!(
+                    "Trait method {} has {slot} only in its return type",
+                    method.id.name
+                ),
+                span: method.span.clone(),
+                hint: Some(
+                    "Introduce the type variable through FunParams or a value argument.".into(),
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn collect_trait_method_slots(ty: &AstTy, used: &mut HashSet<String>) {
+        match ty {
+            AstTy::Named(_, name) if name == "Self" || name.starts_with('$') => {
+                used.insert(name.clone());
+            }
+            AstTy::Named(_, _) | AstTy::ImplTrait(_, _) => {}
+            AstTy::Generic(_, name, args) => {
+                if name == "Self" || name.starts_with('$') {
+                    used.insert(name.clone());
+                }
+                for arg in args {
+                    Self::collect_trait_method_slots(arg, used);
+                }
+            }
+            AstTy::Tuple(_, items) => {
+                for item in items {
+                    Self::collect_trait_method_slots(item, used);
+                }
+            }
+            AstTy::Func(_, params, ret) => {
+                for param in params {
+                    Self::collect_trait_method_slots(param, used);
+                }
+                Self::collect_trait_method_slots(ret, used);
+            }
+        }
     }
 
     fn reject_return_only_signature_slots(

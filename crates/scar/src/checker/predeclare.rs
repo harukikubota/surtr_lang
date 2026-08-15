@@ -2195,18 +2195,19 @@ impl Checker {
             .iter()
             .filter_map(|param| trait_head_bindings.get(&param.name).cloned())
             .collect::<Vec<_>>();
-        let explicit_slots = trait_info
-            .type_params
+        let fun_params = method
+            .fun_params
             .iter()
-            .chain(method.type_params.iter())
-            .filter_map(|param| tyvars.get(&param.name).cloned())
-            .fold(Vec::new(), |mut slots, slot| {
-                if !slots.iter().any(|existing| existing == &slot) {
-                    slots.push(slot);
-                }
-                slots
-            });
-        Ok((params, ret, trait_args, explicit_slots))
+            .map(|param| {
+                self.resolve_trait_signature_ast_ty_in_context(
+                    param,
+                    TypeSyntaxContext::General,
+                    self_ty,
+                    &mut tyvars,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((params, ret, trait_args, fun_params))
     }
 
     fn expand_trait_self_apps(
@@ -2347,8 +2348,16 @@ impl Checker {
         })
     }
 
-    fn alpha_normalized_signature(&self, params: &[Ty], ret: &Ty) -> (Vec<Ty>, Ty) {
+    fn alpha_normalized_signature(
+        &self,
+        fun_params: &[Ty],
+        params: &[Ty],
+        ret: &Ty,
+    ) -> (Vec<Ty>, Vec<Ty>, Ty) {
         let mut vars = Vec::new();
+        for fun_param in fun_params {
+            Self::collect_ty_vars(fun_param, &mut vars);
+        }
         for param in params {
             Self::collect_ty_vars(param, &mut vars);
         }
@@ -2359,6 +2368,10 @@ impl Checker {
             .map(|(ordinal, var)| (var, Ty::Var(ordinal as u32)))
             .collect::<HashMap<_, _>>();
         (
+            fun_params
+                .iter()
+                .map(|param| self.substitute_ty_with_mapping(param, &mapping))
+                .collect(),
             params
                 .iter()
                 .map(|param| self.substitute_ty_with_mapping(param, &mapping))
@@ -2762,7 +2775,7 @@ impl Checker {
                     });
                 }
 
-                let (trait_params, trait_ret, trait_head_vars, _) =
+                let (trait_params, trait_ret, trait_head_vars, trait_fun_params) =
                     self.resolve_trait_method_signature(&trait_info, trait_method, &target_ty)?;
                 let trait_head_mapping = trait_head_vars
                     .into_iter()
@@ -2782,14 +2795,22 @@ impl Checker {
                 let trait_ret = self.substitute_ty_with_mapping(&trait_ret, &trait_head_mapping);
                 let trait_ret =
                     self.expand_trait_self_apps(trait_ret, &target_ty, &constructor_slot_vars)?;
-                let (impl_params, impl_ret, _, _) = self.resolve_trait_impl_method_signature(
-                    &trait_info,
-                    trait_args,
-                    impl_method,
-                    target_ast_ty,
-                    &trait_method.ret_ty,
-                    where_clause.as_ref().map(TypedWhereClause::from).as_ref(),
-                )?;
+                let trait_fun_params = trait_fun_params
+                    .into_iter()
+                    .map(|param| {
+                        let param = self.substitute_ty_with_mapping(&param, &trait_head_mapping);
+                        self.expand_trait_self_apps(param, &target_ty, &constructor_slot_vars)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let (impl_params, impl_ret, _, impl_fun_params) = self
+                    .resolve_trait_impl_method_signature(
+                        &trait_info,
+                        trait_args,
+                        impl_method,
+                        target_ast_ty,
+                        &trait_method.ret_ty,
+                        where_clause.as_ref().map(TypedWhereClause::from).as_ref(),
+                    )?;
 
                 if trait_params.len() != impl_params.len() {
                     return Err(TypeError {
@@ -2802,8 +2823,10 @@ impl Checker {
                     });
                 }
 
-                let expected_signature = self.alpha_normalized_signature(&trait_params, &trait_ret);
-                let impl_signature = self.alpha_normalized_signature(&impl_params, &impl_ret);
+                let expected_signature =
+                    self.alpha_normalized_signature(&trait_fun_params, &trait_params, &trait_ret);
+                let impl_signature =
+                    self.alpha_normalized_signature(&impl_fun_params, &impl_params, &impl_ret);
                 if expected_signature != impl_signature {
                     return Err(TypeError {
                         message: format!(

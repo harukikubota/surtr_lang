@@ -106,7 +106,7 @@ impl Add for Float {
   xldr(1)> Add::add(1.5, 2.0)
   3.5
   """
-  @builtin def add::<Float>(self: Self, rhs: Self) -> Self
+  @builtin def add(self: Self, rhs: Self) -> Self
 }
 
 impl Sub for Float {
@@ -116,7 +116,7 @@ impl Sub for Float {
   xldr(1)> Sub::sub(3.5, 1.0)
   2.5
   """
-  @builtin def sub::<Float>(self: Self, rhs: Self) -> Self
+  @builtin def sub(self: Self, rhs: Self) -> Self
 }
 
 impl Mul for Float {
@@ -126,7 +126,7 @@ impl Mul for Float {
   xldr(1)> Mul::mul(1.5, 2.0)
   3.0
   """
-  @builtin def mul::<Float>(self: Self, rhs: Self) -> Self
+  @builtin def mul(self: Self, rhs: Self) -> Self
 }
 
 impl Show for Float {
@@ -136,7 +136,7 @@ impl Show for Float {
   xldr(1)> to_string(1.5)
   "1.5"
   """
-  def to_string::<Float>(self: Self) -> String {
+  def to_string(self: Self) -> String {
     inspect(self)
   }
 }
@@ -172,7 +172,7 @@ impl Eq for Float {
   xldr(1)> eq(1.5, 1.5)
   True
   """
-  @builtin def eq::<Float>(self: Self, rhs: Self) -> Boolean
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
 }
 
 impl Compare for Float {
@@ -182,7 +182,7 @@ impl Compare for Float {
   xldr(1)> compare(1.5, 2.0)
   Ordering::Less
   """
-  @builtin def compare::<Float>(self: Self, rhs: Self) -> Ordering
+  @builtin def compare(self: Self, rhs: Self) -> Ordering
 
   @doc """
   Return `True` when the left float is strictly less than the right float.
@@ -190,7 +190,7 @@ impl Compare for Float {
   xldr(1)> lt(1.5, 2.0)
   True
   """
-  @builtin def lt::<Float>(self: Self, rhs: Self) -> Boolean
+  @builtin def lt(self: Self, rhs: Self) -> Boolean
 
   @doc """
   Return `True` when the left float is less than or equal to the right float.
@@ -198,7 +198,7 @@ impl Compare for Float {
   xldr(1)> lte(1.5, 1.5)
   True
   """
-  @builtin def lte::<Float>(self: Self, rhs: Self) -> Boolean
+  @builtin def lte(self: Self, rhs: Self) -> Boolean
 
   @doc """
   Return `True` when the left float is strictly greater than the right float.
@@ -206,7 +206,7 @@ impl Compare for Float {
   xldr(1)> gt(2.0, 1.5)
   True
   """
-  @builtin def gt::<Float>(self: Self, rhs: Self) -> Boolean
+  @builtin def gt(self: Self, rhs: Self) -> Boolean
 
   @doc """
   Return `True` when the left float is greater than or equal to the right float.
@@ -214,5 +214,5 @@ impl Compare for Float {
   xldr(1)> gte(2.0, 2.0)
   True
   """
-  @builtin def gte::<Float>(self: Self, rhs: Self) -> Boolean
+  @builtin def gte(self: Self, rhs: Self) -> Boolean
 }

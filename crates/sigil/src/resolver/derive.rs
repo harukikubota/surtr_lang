@@ -464,7 +464,9 @@ fn make_derived_impl(
         });
     }
     let mut generated_attrs = DeclAttrs::default();
-    generated_attrs.fun_params = vec![named(span, "Self")];
+    if generator == DeriveGenerator::Default {
+        generated_attrs.fun_params = vec![named(span, "Self")];
+    }
     let mut methods = vec![Ast::Def(
         span.clone(),
         method_name.into(),

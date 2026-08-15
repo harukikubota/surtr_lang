@@ -1,12 +1,12 @@
 deftrait Render {
-  def render::<$A, $C>(value: $A, other: $C) -> String
+  def render(value: $A, other: $C) -> String
   where
     $A: Eq
     $C: Show
 }
 
 impl Render for Int {
-  def render::<$B, $D>(value: $B, other: $D) -> String
+  def render(value: $B, other: $D) -> String
   where
     $D: Show
     $B: Eq

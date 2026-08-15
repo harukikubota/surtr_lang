@@ -10,5 +10,5 @@ xldr(1)> Sub::sub(5, 2)
 """
 deftrait Sub {
   # Return the subtraction result.
-  def sub::<Self>(self: Self, rhs: Self) -> Self
+  def sub(self: Self, rhs: Self) -> Self
 }

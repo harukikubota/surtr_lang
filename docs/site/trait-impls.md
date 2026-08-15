@@ -30,7 +30,7 @@ impl Describable for Int {
 }
 ```
 
-FunParams は、型変数が value parameter の型から導入できない場合に使う。`self: Self` のように型変数が引数位置に現れる method は FunParams を省略する。trait 宣言に FunParams がある場合、impl method は trait head と impl target で置換した同じ構造を宣言し、個数・順序・型構造を一致させる。引数位置で導入済みの型変数を同じ型で重ねて指定するのはエラーである。
+FunParams は、型変数が value parameter の型から導入できない場合に使い、その型変数は戻り値にも現れなければならない。`self: Self` のように型変数が引数位置に現れる method は FunParams を省略する。trait 宣言に FunParams がある場合、impl method は trait head と impl target で置換した同じ構造を宣言し、個数・順序・型構造を一致させる。引数位置で導入済みの型変数を同じ型で重ねて指定するのはエラーである。
 
 ### 型引数を持つ Trait と `where`
 

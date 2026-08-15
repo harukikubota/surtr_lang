@@ -154,7 +154,7 @@ impl Alternative for Option<$T> {
 This is the source-level meaning of `left >* right` for `Option`.
 """
 impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
-  def lift_compose::<($A -> Option<$B>), $A, $B, $C, Option<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
+  def lift_compose::<$A, Option<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
     {|value| Functor::fmap(self(value), rhs)}
   }
 }
@@ -164,7 +164,7 @@ impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
 This is the source-level meaning of `left >=> right` for `Option`.
 """
 impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
-  def kleisli_compose::<($A -> Option<$B>), $A, $B, Option<$C>>(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
+  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
     {|value| Monad::bind(self(value), rhs)}
   }
 }

@@ -10,5 +10,5 @@ xldr(1)> Mul::mul(3, 4)
 """
 deftrait Mul {
   # Return the multiplication result.
-  def mul::<Self>(self: Self, rhs: Self) -> Self
+  def mul(self: Self, rhs: Self) -> Self
 }
