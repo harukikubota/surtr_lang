@@ -7985,6 +7985,22 @@ def hidden(value: $A) -> Int {
         "{err:?}"
     );
 
+    let mismatched = resolve_with_builtin_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<Self, $To>(self: Self) -> $To
+}
+
+def hidden(value: $A) -> Int
+where
+  $A: Convert<String>
+{
+  Convert::convert::<Int>(value)
+}"#,
+    );
+    let err = typecheck(mismatched).expect_err("a different trait argument is not a bound");
+    assert!(err.message.contains("MissingGenericBound"), "{err:?}");
+    assert!(err.message.contains("Convert<Int>"), "{err:?}");
+
     let bounded = resolve_with_builtin_prelude(
         r#"deftrait Convert<$To> {
   def convert::<Self, $To>(self: Self) -> $To
