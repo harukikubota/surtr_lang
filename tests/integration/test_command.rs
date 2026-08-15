@@ -93,6 +93,11 @@ test("Math") {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "successful test command should exit with status 0"
+        );
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("[PASS] Math > add > adds two numbers"));
@@ -127,6 +132,11 @@ test("Math") {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "test command failure should exit with status 1"
+    );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("[FAIL] Math > add > rejects wrong sum (lib/tests/math.srt)"));
@@ -157,6 +167,11 @@ test("String") {
         "test command should fail\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "test command failure should exit with status 1"
     );
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
