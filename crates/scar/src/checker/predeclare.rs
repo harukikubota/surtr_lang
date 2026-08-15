@@ -1896,12 +1896,25 @@ impl Checker {
                     .iter()
                     .map(|arg| self.instantiate_ty_with_fresh(arg, &mut fresh))
                     .collect::<Vec<_>>();
-                if impl_trait_args.len() != trait_args.len()
-                    || !impl_trait_args
-                        .iter()
-                        .zip(trait_args)
-                        .all(|(candidate, requested)| self.types_compatible(candidate, requested))
-                {
+                // Older signature-bound storage still carries a rendered
+                // instance key. Keep this as a boundary adapter only; all
+                // new solver callers pass the base trait plus `trait_args`.
+                let legacy_instance_key = trait_args.is_empty() && trait_name.contains('<');
+                let args_match = if legacy_instance_key {
+                    self.trait_display_name(&self.trait_instance_key_from_tys(
+                        &self.trait_key(&impl_info.trait_id),
+                        &impl_trait_args,
+                    )) == self.trait_display_name(trait_name)
+                } else {
+                    impl_trait_args.len() == trait_args.len()
+                        && impl_trait_args
+                            .iter()
+                            .zip(trait_args)
+                            .all(|(candidate, requested)| {
+                                self.types_compatible(candidate, requested)
+                            })
+                };
+                if !args_match {
                     continue;
                 }
                 let before = self.substitutions.clone();
@@ -1985,8 +1998,7 @@ impl Checker {
                     continue;
                 };
                 let trait_key = self.trait_key(trait_id);
-                let Ok(trait_args) =
-                    self.instantiate_impl_where_trait_args(impl_info, fresh, args)
+                let Ok(trait_args) = self.instantiate_impl_where_trait_args(impl_info, fresh, args)
                 else {
                     return false;
                 };
@@ -2016,13 +2028,11 @@ impl Checker {
             .type_param_vars_by_name
             .iter()
             .filter_map(|(name, original)| {
-                fresh
-                    .get(original)
-                    .cloned()
-                    .map(|ty| (name.clone(), ty))
+                fresh.get(original).cloned().map(|ty| (name.clone(), ty))
             })
             .collect::<HashMap<_, _>>();
-        let self_ty = self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, fresh));
+        let self_ty =
+            self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, fresh));
         args.iter()
             .map(|arg| {
                 self.resolve_signature_like_ast_ty_in_context(
@@ -3114,18 +3124,19 @@ impl Checker {
                     hint: None,
                 });
             }
-            let parent_args = self.instantiate_child_parent_args(&child_trait, child_impl, parent)?;
+            let parent_args =
+                self.instantiate_child_parent_args(&child_trait, child_impl, parent)?;
             let parent_candidates = self
                 .trait_impls
                 .values()
-                .filter(|impl_info| {
-                    self.trait_key(&impl_info.trait_id) == parent_key
-                })
+                .filter(|impl_info| self.trait_key(&impl_info.trait_id) == parent_key)
                 .cloned()
                 .collect::<Vec<_>>();
             let parent_impl = parent_candidates
                 .into_iter()
-                .find(|impl_info| self.parent_impl_covers_child(impl_info, &parent_args, child_impl))
+                .find(|impl_info| {
+                    self.parent_impl_covers_child(impl_info, &parent_args, child_impl)
+                })
                 .ok_or_else(|| TypeError {
                     message: format!(
                         "Trait impl {} for {} requires parent impl {} for the same target",
