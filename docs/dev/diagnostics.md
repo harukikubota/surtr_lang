@@ -34,7 +34,7 @@ source span を必要としない説明や修正案を `labels` に置かない�
 現在の代表例:
 
 - Unit 型のパターン案内は `parse.rs` の `help` に置く。`Help:` を label 本文に埋め込まない。
-- `OP rule` と `BIND_RULE_TEXT` は typecheck の `notes`、`=?` などの書き換え案は `help` に置く。
+- operator の `OP rule` は演算子 span を指す source label、`BIND_RULE_TEXT` は typecheck の `notes`、`=?` などの書き換え案は `help` に置く。
 - extractor の `input source` は `notes`、extractor 定義は関連 source label に置く。
 - runtime の失敗値・pattern・`call target` は label、`expected rule`・`runtime rule`・`opcode`・入力分類は `notes` に置く。
 - `assert_eq` の LHS/RHS term は比較対象の span を指すため label、失敗の説明は `help` に置く。

@@ -22,8 +22,13 @@ fn type_error_spec_labels_backtick_operator_operands() {
         .labels
         .iter()
         .any(|label| strip_ansi(&label.message) == "LHS actual: Int"));
-    assert!(spec_notes_text(&spec).contains("OP rule: A + A -> A"));
-    assert!(!labels_text(&spec).contains("OP rule:"));
+    let op = spec
+        .labels
+        .iter()
+        .find(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A")
+        .expect("operator label");
+    assert_eq!(slice_chars(source, op.span.start, op.span.end), "`+`");
+    assert!(!spec_notes_text(&spec).contains("OP rule:"));
     assert!(spec
         .labels
         .iter()
@@ -54,13 +59,18 @@ fn type_error_spec_picks_symbol_operator_outside_literals() {
         };
 
     let spec = type_error_spec(source, &err);
+    let op = spec
+        .labels
+        .iter()
+        .find(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A")
+        .expect("operator label");
     let lhs = spec
         .labels
         .iter()
         .find(|label| strip_ansi(&label.message) == "LHS actual: String")
         .expect("lhs label");
 
-    assert!(!labels_text(&spec).contains("OP rule:"));
+    assert_eq!(slice_chars(source, op.span.start, op.span.end), "+");
     assert_eq!(slice_chars(source, lhs.span.start, lhs.span.end), r#""+""#);
 }
 
@@ -85,8 +95,10 @@ fn type_error_spec_formats_eq_operator_with_three_captions() {
         .labels
         .iter()
         .any(|label| strip_ansi(&label.message) == "LHS actual: Int"));
-    assert!(spec_notes_text(&spec).contains("OP rule: A == A -> Boolean"));
-    assert!(!labels_text(&spec).contains("OP rule:"));
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| strip_ansi(&label.message) == "   OP rule: A == A -> Boolean"));
     assert!(spec
         .labels
         .iter()
@@ -113,8 +125,10 @@ fn type_error_spec_distinguishes_neq_operator_from_source() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(spec_notes_text(&spec).contains("OP rule: A != A -> Boolean"));
-    assert!(!labels_text(&spec).contains("OP rule:"));
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| strip_ansi(&label.message) == "   OP rule: A != A -> Boolean"));
     assert!(notes_text.contains("Step: Int != Boolean -> Boolean"));
     assert!(notes_text
         .contains("Reason: `!=` compares two values of the same type, but got Int and Boolean."));
@@ -137,8 +151,10 @@ fn type_error_spec_distinguishes_lt_operator_from_source() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(spec_notes_text(&spec).contains("OP rule: A < A -> Boolean"));
-    assert!(!labels_text(&spec).contains("OP rule:"));
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| strip_ansi(&label.message) == "   OP rule: A < A -> Boolean"));
     assert!(notes_text.contains("Step: Int < Boolean -> Boolean"));
     assert!(notes_text.contains(
         "Reason: `<` compares two ordered values of the same type, but got Int and Boolean."
@@ -162,8 +178,10 @@ fn type_error_spec_distinguishes_same_type_but_undefined_open_operator() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    assert!(spec_notes_text(&spec).contains("OP rule: A + A -> A"));
-    assert!(!labels_text(&spec).contains("OP rule:"));
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A"));
     assert!(notes_text.contains("Reason: `+` is not defined for Boolean."));
     assert!(spec
         .help
@@ -192,8 +210,10 @@ fn type_error_spec_formats_concat_operator_with_three_captions() {
         .labels
         .iter()
         .any(|label| strip_ansi(&label.message) == "LHS actual: Int"));
-    assert!(spec_notes_text(&spec).contains("OP rule: String ++ String -> String"));
-    assert!(!labels_text(&spec).contains("OP rule:"));
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| strip_ansi(&label.message) == "   OP rule: String ++ String -> String"));
     assert!(spec
         .labels
         .iter()
@@ -227,8 +247,10 @@ fn type_error_spec_canonicalizes_eq_helper_as_operator_surface() {
         .labels
         .iter()
         .any(|label| strip_ansi(&label.message) == "LHS actual: Int"));
-    assert!(spec_notes_text(&spec).contains("OP rule: A == A -> Boolean"));
-    assert!(!labels_text(&spec).contains("OP rule:"));
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| strip_ansi(&label.message) == "   OP rule: A == A -> Boolean"));
     assert!(spec
         .labels
         .iter()
@@ -236,7 +258,12 @@ fn type_error_spec_canonicalizes_eq_helper_as_operator_surface() {
     assert!(notes_text.contains("Step: Int == Boolean -> Boolean"));
     assert!(notes_text
         .contains("Reason: `==` compares two values of the same type, but got Int and Boolean."));
-    assert!(!labels_text(&spec).contains("OP rule:"));
+    let op = spec
+        .labels
+        .iter()
+        .find(|label| strip_ansi(&label.message) == "   OP rule: A == A -> Boolean")
+        .expect("operator label");
+    assert_eq!(slice_chars(source, op.span.start, op.span.end), "eq");
 }
 
 #[test]
@@ -290,8 +317,7 @@ fn type_error_spec_labels_flow_operator_parts() {
         .join("\n");
 
     assert!(label_text.contains("LHS actual: Result<Int>"));
-    assert!(!label_text.contains("OP rule:"));
-    assert!(notes_text.contains("OP rule: A |> (A -> B) -> B"));
+    assert!(label_text.contains("OP rule: A |> (A -> B) -> B"));
     assert!(label_text.contains("RHS actual: (Int -> Int)"));
     assert!(notes_text.contains("Step: Result<Int> |> (Int -> Int) -> Int"));
     assert!(notes_text.contains("Reason: RHS expects Int, but LHS is Result<Int>."));
@@ -379,8 +405,7 @@ fn render_flow_operator_error_keeps_actual_types_out_of_help() {
     let rendered_plain = strip_ansi(&rendered);
 
     assert!(rendered_plain.contains("LHS actual: Int"));
-    assert!(!labels_text(&spec).contains("OP rule:"));
-    assert!(spec_notes_text(&spec).contains("OP rule: Result<A> |>= (A -> Result<B>) -> Result<B>"));
+    assert!(labels_text(&spec).contains("OP rule: Result<A> |>= (A -> Result<B>) -> Result<B>"));
     assert!(rendered_plain.contains("Step: Int |>= (Int -> Result<Int>) -> Result<Int>"));
     assert!(rendered_plain.contains(
         "Reason: LHS is Int, but `|>=` requires a Monad such as Result<A>, List<A>, or Option<A>."
