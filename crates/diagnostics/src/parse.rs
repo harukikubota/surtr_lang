@@ -54,6 +54,15 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
         }
     }
 
+    if message == "The Unit type has no pattern matching." {
+        spec.labels.push(DiagnosticLabel {
+            source_id: None,
+            span: span.clone(),
+            message: "Help: variable bindings and the `_` wildcard pattern are allowed".into(),
+            color: Some(Color::Yellow),
+        });
+    }
+
     if message.starts_with("return-position `impl Trait` is not supported") {
         spec.help =
             Some("Name the return type parameter explicitly in the function signature.".into());

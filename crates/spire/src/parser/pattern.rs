@@ -35,6 +35,7 @@ impl Parser<'_> {
             self.peek(),
             Token::LBrack
                 | Token::LParen
+                | Token::Unit
                 | Token::Ident(_)
                 | Token::Caret
                 | Token::Int(_)
@@ -351,6 +352,10 @@ impl Parser<'_> {
                 Ok(AstPattern::Var(sp, name))
             }
             Token::LBrack => self.parse_list_bind_pattern(),
+            Token::Unit => Err(ParseError::syntax(
+                "The Unit type has no pattern matching.",
+                sp,
+            )),
             Token::LParen => {
                 self.with_parse_nesting(sp.clone(), |parser| {
                     parser.advance();

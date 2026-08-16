@@ -3693,6 +3693,19 @@ fn test_safebind_rhs_requires_statement_separator() {
 }
 
 #[test]
+fn test_unit_is_rejected_as_a_pattern_with_binding_help() {
+    for source in ["() = ()", "() =? ()"] {
+        let err = parse(source).expect_err("Unit must not be accepted as a pattern");
+        assert!(
+            err.message()
+                .contains("The Unit type has no pattern matching."),
+            "source={source:?}, message={}",
+            err.message()
+        );
+    }
+}
+
+#[test]
 fn test_safebind_allows_trailing_semicolon() {
     let ast = parse("[] =? value;").unwrap();
     assert!(matches!(

@@ -88,7 +88,7 @@ impl Parser<'_> {
                                 self.stmt_has_top_level_assignment_from(save);
                             let starts_structural_bind = matches!(
                                 self.tokens.get(save).map(|sp| &sp.token),
-                                Some(Token::LParen | Token::LBrack | Token::Caret)
+                                Some(Token::LParen | Token::Unit | Token::LBrack | Token::Caret)
                             ) && has_top_level_assignment;
                             let starts_annotated_ident_bind = matches!(
                                 self.tokens.get(save).map(|sp| &sp.token),

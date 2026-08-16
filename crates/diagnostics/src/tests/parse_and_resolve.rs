@@ -19,6 +19,23 @@ fn parse_error_spec_adds_unexpected_token_help() {
 }
 
 #[test]
+fn parse_error_spec_labels_unit_pattern_help() {
+    let source = "() = ()";
+    let spec = parse_error_spec(
+        source,
+        "The Unit type has no pattern matching.",
+        Span { start: 0, end: 2 },
+    );
+
+    assert!(spec.help.is_none());
+    assert!(spec.labels.iter().any(|label| {
+        label.message == "Help: variable bindings and the `_` wildcard pattern are allowed"
+            && label.color == Some(Color::Yellow)
+            && slice_chars(source, label.span.start, label.span.end) == "()"
+    }));
+}
+
+#[test]
 fn parse_error_spec_rewrites_identity_anonymous_capture() {
     let source = "f = &(&1)";
     let spec = parse_error_spec(
