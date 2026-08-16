@@ -57,7 +57,7 @@ pub fn runtime_error_spec(
         if let Some(primary) = template
             .labels
             .iter()
-            .find(|label| label.message != "call target" && !label.message.starts_with("opcode:"))
+            .find(|label| label.message != "call target")
         {
             spec.primary_span = primary.span.clone();
         }

@@ -177,7 +177,7 @@ pub(crate) fn infer_operator_mismatch_template(
         let line_idx = line_index_for_span(lines, focus.start)?;
         (line_idx, lines[line_idx].0)
     };
-    let (left_start, left_end, right_start, right_end, op_span, op_display, op_name) =
+    let (left_start, left_end, right_start, right_end, _op_span, op_display, op_name) =
         if let Some(call_name) = parsed.source_name_hint {
             let (call_span, arg_spans) = find_call_site_and_args(source, lines, focus, call_name)?;
             let [left_arg, right_arg] = arg_spans.as_slice() else {
@@ -238,7 +238,6 @@ pub(crate) fn infer_operator_mismatch_template(
         line_start,
         left_start,
         left_end,
-        op_span,
         right_start,
         right_end,
         &view,
@@ -600,7 +599,6 @@ pub(crate) fn build_binary_operator_template(
     line_start: usize,
     left_start: usize,
     left_end: usize,
-    op_span: Span,
     right_start: usize,
     right_end: usize,
     view: &BinaryOperatorView<'_>,
@@ -618,12 +616,6 @@ pub(crate) fn build_binary_operator_template(
             },
             DiagnosticLabel {
                 source_id: None,
-                span: op_span,
-                message: flow_operator_caption("OP rule", &view.op_rule),
-                color: Some(Color::Magenta),
-            },
-            DiagnosticLabel {
-                source_id: None,
                 span: Span {
                     start: line_start + right_start,
                     end: line_start + right_end,
@@ -632,7 +624,11 @@ pub(crate) fn build_binary_operator_template(
                 color: Some(Color::Yellow),
             },
         ],
-        notes: vec![format!("Step: {}", view.step), view.reason.clone()],
+        notes: vec![
+            format!("OP rule: {}", view.op_rule),
+            format!("Step: {}", view.step),
+            view.reason.clone(),
+        ],
         help: Some(view.help.clone()),
     }
 }
@@ -641,8 +637,6 @@ pub(crate) fn build_function_value_flow_template(
     line_start: usize,
     lhs_start: usize,
     lhs_end: usize,
-    op_start: usize,
-    op_end: usize,
     rhs_start: usize,
     rhs_end: usize,
     op: &str,
@@ -671,15 +665,6 @@ pub(crate) fn build_function_value_flow_template(
             DiagnosticLabel {
                 source_id: None,
                 span: Span {
-                    start: line_start + op_start,
-                    end: line_start + op_end,
-                },
-                message: format!("OP rule: {}", rule),
-                color: Some(Color::Magenta),
-            },
-            DiagnosticLabel {
-                source_id: None,
-                span: Span {
                     start: line_start + rhs_start,
                     end: line_start + rhs_end,
                 },
@@ -688,6 +673,7 @@ pub(crate) fn build_function_value_flow_template(
             },
         ],
         notes: vec![
+            format!("OP rule: {}", rule),
             format!(
                 "These operands are parsed as expressions before `{}` checks whether they are function values.",
                 op
@@ -705,8 +691,6 @@ pub(crate) fn build_function_value_flow_template_with_signature(
     line_start: usize,
     lhs_start: usize,
     lhs_end: usize,
-    op_start: usize,
-    op_end: usize,
     rhs_start: usize,
     rhs_end: usize,
     op: &str,
@@ -757,7 +741,7 @@ pub(crate) fn build_function_value_flow_template_with_signature(
         }
     };
 
-    let mut notes = vec![message.to_string()];
+    let mut notes = vec![format!("OP rule: {}", rule), message.to_string()];
     if let Some(note) = result_note {
         notes.insert(0, note.to_string());
     }
@@ -769,15 +753,6 @@ pub(crate) fn build_function_value_flow_template_with_signature(
                 span: signature_span,
                 message: format!("{}: {}", signature_label, failing_signature),
                 color: Some(Color::Blue),
-            },
-            DiagnosticLabel {
-                source_id: None,
-                span: Span {
-                    start: line_start + op_start,
-                    end: line_start + op_end,
-                },
-                message: format!("OP rule: {}", rule),
-                color: Some(Color::Magenta),
             },
             DiagnosticLabel {
                 source_id: None,
@@ -842,8 +817,6 @@ pub(crate) fn infer_flow_operator_template(
                 line_start,
                 lhs_start,
                 lhs_end,
-                op_start,
-                op_end,
                 rhs_start,
                 rhs_end,
                 op,
@@ -855,8 +828,7 @@ pub(crate) fn infer_flow_operator_template(
             ));
         }
         return Some(build_function_value_flow_template(
-            line_start, lhs_start, lhs_end, op_start, op_end, rhs_start, rhs_end, op, &lhs_expr,
-            &rhs_expr, message,
+            line_start, lhs_start, lhs_end, rhs_start, rhs_end, op, &lhs_expr, &rhs_expr, message,
         ));
     }
     let lhs_actual = detail
@@ -888,7 +860,7 @@ pub(crate) fn infer_flow_operator_template(
     };
 
     Some(build_flow_operator_template(
-        line_start, lhs_start, lhs_end, op_start, op_end, rhs_start, rhs_end, &view,
+        line_start, lhs_start, lhs_end, rhs_start, rhs_end, &view,
     ))
 }
 
@@ -973,7 +945,7 @@ pub(crate) fn infer_plain_rhs_required_flow_template(
     };
 
     Some(build_flow_operator_template(
-        line_start, lhs_start, lhs_end, op_start, op_end, rhs_start, rhs_end, &view,
+        line_start, lhs_start, lhs_end, rhs_start, rhs_end, &view,
     ))
 }
 
@@ -981,8 +953,6 @@ pub(crate) fn build_flow_operator_template(
     line_start: usize,
     lhs_start: usize,
     lhs_end: usize,
-    op_start: usize,
-    op_end: usize,
     rhs_start: usize,
     rhs_end: usize,
     view: &FlowOperatorView<'_>,
@@ -1000,15 +970,6 @@ pub(crate) fn build_flow_operator_template(
         DiagnosticLabel {
             source_id: None,
             span: Span {
-                start: line_start + op_start,
-                end: line_start + op_end,
-            },
-            message: flow_operator_caption("OP rule", &view.op_rule),
-            color: Some(Color::Yellow),
-        },
-        DiagnosticLabel {
-            source_id: None,
-            span: Span {
                 start: line_start + rhs_start,
                 end: line_start + rhs_end,
             },
@@ -1016,7 +977,10 @@ pub(crate) fn build_flow_operator_template(
             color: Some(Color::Magenta),
         },
     ];
-    let mut notes = vec![format!("Step: {}", view.step)];
+    let mut notes = vec![
+        format!("OP rule: {}", view.op_rule),
+        format!("Step: {}", view.step),
+    ];
     if let Some(rule_detail) = &view.rule_detail {
         notes.push(rule_detail.clone());
     }
@@ -1304,11 +1268,6 @@ pub(crate) fn infer_total_bind_pattern_template(
     let eq_col = find_assignment_eq_before(&chars, chars.len())?;
     let lhs = trim_char_span(&chars, 0, eq_col);
     let rhs = trim_char_span(&chars, eq_col + 1, chars.len());
-    let op_span = Span {
-        start: line_start + eq_col,
-        end: line_start + eq_col + 1,
-    };
-
     Some(TemplateSpec {
         labels: vec![
             DiagnosticLabel {
@@ -1322,12 +1281,6 @@ pub(crate) fn infer_total_bind_pattern_template(
             },
             DiagnosticLabel {
                 source_id: None,
-                span: op_span,
-                message: BIND_RULE_TEXT.to_string(),
-                color: Some(Color::Yellow),
-            },
-            DiagnosticLabel {
-                source_id: None,
                 span: Span {
                     start: line_start + rhs.0,
                     end: line_start + rhs.1,
@@ -1336,7 +1289,7 @@ pub(crate) fn infer_total_bind_pattern_template(
                 color: None,
             },
         ],
-        notes: Vec::new(),
+        notes: vec![BIND_RULE_TEXT.to_string()],
         help: Some(
             hint.unwrap_or("Use `=?` for partial destructuring and extractor-driven matches.")
                 .to_string(),

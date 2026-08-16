@@ -19,7 +19,7 @@ fn parse_error_spec_adds_unexpected_token_help() {
 }
 
 #[test]
-fn parse_error_spec_labels_unit_pattern_help() {
+fn parse_error_spec_uses_help_for_unit_pattern_guidance() {
     let source = "() = ()";
     let spec = parse_error_spec(
         source,
@@ -27,12 +27,11 @@ fn parse_error_spec_labels_unit_pattern_help() {
         Span { start: 0, end: 2 },
     );
 
-    assert!(spec.help.is_none());
-    assert!(spec.labels.iter().any(|label| {
-        label.message == "Help: variable bindings and the `_` wildcard pattern are allowed"
-            && label.color == Some(Color::Yellow)
-            && slice_chars(source, label.span.start, label.span.end) == "()"
-    }));
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Variable bindings and the `_` wildcard pattern are allowed.")
+    );
+    assert!(!labels_text(&spec).contains("Help:"));
 }
 
 #[test]
@@ -124,11 +123,10 @@ fn type_error_spec_splits_total_bind_pattern_error_into_lhs_op_rhs() {
             && label.color == Some(Color::Red)
             && slice_chars(source, label.span.start, label.span.end) == "[h, ..t]"
     }));
-    assert!(spec.labels.iter().any(|label| {
-        label.message == "Bind rule: `=` accepts only total MatchBlock patterns."
-            && label.color == Some(Color::Yellow)
-            && slice_chars(source, label.span.start, label.span.end) == "="
-    }));
+    assert!(
+        spec_notes_text(&spec).contains("Bind rule: `=` accepts only total MatchBlock patterns.")
+    );
+    assert!(!labels_text(&spec).contains("Bind rule:"));
     assert!(spec.labels.iter().any(|label| {
         label.message == "RHS value"
             && label.color.is_none()
@@ -157,10 +155,8 @@ fn type_error_spec_by_id_adds_extractor_context_blocks() {
 
     let spec = type_error_spec_by_id(&sources, main_id, &err);
 
-    assert!(spec
-        .labels
-        .iter()
-        .any(|label| label.source_id == Some(main_id) && label.message == "input source: Boolean"));
+    assert!(spec_notes_text(&spec).contains("input source: Boolean"));
+    assert!(!labels_text(&spec).contains("input source:"));
     assert!(spec.labels.iter().any(|label| {
         label.source_id == Some(kernel_id)
             && label
