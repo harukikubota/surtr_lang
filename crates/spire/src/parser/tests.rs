@@ -2619,6 +2619,44 @@ fn test_func_literal_operator_lowers_to_binop() {
 }
 
 #[test]
+fn test_quoted_callee_name_and_path_lower_like_plain_calls() {
+    let ast = parse("a = `eq`(left, right)\nb = `Boolean::eq`(True, False)").unwrap();
+    assert!(matches!(
+        &ast[0],
+        Ast::Bind(_, _, rhs) if matches!(rhs.as_ref(), Ast::App(_, func, args)
+            if matches!(func.as_ref(), Ast::Var(_, name) if name == "eq") && args.len() == 2)
+    ));
+    assert!(matches!(
+        &ast[1],
+        Ast::Bind(_, _, rhs) if matches!(rhs.as_ref(), Ast::App(_, func, args)
+            if matches!(func.as_ref(), Ast::Path(_, path) if path.segments == vec!["Boolean", "eq"])
+                && args.len() == 2)
+    ));
+}
+
+#[test]
+fn test_quoted_operator_callee_lowers_to_binop() {
+    let ast = parse("value = `+`(1, 2)").unwrap();
+    assert!(matches!(
+        &ast[0],
+        Ast::Bind(_, _, rhs) if matches!(rhs.as_ref(), Ast::BinOp(_, BinOp::Add, _, _))
+    ));
+}
+
+#[test]
+fn test_quoted_operator_callee_requires_two_positional_arguments() {
+    let err = parse("`+`(1)").expect_err("quoted operator call must require two arguments");
+    assert!(err
+        .message()
+        .contains("expects exactly 2 positional arguments"));
+}
+
+#[test]
+fn test_individually_quoted_path_segments_are_rejected() {
+    assert!(parse("`Boolean`::`eq`(True, False)").is_err());
+}
+
+#[test]
 fn test_bare_and_call_stays_plain_name() {
     let ast = parse("x = and(left, right)").unwrap();
     match &ast[0] {
@@ -3437,6 +3475,17 @@ fn test_backtick_qualified_capture_and_operator_capture_parse() {
 }
 
 #[test]
+fn test_bare_operator_capture_suggests_quoted_operator_capture() {
+    for (source, suggestion) in [("&+", "&`+`"), ("List::reduce([1, 2], 0, &*)", "&`*`")] {
+        let err = parse(source).expect_err("bare operator capture must be rejected with guidance");
+        assert!(err.message().contains("Unquoted operator capture"));
+        assert!(err
+            .message()
+            .contains(suggestion.trim_matches(|ch| ch == '&' || ch == '`')));
+    }
+}
+
+#[test]
 fn test_pipe_rhs_call_stays_as_app() {
     let ast = parse("out = user |> User::get_name()").expect("pipe with method call should parse");
     match &ast[0] {
@@ -3689,10 +3738,9 @@ fn test_statements_on_same_line_require_separator() {
 #[test]
 fn test_range_literal_used_as_operator_has_bracket_help() {
     let err = parse("2..8").expect_err("Expected parse error");
-    assert!(
-        err.message()
-            .contains("Range literals must use bracket syntax")
-    );
+    assert!(err
+        .message()
+        .contains("Range literals must use bracket syntax"));
 }
 
 #[test]

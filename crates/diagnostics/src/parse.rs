@@ -62,6 +62,10 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
         spec.help = Some("Write `[start..stop]`.".into());
     }
 
+    if let Some(operator) = message.strip_prefix("Unquoted operator capture: ") {
+        spec.help = Some(format!("Write &`{operator}`."));
+    }
+
     if message.starts_with("return-position `impl Trait` is not supported") {
         spec.help =
             Some("Name the return type parameter explicitly in the function signature.".into());

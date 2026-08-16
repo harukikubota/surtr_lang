@@ -1,7 +1,8 @@
 use crate::ast::*;
 use crate::error::ParseError;
 use crate::func_literal::{
-    func_literal_operator, parse_func_literal_path, FuncLiteralOperatorTier,
+    func_literal_operator, func_literal_operator_token, parse_func_literal_path,
+    FuncLiteralOperatorTier,
 };
 use crate::token::Token;
 use sindr::primitives::ToPrimitive;
@@ -769,10 +770,7 @@ impl Parser<'_> {
                 sp,
             )),
 
-            Token::FuncLiteral(_) => Err(ParseError::syntax(
-                "FuncLiteral must appear in infix position",
-                sp,
-            )),
+            Token::FuncLiteral(body) => self.parse_quoted_callee_call(sp, body),
 
             // Match expression
             Token::Match => self.parse_match_expr(),
@@ -790,6 +788,71 @@ impl Parser<'_> {
             _ => Err(ParseError::syntax(
                 format!("Unexpected token: {:?}", self.peek()),
                 sp,
+            )),
+        }
+    }
+
+    /// Parse a backtick-quoted callee such as `` `Add::add`(1, 2) ``.
+    /// Quoting is syntactic only: it never creates a function value.
+    fn parse_quoted_callee_call(&mut self, span: Span, body: String) -> Result<Ast, ParseError> {
+        let func_span = self.advance().span.clone();
+        if !matches!(self.peek(), Token::LParen | Token::Unit) {
+            return Err(ParseError::syntax(
+                "FuncLiteral must appear in infix position or be followed by a call",
+                func_span,
+            ));
+        }
+
+        let args = if matches!(self.peek(), Token::Unit) {
+            self.advance();
+            Vec::new()
+        } else {
+            self.advance();
+            let args = self.parse_call_args()?;
+            self.skip_newlines();
+            self.expect(&Token::RParen)?;
+            args
+        };
+        let end = self.tokens[self.pos - 1].span.end;
+        match Self::parse_func_literal_body(&body, func_span.clone())? {
+            FuncLiteralBodyKind::Operator(op_body) => {
+                let [RecordLitArg::Positional(left), RecordLitArg::Positional(right)] =
+                    args.as_slice()
+                else {
+                    return Err(ParseError::syntax(
+                        format!(
+                            "quoted operator call `{}` expects exactly 2 positional arguments",
+                            op_body
+                        ),
+                        Span {
+                            start: span.start,
+                            end,
+                        },
+                    ));
+                };
+                let Some(op) = Self::expr_binop_from_func_literal(&op_body) else {
+                    return Err(ParseError::syntax(
+                        format!("quoted operator call `{}` is not supported", op_body),
+                        func_span,
+                    ));
+                };
+                Ok(Self::lower_binop(left.clone(), op, right.clone()))
+            }
+            FuncLiteralBodyKind::Name(name) => Ok(Ast::App(
+                Span {
+                    start: span.start,
+                    end,
+                },
+                Box::new(Ast::Var(func_span, name)),
+                args,
+            )),
+            FuncLiteralBodyKind::Path(path) => Ok(Ast::App(
+                Span {
+                    start: span.start,
+                    end,
+                },
+                Box::new(Ast::Path(path.span.clone(), path)),
+                args,
             )),
         }
     }
@@ -1935,6 +1998,16 @@ impl Parser<'_> {
                 Span {
                     start: sp.start,
                     end: end_span.end,
+                },
+            ));
+        }
+        if let Some(operator) = func_literal_operator_token(self.peek()) {
+            let operator_span = self.peek_span();
+            return Err(ParseError::syntax(
+                format!("Unquoted operator capture: {operator}"),
+                Span {
+                    start: sp.start,
+                    end: operator_span.end,
                 },
             ));
         }

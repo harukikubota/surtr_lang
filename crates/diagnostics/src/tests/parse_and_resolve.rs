@@ -101,6 +101,19 @@ fn parse_error_spec_puts_range_literal_rewrite_in_help() {
 }
 
 #[test]
+fn parse_error_spec_puts_bare_operator_capture_rewrite_in_help() {
+    let spec = parse_error_spec(
+        "List::reduce([1, 2], 0, &+)",
+        "Unquoted operator capture: +",
+        Span { start: 23, end: 25 },
+    );
+
+    assert_eq!(spec.message, "Unquoted operator capture: +");
+    assert_eq!(spec.help.as_deref(), Some("Write &`+`."));
+    assert!(!spec.message.contains("Write &`+`."));
+}
+
+#[test]
 fn type_error_spec_labels_extractor_pattern_for_safebind_rhs() {
     let source = "uncons(head, tail) =? True";
     let err = TypeError {

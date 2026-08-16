@@ -213,18 +213,22 @@ users |> List::map(&User::get_name)
 
 ## Backtick FuncLiteral
 
-backtick FuncLiteral は「関数値」ではなく「中置 call の補助構文」です。
+backtick FuncLiteral は「関数値」ではなく、引用された callee を表す補助構文です。
 
 ```surtr
 10 `+` 5
 7 `eq` 7
 left `concat` right
+`Add::add`(1, 2)
+`+`(1, 2)
 ```
 
 意味は次です。
 
 - ``left `name` right`` は `name(left, right)`
 - ``left `+` right`` は通常の演算子と同じ
+- `` `name`(args...) `` と `` `Type::method`(args...) `` は通常の call と同じ
+- `` `+`(left, right) `` は通常の二項演算子と同じ
 - unqualified ``left `on` right`` は `Function::on(left, right)` として扱います
 - ``left `Function::on` right`` も同じ意味で、flow 演算子より低優先度です
 - ``left `Other::on` right`` は通常どおり `Other::on(left, right)` です
@@ -234,6 +238,7 @@ FuncLiteral は値にならないので、単独では置けません。
 ```surtr
 f = `eq`      # NG
 items |*> `+` # NG
+`Boolean`::`eq`(True, False) # NG: path は全体を一組の backtick で囲む
 ```
 
 これが必要なら capture や closure を使います。
