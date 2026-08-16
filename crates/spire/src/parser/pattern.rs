@@ -135,18 +135,33 @@ impl Parser<'_> {
         };
         loop {
             self.skip_newlines();
-            if !matches!(self.peek(), Token::At) {
+            let compact_alias = matches!(self.peek(), Token::Annotator(_));
+            if !compact_alias && !matches!(self.peek(), Token::At) {
                 break;
             }
-            self.advance(); // '@'
-            self.skip_newlines();
             if super::pattern_depth(&pat) >= super::MAX_PARSE_NESTING {
                 return Err(ParseError::syntax(
                     super::MAX_PARSE_NESTING_MESSAGE,
                     super::pattern_span(&pat).clone(),
                 ));
             }
-            let (alias, alias_span) = self.expect_ident()?;
+            let (alias, alias_span) = if compact_alias {
+                let spanned = self.advance();
+                let Token::Annotator(alias) = spanned.token else {
+                    unreachable!("compact as-pattern alias was checked before consuming")
+                };
+                (
+                    alias,
+                    Span {
+                        start: spanned.span.start + 1,
+                        end: spanned.span.end,
+                    },
+                )
+            } else {
+                self.advance(); // '@'
+                self.skip_newlines();
+                self.expect_ident()?
+            };
             if alias.starts_with('_') {
                 return Err(ParseError::syntax(
                     "as-pattern alias must be a binding identifier; use `pattern @ name`, not `pattern @ _`",

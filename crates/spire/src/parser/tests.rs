@@ -3096,6 +3096,21 @@ fn test_as_pattern_rejects_wildcard_alias() {
 }
 
 #[test]
+fn test_as_pattern_accepts_compact_at_alias() {
+    for source in [
+        "(left, right)@whole = (1, 2)",
+        "(left, right) @whole = (1, 2)",
+    ] {
+        let ast = parse(source).expect("compact as-pattern alias should parse");
+        assert!(matches!(
+            &ast[0],
+            Ast::Bind(_, AstPattern::As(_, inner, alias, None), _)
+                if alias == "whole" && matches!(inner.as_ref(), AstPattern::Tuple(_, _))
+        ));
+    }
+}
+
+#[test]
 fn test_integer_literal_pattern_safebind() {
     let ast = parse("1 =? value").unwrap();
     match &ast[0] {
