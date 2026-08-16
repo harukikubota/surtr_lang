@@ -9,7 +9,7 @@
 `@derive` は型定義の直前に一度だけ置き、Trait 名をカンマで区切ります。
 
 ```surtr
-@derive Eq, Neq, Compare, Show
+@derive Eq, Compare, Show
 defstruct User {
   name: String,
   age: Int,
@@ -26,27 +26,24 @@ older_user = User("alice", 31)
 print(inspect(user == same_user))
 print(inspect(user != older_user))
 print(inspect(user < older_user))
-print(inspect(to_string(user)))
+print(to_string(user))
 ```
 
 ## 生成される Trait
 
 | 指定 | 生成されるメソッド | 生成規則 |
 | --- | --- | --- |
-| `Eq` | `eq(self, rhs) -> Boolean` | 全フィールドを宣言順に比較し、すべて等しければ `True` |
-| `Neq` | `neq(self, rhs) -> Boolean` | 生成された `Eq` の結果を否定 |
+| `Eq` | `eq(self, rhs) -> Boolean` | 全フィールドを宣言順に比較し、すべて等しければ `True` neqも使えるようになる|
 | `Compare` | `compare(self, rhs) -> Ordering` | フィールドを宣言順に辞書順比較 |
 | `Show` | `to_string(self) -> String` | `inspect(self)` を呼び出す |
 | `Default` | `default::<Self>() -> Self` | 各 field / payload を `default()` で生成 |
 
-`Neq` だけを指定した場合も、内部では `Eq` の比較本体が必要になるため `Eq` 相当の実装が自動的に用意されます。
-
-### `Eq` と `Neq`
+### `Eq`
 
 構造体・レコードでは、すべてのフィールドが `Eq` で比較されます。フィールドがない型は等しい値同士として扱われます。
 
 ```surtr
-@derive Eq, Neq
+@derive Eq
 defrecord Point(x: Int, y: Int)
 
 p = Point(1, 2)
@@ -95,11 +92,11 @@ defstruct User {
 }
 
 user = User("alice", 30)
-print(inspect(to_string(user)))
+print(to_string(user))
 # => "User(name: alice, age: 30)"
 ```
 
-`inspect` を直接呼び出した場合の quote を含む表示など、表示形式の詳細は [`structs.md`](./structs.md) を参照してください。`Show` の表示はデバッグ・説明用の文字列表現であり、構造体を再構築できるコード形式とは限りません。
+`inspect` を直接呼び出した場合の quote を含む表示など、表示形式の詳細は [`structs.md`](./structs.md) を参照してください。
 
 ### `Default`
 
@@ -128,7 +125,7 @@ Config {
 
 record も各 public field の default 値から直接構築されます。
 
-構造体リテラルは `impl Config` の同型メソッド本体内だけで許可されるため、derive は型所有者側の自動生成としてこの構築を行います。derive しない型に default 構築経路は自動追加されません。
+構造体リテラルは `impl Config` の同型メソッド本体内だけで許可されるため、derive は型所有者側の自動生成としてこの構築を行います。derive しない型に default 構築経路は追加されません。
 
 ただし、`Default` は型固有の不変条件を検査しません。たとえば `new(value) -> Result<Self, Error>` が `value > 0` を検証していても、`Int` の default が `0` なら、その型に `@derive Default` を付けるのは不適切です。default 値自体が妥当な型だけに指定してください。
 
@@ -161,9 +158,9 @@ generic な struct / enum にも付けられます。生成された比較処理
 - `@derive` は `defstruct`、`defrecord`、`defenum` の直前にだけ置けます。
 - 1 つの型に複数の `@derive` を置けません。
 - Trait 名は bare identifier で指定します。`Eq<Int>` や qualified path は使えません。
-- Trait 名は少なくとも 1 つ必要です。末尾カンマも使えません。
+- Trait 名は少なくとも 1 つ必要です。
 - 同じリスト内で Trait 名を重複させられません。
-- V1 で指定できるのは `Eq`、`Neq`、`Compare`、`Show`、`Default` です。ユーザー定義 Trait の derive recipe はまだ登録できません。
+- 指定できるのは `Eq`、`Compare`、`Show`、`Default` です。ユーザー定義 Trait の derive recipe はまだ登録できません。
 - `deferror`、`deftrait`、`impl`、関数、module、`@builtin type` などには付けられません。
 - derive で生成される Trait と同じ型の明示的な `impl` は書けません。
 
