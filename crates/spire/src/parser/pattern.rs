@@ -191,7 +191,7 @@ impl Parser<'_> {
                 start: super::pattern_span(&pat).start,
                 end,
             };
-            pat = AstPattern::As(span, Box::new(pat), alias, alias_ty);
+            pat = AstPattern::As(span, Box::new(pat), alias, alias_ty, alias_span);
         }
         Ok(pat)
     }
@@ -437,7 +437,7 @@ impl Parser<'_> {
 pub(super) fn pattern_contains_pin(pattern: &AstPattern) -> bool {
     match pattern {
         AstPattern::Pin(_, _) => true,
-        AstPattern::As(_, inner, _, _) => pattern_contains_pin(inner),
+        AstPattern::As(_, inner, _, _, _) => pattern_contains_pin(inner),
         AstPattern::ListCons(_, head, tail) => {
             pattern_contains_pin(head) || pattern_contains_pin(tail)
         }
@@ -458,7 +458,9 @@ pub(super) fn pattern_contains_pin(pattern: &AstPattern) -> bool {
 
 pub(super) fn pattern_contains_binding_var(pattern: &AstPattern) -> bool {
     match pattern {
-        AstPattern::Var(_, _) | AstPattern::Annotated(_, _, _) | AstPattern::As(_, _, _, _) => true,
+        AstPattern::Var(_, _) | AstPattern::Annotated(_, _, _) | AstPattern::As(_, _, _, _, _) => {
+            true
+        }
         AstPattern::ListCons(_, head, tail) => {
             pattern_contains_binding_var(head) || pattern_contains_binding_var(tail)
         }

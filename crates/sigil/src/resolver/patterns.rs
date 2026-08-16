@@ -1,10 +1,15 @@
 use super::*;
 
+const DUPLICATE_PATTERN_LABELS: [&str; 5] = ["first", "second", "third", "fourth", "fifth"];
+
 impl Resolver {
     pub(super) fn resolve_pattern(
         &mut self,
         pat: AstPattern,
     ) -> Result<ResolvedPattern, ResolveError> {
+        if let Some(error) = duplicate_pattern_binding_error(&pat) {
+            return Err(error);
+        }
         let mut seen = HashMap::<String, Span>::new();
         self.resolve_pattern_inner(pat, &mut seen)
     }
@@ -236,9 +241,9 @@ impl Resolver {
                     .map(|item| self.resolve_pattern_inner(item, seen))
                     .collect::<Result<Vec<_>, _>>()?,
             )),
-            AstPattern::As(span, inner, alias, alias_ty) => {
+            AstPattern::As(_span, inner, alias, alias_ty, alias_span) => {
                 let resolved_inner = self.resolve_pattern_inner(*inner, seen)?;
-                let alias_id = self.define_pattern_binding(alias, span, seen)?;
+                let alias_id = self.define_pattern_binding(alias, alias_span, seen)?;
                 Ok(ResolvedPattern::As(
                     Box::new(resolved_inner),
                     alias_id,
@@ -265,5 +270,137 @@ impl Resolver {
                 body: resolved_body,
             })
         })
+    }
+}
+
+fn duplicate_pattern_binding_error(pat: &AstPattern) -> Option<ResolveError> {
+    let mut occurrences = Vec::new();
+    collect_pattern_bindings_preorder(pat, &mut occurrences);
+
+    let mut by_name = HashMap::<String, Vec<Span>>::new();
+    let mut duplicate_name = None;
+    for (name, span) in occurrences {
+        let spans = by_name.entry(name.clone()).or_default();
+        if spans.len() < DUPLICATE_PATTERN_LABELS.len() {
+            spans.push(span);
+        }
+        if spans.len() == 2 && duplicate_name.is_none() {
+            duplicate_name = Some(name);
+        }
+    }
+
+    let name = duplicate_name?;
+    let spans = by_name.get(&name)?;
+    let first = spans.first()?.clone();
+    Some(ResolveError {
+        message: format!("Duplicate binding in pattern: {}", name),
+        span: first,
+        related_labels: spans
+            .iter()
+            .zip(DUPLICATE_PATTERN_LABELS)
+            .map(|(span, message)| ResolveErrorLabel {
+                span: span.clone(),
+                message: message.to_string(),
+            })
+            .collect(),
+    })
+}
+
+fn collect_pattern_bindings_preorder(pat: &AstPattern, out: &mut Vec<(String, Span)>) {
+    match pat {
+        AstPattern::Var(span, name) | AstPattern::Annotated(span, name, _) => {
+            out.push((name.clone(), span.clone()));
+        }
+        AstPattern::As(_, inner, alias, _, alias_span) => {
+            if let Some(items) = pattern_sequence_items(inner) {
+                collect_as_sequence_bindings(items, alias, alias_span, out);
+            } else {
+                collect_pattern_bindings_preorder(inner, out);
+                out.push((alias.clone(), alias_span.clone()));
+            }
+        }
+        AstPattern::ListCons(_, head, tail) => {
+            collect_pattern_bindings_preorder(head, out);
+            collect_pattern_bindings_preorder(tail, out);
+        }
+        AstPattern::Constructor(_, _, inners)
+        | AstPattern::Call(_, _, inners)
+        | AstPattern::Tuple(_, inners)
+        | AstPattern::Or(_, inners) => {
+            for inner in inners {
+                collect_pattern_bindings_preorder(inner, out);
+            }
+        }
+        AstPattern::Pin(_, _)
+        | AstPattern::Wildcard(_)
+        | AstPattern::ListNil(_)
+        | AstPattern::IntLit(_, _)
+        | AstPattern::StrLit(_, _)
+        | AstPattern::BoolLit(_, _)
+        | AstPattern::DurationLit(_, _) => {}
+    }
+}
+
+fn collect_as_sequence_bindings(
+    items: Vec<&AstPattern>,
+    alias: &str,
+    alias_span: &Span,
+    out: &mut Vec<(String, Span)>,
+) {
+    // Binding order contract: direct bindings of an as-pattern sequence come
+    // first, followed by the parent alias, direct child aliases, and then
+    // recursively deferred child patterns. `pattern_sequence_items` flattens
+    // lists and presents tuple/record/enum/extractor patterns as one sequence.
+    // Duplicate-binding diagnostics use this same order as REPL metadata.
+    let mut deferred_aliases = Vec::new();
+    let mut deferred_patterns = Vec::new();
+
+    for item in items {
+        match item {
+            AstPattern::Var(..) | AstPattern::Annotated(..) => {
+                collect_pattern_bindings_preorder(item, out);
+            }
+            AstPattern::As(_, child, child_alias, _, child_alias_span)
+                if matches!(
+                    child.as_ref(),
+                    AstPattern::Var(..) | AstPattern::Annotated(..)
+                ) =>
+            {
+                collect_pattern_bindings_preorder(child, out);
+                deferred_aliases.push((child_alias.clone(), child_alias_span.clone()));
+            }
+            _ => deferred_patterns.push(item),
+        }
+    }
+
+    out.push((alias.to_string(), alias_span.clone()));
+    out.extend(deferred_aliases);
+    for item in deferred_patterns {
+        collect_pattern_bindings_preorder(item, out);
+    }
+}
+
+fn pattern_sequence_items(pattern: &AstPattern) -> Option<Vec<&AstPattern>> {
+    match pattern {
+        AstPattern::Tuple(_, items)
+        | AstPattern::Constructor(_, _, items)
+        | AstPattern::Call(_, _, items) => Some(items.iter().collect()),
+        AstPattern::ListCons(..) => {
+            let mut items = Vec::new();
+            flatten_list_pattern(pattern, &mut items);
+            Some(items)
+        }
+        _ => None,
+    }
+}
+
+fn flatten_list_pattern<'a>(pattern: &'a AstPattern, out: &mut Vec<&'a AstPattern>) {
+    match pattern {
+        AstPattern::ListCons(_, head, tail) => {
+            out.push(head);
+            flatten_list_pattern(tail, out);
+        }
+        AstPattern::ListNil(_) => {}
+        other => out.push(other),
     }
 }

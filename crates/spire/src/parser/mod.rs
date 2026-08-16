@@ -1482,7 +1482,7 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::Call(span, _, _)
         | AstPattern::Tuple(span, _)
         | AstPattern::Or(span, _)
-        | AstPattern::As(span, _, _, _) => span,
+        | AstPattern::As(span, _, _, _, _) => span,
     }
 }
 
@@ -1493,7 +1493,7 @@ fn pattern_depth(pat: &AstPattern) -> usize {
         | AstPattern::Call(_, _, inners)
         | AstPattern::Tuple(_, inners)
         | AstPattern::Or(_, inners) => 1 + inners.iter().map(pattern_depth).max().unwrap_or(0),
-        AstPattern::As(_, inner, _, _) => 1 + pattern_depth(inner),
+        AstPattern::As(_, inner, _, _, _) => 1 + pattern_depth(inner),
         _ => 1,
     }
 }
@@ -1621,11 +1621,12 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
                 .map(|item| shift_pattern(item, delta))
                 .collect(),
         ),
-        AstPattern::As(span, inner, alias, alias_ty) => AstPattern::As(
+        AstPattern::As(span, inner, alias, alias_ty, alias_span) => AstPattern::As(
             shift_span(span, delta),
             Box::new(shift_pattern(*inner, delta)),
             alias,
             alias_ty.map(|ty| shift_ast_ty(ty, delta)),
+            shift_span(alias_span, delta),
         ),
     }
 }

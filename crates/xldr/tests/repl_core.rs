@@ -4886,6 +4886,81 @@ fn core_duplicate_defs_and_runtime_result_errors_keep_the_session_alive() {
 }
 
 #[test]
+fn core_pattern_bindings_are_displayed_in_preorder() {
+    let mut engine = engine();
+    let result = engine.handle_line("(i, s) @ w = (1, 2)");
+    let text = rendered_text(&result);
+
+    let i = text.find("i: Int").expect("left binding should be shown");
+    let s = text.find("s: Int").expect("right binding should be shown");
+    let w = text
+        .find("w: (Int, Int)")
+        .expect("as binding should be shown");
+    assert!(i < s && s < w, "unexpected binding order: {text}");
+}
+
+#[test]
+fn core_pattern_binding_order_defers_pattern_match_as_aliases() {
+    let mut engine = engine();
+    let result = engine.handle_line("(t1 @ t1a, (t2, t3) @ taila) @ r = (1, (2, 3))");
+    let text = rendered_text(&result);
+
+    let t1 = text.find("t1: Int").expect("t1 should be shown");
+    let r = text
+        .find("r: (Int, (Int, Int))")
+        .expect("r should be shown");
+    let t1a = text.find("t1a: Int").expect("t1a should be shown");
+    let t2 = text.find("t2: Int").expect("t2 should be shown");
+    let t3 = text.find("t3: Int").expect("t3 should be shown");
+    let taila = text
+        .find("taila: (Int, Int)")
+        .expect("taila should be shown");
+    assert!(
+        t1 < r && r < t1a && t1a < t2 && t2 < t3 && t3 < taila,
+        "unexpected binding order: {text}"
+    );
+}
+
+#[test]
+fn core_pattern_binding_order_flattens_list_children_before_parent_alias() {
+    let mut engine = engine();
+    let result = engine.handle_line("[head, ..[middle, ..tail]] @ whole =? [1, 2, 3]");
+    let text = rendered_text(&result);
+
+    let head = text.find("head:").expect("head should be shown");
+    let middle = text.find("middle:").expect("middle should be shown");
+    let tail = text.find("tail:").expect("tail should be shown");
+    let whole = text.find("whole:").expect("whole should be shown");
+    assert!(
+        head < middle && middle < tail && tail < whole,
+        "unexpected binding order: {text}"
+    );
+}
+
+#[test]
+fn core_duplicate_pattern_diagnostic_labels_are_limited_to_five() {
+    let mut engine = engine();
+    let result = engine.handle_line("(x, x, x, x, x, x) = (1, 2, 3, 4, 5, 6)");
+    let text = rendered_text(&result);
+
+    for label in ["first", "second", "third", "fourth", "fifth"] {
+        assert!(
+            text.contains(label),
+            "missing diagnostic label {label}: {text}"
+        );
+    }
+    assert!(
+        !text.contains("sixth"),
+        "diagnostic should stop at five: {text}"
+    );
+    assert_eq!(
+        text.matches("Duplicate binding in pattern: x").count(),
+        1,
+        "duplicate message should remain the headline, not an LHS caption: {text}"
+    );
+}
+
+#[test]
 fn core_save_writes_decodable_eldr_snapshot() {
     let mut engine = engine();
     let dir = tempfile_dir("xldr-repl-core-save");

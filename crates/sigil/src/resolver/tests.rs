@@ -3255,6 +3255,156 @@ fn test_duplicate_binding_in_pattern_is_error() {
 }
 
 #[test]
+fn test_duplicate_binding_collects_occurrences_in_preorder_up_to_five() {
+    let err = parse_and_resolve("(x, x, x, x, x, x) = (1, 2, 3, 4, 5, 6)")
+        .expect_err("duplicate pattern bindings should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| label.message.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second", "third", "fourth", "fifth"]
+    );
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [(1, 2), (4, 5), (7, 8), (10, 11), (13, 14)]
+    );
+}
+
+#[test]
+fn test_duplicate_binding_uses_binding_detection_order() {
+    let err = parse_and_resolve("((s, s) @ s, s) @ s = ((1, 3), 2)")
+        .expect_err("duplicate pattern bindings should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.message.as_str(), label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [
+            ("first", 13, 14),
+            ("second", 18, 19),
+            ("third", 2, 3),
+            ("fourth", 5, 6),
+            ("fifth", 10, 11),
+        ]
+    );
+}
+
+#[test]
+fn test_duplicate_binding_orders_enum_constructor_like_tuple_children() {
+    let source = r#"defenum Pair { Pair(Int, Int), }
+Pair(x @ x, x) @ x = Pair(1, 2)"#;
+    let err = parse_and_resolve(source).expect_err("duplicate pattern bindings should fail");
+    let spans = source
+        .match_indices('x')
+        .map(|(start, _)| (start, start + 1))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [spans[0], spans[2], spans[3], spans[1]],
+    );
+}
+
+#[test]
+fn test_duplicate_binding_moves_outer_as_after_left_as_inner_binding() {
+    let err = parse_and_resolve("(s @ s, (s, s)) @ s = (1, (2, 3))")
+        .expect_err("duplicate pattern bindings should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.message.as_str(), label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [
+            ("first", 1, 2),
+            ("second", 18, 19),
+            ("third", 5, 6),
+            ("fourth", 9, 10),
+            ("fifth", 12, 13),
+        ]
+    );
+}
+
+#[test]
+fn test_duplicate_binding_applies_same_order_to_list_cons_elements() {
+    let err = parse_and_resolve("[s, ..s @ s] @ s =? [1, 2]")
+        .expect_err("duplicate list pattern bindings should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.message.as_str(), label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [
+            ("first", 1, 2),
+            ("second", 6, 7),
+            ("third", 15, 16),
+            ("fourth", 10, 11),
+        ]
+    );
+}
+
+#[test]
+fn test_duplicate_binding_flattens_list_children_before_parent_alias() {
+    let source = "[x, ..[y, ..x]] @ x =? [1, 2]";
+    let err = parse_and_resolve(source).expect_err("duplicate list pattern bindings should fail");
+    let spans = source
+        .match_indices('x')
+        .map(|(start, _)| (start, start + 1))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        spans,
+    );
+}
+
+#[test]
+fn test_duplicate_binding_keeps_recursive_detection_order_without_outer_as_pattern() {
+    let err = parse_and_resolve("((s, s) @ s, s) = ((1, 3), 2)")
+        .expect_err("duplicate pattern bindings should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.message.as_str(), label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [
+            ("first", 2, 3),
+            ("second", 5, 6),
+            ("third", 10, 11),
+            ("fourth", 13, 14),
+        ]
+    );
+}
+
+#[test]
+fn test_as_pattern_duplicate_uses_alias_token_span() {
+    let err = parse_and_resolve("(x @ x) = (1, 2)")
+        .expect_err("duplicate as-pattern binding should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.message.as_str(), label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [("first", 1, 2), ("second", 5, 6)]
+    );
+}
+
+#[test]
 fn test_block_binding_does_not_escape() {
     let result = parse_and_resolve(
         r#"{

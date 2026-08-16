@@ -328,7 +328,10 @@ pub enum AstPattern {
     /// `left | right` inside a pattern.
     Or(Span, Vec<AstPattern>),
     /// `inner @ alias` / `inner @ alias: Ty`
-    As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
+    ///
+    /// The final span is the alias identifier token, kept separately from
+    /// the full as-pattern span for diagnostics and REPL binding metadata.
+    As(Span, Box<AstPattern>, Symbol, Option<AstTy>, Span),
 }
 
 /// Match arm: `pattern [when guard] => body`.

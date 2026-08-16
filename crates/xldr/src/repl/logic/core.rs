@@ -5245,8 +5245,18 @@ impl ReplEngine {
         let resolved = match self.sigil_session.resolve(ast.clone()) {
             Ok(r) => r,
             Err(e) => {
-                let spec =
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None);
+                let labels = e
+                    .related_labels
+                    .iter()
+                    .map(|label| (label.span.clone(), label.message.clone()))
+                    .collect::<Vec<_>>();
+                let diagnostic_source = self.sources.source(self.repl_source_id).unwrap_or("");
+                let spec = diagnostics::resolve_error_spec_with_labels(
+                    diagnostic_source,
+                    &e.message,
+                    e.span.clone(),
+                    &labels,
+                );
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
@@ -7692,8 +7702,18 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let spec =
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None);
+                let labels = e
+                    .related_labels
+                    .iter()
+                    .map(|label| (label.span.clone(), label.message.clone()))
+                    .collect::<Vec<_>>();
+                let diagnostic_source = self.sources.source(self.repl_source_id).unwrap_or("");
+                let spec = diagnostics::resolve_error_spec_with_labels(
+                    diagnostic_source,
+                    &e.message,
+                    e.span.clone(),
+                    &labels,
+                );
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
@@ -7723,8 +7743,18 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let spec =
-                    diagnostics::simple_error("ResolveError", &e.message, e.span.clone(), None);
+                let labels = e
+                    .related_labels
+                    .iter()
+                    .map(|label| (label.span.clone(), label.message.clone()))
+                    .collect::<Vec<_>>();
+                let diagnostic_source = self.sources.source(self.repl_source_id).unwrap_or("");
+                let spec = diagnostics::resolve_error_spec_with_labels(
+                    diagnostic_source,
+                    &e.message,
+                    e.span.clone(),
+                    &labels,
+                );
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,

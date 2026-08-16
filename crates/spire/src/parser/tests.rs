@@ -2985,7 +2985,7 @@ fn test_as_pattern_safebind_with_annotation() {
         Ast::SafeBind(_, pattern, rhs) => {
             assert!(matches!(
                 pattern,
-                AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, name, args)))
+                AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, name, args)), _)
                     if alias == "list_dup"
                     && name == "List"
                     && matches!(args.as_slice(), [AstTy::Named(_, elem)] if elem == "Int")
@@ -3004,14 +3004,14 @@ fn test_nested_as_pattern_safebind() {
         Ast::SafeBind(_, pattern, rhs) => {
             assert!(matches!(
                 pattern,
-                AstPattern::As(_, outer_inner, outer_alias, None)
+                AstPattern::As(_, outer_inner, outer_alias, None, _)
                     if outer_alias == "list_dup"
                     && matches!(
                         outer_inner.as_ref(),
                         AstPattern::ListCons(_, _, tail_pattern)
                             if matches!(
                                 tail_pattern.as_ref(),
-                                AstPattern::As(_, inner_list, inner_alias, None)
+                                AstPattern::As(_, inner_list, inner_alias, None, _)
                                     if inner_alias == "tail_dup"
                                     && matches!(inner_list.as_ref(), AstPattern::ListCons(_, _, _))
                             )
@@ -3030,7 +3030,7 @@ fn test_as_pattern_bind() {
         Ast::Bind(_, pattern, rhs) => {
             assert!(matches!(
                 pattern,
-                AstPattern::As(_, inner, alias, None)
+                AstPattern::As(_, inner, alias, None, _)
                     if alias == "list_dup"
                     && matches!(inner.as_ref(), AstPattern::ListCons(_, _, _))
             ));
@@ -3103,7 +3103,7 @@ fn test_as_pattern_accepts_compact_at_alias() {
         let ast = parse(source).expect("compact as-pattern alias should parse");
         assert!(matches!(
             &ast[0],
-            Ast::Bind(_, AstPattern::As(_, inner, alias, None), _)
+            Ast::Bind(_, AstPattern::As(_, inner, alias, None, _), _)
                 if alias == "whole" && matches!(inner.as_ref(), AstPattern::Tuple(_, _))
         ));
     }
@@ -4719,7 +4719,7 @@ fn test_match_as_and_annotated_pattern_is_accepted() {
             Ast::Match(_, _, arms) => {
                 assert!(matches!(
                     &arms[0].pattern,
-                    AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, ty_name, ty_args)))
+                    AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, ty_name, ty_args)), _)
                         if alias == "whole"
                             && ty_name == "List"
                             && ty_args.len() == 1

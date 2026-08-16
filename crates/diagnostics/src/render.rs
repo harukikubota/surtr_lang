@@ -1,7 +1,8 @@
 use crate::heuristics::{
     char_span_to_byte_range, extract_expected_got, has_annotation_assignment_labels,
-    has_duplicate_definition_labels, has_missing_trait_method_labels, has_parse_focus_labels,
-    has_runtime_error_focus_labels, has_runtime_safebind_labels, has_total_bind_pattern_labels,
+    has_duplicate_definition_labels, has_duplicate_pattern_binding_labels,
+    has_missing_trait_method_labels, has_parse_focus_labels, has_runtime_error_focus_labels,
+    has_runtime_safebind_labels, has_total_bind_pattern_labels,
     has_trait_impl_signature_mismatch_labels, is_flow_operator_message, line_column_for_offset,
     line_index_for_span, line_spans, normalized_char_span, parse_binary_operator_error,
     serializable_callable_hint_from_labels, should_render_related_label_with_own_source,
@@ -99,6 +100,7 @@ fn build_report(
             || parse_binary_operator_error(&spec.message).is_some()
             || has_annotation_assignment_labels(spec))
         || has_duplicate_definition_labels(spec)
+        || has_duplicate_pattern_binding_labels(spec)
         || has_missing_trait_method_labels(spec)
         || has_trait_impl_signature_mismatch_labels(spec)
         || has_total_bind_pattern_labels(spec)
@@ -186,6 +188,7 @@ fn build_report_with_registry(
             || parse_binary_operator_error(&spec.message).is_some()
             || has_annotation_assignment_labels(spec))
         || has_duplicate_definition_labels(spec)
+        || has_duplicate_pattern_binding_labels(spec)
         || has_missing_trait_method_labels(spec)
         || has_trait_impl_signature_mismatch_labels(spec)
         || has_total_bind_pattern_labels(spec)

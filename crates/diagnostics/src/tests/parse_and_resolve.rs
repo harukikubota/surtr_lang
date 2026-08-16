@@ -19,6 +19,39 @@ fn parse_error_spec_adds_unexpected_token_help() {
 }
 
 #[test]
+fn resolve_error_spec_with_labels_cycles_duplicate_binding_colors() {
+    let labels = [
+        (Span { start: 0, end: 1 }, "first".to_string()),
+        (Span { start: 2, end: 3 }, "second".to_string()),
+        (Span { start: 4, end: 5 }, "third".to_string()),
+        (Span { start: 6, end: 7 }, "fourth".to_string()),
+        (Span { start: 8, end: 9 }, "fifth".to_string()),
+        (Span { start: 10, end: 11 }, "first".to_string()),
+    ];
+    let spec = resolve_error_spec_with_labels(
+        "abcdefghijkl",
+        "Duplicate binding in pattern: x",
+        Span { start: 0, end: 1 },
+        &labels,
+    );
+
+    assert_eq!(
+        spec.labels
+            .iter()
+            .map(|label| label.color)
+            .collect::<Vec<_>>(),
+        vec![
+            Some(Color::Red),
+            Some(Color::Yellow),
+            Some(Color::Blue),
+            Some(Color::Magenta),
+            Some(Color::Cyan),
+            Some(Color::Red),
+        ]
+    );
+}
+
+#[test]
 fn parse_error_spec_uses_help_for_unit_pattern_guidance() {
     let source = "() = ()";
     let spec = parse_error_spec(

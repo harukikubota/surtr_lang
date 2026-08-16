@@ -200,7 +200,7 @@ fn resolve_spec_for_error(
         span
     };
     let mut spec = diagnostics::resolve_error_spec(source, &error.message, primary_span.clone());
-    for related in &error.related_labels {
+    for (label_index, related) in error.related_labels.iter().enumerate() {
         let (label_source_id, label_span) =
             diagnostic_location_for_span(compile_sources, &related.span);
         let label_source = compile_sources
@@ -220,7 +220,10 @@ fn resolve_spec_for_error(
             source_id: Some(label_source_id),
             span: label_span,
             message: related.message.clone(),
-            color: Some(diagnostics::Color::Red),
+            color: Some(diagnostics::resolve_related_label_color(
+                &related.message,
+                label_index,
+            )),
         });
     }
     (source_id, spec)

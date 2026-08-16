@@ -4549,6 +4549,29 @@ fn collect_stmt_meta(
     }
 }
 
+fn push_binding_info(
+    out: &mut Vec<BindingInfo>,
+    slot_map: &HashMap<u32, u32>,
+    ty: &Ty,
+    id: &ResolvedId,
+    callable_kind: Option<ReplCallableKind>,
+    callable_display: Option<ReplCallableDisplay>,
+    callable_captures: &[String],
+    facet_info: Option<ReplFacetInfo>,
+) {
+    if let Some(slot_id) = slot_map.get(&id.unique_id) {
+        out.push(BindingInfo {
+            name: id.name.clone(),
+            ty: ty_to_string(ty),
+            slot_id: *slot_id,
+            callable_kind,
+            callable_display,
+            callable_captures: callable_captures.to_vec(),
+            facet_info,
+        });
+    }
+}
+
 fn collect_pattern_binding_infos(
     pat: &TypedPattern,
     slot_map: &HashMap<u32, u32>,
@@ -4573,26 +4596,39 @@ fn collect_pattern_binding_infos(
             }
         }
         TypedPattern::As(ty, inner, id) => {
-            if let Some(slot_id) = slot_map.get(&id.unique_id) {
-                out.push(BindingInfo {
-                    name: id.name.clone(),
-                    ty: ty_to_string(ty),
-                    slot_id: *slot_id,
+            if let Some(items) = typed_pattern_sequence_items(inner) {
+                collect_as_sequence_binding_infos(
+                    items,
+                    ty,
+                    id,
+                    slot_map,
+                    out,
                     callable_kind,
-                    callable_display: callable_display.clone(),
-                    callable_captures: callable_captures.to_vec(),
-                    facet_info: facet_info.clone(),
-                });
+                    callable_display,
+                    callable_captures,
+                    facet_info,
+                );
+            } else {
+                collect_pattern_binding_infos(
+                    inner,
+                    slot_map,
+                    out,
+                    callable_kind,
+                    callable_display.clone(),
+                    callable_captures,
+                    facet_info.clone(),
+                );
+                push_binding_info(
+                    out,
+                    slot_map,
+                    ty,
+                    id,
+                    callable_kind,
+                    callable_display.clone(),
+                    callable_captures,
+                    facet_info.clone(),
+                );
             }
-            collect_pattern_binding_infos(
-                inner,
-                slot_map,
-                out,
-                callable_kind,
-                callable_display,
-                callable_captures,
-                facet_info,
-            );
         }
         TypedPattern::Wildcard(_)
         | TypedPattern::Pin(_, _, _)
@@ -4658,6 +4694,114 @@ fn collect_pattern_binding_infos(
                 );
             }
         }
+    }
+}
+
+fn collect_as_sequence_binding_infos(
+    items: Vec<&TypedPattern>,
+    ty: &Ty,
+    id: &ResolvedId,
+    slot_map: &HashMap<u32, u32>,
+    out: &mut Vec<BindingInfo>,
+    callable_kind: Option<ReplCallableKind>,
+    callable_display: Option<ReplCallableDisplay>,
+    callable_captures: &[String],
+    facet_info: Option<ReplFacetInfo>,
+) {
+    // Keep REPL binding metadata in the resolver's binding order: direct
+    // bindings, parent alias, direct child aliases, then deferred patterns.
+    // Lists are flattened while tuple/record/enum/extractor patterns are one
+    // fixed-arity sequence; see Sigil's duplicate-binding diagnostics.
+    let mut deferred_aliases = Vec::new();
+    let mut deferred_patterns = Vec::new();
+
+    for item in items {
+        match item {
+            TypedPattern::Var(..) => collect_pattern_binding_infos(
+                item,
+                slot_map,
+                out,
+                callable_kind,
+                callable_display.clone(),
+                callable_captures,
+                facet_info.clone(),
+            ),
+            TypedPattern::As(child_ty, child, child_id)
+                if matches!(child.as_ref(), TypedPattern::Var(..)) =>
+            {
+                collect_pattern_binding_infos(
+                    child,
+                    slot_map,
+                    out,
+                    callable_kind,
+                    callable_display.clone(),
+                    callable_captures,
+                    facet_info.clone(),
+                );
+                deferred_aliases.push((child_ty, child_id));
+            }
+            _ => deferred_patterns.push(item),
+        }
+    }
+
+    push_binding_info(
+        out,
+        slot_map,
+        ty,
+        id,
+        callable_kind,
+        callable_display.clone(),
+        callable_captures,
+        facet_info.clone(),
+    );
+    for (child_ty, child_id) in deferred_aliases {
+        push_binding_info(
+            out,
+            slot_map,
+            child_ty,
+            child_id,
+            callable_kind,
+            callable_display.clone(),
+            callable_captures,
+            facet_info.clone(),
+        );
+    }
+    for item in deferred_patterns {
+        collect_pattern_binding_infos(
+            item,
+            slot_map,
+            out,
+            callable_kind,
+            callable_display.clone(),
+            callable_captures,
+            facet_info.clone(),
+        );
+    }
+}
+
+fn typed_pattern_sequence_items(pattern: &TypedPattern) -> Option<Vec<&TypedPattern>> {
+    match pattern {
+        TypedPattern::Tuple(_, items) | TypedPattern::Extractor { items, .. } => {
+            Some(items.iter().collect())
+        }
+        TypedPattern::ResultOk(_, inner) => Some(vec![inner]),
+        TypedPattern::ListCons(..) => {
+            let mut items = Vec::new();
+            flatten_typed_list_pattern(pattern, &mut items);
+            Some(items)
+        }
+        _ => None,
+    }
+}
+
+fn flatten_typed_list_pattern<'a>(pattern: &'a TypedPattern, out: &mut Vec<&'a TypedPattern>) {
+    match pattern {
+        TypedPattern::ListCons(_, head, tail) => {
+            out.push(head);
+            flatten_typed_list_pattern(tail, out);
+        }
+        TypedPattern::ListNil(_) => {}
+        other => out.push(other),
     }
 }
 
@@ -5017,13 +5161,13 @@ enum DirectCallableTarget {
     User(u32),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct PatternDecompChild {
     slot: u32,
     decomp: PatternDecomp,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum PatternDecomp {
     None,
     Tuple(Vec<PatternDecompChild>),
@@ -8993,6 +9137,126 @@ impl Codegen {
         Ok(decomp)
     }
 
+    fn emit_pattern_alias_bind_from_local(&mut self, slot: u32, id: &ResolvedId) {
+        let bind_slot = self.alloc_slot(id.unique_id);
+        self.emit(Opcode::LoadLocal(slot));
+        self.emit(Opcode::StoreLocal(bind_slot));
+    }
+
+    fn emit_tuple_pattern_children_from_local(
+        &mut self,
+        items: &[TypedPattern],
+        slot: u32,
+        decomp: Option<PatternDecomp>,
+        err_span: &Span,
+    ) -> Result<Vec<(u32, Option<PatternDecomp>)>, CodegenError> {
+        if let Some(PatternDecomp::Tuple(children)) = decomp {
+            if children.len() != items.len() {
+                return Err(CodegenError {
+                    message: "Internal invariant broken: tuple pattern decomp arity mismatch"
+                        .into(),
+                    span: err_span.clone(),
+                });
+            }
+            return Ok(children
+                .into_iter()
+                .map(|child| (child.slot, Some(child.decomp)))
+                .collect());
+        }
+
+        let mut children = Vec::with_capacity(items.len());
+        for (index, _) in items.iter().enumerate() {
+            let item_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::LoadLocal(slot));
+            self.emit(Opcode::GetTupleField {
+                field_index: index as u32,
+            });
+            self.emit(Opcode::StoreLocal(item_slot));
+            children.push((item_slot, None));
+        }
+        Ok(children)
+    }
+
+    fn emit_tuple_pattern_items_from_local(
+        &mut self,
+        items: &[TypedPattern],
+        slot: u32,
+        decomp: Option<PatternDecomp>,
+        err_span: &Span,
+        order: Option<&[usize]>,
+    ) -> Result<(), CodegenError> {
+        let children =
+            self.emit_tuple_pattern_children_from_local(items, slot, decomp, err_span)?;
+        let indices = order
+            .map(|order| order.to_vec())
+            .unwrap_or_else(|| (0..items.len()).collect());
+        for index in indices {
+            let (item_slot, item_decomp) = children[index].clone();
+            self.emit_pattern_bind_from_local(&items[index], item_slot, item_decomp, err_span)?;
+        }
+        Ok(())
+    }
+
+    fn emit_list_pattern_children_from_local(
+        &mut self,
+        slot: u32,
+        decomp: Option<PatternDecomp>,
+    ) -> Vec<(u32, Option<PatternDecomp>)> {
+        if let Some(PatternDecomp::ListCons { head, tail }) = decomp {
+            return vec![
+                (head.slot, Some(head.decomp)),
+                (tail.slot, Some(tail.decomp)),
+            ];
+        }
+        let head_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::LoadLocal(slot));
+        self.emit(Opcode::ListHead);
+        self.emit(Opcode::StoreLocal(head_slot));
+        let tail_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::LoadLocal(slot));
+        self.emit(Opcode::ListTail);
+        self.emit(Opcode::StoreLocal(tail_slot));
+        vec![(head_slot, None), (tail_slot, None)]
+    }
+
+    fn emit_as_sequence_pattern_bind_from_local(
+        &mut self,
+        items: &[TypedPattern],
+        children: Vec<(u32, Option<PatternDecomp>)>,
+        slot: u32,
+        id: &ResolvedId,
+        err_span: &Span,
+    ) -> Result<(), CodegenError> {
+        let mut deferred_aliases = Vec::new();
+        let mut deferred_patterns = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let (item_slot, item_decomp) = children[index].clone();
+            if let TypedPattern::As(_, inner, alias) = item {
+                if matches!(inner.as_ref(), TypedPattern::Var(_, _)) {
+                    self.emit_pattern_bind_from_local(inner, item_slot, item_decomp, err_span)?;
+                    deferred_aliases.push((item_slot, alias));
+                } else {
+                    deferred_patterns.push((item, item_slot, item_decomp));
+                }
+            } else if matches!(item, TypedPattern::Var(_, _)) {
+                self.emit_pattern_bind_from_local(item, item_slot, item_decomp, err_span)?;
+            } else {
+                deferred_patterns.push((item, item_slot, item_decomp));
+            }
+        }
+        self.emit_pattern_alias_bind_from_local(slot, id);
+        for (item_slot, alias) in deferred_aliases {
+            self.emit_pattern_alias_bind_from_local(item_slot, alias);
+        }
+        for (item, item_slot, item_decomp) in deferred_patterns {
+            self.emit_pattern_bind_from_local(item, item_slot, item_decomp, err_span)?;
+        }
+        Ok(())
+    }
+
     fn emit_pattern_bind_from_local(
         &mut self,
         pat: &TypedPattern,
@@ -9007,10 +9271,22 @@ impl Codegen {
                 self.emit(Opcode::StoreLocal(bind_slot));
             }
             TypedPattern::As(_, inner, id) => {
-                let bind_slot = self.alloc_slot(id.unique_id);
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::StoreLocal(bind_slot));
-                self.emit_pattern_bind_from_local(inner, slot, decomp, err_span)?;
+                if let TypedPattern::Tuple(_, items) = inner.as_ref() {
+                    let children =
+                        self.emit_tuple_pattern_children_from_local(items, slot, decomp, err_span)?;
+                    self.emit_as_sequence_pattern_bind_from_local(
+                        items, children, slot, id, err_span,
+                    )?;
+                } else if let TypedPattern::ListCons(_, head, tail) = inner.as_ref() {
+                    let items = vec![head.as_ref().clone(), tail.as_ref().clone()];
+                    let children = self.emit_list_pattern_children_from_local(slot, decomp);
+                    self.emit_as_sequence_pattern_bind_from_local(
+                        &items, children, slot, id, err_span,
+                    )?;
+                } else {
+                    self.emit_pattern_bind_from_local(inner, slot, decomp, err_span)?;
+                    self.emit_pattern_alias_bind_from_local(slot, id);
+                }
             }
             TypedPattern::Wildcard(_)
             | TypedPattern::Pin(_, _, _)
@@ -9020,32 +9296,7 @@ impl Codegen {
             | TypedPattern::BoolLit(_, _)
             | TypedPattern::DurationLit(_, _) => {}
             TypedPattern::Tuple(_, items) => {
-                let mut cached_children = match decomp {
-                    Some(PatternDecomp::Tuple(children)) => Some(children.into_iter()),
-                    _ => None,
-                };
-                for (index, item) in items.iter().enumerate() {
-                    let (item_slot, item_decomp) = if let Some(children) = cached_children.as_mut()
-                    {
-                        let child = children.next().ok_or_else(|| CodegenError {
-                            message:
-                                "Internal invariant broken: tuple pattern decomp arity mismatch"
-                                    .into(),
-                            span: err_span.clone(),
-                        })?;
-                        (child.slot, Some(child.decomp))
-                    } else {
-                        let item_slot = self.state.next_slot;
-                        self.state.next_slot += 1;
-                        self.emit(Opcode::LoadLocal(slot));
-                        self.emit(Opcode::GetTupleField {
-                            field_index: index as u32,
-                        });
-                        self.emit(Opcode::StoreLocal(item_slot));
-                        (item_slot, None)
-                    };
-                    self.emit_pattern_bind_from_local(item, item_slot, item_decomp, err_span)?;
-                }
+                self.emit_tuple_pattern_items_from_local(items, slot, decomp, err_span, None)?;
             }
             TypedPattern::ListCons(_, _, _) => {
                 self.emit_list_cons_pattern_bind_from_local(pat, slot, decomp, err_span)?;

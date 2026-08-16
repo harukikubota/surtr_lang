@@ -21,6 +21,11 @@ pub(crate) fn has_duplicate_definition_labels(spec: &DiagnosticSpec) -> bool {
             .any(|label| label.message == "conflicting definition")
 }
 
+pub(crate) fn has_duplicate_pattern_binding_labels(spec: &DiagnosticSpec) -> bool {
+    spec.message.starts_with("Duplicate binding in pattern: ")
+        && spec.labels.iter().any(|label| label.message == "first")
+}
+
 pub(crate) fn has_missing_trait_method_labels(spec: &DiagnosticSpec) -> bool {
     spec.labels
         .iter()

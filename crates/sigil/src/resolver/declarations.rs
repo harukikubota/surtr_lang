@@ -978,11 +978,12 @@ fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
                 .map(|item| rewrite_self_pattern(item, target))
                 .collect(),
         ),
-        AstPattern::As(span, inner, alias, alias_ty) => AstPattern::As(
+        AstPattern::As(span, inner, alias, alias_ty, alias_span) => AstPattern::As(
             span,
             Box::new(rewrite_self_pattern(*inner, target)),
             alias,
             alias_ty.map(|ty| rewrite_self_type(ty, target)),
+            alias_span,
         ),
         other => other,
     }

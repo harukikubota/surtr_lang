@@ -5,6 +5,25 @@ use crate::heuristics::{
 use crate::{simple_error, Color, DiagnosticLabel, DiagnosticSpec};
 use spire::ast::Span;
 
+pub fn resolve_related_label_color(message: &str, index: usize) -> Color {
+    if message == "first"
+        || message == "second"
+        || message == "third"
+        || message == "fourth"
+        || message == "fifth"
+    {
+        match index % 5 {
+            0 => Color::Red,
+            1 => Color::Yellow,
+            2 => Color::Blue,
+            3 => Color::Magenta,
+            _ => Color::Cyan,
+        }
+    } else {
+        Color::Red
+    }
+}
+
 pub fn resolve_error_spec(source: &str, message: impl Into<String>, span: Span) -> DiagnosticSpec {
     let message = message.into();
     let mut spec = simple_error("ResolveError", message.clone(), span.clone(), None);
@@ -155,5 +174,26 @@ pub fn resolve_error_spec(source: &str, message: impl Into<String>, span: Span) 
         }
     }
 
+    spec
+}
+
+pub fn resolve_error_spec_with_labels(
+    source: &str,
+    message: impl Into<String>,
+    span: Span,
+    labels: &[(Span, String)],
+) -> DiagnosticSpec {
+    let mut spec = resolve_error_spec(source, message, span);
+    spec.labels.extend(
+        labels
+            .iter()
+            .enumerate()
+            .map(|(index, (span, message))| DiagnosticLabel {
+                source_id: None,
+                span: span.clone(),
+                message: message.clone(),
+                color: Some(resolve_related_label_color(message, index)),
+            }),
+    );
     spec
 }
