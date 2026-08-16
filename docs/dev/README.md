@@ -16,6 +16,7 @@
 - [Rune CLI spec](./Rune_cli_spec.md)
 - [Rune observability](./Rune_observability.md)
 - [Surtr LSP spec](./Surtr_LSP_spec.md)
+- [Trait system implementation spec](./Trait_system_spec.md)
 - [Xldr spec](./Xldr_spec.md)
 - [テスト方針](./テスト方針.md)
 

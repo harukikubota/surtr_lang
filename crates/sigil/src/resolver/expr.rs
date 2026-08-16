@@ -1,5 +1,5 @@
 use super::captures::collect_captures;
-use super::declarations::trait_instance_key;
+use super::declarations::{ast_ty_key, trait_instance_key};
 use super::scope_init::{
     initialize_scope, is_doc_only_builtin_decl, is_runtime_builtin_decl,
     is_special_form_builtin_decl, resolve_decl_attrs,
@@ -690,7 +690,7 @@ impl Resolver {
             | Ast::ConstDef(_, _, _, _, _)
             | Ast::SupervisorInit(_, _)
             | Ast::ExtractorDef(_, _, _, _, _, _, _)
-            | Ast::BuiltinDecl(_, _, _, _, _)
+            | Ast::BuiltinDecl(..)
             | Ast::IntrinsicDecl(_, _, _, _)
             | Ast::BuiltinExtractorDecl(_, _, _, _, _)
             | Ast::BuiltinTypeDecl(_, _, _)
@@ -1928,7 +1928,7 @@ impl Resolver {
             if matches!(stmt, Ast::Import(_, _, _))
                 || matches!(stmt, Ast::SupervisorInit(_, _))
                 || matches!(stmt, Ast::IntrinsicDecl(_, _, _, _))
-                || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _) if is_doc_only_builtin_decl(name))
+                || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _, _) if is_doc_only_builtin_decl(name))
             {
                 // `import` declarations are consumed by resolver-side module/import handling.
                 // Until full module resolution lands, they are intentionally no-op here.
@@ -1955,7 +1955,7 @@ impl Resolver {
                     continue;
                 }
                 for bound in &constraint.bounds {
-                    let spire::ast::WhereConstraintRhs::Trait(_, parent_name) = bound else {
+                    let spire::ast::WhereConstraintRhs::Trait(_, parent_name, _) = bound else {
                         continue;
                     };
                     if let Some(parent_uid) = self.scope.lookup(parent_name) {
@@ -2968,6 +2968,14 @@ impl Resolver {
                 methods,
                 attrs,
             ) => {
+                validate_unique_callable_names(
+                    &format!(
+                        "impl `{}` for `{}`",
+                        trait_instance_key(&trait_name, &trait_args),
+                        ast_ty_key(&target_ty)
+                    ),
+                    &methods,
+                )?;
                 let (trait_uid, qualified_trait_name) =
                     self.resolve_trait_reference(&trait_name, &span)?;
                 let trait_id = ResolvedId {
@@ -3013,13 +3021,20 @@ impl Resolver {
                             attrs,
                             false,
                         ),
-                        Ast::BuiltinDecl(method_span, method_name, params, ret_ty, attrs) => (
+                        Ast::BuiltinDecl(
+                            method_span,
+                            method_name,
+                            params,
+                            ret_ty,
+                            method_where_clause,
+                            attrs,
+                        ) => (
                             method_span,
                             method_name,
                             Vec::new(),
                             params,
                             ret_ty,
-                            None,
+                            method_where_clause,
                             None,
                             attrs,
                             true,
@@ -3125,7 +3140,7 @@ impl Resolver {
                 ))
             }
 
-            Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => {
+            Ast::BuiltinDecl(span, name, params, ret_ty, where_clause, attrs) => {
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let is_io_builtin =
                     sindr::builtin::builtin_meta_for_decl(&name, Some(&qualified_name)).is_some();
@@ -3172,6 +3187,9 @@ impl Resolver {
                     resolved_params,
                     ret_ty
                         .map(|ty| self.resolve_type_annotation(ty))
+                        .transpose()?,
+                    where_clause
+                        .map(|clause| self.resolve_where_clause(clause))
                         .transpose()?,
                     resolve_decl_attrs(&attrs),
                 ))
@@ -3634,17 +3652,23 @@ impl Resolver {
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        spire::ast::WhereConstraintRhs::Trait(span, name) => {
+                        spire::ast::WhereConstraintRhs::Trait(span, name, args) => {
                             let (unique_id, qualified_name) =
                                 self.resolve_trait_reference(&name, &span)?;
-                            Ok(ResolvedWhereConstraintRhs::Trait(ResolvedId {
-                                name,
-                                qualified_name: Some(qualified_name),
-                                unique_id,
-                                compiler_generated: false,
-                                symbol_info: None,
-                                span,
-                            }))
+                            Ok(ResolvedWhereConstraintRhs::Trait {
+                                trait_id: ResolvedId {
+                                    name,
+                                    qualified_name: Some(qualified_name),
+                                    unique_id,
+                                    compiler_generated: false,
+                                    symbol_info: None,
+                                    span,
+                                },
+                                args: args
+                                    .into_iter()
+                                    .map(|arg| self.resolve_type_annotation(arg))
+                                    .collect::<Result<Vec<_>, ResolveError>>()?,
+                            })
                         }
                         spire::ast::WhereConstraintRhs::TypeConstructor(span, slots) => {
                             Ok(ResolvedWhereConstraintRhs::TypeConstructor {

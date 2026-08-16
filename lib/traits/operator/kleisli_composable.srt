@@ -5,5 +5,5 @@ callables. The `>=>` operator lowers through this trait.
 """
 deftrait KleisliComposable<$A, $B, $Chained> {
   # Compose the receiver contextual callable before a contextual RHS callable.
-  def kleisli_compose::<Self, $A, $B, $Chained>(self: Self, rhs: ($B -> $Chained)) -> ($A -> $Chained)
+  def kleisli_compose::<$A>(self: Self, rhs: ($B -> $Chained)) -> ($A -> $Chained)
 }

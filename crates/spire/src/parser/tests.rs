@@ -970,7 +970,7 @@ impl Int {
             assert_eq!(target, "Global::Int");
             assert!(matches!(
                 methods.as_slice(),
-                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Generic(_, ret, _)), attrs)]
+                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Generic(_, ret, _)), _, attrs)]
                     if name == "safe_mod"
                     && ret == "Result"
                     && attrs.doc.as_deref() == Some("Builtin int helper.")
@@ -1104,7 +1104,7 @@ fn test_trait_impl_accepts_builtin_def_method() {
             assert_eq!(target, "Global::Int");
             assert!(matches!(
                 methods.as_slice(),
-                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Named(_, ret)), _)]
+                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Named(_, ret)), _, _)]
                     if name == "add" && ret == "Self"
             ));
         }
@@ -1533,7 +1533,7 @@ where
     assert!(matches!(&constraint.subject, AstTy::Named(_, name) if name == "$A"));
     assert!(matches!(
         constraint.bounds.as_slice(),
-        [WhereConstraintRhs::Trait(_, eq), WhereConstraintRhs::Trait(_, concat)]
+        [WhereConstraintRhs::Trait(_, eq, _), WhereConstraintRhs::Trait(_, concat, _)]
             if eq.ends_with("Eq") && concat.ends_with("Concat")
     ));
 }
@@ -1719,7 +1719,7 @@ fn test_builtin_decl() {
     )
     .expect("std module should accept builtin declarations");
     match &ast[0] {
-        Ast::BuiltinDecl(_, name, params, ret_ty, attrs) => {
+        Ast::BuiltinDecl(_, name, params, ret_ty, _, attrs) => {
             assert_eq!(name, "to_string");
             assert_eq!(params.len(), 1);
             assert_eq!(
@@ -1737,6 +1737,20 @@ fn test_builtin_decl() {
         }
         _ => panic!("Expected BuiltinDecl"),
     }
+}
+
+#[test]
+fn test_builtin_decl_accepts_where_clause() {
+    let ast = parse_with_context(
+        "@builtin def group_count(values: List<$A>) -> List<($A, Int)>\nwhere\n  $A: Eq\n@doc \"\"\"next\"\"\"\n@builtin def zip(left: List<$A>, right: List<$B>) -> List<($A, $B)>",
+        ParserContext::module(1, Some("List".into())).with_rules(ParseRules::std_module()),
+    )
+    .expect("constrained builtin declarations should parse");
+    let [Ast::BuiltinDecl(_, _, _, _, Some(clause), _), Ast::BuiltinDecl(..)] = ast.as_slice()
+    else {
+        panic!("expected constrained builtin followed by builtin declaration");
+    };
+    assert_eq!(clause.constraints.len(), 1);
 }
 
 #[test]
@@ -1809,7 +1823,7 @@ fn test_hidden_annotates_builtin_decl() {
 
     assert!(matches!(
         ast.as_slice(),
-        [Ast::BuiltinDecl(_, name, _, _, DeclAttrs { hidden: true, .. })]
+        [Ast::BuiltinDecl(_, name, _, _, _, DeclAttrs { hidden: true, .. })]
             if name == "__process_sleep"
     ));
 }
@@ -1842,7 +1856,7 @@ fn test_hidden_builtin_impl_member_parses() {
             assert_eq!(target, "Global::Task");
             assert!(matches!(
                 &body[0],
-                Ast::BuiltinDecl(_, name, _, _, DeclAttrs { hidden: true, .. })
+                Ast::BuiltinDecl(_, name, _, _, _, DeclAttrs { hidden: true, .. })
                     if name == "__task_call"
             ));
         }
@@ -1868,6 +1882,7 @@ fn test_private_builtin_impl_member_parses() {
                 Ast::BuiltinDecl(
                     _,
                     name,
+                    _,
                     _,
                     _,
                     DeclAttrs {
@@ -2120,7 +2135,7 @@ fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
             assert_eq!(name, "Global::Kernel");
             assert!(matches!(
                 &body[0],
-                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
+                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _, _)
                     if builtin_name == "if" && params.len() == 3 && ret == "$A"
             ));
         }
@@ -2144,12 +2159,12 @@ fn test_builtin_import_decl_accepts_keyword_name_in_std_module_member() {
             assert_eq!(name, "Global::Bootstrap");
             assert!(matches!(
                 &body[0],
-                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
+                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _, _)
                     if builtin_name == "import" && params.is_empty() && ret == "Unit"
             ));
             assert!(matches!(
                 &body[1],
-                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _)
+                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _, _)
                     if builtin_name == "include" && params.len() == 1 && ret == "Unit"
             ));
         }
@@ -2604,6 +2619,44 @@ fn test_func_literal_operator_lowers_to_binop() {
 }
 
 #[test]
+fn test_quoted_callee_name_and_path_lower_like_plain_calls() {
+    let ast = parse("a = `eq`(left, right)\nb = `Boolean::eq`(True, False)").unwrap();
+    assert!(matches!(
+        &ast[0],
+        Ast::Bind(_, _, rhs) if matches!(rhs.as_ref(), Ast::App(_, func, args)
+            if matches!(func.as_ref(), Ast::Var(_, name) if name == "eq") && args.len() == 2)
+    ));
+    assert!(matches!(
+        &ast[1],
+        Ast::Bind(_, _, rhs) if matches!(rhs.as_ref(), Ast::App(_, func, args)
+            if matches!(func.as_ref(), Ast::Path(_, path) if path.segments == vec!["Boolean", "eq"])
+                && args.len() == 2)
+    ));
+}
+
+#[test]
+fn test_quoted_operator_callee_lowers_to_binop() {
+    let ast = parse("value = `+`(1, 2)").unwrap();
+    assert!(matches!(
+        &ast[0],
+        Ast::Bind(_, _, rhs) if matches!(rhs.as_ref(), Ast::BinOp(_, BinOp::Add, _, _))
+    ));
+}
+
+#[test]
+fn test_quoted_operator_callee_requires_two_positional_arguments() {
+    let err = parse("`+`(1)").expect_err("quoted operator call must require two arguments");
+    assert!(err
+        .message()
+        .contains("expects exactly 2 positional arguments"));
+}
+
+#[test]
+fn test_individually_quoted_path_segments_are_rejected() {
+    assert!(parse("`Boolean`::`eq`(True, False)").is_err());
+}
+
+#[test]
 fn test_bare_and_call_stays_plain_name() {
     let ast = parse("x = and(left, right)").unwrap();
     match &ast[0] {
@@ -2932,7 +2985,7 @@ fn test_as_pattern_safebind_with_annotation() {
         Ast::SafeBind(_, pattern, rhs) => {
             assert!(matches!(
                 pattern,
-                AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, name, args)))
+                AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, name, args)), _)
                     if alias == "list_dup"
                     && name == "List"
                     && matches!(args.as_slice(), [AstTy::Named(_, elem)] if elem == "Int")
@@ -2951,14 +3004,14 @@ fn test_nested_as_pattern_safebind() {
         Ast::SafeBind(_, pattern, rhs) => {
             assert!(matches!(
                 pattern,
-                AstPattern::As(_, outer_inner, outer_alias, None)
+                AstPattern::As(_, outer_inner, outer_alias, None, _)
                     if outer_alias == "list_dup"
                     && matches!(
                         outer_inner.as_ref(),
                         AstPattern::ListCons(_, _, tail_pattern)
                             if matches!(
                                 tail_pattern.as_ref(),
-                                AstPattern::As(_, inner_list, inner_alias, None)
+                                AstPattern::As(_, inner_list, inner_alias, None, _)
                                     if inner_alias == "tail_dup"
                                     && matches!(inner_list.as_ref(), AstPattern::ListCons(_, _, _))
                             )
@@ -2977,7 +3030,7 @@ fn test_as_pattern_bind() {
         Ast::Bind(_, pattern, rhs) => {
             assert!(matches!(
                 pattern,
-                AstPattern::As(_, inner, alias, None)
+                AstPattern::As(_, inner, alias, None, _)
                     if alias == "list_dup"
                     && matches!(inner.as_ref(), AstPattern::ListCons(_, _, _))
             ));
@@ -3013,6 +3066,46 @@ fn test_wildcard_pattern_safebind() {
             assert!(matches!(rhs.as_ref(), Ast::Var(_, name) if name == "value"));
         }
         _ => panic!("Expected SafeBind"),
+    }
+}
+
+#[test]
+fn test_underscore_prefixed_pattern_is_wildcard() {
+    let ast = parse("(_discard, value) = (1, 2)").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, AstPattern::Tuple(_, items), _) => {
+            assert!(
+                matches!(items.as_slice(), [AstPattern::Wildcard(_), AstPattern::Var(_, name)] if name == "value")
+            );
+        }
+        other => panic!("Expected tuple bind with wildcard, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_as_pattern_rejects_wildcard_alias() {
+    for alias in ["_", "_discard"] {
+        let err = parse(&format!("(left, right) @ {alias} = (1, 2)"))
+            .expect_err("as-pattern aliases must create a binding");
+
+        assert!(err
+            .message()
+            .contains("as-pattern alias must be a binding identifier."));
+    }
+}
+
+#[test]
+fn test_as_pattern_accepts_compact_at_alias() {
+    for source in [
+        "(left, right)@whole = (1, 2)",
+        "(left, right) @whole = (1, 2)",
+    ] {
+        let ast = parse(source).expect("compact as-pattern alias should parse");
+        assert!(matches!(
+            &ast[0],
+            Ast::Bind(_, AstPattern::As(_, inner, alias, None, _), _)
+                if alias == "whole" && matches!(inner.as_ref(), AstPattern::Tuple(_, _))
+        ));
     }
 }
 
@@ -3422,6 +3515,17 @@ fn test_backtick_qualified_capture_and_operator_capture_parse() {
 }
 
 #[test]
+fn test_bare_operator_capture_suggests_quoted_operator_capture() {
+    for (source, suggestion) in [("&+", "&`+`"), ("List::reduce([1, 2], 0, &*)", "&`*`")] {
+        let err = parse(source).expect_err("bare operator capture must be rejected with guidance");
+        assert!(err.message().contains("Unquoted operator capture"));
+        assert!(err
+            .message()
+            .contains(suggestion.trim_matches(|ch| ch == '&' || ch == '`')));
+    }
+}
+
+#[test]
 fn test_pipe_rhs_call_stays_as_app() {
     let ast = parse("out = user |> User::get_name()").expect("pipe with method call should parse");
     match &ast[0] {
@@ -3672,9 +3776,30 @@ fn test_statements_on_same_line_require_separator() {
 }
 
 #[test]
+fn test_range_literal_used_as_operator_has_bracket_help() {
+    let err = parse("2..8").expect_err("Expected parse error");
+    assert!(err
+        .message()
+        .contains("Range literals must use bracket syntax"));
+}
+
+#[test]
 fn test_safebind_rhs_requires_statement_separator() {
     let err = parse("[] =? []1").expect_err("Expected parse error");
     assert!(err.message().contains("Expected newline or `;`"));
+}
+
+#[test]
+fn test_unit_is_rejected_as_a_pattern_with_binding_help() {
+    for source in ["() = ()", "() =? ()"] {
+        let err = parse(source).expect_err("Unit must not be accepted as a pattern");
+        assert!(
+            err.message()
+                .contains("The Unit type has no pattern matching."),
+            "source={source:?}, message={}",
+            err.message()
+        );
+    }
 }
 
 #[test]
@@ -4594,7 +4719,7 @@ fn test_match_as_and_annotated_pattern_is_accepted() {
             Ast::Match(_, _, arms) => {
                 assert!(matches!(
                     &arms[0].pattern,
-                    AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, ty_name, ty_args)))
+                    AstPattern::As(_, inner, alias, Some(AstTy::Generic(_, ty_name, ty_args)), _)
                         if alias == "whole"
                             && ty_name == "List"
                             && ty_args.len() == 1
@@ -5116,7 +5241,7 @@ fn test_std_module_compile_unit_accepts_builtin_decl() {
     .expect("std module compile unit should accept builtin declarations");
     assert!(
         matches!(ast.as_slice(), [Ast::Defmod(_, name, body, _)] if name == "Global::Bootstrap"
-            && matches!(body.as_slice(), [Ast::BuiltinDecl(_, _, _, _, _)]))
+            && matches!(body.as_slice(), [Ast::BuiltinDecl(..)]))
     );
 }
 
@@ -5250,7 +5375,7 @@ namespace Auth {
     assert!(matches!(
         clause.constraints[0].bounds.as_slice(),
         [
-            WhereConstraintRhs::Trait(_, trait_name),
+            WhereConstraintRhs::Trait(_, trait_name, _),
             WhereConstraintRhs::TraitSlot(_, owner, slot)
         ] if trait_name == "Equal" && owner == "Functor" && slot == "$A"
     ));

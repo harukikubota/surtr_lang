@@ -59,6 +59,27 @@ impl Option {
   def wrap(value: $T) -> Option<$T> {
     Option::Some(value)
   }
+
+  @doc """
+  Apply a `Result`-returning mapper to an optional value while preserving both
+  layers of control flow.
+
+  - `Some(value)` and `Ok(mapped)` become `Ok(Some(mapped))`
+  - `Some(value)` and `Err(error)` become `Err(error)`
+  - `None` becomes `Ok(None)`
+
+  Use this when an optional field needs to participate in a `Result` pipeline
+  without converting `None` into `NoneError` or discarding mapper errors.
+  """
+  def traverse_result(value: Option<$A>, mapper: ($A -> Result<$B>)) -> Result<Option<$B>> {
+    match value {
+      Option::Some(inner) => match mapper(inner) {
+        Ok(mapped) => Ok(Option::Some(mapped)),
+        Err(error) => Err(error),
+      },
+      Option::None => Ok(Option::None),
+    }
+  }
 }
 
 @doc """
@@ -133,7 +154,7 @@ impl Alternative for Option<$T> {
 This is the source-level meaning of `left >* right` for `Option`.
 """
 impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
-  def lift_compose::<($A -> Option<$B>), $A, $B, $C, Option<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
+  def lift_compose::<$A, Option<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Option<$C>) {
     {|value| Functor::fmap(self(value), rhs)}
   }
 }
@@ -143,7 +164,7 @@ impl LiftComposable<$A, $B, $C, Option<$C>> for ($A -> Option<$B>) {
 This is the source-level meaning of `left >=> right` for `Option`.
 """
 impl KleisliComposable<$A, $B, Option<$C>> for ($A -> Option<$B>) {
-  def kleisli_compose::<($A -> Option<$B>), $A, $B, Option<$C>>(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
+  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Option<$C>)) -> ($A -> Option<$C>) {
     {|value| Monad::bind(self(value), rhs)}
   }
 }

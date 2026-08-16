@@ -6,6 +6,7 @@ impl Checker {
         span: &Span,
         scrutinee: &Resolved,
         arms: &[ResolvedMatchArm],
+        expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         // A polymorphic constructor used as the scrutinee (for example
         // `Err(NoneError)`) cannot be inferred in isolation: without an
@@ -24,7 +25,7 @@ impl Checker {
         let mut result_ty: Option<Ty> = None;
 
         for arm in arms {
-            let mut typed_arm = self.check_match_arm(arm, &typed_scrut.ty, span)?;
+            let mut typed_arm = self.check_match_arm(arm, &typed_scrut.ty, span, expected)?;
             if let Some(ref rt) = result_ty {
                 if !self.types_compatible(rt, &typed_arm.body.ty)
                     && self.can_coerce_err_only_result_self_arm(
@@ -339,6 +340,7 @@ impl Checker {
         arm: &ResolvedMatchArm,
         scrut_ty: &Ty,
         _span: &Span,
+        expected: Option<&Ty>,
     ) -> Result<TypedMatchArm, TypeError> {
         let profile = self.profiler.start();
         self.env.push_var_scope();
@@ -360,7 +362,23 @@ impl Checker {
             } else {
                 None
             };
-            let typed_body = self.check_node(&arm.body)?;
+            let typed_body = match expected {
+                Some(expected) => self.check_node_with_expected(&arm.body, Some(expected))?,
+                None => self.check_node(&arm.body)?,
+            };
+            if let Some(expected) = expected {
+                if !self.types_compatible(expected, &typed_body.ty) {
+                    return Err(TypeError {
+                        message: format!(
+                            "Match arm type mismatch: expected {}, got {}",
+                            self.ty_name(&self.resolve_ty(expected)),
+                            self.ty_name(&typed_body.ty)
+                        ),
+                        span: typed_body.span.clone(),
+                        hint: None,
+                    });
+                }
+            }
             // Do not normalize env bindings or typed guard/body subtrees in this
             // scoped arm. The env frame is discarded below, and the containing
             // TypedInner::Match is normalized once at the program boundary.

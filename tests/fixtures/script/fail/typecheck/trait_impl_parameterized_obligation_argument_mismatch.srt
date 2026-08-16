@@ -1,0 +1,21 @@
+deftrait Marker<$Tag> {
+  def mark(self: Self) -> String
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+impl Marker<String> for Int {
+  def mark(self: Int) -> String { "string" }
+}
+
+impl Use for List<$A>
+where
+  $A: Marker<Int>
+{
+  def use(self: List<$A>) -> String { "used" }
+}
+
+value: List<Int> = [1]
+print(Use::use(value))

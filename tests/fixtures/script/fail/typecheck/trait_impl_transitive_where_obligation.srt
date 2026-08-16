@@ -1,0 +1,33 @@
+defstruct ObligationBox<$A> {
+  value: $A
+}
+
+impl ObligationBox {
+  def new(value: $A) -> ObligationBox<$A> { ObligationBox { value: value } }
+}
+
+deftrait Marker {
+  def mark(self: Self) -> String
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+impl Marker for List<$A>
+where
+  $A: Eq
+{
+  def mark(self: List<$A>) -> String { "marked" }
+}
+
+impl Use for ObligationBox<$A>
+where
+  $A: Marker
+{
+  def use(self: ObligationBox<$A>) -> String { "used" }
+}
+
+f = {|n: Int| n + 1}
+value = ObligationBox([f])
+print(Use::use(value))

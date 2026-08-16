@@ -333,6 +333,12 @@ impl<'a> Parser<'a> {
                 self.peek_span(),
             ));
         }
+        if matches!(self.peek(), Token::DotDot) {
+            return Err(ParseError::syntax(
+                "Range literals must use bracket syntax",
+                self.peek_span(),
+            ));
+        }
         let ok = matches!(self.peek(), Token::Newline | Token::Eof)
             || (allow_rbrace && matches!(self.peek(), Token::RBrace));
         if ok {
@@ -664,8 +670,14 @@ fn qualify_namespace_where_clause(
                         .bounds
                         .into_iter()
                         .map(|bound| match bound {
-                            WhereConstraintRhs::Trait(span, name) => {
-                                Ok(WhereConstraintRhs::Trait(span, name))
+                            WhereConstraintRhs::Trait(span, name, args) => {
+                                Ok(WhereConstraintRhs::Trait(
+                                    span,
+                                    name,
+                                    args.into_iter()
+                                        .map(|arg| qualify_namespace_type(arg, namespace))
+                                        .collect::<Result<Vec<_>, ParseError>>()?,
+                                ))
                             }
                             WhereConstraintRhs::TypeConstructor(span, slots) => {
                                 Ok(WhereConstraintRhs::TypeConstructor(
@@ -1133,7 +1145,7 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                 attrs,
             )
         }
-        Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
+        Ast::BuiltinDecl(span, name, params, ret_ty, where_clause, attrs) => Ast::BuiltinDecl(
             span,
             name,
             params
@@ -1145,6 +1157,7 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                 })
                 .collect(),
             ret_ty.map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+            where_clause,
             attrs,
         ),
         Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
@@ -1309,9 +1322,12 @@ fn rewrite_process_owner_where_clause(
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        WhereConstraintRhs::Trait(span, name) => WhereConstraintRhs::Trait(
+                        WhereConstraintRhs::Trait(span, name, args) => WhereConstraintRhs::Trait(
                             span,
                             rewrite_process_owner_symbol(name, old_name, new_name),
+                            args.into_iter()
+                                .map(|arg| rewrite_process_owner_ty(arg, old_name, new_name))
+                                .collect(),
                         ),
                         WhereConstraintRhs::TypeConstructor(span, slots) => {
                             WhereConstraintRhs::TypeConstructor(
@@ -1466,7 +1482,7 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::Call(span, _, _)
         | AstPattern::Tuple(span, _)
         | AstPattern::Or(span, _)
-        | AstPattern::As(span, _, _, _) => span,
+        | AstPattern::As(span, _, _, _, _) => span,
     }
 }
 
@@ -1477,7 +1493,7 @@ fn pattern_depth(pat: &AstPattern) -> usize {
         | AstPattern::Call(_, _, inners)
         | AstPattern::Tuple(_, inners)
         | AstPattern::Or(_, inners) => 1 + inners.iter().map(pattern_depth).max().unwrap_or(0),
-        AstPattern::As(_, inner, _, _) => 1 + pattern_depth(inner),
+        AstPattern::As(_, inner, _, _, _) => 1 + pattern_depth(inner),
         _ => 1,
     }
 }
@@ -1530,9 +1546,13 @@ fn shift_where_clause(clause: WhereClause, delta: usize) -> WhereClause {
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        WhereConstraintRhs::Trait(span, name) => {
-                            WhereConstraintRhs::Trait(shift_span(span, delta), name)
-                        }
+                        WhereConstraintRhs::Trait(span, name, args) => WhereConstraintRhs::Trait(
+                            shift_span(span, delta),
+                            name,
+                            args.into_iter()
+                                .map(|arg| shift_ast_ty(arg, delta))
+                                .collect(),
+                        ),
                         WhereConstraintRhs::TypeConstructor(span, slots) => {
                             WhereConstraintRhs::TypeConstructor(
                                 shift_span(span, delta),
@@ -1601,11 +1621,12 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
                 .map(|item| shift_pattern(item, delta))
                 .collect(),
         ),
-        AstPattern::As(span, inner, alias, alias_ty) => AstPattern::As(
+        AstPattern::As(span, inner, alias, alias_ty, alias_span) => AstPattern::As(
             shift_span(span, delta),
             Box::new(shift_pattern(*inner, delta)),
             alias,
             alias_ty.map(|ty| shift_ast_ty(ty, delta)),
+            shift_span(alias_span, delta),
         ),
     }
 }
@@ -2158,7 +2179,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 shift_decl_attrs(attrs),
             )
         }
-        Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
+        Ast::BuiltinDecl(span, name, params, ret_ty, where_clause, attrs) => Ast::BuiltinDecl(
             shift_span(span, delta),
             name,
             params
@@ -2166,6 +2187,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|p| shift_fun_param(p, delta))
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
+            where_clause.map(|clause| shift_where_clause(clause, delta)),
             shift_decl_attrs(attrs),
         ),
         Ast::IntrinsicDecl(span, name, signature, attrs) => Ast::IntrinsicDecl(
@@ -2402,7 +2424,7 @@ impl Ast {
             | Ast::ConstDef(s, _, _, _, _)
             | Ast::SupervisorInit(s, _)
             | Ast::ExtractorDef(s, _, _, _, _, _, _)
-            | Ast::BuiltinDecl(s, _, _, _, _)
+            | Ast::BuiltinDecl(s, ..)
             | Ast::IntrinsicDecl(s, _, _, _)
             | Ast::BuiltinExtractorDecl(s, _, _, _, _)
             | Ast::BuiltinTypeDecl(s, _, _)

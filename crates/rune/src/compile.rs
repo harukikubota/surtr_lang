@@ -200,7 +200,7 @@ fn resolve_spec_for_error(
         span
     };
     let mut spec = diagnostics::resolve_error_spec(source, &error.message, primary_span.clone());
-    for related in &error.related_labels {
+    for (label_index, related) in error.related_labels.iter().enumerate() {
         let (label_source_id, label_span) =
             diagnostic_location_for_span(compile_sources, &related.span);
         let label_source = compile_sources
@@ -220,7 +220,10 @@ fn resolve_spec_for_error(
             source_id: Some(label_source_id),
             span: label_span,
             message: related.message.clone(),
-            color: Some(diagnostics::Color::Red),
+            color: Some(diagnostics::resolve_related_label_color(
+                &related.message,
+                label_index,
+            )),
         });
     }
     (source_id, spec)
@@ -373,7 +376,7 @@ fn build_cached_script_compile_prefix(
         let resume_state = resolved.resume_state;
         let mut scar_session = std_snapshot.compile_prefix().restored_scar_session();
         let typed = scar_session
-            .typecheck_staged_program_with_context(
+            .typecheck_staged_program_in_place_with_context(
                 resolved,
                 script_prefix_typecheck_context(env.compile_unit_kind()),
             )
@@ -591,7 +594,7 @@ pub(crate) fn compile_source(
         .unwrap_or_else(|| std_snapshot.compile_prefix());
     let mut scar_session = active_prefix.restored_scar_session();
     let typed = scar_session
-        .typecheck_staged_program_with_context(
+        .typecheck_staged_program_in_place_with_context(
             resolved,
             scar::TypecheckContext::from_source_policy(source_kind.policy(
                 compile_unit_kind,
@@ -744,7 +747,7 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
                     | Ast::ExtractorDef(..)
                     | Ast::TraitDef(..)
                     | Ast::TraitImplDef(..)
-                    | Ast::BuiltinDecl(_, _, _, _, _)
+                    | Ast::BuiltinDecl(..)
                     | Ast::StructDef(..)
                     | Ast::RecordDef(..)
                     | Ast::DeferrorDef(_, _, _, _, _)

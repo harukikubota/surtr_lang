@@ -17,7 +17,7 @@ impl User {
 impl Show for User {
   import Formatting::wrap;
 
-  def to_string::<User>(self: Self) -> String {
+  def to_string(self: Self) -> String {
     wrap(self.name)
   }
 }

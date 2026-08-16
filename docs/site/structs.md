@@ -61,6 +61,10 @@ User { name, age }
 
 この制約により、構築の公開入口は `new` に固定されます。
 
+ただし、`@derive Default` を指定した型には、型所有者側の自動生成として field default から直接構築する `Default::default() -> Self` が追加されます。この経路は `new` を呼ばず、構造体リテラルを使います。`Default` を指定しない型には、この経路は追加されません。
+
+`Default` は型定義者による明示的な許可であり、不変条件の検査ではありません。`new` が入力値を検証して `Result<Self, Error>` を返す型では、field の default 値も妥当である場合にだけ `@derive Default` を指定してください。
+
 field 名と同じ名前のローカル変数・引数・`self` 由来の値を入れるだけなら、shorthand を使えます。
 
 ```surtr

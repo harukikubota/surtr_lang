@@ -1,4 +1,5 @@
 use super::*;
+use crate::env::TypeScheme;
 use sindr::names::FacetRootKind;
 use sindr::primitives::int;
 use spire::ast::Symbol;
@@ -44,6 +45,58 @@ struct ExpectedCallableContract {
 }
 
 impl Checker {
+    fn generalize_local_callable_binding(&mut self, pattern: &TypedPattern) {
+        let (TypedPattern::Var(_, id) | TypedPattern::As(_, _, id)) = pattern else {
+            return;
+        };
+        let Some(ty) = self.env.lookup_var(id.unique_id).cloned() else {
+            return;
+        };
+        let ty = self.resolve_ty(&ty);
+        let quantified = (0..self.env.next_tyvar)
+            .filter(|var| {
+                !self.rigid_tyvars.contains(var)
+                    && self.ty_contains_var(&ty, *var)
+                    && !self.env.vars.iter().any(|(other_id, other_ty)| {
+                        *other_id != id.unique_id && self.ty_contains_var(other_ty, *var)
+                    })
+            })
+            .collect::<Vec<_>>();
+        if !quantified.is_empty() {
+            self.env
+                .bind_var_scheme(id.unique_id, TypeScheme { ty, quantified });
+        }
+    }
+
+    /// Values which do not evaluate an arbitrary call can safely retain the
+    /// polymorphic scheme of a callable.  In particular, an alias must not
+    /// turn a polymorphic closure back into a monomorphic local binding.
+    fn is_non_expansive_callable_value(&self, node: &TypedNode) -> bool {
+        if !matches!(self.resolve_ty(&node.ty), Ty::Func(..)) {
+            return false;
+        }
+        match &node.node {
+            TypedInner::Closure(..) | TypedInner::Capture(..) | TypedInner::Var(_) => true,
+            TypedInner::If(_, then_branch, Some(else_branch)) => {
+                self.is_non_expansive_callable_value(then_branch)
+                    && self.is_non_expansive_callable_value(else_branch)
+            }
+            TypedInner::Match(_, arms) => arms
+                .iter()
+                .all(|arm| self.is_non_expansive_callable_value(&arm.body)),
+            _ => false,
+        }
+    }
+
+    fn instantiate_local_callable_scheme(&mut self, scheme: &TypeScheme) -> Ty {
+        let mapping = scheme
+            .quantified
+            .iter()
+            .map(|var| (*var, self.env.fresh_tyvar()))
+            .collect::<HashMap<_, _>>();
+        self.substitute_ty_with_mapping(&scheme.ty, &mapping)
+    }
+
     fn parse_tuple_index_name(name: &str) -> Option<usize> {
         let suffix = name.strip_prefix('_')?;
         if suffix.is_empty() || !suffix.chars().all(|ch| ch.is_ascii_digit()) {
@@ -52,7 +105,7 @@ impl Checker {
         suffix.parse::<usize>().ok()
     }
 
-    fn pending_trait_helper_error(&self, method_name: &str, span: &Span) -> TypeError {
+    pub(super) fn pending_trait_helper_error(&self, method_name: &str, span: &Span) -> TypeError {
         TypeError {
             message: format!(
                 "Trait helper `{}` could not be concretized for this callable binding",
@@ -66,7 +119,135 @@ impl Checker {
         }
     }
 
-    fn first_pending_trait_helper<'a>(&self, node: &'a TypedNode) -> Option<(&'a str, &'a Span)> {
+    fn constructor_capability_allows(
+        &self,
+        actual: &str,
+        required: &str,
+        visiting: &mut HashSet<String>,
+    ) -> bool {
+        if actual == required || !visiting.insert(actual.to_string()) {
+            return actual == required;
+        }
+        let allowed = self.traits.get(actual).is_some_and(|info| {
+            info.parents.iter().any(|parent| {
+                let parent_key = parent
+                    .trait_id
+                    .qualified_name
+                    .as_deref()
+                    .unwrap_or(parent.trait_id.name.as_str());
+                self.constructor_capability_allows(parent_key, required, visiting)
+            })
+        });
+        visiting.remove(actual);
+        allowed
+    }
+
+    fn check_constructor_capability(
+        &self,
+        required_trait: &str,
+        method_name: &str,
+        arg: &TypedNode,
+    ) -> Result<(), TypeError> {
+        let TypedInner::Var(id) = &arg.node else {
+            return Ok(());
+        };
+        let Some(actual_trait) = self.constructor_capabilities.get(&id.unique_id) else {
+            return Ok(());
+        };
+        let Some(required_info) = self.traits.get(required_trait) else {
+            return Ok(());
+        };
+        if required_info.constructor_slots.is_empty() {
+            return Ok(());
+        }
+        let mut visiting = HashSet::new();
+        if self.constructor_capability_allows(actual_trait, required_trait, &mut visiting) {
+            return Ok(());
+        }
+        Err(TypeError {
+            message: format!(
+                "{}::{} is not available for a value constrained by {}",
+                Self::surface_name(required_trait),
+                method_name,
+                Self::surface_name(actual_trait)
+            ),
+            span: arg.span.clone(),
+            hint: Some(format!(
+                "Use a concrete constructor type or a parameter constrained by {}.",
+                Self::surface_name(required_trait)
+            )),
+        })
+    }
+
+    pub(super) fn constructor_annotation_compatible(
+        &mut self,
+        trait_key: &str,
+        expected: &Ty,
+        actual: &Ty,
+        source_capability: Option<&str>,
+    ) -> bool {
+        let expected = self.resolve_ty(expected);
+        let actual = self.resolve_ty(actual);
+        let (abstract_ty, concrete_ty, abstract_is_actual) = match (&expected, &actual) {
+            (Ty::SelfApp(expected_items), concrete)
+                if Self::constructor_application_parts(expected_items).is_some() =>
+            {
+                (&expected, concrete, false)
+            }
+            (concrete, Ty::SelfApp(actual_items))
+                if Self::constructor_application_parts(actual_items).is_some() =>
+            {
+                (&actual, concrete, true)
+            }
+            _ => return false,
+        };
+        let Ty::SelfApp(items) = abstract_ty else {
+            return false;
+        };
+        let Some((_, abstract_slots)) = Self::constructor_application_parts(items) else {
+            return false;
+        };
+        let Some(concrete_slots) = Self::constructor_application_slots(concrete_ty) else {
+            return false;
+        };
+        if abstract_slots.len() != concrete_slots.len() {
+            return false;
+        }
+
+        let capability_ok = if abstract_is_actual {
+            let Some(source_capability) = source_capability else {
+                return false;
+            };
+            let mut visiting = HashSet::new();
+            self.constructor_capability_allows(source_capability, trait_key, &mut visiting)
+                && self.trait_impl_exists(source_capability, concrete_ty)
+        } else {
+            self.trait_impl_exists(trait_key, concrete_ty)
+        };
+        if !capability_ok {
+            return false;
+        }
+
+        let substitutions = self.substitutions.clone();
+        let slots_ok = abstract_slots
+            .iter()
+            .zip(concrete_slots.iter())
+            .all(|(expected_slot, actual_slot)| self.types_compatible(expected_slot, actual_slot));
+        self.substitutions = substitutions;
+        slots_ok
+    }
+
+    fn constructor_capability_for_node(&self, node: &TypedNode) -> Option<String> {
+        let TypedInner::Var(id) = &node.node else {
+            return None;
+        };
+        self.constructor_capabilities.get(&id.unique_id).cloned()
+    }
+
+    pub(super) fn first_pending_trait_helper<'a>(
+        &self,
+        node: &'a TypedNode,
+    ) -> Option<(&'a str, &'a Span)> {
         match &node.node {
             TypedInner::TraitCall {
                 method_name,
@@ -544,11 +725,15 @@ impl Checker {
                 }
 
                 if let Some(stored_ty) = self.env.lookup_var(id.unique_id).cloned() {
-                    let ty = match &stored_ty {
-                        Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
-                            self.instantiate_callable_ty(&stored_ty)
+                    let ty = if let Some(scheme) = self.env.lookup_scheme(id.unique_id).cloned() {
+                        self.instantiate_local_callable_scheme(&scheme)
+                    } else {
+                        match &stored_ty {
+                            Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
+                                self.instantiate_callable_ty(&stored_ty)
+                            }
+                            _ => self.resolve_ty(&stored_ty),
                         }
-                        _ => self.resolve_ty(&stored_ty),
                     };
                     if self.error_observer_bindings.contains(&id.unique_id)
                         && self.allow_error_observer_value_use == 0
@@ -714,15 +899,31 @@ impl Checker {
                     let mut typed_rhs = self.check_node_with_expected(rhs, Some(&expected))?;
                     self.apply_facet_annotation(&mut typed_rhs, &expected, span)?;
                     if !self.types_compatible(&expected, &typed_rhs.ty) {
-                        if let Some(err) =
-                            self.facet_replace_result_context_error(&typed_rhs, &expected, span)
-                        {
-                            return Err(err);
-                        }
-                        if let Some(err) =
-                            self.plain_value_result_context_error(&expected, &typed_rhs.ty, span)
-                        {
-                            return Err(err);
+                        let source_capability = self.constructor_capability_for_node(&typed_rhs);
+                        let constructor_coercion = self
+                            .constructor_trait_key_for_ast_ty(ast_ty)
+                            .or_else(|| source_capability.clone())
+                            .is_some_and(|trait_key| {
+                                self.constructor_annotation_compatible(
+                                    &trait_key,
+                                    &expected,
+                                    &typed_rhs.ty,
+                                    source_capability.as_deref(),
+                                )
+                            });
+                        if constructor_coercion {
+                            typed_rhs.ty = expected.clone();
+                        } else {
+                            if let Some(err) = self
+                                .facet_replace_result_context_error(&typed_rhs, &expected, span)
+                            {
+                                return Err(err);
+                            }
+                            if let Some(err) = self
+                                .plain_value_result_context_error(&expected, &typed_rhs.ty, span)
+                            {
+                                return Err(err);
+                            }
                         }
                     }
                     typed_rhs
@@ -751,6 +952,22 @@ impl Checker {
                 self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
+                if let ResolvedPattern::Annotated(_, ast_ty) = pat {
+                    if let Some(capability) = self.constructor_trait_key_for_ast_ty(ast_ty) {
+                        match &typed_pat {
+                            TypedPattern::Var(_, id) | TypedPattern::As(_, _, id) => {
+                                self.constructor_capabilities
+                                    .insert(id.unique_id, capability);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if !matches!(pat, ResolvedPattern::Annotated(..))
+                    && self.is_non_expansive_callable_value(&typed_rhs)
+                {
+                    self.generalize_local_callable_binding(&typed_pat);
+                }
                 if let Some(path) = &facet_path {
                     self.bind_facet_pattern_bindings(&typed_pat, path, span)?;
                 } else {
@@ -810,7 +1027,7 @@ impl Checker {
                 self.check_recover_kind(span, value, marker, handler)
             }
 
-            Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms),
+            Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms, None),
 
             Resolved::FieldAccess(span, expr, field) => self.check_field_access(span, expr, field),
             Resolved::FacetSegmentAccess(span, expr, segment) => {
@@ -945,8 +1162,8 @@ impl Checker {
                     methods,
                 )
             }
-            Resolved::BuiltinDecl(span, id, params, ret_ty, _) => {
-                self.check_builtin_decl(span, id, params, ret_ty)
+            Resolved::BuiltinDecl(span, id, params, ret_ty, where_clause, _) => {
+                self.check_builtin_decl(span, id, params, ret_ty, where_clause.as_ref())
             }
             Resolved::BuiltinExtractorDecl(span, id, param, ret_ty, _) => {
                 self.check_builtin_extractor_decl(span, id, param, ret_ty)
@@ -1010,10 +1227,92 @@ impl Checker {
         match (node, expected) {
             (Resolved::Block(span, stmts), expected) => self.check_block(span, stmts, expected),
             (Resolved::Closure(span, params, captures, body), Some(expected_ty)) => {
-                self.check_closure(span, params, captures, body, Some(expected_ty))
+                let expected_ty = self.resolve_ty(expected_ty);
+                if matches!(expected_ty, Ty::Var(var) if !self.rigid_tyvars.contains(&var)) {
+                    let typed = self.check_closure(span, params, captures, body, None)?;
+                    if !self.types_compatible(&expected_ty, &typed.ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "Expected {}, got {}",
+                                self.ty_name(&expected_ty),
+                                self.ty_name(&typed.ty)
+                            ),
+                            span: typed.span.clone(),
+                            hint: None,
+                        });
+                    }
+                    Ok(typed)
+                } else {
+                    self.check_closure(span, params, captures, body, Some(&expected_ty))
+                }
             }
             (Resolved::Capture(span, target, args), Some(expected_ty)) => {
                 self.check_capture(span, target, args, Some(expected_ty))
+            }
+            (Resolved::ListLiteral(span, elems), Some(expected_ty)) => {
+                let expected_ty = self.resolve_ty(expected_ty);
+                let Ty::List(element_ty) = expected_ty else {
+                    return self.check_list_literal(span, elems);
+                };
+                if matches!(self.resolve_ty(element_ty.as_ref()), Ty::Var(_)) {
+                    return self.check_list_literal(span, elems);
+                }
+                let typed_elems = elems
+                    .iter()
+                    .map(|elem| self.check_node_with_expected(elem, Some(element_ty.as_ref())))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for typed in &typed_elems {
+                    self.ensure_no_runtime_facet_value(typed, "List literal")?;
+                    if !self.types_compatible(element_ty.as_ref(), &typed.ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "expected List<{}>, got List<{}>",
+                                self.ty_name(element_ty.as_ref()),
+                                self.ty_name(&typed.ty)
+                            ),
+                            span: typed.span.clone(),
+                            hint: Some("All list elements must have the same type".into()),
+                        });
+                    }
+                }
+                Ok(TypedNode {
+                    ty: Ty::List(element_ty),
+                    span: span.clone(),
+                    node: TypedInner::ListLiteral(typed_elems),
+                })
+            }
+            (Resolved::TupleLiteral(span, elems), Some(expected_ty)) => {
+                let expected_ty = self.resolve_ty(expected_ty);
+                let Ty::Tuple(item_tys) = expected_ty else {
+                    return self.check_tuple_literal(span, elems);
+                };
+                if elems.len() != item_tys.len() {
+                    return self.check_tuple_literal(span, elems);
+                }
+                let typed_elems = elems
+                    .iter()
+                    .zip(item_tys.iter())
+                    .map(|(elem, expected)| self.check_node_with_expected(elem, Some(expected)))
+                    .collect::<Result<Vec<_>, _>>()?;
+                for (expected, typed) in item_tys.iter().zip(&typed_elems) {
+                    self.ensure_no_runtime_facet_value(typed, "Tuple literal")?;
+                    if !self.types_compatible(expected, &typed.ty) {
+                        return Err(TypeError {
+                            message: format!(
+                                "expected {}, got {}",
+                                self.ty_name(expected),
+                                self.ty_name(&typed.ty)
+                            ),
+                            span: typed.span.clone(),
+                            hint: Some("Tuple elements must match their expected types".into()),
+                        });
+                    }
+                }
+                Ok(TypedNode {
+                    ty: Ty::Tuple(item_tys),
+                    span: span.clone(),
+                    node: TypedInner::TupleLiteral(typed_elems),
+                })
             }
             (Resolved::InferredFacetCapture(span, segments), Some(expected_ty)) => {
                 self.check_inferred_facet_capture(span, segments, expected_ty)
@@ -1029,6 +1328,12 @@ impl Checker {
             }
             (Resolved::ContextBind(span, left, right), Some(expected_ty)) => {
                 self.check_context_bind_with_expected(span, left, right, Some(expected_ty))
+            }
+            (Resolved::If(span, cond, then, else_opt), Some(expected_ty)) => {
+                self.check_if_with_expected(span, cond, then, else_opt, expected_ty)
+            }
+            (Resolved::Match(span, scrutinee, arms), Some(expected_ty)) => {
+                self.check_match(span, scrutinee, arms, Some(expected_ty))
             }
             // Constructor applications are normally handled by `check_app`
             // after resolving the callee as a value.  When an enclosing
@@ -2240,7 +2545,7 @@ impl Checker {
             | Resolved::Def(span, _, _, _, _, _, _, _)
             | Resolved::ConstDef(span, _, _, _, _)
             | Resolved::ExtractorDef(span, _, _, _, _, _, _)
-            | Resolved::BuiltinDecl(span, _, _, _, _)
+            | Resolved::BuiltinDecl(span, _, _, _, _, _)
             | Resolved::BuiltinExtractorDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
             | Resolved::TypeAlias(span, _, _, _)
@@ -2516,7 +2821,9 @@ impl Checker {
         let receiver_ty = self.resolve_ty(receiver_ty);
         let result = match receiver_ty {
             Ty::Var(var) => {
-                if self.tyvar_has_bound(var, trait_name)
+                if !self.rigid_tyvars.contains(&var) {
+                    Some(TraitDispatch::Pending)
+                } else if self.tyvar_has_bound(var, trait_name)
                     || self.tyvar_satisfies_compiler_trait(var, trait_name)
                 {
                     Some(TraitDispatch::Pending)
@@ -2599,14 +2906,17 @@ impl Checker {
     ) -> Option<TraitDispatch> {
         let profile = self.profiler.start();
         let result = (|| {
-            for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let candidate_keys = self.trait_impl_candidate_keys(trait_name);
+            let instance_matches = requested_trait_args.is_empty() && trait_name.contains('<');
+            for impl_key in candidate_keys {
                 let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
                     continue;
                 };
                 let Some(method) = impl_info.methods.get(method_name) else {
                     continue;
                 };
-                if impl_info.trait_arg_tys.len() != requested_trait_args.len() {
+                if !instance_matches && impl_info.trait_arg_tys.len() != requested_trait_args.len()
+                {
                     continue;
                 }
                 let mut fresh = HashMap::new();
@@ -2618,12 +2928,30 @@ impl Checker {
                     .collect::<Vec<_>>();
                 let before = self.substitutions.clone();
                 let target_matches = self.types_compatible(&impl_target, receiver_ty);
-                let args_match = target_matches
-                    && impl_trait_args
-                        .iter()
-                        .zip(requested_trait_args.iter())
-                        .all(|(expected, actual)| self.types_compatible(expected, actual));
+                // A pending trait call is revisited after specialization with
+                // its fully-rendered instance name (for example
+                // `Encode<JsonValue>`), but its parsed argument types are no
+                // longer present in `TypedInner::TraitCall`.  Keep that exact
+                // instance constraint instead of treating it as the arity-0
+                // `Encode` trait.
+                let args_match = if instance_matches {
+                    target_matches
+                        && self.trait_display_name(
+                            &self.trait_instance_key(&impl_info.trait_id, &impl_info.trait_args),
+                        ) == self.trait_display_name(trait_name)
+                } else {
+                    target_matches
+                        && impl_trait_args.len() == requested_trait_args.len()
+                        && impl_trait_args
+                            .iter()
+                            .zip(requested_trait_args.iter())
+                            .all(|(expected, actual)| self.types_compatible(expected, actual))
+                };
                 if !args_match {
+                    self.substitutions = before;
+                    continue;
+                }
+                if !self.impl_where_obligations_satisfied(&impl_info, &fresh) {
                     self.substitutions = before;
                     continue;
                 }
@@ -2672,6 +3000,50 @@ impl Checker {
         self.profiler
             .finish(ProfileEvent::GenericTraitCandidateScan, profile);
         result
+    }
+
+    fn impl_where_obligations_satisfied(
+        &mut self,
+        impl_info: &TraitImplInfo,
+        fresh: &HashMap<u32, Ty>,
+    ) -> bool {
+        let Some(where_clause) = &impl_info.where_clause else {
+            return true;
+        };
+        for constraint in &where_clause.constraints {
+            let concrete = match &constraint.subject {
+                AstTy::Named(_, subject) if subject == "Self" => {
+                    self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, fresh))
+                }
+                AstTy::Named(_, subject) => {
+                    let Some(original_var) = impl_info.type_param_vars_by_name.get(subject) else {
+                        return false;
+                    };
+                    let Some(instantiated) = fresh.get(original_var) else {
+                        return false;
+                    };
+                    self.resolve_ty(instantiated)
+                }
+                _ => return false,
+            };
+            for bound in &constraint.bounds {
+                let TypedWhereConstraintRhs::Trait { trait_id, args } = bound else {
+                    // Constructor and slot obligations are validated when the
+                    // impl head is declared. They do not establish runtime
+                    // dispatch applicability in V1.
+                    continue;
+                };
+                let trait_key = self.trait_key(trait_id);
+                let Ok(trait_args) = self.instantiate_impl_where_trait_args(impl_info, fresh, args)
+                else {
+                    return false;
+                };
+                if !self.trait_impl_exists_for_args(&trait_key, &trait_args, &concrete) {
+                    return false;
+                }
+            }
+        }
+        true
     }
 
     fn specializable_fun_idx_for_function_key(&self, function_key: &str) -> Option<u32> {
@@ -3140,12 +3512,13 @@ impl Checker {
         let receiver_name = self.trait_target_name(receiver_ty)?;
         let target_ty = self.resolve_ty(requested_trait_args.first()?);
         let opposite_trait_key = self.trait_key_by_short_name(opposite_trait)?;
-        let opposite_instance_key =
-            self.trait_instance_key_from_tys(&opposite_trait_key, &[target_ty.clone()]);
-        if !self
-            .trait_impls
-            .contains_key(&(opposite_instance_key, receiver_name.clone()))
-        {
+        let receiver_ty = self.resolve_ty(receiver_ty);
+        let has_opposite_impl = self.trait_impls.values().any(|impl_info| {
+            self.trait_key(&impl_info.trait_id) == opposite_trait_key
+                && impl_info.trait_arg_tys == [target_ty.clone()]
+                && impl_info.target_ty == receiver_ty
+        });
+        if !has_opposite_impl {
             return None;
         }
 
@@ -3229,6 +3602,11 @@ impl Checker {
             && positional_args.len() == 2
         {
             let mut typed = self.check_context_map(span, positional_args[0], positional_args[1])?;
+            if let TypedInner::TraitCall { args, .. } = &typed.node {
+                if let Some(receiver) = args.first() {
+                    self.check_constructor_capability(trait_name, method_name, receiver)?;
+                }
+            }
             if let TypedInner::TraitCall { origin, .. } = &mut typed.node {
                 *origin = TraitCallOrigin::Explicit;
             }
@@ -3238,8 +3616,15 @@ impl Checker {
             && method_name == "bind"
             && positional_args.len() == 2
         {
+            let typed_receiver = self.check_node(positional_args[0])?;
+            self.check_constructor_capability(trait_name, method_name, &typed_receiver)?;
             let mut typed =
                 self.check_context_bind(span, positional_args[0], positional_args[1])?;
+            if let TypedInner::TraitCall { args, .. } = &typed.node {
+                if let Some(receiver) = args.first() {
+                    self.check_constructor_capability(trait_name, method_name, receiver)?;
+                }
+            }
             if let TypedInner::TraitCall { origin, .. } = &mut typed.node {
                 *origin = TraitCallOrigin::Explicit;
             }
@@ -3329,9 +3714,9 @@ impl Checker {
                     && method_name == "default"
                 {
                     match explicit_type_args {
-                        Some([arg]) => Some(
-                            self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?,
-                        ),
+                        Some([arg]) => {
+                            Some(self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?)
+                        }
                         Some(args) => {
                             return Err(TypeError {
                                 message: format!(
@@ -3349,8 +3734,10 @@ impl Checker {
                 } else {
                     None
                 };
-                let expected = explicit_target.as_ref().or(expected_ret_ty).ok_or_else(|| {
-                    TypeError {
+                let expected = explicit_target
+                    .as_ref()
+                    .or(expected_ret_ty)
+                    .ok_or_else(|| TypeError {
                         message: format!(
                             "{}::{} requires an expected return type",
                             trait_name, method_name
@@ -3360,8 +3747,7 @@ impl Checker {
                             "Add a type annotation so {}::{} can select a concrete implementation.",
                             trait_name, method_name
                         )),
-                    }
-                })?;
+                    })?;
                 let dispatch = self
                     .constructor_target_dispatch(trait_name, method_name, expected)
                     .ok_or_else(|| TypeError {
@@ -3409,6 +3795,7 @@ impl Checker {
             && positional_args.len() == 2
         {
             let typed_mapper = self.check_node(positional_args[0])?;
+            self.check_constructor_capability(trait_name, method_name, &typed_mapper)?;
             let mapper_inner = self
                 .constructor_slot_type_for(trait_name, &typed_mapper.ty)
                 .ok_or_else(|| TypeError {
@@ -3433,6 +3820,7 @@ impl Checker {
                 })?;
             let typed_value =
                 self.check_node_with_expected(positional_args[1], Some(&expected_value_ty))?;
+            self.check_constructor_capability(trait_name, method_name, &typed_value)?;
             let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
             let Some((dispatch, expected_mapper)) = self.constructor_functor_dispatch(
                 trait_name,
@@ -3486,8 +3874,11 @@ impl Checker {
                     if let Some((witness, slots)) = Self::constructor_application_parts(items) {
                         if slots.len() == trait_info.constructor_slots.len() {
                             let self_ty = self.env.fresh_tyvar();
-                            let (param_tys, ret_ty, _, _) =
-                                self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
+                            let (param_tys, ret_ty, _, _) = self.resolve_trait_method_signature(
+                                &trait_info,
+                                &method,
+                                &self_ty,
+                            )?;
                             let apply_witness = |ty: Ty| match ty {
                                 Ty::SelfApp(args)
                                     if Self::constructor_application_parts(&args).is_none() =>
@@ -3498,10 +3889,8 @@ impl Checker {
                                 }
                                 other => other,
                             };
-                            let param_tys = param_tys
-                                .into_iter()
-                                .map(apply_witness)
-                                .collect::<Vec<_>>();
+                            let param_tys =
+                                param_tys.into_iter().map(apply_witness).collect::<Vec<_>>();
                             let ret_ty = apply_witness(ret_ty);
                             if args.len() != param_tys.len() {
                                 return Err(TypeError {
@@ -3645,6 +4034,10 @@ impl Checker {
             .collect::<Result<Vec<_>, _>>()?;
         self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
 
+        if let Some(receiver) = typed_args.first() {
+            self.check_constructor_capability(trait_name, method_name, receiver)?;
+        }
+
         if let Some(owner_hint) = receiver_owner_hint {
             if let Some(receiver) = typed_args.first() {
                 let receiver_ty = self.resolve_ty(&receiver.ty);
@@ -3753,7 +4146,37 @@ impl Checker {
         let trait_call_summary = self.trait_implementation_summary(&trait_call_name);
         let receiver_ty = self.resolve_ty(&self_ty);
         if let Ty::Var(var) = receiver_ty {
-            self.register_tyvar_bound(var, &trait_call_name);
+            if self.rigid_tyvars.contains(&var)
+                && !self.tyvar_has_bound(var, &trait_call_name)
+                && !self.tyvar_satisfies_compiler_trait(var, &trait_call_name)
+            {
+                return Err(TypeError {
+                    message: format!(
+                        "MissingGenericBound: {} must implement {}",
+                        self.ty_name(&receiver_ty),
+                        trait_call_display_name
+                    ),
+                    span: typed_args
+                        .first()
+                        .map(|arg| arg.span.clone())
+                        .unwrap_or_else(|| span.clone()),
+                    hint: Some(format!(
+                        "Add `where {}: {}` to this declaration.",
+                        self.ty_name(&receiver_ty),
+                        trait_call_display_name
+                    )),
+                });
+            }
+            if !self.rigid_tyvars.contains(&var) {
+                let obligations = self.pending_trait_obligations.entry(var).or_default();
+                let obligation = PendingTraitObligation {
+                    trait_id: trait_name.to_string(),
+                    args: trait_arg_tys.clone(),
+                };
+                if !obligations.contains(&obligation) {
+                    obligations.push(obligation);
+                }
+            }
         }
         let receiver_span = typed_args
             .first()
@@ -3789,13 +4212,15 @@ impl Checker {
                 &trait_arg_tys,
             )
             .ok_or_else(|| TypeError {
-                message: format!(
-                    "{}::{} requires a receiver type implementing {}, got {}",
-                    trait_call_display_name,
-                    method_name,
-                    trait_call_display_name,
-                    self.ty_name(&receiver_ty)
-                ),
+                message: self.trait_obligation_cycle.clone().unwrap_or_else(|| {
+                    format!(
+                        "{}::{} requires a receiver type implementing {}, got {}",
+                        trait_call_display_name,
+                        method_name,
+                        trait_call_display_name,
+                        self.ty_name(&receiver_ty)
+                    )
+                }),
                 span: receiver_span,
                 hint: combine_hint_parts(&[
                     Some(trait_signature_hint(self)),
@@ -7931,20 +8356,39 @@ impl Checker {
 
         match &func_ty {
             Ty::BuiltinFunc { name, params, ret } => {
+                let builtin_uid = match &typed_func.node {
+                    TypedInner::Var(id) => Some(id.unique_id),
+                    _ => None,
+                };
                 let callable_hint = if let TypedInner::Var(id) = &typed_func.node {
                     Some(self.call_target_signature_hint_for_id(id, params, ret.as_ref()))
                 } else {
                     Some(self.call_target_signature_hint(name, params, ret.as_ref(), None))
                 };
+                let unconstrained_arg_params = builtin_uid
+                    .filter(|uid| self.builtin_contracts.contains_key(uid))
+                    .map(|_| vec![Ty::Hole; params.len()]);
                 let typed_args = self.typecheck_positional_call_args(
                     span,
                     name,
-                    params,
+                    unconstrained_arg_params.as_deref().unwrap_or(params),
                     args,
                     callable_hint.clone(),
                     format!("{} does not accept named arguments", name),
                 )?;
                 self.ensure_no_runtime_facet_args(&typed_args, span, name)?;
+                if let Some(uid) = builtin_uid {
+                    for (param, arg) in params.iter().zip(&typed_args) {
+                        if !self.types_compatible(param, &arg.ty) {
+                            return Err(TypeError {
+                                message: self.argument_type_mismatch_message(param, &arg.ty),
+                                span: arg.span.clone(),
+                                hint: callable_hint.clone(),
+                            });
+                        }
+                    }
+                    self.check_builtin_contract(uid, name, &typed_args, span)?;
+                }
 
                 if name == "__process_self" {
                     let Some(process_name) = self.current_process_name() else {
@@ -8082,6 +8526,69 @@ impl Checker {
                 hint: None,
             }),
         }
+    }
+
+    fn check_builtin_contract(
+        &mut self,
+        uid: u32,
+        builtin_name: &str,
+        args: &[TypedNode],
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let Some(contract) = self.builtin_contracts.get(&uid).cloned() else {
+            return Ok(());
+        };
+        let mut type_vars = contract.type_vars;
+        for (expected, actual) in contract
+            .param_tys
+            .iter()
+            .zip(args.iter().map(|arg| &arg.ty))
+        {
+            let _ = self.types_compatible(expected, actual);
+        }
+        for constraint in contract.where_clause.constraints {
+            let subject = self.resolve_builtin_ast_ty_in_context(
+                &constraint.subject,
+                TypeSyntaxContext::General,
+                &mut type_vars,
+            )?;
+            for bound in constraint.bounds {
+                let TypedWhereConstraintRhs::Trait { trait_id, args } = bound else {
+                    continue;
+                };
+                let trait_key = self.trait_key(&trait_id);
+                let trait_args = args
+                    .iter()
+                    .map(|arg| {
+                        self.resolve_builtin_ast_ty_in_context(
+                            arg,
+                            TypeSyntaxContext::General,
+                            &mut type_vars,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let subject = self.resolve_ty(&subject);
+                let satisfied = self.trait_impl_exists_for_args(&trait_key, &trait_args, &subject);
+                if !satisfied {
+                    return Err(TypeError {
+                        message: format!(
+                            "Builtin {} requires {} for {}, got {}",
+                            builtin_name,
+                            self.trait_display_name(&trait_key),
+                            self.ty_name(&subject),
+                            self.ty_name(&subject),
+                        ),
+                        span: span.clone(),
+                        hint: Some(format!(
+                            "Add a {} implementation for {} or use a type that already implements it.",
+                            self.trait_display_name(&trait_key),
+                            self.ty_name(&subject),
+                        )),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     fn typecheck_positional_call_args(
@@ -9429,13 +9936,13 @@ impl Checker {
                     });
                 }
                 let receiver_ty = self.resolve_ty(&lt);
-                let alternative_trait = self
-                    .trait_key_by_short_name("Alternative")
-                    .ok_or_else(|| TypeError {
-                        message: "Unknown trait: Alternative".into(),
-                        span: span.clone(),
-                        hint: None,
-                    })?;
+                let alternative_trait =
+                    self.trait_key_by_short_name("Alternative")
+                        .ok_or_else(|| TypeError {
+                            message: "Unknown trait: Alternative".into(),
+                            span: span.clone(),
+                            hint: None,
+                        })?;
                 let dispatch = self
                     .trait_dispatch_target(&alternative_trait, "choose", &receiver_ty)
                     .ok_or_else(|| TypeError {
@@ -10202,6 +10709,97 @@ impl Checker {
                 Ok(self.maybe_call_zero_arg_function(raw, call_span.clone()))
             }
         }
+    }
+
+    fn check_lazy_argument_with_expected(
+        &mut self,
+        arg: &Resolved,
+        expected: &Ty,
+        call_span: &Span,
+    ) -> Result<TypedNode, TypeError> {
+        match arg {
+            Resolved::Grouped(span, inner) => {
+                let inner = self.check_node_with_expected(inner, Some(expected))?;
+                Ok(TypedNode {
+                    ty: inner.ty.clone(),
+                    span: span.clone(),
+                    node: TypedInner::EagerBoundary(Box::new(inner)),
+                })
+            }
+            _ => {
+                let raw = self.check_node_with_expected(arg, Some(expected))?;
+                Ok(self.maybe_call_zero_arg_function(raw, call_span.clone()))
+            }
+        }
+    }
+
+    fn check_if_with_expected(
+        &mut self,
+        span: &Span,
+        cond: &Resolved,
+        then: &Resolved,
+        else_opt: &Option<Box<Resolved>>,
+        expected: &Ty,
+    ) -> Result<TypedNode, TypeError> {
+        let typed_cond = self.check_node(cond)?;
+        if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "if condition must be Boolean, got {}",
+                    self.ty_name(&typed_cond.ty)
+                ),
+                span: typed_cond.span.clone(),
+                hint: None,
+            });
+        }
+        let typed_then = self.check_lazy_argument_with_expected(then, expected, span)?;
+        if !self.types_compatible(expected, &typed_then.ty) {
+            return Err(TypeError {
+                message: format!(
+                    "if branches have different types: {} and {}",
+                    self.ty_name(&self.resolve_ty(expected)),
+                    self.ty_name(&typed_then.ty)
+                ),
+                span: typed_then.span.clone(),
+                hint: None,
+            });
+        }
+        let typed_else = else_opt
+            .as_ref()
+            .map(|branch| self.check_lazy_argument_with_expected(branch, expected, span))
+            .transpose()?;
+        if typed_else.is_none() && !self.types_compatible(expected, &Ty::Unit) {
+            return Err(TypeError {
+                message: format!(
+                    "expected {}, got Unit",
+                    self.ty_name(&self.resolve_ty(expected))
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if let Some(typed_else) = &typed_else {
+            if !self.types_compatible(expected, &typed_else.ty) {
+                return Err(TypeError {
+                    message: format!(
+                        "if branches have different types: {} and {}",
+                        self.ty_name(&self.resolve_ty(expected)),
+                        self.ty_name(&typed_else.ty)
+                    ),
+                    span: typed_else.span.clone(),
+                    hint: None,
+                });
+            }
+        }
+        Ok(TypedNode {
+            ty: self.resolve_ty(expected),
+            span: span.clone(),
+            node: TypedInner::If(
+                Box::new(typed_cond),
+                Box::new(typed_then),
+                typed_else.map(Box::new),
+            ),
+        })
     }
 
     pub(super) fn check_if(

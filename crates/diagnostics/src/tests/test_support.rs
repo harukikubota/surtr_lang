@@ -35,3 +35,19 @@ pub(super) fn strip_ansi(input: &str) -> String {
     }
     out
 }
+
+pub(super) fn labels_text(spec: &DiagnosticSpec) -> String {
+    spec.labels
+        .iter()
+        .map(|label| strip_ansi(&label.message))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+pub(super) fn spec_notes_text(spec: &DiagnosticSpec) -> String {
+    spec.notes
+        .iter()
+        .map(|note| strip_ansi(note))
+        .collect::<Vec<_>>()
+        .join("\n")
+}

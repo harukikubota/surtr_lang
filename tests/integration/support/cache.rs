@@ -356,7 +356,7 @@ fn cached_script_compile_prefix(
     scar_session.rollback(std_snapshot.scar_checkpoint().clone());
     scar_session.ensure_next_fun_idx_at_least(next_fun_idx(std_snapshot.bytecode()));
     let typed = scar_session
-        .typecheck_staged_program_with_context(
+        .typecheck_staged_program_in_place_with_context(
             resolved,
             compile_chunk_typecheck_context_for_mode(TestCompileMode::Script),
         )
@@ -460,7 +460,7 @@ pub(super) fn cached_compile_prefix(
             let resume_state = resolved.resume_state;
             let mut scar_session = scar::ScarSession::new();
             let typed = scar_session
-                .typecheck_staged_program_with_context(
+                .typecheck_staged_program_in_place_with_context(
                     resolved,
                     std_typecheck_context_for_mode(mode),
                 )

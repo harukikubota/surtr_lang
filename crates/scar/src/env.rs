@@ -7,6 +7,14 @@ use spire::ast::Symbol;
 
 use crate::types::Ty;
 
+/// A locally-bound callable that may be instantiated independently at every
+/// call site.  Non-callable values deliberately remain monomorphic.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypeScheme {
+    pub ty: Ty,
+    pub quantified: Vec<u32>,
+}
+
 fn canonical_type_key(name: &str) -> String {
     if name.contains("::") {
         name.to_string()
@@ -97,7 +105,7 @@ pub struct EnumVariantInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct VarScopeFrame {
     touched: HashSet<u32>,
-    undo: Vec<(u32, Option<Ty>)>,
+    undo: Vec<(u32, Option<Ty>, Option<TypeScheme>)>,
 }
 
 /// Type environment — tracks variable types and type definitions.
@@ -105,6 +113,9 @@ struct VarScopeFrame {
 pub struct TypeEnv {
     /// unique_id → type
     pub vars: HashMap<u32, Ty>,
+    /// Local callable bindings generalized after their right-hand side has
+    /// been checked. `vars` retains the monotype for all other consumers.
+    pub schemes: HashMap<u32, TypeScheme>,
     /// type name → definition
     pub type_defs: HashMap<Symbol, TypeDefInfo>,
     /// Next tag to assign (0 = Ok, 1 = Err are reserved)
@@ -138,6 +149,7 @@ impl TypeEnv {
     pub fn new() -> Self {
         Self {
             vars: HashMap::new(),
+            schemes: HashMap::new(),
             type_defs: HashMap::new(),
             next_tag: 2, // 0 = Ok, 1 = Err
             next_fun_idx: 0,
@@ -156,12 +168,20 @@ impl TypeEnv {
     pub fn bind_var(&mut self, unique_id: u32, ty: Ty) {
         if let Some(frame) = self.var_scope_frames.last_mut() {
             if frame.touched.insert(unique_id) {
-                frame
-                    .undo
-                    .push((unique_id, self.vars.get(&unique_id).cloned()));
+                frame.undo.push((
+                    unique_id,
+                    self.vars.get(&unique_id).cloned(),
+                    self.schemes.get(&unique_id).cloned(),
+                ));
             }
         }
         self.vars.insert(unique_id, ty);
+        self.schemes.remove(&unique_id);
+    }
+
+    pub fn bind_var_scheme(&mut self, unique_id: u32, scheme: TypeScheme) {
+        self.bind_var(unique_id, scheme.ty.clone());
+        self.schemes.insert(unique_id, scheme);
     }
 
     /// Open a scoped mutation frame for `vars`.
@@ -180,11 +200,16 @@ impl TypeEnv {
         let Some(frame) = self.var_scope_frames.pop() else {
             return;
         };
-        for (unique_id, old) in frame.undo.into_iter().rev() {
+        for (unique_id, old, old_scheme) in frame.undo.into_iter().rev() {
             if let Some(old_ty) = old {
                 self.vars.insert(unique_id, old_ty);
             } else {
                 self.vars.remove(&unique_id);
+            }
+            if let Some(old_scheme) = old_scheme {
+                self.schemes.insert(unique_id, old_scheme);
+            } else {
+                self.schemes.remove(&unique_id);
             }
         }
     }
@@ -192,6 +217,10 @@ impl TypeEnv {
     /// Look up the type of a variable.
     pub fn lookup_var(&self, unique_id: u32) -> Option<&Ty> {
         self.vars.get(&unique_id)
+    }
+
+    pub fn lookup_scheme(&self, unique_id: u32) -> Option<&TypeScheme> {
+        self.schemes.get(&unique_id)
     }
 
     /// Predeclare a type definition and reserve a deterministic tag.

@@ -1157,6 +1157,40 @@ impl Metric for Int {
 }
 
 #[test]
+fn test_resolve_rejects_duplicate_callable_in_trait_impl() {
+    let result = parse_and_resolve(
+        r#"deftrait Mark {
+  def mark(self: Self) -> Int
+}
+
+impl Mark for Int {
+  def mark(self: Self) -> Int { 1 }
+  def mark(self: Self) -> Int { 2 }
+}"#,
+    );
+
+    let err = result.expect_err("duplicate trait impl method must fail");
+    assert!(err.message.contains("Duplicate function `mark`"));
+    assert_eq!(err.related_labels.len(), 2);
+}
+
+#[test]
+fn test_resolve_rejects_public_private_overload_in_inherent_impl() {
+    let result = parse_and_resolve(
+        r#"defstruct User { name: String }
+
+impl User {
+  def name(self: Self) -> String { self.name }
+  defp name(self: Self) -> String { self.name }
+}"#,
+    );
+
+    let err = result.expect_err("def and defp cannot overload each other");
+    assert!(err.message.contains("Duplicate function `name`"));
+    assert_eq!(err.related_labels.len(), 2);
+}
+
+#[test]
 fn test_precollect_rejects_impl_target_for_record() {
     let module_stages = vec![vec![staged_module(
         "",
@@ -1381,7 +1415,7 @@ where
                     .expect("trait method where clause");
                 assert!(matches!(
                     method_clause.constraints[0].bounds.as_slice(),
-                    [ResolvedWhereConstraintRhs::Trait(bound_id)]
+                    [ResolvedWhereConstraintRhs::Trait { trait_id: bound_id, .. }]
                         if bound_id.unique_id == equal_id.unique_id
                 ));
                 Some(id.clone())
@@ -1401,7 +1435,7 @@ where
         .expect("function where clause");
     assert!(matches!(
         function_clause.constraints[0].bounds.as_slice(),
-        [ResolvedWhereConstraintRhs::Trait(bound_id)]
+        [ResolvedWhereConstraintRhs::Trait { trait_id: bound_id, .. }]
             if bound_id.unique_id == equal_id.unique_id
     ));
 
@@ -1439,7 +1473,7 @@ where
         .expect("trait impl method where clause");
     assert!(matches!(
         impl_method_clause.constraints[0].bounds.as_slice(),
-        [ResolvedWhereConstraintRhs::Trait(bound_id)]
+        [ResolvedWhereConstraintRhs::Trait { trait_id: bound_id, .. }]
             if bound_id.unique_id == equal_id.unique_id
     ));
 }
@@ -1630,7 +1664,7 @@ fn test_builtin_decl_resolution() {
         .resolve_program(ast)
         .expect("builtin declaration should resolve");
     match &resolved[0] {
-        Resolved::BuiltinDecl(_, id, params, ret_ty, attrs) => {
+        Resolved::BuiltinDecl(_, id, params, ret_ty, _, attrs) => {
             assert_eq!(id.name, "print");
             assert_eq!(id.unique_id, 2); // 0=Ok, 1=Err, 2=print
             assert_eq!(params.len(), 1);
@@ -1663,7 +1697,7 @@ fn test_hidden_builtin_decl_resolution_preserves_hidden_attr() {
         .resolve_program(ast)
         .expect("hidden builtin declaration should resolve");
     match &resolved[0] {
-        Resolved::BuiltinDecl(_, id, _, _, attrs) => {
+        Resolved::BuiltinDecl(_, id, _, _, _, attrs) => {
             assert_eq!(id.name, "__process_sleep");
             assert!(attrs.hidden);
         }
@@ -3139,6 +3173,14 @@ fn test_safebind_resolution() {
 }
 
 #[test]
+fn test_underscore_prefixed_pattern_does_not_bind() {
+    let err = parse_and_resolve("_discard = 1\n_discard")
+        .expect_err("underscore-prefixed patterns must not introduce a name");
+
+    assert!(err.message.contains("Undefined variable: _discard"));
+}
+
+#[test]
 fn test_safebind_constructor_pattern_resolution() {
     let resolved = parse_and_resolve(
         r#"value: Result<Result<Int>> = Ok(Ok(1))
@@ -3210,6 +3252,156 @@ fn test_duplicate_binding_in_pattern_is_error() {
     )
     .expect_err("duplicate pattern binding should fail");
     assert!(err.message.contains("Duplicate binding in pattern: head"));
+}
+
+#[test]
+fn test_duplicate_binding_collects_occurrences_in_preorder_up_to_five() {
+    let err = parse_and_resolve("(x, x, x, x, x, x) = (1, 2, 3, 4, 5, 6)")
+        .expect_err("duplicate pattern bindings should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| label.message.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second", "third", "fourth", "fifth"]
+    );
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [(1, 2), (4, 5), (7, 8), (10, 11), (13, 14)]
+    );
+}
+
+#[test]
+fn test_duplicate_binding_uses_binding_detection_order() {
+    let err = parse_and_resolve("((s, s) @ s, s) @ s = ((1, 3), 2)")
+        .expect_err("duplicate pattern bindings should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.message.as_str(), label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [
+            ("first", 13, 14),
+            ("second", 18, 19),
+            ("third", 2, 3),
+            ("fourth", 5, 6),
+            ("fifth", 10, 11),
+        ]
+    );
+}
+
+#[test]
+fn test_duplicate_binding_orders_enum_constructor_like_tuple_children() {
+    let source = r#"defenum Pair { Pair(Int, Int), }
+Pair(x @ x, x) @ x = Pair(1, 2)"#;
+    let err = parse_and_resolve(source).expect_err("duplicate pattern bindings should fail");
+    let spans = source
+        .match_indices('x')
+        .map(|(start, _)| (start, start + 1))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [spans[0], spans[2], spans[3], spans[1]],
+    );
+}
+
+#[test]
+fn test_duplicate_binding_moves_outer_as_after_left_as_inner_binding() {
+    let err = parse_and_resolve("(s @ s, (s, s)) @ s = (1, (2, 3))")
+        .expect_err("duplicate pattern bindings should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.message.as_str(), label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [
+            ("first", 1, 2),
+            ("second", 18, 19),
+            ("third", 5, 6),
+            ("fourth", 9, 10),
+            ("fifth", 12, 13),
+        ]
+    );
+}
+
+#[test]
+fn test_duplicate_binding_applies_same_order_to_list_cons_elements() {
+    let err = parse_and_resolve("[s, ..s @ s] @ s =? [1, 2]")
+        .expect_err("duplicate list pattern bindings should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.message.as_str(), label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [
+            ("first", 1, 2),
+            ("second", 6, 7),
+            ("third", 15, 16),
+            ("fourth", 10, 11),
+        ]
+    );
+}
+
+#[test]
+fn test_duplicate_binding_flattens_list_children_before_parent_alias() {
+    let source = "[x, ..[y, ..x]] @ x =? [1, 2]";
+    let err = parse_and_resolve(source).expect_err("duplicate list pattern bindings should fail");
+    let spans = source
+        .match_indices('x')
+        .map(|(start, _)| (start, start + 1))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        spans,
+    );
+}
+
+#[test]
+fn test_duplicate_binding_keeps_recursive_detection_order_without_outer_as_pattern() {
+    let err = parse_and_resolve("((s, s) @ s, s) = ((1, 3), 2)")
+        .expect_err("duplicate pattern bindings should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.message.as_str(), label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [
+            ("first", 2, 3),
+            ("second", 5, 6),
+            ("third", 10, 11),
+            ("fourth", 13, 14),
+        ]
+    );
+}
+
+#[test]
+fn test_as_pattern_duplicate_uses_alias_token_span() {
+    let err = parse_and_resolve("(x @ x) = (1, 2)")
+        .expect_err("duplicate as-pattern binding should fail");
+
+    assert_eq!(
+        err.related_labels
+            .iter()
+            .map(|label| (label.message.as_str(), label.span.start, label.span.end))
+            .collect::<Vec<_>>(),
+        [("first", 1, 2), ("second", 5, 6)]
+    );
 }
 
 #[test]

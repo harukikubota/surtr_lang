@@ -35,6 +35,7 @@ impl Parser<'_> {
             self.peek(),
             Token::LBrack
                 | Token::LParen
+                | Token::Unit
                 | Token::Ident(_)
                 | Token::Caret
                 | Token::Int(_)
@@ -134,18 +135,39 @@ impl Parser<'_> {
         };
         loop {
             self.skip_newlines();
-            if !matches!(self.peek(), Token::At) {
+            let compact_alias = matches!(self.peek(), Token::Annotator(_));
+            if !compact_alias && !matches!(self.peek(), Token::At) {
                 break;
             }
-            self.advance(); // '@'
-            self.skip_newlines();
             if super::pattern_depth(&pat) >= super::MAX_PARSE_NESTING {
                 return Err(ParseError::syntax(
                     super::MAX_PARSE_NESTING_MESSAGE,
                     super::pattern_span(&pat).clone(),
                 ));
             }
-            let (alias, alias_span) = self.expect_ident()?;
+            let (alias, alias_span) = if compact_alias {
+                let spanned = self.advance();
+                let Token::Annotator(alias) = spanned.token else {
+                    unreachable!("compact as-pattern alias was checked before consuming")
+                };
+                (
+                    alias,
+                    Span {
+                        start: spanned.span.start + 1,
+                        end: spanned.span.end,
+                    },
+                )
+            } else {
+                self.advance(); // '@'
+                self.skip_newlines();
+                self.expect_ident()?
+            };
+            if alias.starts_with('_') {
+                return Err(ParseError::syntax(
+                    "as-pattern alias must be a binding identifier.",
+                    alias_span,
+                ));
+            }
             if alias == "self" && self.impl_target_stack.is_empty() {
                 return Err(ParseError::syntax(
                     "`self` can only be used inside impl methods",
@@ -169,7 +191,7 @@ impl Parser<'_> {
                 start: super::pattern_span(&pat).start,
                 end,
             };
-            pat = AstPattern::As(span, Box::new(pat), alias, alias_ty);
+            pat = AstPattern::As(span, Box::new(pat), alias, alias_ty, alias_span);
         }
         Ok(pat)
     }
@@ -177,7 +199,7 @@ impl Parser<'_> {
     fn parse_bind_pattern_atom(&mut self) -> Result<AstPattern, ParseError> {
         let sp = self.peek_span();
         match self.peek().clone() {
-            Token::Ident(name) if name == "_" => {
+            Token::Ident(name) if name.starts_with('_') => {
                 self.advance();
                 Ok(AstPattern::Wildcard(sp))
             }
@@ -351,6 +373,10 @@ impl Parser<'_> {
                 Ok(AstPattern::Var(sp, name))
             }
             Token::LBrack => self.parse_list_bind_pattern(),
+            Token::Unit => Err(ParseError::syntax(
+                "The Unit type has no pattern matching.",
+                sp,
+            )),
             Token::LParen => {
                 self.with_parse_nesting(sp.clone(), |parser| {
                     parser.advance();
@@ -411,7 +437,7 @@ impl Parser<'_> {
 pub(super) fn pattern_contains_pin(pattern: &AstPattern) -> bool {
     match pattern {
         AstPattern::Pin(_, _) => true,
-        AstPattern::As(_, inner, _, _) => pattern_contains_pin(inner),
+        AstPattern::As(_, inner, _, _, _) => pattern_contains_pin(inner),
         AstPattern::ListCons(_, head, tail) => {
             pattern_contains_pin(head) || pattern_contains_pin(tail)
         }
@@ -432,7 +458,9 @@ pub(super) fn pattern_contains_pin(pattern: &AstPattern) -> bool {
 
 pub(super) fn pattern_contains_binding_var(pattern: &AstPattern) -> bool {
     match pattern {
-        AstPattern::Var(_, _) | AstPattern::Annotated(_, _, _) | AstPattern::As(_, _, _, _) => true,
+        AstPattern::Var(_, _) | AstPattern::Annotated(_, _, _) | AstPattern::As(_, _, _, _, _) => {
+            true
+        }
         AstPattern::ListCons(_, head, tail) => {
             pattern_contains_binding_var(head) || pattern_contains_binding_var(tail)
         }

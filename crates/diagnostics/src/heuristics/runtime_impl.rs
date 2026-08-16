@@ -73,14 +73,8 @@ pub(crate) fn infer_runtime_value_error_template(
                 message: "SafeBind partial match".into(),
                 color: Some(Color::Yellow),
             },
-            DiagnosticLabel {
-                source_id: None,
-                span: rhs_span,
-                message: format!("input source: {}", input_source),
-                color: None,
-            },
         ],
-        notes: Vec::new(),
+        notes: vec![format!("input source: {}", input_source)],
         help: None,
     })
 }
@@ -212,14 +206,8 @@ pub(crate) fn infer_builtin_runtime_error_template(
                 message: "call target".into(),
                 color: Some(Color::Yellow),
             },
-            DiagnosticLabel {
-                source_id: None,
-                span: call_span,
-                message: format!("expected rule: {}", rule),
-                color: Some(Color::Magenta),
-            },
         ],
-        notes: Vec::new(),
+        notes: vec![format!("expected rule: {}", rule)],
         help: None,
     })
 }
@@ -233,31 +221,21 @@ pub(crate) fn infer_vm_runtime_error_template(
     let line_span =
         trimmed_line_span_containing(source, focus.start).unwrap_or_else(|| focus.clone());
     let rule = runtime_vm_rule_from_message(message)?;
-    let mut labels = vec![
+    let labels = vec![
         DiagnosticLabel {
             source_id: None,
             span: line_span.clone(),
             message: message.to_string(),
             color: Some(Color::Red),
         },
-        DiagnosticLabel {
-            source_id: None,
-            span: line_span.clone(),
-            message: format!("runtime rule: {}", rule),
-            color: Some(Color::Magenta),
-        },
     ];
+    let mut notes = vec![format!("runtime rule: {}", rule)];
     if let Some(opcode) = context.opcode.as_deref() {
-        labels.push(DiagnosticLabel {
-            source_id: None,
-            span: line_span,
-            message: format!("opcode: {}", opcode),
-            color: Some(Color::Yellow),
-        });
+        notes.push(format!("opcode: {}", opcode));
     }
     Some(TemplateSpec {
         labels,
-        notes: Vec::new(),
+        notes,
         help: None,
     })
 }
@@ -506,4 +484,3 @@ pub(crate) fn find_runtime_builtin_definition_label(
     }
     None
 }
-

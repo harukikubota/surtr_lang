@@ -1,0 +1,7 @@
+defstruct User { name: String }
+
+impl User {
+  def new(name: String) -> Self { User { name } }
+}
+
+values = List::group_count([User(name: "a")])

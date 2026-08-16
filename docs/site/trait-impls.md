@@ -8,13 +8,15 @@ Surtr の trait system は V1 です。
 標準 trait は大きく 3 層に分けて読むと分かりやすいです。
 
 - capability trait
-  - `Show`, `Compare`, `From`, `TryFrom`
+  - `Show`, `Compare`, `Default`, `From`, `TryFrom`
 - operator dispatch trait
   - `Add`, `Sub`, `Mul`, `Eq`, `Neq`, `Concat`
   - `Functor`, `Applicative`, `Monad`, `PipeApply`, `Compose`, `Composable`, `LiftComposable`, `KleisliComposable`
 
 `Compare` は新しい API が三値比較を要求するときの正本です。`< <= > >=` も公開 surface では `Compare` によって意味づけられます。  
 数値 helper は generic trait ではなく、`Int::abs` / `Float::safe_div` のような concrete type owner surface として提供します。
+
+`Default::default::<T>() -> T` は runtime value parameter を取らず、expected return type または明示型引数から target type を決めます。`@derive Default` は field / payload の default 値を使う実装を生成しますが、constructor の検証処理や型固有の不変条件を代替しません。
 
 ## 宣言側
 
@@ -30,7 +32,39 @@ impl Describable for Int {
 }
 ```
 
-FunParams は、型変数が value parameter の型から導入できない場合に使う。`self: Self` のように型変数が引数位置に現れる method は FunParams を省略する。trait 宣言に FunParams がある場合、impl method は trait head と impl target で置換した同じ構造を宣言し、個数・順序・型構造を一致させる。引数位置で導入済みの型変数を同じ型で重ねて指定するのはエラーである。
+FunParams は、型変数が value parameter の型から導入できない場合に使い、その型変数は戻り値にも現れなければならない。`self: Self` のように型変数が引数位置に現れる method は FunParams を省略する。trait 宣言に FunParams がある場合、impl method は trait head と impl target で置換した同じ構造を宣言し、個数・順序・型構造を一致させる。引数位置で導入済みの型変数を同じ型で重ねて指定するのはエラーである。
+
+### 型引数を持つ Trait と `where`
+
+Trait 引数と impl target の両方を明示して、必要な capability を `where` に書けます。
+
+```surtr
+deftrait Encode<$Format> {
+  def encode(self: Self) -> $Format
+}
+
+impl Encode<String> for List<$A>
+where
+  $A: Encode<String>
+{
+  def encode(self: List<$A>) -> String { # ... }
+}
+```
+
+ここで要求しているのは `Encode<String>` です。`Encode<JsonValue>` だけを実装した要素型にはこの impl を使えません。candidate が target に一致しても、impl 自身の `where` 条件を満たさなければ dispatch されません。
+
+親 Trait を持つ Trait を実装するときは、対応する親 Trait も同じ型引数で満たします。child impl の `where` が親 impl の条件を包含していれば利用できますが、親の条件を弱めたり別の Trait 引数に替えたりはできません。
+
+### default method と同名 method
+
+body を持つ Trait method は default method です。impl は 1 回だけ override できます。body のない method は各 impl で実装が必要です。
+
+同一の `defmod`、`impl Type`、`impl Trait for Type` block に同名の `def` / `defp` を複数書くことはできません。引数や visibility を変えて overload を作ることもできません。一方、別 Trait の同名 method は別の契約なので、Trait 名を付けて呼び分けます。
+
+```surtr
+T1::f(value)
+T2::f(value)
+```
 
 ## 呼び出し側
 
@@ -66,6 +100,12 @@ mapped: Result<Int> = fmap(value, {|n| n + 1})
 
 変換系は `From` / `TryFrom` trait が裏側の coherence を担います。
 
+impl coherence は型変数名や宣言順ではなく、Trait 引数と target 型の構造で決まります。generic は任意の型と一致し、型コンストラクタの内側も再帰照合するため、`List<$A>` と `List<Int>` は重複です。Surtr V1 は specialization の優先順位を持たず、overlap は compile error にします。`List<Int>` と `List<String>` のように同時成立しない pattern は併存できます。
+
+この判定は method body を実行・生成する前の typecheck で行われます。user code の impl conflict が runtime や codegen error になることはありません。
+
+`From` / `TryFrom` の排他も同じ照合を使うため、generic parameter を `$A` から `$T` へ改名して回避することはできません。
+
 ```text
 xldr(1)> print(match try_from::<Int>("42") { Ok(value) => to_string(value), Err(err) => inspect(err), })
 42
@@ -87,6 +127,7 @@ xldr(2)>
 
 - 変換の呼び出し surface は `./definitions-and-usage.md`
 - 型注釈は `./type-annotations.md`
+- Trait の制約・親 Trait・coherence の契約は `./trait-system.md`
 - 標準定義ソース内での位置づけは `./standard-modules.md`
 - 制約一覧は `./language-reference.md`
 
@@ -105,3 +146,4 @@ xldr(2)>
 - `|*>`, `|*|`, `|>=` はそれぞれ `Functor::fmap`, `Applicative::ap`, `Monad::bind` の dispatch です。
 - `|*|` は未カリー化 callable を暗黙変換しません。複数引数では `curry()` を明示します。
 - `From` / `TryFrom` の呼び出し surface は簡潔でも、coherence 自体は trait 実装側で管理されています。
+- 1 つの `defmod` / `impl` block に同名 method を複数定義できません。signature や `def` / `defp` を変えても overload にはなりません。

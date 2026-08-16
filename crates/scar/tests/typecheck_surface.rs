@@ -2628,7 +2628,8 @@ match value {
     )
     .expect_err("nested Err patterns must be rejected");
     assert!(
-        err.message.contains("Nested Result errors are not allowed in match patterns"),
+        err.message
+            .contains("Nested Result errors are not allowed in match patterns"),
         "{err:?}"
     );
 }
@@ -3423,7 +3424,7 @@ fn namespaced_type_and_trait_impl_typecheck_inside_script_module_scope() {
 }
 
 impl Show for Auth::User {
-  def to_string::<Auth::User>(self: Self) -> String { "user" }
+  def to_string(self: Self) -> String { "user" }
 }
 
 value: Auth::User = Auth::User("alice")
@@ -3480,6 +3481,343 @@ impl PairTrait for (Int, String) {
             .iter()
             .any(|node| matches!(node.node, TypedInner::TraitImplDef(..))),
         "expected concrete tuple trait impl to survive typechecking"
+    );
+}
+
+#[test]
+fn overlapping_trait_impl_patterns_are_rejected_before_codegen() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Mark<$T> {
+  def mark(self: Self) -> String
+}
+
+impl Mark<$A> for String {
+  def mark(self: String) -> String { "any" }
+}
+
+impl Mark<List<$A>> for String {
+  def mark(self: String) -> String { "list" }
+}"#,
+    );
+
+    let err = typecheck(resolved).expect_err("overlapping impls must be rejected by Scar");
+    assert!(
+        err.message.contains("Overlapping trait impls for Mark"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn disjoint_specializations_with_the_same_nominal_target_typecheck() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Mark<$T> {
+  def mark(self: Self) -> String
+}
+
+impl Mark<Int> for List<Int> {
+  def mark(self: List<Int>) -> String { "int" }
+}
+
+impl Mark<Int> for List<String> {
+  def mark(self: List<String>) -> String { "string" }
+}"#,
+    );
+
+    let typed = typecheck(resolved).expect("disjoint impl patterns should coexist");
+    assert_eq!(
+        typed
+            .iter()
+            .filter(|node| matches!(node.node, TypedInner::TraitImplDef(..)))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn conversion_impl_exclusivity_ignores_generic_parameter_names() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defstruct LocalBox<$A> { value: $A }
+
+impl From<$A> for LocalBox<$A> {
+  def from::<$A>(self: LocalBox<$A>) -> $A { self.value }
+}
+
+impl TryFrom<$T> for LocalBox<$T> {
+  def try_from::<$T>(self: LocalBox<$T>) -> Result<$T, Error> { Ok(self.value) }
+}"#,
+    );
+
+    let err = typecheck(resolved).expect_err("From and TryFrom patterns must be exclusive");
+    assert!(
+        err.message.contains("cannot both be implemented"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn local_callable_is_instantiated_at_each_call_site() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"id = {|x| x}
+pair: (Int, String) = (id(1), id("s"))
+first: Int = id(2)
+second: String = id("t")"#,
+    );
+
+    assert!(matches!(typed_bind_rhs(&typed, "pair").ty, Ty::Tuple(_)));
+    assert!(matches!(typed_bind_rhs(&typed, "first").ty, Ty::Int));
+    assert!(matches!(typed_bind_rhs(&typed, "second").ty, Ty::Str));
+}
+
+#[test]
+fn annotated_local_callable_remains_monomorphic() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"id: (Int -> Int) = {|x| x}
+bad: String = id("not an int")"#,
+    );
+
+    assert!(
+        typecheck(resolved).is_err(),
+        "an explicit callable annotation must prevent generalization"
+    );
+}
+
+#[test]
+fn unbound_generic_argument_synthesizes_closure_shape() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"def box(value: $A) -> $A { value }
+increment = box({|n: Int| n + 1})
+result: Int = increment(1)"#,
+    );
+
+    assert!(matches!(typed_bind_rhs(&typed, "result").ty, Ty::Int));
+}
+
+#[test]
+fn expected_type_flows_to_if_and_match_branches() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"chooser: (Int -> Int) = if(True, {|n: Int| n + 1}, {|n: Int| n - 1})
+matched: (Int -> Int) = match True {
+  True => {|n: Int| n + 1},
+  False => {|n: Int| n - 1},
+}
+result: Int = chooser(1) + matched(1)"#,
+    );
+
+    assert!(matches!(typed_bind_rhs(&typed, "result").ty, Ty::Int));
+}
+
+#[test]
+fn trait_dispatch_rejects_impl_with_unsatisfied_where_obligation() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> Self
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+impl Use for List<$A>
+where
+  $A: Marker
+{
+  def use(self: List<$A>) -> String { "usable" }
+}
+
+values: List<Int> = [1]
+result = Use::use(values)"#,
+    );
+
+    let err = typecheck(resolved).expect_err("unsatisfied impl bound must reject dispatch");
+    assert!(
+        err.message
+            .contains("requires a receiver type implementing Use"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn direct_trait_call_on_rigid_generic_requires_declared_bound() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> String
+}
+
+def hidden(value: $A) -> String {
+  Marker::mark(value)
+}"#,
+    );
+
+    let err = typecheck(resolved).expect_err("undeclared generic bound must be rejected");
+    assert!(err.message.contains("MissingGenericBound"), "{err:?}");
+    assert!(err.message.contains("must implement Marker"), "{err:?}");
+}
+
+#[test]
+fn deferred_trait_obligation_is_checked_when_closure_argument_is_bound() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> String
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+defstruct ObligationBox<$A> {
+  value: $A
+}
+
+impl ObligationBox {
+  def new(value: $A) -> ObligationBox<$A> {
+    ObligationBox { value: value }
+  }
+}
+
+impl Use for ObligationBox<$A>
+where
+  $A: Marker
+{
+  def use(self: ObligationBox<$A>) -> String { "used" }
+}
+
+call = {|value| Use::use(ObligationBox(value))}
+result = call(1)"#,
+    );
+
+    let err = typecheck(resolved)
+        .expect_err("binding the deferred receiver to Int must re-check its Marker obligation");
+    assert!(
+        err.message.contains("Argument type mismatch"),
+        "unexpected phase-boundary diagnostic: {err:?}"
+    );
+}
+
+#[test]
+fn child_impl_where_assumptions_cover_parent_impl_requirements() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Eq {
+  def eq(self: Self, other: Self) -> Boolean
+}
+
+deftrait Show {
+  def show(self: Self) -> String
+}
+
+deftrait Parent {
+  def parent(self: Self) -> String
+}
+
+deftrait Child
+where
+  Self: Parent
+{
+  def child(self: Self) -> String
+}
+
+impl Parent for List<$A>
+where
+  $A: Eq
+{
+  def parent(self: List<$A>) -> String { "parent" }
+}
+
+impl Child for List<$A>
+where
+  $A: Eq + Show
+{
+  def child(self: List<$A>) -> String { "child" }
+}"#,
+    );
+
+    typecheck(resolved).expect("a stronger child where clause must cover the parent impl");
+}
+
+#[test]
+fn child_impl_self_where_assumption_covers_parent_requirement() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> String
+}
+
+deftrait Parent {
+  def parent(self: Self) -> String
+}
+
+deftrait Child
+where
+  Self: Parent
+{
+  def child(self: Self) -> String
+}
+
+impl Parent for List<$A>
+where
+  Self: Marker
+{
+  def parent(self: List<$A>) -> String { "parent" }
+}
+
+impl Child for List<$A>
+where
+  Self: Marker
+{
+  def child(self: List<$A>) -> String { "child" }
+}"#,
+    );
+
+    typecheck(resolved).expect("a child Self assumption must cover the parent requirement");
+}
+
+#[test]
+fn parameterized_parent_trait_coverage_uses_the_child_trait_arguments() {
+    let covered = resolve_with_builtin_prelude(
+        r#"deftrait Parent<$Tag> {
+  def parent(self: Self) -> String
+}
+
+deftrait Child<$Tag>
+where
+  Self: Parent<$Tag>
+{
+  def child(self: Self) -> String
+}
+
+impl Parent<Int> for List<$A> {
+  def parent(self: List<$A>) -> String { "parent" }
+}
+
+impl Child<Int> for List<$A> {
+  def child(self: List<$A>) -> String { "child" }
+}"#,
+    );
+    typecheck(covered).expect("Child<Int> must require and find Parent<Int>");
+
+    let mismatched = resolve_with_builtin_prelude(
+        r#"deftrait Parent<$Tag> {
+  def parent(self: Self) -> String
+}
+
+deftrait Child<$Tag>
+where
+  Self: Parent<$Tag>
+{
+  def child(self: Self) -> String
+}
+
+impl Parent<String> for List<$A> {
+  def parent(self: List<$A>) -> String { "parent" }
+}
+
+impl Child<Int> for List<$A> {
+  def child(self: List<$A>) -> String { "child" }
+}"#,
+    );
+    let err = typecheck(mismatched)
+        .expect_err("Parent<String> cannot cover Child<Int>'s Parent<Int> requirement");
+    assert!(
+        err.message.contains("requires parent impl Parent"),
+        "{err:?}"
     );
 }
 
@@ -3555,7 +3893,7 @@ marked: Boxed<Int> = Marker::mark(Boxed::Box(1))"#,
         })
         .expect("typed def should retain its where clause");
     let bounds = &where_clause.constraints[0].bounds;
-    assert!(matches!(bounds[0], TypedWhereConstraintRhs::Trait(_)));
+    assert!(matches!(bounds[0], TypedWhereConstraintRhs::Trait { .. }));
     assert!(matches!(
         bounds[1],
         TypedWhereConstraintRhs::TypeConstructor { .. }
@@ -3809,6 +4147,63 @@ impl Parent for Identity<$T> {{
 }
 
 #[test]
+fn concrete_constructor_implementation_can_be_passed_to_parent_or_child_trait() {
+    typecheck_with_rules(
+        r#"
+def take_applicative(value: Applicative<$A>) -> Unit { () }
+def take_functor(value: Functor<$A>) -> Unit { () }
+
+take_applicative(Option::Some(1))
+take_functor(Option::Some(1))
+"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("a concrete Option value should satisfy either constructor trait");
+}
+
+#[test]
+fn abstract_applicative_cannot_use_monad_helper_but_concrete_option_can() {
+    let err = typecheck_with_rules(
+        r#"
+def invalid(value: Applicative<$A>) -> Applicative<$A> {
+  Monad::bind(value, {|n| value})
+}
+"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("an Applicative binding must not expose Monad operations");
+    assert!(
+        err.message.contains("Monad::bind is not available") && err.message.contains("Applicative"),
+        "{err:?}"
+    );
+
+    typecheck_with_rules(
+        r#"
+def valid(value: Option<$A>) -> Option<$A> {
+  Monad::bind(value, {|n| value})
+}
+
+valid(Option::Some(1))
+"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("a concrete Option binding must expose its Monad implementation");
+
+    typecheck_with_rules(
+        r#"
+def preserve_applicative2(value: Applicative<Int>) -> Applicative<String> {
+  ret: Option<Int> = value
+  Monad::bind(ret, {|num| Option::Some(to_string(num))})
+}
+
+preserve_applicative2(Option::Some(1))
+"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("an explicitly narrowed Option should support concrete Monad dispatch");
+}
+
+#[test]
 fn trait_default_methods_and_private_helpers_are_accepted() {
     let source = r#"
 deftrait DefaultValue {
@@ -3912,7 +4307,9 @@ impl Keep for Int {
     )
     .expect_err("an impl body cannot specialize its method generic to String");
     assert!(
-        err.message.contains("expected $") && err.message.contains("got String"),
+        !err.message.contains("expected $")
+            && err.message.contains("expected the inferred argument type")
+            && err.message.contains("got String"),
         "{err:?}"
     );
 }
@@ -4228,7 +4625,9 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
     let colliding_defs = resolved
         .iter()
         .filter_map(|node| match node {
-            sigil::resolved::Resolved::BuiltinDecl(_, id, _, _, _) if id.unique_id == use_uid => {
+            sigil::resolved::Resolved::BuiltinDecl(_, id, _, _, _, _)
+                if id.unique_id == use_uid =>
+            {
                 Some(format!("builtin {}", id.name))
             }
             sigil::resolved::Resolved::Def(_, id, _, _, _, _, _, _) if id.unique_id == use_uid => {
@@ -4416,7 +4815,7 @@ impl Boolean {
 }
 
 impl Eq for Boolean {
-  @builtin def eq::<Boolean>(self: Self, rhs: Self) -> Boolean
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
 }"#,
     )])
     .expect_err("special-form declaration outside Kernel must fail");
@@ -5144,7 +5543,7 @@ fn user_defined_container_can_use_context_operators_via_traits() {
 }
 
 impl Functor for Boxed<$T> {
-  def fmap::<Boxed<$T>, $A, $B>(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
+  def fmap(self: Boxed<$A>, mapper: ($A -> $B)) -> Boxed<$B> {
     match self {
       Boxed::Box(value) => Boxed::Box(mapper(value)),
     }
@@ -5152,9 +5551,9 @@ impl Functor for Boxed<$T> {
 }
 
 impl Applicative for Boxed<$T> {
-  def pure::<Boxed<$T>, $A>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
+  def pure::<Boxed<$T>>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
 
-  def ap::<Boxed<$T>, $A, $B>(mapper: Boxed<($A -> $B)>, value: Boxed<$A>) -> Boxed<$B> {
+  def ap(mapper: Boxed<($A -> $B)>, value: Boxed<$A>) -> Boxed<$B> {
     match mapper {
       Boxed::Box(f) => match value {
         Boxed::Box(inner) => Boxed::Box(f(inner)),
@@ -5164,9 +5563,9 @@ impl Applicative for Boxed<$T> {
 }
 
 impl Monad for Boxed<$T> {
-  def return::<Boxed<$T>, $A>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
+  def return::<Boxed<$T>>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
 
-  def bind::<Boxed<$T>, $A, $B>(self: Boxed<$A>, mapper: ($A -> Boxed<$B>)) -> Boxed<$B> {
+  def bind(self: Boxed<$A>, mapper: ($A -> Boxed<$B>)) -> Boxed<$B> {
     match self {
       Boxed::Box(value) => mapper(value),
     }
@@ -5174,13 +5573,13 @@ impl Monad for Boxed<$T> {
 }
 
 impl LiftComposable<$A, $B, $C, Boxed<$C>> for ($A -> Boxed<$B>) {
-  def lift_compose::<($A -> Boxed<$B>), $A, $B, $C, Boxed<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Boxed<$C>) {
+  def lift_compose::<$A, Boxed<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Boxed<$C>) {
     {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
 impl KleisliComposable<$A, $B, Boxed<$C>> for ($A -> Boxed<$B>) {
-  def kleisli_compose::<($A -> Boxed<$B>), $A, $B, Boxed<$C>>(self: Self, rhs: ($B -> Boxed<$C>)) -> ($A -> Boxed<$C>) {
+  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Boxed<$C>)) -> ($A -> Boxed<$C>) {
     {|value| Monad::bind(self(value), rhs)}
   }
 }
@@ -5867,7 +6266,7 @@ impl BoxedInt {
 }
 
 impl Compare for BoxedInt {
-  def compare::<BoxedInt>(self: Self, rhs: Self) -> Ordering {
+  def compare(self: Self, rhs: Self) -> Ordering {
     Compare::compare(self.value, rhs.value)
   }
 }
@@ -6732,7 +7131,7 @@ impl String {
 }
 
 impl Show for String {
-  def to_string::<String>(self: Self) -> String {
+  def to_string(self: Self) -> String {
 inspect(self)
   }
 }
@@ -6756,11 +7155,11 @@ impl From<Int> for String {
 }
 
 impl Eq for String {
-  def eq::<String>(self: Self, rhs: Self) -> Boolean {
+  def eq(self: Self, rhs: Self) -> Boolean {
 self == rhs
   }
 
-  def neq::<String>(self: Self, rhs: Self) -> Boolean {
+  def neq(self: Self, rhs: Self) -> Boolean {
 self != rhs
   }
 }"#,
@@ -7595,11 +7994,11 @@ value = Result::tap_err(Err(NoneError), id(handler))"#,
 fn explicit_type_arguments_specialize_functions_trait_calls_and_captures() {
     let typed = typecheck_with_builtin_prelude(
         r#"deftrait Convert<$To> {
-  def convert::<Self, $To>(self: Self) -> $To
+  def convert::<$To>(self: Self) -> $To
 }
 
 impl Convert<Int> for String {
-  def convert::<String, Int>(self: String) -> Int { 1 }
+  def convert::<Int>(self: String) -> Int { 1 }
 }
 
 converted: Int = Convert::convert::<Int>("")
@@ -7623,6 +8022,179 @@ bad: Int = identity::<Int>(1)"#,
 }
 
 #[test]
+fn parameterized_trait_bound_controls_rigid_generic_dispatch() {
+    let missing = resolve_with_builtin_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<$To>(self: Self) -> $To
+}
+
+def hidden(value: $A) -> Int {
+  Convert::convert::<Int>(value)
+}"#,
+    );
+    let err = typecheck(missing).expect_err("missing parameterized bound must be rejected");
+    assert!(err.message.contains("MissingGenericBound"), "{err:?}");
+    assert!(
+        err.message.contains("$A must implement Convert<Int>"),
+        "{err:?}"
+    );
+
+    let mismatched = resolve_with_builtin_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<$To>(self: Self) -> $To
+}
+
+def hidden(value: $A) -> Int
+where
+  $A: Convert<String>
+{
+  Convert::convert::<Int>(value)
+}"#,
+    );
+    let err = typecheck(mismatched).expect_err("a different trait argument is not a bound");
+    assert!(err.message.contains("MissingGenericBound"), "{err:?}");
+    assert!(err.message.contains("Convert<Int>"), "{err:?}");
+
+    let bounded = resolve_with_builtin_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<$To>(self: Self) -> $To
+}
+
+def hidden(value: $A) -> Int
+where
+  $A: Convert<Int>
+{
+  Convert::convert::<Int>(value)
+}"#,
+    );
+    typecheck(bounded).expect("matching parameterized bound must permit dispatch");
+}
+
+#[test]
+fn parameterized_trait_bounds_validate_arity_and_generic_scope() {
+    let arity = resolve_with_builtin_prelude(
+        r#"deftrait Marker<$A> {
+  def mark(self: Self) -> String
+}
+
+def broken(value: $A) -> String
+where
+  $A: Marker<Int, String>
+{
+  "broken"
+}"#,
+    );
+    let err = typecheck(arity).expect_err("trait bound arity must be checked");
+    assert!(
+        err.message
+            .contains("Trait Marker expects 1 type argument(s), got 2"),
+        "{err:?}"
+    );
+
+    let scope = resolve_with_builtin_prelude(
+        r#"deftrait Marker<$A> {
+  def mark(self: Self) -> String
+}
+
+def broken(value: $A) -> String
+where
+  $A: Marker<List<$B>>
+{
+  "broken"
+}"#,
+    );
+    let err = typecheck(scope).expect_err("where clauses must not declare nested variables");
+    assert!(
+        err.message.contains("type variable `$B` does not appear"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn impl_where_obligations_match_parameterized_trait_arguments() {
+    let satisfied = resolve_with_builtin_prelude(
+        r#"deftrait Marker<$Tag> {
+  def mark(self: Self) -> String
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+impl Marker<Int> for Int {
+  def mark(self: Int) -> String { "int" }
+}
+
+impl Use for List<$A>
+where
+  $A: Marker<Int>
+{
+  def use(self: List<$A>) -> String { "used" }
+}
+
+value: List<Int> = [1]
+result = Use::use(value)"#,
+    );
+    typecheck(satisfied).expect("the exact parameterized obligation must be proved");
+
+    let mismatched = resolve_with_builtin_prelude(
+        r#"deftrait Marker<$Tag> {
+  def mark(self: Self) -> String
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+impl Marker<String> for Int {
+  def mark(self: Int) -> String { "string" }
+}
+
+impl Use for List<$A>
+where
+  $A: Marker<Int>
+{
+  def use(self: List<$A>) -> String { "used" }
+}
+
+value: List<Int> = [1]
+result = Use::use(value)"#,
+    );
+    let err = typecheck(mismatched)
+        .expect_err("a same-name trait with different arguments must not prove an obligation");
+    assert!(
+        err.message
+            .contains("requires a receiver type implementing Use"),
+        "{err:?}"
+    );
+
+    let generic = resolve_with_builtin_prelude(
+        r#"deftrait Marker<$Tag> {
+  def mark(self: Self) -> String
+}
+
+deftrait Use {
+  def use(self: Self) -> String
+}
+
+impl Marker<$Tag> for Int {
+  def mark(self: Int) -> String { "generic" }
+}
+
+impl Use for List<$A>
+where
+  $A: Marker<String>
+{
+  def use(self: List<$A>) -> String { "used" }
+}
+
+value: List<Int> = [1]
+result = Use::use(value)"#,
+    );
+    typecheck(generic).expect("a generic trait argument must unify with the requested argument");
+}
+
+#[test]
 fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
     let resolved =
         resolve_with_builtin_prelude(r#"value = Concat::concat::<String>("left", "right")"#);
@@ -7640,6 +8212,71 @@ fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
             .contains("TryFrom::try_from expects 1 explicit type argument(s), got 2"),
         "{err:?}"
     );
+}
+
+#[test]
+fn trait_method_type_slots_have_one_input_channel_and_funparams_flow_to_return() {
+    let duplicated = resolve_with_builtin_prelude(
+        r#"deftrait DuplicateInput {
+  def duplicate::<$A>(value: $A) -> $A
+}"#,
+    );
+    let err = typecheck(duplicated).expect_err("a slot cannot use both input channels");
+    assert!(
+        err.message
+            .contains("introduces $A through both FunParams and value arguments"),
+        "{err:?}"
+    );
+
+    let unconsumed_fun_param = resolve_with_builtin_prelude(
+        r#"deftrait UnconsumedFunParam<$A> {
+  def render::<$A>(self: Self) -> String
+}"#,
+    );
+    let err = typecheck(unconsumed_fun_param)
+        .expect_err("a FunParams slot must be represented by the return type");
+    assert!(
+        err.message
+            .contains("declares $A in FunParams but does not use it in its return type"),
+        "{err:?}"
+    );
+
+    let return_only = resolve_with_builtin_prelude(
+        r#"deftrait ReturnOnly {
+  def make() -> $A
+}"#,
+    );
+    let err = typecheck(return_only).expect_err("a return-only slot has no input introduction");
+    assert!(
+        err.message.contains("has $A only in its return type"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn trait_impl_funparams_must_match_the_trait_slots() {
+    let matching = resolve_with_builtin_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<$To>(self: Self) -> $To
+}
+
+impl Convert<Int> for String {
+  def convert::<Int>(self: String) -> Int { 1 }
+}"#,
+    );
+    typecheck(matching).expect("the impl must repeat the trait's target slot");
+
+    let omitted = resolve_with_builtin_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<$To>(self: Self) -> $To
+}
+
+impl Convert<Int> for String {
+  def convert(self: String) -> Int { 1 }
+}"#,
+    );
+    let err = typecheck(omitted).expect_err("an impl cannot omit a required FunParams slot");
+    assert!(err.message.contains("incompatible signature"), "{err:?}");
 }
 
 #[test]

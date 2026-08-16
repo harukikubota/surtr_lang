@@ -41,20 +41,21 @@ surtr/
 | `docs/dev/EldrVM_spec.md`   | VM仕様書 |
 | `docs/dev/テスト方針.md`    | テストの分離方法・レイヤー |
 | `docs/dev/Rune_observability.md` | `Rune` / `Eldr` の観測系オプション設計 |
+| `docs/dev/diagnostics.md` | user-facing diagnostics の message / label / note / help と JSON 契約 |
 
 ---
 
 ## Documentation Workflow
 
 - `docs/dev/`: 開発者向け正本仕様
-  - `EldrVM_spec.md`, `Xldr_spec.md`, `テスト方針.md`, `Rune_observability.md`
+  - `EldrVM_spec.md`, `Xldr_spec.md`, `テスト方針.md`, `Rune_observability.md`, `diagnostics.md`
 - `doc/`: draft、開発アイデア、タスク入力、tmp ファイル置き場
   - `要件定義v9.md`, `open-issues.md` など
 - `docs/`: 補助資料・公開向けガイド
 - `lib/*.srt`: 標準定義ソースの利用者向けドキュメント。`@doc` を正本とする
 - `crates/**`: 実装者向け内部契約。公開境界は rustdoc で残す
 
-実装タスクの着手時は `doc/要件定義v9.md` と `docs/dev/` 配下の該当 spec を最優先で参照し、不整合があれば先に正本を更新してからコードを変更すること。
+実装タスクの着手時は `doc/要件定義v9.md` と `docs/dev/` 配下の該当 spec を最優先で参照し、不整合があれば先に正本を更新してからコードを変更すること。user-facing のエラーメッセージ、source label、note、help、JSON 診断を追加・変更するときは、必ず `docs/dev/diagnostics.md` を参照すること。
 
 ---
 

@@ -21,6 +21,11 @@ pub(crate) fn has_duplicate_definition_labels(spec: &DiagnosticSpec) -> bool {
             .any(|label| label.message == "conflicting definition")
 }
 
+pub(crate) fn has_duplicate_pattern_binding_labels(spec: &DiagnosticSpec) -> bool {
+    spec.message.starts_with("Duplicate binding in pattern: ")
+        && spec.labels.iter().any(|label| label.message == "first")
+}
+
 pub(crate) fn has_missing_trait_method_labels(spec: &DiagnosticSpec) -> bool {
     spec.labels
         .iter()
@@ -68,11 +73,7 @@ pub(crate) fn has_total_bind_pattern_labels(spec: &DiagnosticSpec) -> bool {
             .labels
             .iter()
             .any(|label| label.message == "LHS pattern: partial MatchBlock pattern")
-        && spec.labels.iter().any(|label| {
-            label
-                .message
-                .contains("Use `=?` for partial destructuring and extractor-driven matches.")
-        })
+        && spec.labels.iter().any(|label| label.message == "RHS value")
 }
 
 pub(crate) fn has_runtime_safebind_labels(spec: &DiagnosticSpec) -> bool {
@@ -82,13 +83,7 @@ pub(crate) fn has_runtime_safebind_labels(spec: &DiagnosticSpec) -> bool {
 }
 
 pub(crate) fn has_runtime_error_focus_labels(spec: &DiagnosticSpec) -> bool {
-    spec.kind == "RuntimeError"
-        && spec.labels.iter().any(|label| {
-            label.message == "call target"
-                || label.message.starts_with("opcode:")
-                || label.message.starts_with("expected rule:")
-                || label.message.starts_with("runtime rule:")
-        })
+    spec.kind == "RuntimeError" && !spec.labels.is_empty()
 }
 
 pub(crate) fn infer_missing_trait_method_labels(

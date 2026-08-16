@@ -62,6 +62,46 @@ fn builtin_special_enum_variant_alias(enum_name: &str, variant_name: &str) -> bo
     )
 }
 
+/// Reject overloads before an implementation body is lowered into the
+/// declaration index.  Inherent implementation members use their stable
+/// qualified name as an index key, but trait implementation members include a
+/// source offset in their private name so that two methods could otherwise
+/// silently survive until Scar overwrote one of them.
+pub(super) fn validate_unique_callable_names(
+    owner: &str,
+    methods: &[Ast],
+) -> Result<(), ResolveError> {
+    let mut first_by_name = HashMap::<String, Span>::new();
+    for method in methods {
+        let (span, name) = match method {
+            Ast::Def(span, name, _, _, _, _, _, _)
+            | Ast::BuiltinDecl(span, name, _, _, _, _)
+            | Ast::ExtractorDef(span, name, _, _, _, _, _)
+            | Ast::BuiltinExtractorDecl(span, name, _, _, _) => (span, name),
+            Ast::IntrinsicDecl(span, name, _, _) => (span, name),
+            _ => continue,
+        };
+        if let Some(first_span) = first_by_name.get(name) {
+            return Err(ResolveError {
+                message: format!("Duplicate function `{name}` in {owner}"),
+                span: span.clone(),
+                related_labels: vec![
+                    ResolveErrorLabel {
+                        span: first_span.clone(),
+                        message: "first definition".to_string(),
+                    },
+                    ResolveErrorLabel {
+                        span: span.clone(),
+                        message: "conflicting definition".to_string(),
+                    },
+                ],
+            });
+        }
+        first_by_name.insert(name.clone(), span.clone());
+    }
+    Ok(())
+}
+
 fn type_declaration_kind(stmt: &Ast) -> Option<DeclarationKind> {
     match stmt {
         Ast::StructDef(..) => Some(DeclarationKind::Struct),
@@ -219,7 +259,7 @@ pub fn lower_module_source_ast(
             | Ast::RecordDef(..)
             | Ast::DeferrorDef(_, _, _, _, _)
             | Ast::EnumDef(_, _, _, _, _)
-            | Ast::BuiltinDecl(_, _, _, _, _)
+            | Ast::BuiltinDecl(..)
             | Ast::IntrinsicDecl(_, _, _, _)
             | Ast::BuiltinTypeDecl(_, _, _) => {
                 shared_global_defs.push(stmt);
@@ -881,8 +921,8 @@ fn rewrite_self_where_clause(
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        spire::ast::WhereConstraintRhs::Trait(span, name) => {
-                            spire::ast::WhereConstraintRhs::Trait(span, name)
+                        spire::ast::WhereConstraintRhs::Trait(span, name, args) => {
+                            spire::ast::WhereConstraintRhs::Trait(span, name, args)
                         }
                         spire::ast::WhereConstraintRhs::TypeConstructor(span, slots) => {
                             spire::ast::WhereConstraintRhs::TypeConstructor(
@@ -938,11 +978,12 @@ fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
                 .map(|item| rewrite_self_pattern(item, target))
                 .collect(),
         ),
-        AstPattern::As(span, inner, alias, alias_ty) => AstPattern::As(
+        AstPattern::As(span, inner, alias, alias_ty, alias_span) => AstPattern::As(
             span,
             Box::new(rewrite_self_pattern(*inner, target)),
             alias,
             alias_ty.map(|ty| rewrite_self_type(ty, target)),
+            alias_span,
         ),
         other => other,
     }
@@ -1161,7 +1202,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 attrs,
             )
         }
-        Ast::BuiltinDecl(span, name, params, ret_ty, attrs) => Ast::BuiltinDecl(
+        Ast::BuiltinDecl(span, name, params, ret_ty, where_clause, attrs) => Ast::BuiltinDecl(
             span,
             name,
             params
@@ -1173,6 +1214,7 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 })
                 .collect(),
             ret_ty.map(|ret| rewrite_self_type(ret, target)),
+            where_clause.map(|clause| rewrite_self_where_clause(clause, target)),
             attrs,
         ),
         Ast::IntrinsicDecl(span, name, signature, attrs) => {
@@ -1325,6 +1367,10 @@ pub fn precollect_declaration_index(
 
             for stmt in &module.ast {
                 if let Ast::ImplDef(span, target, methods, _) = stmt {
+                    validate_unique_callable_names(
+                        &format!("impl `{}`", global_surface_name(target)),
+                        methods,
+                    )?;
                     let target_kind = resolve_impl_target_kind(target, span, &stage_impl_targets)?;
                     if !matches!(
                         target_kind,
@@ -1384,7 +1430,7 @@ pub fn precollect_declaration_index(
                                 };
                                 (method_span, method_name, kind, attrs)
                             }
-                            Ast::BuiltinDecl(method_span, method_name, _, _, attrs) => {
+                            Ast::BuiltinDecl(method_span, method_name, _, _, _, attrs) => {
                                 (method_span, method_name, DeclarationKind::Def, attrs)
                             }
                             Ast::ExtractorDef(method_span, method_name, _, _, _, _, attrs) => {
@@ -1481,20 +1527,21 @@ pub fn precollect_declaration_index(
                     continue;
                 }
 
-                if let Ast::TraitImplDef(
-                    span,
-                    _trait_name,
-                    _trait_args,
-                    _target_ty,
-                    _,
-                    methods,
-                    _,
-                ) = stmt
+                if let Ast::TraitImplDef(span, trait_name, trait_args, target_ty, _, methods, _) =
+                    stmt
                 {
+                    validate_unique_callable_names(
+                        &format!(
+                            "impl `{}` for `{}`",
+                            trait_instance_key(trait_name, trait_args),
+                            ast_ty_key(target_ty)
+                        ),
+                        methods,
+                    )?;
                     for method in methods {
                         let (method_span, method_name) = match method {
                             Ast::Def(method_span, method_name, _, _, _, _, _, _)
-                            | Ast::BuiltinDecl(method_span, method_name, _, _, _) => {
+                            | Ast::BuiltinDecl(method_span, method_name, _, _, _, _) => {
                                 (method_span, method_name)
                             }
                             _ => {
@@ -1509,9 +1556,9 @@ pub fn precollect_declaration_index(
                         };
                         let internal_name = trait_impl_method_qualified_name(
                             Some(module.module_path.as_str()),
-                            _trait_name,
-                            _trait_args,
-                            _target_ty,
+                            trait_name,
+                            trait_args,
+                            target_ty,
                             &method_name,
                             method_span.start,
                         );
@@ -1611,7 +1658,7 @@ pub fn precollect_declaration_index(
                             entry_user_importable(attrs),
                             entry_user_callable(attrs),
                         ),
-                        Ast::BuiltinDecl(span, name, _, _, attrs) => (
+                        Ast::BuiltinDecl(span, name, _, _, _, attrs) => (
                             span,
                             name.as_str(),
                             DeclarationKind::Def,
@@ -1681,7 +1728,7 @@ pub fn precollect_declaration_index(
                         _ => continue,
                     };
 
-                if matches!(stmt, Ast::BuiltinDecl(_, name, _, _, _) if is_doc_only_builtin_decl(name))
+                if matches!(stmt, Ast::BuiltinDecl(_, name, _, _, _, _) if is_doc_only_builtin_decl(name))
                 {
                     continue;
                 }
@@ -1861,6 +1908,10 @@ impl Resolver {
         for stmt in stmts {
             match stmt {
                 Ast::ImplDef(span, target, methods, _attrs) => {
+                    validate_unique_callable_names(
+                        &format!("impl `{}`", global_surface_name(&target)),
+                        &methods,
+                    )?;
                     let target_kind = resolve_impl_target_kind(&target, &span, impl_targets)?;
                     if !matches!(
                         target_kind,
@@ -1985,7 +2036,14 @@ impl Resolver {
                                     attrs,
                                 ));
                             }
-                            Ast::BuiltinDecl(method_span, method_name, params, ret_ty, attrs) => {
+                            Ast::BuiltinDecl(
+                                method_span,
+                                method_name,
+                                params,
+                                ret_ty,
+                                where_clause,
+                                attrs,
+                            ) => {
                                 let lowered_name = lower_impl_member_name(
                                     lowered_module_path,
                                     &target,
@@ -2007,6 +2065,7 @@ impl Resolver {
                                     lowered_name,
                                     lowered_params,
                                     lowered_ret_ty,
+                                    where_clause,
                                     attrs,
                                 ));
                             }
@@ -2190,7 +2249,7 @@ impl Resolver {
                         self.predeclare_scope_binding(&method_alias, method_uid, None);
                     }
                 }
-                Ast::BuiltinDecl(_, name, _, _, _) => {
+                Ast::BuiltinDecl(_, name, _, _, _, _) => {
                     if is_doc_only_builtin_decl(name) {
                         continue;
                     }

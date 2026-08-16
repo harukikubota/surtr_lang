@@ -260,7 +260,7 @@ impl Resolver {
     ) -> Result<AstPattern, ResolveError> {
         match expr {
             Ast::Var(span, name) => {
-                if name == "_" {
+                if name.starts_with('_') {
                     Ok(AstPattern::Wildcard(span))
                 } else if Self::is_constructor_style_head(&name) {
                     Ok(AstPattern::Constructor(span, name, Vec::new()))
@@ -490,7 +490,9 @@ fn fixed_pattern_list(span: Span, items: Vec<AstPattern>) -> AstPattern {
 
 fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {
     match pattern {
-        AstPattern::Var(_, _) | AstPattern::Annotated(_, _, _) | AstPattern::As(_, _, _, _) => true,
+        AstPattern::Var(_, _) | AstPattern::Annotated(_, _, _) | AstPattern::As(_, _, _, _, _) => {
+            true
+        }
         AstPattern::ListCons(_, head, tail) => {
             pattern_has_binding_vars(head) || pattern_has_binding_vars(tail)
         }
@@ -524,6 +526,6 @@ fn ast_pattern_span(pattern: &AstPattern) -> &Span {
         | AstPattern::Call(span, _, _)
         | AstPattern::Tuple(span, _)
         | AstPattern::Or(span, _)
-        | AstPattern::As(span, _, _, _) => span,
+        | AstPattern::As(span, _, _, _, _) => span,
     }
 }

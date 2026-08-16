@@ -64,7 +64,7 @@ impl Show for Boolean {
   xldr(1)> to_string(True)
   "True"
   """
-  def to_string::<Boolean>(self: Self) -> String {
+  def to_string(self: Self) -> String {
     inspect(self)
   }
 }
@@ -100,5 +100,5 @@ impl Eq for Boolean {
   xldr(1)> eq(True, True)
   True
   """
-  @builtin def eq::<Boolean>(self: Self, rhs: Self) -> Boolean
+  @builtin def eq(self: Self, rhs: Self) -> Boolean
 }

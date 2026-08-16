@@ -216,6 +216,13 @@ fn core_completion_returns_global_candidates_with_details() {
 }
 
 #[test]
+fn range_literal_used_as_operator_shows_bracket_help() {
+    let result = engine().handle_line("2..8");
+
+    assert!(rendered_text(&result).contains("Range literals must use bracket syntax"));
+}
+
+#[test]
 fn core_completion_keeps_all_matching_candidates() {
     let mut engine = engine();
     for idx in 0..6 {
@@ -4102,40 +4109,40 @@ impl Identity {
 }
 
 impl Functor for Identity<$T> {
-  def fmap::<Identity<$T>, $A, $B>(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
+  def fmap(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
     Identity { value: mapper(self.value) }
   }
 }
 
 impl Applicative for Identity<$T> {
-  def pure::<Identity<$T>, $A>(value: $A) -> Identity<$A> {
+  def pure::<Identity<$T>>(value: $A) -> Identity<$A> {
     Identity { value: value }
   }
 
-  def ap::<Identity<$T>, $A, $B>(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
+  def ap(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
     f = mapper.value
     Identity { value: f(value.value) }
   }
 }
 
 impl Monad for Identity<$T> {
-  def return::<Identity<$T>, $A>(value: $A) -> Identity<$A> {
+  def return::<Identity<$T>>(value: $A) -> Identity<$A> {
     Identity { value: value }
   }
 
-  def bind::<Identity<$T>, $A, $B>(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
+  def bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
     mapper(self.value)
   }
 }
 
 impl LiftComposable<$A, $B, $C, Identity<$C>> for ($A -> Identity<$B>) {
-  def lift_compose::<($A -> Identity<$B>), $A, $B, $C, Identity<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Identity<$C>) {
+  def lift_compose::<$A, Identity<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Identity<$C>) {
     {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
 impl KleisliComposable<$A, $B, Identity<$C>> for ($A -> Identity<$B>) {
-  def kleisli_compose::<($A -> Identity<$B>), $A, $B, Identity<$C>>(self: Self, rhs: ($B -> Identity<$C>)) -> ($A -> Identity<$C>) {
+  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Identity<$C>)) -> ($A -> Identity<$C>) {
     {|value| Monad::bind(self(value), rhs)}
   }
 }"#,
@@ -4174,7 +4181,7 @@ impl Ranked {
 
 impl Compare for Ranked {
   @doc """Compare ranked values by weight."""
-  def compare::<Ranked>(self: Self, rhs: Self) -> Ordering {
+  def compare(self: Self, rhs: Self) -> Ordering {
     Compare::compare(self.weight, rhs.weight)
   }
 }
@@ -4876,6 +4883,81 @@ fn core_duplicate_defs_and_runtime_result_errors_keep_the_session_alive() {
     let still_alive = engine.handle_line("1");
     assert!(!still_alive.should_exit);
     assert!(rendered_text(&still_alive).contains("1"));
+}
+
+#[test]
+fn core_pattern_bindings_are_displayed_in_preorder() {
+    let mut engine = engine();
+    let result = engine.handle_line("(i, s) @ w = (1, 2)");
+    let text = rendered_text(&result);
+
+    let i = text.find("i: Int").expect("left binding should be shown");
+    let s = text.find("s: Int").expect("right binding should be shown");
+    let w = text
+        .find("w: (Int, Int)")
+        .expect("as binding should be shown");
+    assert!(i < s && s < w, "unexpected binding order: {text}");
+}
+
+#[test]
+fn core_pattern_binding_order_defers_pattern_match_as_aliases() {
+    let mut engine = engine();
+    let result = engine.handle_line("(t1 @ t1a, (t2, t3) @ taila) @ r = (1, (2, 3))");
+    let text = rendered_text(&result);
+
+    let t1 = text.find("t1: Int").expect("t1 should be shown");
+    let r = text
+        .find("r: (Int, (Int, Int))")
+        .expect("r should be shown");
+    let t1a = text.find("t1a: Int").expect("t1a should be shown");
+    let t2 = text.find("t2: Int").expect("t2 should be shown");
+    let t3 = text.find("t3: Int").expect("t3 should be shown");
+    let taila = text
+        .find("taila: (Int, Int)")
+        .expect("taila should be shown");
+    assert!(
+        t1 < r && r < t1a && t1a < t2 && t2 < t3 && t3 < taila,
+        "unexpected binding order: {text}"
+    );
+}
+
+#[test]
+fn core_pattern_binding_order_flattens_list_children_before_parent_alias() {
+    let mut engine = engine();
+    let result = engine.handle_line("[head, ..[middle, ..tail]] @ whole =? [1, 2, 3]");
+    let text = rendered_text(&result);
+
+    let head = text.find("head:").expect("head should be shown");
+    let middle = text.find("middle:").expect("middle should be shown");
+    let tail = text.find("tail:").expect("tail should be shown");
+    let whole = text.find("whole:").expect("whole should be shown");
+    assert!(
+        head < middle && middle < tail && tail < whole,
+        "unexpected binding order: {text}"
+    );
+}
+
+#[test]
+fn core_duplicate_pattern_diagnostic_labels_are_limited_to_five() {
+    let mut engine = engine();
+    let result = engine.handle_line("(x, x, x, x, x, x) = (1, 2, 3, 4, 5, 6)");
+    let text = rendered_text(&result);
+
+    for label in ["first", "second", "third", "fourth", "fifth"] {
+        assert!(
+            text.contains(label),
+            "missing diagnostic label {label}: {text}"
+        );
+    }
+    assert!(
+        !text.contains("sixth"),
+        "diagnostic should stop at five: {text}"
+    );
+    assert_eq!(
+        text.matches("Duplicate binding in pattern: x").count(),
+        1,
+        "duplicate message should remain the headline, not an LHS caption: {text}"
+    );
 }
 
 #[test]

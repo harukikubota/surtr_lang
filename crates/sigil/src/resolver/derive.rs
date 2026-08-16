@@ -2,7 +2,7 @@ use super::*;
 use sindr::derive::{derive_trait_meta, DeriveGenerator, DeriveTraitMeta, FieldTraitRequirement};
 use spire::ast::{
     AstMatchArm, AstPath, AstPattern, AstTy, DeclAttrs, EnumVariant, FunParam, Lit, RecordLitArg,
-    Span, TypeParam, WhereClause, WhereConstraint, WhereConstraintRhs,
+    Span, StructLitField, TypeParam, WhereClause, WhereConstraint, WhereConstraintRhs,
 };
 
 pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
@@ -96,7 +96,8 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
             metas.push(meta);
         }
         for meta in metas {
-            if meta.default_variant.is_some() && !matches!(meta.generator, DeriveGenerator::Default) {
+            if meta.default_variant.is_some() && !matches!(meta.generator, DeriveGenerator::Default)
+            {
                 return Err(ResolveError {
                     message: format!("DeriveVariantNotAllowed: {}", meta.trait_name.as_str()),
                     span: span.clone(),
@@ -383,12 +384,17 @@ fn make_derived_impl(
         ),
         DeriveGenerator::Default => {
             let body = if variants.is_empty() {
-                constructor(
-                    span,
-                    name,
+                Ast::StructLit(
+                    span.clone(),
+                    name.to_string(),
                     fields
                         .iter()
-                        .map(|_| call(span, &["Default", "default"], Vec::new()))
+                        .map(|(field_name, _)| {
+                            StructLitField::Explicit(
+                                field_name.clone(),
+                                call(span, &["Default", "default"], Vec::new()),
+                            )
+                        })
                         .collect(),
                 )
             } else {
@@ -432,6 +438,7 @@ fn make_derived_impl(
                     bounds: vec![WhereConstraintRhs::Trait(
                         span.clone(),
                         trait_name.as_str().into(),
+                        Vec::new(),
                     )],
                     span: span.clone(),
                 })
@@ -440,7 +447,10 @@ fn make_derived_impl(
         }),
     };
     let mut params = Vec::new();
-    if !matches!(generator, DeriveGenerator::InspectShow | DeriveGenerator::Default) {
+    if !matches!(
+        generator,
+        DeriveGenerator::InspectShow | DeriveGenerator::Default
+    ) {
         params.push(FunParam {
             name: "self".into(),
             ty: named(span, "Self"),
@@ -459,7 +469,9 @@ fn make_derived_impl(
         });
     }
     let mut generated_attrs = DeclAttrs::default();
-    generated_attrs.fun_params = vec![named(span, "Self")];
+    if generator == DeriveGenerator::Default {
+        generated_attrs.fun_params = vec![named(span, "Self")];
+    }
     let mut methods = vec![Ast::Def(
         span.clone(),
         method_name.into(),

@@ -267,7 +267,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 collect_node_usage(&method.body, usage);
             }
         }
-        Resolved::BuiltinDecl(_, _, _, _, _) | Resolved::BuiltinExtractorDecl(_, _, _, _, _) => {}
+        Resolved::BuiltinDecl(..) | Resolved::BuiltinExtractorDecl(_, _, _, _, _) => {}
         Resolved::Closure(_, params, captures, body) => {
             for param in params {
                 usage.bind_id(&param.id);

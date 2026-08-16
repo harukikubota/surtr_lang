@@ -855,8 +855,17 @@ pub(crate) fn infer_flow_operator_template(
             ));
         }
         return Some(build_function_value_flow_template(
-            line_start, lhs_start, lhs_end, op_start, op_end, rhs_start, rhs_end, op, &lhs_expr,
-            &rhs_expr, message,
+            line_start,
+            lhs_start,
+            lhs_end,
+            op_start,
+            op_end,
+            rhs_start,
+            rhs_end,
+            op,
+            &lhs_expr,
+            &rhs_expr,
+            message,
         ));
     }
     let lhs_actual = detail
@@ -888,7 +897,14 @@ pub(crate) fn infer_flow_operator_template(
     };
 
     Some(build_flow_operator_template(
-        line_start, lhs_start, lhs_end, op_start, op_end, rhs_start, rhs_end, &view,
+        line_start,
+        lhs_start,
+        lhs_end,
+        op_start,
+        op_end,
+        rhs_start,
+        rhs_end,
+        &view,
     ))
 }
 
@@ -973,7 +989,14 @@ pub(crate) fn infer_plain_rhs_required_flow_template(
     };
 
     Some(build_flow_operator_template(
-        line_start, lhs_start, lhs_end, op_start, op_end, rhs_start, rhs_end, &view,
+        line_start,
+        lhs_start,
+        lhs_end,
+        op_start,
+        op_end,
+        rhs_start,
+        rhs_end,
+        &view,
     ))
 }
 
@@ -1304,11 +1327,6 @@ pub(crate) fn infer_total_bind_pattern_template(
     let eq_col = find_assignment_eq_before(&chars, chars.len())?;
     let lhs = trim_char_span(&chars, 0, eq_col);
     let rhs = trim_char_span(&chars, eq_col + 1, chars.len());
-    let op_span = Span {
-        start: line_start + eq_col,
-        end: line_start + eq_col + 1,
-    };
-
     Some(TemplateSpec {
         labels: vec![
             DiagnosticLabel {
@@ -1322,12 +1340,6 @@ pub(crate) fn infer_total_bind_pattern_template(
             },
             DiagnosticLabel {
                 source_id: None,
-                span: op_span,
-                message: BIND_RULE_TEXT.to_string(),
-                color: Some(Color::Yellow),
-            },
-            DiagnosticLabel {
-                source_id: None,
                 span: Span {
                     start: line_start + rhs.0,
                     end: line_start + rhs.1,
@@ -1336,7 +1348,7 @@ pub(crate) fn infer_total_bind_pattern_template(
                 color: None,
             },
         ],
-        notes: Vec::new(),
+        notes: vec![BIND_RULE_TEXT.to_string()],
         help: Some(
             hint.unwrap_or("Use `=?` for partial destructuring and extractor-driven matches.")
                 .to_string(),

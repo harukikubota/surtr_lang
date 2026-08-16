@@ -25,8 +25,7 @@ const TRY_FROM_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/try_fr
 const ENCODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/encode.srt");
 const DECODE_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/decode.srt");
 const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/functor.srt");
-const BIFUNCTOR_MODULE_SOURCE: &str =
-    include_str!("../../../../lib/traits/operator/bifunctor.srt");
+const BIFUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/bifunctor.srt");
 const APPLICATIVE_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/applicative.srt");
 const MONAD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/monad.srt");
@@ -82,7 +81,7 @@ pub(crate) fn typecheck_with_context(
     context: TypecheckContext,
 ) -> Result<Vec<TypedNode>, scar::error::TypeError> {
     let mut session = session_from_cached_std_prelude();
-    session.typecheck_with_context(resolved, context)
+    session.typecheck_in_place_with_context(resolved, context)
 }
 
 fn parse_std_module_stage(source: &str, fallback_module_path: &str) -> Vec<sigil::StagedModuleAst> {
@@ -278,6 +277,7 @@ struct CachedStdPrelude {
     module_stages: Vec<Vec<sigil::StagedModuleAst>>,
     declaration_index: sigil::DeclarationIndex,
     resolved_len: usize,
+    resolve_resume_state: sigil::ResolveResumeState,
     checkpoint: ScarCheckpoint,
 }
 
@@ -288,14 +288,19 @@ fn cached_std_prelude() -> &'static CachedStdPrelude {
         let module_stages = build_std_module_stages(&[]);
         let declaration_index = sigil::precollect_declaration_index(&module_stages)
             .expect("std modules should precollect");
-        let std_resolved =
-            sigil::resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
-                .expect("std modules should resolve");
-        let resolved_len = std_resolved.len();
+        let std_resolved = sigil::resolve_staged_program_with_state(
+            &module_stages,
+            Vec::new(),
+            &declaration_index,
+            None,
+        )
+        .expect("std modules should resolve");
+        let resolved_len = std_resolved.resolved.len();
+        let resolve_resume_state = std_resolved.resume_state.clone();
         let mut session = ScarSession::new();
         session
             .typecheck_with_context(
-                std_resolved,
+                std_resolved.resolved,
                 TypecheckContext {
                     runtime_policy: RuntimeSourcePolicy::std_module(),
                     enforce_builtin_type_contracts: true,
@@ -310,6 +315,7 @@ fn cached_std_prelude() -> &'static CachedStdPrelude {
             module_stages,
             declaration_index,
             resolved_len,
+            resolve_resume_state,
             checkpoint,
         }
     })
@@ -478,7 +484,10 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
                 "Alternative",
                 pick_override("Alternative", ALTERNATIVE_MODULE_SOURCE, overrides),
             ),
-            ("Monoid", pick_override("Monoid", MONOID_MODULE_SOURCE, overrides)),
+            (
+                "Monoid",
+                pick_override("Monoid", MONOID_MODULE_SOURCE, overrides),
+            ),
             (
                 "PipeApply",
                 pick_override("PipeApply", PIPE_APPLY_MODULE_SOURCE, overrides),
@@ -576,13 +585,15 @@ pub(crate) fn resolve_with_builtin_prelude_result(
     let prelude = cached_std_prelude();
     let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
         .expect("source should parse");
-    sigil::resolve_staged_program(
+    sigil::resolve_staged_program_from_state(
         &prelude.module_stages,
         user_ast,
         &prelude.declaration_index,
         None,
+        prelude.module_stages.len(),
+        prelude.resolve_resume_state.clone(),
     )
-    .map(|resolved| resolved.into_iter().skip(prelude.resolved_len).collect())
+    .map(|resolved| resolved.resolved)
 }
 
 pub(crate) fn resolve_program_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {
@@ -611,13 +622,15 @@ pub(crate) fn resolve_with_builtin_prelude_in_module(
     let prelude = cached_std_prelude();
     let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
         .expect("source should parse");
-    sigil::resolve_staged_program(
+    sigil::resolve_staged_program_from_state(
         &prelude.module_stages,
         user_ast,
         &prelude.declaration_index,
         Some(module_path.to_owned()),
+        prelude.module_stages.len(),
+        prelude.resolve_resume_state.clone(),
     )
-    .map(|resolved| resolved.into_iter().skip(prelude.resolved_len).collect())
+    .map(|resolved| resolved.resolved)
 }
 
 pub(crate) fn resolve_with_builtin_prelude(source: &str) -> Vec<sigil::resolved::Resolved> {

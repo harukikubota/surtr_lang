@@ -1198,7 +1198,7 @@ impl Int {
         assert!(lowered[1]
             .ast
             .iter()
-            .any(|stmt| matches!(stmt, spire::ast::Ast::BuiltinDecl(_, name, _, _, _) if name == "safe_mod")));
+            .any(|stmt| matches!(stmt, spire::ast::Ast::BuiltinDecl(_, name, _, _, _, _) if name == "safe_mod")));
     }
 
     #[test]
@@ -1370,7 +1370,7 @@ deferror NoneError { "None Value." }"#,
                 if name == "Global::Bootstrap"
                 && body.iter().any(|stmt| matches!(
                     stmt,
-                    spire::ast::Ast::BuiltinDecl(_, builtin_name, _, _, _) if builtin_name == "import"
+                    spire::ast::Ast::BuiltinDecl(_, builtin_name, _, _, _, _) if builtin_name == "import"
                 ))
         )));
     }

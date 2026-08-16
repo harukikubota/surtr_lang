@@ -150,15 +150,10 @@ fn apply_extractor_context_by_id(
         return;
     };
 
-    if let Some((context_span, context_ty)) =
+    if let Some((_context_span, context_ty)) =
         extractor_input_context(source, &lines, error_line_idx, &error.message)
     {
-        spec.labels.push(DiagnosticLabel {
-            source_id: Some(source_id),
-            span: context_span,
-            message: format!("input source: {}", context_ty),
-            color: Some(Color::Yellow),
-        });
+        spec.notes.push(format!("input source: {}", context_ty));
     }
 
     if let Some(pattern_span) = extractor_error_locus_span(source, &lines, error_line_idx) {

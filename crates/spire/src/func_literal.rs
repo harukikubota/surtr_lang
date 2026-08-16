@@ -1,4 +1,5 @@
 use crate::ast::BinOp;
+use crate::token::Token;
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FuncLiteralOperator {
@@ -76,6 +77,27 @@ pub(crate) fn func_literal_operator(body: &str) -> Option<FuncLiteralOperator> {
         .iter()
         .find(|operator| operator.body == body)
         .cloned()
+}
+
+/// Returns the quoted spelling for a token that is supported as a FuncLiteral
+/// operator. This keeps bare capture guidance aligned with `` &`operator` ``.
+pub(crate) fn func_literal_operator_token(token: &Token) -> Option<&'static str> {
+    let body = match token {
+        Token::Plus => "+",
+        Token::Minus => "-",
+        Token::Star => "*",
+        Token::Slash => "/",
+        Token::Concat => "++",
+        Token::EqEq => "==",
+        Token::BangEq => "!=",
+        Token::Lt => "<",
+        Token::Gt => ">",
+        Token::LtEq => "<=",
+        Token::GtEq => ">=",
+        _ => return None,
+    };
+    debug_assert!(func_literal_operator(body).is_some());
+    Some(body)
 }
 
 pub(crate) fn is_func_literal_ident(body: &str) -> bool {

@@ -6,5 +6,5 @@ trait.
 """
 deftrait LiftComposable<$A, $B, $C, $Mapped> {
   # Compose the receiver contextual callable before a plain mapper.
-  def lift_compose::<Self, $A, $B, $C, $Mapped>(self: Self, rhs: ($B -> $C)) -> ($A -> $Mapped)
+  def lift_compose::<$A, $Mapped>(self: Self, rhs: ($B -> $C)) -> ($A -> $Mapped)
 }

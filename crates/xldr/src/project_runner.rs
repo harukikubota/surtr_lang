@@ -77,7 +77,7 @@ pub fn execute_project_runner_source(
         .unwrap_or(0);
     scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
     let typed = scar_session
-        .typecheck_staged_program_with_context(
+        .typecheck_staged_program_in_place_with_context(
             resolved,
             scar::TypecheckContext::from_source_policy(
                 SourceKind::ProjectConfigSource.policy(CompileUnitKind::Project, None),

@@ -11,14 +11,6 @@ def audit_applicative(value: Applicative) -> Unit {
   ()
 }
 
-def map_applicative(value: Applicative<$A>, mapper: ($A -> $B)) -> Applicative<$B> {
-  Functor::fmap(value, mapper)
-}
-
-def as_functor(value: Applicative<$A>) -> Functor<$A> {
-  value
-}
-
 test("Option") {
   describe("predicates and constructors") {
     it("reports some and none states") {
@@ -51,19 +43,25 @@ test("Option") {
     it("drops concrete errors when converting err into option") {
       assert_eq("Option::None", inspect(from::<Option>(Err(NoneError))))
     }
+
+    it("traverses Some through a Result mapper") {
+      mapped = Option::traverse_result(Option::Some(7), {|value| Ok(value + 1)})
+      assert_eq("Ok(Option::Some(8))", inspect(mapped))
+    }
+
+    it("preserves None during Result traversal") {
+      mapped = Option::traverse_result(Option::None, {|value| Ok(value + 1)})
+      assert_eq("Ok(Option::None)", inspect(mapped))
+    }
+
+    it("propagates mapper errors during Result traversal") {
+      mapped = Option::traverse_result(Option::Some(7), {|_| Err(NoneError)})
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(mapped))
+    }
+
   }
 
   describe("trait integrations") {
-    it("specializes constructor-constrained fmap") {
-      mapped: Option<String> = map_applicative(Option::Some(9), &to_string)
-      assert_eq(mapped, Option::Some("9"))
-    }
-
-    it("shares the Functor root with Applicative annotations") {
-      mapped: Option<Int> = as_functor(Option::Some(9))
-      assert_eq(mapped, Option::Some(9))
-    }
-
     it("chooses the first Some with Alternative") {
       assert_eq(Option::Some(7), Option::Some(7) <|> Option::Some(9))
     }

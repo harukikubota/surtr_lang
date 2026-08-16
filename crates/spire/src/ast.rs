@@ -287,8 +287,8 @@ pub struct WhereConstraint {
 /// The right-hand side of a `where` constraint.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WhereConstraintRhs {
-    /// An ordinary trait requirement such as `Eq`.
-    Trait(Span, Symbol),
+    /// An ordinary trait requirement such as `Eq` or `Convert<Int>`.
+    Trait(Span, Symbol, Vec<AstTy>),
     /// A type-constructor shape requirement such as `Type<$A>`.
     TypeConstructor(Span, Vec<AstTy>),
     /// A trait constructor-slot projection such as `Functor.$A`.
@@ -328,7 +328,10 @@ pub enum AstPattern {
     /// `left | right` inside a pattern.
     Or(Span, Vec<AstPattern>),
     /// `inner @ alias` / `inner @ alias: Ty`
-    As(Span, Box<AstPattern>, Symbol, Option<AstTy>),
+    ///
+    /// The final span is the alias identifier token, kept separately from
+    /// the full as-pattern span for diagnostics and REPL binding metadata.
+    As(Span, Box<AstPattern>, Symbol, Option<AstTy>, Span),
 }
 
 /// Match arm: `pattern [when guard] => body`.
@@ -694,7 +697,14 @@ pub enum Ast {
     ),
 
     /// Builtin declaration: `@builtin def print(a: String) -> Unit`
-    BuiltinDecl(Span, Symbol, Vec<FunParam>, Option<AstTy>, DeclAttrs),
+    BuiltinDecl(
+        Span,
+        Symbol,
+        Vec<FunParam>,
+        Option<AstTy>,
+        Option<WhereClause>,
+        DeclAttrs,
+    ),
 
     /// Display-only intrinsic declaration: `@intrinsic def dbg!(values: *$A) -> Unit`
     IntrinsicDecl(Span, Symbol, String, DeclAttrs),

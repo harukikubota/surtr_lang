@@ -49,10 +49,8 @@ fn runtime_value_error_spec_splits_head_tail_string_safebind_pattern() {
         .labels
         .iter()
         .any(|label| label.message == "SafeBind partial match"));
-    assert!(spec
-        .labels
-        .iter()
-        .any(|label| label.message == "input source: String"));
+    assert!(spec_notes_text(&spec).contains("input source: String"));
+    assert!(!labels_text(&spec).contains("input source:"));
 }
 
 #[test]
@@ -68,10 +66,8 @@ fn runtime_error_spec_splits_builtin_runtime_error() {
         .labels
         .iter()
         .any(|label| label.message == "call target"));
-    assert!(spec
-        .labels
-        .iter()
-        .any(|label| label.message == "expected rule: List as first argument"));
+    assert!(spec_notes_text(&spec).contains("expected rule: List as first argument"));
+    assert!(!labels_text(&spec).contains("expected rule:"));
 }
 
 use super::test_support::*;
@@ -85,10 +81,8 @@ fn runtime_error_spec_splits_builtin_out_of_range_rule() {
         &RuntimeDiagnosticContext::default(),
         None,
     );
-    assert!(spec
-        .labels
-        .iter()
-        .any(|label| label.message == "expected rule: value must fit in i32"));
+    assert!(spec_notes_text(&spec).contains("expected rule: value must fit in i32"));
+    assert!(!labels_text(&spec).contains("expected rule:"));
 }
 
 #[test]
@@ -104,13 +98,8 @@ fn runtime_error_spec_splits_vm_runtime_error() {
         },
         None,
     );
-    assert!(spec
-        .labels
-        .iter()
-        .any(|label| label.message == "opcode: JumpIfFalse"));
-    assert!(spec.labels.iter().any(|label| {
-        label
-            .message
-            .starts_with("runtime rule: JumpIfFalse requires Bool")
-    }));
+    assert!(spec_notes_text(&spec).contains("opcode: JumpIfFalse"));
+    assert!(spec_notes_text(&spec).contains("runtime rule: JumpIfFalse requires Bool"));
+    assert!(!labels_text(&spec).contains("opcode:"));
+    assert!(!labels_text(&spec).contains("runtime rule:"));
 }

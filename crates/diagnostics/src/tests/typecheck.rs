@@ -22,10 +22,13 @@ fn type_error_spec_labels_backtick_operator_operands() {
         .labels
         .iter()
         .any(|label| strip_ansi(&label.message) == "LHS actual: Int"));
-    assert!(spec
+    let op = spec
         .labels
         .iter()
-        .any(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A"));
+        .find(|label| strip_ansi(&label.message) == "   OP rule: A + A -> A")
+        .expect("operator label");
+    assert_eq!(slice_chars(source, op.span.start, op.span.end), "`+`");
+    assert!(!spec_notes_text(&spec).contains("OP rule:"));
     assert!(spec
         .labels
         .iter()
@@ -402,7 +405,7 @@ fn render_flow_operator_error_keeps_actual_types_out_of_help() {
     let rendered_plain = strip_ansi(&rendered);
 
     assert!(rendered_plain.contains("LHS actual: Int"));
-    assert!(rendered_plain.contains("OP rule: Result<A> |>= (A -> Result<B>) -> Result<B>"));
+    assert!(labels_text(&spec).contains("OP rule: Result<A> |>= (A -> Result<B>) -> Result<B>"));
     assert!(rendered_plain.contains("Step: Int |>= (Int -> Result<Int>) -> Result<Int>"));
     assert!(rendered_plain.contains(
         "Reason: LHS is Int, but `|>=` requires a Monad such as Result<A>, List<A>, or Option<A>."

@@ -19,6 +19,69 @@ fn parse_error_spec_adds_unexpected_token_help() {
 }
 
 #[test]
+fn resolve_error_spec_with_labels_cycles_duplicate_binding_colors() {
+    let labels = [
+        (Span { start: 0, end: 1 }, "first".to_string()),
+        (Span { start: 2, end: 3 }, "second".to_string()),
+        (Span { start: 4, end: 5 }, "third".to_string()),
+        (Span { start: 6, end: 7 }, "fourth".to_string()),
+        (Span { start: 8, end: 9 }, "fifth".to_string()),
+        (Span { start: 10, end: 11 }, "first".to_string()),
+    ];
+    let spec = resolve_error_spec_with_labels(
+        "abcdefghijkl",
+        "Duplicate binding in pattern: x",
+        Span { start: 0, end: 1 },
+        &labels,
+    );
+
+    assert_eq!(
+        spec.labels
+            .iter()
+            .map(|label| label.color)
+            .collect::<Vec<_>>(),
+        vec![
+            Some(Color::Red),
+            Some(Color::Yellow),
+            Some(Color::Blue),
+            Some(Color::Magenta),
+            Some(Color::Cyan),
+            Some(Color::Red),
+        ]
+    );
+}
+
+#[test]
+fn parse_error_spec_uses_help_for_unit_pattern_guidance() {
+    let source = "() = ()";
+    let spec = parse_error_spec(
+        source,
+        "The Unit type has no pattern matching.",
+        Span { start: 0, end: 2 },
+    );
+
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Variable bindings and the `_` wildcard pattern are allowed.")
+    );
+    assert!(!labels_text(&spec).contains("Help:"));
+}
+
+#[test]
+fn parse_error_spec_guides_wildcard_as_pattern_aliases() {
+    let spec = parse_error_spec(
+        "(left, right) @ _ = (1, 2)",
+        "as-pattern alias must be a binding identifier.",
+        Span { start: 16, end: 17 },
+    );
+
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Replace the wildcard alias with a name, for example `pattern @ value`.")
+    );
+}
+
+#[test]
 fn parse_error_spec_rewrites_identity_anonymous_capture() {
     let source = "f = &(&1)";
     let spec = parse_error_spec(
@@ -72,6 +135,32 @@ fn parse_error_spec_explains_immediate_anonymous_callable_calls() {
 }
 
 #[test]
+fn parse_error_spec_puts_range_literal_rewrite_in_help() {
+    let spec = parse_error_spec(
+        "2..8",
+        "Range literals must use bracket syntax",
+        Span { start: 1, end: 3 },
+    );
+
+    assert_eq!(spec.message, "Range literals must use bracket syntax");
+    assert_eq!(spec.help.as_deref(), Some("Write `[start..stop]`."));
+    assert!(!spec.message.contains("[start..stop]"));
+}
+
+#[test]
+fn parse_error_spec_puts_bare_operator_capture_rewrite_in_help() {
+    let spec = parse_error_spec(
+        "List::reduce([1, 2], 0, &+)",
+        "Unquoted operator capture: +",
+        Span { start: 23, end: 25 },
+    );
+
+    assert_eq!(spec.message, "Unquoted operator capture: +");
+    assert_eq!(spec.help.as_deref(), Some("Write &`+`."));
+    assert!(!spec.message.contains("Write &`+`."));
+}
+
+#[test]
 fn type_error_spec_labels_extractor_pattern_for_safebind_rhs() {
     let source = "uncons(head, tail) =? True";
     let err = TypeError {
@@ -107,11 +196,10 @@ fn type_error_spec_splits_total_bind_pattern_error_into_lhs_op_rhs() {
             && label.color == Some(Color::Red)
             && slice_chars(source, label.span.start, label.span.end) == "[h, ..t]"
     }));
-    assert!(spec.labels.iter().any(|label| {
-        label.message == "Bind rule: `=` accepts only total MatchBlock patterns."
-            && label.color == Some(Color::Yellow)
-            && slice_chars(source, label.span.start, label.span.end) == "="
-    }));
+    assert!(
+        spec_notes_text(&spec).contains("Bind rule: `=` accepts only total MatchBlock patterns.")
+    );
+    assert!(!labels_text(&spec).contains("Bind rule:"));
     assert!(spec.labels.iter().any(|label| {
         label.message == "RHS value"
             && label.color.is_none()
@@ -140,10 +228,8 @@ fn type_error_spec_by_id_adds_extractor_context_blocks() {
 
     let spec = type_error_spec_by_id(&sources, main_id, &err);
 
-    assert!(spec
-        .labels
-        .iter()
-        .any(|label| label.source_id == Some(main_id) && label.message == "input source: Boolean"));
+    assert!(spec_notes_text(&spec).contains("input source: Boolean"));
+    assert!(!labels_text(&spec).contains("input source:"));
     assert!(spec.labels.iter().any(|label| {
         label.source_id == Some(kernel_id)
             && label

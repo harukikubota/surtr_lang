@@ -81,6 +81,8 @@ where
 }
 ```
 
+型引数を持つ制約は `$T: Encode<String>` のように書きます。Trait 名だけでなく型引数も制約の一部です。generic receiver で Trait helper を使うには、その helper が要求する bound を明示します。詳しくは [`trait-system.md`](./trait-system.md) を参照してください。
+
 ## 明示型引数
 
 変換先など、値引数だけでは決まらない型は `::<...>` で指定します。
@@ -100,6 +102,19 @@ number =? try_from::<Int>("42")
 nums: List<Int> = []
 names: List<String> = []
 ```
+
+既知の expected type は複合式の内側へ伝播します。list の各要素、tuple の各 slot、`if` の全 branch、`match` の全 arm が対象です。
+
+```surtr
+values: List<Option<Int>> = [pure(1), Option::Some(2)]
+value: Option<Int> = if(flag, pure(1), Option::Some(2))
+```
+
+反対に expected type がまだ未束縛でも、scalar literal、closure、tuple、non-empty collection などは式自身から型を得て generic slot と照合します。これは通常 call、constructor、Trait helper、apply、compose で共通です。
+
+numeric literal の種類はこの推論で変更しません。`Int` literal を `Float` として使う暗黙 coercion はありません。
+
+型注釈で単相に固定していない local callable は、binding environment から独立した型スロットを call-site ごとに fresh にします。capture した外部値の型や外側 signature の rigid generic は一般化しません。
 
 ## `from(...)` / `try_from(...)`
 

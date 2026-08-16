@@ -26,7 +26,9 @@ pub use report::{
     simple_error, DiagnosticLabel, DiagnosticSpec, RuntimeDiagnosticContext,
     SerializableDiagnostic, SerializableDiagnosticReport,
 };
-pub use resolve::resolve_error_spec;
+pub use resolve::{
+    resolve_error_spec, resolve_error_spec_with_labels, resolve_related_label_color,
+};
 pub use runtime::{runtime_error_spec, runtime_error_spec_by_id, runtime_value_error_spec};
 pub use source::{SourceEntry, SourceId, SourceRegistry};
 pub use surtr_code::{render_surtr_code_error, surtr_assert_eq_error_spec};

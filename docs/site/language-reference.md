@@ -108,10 +108,17 @@ match expr {
 - trait 宣言は `deftrait Name<$T, ...> { ... }` のように型引数を取ってよい
 - trait 実装は `impl Trait for Type { ... }`
 - trait 実装は `impl Trait<Concrete, ...> for Type { ... }` の形も取れる
+- 同じ Trait の impl は Trait 引数と target 型を再帰 unification して overlap を判定し、交差する場合は宣言順にかかわらず compile error とする。generic は任意の型 pattern と一致し、V1 は specialization 優先順位を持たない
+- 同じ nominal target でも full pattern が構造的に disjoint なら併存できる。`where` 制約の違いだけでは disjoint とみなさない
+- `defmod` / inherent `impl` / trait `impl` block 内の callable 名は一意であり、signature や `def` / `defp` の違いによる overload はできない
 - 通常 callable は型引数を明示できない。型スロットは signature の引数型・receiver 型から推論する
 - `::<Int>` は `try_from::<Int>(value)` のような Trait helper の target specialization にだけ使える。`Self` は値引数または期待 callable 型から推論する
-- FunParams は、型変数が value parameter の型から導入できない場合にだけ使う。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で FunParams に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として FunParams に置く
+- FunParams は、型変数が value parameter の型から導入できない場合にだけ使い、その型変数は戻り値にも現れなければならない。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で FunParams に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として FunParams に置く
 - trait は method のみを持つ
+- parameterized bound は `$A: Trait<Arg, ...>` と書く。Trait 名と全ての型引数が一致して初めて同じ bound である
+- generic receiver の Trait 呼び出しには、signature 上で宣言した `where` bound が必要である。呼び出しから implicit bound は追加されない
+- body を持つ Trait method は default method として override でき、`where Self: Parent` は parent Trait を要求する
+- Trait の詳細な利用規則は [`trait-system.md`](./trait-system.md)、実装例は [`trait-impls.md`](./trait-impls.md) を参照する
 - 匿名 `impl Trait` 型は使えず、名前付き型変数と `where` clause で制約する
 - `where` clause は宣言・trait・impl に制約を追加する
 - `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
@@ -126,6 +133,7 @@ match expr {
 - source 上の呼び出しは `from::<TargetTy>(value)` / `try_from::<TargetTy>(value)`
 - `TargetTy` は明示型引数であり runtime の値引数ではない
 - `From<$To>` / `TryFrom<$To>` trait が impl coherence を担う
+- `From` / `TryFrom` の排他は generic 名を alpha-normalize し、target と変換元を再帰照合する
 
 ### `Result<T>`
 
@@ -401,7 +409,8 @@ value: Int =? parse_int("1")
 - `False`
 - `Ok(x)`
 - `Err(e)`
-- `_`
+- `_` または `_` で始まる identifier（wildcard pattern。束縛を生成しない）
+- as-pattern は `pattern @ name` または `pattern@name` で書ける
 - `Int` リテラル
 - `String` リテラル
 - list pattern
@@ -641,14 +650,10 @@ defmod Bootstrap {
 このリファレンスでは扱わないもの:
 
 - associated types / associated consts
-- default method body
-- trait inheritance
-- multi-trait bounds
 - 匿名 `impl Trait` 型（parameter / return / generic argument / impl target component）
-- `where` clauses
 - 型エイリアス / NewType
 - マクロシステム拡張
 - 並列コンパイル
 - 高度なモジュールシステム拡張
 
-正本としての詳細仕様は [要件定義v9](../../doc/要件定義v9.md) を参照してください。
+Trait system の利用規則は [Trait システム](./trait-system.md) と [Trait Impls](./trait-impls.md) を正本とします。その他の全体要件は [要件定義v9](../../doc/要件定義v9.md) を参照してください。

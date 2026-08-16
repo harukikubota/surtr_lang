@@ -94,7 +94,7 @@ impl Show for Unit {
   xldr(1)> to_string(())
   "()"
   """
-  def to_string::<Unit>(self: Self) -> String {
+  def to_string(self: Self) -> String {
     inspect(self)
   }
 }

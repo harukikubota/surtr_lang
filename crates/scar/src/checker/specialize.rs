@@ -1044,7 +1044,7 @@ impl Checker {
         }
     }
 
-    fn canonical_ty_key(&self, ty: &Ty) -> CanonicalTyKey {
+    pub(super) fn canonical_ty_key(&self, ty: &Ty) -> CanonicalTyKey {
         match self.resolve_ty(ty) {
             Ty::Int => CanonicalTyKey::Int,
             Ty::Float => CanonicalTyKey::Float,
@@ -1355,7 +1355,7 @@ impl Checker {
         let mut ordered = Vec::new();
         let mut seen = HashSet::new();
         match &def.node {
-            TypedInner::Def(_, _, type_params, params, ret_ty, _, body, _) => {
+            TypedInner::Def(_, _, type_params, params, ret_ty, _, _body, _) => {
                 for type_param in type_params {
                     if type_param.bound.is_some() && seen.insert(type_param.ty_var) {
                         ordered.push(type_param.ty_var);
@@ -1365,9 +1365,12 @@ impl Checker {
                     self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
                 }
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
-                self.collect_bound_tyvars_in_node(body, &mut ordered, &mut seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(_body, &mut ordered, &mut seen);
+                // Function-local inference variables can carry trait bounds,
+                // but callers cannot infer them from a call site. Only the
+                // declared signature determines a valid specialization key.
             }
-            TypedInner::ExtractorDef(_, _, type_params, param, ret_ty, body, _) => {
+            TypedInner::ExtractorDef(_, _, type_params, param, ret_ty, _body, _) => {
                 for type_param in type_params {
                     if type_param.bound.is_some() && seen.insert(type_param.ty_var) {
                         ordered.push(type_param.ty_var);
@@ -1375,13 +1378,175 @@ impl Checker {
                 }
                 self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
-                self.collect_bound_tyvars_in_node(body, &mut ordered, &mut seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(_body, &mut ordered, &mut seen);
+                // See `Def` above: exclude function-local inference variables.
             }
             _ => {}
         }
         ordered
     }
 
+    /// A generic trait instance may be pending in a definition body even when
+    /// the current surface syntax cannot express that fully-instantiated
+    /// bound in the enclosing signature. It still has to participate in the
+    /// definition's specialization key, otherwise Forge sees a Pending call.
+    fn collect_pending_trait_receiver_tyvars_in_node(
+        &self,
+        node: &TypedNode,
+        ordered: &mut Vec<u32>,
+        seen: &mut HashSet<u32>,
+    ) {
+        match &node.node {
+            TypedInner::TraitCall {
+                dispatch: TraitDispatch::Pending,
+                receiver_ty,
+                args,
+                ..
+            } => {
+                let mut vars = Vec::new();
+                Self::collect_ty_vars(receiver_ty, &mut vars);
+                for var in vars {
+                    if seen.insert(var) {
+                        ordered.push(var);
+                    }
+                }
+                for arg in args {
+                    self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
+                }
+            }
+            TypedInner::TraitCall { args, .. }
+            | TypedInner::ListLiteral(args)
+            | TypedInner::TupleLiteral(args) => {
+                for arg in args {
+                    self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
+                }
+            }
+            TypedInner::App(func, args)
+            | TypedInner::InjectCall(func, args)
+            | TypedInner::Capture(func, args) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(func, ordered, seen);
+                for arg in args {
+                    self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
+                }
+            }
+            TypedInner::Block(stmts) => {
+                for stmt in stmts {
+                    self.collect_pending_trait_receiver_tyvars_in_node(stmt, ordered, seen);
+                }
+            }
+            TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) | TypedInner::Semi(rhs) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(rhs, ordered, seen)
+            }
+            TypedInner::BinOp(_, left, right)
+            | TypedInner::Pipe(left, right)
+            | TypedInner::Compose(_, left, right)
+            | TypedInner::ListCons(left, right) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(left, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(right, ordered, seen);
+            }
+            TypedInner::HashMapLiteral(entries) => {
+                for (key, value) in entries {
+                    self.collect_pending_trait_receiver_tyvars_in_node(key, ordered, seen);
+                    self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
+                }
+            }
+            TypedInner::InterpolatedStr(parts) => {
+                for part in parts {
+                    if let TypedInterpolatedPart::Expr(expr) = part {
+                        self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
+                    }
+                }
+            }
+            TypedInner::Dbg(args) => {
+                for arg in args {
+                    self.collect_pending_trait_receiver_tyvars_in_node(&arg.expr, ordered, seen);
+                }
+            }
+            TypedInner::EagerBoundary(inner)
+            | TypedInner::FieldAccess(inner, _)
+            | TypedInner::SupervisorSpawn { init: inner, .. }
+            | TypedInner::SupervisorAdopt { pid: inner, .. }
+            | TypedInner::FacetView { source: inner, .. } => {
+                self.collect_pending_trait_receiver_tyvars_in_node(inner, ordered, seen)
+            }
+            TypedInner::If(cond, then_branch, else_branch) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(cond, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(then_branch, ordered, seen);
+                if let Some(branch) = else_branch {
+                    self.collect_pending_trait_receiver_tyvars_in_node(branch, ordered, seen);
+                }
+            }
+            TypedInner::Assert(cond, err) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(cond, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
+            }
+            TypedInner::Ensure(value, pred, err) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(pred, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
+            }
+            TypedInner::MapErr(value, err) | TypedInner::Cause(value, err) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(err, ordered, seen);
+            }
+            TypedInner::RecoverKind(value, marker, handler) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(marker, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(handler, ordered, seen);
+            }
+            TypedInner::Match(scrutinee, arms) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(scrutinee, ordered, seen);
+                for arm in arms {
+                    if let Some(guard) = &arm.guard {
+                        self.collect_pending_trait_receiver_tyvars_in_node(guard, ordered, seen);
+                    }
+                    self.collect_pending_trait_receiver_tyvars_in_node(&arm.body, ordered, seen);
+                }
+            }
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
+                self.collect_pending_trait_receiver_tyvars_in_node(init, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(strategy, ordered, seen);
+            }
+            TypedInner::FacetSet { source, value, .. } => {
+                self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(value, ordered, seen);
+            }
+            TypedInner::FacetOver {
+                source, update_fun, ..
+            } => {
+                self.collect_pending_trait_receiver_tyvars_in_node(source, ordered, seen);
+                self.collect_pending_trait_receiver_tyvars_in_node(update_fun, ordered, seen);
+            }
+            TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
+                for field in fields {
+                    self.collect_pending_trait_receiver_tyvars_in_node(field, ordered, seen);
+                }
+            }
+            TypedInner::DeferrorDef(_, _, _, _, show) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(show, ordered, seen)
+            }
+            TypedInner::Def(_, _, _, _, _, _, body, _)
+            | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
+            | TypedInner::Closure(_, _, body) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
+            }
+            TypedInner::Lit(_)
+            | TypedInner::Var(_)
+            | TypedInner::ListNil
+            | TypedInner::BuiltinExtractorDecl(..)
+            | TypedInner::StructDef(..)
+            | TypedInner::RecordDef(..)
+            | TypedInner::EnumDef(..)
+            | TypedInner::TraitDef(..)
+            | TypedInner::TraitImplDef(..)
+            | TypedInner::SupervisorStatus { .. }
+            | TypedInner::ProcessContextHandler { .. }
+            | TypedInner::FacetPath(_)
+            | TypedInner::PendingFacetPath(_) => {}
+        }
+    }
+
+    #[allow(dead_code)]
     fn collect_bound_tyvars_in_node(
         &self,
         node: &TypedNode,

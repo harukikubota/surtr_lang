@@ -40,8 +40,8 @@ pub use self::declarations::{
 pub use self::session::{SigilCheckpoint, SigilSession};
 
 use self::declarations::{
-    assign_declaration_uids, ast_ty_key, collect_stage_impl_target_resolutions,
-    declaration_uid_kind_map, trait_impl_method_qualified_name, trait_method_qualified_name,
+    assign_declaration_uids, collect_stage_impl_target_resolutions, declaration_uid_kind_map,
+    trait_impl_method_qualified_name, trait_method_qualified_name, validate_unique_callable_names,
 };
 use self::expr::validate_trait_impl_pairs_in_nodes;
 use self::imports::{build_global_scope, build_module_scope, build_module_scope_with_imports};
@@ -171,7 +171,7 @@ fn collect_staged_trait_constructor_slots(
                                     .collect(),
                             );
                         }
-                        spire::ast::WhereConstraintRhs::Trait(_, parent_name) => {
+                        spire::ast::WhereConstraintRhs::Trait(_, parent_name, _) => {
                             if let Some(parent_uid) = lookup_uid(parent_name, &module.module_path) {
                                 parents.push((uid, parent_uid));
                             }
@@ -590,7 +590,9 @@ fn rebase_where_clause(clause: &mut ResolvedWhereClause, base: u32, offset: u32)
     for constraint in &mut clause.constraints {
         for bound in &mut constraint.bounds {
             match bound {
-                ResolvedWhereConstraintRhs::Trait(id) => rebase_resolved_id(id, base, offset),
+                ResolvedWhereConstraintRhs::Trait { trait_id, .. } => {
+                    rebase_resolved_id(trait_id, base, offset)
+                }
                 ResolvedWhereConstraintRhs::TraitSlot { trait_id, .. } => {
                     rebase_resolved_id(trait_id, base, offset)
                 }
@@ -781,9 +783,12 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_resolved_node(&mut method.body, base, offset);
             }
         }
-        Resolved::BuiltinDecl(_, id, params, _, _) => {
+        Resolved::BuiltinDecl(_, id, params, _, where_clause, _) => {
             rebase_resolved_id(id, base, offset);
             rebase_fun_params(params, base, offset);
+            if let Some(clause) = where_clause {
+                rebase_where_clause(clause, base, offset);
+            }
         }
         Resolved::BuiltinExtractorDecl(_, id, param, _, _) => {
             rebase_resolved_id(id, base, offset);

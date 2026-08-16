@@ -426,8 +426,14 @@ struct TraitInfo {
     where_clause: Option<TypedWhereClause>,
     constructor_slots: Vec<String>,
     constructor_root: Option<String>,
-    parents: Vec<ResolvedId>,
+    parents: Vec<TraitParent>,
     methods: HashMap<String, TraitMethodInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TraitParent {
+    trait_id: ResolvedId,
+    args: Vec<AstTy>,
 }
 
 #[allow(dead_code)]
@@ -459,9 +465,26 @@ struct TraitImplInfo {
     target_ty: Ty,
     where_clause: Option<TypedWhereClause>,
     type_param_vars: Vec<u32>,
+    type_param_vars_by_name: HashMap<String, u32>,
     constructor_slot_vars: Vec<u32>,
     constructor_slot_positions: Vec<usize>,
     methods: HashMap<String, TraitImplMethodInfo>,
+}
+
+/// A trait requirement kept in inference state.  Keep the trait identity and
+/// its type arguments separate so parameterized bounds are not collapsed into
+/// a display string while an inference variable remains unresolved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct PendingTraitObligation {
+    trait_id: String,
+    args: Vec<Ty>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct BuiltinContract {
+    where_clause: TypedWhereClause,
+    type_vars: HashMap<String, Ty>,
+    param_tys: Vec<Ty>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1068,6 +1091,16 @@ enum CanonicalTyKey {
     },
 }
 
+/// Solver identity is structural. In particular, two applications of the
+/// same generic struct with different field types must not collapse to the
+/// display name used in diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ObligationKey {
+    trait_name: String,
+    trait_args: Vec<CanonicalTyKey>,
+    target: CanonicalTyKey,
+}
+
 #[derive(Debug, Clone)]
 struct PersistentCheckerState {
     env: TypeEnv,
@@ -1075,6 +1108,7 @@ struct PersistentCheckerState {
     facet_bindings: HashMap<u32, StoredFacetPath>,
     error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
+    builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
@@ -1095,6 +1129,7 @@ impl PersistentCheckerState {
             facet_bindings: HashMap::new(),
             error_observer_bindings: HashSet::new(),
             user_func_params: HashMap::new(),
+            builtin_contracts: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
             specializable_defs: HashMap::new(),
@@ -1115,6 +1150,7 @@ impl PersistentCheckerState {
             facet_bindings: self.facet_bindings.clone(),
             error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
+            builtin_contracts: self.builtin_contracts.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
@@ -1138,6 +1174,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             facet_bindings: checkpoint.facet_bindings,
             error_observer_bindings: checkpoint.error_observer_bindings,
             user_func_params: checkpoint.user_func_params,
+            builtin_contracts: checkpoint.builtin_contracts,
             impl_method_uids: checkpoint.impl_method_uids,
             function_ids_by_name: checkpoint.function_ids_by_name,
             specializable_defs: checkpoint.specializable_defs,
@@ -1160,6 +1197,8 @@ pub struct ScarCheckpoint {
     #[serde(default)]
     error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
+    #[serde(default)]
+    builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
@@ -1225,6 +1264,42 @@ impl ScarSession {
             .map(|output| output.value)
     }
 
+    /// Typechecks a one-shot compile suffix without cloning the persistent
+    /// session state. On error the session contains the partially checked
+    /// state; incremental callers must use the transactional API above and
+    /// roll back their checkpoint instead.
+    pub fn typecheck_staged_program_in_place_with_context(
+        &mut self,
+        program: sigil::ResolvedStagedProgram,
+        context: TypecheckContext,
+    ) -> Result<TypedProgram, TypeError> {
+        let process_specs = program
+            .process_specs
+            .into_iter()
+            .map(Into::into)
+            .collect::<Vec<TypedProcessSpec>>();
+        let state = std::mem::replace(&mut self.state, PersistentCheckerState::new());
+        let mut checker = Checker::with_persistent_state(state, context);
+        checker.set_process_handler_dependencies(&process_specs);
+        checker.boot_plan = program.boot_plan.clone();
+        let nodes = match checker.check_program(program.resolved) {
+            Ok(nodes) => nodes,
+            Err(error) => {
+                self.process_specs = checker.process_specs.clone();
+                self.state = checker.into_persistent_state();
+                return Err(error);
+            }
+        };
+        let persisted_process_specs = checker.process_specs.clone();
+        self.state = checker.into_persistent_state();
+        self.process_specs = persisted_process_specs;
+        Ok(TypedProgram {
+            nodes,
+            process_specs,
+            boot_plan: program.boot_plan,
+        })
+    }
+
     pub fn typecheck_staged_program_with_context_with_warnings(
         &mut self,
         program: sigil::ResolvedStagedProgram,
@@ -1260,6 +1335,32 @@ impl ScarSession {
     ) -> Result<Vec<TypedNode>, TypeError> {
         self.typecheck_with_context_with_warnings(resolved, context)
             .map(|output| output.value)
+    }
+
+    /// Typechecks a one-shot compile suffix without cloning the persistent
+    /// session state. On error the session contains the partially checked
+    /// state; incremental callers must use the transactional API above and
+    /// roll back their checkpoint instead.
+    pub fn typecheck_in_place_with_context(
+        &mut self,
+        resolved: Vec<Resolved>,
+        context: TypecheckContext,
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        let state = std::mem::replace(&mut self.state, PersistentCheckerState::new());
+        let mut checker = Checker::with_persistent_state(state, context);
+        checker.set_process_handler_dependencies(self.process_specs.as_slice());
+        let typed = match checker.check_program(resolved) {
+            Ok(typed) => typed,
+            Err(error) => {
+                self.process_specs = checker.process_specs.clone();
+                self.state = checker.into_persistent_state();
+                return Err(error);
+            }
+        };
+        let persisted_process_specs = checker.process_specs.clone();
+        self.state = checker.into_persistent_state();
+        self.process_specs = persisted_process_specs;
+        Ok(typed)
     }
 
     pub fn typecheck_with_context_with_warnings(
@@ -2047,12 +2148,21 @@ struct Checker {
     error_observer_bindings: HashSet<u32>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
+    builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
     specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    /// Obligations discovered while an inference variable is still unbound.
+    /// These are deliberately separate from signature bounds: solving an
+    /// expression must never strengthen a declaration-owned generic.
+    pending_trait_obligations: HashMap<u32, Vec<PendingTraitObligation>>,
+    /// Static constructor-trait capabilities attached to abstract bindings.
+    /// These are intentionally binding-local: constructor roots may share a
+    /// witness while different bindings expose different trait capabilities.
+    constructor_capabilities: HashMap<u32, String>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
@@ -2066,6 +2176,7 @@ struct Checker {
     trait_impls: HashMap<(String, String), TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
+    trait_obligation_cycle: Option<String>,
     profiler: TypecheckProfiler,
     process_handler_dependencies: HashMap<String, HashMap<String, String>>,
     process_specs: Vec<TypedProcessSpec>,
@@ -2131,12 +2242,15 @@ impl Checker {
             error_observer_bindings: state.error_observer_bindings,
             consts: state.consts,
             user_func_params: state.user_func_params,
+            builtin_contracts: state.builtin_contracts,
             impl_method_uids: state.impl_method_uids,
             function_ids_by_name: state.function_ids_by_name,
             specializable_defs: state.specializable_defs,
             specialization_fun_idxs: state.specialization_fun_idxs,
             substitutions: HashMap::new(),
             tyvar_bounds: state.tyvar_bounds,
+            pending_trait_obligations: HashMap::new(),
+            constructor_capabilities: HashMap::new(),
             signature_aliases: state.signature_aliases,
             alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
@@ -2150,6 +2264,7 @@ impl Checker {
             trait_impls: state.trait_impls,
             trait_impl_index_by_base_trait: state.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: state.trait_methods_by_qualified_name,
+            trait_obligation_cycle: None,
             profiler: TypecheckProfiler::new_from_env(),
             process_handler_dependencies: HashMap::new(),
             process_specs: Vec::new(),
@@ -2181,6 +2296,9 @@ impl Checker {
         checker.facet_bindings = self.facet_bindings.clone();
         checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
+        checker.pending_trait_obligations = self.pending_trait_obligations.clone();
+        checker.trait_obligation_cycle = self.trait_obligation_cycle.clone();
+        checker.constructor_capabilities = self.constructor_capabilities.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();
@@ -2268,6 +2386,7 @@ impl Checker {
                 Resolved::TraitDef(_, id, type_params, _, methods, _) => {
                     let mut trait_used = HashSet::new();
                     for method in methods {
+                        Self::validate_trait_method_input_slots(method)?;
                         let mut fun_param_slots = HashSet::new();
                         for fun_param in &method.fun_params {
                             Self::collect_ast_ty_type_params(fun_param, &mut fun_param_slots);
@@ -2309,21 +2428,11 @@ impl Checker {
                                 hint: Some("Add the type variable to FunParams or a value argument.".into()),
                             });
                         }
-                        if method_output_used.iter().any(|var| !method_input_used.contains(var)) {
-                            return Err(TypeError {
-                                message: format!(
-                                    "Trait method {} has a type variable that is only present in its return type",
-                                    method.id.name
-                                ),
-                                span: method.span.clone(),
-                                hint: Some("Add the type variable to FunParams or a value argument.".into()),
-                            });
-                        }
                         if id.name == "Default"
                             && method.id.name == "default"
-                            && !method.fun_params.iter().any(|param| {
-                                matches!(param, AstTy::Named(_, name) if name == "Self")
-                            })
+                            && !method.fun_params.iter().any(
+                                |param| matches!(param, AstTy::Named(_, name) if name == "Self"),
+                            )
                         {
                             return Err(TypeError {
                                 message: "Default::default must declare Self in FunParams".into(),
@@ -2369,6 +2478,90 @@ impl Checker {
             Self::collect_ast_ty_type_params(ret_ty, &mut used);
         }
         used
+    }
+
+    /// Trait type slots have exactly one input introduction channel: either
+    /// explicit `::<...>` FunParams or value parameters. A FunParam slot must
+    /// also flow into the return type, so explicit specialization is observable
+    /// in the method contract.
+    fn validate_trait_method_input_slots(method: &ResolvedTraitMethodSig) -> Result<(), TypeError> {
+        let mut fun_param_slots = HashSet::new();
+        for fun_param in &method.fun_params {
+            Self::collect_trait_method_slots(fun_param, &mut fun_param_slots);
+        }
+        let mut value_param_slots = HashSet::new();
+        for param in &method.params {
+            Self::collect_trait_method_slots(&param.ty, &mut value_param_slots);
+        }
+        if let Some(slot) = fun_param_slots.intersection(&value_param_slots).next() {
+            return Err(TypeError {
+                message: format!(
+                    "Trait method {} introduces {slot} through both FunParams and value arguments",
+                    method.id.name
+                ),
+                span: method.span.clone(),
+                hint: Some(
+                    "Introduce each type variable through exactly one input channel.".into(),
+                ),
+            });
+        }
+
+        let mut return_slots = HashSet::new();
+        Self::collect_trait_method_slots(&method.ret_ty, &mut return_slots);
+        if let Some(slot) = fun_param_slots.difference(&return_slots).next() {
+            return Err(TypeError {
+                message: format!(
+                    "Trait method {} declares {slot} in FunParams but does not use it in its return type",
+                    method.id.name
+                ),
+                span: method.span.clone(),
+                hint: Some("FunParams type variables must appear in the return type.".into()),
+            });
+        }
+
+        let mut input_slots = fun_param_slots;
+        input_slots.extend(value_param_slots);
+        if let Some(slot) = return_slots.difference(&input_slots).next() {
+            return Err(TypeError {
+                message: format!(
+                    "Trait method {} has {slot} only in its return type",
+                    method.id.name
+                ),
+                span: method.span.clone(),
+                hint: Some(
+                    "Introduce the type variable through FunParams or a value argument.".into(),
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    fn collect_trait_method_slots(ty: &AstTy, used: &mut HashSet<String>) {
+        match ty {
+            AstTy::Named(_, name) if name == "Self" || name.starts_with('$') => {
+                used.insert(name.clone());
+            }
+            AstTy::Named(_, _) | AstTy::ImplTrait(_, _) => {}
+            AstTy::Generic(_, name, args) => {
+                if name == "Self" || name.starts_with('$') {
+                    used.insert(name.clone());
+                }
+                for arg in args {
+                    Self::collect_trait_method_slots(arg, used);
+                }
+            }
+            AstTy::Tuple(_, items) => {
+                for item in items {
+                    Self::collect_trait_method_slots(item, used);
+                }
+            }
+            AstTy::Func(_, params, ret) => {
+                for param in params {
+                    Self::collect_trait_method_slots(param, used);
+                }
+                Self::collect_trait_method_slots(ret, used);
+            }
+        }
     }
 
     fn reject_return_only_signature_slots(
@@ -3170,6 +3363,7 @@ impl Checker {
             facet_bindings: self.facet_bindings.clone(),
             error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
+            builtin_contracts: self.builtin_contracts.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
@@ -3190,6 +3384,7 @@ impl Checker {
             facet_bindings: self.facet_bindings,
             error_observer_bindings: self.error_observer_bindings,
             user_func_params: self.user_func_params,
+            builtin_contracts: self.builtin_contracts,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,
             specializable_defs: self.specializable_defs,
@@ -3221,10 +3416,16 @@ impl Checker {
     }
 
     pub(super) fn trait_impl_candidate_keys(&self, trait_name: &str) -> Vec<TraitImplKey> {
+        let base = Self::base_trait_key(trait_name);
+        if let Some(keys) = self.trait_impl_index_by_base_trait.get(base) {
+            return keys.clone();
+        }
+        let surface_base = Self::surface_name(base);
         self.trait_impl_index_by_base_trait
-            .get(Self::base_trait_key(trait_name))
-            .cloned()
-            .unwrap_or_default()
+            .iter()
+            .filter(|(key, _)| Self::surface_name(key) == surface_base)
+            .flat_map(|(_, keys)| keys.iter().cloned())
+            .collect()
     }
 
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
@@ -3360,6 +3561,12 @@ impl Checker {
             let specialized = self.specialize_program(typed)?;
             if let Some(start) = t {
                 specialize_program_dur = start.elapsed();
+            }
+            if let Some((method_name, span)) = specialized
+                .iter()
+                .find_map(|node| self.first_pending_trait_helper(node))
+            {
+                return Err(self.pending_trait_helper_error(method_name, span));
             }
             self.collect_unused_value_warnings_in_sequence(&specialized);
             Ok(specialized)

@@ -9,7 +9,7 @@ use super::Parser;
 
 fn where_constraint_rhs_span(rhs: &WhereConstraintRhs) -> &Span {
     match rhs {
-        WhereConstraintRhs::Trait(span, _)
+        WhereConstraintRhs::Trait(span, _, _)
         | WhereConstraintRhs::TypeConstructor(span, _)
         | WhereConstraintRhs::TraitSlot(span, _, _) => span,
     }
@@ -132,7 +132,7 @@ fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
         Ast::Def(_, _, _, _, _, _, _, attrs)
         | Ast::ConstDef(_, _, _, _, attrs)
         | Ast::ExtractorDef(_, _, _, _, _, _, attrs)
-        | Ast::BuiltinDecl(_, _, _, _, attrs)
+        | Ast::BuiltinDecl(_, _, _, _, _, attrs)
         | Ast::IntrinsicDecl(_, _, _, attrs)
         | Ast::BuiltinExtractorDecl(_, _, _, _, attrs)
         | Ast::BuiltinTypeDecl(_, _, attrs)
@@ -2012,6 +2012,7 @@ impl Parser<'_> {
             name,
             params,
             ret_ty,
+            None,
             attrs,
         ))
     }
@@ -3319,7 +3320,12 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             }
+            let newline_pos = self.pos;
             self.skip_newlines();
+            if Self::is_where_clause_terminator(self.peek()) && self.pos > newline_pos {
+                self.pos -= 1;
+                break;
+            }
         }
 
         if constraints.is_empty() {
@@ -3341,7 +3347,7 @@ impl Parser<'_> {
     fn is_where_clause_terminator(token: &Token) -> bool {
         matches!(
             token,
-            Token::LBrace | Token::RBrace | Token::Def | Token::Annotator(_)
+            Token::Eof | Token::LBrace | Token::RBrace | Token::Def | Token::Annotator(_)
         )
     }
 
@@ -3397,12 +3403,28 @@ impl Parser<'_> {
             ));
         }
 
+        let mut trait_args = Vec::new();
+        let mut end = trait_span.end;
+        if matches!(self.peek(), Token::Lt) {
+            self.advance();
+            self.skip_newlines();
+            loop {
+                trait_args.push(self.parse_type_in_impl_context(self_context.clone())?);
+                self.skip_newlines();
+                if matches!(self.peek(), Token::Comma) {
+                    self.advance();
+                    self.skip_newlines();
+                    continue;
+                }
+                break;
+            }
+            end = self.expect_type_gt()?.end;
+        }
+
         Ok(WhereConstraintRhs::Trait(
-            Span {
-                start,
-                end: trait_span.end,
-            },
+            Span { start, end },
             trait_name,
+            trait_args,
         ))
     }
 
@@ -3764,12 +3786,7 @@ impl Parser<'_> {
             ));
         }
         let end = ast_ty_span(&rhs).end;
-        Ok(Ast::TypeAlias(
-            Span { start, end },
-            name,
-            type_params,
-            rhs,
-        ))
+        Ok(Ast::TypeAlias(Span { start, end }, name, type_params, rhs))
     }
 
     pub(super) fn parse_defagent_default_attrs(&mut self) -> Result<Ast, ParseError> {
@@ -5147,12 +5164,6 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let (_def_span, name, _type_params, params, ret_ty, where_clause, _visibility) =
             self.parse_def_signature_with_name_mode(true)?;
-        if let Some(clause) = where_clause {
-            return Err(ParseError::syntax(
-                "@builtin declarations do not accept `where` clauses",
-                clause.span,
-            ));
-        }
 
         let mut lookahead = self.pos;
         while matches!(
@@ -5183,6 +5194,7 @@ impl Parser<'_> {
             name,
             params,
             ret_ty,
+            where_clause,
             attrs,
         ))
     }

@@ -37,6 +37,7 @@ print(inspect(to_string(user)))
 | `Neq` | `neq(self, rhs) -> Boolean` | 生成された `Eq` の結果を否定 |
 | `Compare` | `compare(self, rhs) -> Ordering` | フィールドを宣言順に辞書順比較 |
 | `Show` | `to_string(self) -> String` | `inspect(self)` を呼び出す |
+| `Default` | `default::<Self>() -> Self` | 各 field / payload を `default()` で生成 |
 
 `Neq` だけを指定した場合も、内部では `Eq` の比較本体が必要になるため `Eq` 相当の実装が自動的に用意されます。
 
@@ -100,6 +101,38 @@ print(inspect(to_string(user)))
 
 `inspect` を直接呼び出した場合の quote を含む表示など、表示形式の詳細は [`structs.md`](./structs.md) を参照してください。`Show` の表示はデバッグ・説明用の文字列表現であり、構造体を再構築できるコード形式とは限りません。
 
+### `Default`
+
+`Default` は、型定義者が各 field / payload の default 値で値を構築してよいことを明示する derive です。
+
+```surtr
+@derive Default
+defstruct Config {
+  retries: Int,
+  label: String,
+}
+
+config: Config = default()
+```
+
+struct の生成コードは、概念的には次のような構造体リテラルになります。
+
+```surtr
+Config {
+  retries: default(),
+  label: default(),
+}
+```
+
+`Default` derive は `Config::new(...)` や `Config(...)` を呼びません。したがって、`new` が `Self` を返すか `Result<Self, Error>` を返すかには影響されません。また、`Default::default` の戻り値は常に `Self` です。
+
+record も各 public field の default 値から直接構築されます。
+
+構造体リテラルは `impl Config` の同型メソッド本体内だけで許可されるため、derive は型所有者側の自動生成としてこの構築を行います。derive しない型に default 構築経路は自動追加されません。
+
+ただし、`Default` は型固有の不変条件を検査しません。たとえば `new(value) -> Result<Self, Error>` が `value > 0` を検証していても、`Int` の default が `0` なら、その型に `@derive Default` を付けるのは不適切です。default 値自体が妥当な型だけに指定してください。
+
+
 ## struct・record・enum での使用
 
 3 種類のデータ宣言で同じ構文を使えます。
@@ -130,7 +163,7 @@ generic な struct / enum にも付けられます。生成された比較処理
 - Trait 名は bare identifier で指定します。`Eq<Int>` や qualified path は使えません。
 - Trait 名は少なくとも 1 つ必要です。末尾カンマも使えません。
 - 同じリスト内で Trait 名を重複させられません。
-- V1 で指定できるのは `Eq`、`Neq`、`Compare`、`Show` だけです。ユーザー定義 Trait の derive recipe はまだ登録できません。
+- V1 で指定できるのは `Eq`、`Neq`、`Compare`、`Show`、`Default` です。ユーザー定義 Trait の derive recipe はまだ登録できません。
 - `deferror`、`deftrait`、`impl`、関数、module、`@builtin type` などには付けられません。
 - derive で生成される Trait と同じ型の明示的な `impl` は書けません。
 
