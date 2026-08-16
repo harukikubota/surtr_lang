@@ -59,7 +59,7 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
     }
 
     if message
-        == "as-pattern alias must be a binding identifier; use `pattern @ name`, not `pattern @ _`"
+        == "as-pattern alias must be a binding identifier."
     {
         spec.help =
             Some("Replace the wildcard alias with a name, for example `pattern @ value`.".into());

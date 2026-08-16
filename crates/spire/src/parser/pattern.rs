@@ -164,7 +164,7 @@ impl Parser<'_> {
             };
             if alias.starts_with('_') {
                 return Err(ParseError::syntax(
-                    "as-pattern alias must be a binding identifier; use `pattern @ name`, not `pattern @ _`",
+                    "as-pattern alias must be a binding identifier.",
                     alias_span,
                 ));
             }

@@ -3090,8 +3090,7 @@ fn test_as_pattern_rejects_wildcard_alias() {
 
         assert!(err
             .message()
-            .contains("as-pattern alias must be a binding identifier"));
-        assert!(err.message().contains("pattern @ name"));
+            .contains("as-pattern alias must be a binding identifier."));
     }
 }
 
