@@ -111,7 +111,7 @@ defmod Kernel {
 
   Returns `True` when the value matches the pattern, otherwise `False`.
   This form does not permit binding variables in the pattern argument.
-  Use `_` to ignore values, or switch to `if_let` / `match` when bindings
+  Use `_` or an identifier beginning with `_` to ignore values, or switch to `if_let` / `match` when bindings
   are required.
 
   ## REPL

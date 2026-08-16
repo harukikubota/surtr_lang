@@ -58,6 +58,13 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
         spec.help = Some("Variable bindings and the `_` wildcard pattern are allowed.".into());
     }
 
+    if message
+        == "as-pattern alias must be a binding identifier; use `pattern @ name`, not `pattern @ _`"
+    {
+        spec.help =
+            Some("Replace the wildcard alias with a name, for example `pattern @ value`.".into());
+    }
+
     if message == "Range literals must use bracket syntax" {
         spec.help = Some("Write `[start..stop]`.".into());
     }

@@ -35,6 +35,21 @@ fn parse_error_spec_uses_help_for_unit_pattern_guidance() {
 }
 
 #[test]
+fn parse_error_spec_guides_wildcard_as_pattern_aliases() {
+    let spec = parse_error_spec(
+        "(left, right) @ _ = (1, 2)",
+        "as-pattern alias must be a binding identifier; use `pattern @ name`, not `pattern @ _`",
+        Span { start: 16, end: 17 },
+    );
+
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Replace the wildcard alias with a name, for example `pattern @ value`.")
+    );
+    assert!(!labels_text(&spec).contains("pattern @ value"));
+}
+
+#[test]
 fn parse_error_spec_rewrites_identity_anonymous_capture() {
     let source = "f = &(&1)";
     let spec = parse_error_spec(

@@ -409,7 +409,7 @@ value: Int =? parse_int("1")
 - `False`
 - `Ok(x)`
 - `Err(e)`
-- `_`
+- `_` または `_` で始まる identifier（wildcard pattern。束縛を生成しない）
 - `Int` リテラル
 - `String` リテラル
 - list pattern

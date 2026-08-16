@@ -260,7 +260,7 @@ impl Resolver {
     ) -> Result<AstPattern, ResolveError> {
         match expr {
             Ast::Var(span, name) => {
-                if name == "_" {
+                if name.starts_with('_') {
                     Ok(AstPattern::Wildcard(span))
                 } else if Self::is_constructor_style_head(&name) {
                     Ok(AstPattern::Constructor(span, name, Vec::new()))

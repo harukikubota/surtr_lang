@@ -147,6 +147,12 @@ impl Parser<'_> {
                 ));
             }
             let (alias, alias_span) = self.expect_ident()?;
+            if alias.starts_with('_') {
+                return Err(ParseError::syntax(
+                    "as-pattern alias must be a binding identifier; use `pattern @ name`, not `pattern @ _`",
+                    alias_span,
+                ));
+            }
             if alias == "self" && self.impl_target_stack.is_empty() {
                 return Err(ParseError::syntax(
                     "`self` can only be used inside impl methods",
@@ -178,7 +184,7 @@ impl Parser<'_> {
     fn parse_bind_pattern_atom(&mut self) -> Result<AstPattern, ParseError> {
         let sp = self.peek_span();
         match self.peek().clone() {
-            Token::Ident(name) if name == "_" => {
+            Token::Ident(name) if name.starts_with('_') => {
                 self.advance();
                 Ok(AstPattern::Wildcard(sp))
             }

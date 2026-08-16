@@ -3173,6 +3173,14 @@ fn test_safebind_resolution() {
 }
 
 #[test]
+fn test_underscore_prefixed_pattern_does_not_bind() {
+    let err = parse_and_resolve("_discard = 1\n_discard")
+        .expect_err("underscore-prefixed patterns must not introduce a name");
+
+    assert!(err.message.contains("Undefined variable: _discard"));
+}
+
+#[test]
 fn test_safebind_constructor_pattern_resolution() {
     let resolved = parse_and_resolve(
         r#"value: Result<Result<Int>> = Ok(Ok(1))

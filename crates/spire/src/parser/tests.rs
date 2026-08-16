@@ -3070,6 +3070,32 @@ fn test_wildcard_pattern_safebind() {
 }
 
 #[test]
+fn test_underscore_prefixed_pattern_is_wildcard() {
+    let ast = parse("(_discard, value) = (1, 2)").unwrap();
+    match &ast[0] {
+        Ast::Bind(_, AstPattern::Tuple(_, items), _) => {
+            assert!(
+                matches!(items.as_slice(), [AstPattern::Wildcard(_), AstPattern::Var(_, name)] if name == "value")
+            );
+        }
+        other => panic!("Expected tuple bind with wildcard, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_as_pattern_rejects_wildcard_alias() {
+    for alias in ["_", "_discard"] {
+        let err = parse(&format!("(left, right) @ {alias} = (1, 2)"))
+            .expect_err("as-pattern aliases must create a binding");
+
+        assert!(err
+            .message()
+            .contains("as-pattern alias must be a binding identifier"));
+        assert!(err.message().contains("pattern @ name"));
+    }
+}
+
+#[test]
 fn test_integer_literal_pattern_safebind() {
     let ast = parse("1 =? value").unwrap();
     match &ast[0] {
