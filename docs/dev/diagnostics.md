@@ -30,6 +30,8 @@ source span を必要としない説明や修正案を `labels` に置かない�
 - headline だけで十分な診断に無理な source label を追加しない。
 - `kind`、`phase`、`primary_span`、`expected`、`got`、`hint` の意味を表示文の改善目的で変更しない。
 - テンプレートを変更したら、source label・note・help の分類が変わる renderer 判定 helper も確認する。
+- 修正方法・代替構文・書き換え例は `message` や label ではなく `help` に書く。`message` は原因を短い headline として残す。
+- 新しい診断文を追加する前に既存の同 phase / 同種の診断を見渡し、headline の簡潔さ、命令形の Help、句読点などの温度感を統一する。
 
 現在の代表例:
 - operator の `OP rule` は演算子 span を指す source label、`BIND_RULE_TEXT` は typecheck の `notes`、`=?` などの書き換え案は `help` に置く。
