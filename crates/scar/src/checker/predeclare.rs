@@ -2,6 +2,7 @@ use super::types::SignatureTyMode;
 use super::*;
 use sindr::builtin::builtin_type_meta_by_name;
 use sindr::names::builtin_type_usage_policy;
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
 static SYNTHETIC_DEFAULT_METHOD_UID: AtomicU32 = AtomicU32::new(0x6000_0000);
@@ -1797,9 +1798,115 @@ impl Checker {
             format!(
                 "{} is implemented for: {}",
                 display_name,
-                targets.join(", ")
+                Self::format_trait_implementation_targets(&targets)
             )
         }
+    }
+
+    fn format_trait_implementation_targets(targets: &[String]) -> String {
+        let tuple_arities = targets
+            .iter()
+            .map(|target| Self::generic_tuple_arity(target))
+            .collect::<Vec<_>>();
+        let Some(first_tuple_index) = tuple_arities.iter().position(Option::is_some) else {
+            return targets.join(", ");
+        };
+
+        let arities = tuple_arities
+            .iter()
+            .flatten()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let ranges = Self::format_generic_tuple_arity_ranges(&arities);
+        let tuple_summary = format!("Tuple(len={ranges})");
+        let mut formatted = Vec::with_capacity(targets.len());
+        for (index, target) in targets.iter().enumerate() {
+            if index == first_tuple_index {
+                formatted.push(tuple_summary.clone());
+            }
+            if tuple_arities[index].is_none() {
+                formatted.push(target.clone());
+            }
+        }
+
+        formatted.join(", ")
+    }
+
+    fn format_generic_tuple_arity_ranges(arities: &BTreeSet<usize>) -> String {
+        let mut ranges = Vec::new();
+        let mut iter = arities.iter().copied();
+        let Some(first) = iter.next() else {
+            return String::new();
+        };
+
+        let mut start = first;
+        let mut end = first;
+        for arity in iter {
+            if arity == end.saturating_add(1) {
+                end = arity;
+            } else {
+                ranges.push(Self::format_generic_tuple_arity_range(start, end));
+                start = arity;
+                end = arity;
+            }
+        }
+        ranges.push(Self::format_generic_tuple_arity_range(start, end));
+        ranges.join(", ")
+    }
+
+    fn format_generic_tuple_arity_range(start: usize, end: usize) -> String {
+        if start == end {
+            start.to_string()
+        } else {
+            format!("[{start}..{end}]")
+        }
+    }
+
+    fn generic_tuple_arity(target: &str) -> Option<usize> {
+        let target = target.trim();
+        let inner = target.strip_prefix('(')?.strip_suffix(')')?;
+        let elements = Self::split_type_list(inner)?;
+        if elements.len() < 2
+            || elements.iter().any(|element| {
+                let element = element.trim();
+                let Some(name) = element.strip_prefix('$') else {
+                    return true;
+                };
+                name.is_empty()
+                    || !name
+                        .chars()
+                        .all(|character| character.is_ascii_alphanumeric() || character == '_')
+            })
+        {
+            return None;
+        }
+        Some(elements.len())
+    }
+
+    fn split_type_list(source: &str) -> Option<Vec<&str>> {
+        let mut elements = Vec::new();
+        let mut start = 0;
+        let mut depth = 0usize;
+
+        for (index, character) in source.char_indices() {
+            match character {
+                '(' | '[' | '{' | '<' => depth += 1,
+                ')' | ']' | '}' | '>' => {
+                    depth = depth.checked_sub(1)?;
+                }
+                ',' if depth == 0 => {
+                    elements.push(source.get(start..index)?.trim());
+                    start = index + character.len_utf8();
+                }
+                _ => {}
+            }
+        }
+
+        if depth != 0 {
+            return None;
+        }
+        elements.push(source.get(start..)?.trim());
+        Some(elements)
     }
 
     pub(super) fn tyvar_satisfies_compiler_trait(&self, _var: u32, _trait_name: &str) -> bool {
@@ -3689,6 +3796,78 @@ impl Checker {
 #[cfg(test)]
 mod policy_tests {
     use super::*;
+
+    #[test]
+    fn generic_tuple_targets_are_compressed_into_an_arity_range() {
+        let targets = (2..=8)
+            .map(|arity| {
+                let elements = (0..arity)
+                    .map(|index| format!("$A{index}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({elements})")
+            })
+            .chain(["Duration".into(), "Float".into(), "Int".into()])
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            Checker::format_trait_implementation_targets(&targets),
+            "Tuple(len=[2..8]), Duration, Float, Int"
+        );
+    }
+
+    #[test]
+    fn concrete_and_mixed_tuple_targets_are_not_compressed() {
+        let targets = vec![
+            "(String, Int)".into(),
+            "($A0, Int)".into(),
+            "($A0, $A1)".into(),
+            "($A0, $A1, $A2)".into(),
+        ];
+
+        assert_eq!(
+            Checker::format_trait_implementation_targets(&targets),
+            "(String, Int), ($A0, Int), Tuple(len=[2..3])"
+        );
+    }
+
+    #[test]
+    fn generic_tuple_ranges_are_derived_from_the_full_arity_set() {
+        let targets = vec![
+            "Duration".into(),
+            "($A0, $A1)".into(),
+            "Int".into(),
+            "($A0, $A1, $A2, $A3)".into(),
+            "($A0, $A1, $A2)".into(),
+            "($A0, $A1, $A2, $A3, $A4, $A5)".into(),
+            "($A0, $A1, $A2, $A3, $A4, $A5, $A6)".into(),
+            "($A0, $A1, $A2, $A3, $A4, $A5, $A6, $A7)".into(),
+        ];
+
+        assert_eq!(
+            Checker::format_trait_implementation_targets(&targets),
+            "Duration, Tuple(len=[2..4], [6..8]), Int"
+        );
+    }
+
+    #[test]
+    fn singleton_generic_tuple_arities_share_one_summary_entry() {
+        let targets = vec![
+            "Int".into(),
+            "($A0, $A1)".into(),
+            "Duration".into(),
+            "($A0, $A1, $A2, $A3)".into(),
+            "($A0, $A1, $A2, $A3, $A4)".into(),
+            "($A0, $A1, $A2, $A3, $A4, $A5)".into(),
+            "($A0, $A1, $A2, $A3, $A4, $A5, $A6)".into(),
+            "($A0, $A1, $A2, $A3, $A4, $A5, $A6, $A7)".into(),
+        ];
+
+        assert_eq!(
+            Checker::format_trait_implementation_targets(&targets),
+            "Int, Tuple(len=2, [4..8]), Duration"
+        );
+    }
 
     #[test]
     fn public_trait_target_surface_uses_builtin_type_usage_policy() {
