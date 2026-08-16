@@ -32,8 +32,6 @@ source span を必要としない説明や修正案を `labels` に置かない�
 - テンプレートを変更したら、source label・note・help の分類が変わる renderer 判定 helper も確認する。
 
 現在の代表例:
-
-- Unit 型のパターン案内は `parse.rs` の `help` に置く。`Help:` を label 本文に埋め込まない。
 - operator の `OP rule` は演算子 span を指す source label、`BIND_RULE_TEXT` は typecheck の `notes`、`=?` などの書き換え案は `help` に置く。
 - extractor の `input source` は `notes`、extractor 定義は関連 source label に置く。
 - runtime の失敗値・pattern・`call target` は label、`expected rule`・`runtime rule`・`opcode`・入力分類は `notes` に置く。

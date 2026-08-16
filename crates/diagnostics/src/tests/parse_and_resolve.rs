@@ -88,6 +88,19 @@ fn parse_error_spec_explains_immediate_anonymous_callable_calls() {
 }
 
 #[test]
+fn parse_error_spec_puts_range_literal_rewrite_in_help() {
+    let spec = parse_error_spec(
+        "2..8",
+        "Range literals must use bracket syntax",
+        Span { start: 1, end: 3 },
+    );
+
+    assert_eq!(spec.message, "Range literals must use bracket syntax");
+    assert_eq!(spec.help.as_deref(), Some("Write `[start..stop]`."));
+    assert!(!spec.message.contains("[start..stop]"));
+}
+
+#[test]
 fn type_error_spec_labels_extractor_pattern_for_safebind_rhs() {
     let source = "uncons(head, tail) =? True";
     let err = TypeError {

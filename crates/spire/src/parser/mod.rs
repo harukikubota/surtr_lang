@@ -333,6 +333,12 @@ impl<'a> Parser<'a> {
                 self.peek_span(),
             ));
         }
+        if matches!(self.peek(), Token::DotDot) {
+            return Err(ParseError::syntax(
+                "Range literals must use bracket syntax",
+                self.peek_span(),
+            ));
+        }
         let ok = matches!(self.peek(), Token::Newline | Token::Eof)
             || (allow_rbrace && matches!(self.peek(), Token::RBrace));
         if ok {

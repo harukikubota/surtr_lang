@@ -3687,6 +3687,15 @@ fn test_statements_on_same_line_require_separator() {
 }
 
 #[test]
+fn test_range_literal_used_as_operator_has_bracket_help() {
+    let err = parse("2..8").expect_err("Expected parse error");
+    assert!(
+        err.message()
+            .contains("Range literals must use bracket syntax")
+    );
+}
+
+#[test]
 fn test_safebind_rhs_requires_statement_separator() {
     let err = parse("[] =? []1").expect_err("Expected parse error");
     assert!(err.message().contains("Expected newline or `;`"));

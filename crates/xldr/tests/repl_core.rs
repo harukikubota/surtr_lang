@@ -216,6 +216,13 @@ fn core_completion_returns_global_candidates_with_details() {
 }
 
 #[test]
+fn range_literal_used_as_operator_shows_bracket_help() {
+    let result = engine().handle_line("2..8");
+
+    assert!(rendered_text(&result).contains("Range literals must use bracket syntax"));
+}
+
+#[test]
 fn core_completion_keeps_all_matching_candidates() {
     let mut engine = engine();
     for idx in 0..6 {

@@ -58,6 +58,10 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
         spec.help = Some("Variable bindings and the `_` wildcard pattern are allowed.".into());
     }
 
+    if message == "Range literals must use bracket syntax" {
+        spec.help = Some("Write `[start..stop]`.".into());
+    }
+
     if message.starts_with("return-position `impl Trait` is not supported") {
         spec.help =
             Some("Name the return type parameter explicitly in the function signature.".into());
