@@ -1,0 +1,8 @@
+@derive Compare
+defstruct Empty {}
+
+impl Empty {
+  def new() -> Self { Empty {} }
+}
+
+print(inspect(compare(Empty(), Empty())))

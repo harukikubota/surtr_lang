@@ -5978,6 +5978,22 @@ different = Empty() != Empty()
     typecheck(resolved).expect("empty struct Eq derive should provide eq and neq");
 }
 
+#[test]
+fn empty_struct_compare_is_equal() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"@derive Compare
+defstruct Empty {}
+
+impl Empty {
+  def new() -> Self { Empty {} }
+}
+
+ordering = compare(Empty(), Empty())
+"#,
+    );
+    typecheck(resolved).expect("empty struct Compare derive should provide Equal");
+}
+
 fn generic_struct_bare_annotation_requires_type_args() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct Box<$A> {
