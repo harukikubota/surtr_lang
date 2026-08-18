@@ -1,0 +1,9 @@
+@derive Eq
+defstruct Empty {}
+
+impl Empty {
+  def new() -> Self { Empty {} }
+}
+
+print(inspect(Empty() == Empty()))
+print(inspect(Empty() != Empty()))

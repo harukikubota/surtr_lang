@@ -5961,6 +5961,23 @@ value = Default::default::<Empty>()
     assert!(err.message.contains("must define `new` in its impl block"));
 }
 
+#[test]
+fn empty_struct_eq_and_neq_are_constant() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"@derive Eq
+defstruct Empty {}
+
+impl Empty {
+  def new() -> Self { Empty {} }
+}
+
+same = Empty() == Empty()
+different = Empty() != Empty()
+"#,
+    );
+    typecheck(resolved).expect("empty struct Eq derive should provide eq and neq");
+}
+
 fn generic_struct_bare_annotation_requires_type_args() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct Box<$A> {
