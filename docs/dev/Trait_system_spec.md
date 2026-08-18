@@ -179,6 +179,7 @@ deftrait Default {
 
 - struct は各 field を `Default::default()` で埋めた struct literal を生成する。record は常に public な field を持つ
   unprotected aggregate として、同じ field-by-field construction を行う。
+- 0 フィールド struct も有効な product とし、空の struct literal を生成する。`@derive Default` は inherent `new` を生成せず、struct のフィールド数に関係なく `new` 必須契約を緩和しない。
 - enum は選択した variant を直接構築し、payload を `Default::default()` で埋める。
 - structの生成で `Type(...)` や `Type::new(...)` の constructor surface を呼び出してはならない。
 - struct literal は `impl Type` の同型メソッド本体内だけで許可されるため、struct の derive 生成コードは型所有者側の
@@ -189,6 +190,11 @@ deftrait Default {
 特に constructor が `Result<Self, Error>` を返す型でも、derive 側は constructor の戻り値を unwrap / match
 して `Self` を取り出す経路を作らない。constructor の検証契約と field default の妥当性は別責任であり、default
 値が不正になり得る型は `Default` を derive してはならない。
+
+user-defined `Struct` はフィールド数に関係なく inherent `new` を持たなければならない。したがって
+`defstruct Empty {}` と `@derive Default` は両立するが、`impl Empty { def new() -> Self { Empty {} } }` などの
+`new` は別途必要である。`Empty()` は `new` のシグネチャに依存する constructor sugar であり、Default derive や
+フィールド数とは疎結合である。
 
 pending obligation、substitution、declared bound、source generic name は次のすべてで整合して移動する。
 

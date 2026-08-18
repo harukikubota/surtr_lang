@@ -5931,6 +5931,36 @@ user = User("alice")"#,
     assert!(err.message.contains("must define `new` in its impl block"));
 }
 
+#[test]
+fn empty_struct_default_derives_without_relaxing_new_contract() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"@derive Default
+defstruct Empty {}
+
+impl Empty {
+  def new() -> Self { Empty {} }
+}
+
+value = Default::default::<Empty>()
+constructed = Empty()
+"#,
+    );
+    typecheck(resolved).expect("empty struct should derive Default and retain new constructor");
+}
+
+#[test]
+fn empty_struct_without_new_is_rejected() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"@derive Default
+defstruct Empty {}
+
+value = Default::default::<Empty>()
+"#,
+    );
+    let err = typecheck(resolved).expect_err("empty struct without new should fail");
+    assert!(err.message.contains("must define `new` in its impl block"));
+}
+
 fn generic_struct_bare_annotation_requires_type_args() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct Box<$A> {

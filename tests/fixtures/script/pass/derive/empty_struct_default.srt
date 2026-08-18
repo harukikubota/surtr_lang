@@ -1,0 +1,8 @@
+@derive Default
+defstruct Empty {}
+
+impl Empty {
+  def new() -> Self { Empty {} }
+}
+
+print(inspect(Default::default::<Empty>()))
