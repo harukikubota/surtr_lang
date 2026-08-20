@@ -1,3 +1,4 @@
+use scar::env::TypeKind;
 use scar::typed::{
     OperatorTraitOp, TraitCallOrigin, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode,
     TypedPattern, TypedProgram, TypedWhereConstraintRhs,
@@ -7,6 +8,7 @@ use sigil::resolved::{
     Resolved, ResolvedFacetBracketExpr, ResolvedFacetPathSegment, ResolvedHashMapLiteralEntry,
     ResolvedId, ResolvedPattern,
 };
+use sindr::names::TypeIdentity;
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 use sindr::primitives::int;
 use spire::ast::{Lit, Span};
@@ -1113,6 +1115,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         "error_observer_binding_cannot_flow_through_generic_identity",
         error_observer_binding_cannot_flow_through_generic_identity as fn(),
     ),
+    (
+        "type_kinds_map_to_compile_space_identities",
+        type_kinds_map_to_compile_space_identities as fn(),
+    ),
 ];
 
 macro_rules! surface_bucket_test {
@@ -1261,6 +1267,17 @@ fn resolved_bracket_segment(expr: Resolved, display: &str) -> ResolvedFacetPathS
         expr: Box::new(expr),
         display: display.into(),
     })
+}
+
+fn type_kinds_map_to_compile_space_identities() {
+    for (kind, expected) in [
+        (TypeKind::Struct, TypeIdentity::Struct),
+        (TypeKind::Record, TypeIdentity::Record),
+        (TypeKind::Enum, TypeIdentity::Enum),
+        (TypeKind::ConcreteError, TypeIdentity::Error),
+    ] {
+        assert_eq!(kind.identity(), expected);
+    }
 }
 
 fn process_stdlib_no_longer_declares_task_hidden_lower_helpers() {
@@ -3714,11 +3731,11 @@ result = call(1)"#,
 #[test]
 fn child_impl_where_assumptions_cover_parent_impl_requirements() {
     let resolved = resolve_with_builtin_prelude(
-        r#"deftrait Eq {
+        r#"deftrait FixtureEq {
   def eq(self: Self, other: Self) -> Boolean
 }
 
-deftrait Show {
+deftrait FixtureShow {
   def show(self: Self) -> String
 }
 
@@ -3735,14 +3752,14 @@ where
 
 impl Parent for List<$A>
 where
-  $A: Eq
+  $A: FixtureEq
 {
   def parent(self: List<$A>) -> String { "parent" }
 }
 
 impl Child for List<$A>
 where
-  $A: Eq + Show
+  $A: FixtureEq + FixtureShow
 {
   def child(self: List<$A>) -> String { "child" }
 }"#,
@@ -3943,11 +3960,7 @@ marked: Boxed<Int> = Marker::mark(Boxed::Box(1))"#,
 
 #[test]
 fn function_where_bounds_propagate_to_generic_call_sites() {
-    let source = r#"deftrait Default {
-  def default::<Self>() -> Self
-}
-
-def make(seed: $A) -> $A
+    let source = r#"def make(seed: $A) -> $A
 where
   $A: Default
 {
@@ -3975,11 +3988,7 @@ where
 #[test]
 fn where_clause_does_not_declare_a_new_type_variable() {
     let err = typecheck_with_rules(
-        r#"deftrait Default {
-  def default::<Self>() -> Self
-}
-
-def id(value: $A) -> $A
+        r#"def id(value: $A) -> $A
 where
   $B: Default
 {
@@ -4391,7 +4400,7 @@ fn canonical_builtin_type_name_hole_is_reserved_for_structs() {
     )
     .expect_err("Hole should be reserved");
     assert!(
-        err.contains("Type name `Hole` is reserved by a canonical builtin type declaration"),
+        err.contains("Owner name `Hole` is reserved by a canonical builtin type declaration"),
         "unexpected error: {err}"
     );
 }
@@ -4417,7 +4426,7 @@ fn canonical_builtin_type_name_hole_is_reserved_for_errors() {
     )
     .expect_err("Hole should be reserved");
     assert!(
-        err.contains("Type name `Hole` is reserved by a canonical builtin type declaration"),
+        err.contains("Owner name `Hole` is reserved by a canonical builtin type declaration"),
         "unexpected error: {err}"
     );
 }
@@ -4430,7 +4439,7 @@ fn canonical_builtin_type_name_closure_is_reserved_for_structs() {
     )
     .expect_err("Closure should be reserved");
     assert!(
-        err.contains("Type name `Closure` is reserved by a canonical builtin type declaration"),
+        err.contains("Owner name `Closure` is reserved by a canonical builtin type declaration"),
         "unexpected error: {err}"
     );
 }
@@ -4443,7 +4452,7 @@ fn canonical_builtin_type_name_match_arms_is_reserved_for_structs() {
     )
     .expect_err("MatchArms should be reserved");
     assert!(
-        err.contains("Type name `MatchArms` is reserved by a canonical builtin type declaration"),
+        err.contains("Owner name `MatchArms` is reserved by a canonical builtin type declaration"),
         "unexpected error: {err}"
     );
 }
@@ -6049,15 +6058,15 @@ impl Pair {
 
 fn struct_new_accepts_result_self_return_type() {
     let resolved = resolve_with_builtin_prelude(
-        r#"defstruct Duration {
+        r#"defstruct Elapsed {
   private millis: Int,
 }
-impl Duration {
+impl Elapsed {
   def new(value: Int) -> Result<Self, Error> {
-    Ok(Duration { millis: value })
+    Ok(Elapsed { millis: value })
   }
 }
-value: Result<Duration> = Duration(10)"#,
+value: Result<Elapsed> = Elapsed(10)"#,
     );
     let typed = typecheck(resolved).expect("Result<Self, Error> constructor should pass");
     let rhs = typed
@@ -6070,7 +6079,7 @@ value: Result<Duration> = Duration(10)"#,
     assert!(matches!(
         &rhs.ty,
         Ty::Result(ok, err)
-            if matches!(ok.as_ref(), Ty::Struct(name, _) if name == "Global::Duration")
+            if matches!(ok.as_ref(), Ty::Struct(name, _) if name == "Global::Elapsed")
                 && matches!(err.as_ref(), Ty::Error)
     ));
 }
@@ -6111,15 +6120,15 @@ impl User {
 
 fn struct_constructor_call_accepts_result_return_type() {
     let resolved = resolve_with_builtin_prelude(
-        r#"defstruct Duration {
+        r#"defstruct Elapsed {
   private millis: Int,
 }
-impl Duration {
+impl Elapsed {
   def new(value: Int) -> Result<Self, Error> {
-    Ok(Duration { millis: value })
+    Ok(Elapsed { millis: value })
   }
 }
-dur = Duration(10)"#,
+dur = Elapsed(10)"#,
     );
     let typed = typecheck(resolved).expect("constructor call should accept Result<Self>");
     let rhs = typed
@@ -6132,7 +6141,7 @@ dur = Duration(10)"#,
     assert!(matches!(
         &rhs.ty,
         Ty::Result(ok, err)
-            if matches!(ok.as_ref(), Ty::Struct(name, _) if name == "Global::Duration")
+            if matches!(ok.as_ref(), Ty::Struct(name, _) if name == "Global::Elapsed")
                 && matches!(err.as_ref(), Ty::Error)
     ));
 }

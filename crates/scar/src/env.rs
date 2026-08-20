@@ -55,7 +55,7 @@ impl TypeKind {
         match self {
             Self::Struct => TypeIdentity::Struct,
             Self::Record => TypeIdentity::Record,
-            Self::ConcreteError => TypeIdentity::ConcreteError,
+            Self::ConcreteError => TypeIdentity::Error,
             Self::Enum => TypeIdentity::Enum,
         }
     }

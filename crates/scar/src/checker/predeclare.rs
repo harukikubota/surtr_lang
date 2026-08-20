@@ -20,11 +20,13 @@ impl Checker {
             {
                 return Err(TypeError {
                     message: format!(
-                        "Duplicate visible type name `{}` in the flat type namespace",
+                        "Internal consistency error: duplicate type owner `{}` reached Scar after resolution",
                         name
                     ),
                     span: span.clone(),
-                    hint: None,
+                    hint: Some(
+                        "Sigil must reject duplicate owners before type checking.".into(),
+                    ),
                 });
             }
             let mut used = HashSet::new();
@@ -510,12 +512,12 @@ impl Checker {
             if let Some(first_span) = seen_type_spans.get(name) {
                 return Err(TypeError {
                     message: format!(
-                        "Duplicate visible type name `{}` in the flat type namespace",
+                        "Internal consistency error: duplicate type owner `{}` reached Scar after resolution",
                         name
                     ),
                     span: span.clone(),
                     hint: Some(format!(
-                        "The first declaration was at {}..{}.",
+                        "Sigil must reject duplicate owners before type checking; the first malformed resolved declaration was at {}..{}.",
                         first_span.start, first_span.end
                     )),
                 });
