@@ -136,6 +136,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         tuple_literal_and_field_access_typecheck as fn(),
     ),
     (
+        "pair_constructor_lowered_tuple_values_typecheck_without_operator_traits",
+        pair_constructor_lowered_tuple_values_typecheck_without_operator_traits as fn(),
+    ),
+    (
         "tuple_bind_pattern_typechecks",
         tuple_bind_pattern_typechecks as fn(),
     ),
@@ -593,8 +597,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         kernel_and_contract_rejects_eager_signature as fn(),
     ),
     (
-        "special_form_builtin_decl_must_live_under_kernel",
-        special_form_builtin_decl_must_live_under_kernel as fn(),
+        "special_form_builtin_decl_must_live_at_its_canonical_std_qname",
+        special_form_builtin_decl_must_live_at_its_canonical_std_qname as fn(),
     ),
     (
         "kernel_does_not_allow_removed_concat_builtin",
@@ -1663,6 +1667,20 @@ second = pair._1"#,
             .count()
             >= 3
     );
+}
+
+fn pair_constructor_lowered_tuple_values_typecheck_without_operator_traits() {
+    let resolved = resolve_with_builtin_prelude(
+        "pair: (Int, String) = 1 (,) \"two\"\nnested: (Int, (Int, Int)) = 1 (,) 2 (,) 3\npair_fn = &`(,)`\nfrom_capture: (Int, String) = pair_fn(1, \"two\")\nfrom_pipeline: (Int, String) = 1 |> `(,)`(\"two\")",
+    );
+    let typed = typecheck(resolved).expect("pair constructor forms should typecheck as tuples");
+
+    for name in ["pair", "nested", "from_capture", "from_pipeline"] {
+        assert!(
+            matches!(typed_bind_rhs(&typed, name).ty, Ty::Tuple(_)),
+            "{name} must typecheck as a tuple"
+        );
+    }
 }
 
 fn tuple_bind_pattern_typechecks() {
@@ -4801,7 +4819,7 @@ defmod Kernel {
         .contains("@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean"));
 }
 
-fn special_form_builtin_decl_must_live_under_kernel() {
+fn special_form_builtin_decl_must_live_at_its_canonical_std_qname() {
     let err = typecheck_std_modules_with_overrides(&[(
         "Boolean",
         r#"@builtin type Boolean
@@ -4818,10 +4836,10 @@ impl Eq for Boolean {
   @builtin def eq(self: Self, rhs: Self) -> Boolean
 }"#,
     )])
-    .expect_err("special-form declaration outside Kernel must fail");
+    .expect_err("special-form declaration outside its canonical module must fail");
     assert!(err
         .message
-        .contains("Special-form declaration `and` is only allowed in std module `Kernel`."));
+        .contains("Special-form declaration `and` is only allowed at `Kernel::and`."));
 }
 
 fn kernel_does_not_allow_removed_concat_builtin() {

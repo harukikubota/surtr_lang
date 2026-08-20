@@ -1,0 +1,11 @@
+(1, "one")
+(1, (2, 3))
+(3, 7)
+True
+True
+True
+True
+True
+True
+(1, "one")
+("left", "right")

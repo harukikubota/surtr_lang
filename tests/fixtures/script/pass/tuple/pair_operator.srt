@@ -1,0 +1,13 @@
+print(inspect(1 (,) "one"))
+print(inspect(1 (,) 2 (,) 3))
+print(inspect(1 + 2 (,) 3 + 4))
+print(inspect((1 (,) 2) == (1 (,) 2)))
+print(inspect((1 (,) 2) != (1 (,) 3)))
+print(inspect((1 (,) 2) < (1 (,) 3)))
+print(inspect((1 (,) 2) <= (1 (,) 2)))
+print(inspect((1 (,) 3) > (1 (,) 2)))
+print(inspect((1 (,) 3) >= (1 (,) 3)))
+print(inspect(1 |> `(,)`("one")))
+
+pair = &`(,)`
+print(inspect(pair("left", "right")))

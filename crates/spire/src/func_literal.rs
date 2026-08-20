@@ -4,70 +4,85 @@ use crate::token::Token;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FuncLiteralOperator {
     pub(crate) body: &'static str,
-    pub(crate) binop: BinOp,
+    pub(crate) kind: FuncLiteralOperatorKind,
     pub(crate) tier: FuncLiteralOperatorTier,
+}
+
+/// Compiler-owned descriptors for quoted FuncLiteral operators.
+/// Pair construction never becomes a `BinOp`: it lowers directly to the
+/// existing tuple-literal AST and therefore avoids trait and runtime dispatch.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum FuncLiteralOperatorKind {
+    BinOp(BinOp),
+    PairConstructor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FuncLiteralOperatorTier {
     Expr,
+    Pair,
     Logical,
 }
 
 const FUNC_LITERAL_OPERATORS: &[FuncLiteralOperator] = &[
     FuncLiteralOperator {
         body: "+",
-        binop: BinOp::Add,
+        kind: FuncLiteralOperatorKind::BinOp(BinOp::Add),
         tier: FuncLiteralOperatorTier::Expr,
     },
     FuncLiteralOperator {
         body: "-",
-        binop: BinOp::Sub,
+        kind: FuncLiteralOperatorKind::BinOp(BinOp::Sub),
         tier: FuncLiteralOperatorTier::Expr,
     },
     FuncLiteralOperator {
         body: "*",
-        binop: BinOp::Mul,
+        kind: FuncLiteralOperatorKind::BinOp(BinOp::Mul),
         tier: FuncLiteralOperatorTier::Expr,
     },
     FuncLiteralOperator {
         body: "/",
-        binop: BinOp::Slash,
+        kind: FuncLiteralOperatorKind::BinOp(BinOp::Slash),
         tier: FuncLiteralOperatorTier::Expr,
     },
     FuncLiteralOperator {
         body: "++",
-        binop: BinOp::Concat,
+        kind: FuncLiteralOperatorKind::BinOp(BinOp::Concat),
         tier: FuncLiteralOperatorTier::Expr,
     },
     FuncLiteralOperator {
+        body: "(,)",
+        kind: FuncLiteralOperatorKind::PairConstructor,
+        tier: FuncLiteralOperatorTier::Pair,
+    },
+    FuncLiteralOperator {
         body: "==",
-        binop: BinOp::Eq,
+        kind: FuncLiteralOperatorKind::BinOp(BinOp::Eq),
         tier: FuncLiteralOperatorTier::Logical,
     },
     FuncLiteralOperator {
         body: "!=",
-        binop: BinOp::Neq,
+        kind: FuncLiteralOperatorKind::BinOp(BinOp::Neq),
         tier: FuncLiteralOperatorTier::Logical,
     },
     FuncLiteralOperator {
         body: "<",
-        binop: BinOp::Lt,
+        kind: FuncLiteralOperatorKind::BinOp(BinOp::Lt),
         tier: FuncLiteralOperatorTier::Logical,
     },
     FuncLiteralOperator {
         body: ">",
-        binop: BinOp::Gt,
+        kind: FuncLiteralOperatorKind::BinOp(BinOp::Gt),
         tier: FuncLiteralOperatorTier::Logical,
     },
     FuncLiteralOperator {
         body: "<=",
-        binop: BinOp::Lte,
+        kind: FuncLiteralOperatorKind::BinOp(BinOp::Lte),
         tier: FuncLiteralOperatorTier::Logical,
     },
     FuncLiteralOperator {
         body: ">=",
-        binop: BinOp::Gte,
+        kind: FuncLiteralOperatorKind::BinOp(BinOp::Gte),
         tier: FuncLiteralOperatorTier::Logical,
     },
 ];

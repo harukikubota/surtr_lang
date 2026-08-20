@@ -840,7 +840,10 @@ mod tests {
         for (body, expected) in cases {
             let operator = crate::func_literal::func_literal_operator(body)
                 .expect("operator should be supported by shared func literal table");
-            assert_eq!(operator.binop, expected);
+            assert!(matches!(
+                operator.kind,
+                crate::func_literal::FuncLiteralOperatorKind::BinOp(found) if found == expected
+            ));
 
             let tokens = tokenize(&format!("`{body}`")).unwrap();
             assert!(matches!(

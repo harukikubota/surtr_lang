@@ -18,6 +18,16 @@ type itself lives in `error.srt`.
 # stage-0 anchor for the loader.
 defmod Bootstrap {
   @doc """
+  Construct a 2-tuple from `lhs` and `rhs`.
+
+  `left (,) right` is a right-associative pair constructor. It always creates
+  exactly two elements, so `a (,) b (,) c` is `(a, (b, c))`, not `(a, b, c)`.
+  The resulting pair uses componentwise tuple equality and comparison, for
+  example `(1 (,) 2) < (1 (,) 3)`.
+  """
+  @builtin def (,)(lhs: $A, rhs: $B) -> ($A, $B)
+
+  @doc """
   Debug special form.
 
   `dbg!` is a language-provided special form for observing intermediate values.

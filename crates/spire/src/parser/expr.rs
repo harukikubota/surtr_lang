@@ -2,7 +2,7 @@ use crate::ast::*;
 use crate::error::ParseError;
 use crate::func_literal::{
     func_literal_operator, func_literal_operator_token, parse_func_literal_path,
-    FuncLiteralOperatorTier,
+    FuncLiteralOperator, FuncLiteralOperatorKind, FuncLiteralOperatorTier,
 };
 use crate::token::Token;
 use sindr::primitives::ToPrimitive;
@@ -104,6 +104,13 @@ impl Parser<'_> {
         }
     }
 
+    fn flow_op_injects_first_argument(kind: FlowOpKind) -> bool {
+        matches!(
+            kind,
+            FlowOpKind::PipeApply | FlowOpKind::PipeMap | FlowOpKind::PipeBind
+        )
+    }
+
     fn skip_newlines_before_flow_op(&mut self) {
         if !matches!(self.peek(), Token::Newline) {
             return;
@@ -171,7 +178,38 @@ impl Parser<'_> {
             if !matches!(next, FlowOpKind::Choice) {
                 self.skip_newlines();
             }
-            let right = self.parse_and_or_expr()?;
+            let direct_partial_pair_call = if Self::flow_op_injects_first_argument(next) {
+                match self.peek().clone() {
+                    Token::FuncLiteral(body) if Self::is_pair_constructor_func_literal(&body) => {
+                        Some((self.peek_span(), body))
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            let right = if let Some((func_span, body)) = direct_partial_pair_call {
+                let pair_call = self.parse_quoted_callee_call(func_span, body, true)?;
+                if !matches!(
+                    self.peek(),
+                    Token::Newline
+                        | Token::Semicolon
+                        | Token::Comma
+                        | Token::RParen
+                        | Token::RBrack
+                        | Token::RBrace
+                        | Token::Eof
+                ) && Self::flow_op_kind(self.peek()).is_none()
+                {
+                    return Err(ParseError::syntax(
+                        "quoted pair constructor partial call must be the complete pipeline RHS",
+                        pair_call.span().clone(),
+                    ));
+                }
+                pair_call
+            } else {
+                self.parse_and_or_expr()?
+            };
             let span = Span {
                 start: left.span().start,
                 end: right.span().end,
@@ -286,12 +324,49 @@ impl Parser<'_> {
 
     pub(super) fn expr_binop_from_func_literal(body: &str) -> Option<BinOp> {
         let operator = func_literal_operator(body)?;
-        (operator.tier == FuncLiteralOperatorTier::Expr).then_some(operator.binop)
+        match (operator.tier, operator.kind) {
+            (FuncLiteralOperatorTier::Expr, FuncLiteralOperatorKind::BinOp(op)) => Some(op),
+            _ => None,
+        }
     }
 
     pub(super) fn logical_binop_from_func_literal(body: &str) -> Option<BinOp> {
         let operator = func_literal_operator(body)?;
-        (operator.tier == FuncLiteralOperatorTier::Logical).then_some(operator.binop)
+        match (operator.tier, operator.kind) {
+            (FuncLiteralOperatorTier::Logical, FuncLiteralOperatorKind::BinOp(op)) => Some(op),
+            _ => None,
+        }
+    }
+
+    fn is_pair_constructor_func_literal(body: &str) -> bool {
+        matches!(
+            func_literal_operator(body),
+            Some(FuncLiteralOperator {
+                kind: FuncLiteralOperatorKind::PairConstructor,
+                ..
+            })
+        )
+    }
+
+    fn pair_constructor_at(&self) -> bool {
+        matches!(
+            (self.peek(), self.peek_n(1), self.peek_n(2)),
+            (Token::LParen, Some(Token::Comma), Some(Token::RParen))
+        )
+    }
+
+    fn pair_constructor_span(&self) -> Span {
+        Span {
+            start: self.peek_span().start,
+            end: self.tokens[self.pos + 2].span.end,
+        }
+    }
+
+    fn consume_pair_constructor(&mut self) -> Span {
+        let start = self.advance().span.start;
+        self.advance();
+        let end = self.advance().span.end;
+        Span { start, end }
     }
 
     pub(super) fn and_or_func_literal_name(body: &str) -> bool {
@@ -312,6 +387,14 @@ impl Parser<'_> {
             end: right.span().end,
         };
         Ast::BinOp(span, op, Box::new(left), Box::new(right))
+    }
+
+    pub(super) fn lower_pair_constructor(left: Ast, right: Ast) -> Ast {
+        let span = Span {
+            start: left.span().start,
+            end: right.span().end,
+        };
+        Ast::TupleLiteral(span, vec![left, right])
     }
 
     pub(super) fn lower_func_literal_call(left: Ast, func: Ast, right: Ast) -> Ast {
@@ -347,7 +430,8 @@ impl Parser<'_> {
             let func_kind = Self::parse_func_literal_body(&body, func_span.clone())?;
 
             if matches!(func_kind, FuncLiteralBodyKind::Operator(ref op_body)
-                if Self::logical_binop_from_func_literal(op_body).is_some())
+                if Self::logical_binop_from_func_literal(op_body).is_some()
+                    || Self::is_pair_constructor_func_literal(op_body))
                 || matches!(func_kind, FuncLiteralBodyKind::Name(ref name)
                     if Self::logical_func_literal_name(name))
                 || Self::low_precedence_on_target_callee(&func_kind, &func_span).is_some()
@@ -383,13 +467,32 @@ impl Parser<'_> {
         Ok(left)
     }
 
+    /// Parse the pair-constructor tier: `Expr > (,) > Compare`.
+    /// The recursive RHS preserves right associativity and nested tuple shape.
+    pub(super) fn parse_pair_expr(&mut self) -> Result<Ast, ParseError> {
+        let left = self.parse_expr_class_expr()?;
+        let is_pair = self.pair_constructor_at()
+            || matches!(self.peek(), Token::FuncLiteral(body) if Self::is_pair_constructor_func_literal(body));
+        if !is_pair {
+            return Ok(left);
+        }
+
+        if self.pair_constructor_at() {
+            self.consume_pair_constructor();
+        } else {
+            self.advance();
+        }
+        let right = self.parse_pair_expr()?;
+        Ok(Self::lower_pair_constructor(left, right))
+    }
+
     pub(super) fn parse_logical_expr(&mut self) -> Result<Ast, ParseError> {
-        let mut left = self.parse_expr_class_expr()?;
+        let mut left = self.parse_pair_expr()?;
 
         loop {
             if let Some(op) = Self::logical_binop(self.peek()) {
                 self.advance();
-                let right = self.parse_expr_class_expr()?;
+                let right = self.parse_pair_expr()?;
                 left = Self::lower_binop(left, op, right);
                 continue;
             }
@@ -403,7 +506,7 @@ impl Parser<'_> {
             if let FuncLiteralBodyKind::Operator(ref op_body) = func_kind {
                 if let Some(op) = Self::logical_binop_from_func_literal(op_body) {
                     self.advance();
-                    let right = self.parse_expr_class_expr()?;
+                    let right = self.parse_pair_expr()?;
                     left = Self::lower_binop(left, op, right);
                     continue;
                 }
@@ -413,7 +516,7 @@ impl Parser<'_> {
                 if Self::comparison_func_literal_name(name))
             {
                 self.advance();
-                let right = self.parse_expr_class_expr()?;
+                let right = self.parse_pair_expr()?;
                 left = Self::lower_func_literal_call(left, Ast::Var(func_span, body), right);
                 continue;
             }
@@ -711,6 +814,10 @@ impl Parser<'_> {
             Token::LBrack => self.parse_list_expr(sp),
 
             // Parenthesized expression
+            Token::LParen if self.pair_constructor_at() => Err(ParseError::syntax(
+                "bare `(,)` is only valid in infix position",
+                self.pair_constructor_span(),
+            )),
             Token::LParen => self.with_parse_nesting(sp.clone(), |parser| {
                 parser.advance();
                 parser.skip_newlines();
@@ -770,7 +877,7 @@ impl Parser<'_> {
                 sp,
             )),
 
-            Token::FuncLiteral(body) => self.parse_quoted_callee_call(sp, body),
+            Token::FuncLiteral(body) => self.parse_quoted_callee_call(sp, body, false),
 
             // Match expression
             Token::Match => self.parse_match_expr(),
@@ -794,7 +901,12 @@ impl Parser<'_> {
 
     /// Parse a backtick-quoted callee such as `` `Add::add`(1, 2) ``.
     /// Quoting is syntactic only: it never creates a function value.
-    fn parse_quoted_callee_call(&mut self, span: Span, body: String) -> Result<Ast, ParseError> {
+    fn parse_quoted_callee_call(
+        &mut self,
+        span: Span,
+        body: String,
+        allow_partial_pair_constructor_call: bool,
+    ) -> Result<Ast, ParseError> {
         let func_span = self.advance().span.clone();
         if !matches!(self.peek(), Token::LParen | Token::Unit) {
             return Err(ParseError::syntax(
@@ -816,6 +928,39 @@ impl Parser<'_> {
         let end = self.tokens[self.pos - 1].span.end;
         match Self::parse_func_literal_body(&body, func_span.clone())? {
             FuncLiteralBodyKind::Operator(op_body) => {
+                if Self::is_pair_constructor_func_literal(&op_body) {
+                    let [RecordLitArg::Positional(left), RecordLitArg::Positional(right)] =
+                        args.as_slice()
+                    else {
+                        if allow_partial_pair_constructor_call
+                            && matches!(args.as_slice(), [RecordLitArg::Positional(_)])
+                        {
+                            return Ok(Ast::App(
+                                Span {
+                                    start: span.start,
+                                    end,
+                                },
+                                Box::new(Ast::FuncLiteralRef(
+                                    func_span.clone(),
+                                    FuncLiteralRef {
+                                        span: func_span,
+                                        body: op_body,
+                                    },
+                                )),
+                                args,
+                            ));
+                        }
+
+                        return Err(ParseError::syntax(
+                            "quoted pair constructor call `(,)` expects exactly 2 positional arguments",
+                            Span {
+                                start: span.start,
+                                end,
+                            },
+                        ));
+                    };
+                    return Ok(Self::lower_pair_constructor(left.clone(), right.clone()));
+                }
                 let [RecordLitArg::Positional(left), RecordLitArg::Positional(right)] =
                     args.as_slice()
                 else {
@@ -1296,7 +1441,7 @@ impl Parser<'_> {
         }
 
         // Function call or constructor call: name(args)
-        if matches!(self.peek(), Token::LParen) {
+        if matches!(self.peek(), Token::LParen) && !self.pair_constructor_at() {
             self.advance();
             let args = if name == "is_match" {
                 self.parse_is_match_args()?
@@ -1979,6 +2124,15 @@ impl Parser<'_> {
                     end: span.end,
                 },
                 index,
+            ));
+        }
+        if self.pair_constructor_at() {
+            return Err(ParseError::syntax(
+                "bare `(,)` is only valid in infix position",
+                Span {
+                    start: sp.start,
+                    end: self.pair_constructor_span().end,
+                },
             ));
         }
         if matches!(self.peek(), Token::LParen) {

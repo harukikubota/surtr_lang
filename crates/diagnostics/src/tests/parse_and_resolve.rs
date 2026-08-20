@@ -161,6 +161,22 @@ fn parse_error_spec_puts_bare_operator_capture_rewrite_in_help() {
 }
 
 #[test]
+fn parse_error_spec_puts_bare_pair_constructor_rewrite_in_help() {
+    let spec = parse_error_spec(
+        "pair = &(,)",
+        "bare `(,)` is only valid in infix position",
+        Span { start: 7, end: 11 },
+    );
+
+    assert_eq!(spec.message, "bare `(,)` is only valid in infix position");
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Write &`(,)` for a capture, or use `(,)`(right) as a pipeline RHS.")
+    );
+    assert!(!spec.message.contains("Write &`(,)`"));
+}
+
+#[test]
 fn type_error_spec_labels_extractor_pattern_for_safebind_rhs() {
     let source = "uncons(head, tail) =? True";
     let err = TypeError {

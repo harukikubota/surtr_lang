@@ -4038,6 +4038,141 @@ fn test_tuple_literal() {
 }
 
 #[test]
+fn test_pair_constructor_operator_lowers_to_right_associative_tuple_literals() {
+    let ast = parse(
+        "simple = a (,) b\nright = a (,) b (,) c\nexpr = a + b (,) c + d\ncompare = a (,) b == c (,) d",
+    )
+    .expect("pair constructor expressions should parse");
+
+    let rhs = |index| match &ast[index] {
+        Ast::Bind(_, _, rhs) => rhs.as_ref(),
+        other => panic!("Expected Bind, got {other:?}"),
+    };
+
+    assert!(matches!(
+        rhs(0),
+        Ast::TupleLiteral(_, items)
+            if matches!(&items[..], [Ast::Var(_, left), Ast::Var(_, right)] if left == "a" && right == "b")
+    ));
+    assert!(matches!(
+        rhs(1),
+        Ast::TupleLiteral(_, items)
+            if matches!(&items[..], [Ast::Var(_, left), Ast::TupleLiteral(_, nested)]
+                if left == "a"
+                    && matches!(&nested[..], [Ast::Var(_, middle), Ast::Var(_, right)] if middle == "b" && right == "c"))
+    ));
+    assert!(matches!(
+        rhs(2),
+        Ast::TupleLiteral(_, items)
+            if matches!(&items[..], [Ast::BinOp(_, BinOp::Add, _, _), Ast::BinOp(_, BinOp::Add, _, _)])
+    ));
+    assert!(matches!(
+        rhs(3),
+        Ast::BinOp(_, BinOp::Eq, left, right)
+            if matches!(left.as_ref(), Ast::TupleLiteral(_, items) if items.len() == 2)
+                && matches!(right.as_ref(), Ast::TupleLiteral(_, items) if items.len() == 2)
+    ));
+}
+
+#[test]
+fn test_cond_expression_can_be_the_left_operand_of_pair_constructor() {
+    let ast = parse("value = cond { flag => 1, True => 2 } (,) \"one\"")
+        .expect("a cond expression should be usable as the left pair operand");
+
+    assert!(matches!(
+        &ast[0],
+        Ast::Bind(_, _, rhs)
+            if matches!(rhs.as_ref(), Ast::TupleLiteral(_, items)
+                if matches!(&items[..], [Ast::App(_, func, _), Ast::Lit(_, Lit::Str(right))]
+                    if matches!(func.as_ref(), Ast::Var(_, name) if name == "if") && right == "one"))
+    ));
+}
+
+#[test]
+fn test_quoted_pair_constructor_lowers_for_calls_and_captures() {
+    let ast = parse("called = `(,)`(1, \"one\")\npiped = 1 |> `(,)`(\"one\")\npair = &`(,)`")
+        .expect("quoted pair constructor references should parse");
+
+    let rhs = |index| match &ast[index] {
+        Ast::Bind(_, _, rhs) => rhs.as_ref(),
+        other => panic!("Expected Bind, got {other:?}"),
+    };
+
+    assert!(matches!(rhs(0), Ast::TupleLiteral(_, items) if items.len() == 2));
+    assert!(matches!(
+        rhs(1),
+        Ast::Pipe(_, _, right)
+            if matches!(right.as_ref(), Ast::App(_, func, args)
+                if args.len() == 1
+                    && matches!(func.as_ref(), Ast::FuncLiteralRef(_, pair) if pair.body == "(,)"))
+    ));
+    assert!(matches!(
+        rhs(2),
+        Ast::Capture(_, target, args)
+            if args.is_empty()
+                && matches!(target.as_ref(), Ast::FuncLiteralRef(_, func) if func.body == "(,)")
+    ));
+}
+
+#[test]
+fn test_quoted_pair_constructor_call_rejects_non_pair_arity_or_named_arguments() {
+    for source in ["`(,)`()", "`(,)`(1)", "`(,)`(left: 1, right: 2)"] {
+        let err =
+            parse(source).expect_err("pair constructor calls require two positional arguments");
+        assert!(
+            err.message().contains(
+                "quoted pair constructor call `(,)` expects exactly 2 positional arguments"
+            ),
+            "{source}: {}",
+            err.message()
+        );
+    }
+
+    for source in [
+        "1 |> `(,)`(\"one\")",
+        "[1] |*> `(,)`(\"tag\")",
+        "Ok(1) |>= `(,)`(\"tag\")",
+    ] {
+        parse(source).expect("a direct first-argument-injection RHS must retain the pair route");
+    }
+
+    for source in [
+        "1 |> f(`(,)`(\"one\"))",
+        "1 |> (`(,)`(\"one\"))",
+        "1 |> `(,)`(\"one\") + 1",
+        "Ok(1) |*| `(,)`(\"tag\")",
+    ] {
+        let err = parse(source)
+            .expect_err("a partial pair call is only valid as the direct pipeline RHS");
+        assert!(
+            err.message().contains("quoted pair constructor"),
+            "{source}: {}",
+            err.message()
+        );
+    }
+}
+
+#[test]
+fn test_unquoted_pair_constructor_callable_forms_explain_quoting() {
+    for (source, span) in [
+        ("&(,)", Span { start: 0, end: 4 }),
+        ("(,)", Span { start: 0, end: 3 }),
+    ] {
+        let err = parse(source).expect_err("unquoted pair callable form must be rejected");
+        assert!(
+            err.message() == "bare `(,)` is only valid in infix position",
+            "{source}: {}",
+            err.message()
+        );
+        assert_eq!(
+            err.span(),
+            &span,
+            "{source}: diagnostic must cover the full bare pair spelling"
+        );
+    }
+}
+
+#[test]
 fn test_parenthesized_expression_is_not_tuple_literal() {
     let ast = parse("value = (1)").unwrap();
     match &ast[0] {

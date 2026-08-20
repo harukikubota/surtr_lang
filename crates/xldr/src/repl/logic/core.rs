@@ -4700,6 +4700,11 @@ impl ReplEngine {
     }
 
     fn special_form_doc_entry(&self, symbol: &str) -> Option<&DocEntry> {
+        if symbol == "(,)" {
+            return self.docs.iter().find(|entry| {
+                entry.kind == DocKind::Function && entry.qualified_name == "Bootstrap::(,)"
+            });
+        }
         self.docs.iter().find(|entry| {
             entry.kind == DocKind::Function
                 && entry.qualified_name == format!("Bootstrap::{symbol}")
@@ -4707,6 +4712,11 @@ impl ReplEngine {
     }
 
     fn special_form_signature_entry(&self, symbol: &str) -> Option<&SignatureEntry> {
+        if symbol == "(,)" {
+            return self.signatures.iter().find(|entry| {
+                entry.kind == DocKind::Function && entry.qualified_name == "Bootstrap::(,)"
+            });
+        }
         self.signatures.iter().find(|entry| {
             entry.kind == DocKind::Function
                 && entry.qualified_name == format!("Bootstrap::{symbol}")

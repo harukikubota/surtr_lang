@@ -265,6 +265,38 @@ impl Resolver {
             return Ok(rhs);
         };
 
+        if matches!(func.as_ref(), Ast::FuncLiteralRef(_, pair) if pair.body == "(,)") {
+            let args: [RecordLitArg; 1] = args.try_into().map_err(|_| ResolveError {
+                message:
+                    "quoted pair constructor pipeline call expects exactly one positional argument"
+                        .into(),
+                span: span.clone(),
+                related_labels: Vec::new(),
+            })?;
+            let [RecordLitArg::Positional(right)] = args else {
+                return Err(ResolveError {
+                    message: "quoted pair constructor pipeline call expects exactly one positional argument"
+                        .into(),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                });
+            };
+            let param_name = format!("__pipe_injected_{}_{}", span.start, span.end);
+            let param_span = span.clone();
+            return Ok(Ast::Closure(
+                span.clone(),
+                vec![ClosureParam {
+                    name: param_name.clone(),
+                    ty: None,
+                    span: param_span.clone(),
+                }],
+                Box::new(Ast::TupleLiteral(
+                    span,
+                    vec![Ast::Var(param_span, param_name), right],
+                )),
+            ));
+        }
+
         if !matches!(func.as_ref(), Ast::Var(_, _) | Ast::InternalVar(_, _)) {
             return Ok(Ast::App(span, func, args));
         }
@@ -337,6 +369,9 @@ impl Resolver {
         left: Ast,
         right: Ast,
     ) -> Result<Ast, ResolveError> {
+        if body == "(,)" {
+            return Ok(Ast::TupleLiteral(span.clone(), vec![left, right]));
+        }
         let op = match body {
             "+" => BinOp::Add,
             "-" => BinOp::Sub,

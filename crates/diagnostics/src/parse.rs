@@ -58,9 +58,7 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
         spec.help = Some("Variable bindings and the `_` wildcard pattern are allowed.".into());
     }
 
-    if message
-        == "as-pattern alias must be a binding identifier."
-    {
+    if message == "as-pattern alias must be a binding identifier." {
         spec.help =
             Some("Replace the wildcard alias with a name, for example `pattern @ value`.".into());
     }
@@ -71,6 +69,11 @@ pub fn parse_error_spec(source: &str, message: impl Into<String>, span: Span) ->
 
     if let Some(operator) = message.strip_prefix("Unquoted operator capture: ") {
         spec.help = Some(format!("Write &`{operator}`."));
+    }
+
+    if message == "bare `(,)` is only valid in infix position" {
+        spec.help =
+            Some("Write &`(,)` for a capture, or use `(,)`(right) as a pipeline RHS.".into());
     }
 
     if message.starts_with("return-position `impl Trait` is not supported") {

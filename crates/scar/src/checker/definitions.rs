@@ -101,6 +101,21 @@ fn special_form_shape_and_or(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>
             .is_some_and(|ty| Checker::is_named_type(ty, "Boolean"))
 }
 
+fn special_form_shape_pair_constructor(
+    params: &[ResolvedFunParam],
+    ret_ty: &Option<AstTy>,
+) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "$A")
+        && Checker::is_named_type(&params[1].ty, "$B")
+        && matches!(
+            ret_ty,
+            Some(AstTy::Tuple(_, items))
+                if matches!(items.as_slice(), [first, second]
+                    if Checker::is_named_type(first, "$A") && Checker::is_named_type(second, "$B"))
+        )
+}
+
 impl Checker {
     fn bare_return_typevar_result_mismatch(
         &self,
@@ -220,8 +235,8 @@ impl Checker {
         {
             return Err(TypeError {
                 message: format!(
-                    "Special-form declaration `{}` is only allowed in std module `Kernel`.",
-                    id.name
+                    "Special-form declaration `{}` is only allowed at `{}`.",
+                    id.name, contract.expected_qname
                 ),
                 span: span.clone(),
                 hint: None,
@@ -562,6 +577,7 @@ impl Checker {
                 | "eq"
                 | "neq"
                 | "concat"
+                | "(,)"
         )
     }
 
@@ -638,6 +654,11 @@ impl Checker {
                 expected_signature:
                     "@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
                 shape_ok: special_form_shape_and_or,
+            },
+            "(,)" => SpecialFormBuiltinContract {
+                expected_qname: "Bootstrap::(,)",
+                expected_signature: "@builtin def (,)(lhs: $A, rhs: $B) -> ($A, $B)",
+                shape_ok: special_form_shape_pair_constructor,
             },
             _ => unreachable!(),
         }

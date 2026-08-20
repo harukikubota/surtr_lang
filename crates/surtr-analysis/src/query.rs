@@ -125,7 +125,7 @@ pub fn parse_command_query(input: &str) -> Result<CommandQuery, CommandQueryPars
         base_char: input[..trim_start].chars().count(),
     };
 
-    if QUERY_OPERATORS.contains(&trimmed) {
+    if QUERY_OPERATORS.contains(&trimmed) || trimmed == "(,)" {
         return Ok(CommandQuery::Symbol(SymbolQuery {
             source: trimmed.to_string(),
             span: ctx.full_span(),

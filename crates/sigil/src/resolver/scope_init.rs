@@ -75,6 +75,7 @@ pub(super) fn is_special_form_builtin_decl(name: &str) -> bool {
             | "recover_kind"
             | "and"
             | "or"
+            | "(,)"
     )
 }
 

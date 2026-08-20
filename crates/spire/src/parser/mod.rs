@@ -246,6 +246,23 @@ impl<'a> Parser<'a> {
     fn expect_builtin_decl_name(&mut self) -> Result<(Symbol, Span), ParseError> {
         let sp = self.peek_span();
         match self.peek().clone() {
+            Token::LParen
+                if matches!(
+                    (self.peek_n(1), self.peek_n(2)),
+                    (Some(Token::Comma), Some(Token::RParen))
+                ) =>
+            {
+                self.advance();
+                self.advance();
+                let end = self.advance().span.end;
+                Ok((
+                    "(,)".to_string(),
+                    Span {
+                        start: sp.start,
+                        end,
+                    },
+                ))
+            }
             Token::Ident(name) => {
                 self.advance();
                 Ok((name, sp))

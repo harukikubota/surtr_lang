@@ -5125,9 +5125,13 @@ mod tests {
 
     /// Parse the `name(params) -> ret_ty` portion of a `def` declaration.
     fn parse_def_signature(def_rest: &str) -> (String, u8, String) {
-        let (name, after_name) = def_rest
-            .split_once('(')
-            .expect("def declaration must include params");
+        let (name, after_name) = if let Some(after_name) = def_rest.strip_prefix("(,)(") {
+            ("(,)", after_name)
+        } else {
+            def_rest
+                .split_once('(')
+                .expect("def declaration must include params")
+        };
         let mut angle_depth = 0usize;
         let mut paren_depth = 1usize;
         let mut close_idx = None;

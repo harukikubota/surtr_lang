@@ -1,11 +1,25 @@
 @doc """
-Standard tuple comparison helpers.
+Standard tuple equality and comparison helpers.
 Surtr provides lexicographic `Compare` implementations for tuple arities 2
 through 8.
+A pair made with `left (,) right` is a 2-element tuple; chained pairs remain
+nested (`a (,) b (,) c` is `(a, (b, c))`) and do not become a flat tuple
+literal such as `(a, b, c)`. Pair values use these implementations, for
+example `(1 (,) 2) < (1 (,) 3)`.
 Tuples with 9 or more elements are not covered by the standard library in this
 version. Define your own `impl Compare for (...)` or nest tuples to stay within
 the provided arity range.
 """
+impl Eq for ($A0, $A1)
+where
+  $A0: Eq
+  $A1: Eq
+{
+  def eq(self: Self, rhs: Self) -> Boolean {
+    Eq::eq(self._0, rhs._0) && Eq::eq(self._1, rhs._1)
+  }
+}
+
 impl Compare for ($A0, $A1)
 where
   $A0: Compare

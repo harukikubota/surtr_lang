@@ -3109,6 +3109,58 @@ fn test_backtick_operator_capture_lowers_to_closure() {
 }
 
 #[test]
+fn test_backtick_pair_constructor_capture_and_pipeline_lower_to_tuple_closures() {
+    let resolved = parse_and_resolve(
+        "pair = &`(,)`\npiped = 1 |> `(,)`(\"one\")\nmapped = [1] |*> `(,)`(\"tag\")\nbound = Ok(1) |>= `(,)`(\"tag\")",
+    )
+    .expect("quoted pair constructor forms should resolve");
+
+    match &resolved[0] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Closure(_, params, _, body) => {
+                assert_eq!(params.len(), 2);
+                assert!(
+                    matches!(body.as_ref(), Resolved::TupleLiteral(_, items) if items.len() == 2)
+                );
+            }
+            other => panic!("Expected pair closure, got {other:?}"),
+        },
+        other => panic!("Expected pair bind, got {other:?}"),
+    }
+
+    match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::Pipe(_, _, right) => match right.as_ref() {
+                Resolved::Closure(_, params, _, body) => {
+                    assert_eq!(params.len(), 1);
+                    assert!(
+                        matches!(body.as_ref(), Resolved::TupleLiteral(_, items) if items.len() == 2)
+                    );
+                }
+                other => panic!("Expected pipeline pair closure, got {other:?}"),
+            },
+            other => panic!("Expected pair pipeline, got {other:?}"),
+        },
+        other => panic!("Expected pipeline bind, got {other:?}"),
+    }
+
+    for node in &resolved[2..] {
+        let Resolved::Bind(_, _, rhs) = node else {
+            panic!("Expected contextual pipeline bind, got {node:?}");
+        };
+        let right = match rhs.as_ref() {
+            Resolved::ContextMap(_, _, right) | Resolved::ContextBind(_, _, right) => right,
+            other => panic!("Expected contextual pipeline, got {other:?}"),
+        };
+        assert!(
+            matches!(right.as_ref(), Resolved::Closure(_, params, _, body)
+            if params.len() == 1
+                && matches!(body.as_ref(), Resolved::TupleLiteral(_, items) if items.len() == 2))
+        );
+    }
+}
+
+#[test]
 fn test_pipe_slot_lowers_to_closure() {
     let resolved =
         parse_and_resolve("def add(x: Int, y: Int) -> Int { x + y }\nout = 1 |> add(10, _1)")
