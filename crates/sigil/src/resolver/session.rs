@@ -11,6 +11,7 @@ pub struct SigilCheckpoint {
     declaration_uid_kinds: HashMap<u32, DeclarationKind>,
     declaration_hidden_by_uid: HashMap<u32, bool>,
     trait_constructor_slots: HashMap<u32, Vec<String>>,
+    owner_registry: OwnerRegistry,
 }
 
 #[derive(Debug, Clone)]
@@ -21,6 +22,7 @@ pub struct SigilSession {
     declaration_uid_kinds: HashMap<u32, DeclarationKind>,
     declaration_hidden_by_uid: HashMap<u32, bool>,
     trait_constructor_slots: HashMap<u32, Vec<String>>,
+    owner_registry: OwnerRegistry,
     current_module_path: Option<String>,
 }
 
@@ -71,6 +73,7 @@ impl SigilSession {
             ]),
             declaration_hidden_by_uid: HashMap::new(),
             trait_constructor_slots: HashMap::new(),
+            owner_registry: OwnerRegistry::default(),
             current_module_path,
         }
     }
@@ -84,12 +87,23 @@ impl SigilSession {
         ast: Vec<Ast>,
     ) -> Result<PhaseOutput<Vec<Resolved>>, ResolveError> {
         self.reject_duplicate_current_module_defs(&ast)?;
+        let owner_modules = ast
+            .iter()
+            .cloned()
+            .flat_map(|stmt| {
+                staged_modules_from_source_ast(vec![stmt], self.current_module_path.as_deref())
+            })
+            .collect::<Vec<_>>();
+        let chunk_registry = precollect_owner_registry(&[owner_modules])?;
+        let mut owner_registry = self.owner_registry.clone();
+        owner_registry.merge(&chunk_registry)?;
         let mut resolver = Resolver::with_scope(self.scope.clone());
         resolver.declaration_entries = self.declaration_entries.clone();
         resolver.declaration_uids = self.declaration_uids.clone();
         resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
         resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
         resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
+        resolver.owner_registry = owner_registry;
         resolver.current_module_path = self.current_module_path.clone();
         resolver.allow_top_level_shadowing = true;
         let resolved = resolver.resolve_program(ast)?;
@@ -99,6 +113,7 @@ impl SigilSession {
         self.declaration_uid_kinds = resolver.declaration_uid_kinds.clone();
         self.declaration_hidden_by_uid = resolver.declaration_hidden_by_uid.clone();
         self.trait_constructor_slots = resolver.trait_constructor_slots.clone();
+        self.owner_registry = resolver.owner_registry.clone();
         self.scope = resolver.into_scope();
         Ok(PhaseOutput::new(resolved, warnings))
     }
@@ -111,6 +126,7 @@ impl SigilSession {
             declaration_uid_kinds: self.declaration_uid_kinds.clone(),
             declaration_hidden_by_uid: self.declaration_hidden_by_uid.clone(),
             trait_constructor_slots: self.trait_constructor_slots.clone(),
+            owner_registry: self.owner_registry.clone(),
         }
     }
 
@@ -121,6 +137,7 @@ impl SigilSession {
         self.declaration_uid_kinds = checkpoint.declaration_uid_kinds;
         self.declaration_hidden_by_uid = checkpoint.declaration_hidden_by_uid;
         self.trait_constructor_slots = checkpoint.trait_constructor_slots;
+        self.owner_registry = checkpoint.owner_registry;
     }
 
     pub fn replace_scope(&mut self, scope: Scope) {
@@ -155,6 +172,19 @@ impl SigilSession {
         self.declaration_uids = declaration_uids;
         self.declaration_uid_kinds = declaration_uid_kinds;
         self.declaration_hidden_by_uid = declaration_hidden_by_uid;
+    }
+
+    pub fn replace_scope_with_precollected_declarations(
+        &mut self,
+        scope: Scope,
+        precollected: &PrecollectedDeclarations,
+    ) {
+        self.replace_scope_with_declarations(scope, &precollected.declaration_index);
+        self.owner_registry = precollected.owner_registry.clone();
+    }
+
+    pub fn owner_registry(&self) -> &OwnerRegistry {
+        &self.owner_registry
     }
 
     pub fn lookup_uid(&self, name: &str) -> Option<u32> {

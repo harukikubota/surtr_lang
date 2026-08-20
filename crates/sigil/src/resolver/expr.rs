@@ -1657,6 +1657,7 @@ impl Resolver {
             ]),
             declaration_hidden_by_uid: HashMap::new(),
             trait_constructor_slots: HashMap::new(),
+            owner_registry: OwnerRegistry::default(),
             explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
@@ -1678,6 +1679,7 @@ impl Resolver {
             ]),
             declaration_hidden_by_uid: HashMap::new(),
             trait_constructor_slots: HashMap::new(),
+            owner_registry: OwnerRegistry::default(),
             explicit_module_imports: HashSet::new(),
             current_module_path: None,
             current_stage_impl_targets: None,
@@ -1719,6 +1721,7 @@ impl Resolver {
         child.declaration_uid_kinds = self.declaration_uid_kinds.clone();
         child.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
         child.declaration_entries = self.declaration_entries.clone();
+        child.owner_registry = self.owner_registry.clone();
         child.explicit_module_imports = self.explicit_module_imports.clone();
         child.current_module_path = self.current_module_path.clone();
         child.current_stage_impl_targets = self.current_stage_impl_targets.clone();
@@ -2697,6 +2700,7 @@ impl Resolver {
                 show_resolver.declaration_uids = self.declaration_uids.clone();
                 show_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 show_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+                show_resolver.owner_registry = self.owner_registry.clone();
                 show_resolver.current_module_path = self.current_module_path.clone();
                 show_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_show = show_resolver.resolve_node(*show_expr)?;
@@ -2781,6 +2785,7 @@ impl Resolver {
                 body_resolver.declaration_uids = self.declaration_uids.clone();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+                body_resolver.owner_registry = self.owner_registry.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 if self.forbids_top_level_value_capture_in_defs() {
@@ -2865,6 +2870,7 @@ impl Resolver {
                 body_resolver.declaration_uids = self.declaration_uids.clone();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+                body_resolver.owner_registry = self.owner_registry.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_type_params = self.resolve_type_params(type_params)?;
@@ -2948,6 +2954,7 @@ impl Resolver {
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
+                    method_resolver.owner_registry = self.owner_registry.clone();
                     method_resolver.current_module_path = self.current_module_path.clone();
                     method_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                     let resolved_params = params
@@ -3110,6 +3117,7 @@ impl Resolver {
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
+                    method_resolver.owner_registry = self.owner_registry.clone();
                     method_resolver.current_module_path = self.current_module_path.clone();
                     method_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                     let resolved_params = params
@@ -3200,6 +3208,7 @@ impl Resolver {
                 decl_resolver.declaration_uids = self.declaration_uids.clone();
                 decl_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 decl_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+                decl_resolver.owner_registry = self.owner_registry.clone();
                 decl_resolver.current_module_path = self.current_module_path.clone();
                 decl_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_params = params
@@ -3373,6 +3382,7 @@ impl Resolver {
                 body_resolver.declaration_uids = self.declaration_uids.clone();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+                body_resolver.owner_registry = self.owner_registry.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_body = body_resolver.resolve_node(*body)?;

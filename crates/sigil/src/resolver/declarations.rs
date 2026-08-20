@@ -1,9 +1,13 @@
 use super::scope_init::initialize_scope;
 use super::scope_init::is_doc_only_builtin_decl;
 use super::*;
-use sindr::builtin::builtin_type_supports_inherent_impl;
+use sindr::builtin::{
+    builtin_type_head_meta_by_name, builtin_type_supports_inherent_impl,
+    standard_owner_identity_by_name,
+};
 use sindr::names::{
     reserved_owner_surface_name_constraint, surface_path_name, ReservedOwnerSurfaceNameKind,
+    TypeIdentity,
 };
 use spire::ast::FacetPathSegment;
 
@@ -116,6 +120,7 @@ pub struct StagedModuleAst {
     pub module_path: String,
     pub doc_module_path: Option<String>,
     pub ast: Vec<Ast>,
+    pub owner: Option<OwnerDescriptor>,
     pub module_doc: Option<String>,
     pub auto_import: bool,
     pub process_spec: Option<spire::ast::ProcessSpec>,
@@ -127,9 +132,47 @@ pub struct LoweredModuleAst {
     pub doc_module_path: Option<String>,
     pub ast: Vec<Ast>,
     pub declared_span: Option<Span>,
+    pub owner: Option<OwnerDescriptor>,
     pub module_doc: Option<String>,
     pub auto_import: bool,
     pub process_spec: Option<spire::ast::ProcessSpec>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OwnerSourceForm {
+    Defmod,
+    Defagent,
+    Defgenserver,
+    Defsupervisor,
+    DefdynamicSupervisor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnerDescriptor {
+    pub canonical_path: String,
+    pub span: Span,
+    pub source_form: OwnerSourceForm,
+}
+
+impl OwnerDescriptor {
+    pub fn new(canonical_path: String, span: Span, source_form: OwnerSourceForm) -> Self {
+        Self {
+            canonical_path,
+            span,
+            source_form,
+        }
+    }
+
+    fn owner_kind(&self) -> OwnerKind {
+        match self.source_form {
+            OwnerSourceForm::Defmod | OwnerSourceForm::Defagent | OwnerSourceForm::Defgenserver => {
+                OwnerKind::Mod
+            }
+            OwnerSourceForm::Defsupervisor | OwnerSourceForm::DefdynamicSupervisor => {
+                OwnerKind::Supervisor
+            }
+        }
+    }
 }
 
 impl From<LoweredModuleAst> for StagedModuleAst {
@@ -138,6 +181,7 @@ impl From<LoweredModuleAst> for StagedModuleAst {
             module_path: lowered.module_path,
             doc_module_path: lowered.doc_module_path,
             ast: lowered.ast,
+            owner: lowered.owner,
             module_doc: lowered.module_doc,
             auto_import: lowered.auto_import,
             process_spec: lowered.process_spec,
@@ -167,27 +211,93 @@ pub fn lower_module_source_ast(
             Ast::Defmod(span, module_path, body, attrs) => {
                 let mut module_ast = shared_imports.clone();
                 module_ast.extend(body);
+                let owner = OwnerDescriptor::new(
+                    module_path.clone(),
+                    span.clone(),
+                    OwnerSourceForm::Defmod,
+                );
                 lowered.push(LoweredModuleAst {
                     module_path,
                     doc_module_path: None,
                     ast: module_ast,
                     declared_span: Some(span),
+                    owner: Some(owner),
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
                     process_spec: None,
                 });
             }
-            Ast::Defagent(span, module_path, body, process_spec, attrs)
-            | Ast::Defgenserver(span, module_path, body, process_spec, attrs)
-            | Ast::Defsupervisor(span, module_path, body, process_spec, attrs)
-            | Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) => {
+            Ast::Defagent(span, module_path, body, process_spec, attrs) => {
                 let mut module_ast = shared_imports.clone();
                 module_ast.extend(body);
+                let owner = OwnerDescriptor::new(
+                    module_path.clone(),
+                    span.clone(),
+                    OwnerSourceForm::Defagent,
+                );
                 lowered.push(LoweredModuleAst {
                     module_path,
                     doc_module_path: None,
                     ast: module_ast,
                     declared_span: Some(span),
+                    owner: Some(owner),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
+                });
+            }
+            Ast::Defgenserver(span, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                let owner = OwnerDescriptor::new(
+                    module_path.clone(),
+                    span.clone(),
+                    OwnerSourceForm::Defgenserver,
+                );
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    declared_span: Some(span),
+                    owner: Some(owner),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
+                });
+            }
+            Ast::Defsupervisor(span, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                let owner = OwnerDescriptor::new(
+                    module_path.clone(),
+                    span.clone(),
+                    OwnerSourceForm::Defsupervisor,
+                );
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    declared_span: Some(span),
+                    owner: Some(owner),
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
+                });
+            }
+            Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                let owner = OwnerDescriptor::new(
+                    module_path.clone(),
+                    span.clone(),
+                    OwnerSourceForm::DefdynamicSupervisor,
+                );
+                lowered.push(LoweredModuleAst {
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    declared_span: Some(span),
+                    owner: Some(owner),
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
                     process_spec: Some(process_spec),
@@ -205,6 +315,7 @@ pub fn lower_module_source_ast(
                     doc_module_path: None,
                     ast: module_ast,
                     declared_span: Some(declared_span),
+                    owner: None,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
                     process_spec: None,
@@ -243,6 +354,7 @@ pub fn lower_module_source_ast(
                     doc_module_path: fallback_module_path.map(str::to_string),
                     ast: module_ast,
                     declared_span: Some(declared_span),
+                    owner: None,
                     module_doc: attrs.doc,
                     auto_import: attrs.auto_import,
                     process_spec: None,
@@ -286,6 +398,7 @@ pub fn lower_module_source_ast(
                 doc_module_path: None,
                 ast: shared_ast,
                 declared_span: None,
+                owner: None,
                 module_doc: None,
                 auto_import: false,
                 process_spec: None,
@@ -309,6 +422,7 @@ pub fn lower_module_source_ast(
                 doc_module_path: None,
                 ast: shared_ast,
                 declared_span: None,
+                owner: None,
                 module_doc: None,
                 auto_import: false,
                 process_spec: None,
@@ -324,6 +438,7 @@ pub fn lower_module_source_ast(
             doc_module_path: None,
             ast: shared_ast,
             declared_span: None,
+            owner: None,
             module_doc: None,
             auto_import: false,
             process_spec: None,
@@ -356,13 +471,66 @@ pub fn extract_process_modules_from_user_ast(ast: Vec<Ast>) -> (Vec<StagedModule
 
     for stmt in ast {
         match stmt {
-            Ast::Defagent(_, module_path, body, process_spec, attrs)
-            | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
-            | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
-            | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+            Ast::Defagent(span, module_path, body, process_spec, attrs) => {
                 let mut module_ast = shared_imports.clone();
                 module_ast.extend(body);
                 process_modules.push(StagedModuleAst {
+                    owner: Some(OwnerDescriptor::new(
+                        module_path.clone(),
+                        span,
+                        OwnerSourceForm::Defagent,
+                    )),
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
+                });
+            }
+            Ast::Defgenserver(span, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                process_modules.push(StagedModuleAst {
+                    owner: Some(OwnerDescriptor::new(
+                        module_path.clone(),
+                        span,
+                        OwnerSourceForm::Defgenserver,
+                    )),
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
+                });
+            }
+            Ast::Defsupervisor(span, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                process_modules.push(StagedModuleAst {
+                    owner: Some(OwnerDescriptor::new(
+                        module_path.clone(),
+                        span,
+                        OwnerSourceForm::Defsupervisor,
+                    )),
+                    module_path,
+                    doc_module_path: None,
+                    ast: module_ast,
+                    module_doc: attrs.doc,
+                    auto_import: attrs.auto_import,
+                    process_spec: Some(process_spec),
+                });
+            }
+            Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) => {
+                let mut module_ast = shared_imports.clone();
+                module_ast.extend(body);
+                process_modules.push(StagedModuleAst {
+                    owner: Some(OwnerDescriptor::new(
+                        module_path.clone(),
+                        span,
+                        OwnerSourceForm::DefdynamicSupervisor,
+                    )),
                     module_path,
                     doc_module_path: None,
                     ast: module_ast,
@@ -498,6 +666,165 @@ pub struct DeclarationEntry {
 }
 
 pub type DeclarationIndex = BTreeMap<String, DeclarationEntry>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OwnerKind {
+    BuiltinType,
+    Struct,
+    Record,
+    Enum,
+    Error,
+    Trait,
+    Sig,
+    Const,
+    Mod,
+    Supervisor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnerEntry {
+    pub canonical_key: String,
+    pub identity: TypeIdentity,
+    pub kind: OwnerKind,
+    pub span: Span,
+    pub stage_index: usize,
+    pub module_path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnerRef {
+    pub canonical_key: String,
+    pub identity: TypeIdentity,
+    pub kind: OwnerKind,
+}
+
+impl From<&OwnerEntry> for OwnerRef {
+    fn from(entry: &OwnerEntry) -> Self {
+        Self {
+            canonical_key: entry.canonical_key.clone(),
+            identity: entry.identity,
+            kind: entry.kind,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OwnerRegistry {
+    entries: BTreeMap<String, OwnerEntry>,
+}
+
+impl OwnerRegistry {
+    pub fn register(&mut self, entry: OwnerEntry) -> Result<(), ResolveError> {
+        if let Some(first) = self.entries.get(&entry.canonical_key) {
+            return Err(ResolveError {
+                message: format!(
+                    "Duplicate top-level owner: {}",
+                    global_surface_name(&entry.canonical_key)
+                ),
+                span: entry.span.clone(),
+                related_labels: vec![
+                    ResolveErrorLabel {
+                        span: first.span.clone(),
+                        message: format!(
+                            "first {} declaration",
+                            type_identity_diagnostic_name(first.identity)
+                        ),
+                    },
+                    ResolveErrorLabel {
+                        span: entry.span.clone(),
+                        message: format!(
+                            "conflicting {} declaration",
+                            type_identity_diagnostic_name(entry.identity)
+                        ),
+                    },
+                ],
+            });
+        }
+
+        self.entries.insert(entry.canonical_key.clone(), entry);
+        Ok(())
+    }
+
+    pub fn get(&self, key: &str) -> Option<&OwnerEntry> {
+        self.entries
+            .get(key)
+            .or_else(|| self.entries.get(global_surface_name(key)))
+    }
+
+    pub fn identity_for_owner(&self, key: &str) -> Option<TypeIdentity> {
+        self.get(key).map(|entry| entry.identity)
+    }
+
+    pub fn owner_ref(&self, key: &str) -> Option<OwnerRef> {
+        self.get(key).map(OwnerRef::from)
+    }
+
+    pub fn entries(&self) -> impl Iterator<Item = &OwnerEntry> {
+        self.entries.values()
+    }
+
+    pub fn merge(&mut self, other: &OwnerRegistry) -> Result<(), ResolveError> {
+        for entry in other.entries.values() {
+            self.register(entry.clone())?;
+        }
+        Ok(())
+    }
+
+    pub fn owner_identity_for_declaration(
+        &self,
+        name: &str,
+        kind: &DeclarationKind,
+        enclosing_owner: Option<&str>,
+    ) -> Option<TypeIdentity> {
+        let direct_identity = matches!(
+            kind,
+            DeclarationKind::BuiltinType
+                | DeclarationKind::Struct
+                | DeclarationKind::Record
+                | DeclarationKind::Deferror
+                | DeclarationKind::Enum
+                | DeclarationKind::Trait
+                | DeclarationKind::Const
+        )
+        .then(|| self.identity_for_owner(name))
+        .flatten();
+
+        direct_identity.or_else(|| enclosing_owner.and_then(|owner| self.identity_for_owner(owner)))
+    }
+
+    fn promote_identity(&mut self, key: &str, identity: TypeIdentity) -> bool {
+        let Some(entry) = self.entries.get_mut(key) else {
+            return false;
+        };
+        if entry.identity == identity {
+            return false;
+        }
+        entry.identity = identity;
+        true
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PrecollectedDeclarations {
+    pub declaration_index: DeclarationIndex,
+    pub owner_registry: OwnerRegistry,
+}
+
+fn type_identity_diagnostic_name(identity: TypeIdentity) -> &'static str {
+    match identity {
+        TypeIdentity::Type => "Type",
+        TypeIdentity::TypeConstructor => "TypeConstructor",
+        TypeIdentity::Struct => "Struct",
+        TypeIdentity::Record => "Record",
+        TypeIdentity::Enum => "Enum",
+        TypeIdentity::Error => "Error",
+        TypeIdentity::Mod => "Mod",
+        TypeIdentity::Supervisor => "Supervisor",
+        TypeIdentity::Sig => "Sig",
+        TypeIdentity::Const => "Const",
+        TypeIdentity::Trait => "Trait",
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StageOrderedDeclaration {
@@ -1327,6 +1654,207 @@ pub(super) fn declaration_uid_kind_map(
     out
 }
 
+fn canonical_owner_key(name: &str) -> String {
+    global_surface_name(name).to_string()
+}
+
+fn declaration_module_path(module: &StagedModuleAst) -> Option<String> {
+    (!module.module_path.is_empty()).then(|| module.module_path.clone())
+}
+
+fn const_owner_key(module_path: &str, name: &str, visibility: Visibility) -> String {
+    if visibility == Visibility::Public {
+        canonical_owner_key(name)
+    } else if module_path.is_empty() {
+        format!("__const__::{name}")
+    } else {
+        canonical_owner_key(&format!("{module_path}::__const__::{name}"))
+    }
+}
+
+fn direct_owner_entry(
+    stmt: &Ast,
+    module: &StagedModuleAst,
+    stage_index: usize,
+) -> Option<OwnerEntry> {
+    let (name, identity, kind, span) = match stmt {
+        Ast::BuiltinTypeDecl(span, head, _) => {
+            let surface_name = global_surface_name(&head.name);
+            let identity = builtin_type_head_meta_by_name(surface_name)
+                .map(|meta| meta.identity)
+                .unwrap_or(TypeIdentity::Type);
+            (head.name.as_str(), identity, OwnerKind::BuiltinType, span)
+        }
+        Ast::StructDef(span, name, ..) => {
+            (name.as_str(), TypeIdentity::Struct, OwnerKind::Struct, span)
+        }
+        Ast::RecordDef(span, name, _, _) => {
+            (name.as_str(), TypeIdentity::Record, OwnerKind::Record, span)
+        }
+        Ast::EnumDef(span, name, _, _, _) => (
+            name.as_str(),
+            standard_owner_identity_by_name(global_surface_name(name))
+                .unwrap_or(TypeIdentity::Enum),
+            OwnerKind::Enum,
+            span,
+        ),
+        Ast::DeferrorDef(span, name, _, _, _) => {
+            (name.as_str(), TypeIdentity::Error, OwnerKind::Error, span)
+        }
+        Ast::TraitDef(span, name, ..) => {
+            (name.as_str(), TypeIdentity::Trait, OwnerKind::Trait, span)
+        }
+        Ast::TypeAlias(span, name, _, _) => {
+            (name.as_str(), TypeIdentity::Sig, OwnerKind::Sig, span)
+        }
+        Ast::ConstDef(span, name, _, _, attrs) => {
+            return Some(OwnerEntry {
+                canonical_key: const_owner_key(&module.module_path, name, entry_visibility(attrs)),
+                identity: TypeIdentity::Const,
+                kind: OwnerKind::Const,
+                span: span.clone(),
+                stage_index,
+                module_path: declaration_module_path(module),
+            });
+        }
+        _ => return None,
+    };
+
+    Some(OwnerEntry {
+        canonical_key: canonical_owner_key(name),
+        identity,
+        kind,
+        span: span.clone(),
+        stage_index,
+        module_path: declaration_module_path(module),
+    })
+}
+
+fn module_owner_entry(descriptor: &OwnerDescriptor, stage_index: usize) -> OwnerEntry {
+    let kind = descriptor.owner_kind();
+    let identity = match kind {
+        OwnerKind::Mod => TypeIdentity::Mod,
+        OwnerKind::Supervisor => TypeIdentity::Supervisor,
+        _ => unreachable!("module descriptors only describe module-like owners"),
+    };
+    OwnerEntry {
+        canonical_key: canonical_owner_key(&descriptor.canonical_path),
+        identity,
+        kind,
+        span: descriptor.span.clone(),
+        stage_index,
+        module_path: Some(descriptor.canonical_path.clone()),
+    }
+}
+
+fn reject_reserved_direct_owner_name(stmt: &Ast) -> Result<(), ResolveError> {
+    let (owner_kind, name, span, allow_canonical_builtin_type) = match stmt {
+        Ast::BuiltinTypeDecl(span, head, _) => ("Type name", head.name.as_str(), span, true),
+        Ast::StructDef(span, name, ..)
+        | Ast::RecordDef(span, name, _, _)
+        | Ast::DeferrorDef(span, name, _, _, _)
+        | Ast::TypeAlias(span, name, _, _)
+        | Ast::ConstDef(span, name, _, _, _) => ("Owner name", name.as_str(), span, false),
+        Ast::EnumDef(span, name, _, _, attrs) => ("Type name", name.as_str(), span, attrs.builtin),
+        Ast::TraitDef(span, name, ..) => ("Owner name", name.as_str(), span, false),
+        _ => return Ok(()),
+    };
+    reject_reserved_owner_name(owner_kind, name, span, allow_canonical_builtin_type)
+}
+
+fn trait_owner_key(name: &str) -> String {
+    canonical_owner_key(name)
+}
+
+fn promote_constructor_trait_owners(
+    module_stages: &[Vec<StagedModuleAst>],
+    owner_registry: &mut OwnerRegistry,
+) {
+    let mut direct = HashSet::new();
+    let mut parent_edges = Vec::new();
+
+    for module in module_stages.iter().flatten() {
+        for stmt in &module.ast {
+            let Ast::TraitDef(_, name, _, Some(clause), _, _) = stmt else {
+                continue;
+            };
+            let child_key = trait_owner_key(name);
+            for constraint in &clause.constraints {
+                if !matches!(&constraint.subject, AstTy::Named(_, subject) if subject == "Self") {
+                    continue;
+                }
+                for bound in &constraint.bounds {
+                    match bound {
+                        spire::ast::WhereConstraintRhs::TypeConstructor(..) => {
+                            direct.insert(child_key.clone());
+                        }
+                        spire::ast::WhereConstraintRhs::Trait(_, parent_name, _) => {
+                            parent_edges.push((child_key.clone(), trait_owner_key(parent_name)));
+                        }
+                        spire::ast::WhereConstraintRhs::TraitSlot(..) => {}
+                    }
+                }
+            }
+        }
+    }
+
+    let mut constructor_traits = direct;
+    loop {
+        let mut changed = false;
+        for (child, parent) in &parent_edges {
+            if constructor_traits.contains(parent) && constructor_traits.insert(child.clone()) {
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    for key in constructor_traits {
+        owner_registry.promote_identity(&key, TypeIdentity::TypeConstructor);
+    }
+}
+
+pub fn precollect_owner_registry(
+    module_stages: &[Vec<StagedModuleAst>],
+) -> Result<OwnerRegistry, ResolveError> {
+    let mut owner_registry = OwnerRegistry::default();
+    for (stage_index, stage) in module_stages.iter().enumerate() {
+        for module in stage {
+            if !module.module_path.is_empty()
+                && !staged_module_is_impl_owner(module)
+                && reserved_owner_surface_name_constraint(&module.module_path).is_some_and(
+                    |constraint| {
+                        matches!(
+                            constraint.kind,
+                            ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias
+                        )
+                    },
+                )
+            {
+                reject_reserved_owner_name(
+                    "Module name",
+                    &module.module_path,
+                    &module_owner_fallback_span(module),
+                    true,
+                )?;
+            }
+            if let Some(owner) = &module.owner {
+                owner_registry.register(module_owner_entry(owner, stage_index))?;
+            }
+            for stmt in &module.ast {
+                reject_reserved_direct_owner_name(stmt)?;
+                if let Some(owner) = direct_owner_entry(stmt, module, stage_index) {
+                    owner_registry.register(owner)?;
+                }
+            }
+        }
+    }
+    promote_constructor_trait_owners(module_stages, &mut owner_registry);
+    Ok(owner_registry)
+}
+
 /// Precollect global declaration index from staged module ASTs.
 ///
 /// The index key is the fully-qualified declaration name. This pass does not
@@ -1337,10 +1865,11 @@ pub(super) fn declaration_uid_kind_map(
 /// `def`, `defextractor`, `@builtin def`, `@builtin defextractor`, `@builtin type`,
 /// `defstruct`, `defrecord`, `deferror`, `defenum`, `deftrait`, `impl`, and
 /// `impl Trait for Type` members.
-pub fn precollect_declaration_index(
+pub fn precollect_declarations(
     module_stages: &[Vec<StagedModuleAst>],
-) -> Result<DeclarationIndex, ResolveError> {
+) -> Result<PrecollectedDeclarations, ResolveError> {
     let mut index = DeclarationIndex::new();
+    let mut owner_registry = OwnerRegistry::default();
     let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
     let mut seen_public_consts: HashMap<String, (usize, String)> = HashMap::new();
     for (stage_index, stage) in module_stages.iter().enumerate() {
@@ -1365,7 +1894,16 @@ pub fn precollect_declaration_index(
                 )?;
             }
 
+            if let Some(owner) = &module.owner {
+                owner_registry.register(module_owner_entry(owner, stage_index))?;
+            }
+
             for stmt in &module.ast {
+                reject_reserved_direct_owner_name(stmt)?;
+                if let Some(owner) = direct_owner_entry(stmt, module, stage_index) {
+                    owner_registry.register(owner)?;
+                }
+
                 if let Ast::ImplDef(span, target, methods, _) = stmt {
                     validate_unique_callable_names(
                         &format!("impl `{}`", global_surface_name(target)),
@@ -1813,10 +2351,32 @@ pub fn precollect_declaration_index(
         }
     }
 
-    Ok(index)
+    promote_constructor_trait_owners(module_stages, &mut owner_registry);
+
+    Ok(PrecollectedDeclarations {
+        declaration_index: index,
+        owner_registry,
+    })
+}
+
+pub fn precollect_declaration_index(
+    module_stages: &[Vec<StagedModuleAst>],
+) -> Result<DeclarationIndex, ResolveError> {
+    precollect_declarations(module_stages).map(|precollected| precollected.declaration_index)
 }
 
 impl Resolver {
+    #[allow(dead_code)] // Consumed by registry-backed symbol propagation in the next resolver layer.
+    pub(super) fn owner_identity_for_declaration(
+        &self,
+        name: &str,
+        kind: &DeclarationKind,
+        enclosing_owner: Option<&str>,
+    ) -> Option<TypeIdentity> {
+        self.owner_registry
+            .owner_identity_for_declaration(name, kind, enclosing_owner)
+    }
+
     fn duplicate_top_level_definition_error(surface: &str, span: &Span) -> ResolveError {
         ResolveError {
             message: format!("Duplicate top-level definition: {}", surface),

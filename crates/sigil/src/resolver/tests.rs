@@ -82,6 +82,26 @@ impl User {
 }
 
 #[test]
+fn lower_module_source_ast_preserves_explicit_owner_provenance() {
+    let ast = spire::parse_with_context(
+        "defmod App { def run() { () } }",
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module_source()),
+    )
+    .expect("definition source should parse");
+    let expected_span = ast[0].span().clone();
+
+    let lowered = lower_module_source_ast(ast, None);
+    let owner = lowered[0]
+        .owner
+        .as_ref()
+        .expect("explicit defmod should preserve its owner");
+
+    assert_eq!(owner.canonical_path, "Global::App");
+    assert_eq!(owner.span, expected_span);
+    assert_eq!(owner.source_form, OwnerSourceForm::Defmod);
+}
+
+#[test]
 fn extract_process_modules_from_user_ast_hoists_shared_imports_and_removes_process_defs() {
     let ast = spire::parse_with_context(
         r#"
@@ -250,6 +270,7 @@ fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
         module_path: module_path.to_string(),
         doc_module_path: None,
         ast,
+        owner: None,
         module_doc: None,
         auto_import: matches!(module_path, "Bootstrap" | "Kernel" | "Result"),
         process_spec: None,
@@ -258,7 +279,12 @@ fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
 
 fn staged_process_module(ast: Vec<Ast>) -> StagedModuleAst {
     match ast.into_iter().next().expect("process module should exist") {
-        Ast::Defagent(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
+        Ast::Defagent(span, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            owner: Some(OwnerDescriptor {
+                canonical_path: module_path.clone(),
+                span,
+                source_form: OwnerSourceForm::Defagent,
+            }),
             module_path,
             doc_module_path: None,
             ast,
@@ -266,7 +292,12 @@ fn staged_process_module(ast: Vec<Ast>) -> StagedModuleAst {
             auto_import: attrs.auto_import,
             process_spec: Some(process_spec),
         },
-        Ast::Defgenserver(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
+        Ast::Defgenserver(span, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            owner: Some(OwnerDescriptor {
+                canonical_path: module_path.clone(),
+                span,
+                source_form: OwnerSourceForm::Defgenserver,
+            }),
             module_path,
             doc_module_path: None,
             ast,
@@ -274,8 +305,25 @@ fn staged_process_module(ast: Vec<Ast>) -> StagedModuleAst {
             auto_import: attrs.auto_import,
             process_spec: Some(process_spec),
         },
-        Ast::Defsupervisor(_, module_path, ast, process_spec, attrs)
-        | Ast::DefdynamicSupervisor(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
+        Ast::Defsupervisor(span, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            owner: Some(OwnerDescriptor {
+                canonical_path: module_path.clone(),
+                span,
+                source_form: OwnerSourceForm::Defsupervisor,
+            }),
+            module_path,
+            doc_module_path: None,
+            ast,
+            module_doc: attrs.doc,
+            auto_import: attrs.auto_import,
+            process_spec: Some(process_spec),
+        },
+        Ast::DefdynamicSupervisor(span, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            owner: Some(OwnerDescriptor {
+                canonical_path: module_path.clone(),
+                span,
+                source_form: OwnerSourceForm::DefdynamicSupervisor,
+            }),
             module_path,
             doc_module_path: None,
             ast,
@@ -292,6 +340,7 @@ fn staged_auto_import_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAs
         module_path: module_path.to_string(),
         doc_module_path: None,
         ast,
+        owner: None,
         module_doc: None,
         auto_import: true,
         process_spec: None,
@@ -515,7 +564,12 @@ fn test_resolve_staged_program_keeps_process_specs() {
     .expect("definition source should parse");
 
     let module = match ast.into_iter().next().expect("lowered module should exist") {
-        Ast::Defagent(_, module_path, ast, process_spec, attrs) => StagedModuleAst {
+        Ast::Defagent(span, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            owner: Some(OwnerDescriptor {
+                canonical_path: module_path.clone(),
+                span,
+                source_form: OwnerSourceForm::Defagent,
+            }),
             module_path,
             doc_module_path: None,
             ast,
@@ -559,6 +613,165 @@ fn test_precollect_declaration_index_rejects_duplicate_fully_qualified_name() {
 }
 
 #[test]
+fn test_precollect_owner_registry_rejects_record_then_module() {
+    let ast = spire::parse_with_context(
+        r#"defrecord Hoge(a: String)
+defmod Hoge { def test() { () } }"#,
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module_source()),
+    )
+    .expect("definition source should parse");
+    let first_span = ast[0].span().clone();
+    let conflicting_span = ast[1].span().clone();
+    let staged = ast
+        .into_iter()
+        .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
+        .collect();
+    let module_stages = vec![staged];
+
+    let err = precollect_declaration_index(&module_stages)
+        .expect_err("record and module owners must share one namespace");
+
+    assert_eq!(err.message, "Duplicate top-level owner: Hoge");
+    assert_eq!(err.span, conflicting_span);
+    assert!(err.related_labels.iter().any(|label| {
+        label.span == first_span
+            && label.message.starts_with("first ")
+            && label.message.ends_with(" declaration")
+    }));
+}
+
+#[test]
+fn test_precollect_owner_registry_rejects_module_then_record() {
+    let ast = spire::parse_with_context(
+        r#"defmod Hoge { def test() { () } }
+defrecord Hoge(a: String)"#,
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::module_source()),
+    )
+    .expect("definition source should parse");
+    let first_span = ast[0].span().clone();
+    let conflicting_span = ast[1].span().clone();
+    let staged = ast
+        .into_iter()
+        .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
+        .collect();
+    let module_stages = vec![staged];
+
+    let err = precollect_declaration_index(&module_stages)
+        .expect_err("module and record owners must share one namespace");
+
+    assert_eq!(err.message, "Duplicate top-level owner: Hoge");
+    assert_eq!(err.span, conflicting_span);
+    assert!(err.related_labels.iter().any(|label| {
+        label.span == first_span
+            && label.message.starts_with("first ")
+            && label.message.ends_with(" declaration")
+    }));
+}
+
+#[test]
+fn test_precollect_owner_registry_maps_direct_and_promoted_identities() {
+    let regular_ast = spire::parse_with_context(
+        r#"defmod App { def run() { () } }
+defstruct User { name: String }
+defrecord Pair(left: Int, right: Int)
+defenum Choice { First, Second }
+deferror Oops { "oops" }
+type Mapper<$A, $B> = ($A -> $B)
+const FLAG: Int = 1
+deftrait Show {
+  def show(self: Self) -> String
+}
+deftrait Applicative
+where
+  Self: Functor
+{
+  def pure(value: $A) -> Self<$A>
+}
+deftrait Functor
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}"#,
+        spire::ParserContext::project(0),
+    )
+    .expect("project source should parse");
+    let standard_ast = spire::parse_with_context(
+        r#"@builtin type Int
+@builtin type List<$A>
+@builtin defenum Option<$T> { Some($T), None }"#,
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("standard source should parse");
+    let regular_stage = regular_ast
+        .into_iter()
+        .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
+        .collect::<Vec<_>>();
+    let standard_stage = standard_ast
+        .into_iter()
+        .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
+        .collect::<Vec<_>>();
+    let staged_owner = |canonical_path: &str, source_form| StagedModuleAst {
+        module_path: canonical_path.to_string(),
+        doc_module_path: None,
+        ast: Vec::new(),
+        owner: Some(OwnerDescriptor {
+            canonical_path: canonical_path.to_string(),
+            span: Span { start: 0, end: 1 },
+            source_form,
+        }),
+        module_doc: None,
+        auto_import: false,
+        process_spec: None,
+    };
+    let process_stage = vec![
+        staged_owner("Global::Worker", OwnerSourceForm::Defagent),
+        staged_owner("Global::Server", OwnerSourceForm::Defgenserver),
+        staged_owner("Global::RootSup", OwnerSourceForm::Defsupervisor),
+        staged_owner("Global::DynamicSup", OwnerSourceForm::DefdynamicSupervisor),
+    ];
+    let all_stages = vec![standard_stage, regular_stage, process_stage];
+
+    let precollected =
+        precollect_declarations(&all_stages).expect("distinct owners should precollect");
+    let owners = &precollected.owner_registry;
+
+    for (name, identity) in [
+        ("Int", TypeIdentity::Type),
+        ("List", TypeIdentity::TypeConstructor),
+        ("Option", TypeIdentity::TypeConstructor),
+        ("User", TypeIdentity::Struct),
+        ("Pair", TypeIdentity::Record),
+        ("Choice", TypeIdentity::Enum),
+        ("Oops", TypeIdentity::Error),
+        ("Mapper", TypeIdentity::Sig),
+        ("FLAG", TypeIdentity::Const),
+        ("App", TypeIdentity::Mod),
+        ("Worker", TypeIdentity::Mod),
+        ("Server", TypeIdentity::Mod),
+        ("RootSup", TypeIdentity::Supervisor),
+        ("DynamicSup", TypeIdentity::Supervisor),
+        ("Show", TypeIdentity::Trait),
+        ("Functor", TypeIdentity::TypeConstructor),
+        ("Applicative", TypeIdentity::TypeConstructor),
+    ] {
+        assert_eq!(owners.identity_for_owner(name), Some(identity), "{name}");
+    }
+    assert_eq!(owners.get("Functor").unwrap().kind, OwnerKind::Trait);
+    assert_eq!(owners.owner_ref("Option").unwrap().canonical_key, "Option");
+    let mut resolver = Resolver::new();
+    resolver.owner_registry = owners.clone();
+    assert_eq!(
+        resolver.owner_identity_for_declaration("App::run", &DeclarationKind::Def, Some("App"),),
+        Some(TypeIdentity::Mod)
+    );
+    assert!(!precollected.declaration_index.contains_key("Global::App"));
+    let scope = build_scope_for_module(&all_stages, None, all_stages.len())
+        .expect("owner metadata should not change scope construction");
+    assert_eq!(scope.lookup("App"), None);
+}
+
+#[test]
 fn test_precollect_namespaced_types_can_coexist() {
     let module_stages = vec![vec![staged_module(
         "",
@@ -589,9 +802,11 @@ fn test_precollect_namespaced_duplicate_type_is_rejected() {
 
     let err = precollect_declaration_index(&module_stages)
         .expect_err("duplicate namespaced type must fail");
+    assert_eq!(err.message, "Duplicate top-level owner: Auth::User");
     assert!(err
-        .message
-        .contains("Duplicate fully-qualified declaration: Auth::User"));
+        .related_labels
+        .iter()
+        .any(|label| label.message == "first Record declaration"));
 }
 
 #[test]
@@ -2882,7 +3097,11 @@ fn test_duplicate_top_level_struct_is_error() {
 defstruct User { name: String }"#,
     );
     let err = result.expect_err("duplicate struct must fail");
-    assert!(err.message.contains("Duplicate top-level definition: User"));
+    assert_eq!(err.message, "Duplicate top-level owner: User");
+    assert!(err
+        .related_labels
+        .iter()
+        .any(|label| label.message == "first Struct declaration"));
 }
 
 #[test]
@@ -4234,6 +4453,43 @@ fn test_sigil_session_checkpoint_rollback_removes_later_bindings() {
 }
 
 #[test]
+fn test_sigil_session_checkpoint_rollback_restores_owner_registry() {
+    let mut session = SigilSession::new();
+    let checkpoint = session.checkpoint();
+
+    session
+        .resolve(spire::parse("defrecord Saved(value: Int)").expect("parse failed"))
+        .expect("owner declaration should resolve");
+    assert_eq!(
+        session.owner_registry().identity_for_owner("Saved"),
+        Some(TypeIdentity::Record)
+    );
+
+    session.rollback(checkpoint);
+    assert_eq!(session.owner_registry().identity_for_owner("Saved"), None);
+    session
+        .resolve(spire::parse("defrecord Saved(value: Int)").expect("parse failed"))
+        .expect("rolled-back owner should be declarable again");
+}
+
+#[test]
+fn test_sigil_session_rejects_cross_chunk_owner_collision() {
+    let mut session = SigilSession::new();
+    session
+        .resolve(spire::parse("defrecord Shared(value: Int)").expect("parse failed"))
+        .expect("first owner should resolve");
+
+    let err = session
+        .resolve(spire::parse("type Shared = (Int -> Int)").expect("parse failed"))
+        .expect_err("signature alias must collide with the existing record owner");
+    assert_eq!(err.message, "Duplicate top-level owner: Shared");
+    assert!(err
+        .related_labels
+        .iter()
+        .any(|label| label.message == "first Record declaration"));
+}
+
+#[test]
 fn test_sigil_session_failed_resolve_does_not_pollute_scope() {
     let mut session = SigilSession::new();
 
@@ -4563,7 +4819,7 @@ deferror Oops(reason: String) { reason }"#,
     match &resolved[3] {
         Resolved::DeferrorDef(_, id, _, _) => {
             let info = id.symbol_info.as_ref().expect("deferror should carry info");
-            assert_eq!(info.identity, TypeIdentity::ConcreteError);
+            assert_eq!(info.identity, TypeIdentity::Error);
             assert!(info.capabilities.type_annotation);
             assert!(!info.capabilities.module_owner);
             assert!(!info.capabilities.impl_target);

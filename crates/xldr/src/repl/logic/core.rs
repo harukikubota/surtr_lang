@@ -8716,6 +8716,7 @@ fn merge_user_preload_declarations(
         module_path: user_module_path.to_string(),
         doc_module_path: Some(user_module_path.to_string()),
         ast: user_ast.to_vec(),
+        owner: None,
         module_doc: None,
         auto_import: false,
         process_spec: None,
@@ -9332,10 +9333,17 @@ pub(crate) fn parse_module_stages_from_sources(
                         .or_insert_with(|| SeenModulePath::new(second_file_name, is_impl_owner));
                 }
 
+                let owner = lowered.owner.map(|mut owner| {
+                    let base = crate::module_span_base_for_source(module.source_id);
+                    owner.span.start = owner.span.start.saturating_add(base);
+                    owner.span.end = owner.span.end.saturating_add(base);
+                    owner
+                });
                 stage_ast.push(sigil::StagedModuleAst {
                     module_path: lowered.module_path,
                     doc_module_path: lowered.doc_module_path,
                     ast: crate::rebase_module_ast_spans(lowered.ast, module.source_id),
+                    owner,
                     module_doc: lowered.module_doc,
                     auto_import: lowered.auto_import,
                     process_spec: lowered.process_spec,

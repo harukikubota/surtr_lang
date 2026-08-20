@@ -7577,8 +7577,13 @@ defmod Helper {
     let mut global_ast = Vec::new();
     for stmt in user_ast {
         match stmt {
-            spire::ast::Ast::Defmod(_, module_path, ast, attrs) => {
+            spire::ast::Ast::Defmod(span, module_path, ast, attrs) => {
                 user_modules.push(sigil::StagedModuleAst {
+                    owner: Some(sigil::OwnerDescriptor::new(
+                        module_path.clone(),
+                        span,
+                        sigil::OwnerSourceForm::Defmod,
+                    )),
                     module_path,
                     doc_module_path: None,
                     ast,
@@ -7595,6 +7600,7 @@ defmod Helper {
             module_path: String::new(),
             doc_module_path: None,
             ast: global_ast,
+            owner: None,
             module_doc: None,
             auto_import: false,
             process_spec: None,
@@ -7649,8 +7655,13 @@ fn typecheck_staged_program_keeps_process_specs() {
     .expect("defagent source should parse");
 
     let staged_module = match ast.into_iter().next().expect("lowered module should exist") {
-        spire::ast::Ast::Defagent(_, module_path, ast, process_spec, attrs) => {
+        spire::ast::Ast::Defagent(span, module_path, ast, process_spec, attrs) => {
             sigil::StagedModuleAst {
+                owner: Some(sigil::OwnerDescriptor::new(
+                    module_path.clone(),
+                    span,
+                    sigil::OwnerSourceForm::Defagent,
+                )),
                 module_path,
                 doc_module_path: None,
                 ast,
@@ -7691,10 +7702,27 @@ fn staged_process_module(source: &str) -> sigil::StagedModuleAst {
         .next()
         .expect("lowered process should exist")
     {
-        spire::ast::Ast::Defagent(_, module_path, ast, process_spec, attrs)
-        | spire::ast::Ast::Defgenserver(_, module_path, ast, process_spec, attrs)
-        | spire::ast::Ast::Defsupervisor(_, module_path, ast, process_spec, attrs) => {
+        spire::ast::Ast::Defagent(span, module_path, ast, process_spec, attrs)
+        | spire::ast::Ast::Defgenserver(span, module_path, ast, process_spec, attrs)
+        | spire::ast::Ast::Defsupervisor(span, module_path, ast, process_spec, attrs) => {
+            let source_form = match process_spec.kind {
+                spire::ast::ProcessKind::Agent => sigil::OwnerSourceForm::Defagent,
+                spire::ast::ProcessKind::GenServer => sigil::OwnerSourceForm::Defgenserver,
+                spire::ast::ProcessKind::Supervisor
+                | spire::ast::ProcessKind::RuntimeSupervisor => {
+                    sigil::OwnerSourceForm::Defsupervisor
+                }
+                spire::ast::ProcessKind::DynamicSupervisor => {
+                    sigil::OwnerSourceForm::DefdynamicSupervisor
+                }
+                spire::ast::ProcessKind::Task => sigil::OwnerSourceForm::Defagent,
+            };
             sigil::StagedModuleAst {
+                owner: Some(sigil::OwnerDescriptor::new(
+                    module_path.clone(),
+                    span,
+                    source_form,
+                )),
                 module_path,
                 doc_module_path: None,
                 ast,

@@ -33,9 +33,11 @@ mod warnings;
 pub use self::declarations::{
     const_only_fallback_module_path, declaration_stage_ordering, declaration_uid_order,
     extract_process_modules_from_user_ast, lower_module_source_ast, lowered_module_is_impl_owner,
-    precollect_declaration_index, staged_modules_from_source_ast, DeclarationEntry,
-    DeclarationIndex, DeclarationKind, DeclarationOrdering, LoweredModuleAst,
-    StageOrderedDeclaration, StagedModuleAst,
+    precollect_declaration_index, precollect_declarations, precollect_owner_registry,
+    staged_modules_from_source_ast, DeclarationEntry, DeclarationIndex, DeclarationKind,
+    DeclarationOrdering, LoweredModuleAst, OwnerDescriptor, OwnerEntry, OwnerKind, OwnerRef,
+    OwnerRegistry, OwnerSourceForm, PrecollectedDeclarations, StageOrderedDeclaration,
+    StagedModuleAst,
 };
 pub use self::session::{SigilCheckpoint, SigilSession};
 
@@ -82,7 +84,7 @@ pub fn user_type_symbol_identity_info(kind: &DeclarationKind) -> Option<SymbolId
             SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot)),
         ),
         DeclarationKind::Deferror => (
-            TypeIdentity::ConcreteError,
+            TypeIdentity::Error,
             SymbolCapabilities::new(true, false, false, None),
         ),
         _ => return None,
@@ -207,6 +209,12 @@ pub fn resolve(ast: Vec<Ast>) -> Result<Vec<Resolved>, ResolveError> {
 
 pub fn resolve_with_warnings(ast: Vec<Ast>) -> Result<PhaseOutput<Vec<Resolved>>, ResolveError> {
     let mut resolver = Resolver::new();
+    let staged = ast
+        .iter()
+        .cloned()
+        .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
+        .collect::<Vec<_>>();
+    resolver.owner_registry = precollect_owner_registry(&[staged])?;
     let resolved = resolver.resolve_program(ast)?;
     let warnings = collect_resolution_warnings(&resolved, &[]);
     Ok(PhaseOutput::new(resolved, warnings))
@@ -332,6 +340,18 @@ pub fn resolve_staged_program_from_state_with_warnings(
     start_stage_index: usize,
     resume_state: ResolveResumeState,
 ) -> Result<PhaseOutput<ResolvedStagedProgram>, ResolveError> {
+    let mut owner_registry = precollect_owner_registry(module_stages)?;
+    if !user_ast.is_empty() {
+        let user_owner_modules = user_ast
+            .iter()
+            .cloned()
+            .flat_map(|stmt| {
+                staged_modules_from_source_ast(vec![stmt], user_module_path.as_deref())
+            })
+            .collect::<Vec<_>>();
+        let user_owner_registry = precollect_owner_registry(&[user_owner_modules])?;
+        owner_registry.merge(&user_owner_registry)?;
+    }
     let declaration_uids = assign_declaration_uids(declaration_index);
     let declaration_uid_kinds = declaration_uid_kind_map(declaration_index, &declaration_uids);
     let trait_constructor_slots =
@@ -374,6 +394,7 @@ pub fn resolve_staged_program_from_state_with_warnings(
             &declaration_uid_kinds,
             &declaration_hidden_by_uid,
             &trait_constructor_slots,
+            &owner_registry,
             &stage_impl_targets,
         );
 
@@ -461,6 +482,7 @@ pub fn resolve_staged_program_from_state_with_warnings(
         user_resolver.declaration_uid_kinds = declaration_uid_kinds;
         user_resolver.declaration_hidden_by_uid = declaration_hidden_by_uid;
         user_resolver.trait_constructor_slots = trait_constructor_slots;
+        user_resolver.owner_registry = owner_registry;
         user_resolver.current_module_path = user_module_path;
         user_resolver.allow_top_level_shadowing = true;
         resolved.extend(user_resolver.resolve_program(user_ast)?);
@@ -514,6 +536,7 @@ fn resolve_stage_modules_parallel(
     declaration_uid_kinds: &HashMap<u32, DeclarationKind>,
     declaration_hidden_by_uid: &HashMap<u32, bool>,
     trait_constructor_slots: &HashMap<u32, Vec<String>>,
+    owner_registry: &OwnerRegistry,
     stage_impl_targets: &HashMap<String, declarations::ImplTargetResolution>,
 ) -> Vec<Result<StageModuleResolveResult, ResolveError>> {
     std::thread::scope(|scope| {
@@ -541,6 +564,7 @@ fn resolve_stage_modules_parallel(
                     resolver.declaration_uid_kinds = declaration_uid_kinds.clone();
                     resolver.declaration_hidden_by_uid = declaration_hidden_by_uid.clone();
                     resolver.trait_constructor_slots = trait_constructor_slots.clone();
+                    resolver.owner_registry = owner_registry.clone();
                     resolver.current_stage_impl_targets = Some(stage_impl_targets.clone());
                     resolver.allow_top_level_shadowing = true;
                     let resolved = resolver.resolve_program(module.ast.clone())?;
@@ -1031,6 +1055,7 @@ struct Resolver {
     declaration_uid_kinds: HashMap<u32, DeclarationKind>,
     declaration_hidden_by_uid: HashMap<u32, bool>,
     trait_constructor_slots: HashMap<u32, Vec<String>>,
+    owner_registry: OwnerRegistry,
     explicit_module_imports: HashSet<String>,
     current_module_path: Option<String>,
     current_stage_impl_targets: Option<HashMap<String, declarations::ImplTargetResolution>>,

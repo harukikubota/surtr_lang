@@ -111,10 +111,15 @@ mod tests {
 
         for stmt in ast {
             match stmt {
-                Ast::Defmod(_, module_path, body, attrs) => {
+                Ast::Defmod(span, module_path, body, attrs) => {
                     let mut module_ast = shared_imports.clone();
                     module_ast.extend(body);
                     lowered.push(sigil::StagedModuleAst {
+                        owner: Some(sigil::OwnerDescriptor::new(
+                            module_path.clone(),
+                            span,
+                            sigil::OwnerSourceForm::Defmod,
+                        )),
                         module_path,
                         doc_module_path: None,
                         ast: module_ast,
@@ -123,13 +128,30 @@ mod tests {
                         process_spec: None,
                     });
                 }
-                Ast::Defagent(_, module_path, body, process_spec, attrs)
-                | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
-                | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
-                | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+                Ast::Defagent(span, module_path, body, process_spec, attrs)
+                | Ast::Defgenserver(span, module_path, body, process_spec, attrs)
+                | Ast::Defsupervisor(span, module_path, body, process_spec, attrs)
+                | Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) => {
+                    let source_form = match process_spec.kind {
+                        spire::ast::ProcessKind::Agent => sigil::OwnerSourceForm::Defagent,
+                        spire::ast::ProcessKind::GenServer => sigil::OwnerSourceForm::Defgenserver,
+                        spire::ast::ProcessKind::DynamicSupervisor => {
+                            sigil::OwnerSourceForm::DefdynamicSupervisor
+                        }
+                        spire::ast::ProcessKind::Supervisor
+                        | spire::ast::ProcessKind::RuntimeSupervisor => {
+                            sigil::OwnerSourceForm::Defsupervisor
+                        }
+                        spire::ast::ProcessKind::Task => sigil::OwnerSourceForm::Defagent,
+                    };
                     let mut module_ast = shared_imports.clone();
                     module_ast.extend(body);
                     lowered.push(sigil::StagedModuleAst {
+                        owner: Some(sigil::OwnerDescriptor::new(
+                            module_path.clone(),
+                            span,
+                            source_form,
+                        )),
                         module_path,
                         doc_module_path: None,
                         ast: module_ast,
@@ -145,6 +167,7 @@ mod tests {
                         module_path: target,
                         doc_module_path: None,
                         ast: module_ast,
+                        owner: None,
                         module_doc: attrs.doc,
                         auto_import: attrs.auto_import,
                         process_spec: None,
@@ -176,6 +199,7 @@ mod tests {
                 module_path: String::new(),
                 doc_module_path: None,
                 ast: global_ast,
+                owner: None,
                 module_doc: None,
                 auto_import: false,
                 process_spec: None,
@@ -189,6 +213,7 @@ mod tests {
                 module_path: String::new(),
                 doc_module_path: None,
                 ast: global_ast,
+                owner: None,
                 module_doc: None,
                 auto_import: false,
                 process_spec: None,
@@ -295,10 +320,15 @@ mod tests {
         let lowered = ast
             .into_iter()
             .filter_map(|stmt| match stmt {
-                Ast::Defmod(_, module_path, body, attrs) => {
+                Ast::Defmod(span, module_path, body, attrs) => {
                     let mut module_ast = shared_imports.clone();
                     module_ast.extend(body);
                     Some(sigil::StagedModuleAst {
+                        owner: Some(sigil::OwnerDescriptor::new(
+                            module_path.clone(),
+                            span,
+                            sigil::OwnerSourceForm::Defmod,
+                        )),
                         module_path,
                         doc_module_path: None,
                         ast: module_ast,
@@ -307,13 +337,30 @@ mod tests {
                         process_spec: None,
                     })
                 }
-                Ast::Defagent(_, module_path, body, process_spec, attrs)
-                | Ast::Defgenserver(_, module_path, body, process_spec, attrs)
-                | Ast::Defsupervisor(_, module_path, body, process_spec, attrs)
-                | Ast::DefdynamicSupervisor(_, module_path, body, process_spec, attrs) => {
+                Ast::Defagent(span, module_path, body, process_spec, attrs)
+                | Ast::Defgenserver(span, module_path, body, process_spec, attrs)
+                | Ast::Defsupervisor(span, module_path, body, process_spec, attrs)
+                | Ast::DefdynamicSupervisor(span, module_path, body, process_spec, attrs) => {
+                    let source_form = match process_spec.kind {
+                        spire::ast::ProcessKind::Agent => sigil::OwnerSourceForm::Defagent,
+                        spire::ast::ProcessKind::GenServer => sigil::OwnerSourceForm::Defgenserver,
+                        spire::ast::ProcessKind::DynamicSupervisor => {
+                            sigil::OwnerSourceForm::DefdynamicSupervisor
+                        }
+                        spire::ast::ProcessKind::Supervisor
+                        | spire::ast::ProcessKind::RuntimeSupervisor => {
+                            sigil::OwnerSourceForm::Defsupervisor
+                        }
+                        spire::ast::ProcessKind::Task => sigil::OwnerSourceForm::Defagent,
+                    };
                     let mut module_ast = shared_imports.clone();
                     module_ast.extend(body);
                     Some(sigil::StagedModuleAst {
+                        owner: Some(sigil::OwnerDescriptor::new(
+                            module_path.clone(),
+                            span,
+                            source_form,
+                        )),
                         module_path,
                         doc_module_path: None,
                         ast: module_ast,
