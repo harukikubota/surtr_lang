@@ -1000,48 +1000,64 @@ fn analyze_project_stages(
         &visible_ast,
         current_module_path.as_deref(),
     );
+    let user_ast = project_user_ast_for_active_document(context, active_ast);
 
-    match sigil::precollect_declarations(&module_stages) {
-        Ok(precollected) => {
-            let declaration_index = precollected.declaration_index;
-            *semantic_index = semantic_index_with_declarations(
-                semantic_index,
-                &precollected.owner_registry,
-                &declaration_index,
-                &docs,
-                &signatures,
-                &module_stages,
-                &visible_ast,
-                current_module_path.as_deref(),
-                active_stage_index_for_document(runner, active_document),
-            );
-            let user_ast = project_user_ast_for_active_document(context, active_ast);
-            match sigil::resolve_staged_program_with_state(
-                &module_stages,
-                user_ast,
-                &declaration_index,
-                None,
-            ) {
-                Ok(resolved_program) => {
-                    let resolved_nodes = resolved_program.resolved.clone();
-                    match scar::typecheck_staged_program_with_context(
-                        resolved_program,
-                        typecheck_context_for_analysis(context),
-                    ) {
-                        Ok(typed_program) => *typed = Some(typed_program.nodes),
-                        Err(error) => diagnostics.push(diagnostic_from_span(
-                            AnalysisDiagnosticKind::Typecheck,
-                            AnalysisSeverity::Error,
-                            active_document,
-                            error.span.start,
-                            error.span.end,
-                            error.message,
-                        )),
-                    }
-                    *resolved = Some(resolved_nodes);
-                }
-                Err(error) => diagnostics.push(diagnostic_from_span(
+    let prefix_declarations = match sigil::precollect_declarations(&module_stages) {
+        Ok(precollected) => precollected,
+        Err(error) => {
+            diagnostics.push(diagnostic_from_span(
+                AnalysisDiagnosticKind::Resolve,
+                AnalysisSeverity::Error,
+                active_document,
+                error.span.start,
+                error.span.end,
+                error.message,
+            ));
+            return;
+        }
+    };
+    let semantic_declarations =
+        match precollect_declarations_with_active_ast(&module_stages, &user_ast, None) {
+            Ok(precollected) => precollected,
+            Err(error) => {
+                diagnostics.push(diagnostic_from_span(
                     AnalysisDiagnosticKind::Resolve,
+                    AnalysisSeverity::Error,
+                    active_document,
+                    error.span.start,
+                    error.span.end,
+                    error.message,
+                ));
+                return;
+            }
+        };
+    *semantic_index = semantic_index_with_declarations(
+        semantic_index,
+        &semantic_declarations.owner_registry,
+        &semantic_declarations.declaration_index,
+        &docs,
+        &signatures,
+        &module_stages,
+        &visible_ast,
+        current_module_path.as_deref(),
+        active_stage_index_for_document(runner, active_document),
+    );
+
+    match sigil::resolve_staged_program_with_state(
+        &module_stages,
+        user_ast,
+        &prefix_declarations.declaration_index,
+        None,
+    ) {
+        Ok(resolved_program) => {
+            let resolved_nodes = resolved_program.resolved.clone();
+            match scar::typecheck_staged_program_with_context(
+                resolved_program,
+                typecheck_context_for_analysis(context),
+            ) {
+                Ok(typed_program) => *typed = Some(typed_program.nodes),
+                Err(error) => diagnostics.push(diagnostic_from_span(
+                    AnalysisDiagnosticKind::Typecheck,
                     AnalysisSeverity::Error,
                     active_document,
                     error.span.start,
@@ -1049,6 +1065,7 @@ fn analyze_project_stages(
                     error.message,
                 )),
             }
+            *resolved = Some(resolved_nodes);
         }
         Err(error) => diagnostics.push(diagnostic_from_span(
             AnalysisDiagnosticKind::Resolve,
@@ -1059,6 +1076,25 @@ fn analyze_project_stages(
             error.message,
         )),
     }
+}
+
+fn precollect_declarations_with_active_ast(
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    active_ast: &[Ast],
+    user_module_path: Option<&str>,
+) -> Result<sigil::PrecollectedDeclarations, sigil::error::ResolveError> {
+    if active_ast.is_empty() {
+        return sigil::precollect_declarations(module_stages);
+    }
+
+    let active_owner_modules = active_ast
+        .iter()
+        .cloned()
+        .flat_map(|stmt| sigil::staged_modules_from_source_ast(vec![stmt], user_module_path))
+        .collect::<Vec<_>>();
+    let mut semantic_stages = module_stages.to_vec();
+    semantic_stages.push(active_owner_modules);
+    sigil::precollect_declarations(&semantic_stages)
 }
 
 fn project_user_ast_for_active_document(

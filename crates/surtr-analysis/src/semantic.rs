@@ -556,10 +556,15 @@ pub fn symbol_semantic_infos_from_compile_metadata(
     signatures: &[SignatureEntry],
 ) -> Vec<SymbolSemanticInfo> {
     let mut infos = symbol_semantic_infos_from_declaration_index(owner_registry, declarations);
-    merge_semantic_info(
-        &mut infos,
-        symbol_semantic_infos_from_metadata(docs, signatures),
-    );
+    let mut metadata_infos = symbol_semantic_infos_from_metadata(docs, signatures);
+    for metadata in &mut metadata_infos {
+        if let Some(canonical) = infos.iter().find(|canonical| {
+            canonical.canonical_name == metadata.canonical_name && canonical.identity.is_some()
+        }) {
+            metadata.kind = canonical.kind.clone();
+        }
+    }
+    merge_semantic_info(&mut infos, metadata_infos);
     infos
 }
 

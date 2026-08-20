@@ -1926,6 +1926,55 @@ fn semantic_index_uses_registry_for_complete_owner_and_member_identities() {
 }
 
 #[test]
+fn trait_signature_metadata_preserves_registry_owner_completion_kind() {
+    let ast = spire::parse_with_context(
+        r#"
+deftrait Show {
+  def show(self: Self) -> String
+}
+
+deftrait Functor
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}
+"#,
+        spire::ParserContext::project(0),
+    )
+    .expect("trait declarations should parse");
+    let module_stages = vec![ast
+        .into_iter()
+        .flat_map(|stmt| sigil::staged_modules_from_source_ast(vec![stmt], None))
+        .collect::<Vec<_>>()];
+    let precollected =
+        sigil::precollect_declarations(&module_stages).expect("traits should precollect");
+    let signatures = sigil::collect_signature_entries(&module_stages, &[], None);
+
+    let index = SemanticIndex::from_compile_metadata(
+        &precollected.owner_registry,
+        &precollected.declaration_index,
+        &[],
+        &signatures,
+    );
+
+    for (name, identity) in [
+        ("Show", TypeIdentity::Trait),
+        ("Functor", TypeIdentity::TypeConstructor),
+    ] {
+        let matching = index
+            .symbol_semantic_infos()
+            .iter()
+            .filter(|info| info.canonical_name == name)
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "{name}: {matching:?}");
+        assert_eq!(matching[0].identity, Some(identity), "{name}");
+        assert_eq!(matching[0].kind, CompletionKind::TypePath, "{name}");
+        assert!(matching[0].detail.is_some(), "{name} signature metadata");
+    }
+}
+
+#[test]
 fn semantic_identity_does_not_fall_back_to_declaration_shape() {
     let owners = OwnerRegistry::default();
     let ghost_member = declaration_entry(

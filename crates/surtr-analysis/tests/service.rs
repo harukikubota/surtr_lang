@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use sindr::names::{FacetRootKind, SymbolCapabilities};
+use sindr::names::{FacetRootKind, SymbolCapabilities, TypeIdentity};
 use surtr_analysis::{
     resolve_context, AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisHost, AnalysisMode,
     AnalysisService, CompletionKind, CompletionSymbol, ProjectRunnerInput,
@@ -444,6 +444,83 @@ value = missing_name
         }),
         "script body should be resolved under load_project context: {diagnostics:?}"
     );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn analysis_service_indexes_active_load_project_script_owner_identities() {
+    let root = temp_root("load-project-script-owner-identities");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let script_path = root.join("scripts").join("seed.srt");
+    std::fs::create_dir_all(script_path.parent().expect("script parent")).expect("create scripts");
+    let project_file = root.join("project.srt");
+    let module_path = src.join("main.srt");
+    std::fs::write(&module_path, "defmod Main { def main() -> Int { 1 } }").expect("write module");
+    std::fs::write(
+        &project_file,
+        r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::entry_fun(c, "Main::main")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#,
+    )
+    .expect("write project");
+
+    let mut service = AnalysisService::new();
+    service.update_document(
+        script_path.clone(),
+        Some(1),
+        r#"load_project("../project.srt", profile: "dev")"#.to_string(),
+    );
+    let context = service.resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: script_path.clone(),
+        selected_context: Some(SelectedContext::ScriptEntry(script_path.clone())),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    service.update_document(
+        script_path.clone(),
+        Some(2),
+        r#"type Alias = (Int -> Int)
+
+deftrait Show {
+  def show(self: Self) -> String
+}
+"#
+        .to_string(),
+    );
+
+    let snapshot = service.analyze(context);
+    let diagnostics = service.diagnostics(&snapshot);
+    assert!(
+        diagnostics.is_empty(),
+        "active project script should analyze: {diagnostics:?}"
+    );
+
+    for (name, identity, kind) in [
+        ("Alias", TypeIdentity::Sig, CompletionKind::TypePath),
+        ("Show", TypeIdentity::Trait, CompletionKind::TypePath),
+        (
+            "Show::show",
+            TypeIdentity::Trait,
+            CompletionKind::FunctionCall,
+        ),
+    ] {
+        let matching = snapshot
+            .semantic_index
+            .symbol_semantic_infos()
+            .iter()
+            .filter(|info| info.canonical_name == name && info.kind == kind)
+            .collect::<Vec<_>>();
+        assert_eq!(matching.len(), 1, "{name}: {matching:?}");
+        assert_eq!(matching[0].identity, Some(identity), "{name}");
+    }
 
     let _ = std::fs::remove_dir_all(root);
 }
