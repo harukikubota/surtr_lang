@@ -28,6 +28,23 @@ pub struct BuiltinTypeMeta {
 /// Builtin type declaration-head metadata accepted by standard sources.
 pub type BuiltinTypeHeadMeta = BuiltinTypeMeta;
 
+/// Standard-library owners whose identities are not declared with `@builtin type`.
+///
+/// This is separate from [`BUILTIN_TYPE_METAS`], which validates only compiler
+/// builtin type declaration heads. Resolver owner registration uses this table
+/// for standard declarations such as `defenum Option<$T>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StandardOwnerIdentityMeta {
+    pub name: &'static str,
+    pub identity: TypeIdentity,
+}
+
+pub const STANDARD_OWNER_IDENTITY_METAS: &[StandardOwnerIdentityMeta] =
+    &[StandardOwnerIdentityMeta {
+        name: "Option",
+        identity: TypeIdentity::TypeConstructor,
+    }];
+
 /// Builtin unique ids start after the first two scope-reserved ids.
 pub const BUILTIN_UID_BASE: u32 = 2;
 
@@ -1311,6 +1328,14 @@ pub fn builtin_type_meta_by_name(name: &str) -> Option<&'static BuiltinTypeMeta>
     builtin_type_head_meta_by_name(name)
 }
 
+/// Look up a standard-library declaration's explicit owner identity.
+pub fn standard_owner_identity_by_name(name: &str) -> Option<TypeIdentity> {
+    STANDARD_OWNER_IDENTITY_METAS
+        .iter()
+        .find(|meta| meta.name == name)
+        .map(|meta| meta.identity)
+}
+
 pub fn builtin_type_supports_inherent_impl(name: &str) -> bool {
     builtin_type_name(name).is_some_and(TypeName::supports_inherent_impl)
 }
@@ -1324,8 +1349,10 @@ mod tests {
     use super::{
         builtin_function_metas, builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name,
         builtin_meta_for_decl, builtin_runtime_name, builtin_type_head_metas, builtin_uid,
-        BUILTIN_FUNCTION_METAS, BUILTIN_METAS, BUILTIN_TYPE_HEAD_METAS, BUILTIN_TYPE_METAS,
+        standard_owner_identity_by_name, BUILTIN_FUNCTION_METAS, BUILTIN_METAS,
+        BUILTIN_TYPE_HEAD_METAS, BUILTIN_TYPE_METAS,
     };
+    use crate::names::TypeIdentity;
 
     #[test]
     fn builtin_ids_match_definition_order() {
@@ -1344,6 +1371,14 @@ mod tests {
         assert!(BUILTIN_TYPE_HEAD_METAS
             .iter()
             .any(|meta| meta.name == "StandbyInit"));
+    }
+
+    #[test]
+    fn standard_owner_identity_metadata_marks_option_as_type_constructor() {
+        assert_eq!(
+            standard_owner_identity_by_name("Option"),
+            Some(TypeIdentity::TypeConstructor)
+        );
     }
 
     #[test]
