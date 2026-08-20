@@ -1685,6 +1685,69 @@ deftrait Show {
 }
 
 #[test]
+fn test_resolved_type_alias_carries_sig_identity_across_ir_boundary() {
+    let resolved = parse_and_resolve("type Mapper<$A, $B> = ($A -> $B)")
+        .expect("signature alias should resolve");
+    let alias = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::TypeAlias(..)))
+        .expect("resolved signature alias should be present");
+    let serialized = serde_json::to_value(alias).expect("resolved alias should serialize");
+    let fields = serialized
+        .get("TypeAlias")
+        .and_then(serde_json::Value::as_array)
+        .expect("resolved alias should retain its tuple fields");
+
+    assert_eq!(
+        fields
+            .get(4)
+            .and_then(|identity| identity.get("identity"))
+            .and_then(serde_json::Value::as_str),
+        Some("Sig"),
+        "Sig identity must survive after resolver-private registry state is dropped"
+    );
+}
+
+#[test]
+fn test_generic_trait_impl_member_uses_target_head_owner_identity() {
+    let ast = parse_module_ast(
+        r#"deftrait Functor
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>) -> Self<$A>
+}
+
+defstruct Boxed<$T> { value: $T }
+
+impl Functor for Boxed<$T> {
+  def fmap(self: Self<$A>) -> Self<$A> { self }
+}"#,
+        "GenericOwners",
+    );
+
+    let resolved = resolve(ast).expect("generic trait impl should resolve");
+    let method_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, _, _, AstTy::Generic(_, target, _), _, methods)
+                if target == "Global::Boxed" =>
+            {
+                methods.first().map(|method| &method.function_id)
+            }
+            _ => None,
+        })
+        .expect("generic trait impl method should be present");
+
+    assert_eq!(method_id.name, "Global::Boxed<$T>::fmap");
+    assert_eq!(
+        method_id.symbol_info.as_ref().map(|info| info.identity),
+        Some(TypeIdentity::Struct),
+        "the generic application must resolve through the canonical Boxed owner"
+    );
+}
+
+#[test]
 fn test_resolved_members_use_enclosing_or_target_owner_identity() {
     let ast = spire::parse_with_context(
         r#"defmod App {
@@ -4126,6 +4189,16 @@ deftrait Metric {
     let resolved = resolve_user_with_modules("value = add(1, 2)", &module_stages)
         .expect("std trait method should auto-import");
 
+    let declaration_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, _, methods, _) if id.name == "Metric" => {
+                methods.first().map(|method| &method.id)
+            }
+            _ => None,
+        })
+        .expect("trait method declaration should exist");
+
     let bind = resolved
         .iter()
         .find(|node| matches!(node, Resolved::Bind(_, _, _)))
@@ -4142,6 +4215,12 @@ deftrait Metric {
                             .qualified_name
                             .as_deref()
                             .is_some_and(|name| name.ends_with("::add")));
+                        assert_eq!(id.unique_id, declaration_id.unique_id);
+                        assert_eq!(
+                            id.symbol_info.as_ref().map(|info| info.identity),
+                            Some(TypeIdentity::Trait),
+                            "a bare auto-import alias must retain its canonical trait owner"
+                        );
                     }
                     other => panic!("expected trait method var, got {:?}", other),
                 }
@@ -4172,9 +4251,36 @@ value = add(1, 2)"#,
     )
     .expect("explicit import of autoimport trait should be allowed");
 
-    assert!(resolved
+    let declaration_id = resolved
         .iter()
-        .any(|node| matches!(node, Resolved::Bind(_, _, _))));
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, _, methods, _) if id.name == "Metric" => {
+                methods.first().map(|method| &method.id)
+            }
+            _ => None,
+        })
+        .expect("trait method declaration should exist");
+    let callee_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::App(_, func, _) => match func.as_ref() {
+                    Resolved::Var(_, id) => Some(id),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("explicitly imported trait method call should exist");
+
+    assert_eq!(callee_id.name, "add");
+    assert_eq!(callee_id.unique_id, declaration_id.unique_id);
+    assert_eq!(
+        callee_id.symbol_info.as_ref().map(|info| info.identity),
+        Some(TypeIdentity::Trait),
+        "a bare explicit-import alias must retain its canonical trait owner"
+    );
 }
 
 #[test]

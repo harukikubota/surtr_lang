@@ -8,3 +8,6 @@ description = "Name resolver — binds identifiers to unique definitions"
 spire = { path = "../spire" }
 sindr = { path = "../sindr" }
 serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0"

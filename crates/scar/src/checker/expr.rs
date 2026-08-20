@@ -1171,7 +1171,7 @@ impl Checker {
             Resolved::BuiltinTypeDecl(span, id, params, attrs) => {
                 self.check_builtin_type_decl(span, id, params, attrs)
             }
-            Resolved::TypeAlias(span, _, _, _) => Ok(TypedNode {
+            Resolved::TypeAlias(span, _, _, _, _) => Ok(TypedNode {
                 ty: Ty::Unit,
                 span: span.clone(),
                 node: TypedInner::Lit(Lit::Unit),
@@ -2548,7 +2548,7 @@ impl Checker {
             | Resolved::BuiltinDecl(span, _, _, _, _, _)
             | Resolved::BuiltinExtractorDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
-            | Resolved::TypeAlias(span, _, _, _)
+            | Resolved::TypeAlias(span, _, _, _, _)
             | Resolved::ResultCtorDecl(span, _, _, _, _)
             | Resolved::TraitDef(span, _, _, _, _, _)
             | Resolved::TraitImplDef(span, _, _, _, _, _)

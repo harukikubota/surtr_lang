@@ -296,7 +296,13 @@ pub enum Resolved {
     BuiltinTypeDecl(Span, ResolvedId, Vec<Symbol>, ResolvedDeclAttrs),
 
     /// Compile-time-only alias for a function signature.
-    TypeAlias(Span, Symbol, Vec<ResolvedTypeParam>, AstTy),
+    TypeAlias(
+        Span,
+        Symbol,
+        Vec<ResolvedTypeParam>,
+        AstTy,
+        SymbolIdentityInfo,
+    ),
 
     /// Declaration-only Result constructor contract from std modules.
     ///

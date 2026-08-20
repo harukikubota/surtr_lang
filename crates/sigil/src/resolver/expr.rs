@@ -21,6 +21,15 @@ const FLOAT_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 12;
 const BOOLEAN_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 13;
 const FUNCTION_PRIMITIVE_ROOT_UID: u32 = u32::MAX - 14;
 
+fn ast_ty_owner_head(ty: &AstTy) -> Option<&str> {
+    match ty {
+        AstTy::Named(_, name) | AstTy::ImplTrait(_, name) | AstTy::Generic(_, name, _) => {
+            Some(name)
+        }
+        AstTy::Tuple(..) | AstTy::Func(..) => None,
+    }
+}
+
 fn synthetic_builtin_symbol_uid(name: &str, info: &SymbolIdentityInfo) -> Option<u32> {
     let name = global_surface_name(name);
     match (name, info.capabilities.facet_root_path) {
@@ -1720,7 +1729,14 @@ impl Resolver {
         };
         let inferred_owner = match kind {
             DeclarationKind::EnumVariant | DeclarationKind::TraitMethod => {
-                name.rsplit_once("::").map(|(owner, _)| owner.to_string())
+                let canonical_member_name = entry
+                    .map(|entry| entry.name.as_str())
+                    .filter(|entry_name| entry_name.contains("::"))
+                    .or_else(|| entry.map(|entry| entry.fq_name.as_str()))
+                    .unwrap_or(name);
+                canonical_member_name
+                    .rsplit_once("::")
+                    .map(|(owner, _)| owner.to_string())
             }
             _ => entry.and_then(|entry| {
                 let module_path = entry
@@ -3105,6 +3121,8 @@ impl Resolver {
                 };
                 let resolved_target_ty = self.resolve_type_annotation(target_ty)?;
                 let target_key = ast_ty_key(&resolved_target_ty);
+                let target_owner_key =
+                    ast_ty_owner_head(&resolved_target_ty).unwrap_or(target_key.as_str());
                 let mut resolved_methods = Vec::new();
                 for method in methods {
                     let (
@@ -3219,7 +3237,7 @@ impl Resolver {
                     let symbol_info = self.symbol_info_for_declaration(
                         &local_function_name,
                         &DeclarationKind::ImplMethod,
-                        Some(&target_key),
+                        Some(target_owner_key),
                     );
 
                     resolved_methods.push(ResolvedTraitImplMethod {
@@ -3388,19 +3406,27 @@ impl Resolver {
                     resolve_decl_attrs(&attrs),
                 ))
             }
-            Ast::TypeAlias(span, name, type_params, rhs) => Ok(Resolved::TypeAlias(
-                span,
-                name,
-                type_params
-                    .into_iter()
-                    .map(|param| ResolvedTypeParam {
-                        name: param.name,
-                        bound: param.bound,
-                        span: param.span,
-                    })
-                    .collect(),
-                rhs,
-            )),
+            Ast::TypeAlias(span, name, type_params, rhs) => {
+                let symbol_info = self
+                    .owner_registry
+                    .owner_ref(&name)
+                    .and_then(|owner| user_type_symbol_identity_info(&owner))
+                    .expect("type aliases must have precollected owner metadata");
+                Ok(Resolved::TypeAlias(
+                    span,
+                    name,
+                    type_params
+                        .into_iter()
+                        .map(|param| ResolvedTypeParam {
+                            name: param.name,
+                            bound: param.bound,
+                            span: param.span,
+                        })
+                        .collect(),
+                    rhs,
+                    symbol_info,
+                ))
+            }
             Ast::ResultCtorDecl(span, name, param_ty, ret_ty, attrs) => {
                 let uid = self
                     .take_predeclared_id(&name)

@@ -13,7 +13,7 @@ impl Checker {
         stmts: &[Resolved],
     ) -> Result<(), TypeError> {
         for stmt in stmts {
-            let Resolved::TypeAlias(span, name, params, rhs) = stmt else {
+            let Resolved::TypeAlias(span, name, params, rhs, _) = stmt else {
                 continue;
             };
             if self.signature_aliases.contains_key(name) || self.env.lookup_type_def(name).is_some()
