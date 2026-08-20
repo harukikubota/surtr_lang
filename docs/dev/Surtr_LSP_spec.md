@@ -568,7 +568,10 @@ v0 completion は低リスクな候補に限定する。
 - same file declaration
 - visible top-level function
 - type constructor / type owner
-- `Bootstrap` / `Kernel` / `@autoimport` surface
+- `Kernel` と通常の `@autoimport` surface
+- `Bootstrap` 配下の特殊形式・自動 import surface。ただし `Bootstrap` 自体は
+  stage-0 anchor で通常の `Bootstrap::fun()` callable surface を持たないため、
+  module completion candidate に含めない
 - import path segment
 - call site signature help と active parameter
 
