@@ -1925,7 +1925,7 @@ impl User {
     }
 
     #[test]
-    fn parse_module_stages_detects_duplicate_defmod_paths() {
+    fn explicit_duplicate_defmod_paths_reach_owner_registry() {
         let module_sources = collect_module_sources_with_module_stages(&[vec![
             ModuleInput {
                 file_name: "a.srt".into(),
@@ -1942,17 +1942,71 @@ impl User {
         let compile_sources =
             compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
 
-        let err =
+        let stages =
             parse_module_stages_from_compile_sources(&compile_sources, CompileUnitKind::Script)
-                .expect_err("duplicate defmod path must fail");
-        assert!(matches!(
-            err.kind,
-            ModuleStageParseErrorKind::DuplicateModulePath { ref module_path, .. } if module_path == "Global::Shared"
-        ));
+                .expect("explicit owners must pass the structural staging check");
+        let err = sigil::precollect_declarations(&stages)
+            .expect_err("duplicate defmod owners must fail in OwnerRegistry");
+        assert_eq!(err.message, "Duplicate top-level owner: Shared");
+        assert_eq!(err.related_labels[0].message, "first Mod declaration");
+        assert_eq!(err.related_labels[1].message, "conflicting Mod declaration");
     }
 
     #[test]
-    fn parse_module_stages_rejects_normal_duplicate_after_impl_owner_extension() {
+    fn explicit_duplicate_process_paths_reach_owner_registry() {
+        let agent_source = r#"defagent Shared {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(0) }
+
+  @get
+  def get(state: Int, _field: String) -> Result<Int> { Ok(state) }
+}"#;
+        let supervisor_source = r#"defsupervisor Shared {
+  meta {
+    strategy: OneForOne
+    max_restarts: 5
+    max_seconds: 10
+    child_restart_default: Transient
+    allow_adopt: True
+  }
+}"#;
+        let module_sources = collect_module_sources_with_module_stages(&[vec![
+            ModuleInput {
+                file_name: "a.srt".into(),
+                source: agent_source.into(),
+                module_path: "A".into(),
+            },
+            ModuleInput {
+                file_name: "b.srt".into(),
+                source: supervisor_source.into(),
+                module_path: "B".into(),
+            },
+        ]])
+        .expect("module collection should succeed");
+        let compile_sources =
+            compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
+
+        let stages =
+            parse_module_stages_from_compile_sources(&compile_sources, CompileUnitKind::Script)
+                .expect("explicit process owners must pass the structural staging check");
+        let err = sigil::precollect_declarations(&stages)
+            .expect_err("duplicate process owners must fail in OwnerRegistry");
+        assert_eq!(err.message, "Duplicate top-level owner: Shared");
+        assert_eq!(err.related_labels[0].message, "first Mod declaration");
+        assert_eq!(
+            err.related_labels[1].message,
+            "conflicting Supervisor declaration"
+        );
+    }
+
+    #[test]
+    fn explicit_duplicate_after_impl_owner_extension_reaches_owner_registry() {
         let module_sources = collect_module_sources_with_module_stages(&[vec![
             ModuleInput {
                 file_name: "a.srt".into(),
@@ -1974,13 +2028,43 @@ impl User {
         let compile_sources =
             compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
 
+        let stages =
+            parse_module_stages_from_compile_sources(&compile_sources, CompileUnitKind::Script)
+                .expect("explicit owners must pass the structural staging check");
+        let err = sigil::precollect_declarations(&stages)
+            .expect_err("duplicate explicit owners must fail in OwnerRegistry");
+        assert_eq!(err.message, "Duplicate top-level owner: Shared");
+    }
+
+    #[test]
+    fn parse_module_stages_rejects_duplicate_ownerless_structural_roots() {
+        let module_sources = collect_module_sources_with_module_stages(&[vec![
+            ModuleInput {
+                file_name: "a.srt".into(),
+                source: "const FIRST: Int = 1".into(),
+                module_path: "Shared".into(),
+            },
+            ModuleInput {
+                file_name: "b.srt".into(),
+                source: "const SECOND: Int = 2".into(),
+                module_path: "Shared".into(),
+            },
+        ]])
+        .expect("module collection should succeed");
+        let compile_sources =
+            compose_script_compile_sources("entry.srt", "print(\"hi\")", module_sources);
+
         let err =
             parse_module_stages_from_compile_sources(&compile_sources, CompileUnitKind::Script)
-                .expect_err("normal duplicate after impl owner must fail");
-        assert!(matches!(
-            err.kind,
-            ModuleStageParseErrorKind::DuplicateModulePath { ref module_path, .. } if module_path == "Global::Shared"
-        ));
+                .expect_err("ownerless structural roots must stay unique");
+        assert!(
+            matches!(
+                err.kind,
+                ModuleStageParseErrorKind::DuplicateModulePath { ref module_path, .. }
+                    if module_path == "Shared"
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]

@@ -711,6 +711,10 @@ impl From<&OwnerEntry> for OwnerRef {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerRegistry {
     entries: BTreeMap<String, OwnerEntry>,
+    #[serde(default)]
+    constructor_trait_seeds: BTreeSet<String>,
+    #[serde(default)]
+    trait_parent_edges: BTreeSet<(String, String)>,
 }
 
 impl OwnerRegistry {
@@ -767,6 +771,11 @@ impl OwnerRegistry {
         for entry in other.entries.values() {
             self.register(entry.clone())?;
         }
+        self.constructor_trait_seeds
+            .extend(other.constructor_trait_seeds.iter().cloned());
+        self.trait_parent_edges
+            .extend(other.trait_parent_edges.iter().cloned());
+        self.promote_constructor_traits();
         Ok(())
     }
 
@@ -801,6 +810,30 @@ impl OwnerRegistry {
         }
         entry.identity = identity;
         true
+    }
+
+    fn promote_constructor_traits(&mut self) {
+        let mut constructor_traits = self.constructor_trait_seeds.clone();
+        constructor_traits.extend(self.entries.iter().filter_map(|(key, entry)| {
+            (entry.kind == OwnerKind::Trait && entry.identity == TypeIdentity::TypeConstructor)
+                .then(|| key.clone())
+        }));
+
+        loop {
+            let mut changed = false;
+            for (child, parent) in &self.trait_parent_edges {
+                if constructor_traits.contains(parent) && constructor_traits.insert(child.clone()) {
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        for key in constructor_traits {
+            self.promote_identity(&key, TypeIdentity::TypeConstructor);
+        }
     }
 }
 
@@ -1693,7 +1726,9 @@ fn direct_owner_entry(
         }
         Ast::EnumDef(span, name, _, _, _) => (
             name.as_str(),
-            standard_owner_identity_by_name(global_surface_name(name))
+            builtin_type_head_meta_by_name(global_surface_name(name))
+                .map(|meta| meta.identity)
+                .or_else(|| standard_owner_identity_by_name(global_surface_name(name)))
                 .unwrap_or(TypeIdentity::Enum),
             OwnerKind::Enum,
             span,
@@ -1770,9 +1805,6 @@ fn promote_constructor_trait_owners(
     module_stages: &[Vec<StagedModuleAst>],
     owner_registry: &mut OwnerRegistry,
 ) {
-    let mut direct = HashSet::new();
-    let mut parent_edges = Vec::new();
-
     for module in module_stages.iter().flatten() {
         for stmt in &module.ast {
             let Ast::TraitDef(_, name, _, Some(clause), _, _) = stmt else {
@@ -1786,10 +1818,14 @@ fn promote_constructor_trait_owners(
                 for bound in &constraint.bounds {
                     match bound {
                         spire::ast::WhereConstraintRhs::TypeConstructor(..) => {
-                            direct.insert(child_key.clone());
+                            owner_registry
+                                .constructor_trait_seeds
+                                .insert(child_key.clone());
                         }
                         spire::ast::WhereConstraintRhs::Trait(_, parent_name, _) => {
-                            parent_edges.push((child_key.clone(), trait_owner_key(parent_name)));
+                            owner_registry
+                                .trait_parent_edges
+                                .insert((child_key.clone(), trait_owner_key(parent_name)));
                         }
                         spire::ast::WhereConstraintRhs::TraitSlot(..) => {}
                     }
@@ -1798,22 +1834,7 @@ fn promote_constructor_trait_owners(
         }
     }
 
-    let mut constructor_traits = direct;
-    loop {
-        let mut changed = false;
-        for (child, parent) in &parent_edges {
-            if constructor_traits.contains(parent) && constructor_traits.insert(child.clone()) {
-                changed = true;
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
-
-    for key in constructor_traits {
-        owner_registry.promote_identity(&key, TypeIdentity::TypeConstructor);
-    }
+    owner_registry.promote_constructor_traits();
 }
 
 pub fn precollect_owner_registry(
@@ -1821,6 +1842,8 @@ pub fn precollect_owner_registry(
 ) -> Result<OwnerRegistry, ResolveError> {
     let mut owner_registry = OwnerRegistry::default();
     for (stage_index, stage) in module_stages.iter().enumerate() {
+        let mut source_ordered_entries = Vec::new();
+        let mut encounter_order = 0usize;
         for module in stage {
             if !module.module_path.is_empty()
                 && !staged_module_is_impl_owner(module)
@@ -1841,14 +1864,25 @@ pub fn precollect_owner_registry(
                 )?;
             }
             if let Some(owner) = &module.owner {
-                owner_registry.register(module_owner_entry(owner, stage_index))?;
+                source_ordered_entries.push((
+                    owner.span.start,
+                    encounter_order,
+                    module_owner_entry(owner, stage_index),
+                ));
+                encounter_order += 1;
             }
             for stmt in &module.ast {
                 reject_reserved_direct_owner_name(stmt)?;
                 if let Some(owner) = direct_owner_entry(stmt, module, stage_index) {
-                    owner_registry.register(owner)?;
+                    source_ordered_entries.push((owner.span.start, encounter_order, owner));
+                    encounter_order += 1;
                 }
             }
+        }
+        source_ordered_entries
+            .sort_by_key(|(span_start, encounter_order, _)| (*span_start, *encounter_order));
+        for (_, _, entry) in source_ordered_entries {
+            owner_registry.register(entry)?;
         }
     }
     promote_constructor_trait_owners(module_stages, &mut owner_registry);
@@ -1869,41 +1903,13 @@ pub fn precollect_declarations(
     module_stages: &[Vec<StagedModuleAst>],
 ) -> Result<PrecollectedDeclarations, ResolveError> {
     let mut index = DeclarationIndex::new();
-    let mut owner_registry = OwnerRegistry::default();
+    let owner_registry = precollect_owner_registry(module_stages)?;
     let mut seen_impl_targets: HashMap<String, Span> = HashMap::new();
     let mut seen_public_consts: HashMap<String, (usize, String)> = HashMap::new();
     for (stage_index, stage) in module_stages.iter().enumerate() {
         let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
         for module in stage {
-            if !module.module_path.is_empty()
-                && !staged_module_is_impl_owner(module)
-                && reserved_owner_surface_name_constraint(&module.module_path).is_some_and(
-                    |constraint| {
-                        matches!(
-                            constraint.kind,
-                            ReservedOwnerSurfaceNameKind::BuiltinSpecialEnumVariantAlias
-                        )
-                    },
-                )
-            {
-                reject_reserved_owner_name(
-                    "Module name",
-                    &module.module_path,
-                    &module_owner_fallback_span(module),
-                    true,
-                )?;
-            }
-
-            if let Some(owner) = &module.owner {
-                owner_registry.register(module_owner_entry(owner, stage_index))?;
-            }
-
             for stmt in &module.ast {
-                reject_reserved_direct_owner_name(stmt)?;
-                if let Some(owner) = direct_owner_entry(stmt, module, stage_index) {
-                    owner_registry.register(owner)?;
-                }
-
                 if let Ast::ImplDef(span, target, methods, _) = stmt {
                     validate_unique_callable_names(
                         &format!("impl `{}`", global_surface_name(target)),
@@ -2350,8 +2356,6 @@ pub fn precollect_declarations(
             }
         }
     }
-
-    promote_constructor_trait_owners(module_stages, &mut owner_registry);
 
     Ok(PrecollectedDeclarations {
         declaration_index: index,

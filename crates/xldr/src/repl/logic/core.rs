@@ -892,8 +892,8 @@ impl ReplEngine {
             .map(|module| module.module_path.clone())
             .collect();
 
-        let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
-            Ok(index) => index,
+        let precollected = match sigil::precollect_declarations(&module_stages) {
+            Ok(precollected) => precollected,
             Err(e) => {
                 return Err(load_error_from_span_failure(
                     &self.sources,
@@ -905,6 +905,7 @@ impl ReplEngine {
                 ));
             }
         };
+        let declaration_index = precollected.declaration_index.clone();
         self.declaration_index = declaration_index.clone();
         self.auto_import_records =
             Self::collect_auto_import_records(&module_stages, &declaration_index);
@@ -1003,7 +1004,7 @@ impl ReplEngine {
             }
         };
         self.sigil_session
-            .replace_scope_with_declarations(scope, &declaration_index);
+            .replace_scope_with_precollected_declarations(scope, &precollected);
 
         for name in &meta.function_defs {
             self.insert_surface_symbol(name);
@@ -1023,7 +1024,18 @@ impl ReplEngine {
         if let Ok(snapshot) = crate::default_stdlib_semantic_snapshot() {
             if self.module_stages.len() == snapshot.default_stage_count {
                 self.auto_import_modules = snapshot.auto_import_modules.clone();
-                self.declaration_index = snapshot.declaration_index().clone();
+                let precollected = sigil::precollect_declarations(&snapshot.module_stages)
+                    .map_err(|e| {
+                        load_error_from_span_failure(
+                            &self.sources,
+                            &self.module_stages,
+                            &e.span,
+                            self.builtin_source_id,
+                            "resolve",
+                            e.message,
+                        )
+                    })?;
+                self.declaration_index = precollected.declaration_index.clone();
                 self.auto_import_records = Self::collect_auto_import_records(
                     &snapshot.module_stages,
                     &self.declaration_index,
@@ -1051,7 +1063,7 @@ impl ReplEngine {
                     }
                 };
                 self.sigil_session
-                    .replace_scope_with_declarations(scope, &self.declaration_index);
+                    .replace_scope_with_precollected_declarations(scope, &precollected);
                 return Ok(());
             }
         }
@@ -1076,8 +1088,8 @@ impl ReplEngine {
             .map(|module| module.module_path.clone())
             .collect();
 
-        let declaration_index = match sigil::precollect_declaration_index(&module_stages) {
-            Ok(index) => index,
+        let precollected = match sigil::precollect_declarations(&module_stages) {
+            Ok(precollected) => precollected,
             Err(e) => {
                 return Err(load_error_from_span_failure(
                     &self.sources,
@@ -1089,6 +1101,7 @@ impl ReplEngine {
                 ));
             }
         };
+        let declaration_index = precollected.declaration_index.clone();
         self.declaration_index = declaration_index.clone();
         self.auto_import_records =
             Self::collect_auto_import_records(&module_stages, &declaration_index);
@@ -1149,7 +1162,7 @@ impl ReplEngine {
             }
         };
         self.sigil_session
-            .replace_scope_with_declarations(scope, &declaration_index);
+            .replace_scope_with_precollected_declarations(scope, &precollected);
         Ok(())
     }
 
@@ -8277,27 +8290,24 @@ fn compile_repl_preload_from_module_stages(
         Some(compile_sources.user_module_path.as_str()),
     );
 
-    let mut declaration_index = if module_stage_asts.len() == snapshot.default_stage_count {
-        snapshot.declaration_index().clone()
+    let mut precollected = if module_stage_asts.len() == snapshot.default_stage_count {
+        sigil::PrecollectedDeclarations {
+            declaration_index: snapshot.declaration_index().clone(),
+            owner_registry: sigil::precollect_owner_registry(&module_stage_asts)
+                .map_err(|e| preload_resolve_error(&compile_sources, &e))?,
+        }
     } else {
-        sigil::precollect_declaration_index(&module_stage_asts).map_err(|e| {
-            let spec = diagnostics::simple_error("ResolveError", &e.message, e.span, None);
-            ReplLoadError::Diagnostic {
-                phase: "resolve".to_string(),
-                sources: compile_sources.sources.clone(),
-                source_id: compile_sources.builtin_source_id,
-                spec,
-            }
-        })?
+        sigil::precollect_declarations(&module_stage_asts)
+            .map_err(|e| preload_resolve_error(&compile_sources, &e))?
     };
     merge_user_preload_declarations(
-        &mut declaration_index,
+        &mut precollected,
         &user_ast,
         &compile_sources.user_module_path,
         module_stage_asts.len(),
-        &compile_sources.sources,
-        compile_sources.user_source_id,
+        &compile_sources,
     )?;
+    let declaration_index = precollected.declaration_index.clone();
 
     let mut staged_program = sigil::resolve_staged_program_from_state(
         &module_stage_asts,
@@ -8318,7 +8328,7 @@ fn compile_repl_preload_from_module_stages(
     )
     .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
     scope.advance_next_id_to(staged_program.resume_state.next_local_id);
-    sigil_session.replace_scope_with_declarations(scope, &declaration_index);
+    sigil_session.replace_scope_with_precollected_declarations(scope, &precollected);
 
     let mut preload_imported = Vec::new();
     if !user_ast.is_empty() {
@@ -8701,12 +8711,11 @@ fn prepare_script_preload(
 }
 
 fn merge_user_preload_declarations(
-    declaration_index: &mut sigil::DeclarationIndex,
+    precollected: &mut sigil::PrecollectedDeclarations,
     user_ast: &[Ast],
     user_module_path: &str,
     stage_index: usize,
-    sources: &SourceRegistry,
-    source_id: SourceId,
+    compile_sources: &crate::CompileSources,
 ) -> Result<(), ReplLoadError> {
     if user_ast.is_empty() {
         return Ok(());
@@ -8721,19 +8730,18 @@ fn merge_user_preload_declarations(
         auto_import: false,
         process_spec: None,
     }];
-    let user_index = sigil::precollect_declaration_index(&[stage]).map_err(|e| {
-        let spec = diagnostics::simple_error("ResolveError", &e.message, e.span, None);
-        ReplLoadError::Diagnostic {
-            phase: "resolve".to_string(),
-            sources: sources.clone(),
-            source_id,
-            spec,
-        }
-    })?;
+    let mut staged_user = vec![Vec::new(); stage_index];
+    staged_user.push(stage);
+    let user_precollected = sigil::precollect_declarations(&staged_user)
+        .map_err(|e| preload_resolve_error(compile_sources, &e))?;
 
-    for (fq_name, mut entry) in user_index {
-        entry.stage_index = stage_index;
-        declaration_index.insert(fq_name, entry);
+    let mut validated_owner_registry = precollected.owner_registry.clone();
+    validated_owner_registry
+        .merge(&user_precollected.owner_registry)
+        .map_err(|e| preload_resolve_error(compile_sources, &e))?;
+
+    for (fq_name, entry) in user_precollected.declaration_index {
+        precollected.declaration_index.insert(fq_name, entry);
     }
     Ok(())
 }
@@ -8789,15 +8797,38 @@ fn preload_resolve_error(
 ) -> ReplLoadError {
     let source_id = diagnostic_source_id(compile_sources, &error.span);
     let source = compile_sources.sources.source(source_id).unwrap_or("");
+    let labels = error
+        .related_labels
+        .iter()
+        .map(|label| {
+            (
+                diagnostic_source_id(compile_sources, &label.span),
+                local_diagnostic_span(compile_sources, &label.span),
+                label.message.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let local_labels = labels
+        .iter()
+        .map(|(_, span, message)| (span.clone(), message.clone()))
+        .collect::<Vec<_>>();
+    let mut spec = diagnostics::resolve_error_spec_with_labels(
+        source,
+        &error.message,
+        local_diagnostic_span(compile_sources, &error.span),
+        &local_labels,
+    );
+    let related_label_start = spec.labels.len().saturating_sub(labels.len());
+    for (label, (label_source_id, _, _)) in
+        spec.labels[related_label_start..].iter_mut().zip(labels)
+    {
+        label.source_id = (label_source_id != source_id).then_some(label_source_id);
+    }
     ReplLoadError::Diagnostic {
         phase: "resolve".to_string(),
         sources: compile_sources.sources.clone(),
         source_id,
-        spec: diagnostics::resolve_error_spec(
-            source,
-            &error.message,
-            local_diagnostic_span(compile_sources, &error.span),
-        ),
+        spec,
     }
 }
 
@@ -9303,7 +9334,7 @@ pub(crate) fn parse_module_stages_from_sources(
         let parsed_stage = parse_stage_modules_parallel(sources, stage, compile_unit_kind);
         for (module, lowered_modules) in stage.iter().zip(parsed_stage) {
             for lowered in lowered_modules? {
-                if !lowered.module_path.is_empty() {
+                if !lowered.module_path.is_empty() && lowered.owner.is_none() {
                     let is_impl_owner = crate::lowered_module_is_impl_owner(&lowered);
                     let second_file_name = sources
                         .file_name(module.source_id)
@@ -10069,6 +10100,83 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("helper() -> Int")),
             "signature help should resolve imported short callable: {signature_lines:?}"
+        );
+    }
+
+    #[test]
+    fn preloaded_owner_registry_rejects_later_repl_owner_collision() {
+        let mut engine = ReplEngine::from_module_source(
+            "preloaded_owner.srt",
+            "defrecord PreloadedOwner(value: Int)",
+        )
+        .expect("preloaded owner should initialize");
+
+        let err = engine
+            .sigil_session
+            .resolve(
+                spire::parse("type PreloadedOwner = (Int -> Int)")
+                    .expect("later owner chunk should parse"),
+            )
+            .expect_err("later owner chunk must collide with the preloaded owner");
+
+        assert_eq!(err.message, "Duplicate top-level owner: PreloadedOwner");
+        assert_eq!(err.related_labels[0].message, "first Record declaration");
+    }
+
+    #[test]
+    fn preloaded_script_owner_is_registered_once_and_persists() {
+        let mut engine = ReplEngine::from_script_source(
+            "preloaded_script_owner.srt",
+            "defrecord ScriptOwner(value: Int)",
+        )
+        .expect("a script preload owner should initialize exactly once");
+        assert_eq!(
+            engine
+                .sigil_session
+                .owner_registry()
+                .identity_for_owner("ScriptOwner"),
+            Some(sindr::names::TypeIdentity::Record)
+        );
+
+        let err = engine
+            .sigil_session
+            .resolve(
+                spire::parse("type ScriptOwner = (Int -> Int)")
+                    .expect("later owner chunk should parse"),
+            )
+            .expect_err("later owner chunk must collide with the script preload owner");
+        assert_eq!(err.message, "Duplicate top-level owner: ScriptOwner");
+    }
+
+    #[test]
+    fn preload_duplicate_owner_uses_the_resolve_diagnostic_contract() {
+        let err = match ReplEngine::from_module_source(
+            "duplicate_owner.srt",
+            "defrecord Hoge(value: Int)\ndefmod Hoge {}",
+        ) {
+            Ok(_) => panic!("duplicate preload owners must fail"),
+            Err(err) => err,
+        };
+        let ReplLoadError::Diagnostic { spec, .. } = err else {
+            panic!("duplicate owner should be a resolve diagnostic: {err:?}");
+        };
+
+        assert_eq!(spec.message, "Duplicate top-level owner: Hoge");
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "first Record declaration"));
+        assert!(spec
+            .labels
+            .iter()
+            .any(|label| label.message == "conflicting Mod declaration"));
+        assert_eq!(
+            spec.notes,
+            ["Top-level owners share one namespace, so an owner name can be declared only once."]
+        );
+        assert_eq!(
+            spec.help.as_deref(),
+            Some("Rename one of the owners so each top-level owner has a unique name.")
         );
     }
 

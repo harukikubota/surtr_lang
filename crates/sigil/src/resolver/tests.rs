@@ -622,10 +622,7 @@ defmod Hoge { def test() { () } }"#,
     .expect("definition source should parse");
     let first_span = ast[0].span().clone();
     let conflicting_span = ast[1].span().clone();
-    let staged = ast
-        .into_iter()
-        .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
-        .collect();
+    let staged = staged_modules_from_source_ast(ast, None);
     let module_stages = vec![staged];
 
     let err = precollect_declaration_index(&module_stages)
@@ -650,10 +647,7 @@ defrecord Hoge(a: String)"#,
     .expect("definition source should parse");
     let first_span = ast[0].span().clone();
     let conflicting_span = ast[1].span().clone();
-    let staged = ast
-        .into_iter()
-        .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
-        .collect();
+    let staged = staged_modules_from_source_ast(ast, None);
     let module_stages = vec![staged];
 
     let err = precollect_declaration_index(&module_stages)
@@ -699,7 +693,9 @@ where
     let standard_ast = spire::parse_with_context(
         r#"@builtin type Int
 @builtin type List<$A>
-@builtin defenum Option<$T> { Some($T), None }"#,
+@builtin defenum Option<$T> { Some($T), None }
+@builtin defenum Result<$T> { Ok($T), Err(Error) }
+@builtin defenum Boolean { True, False }"#,
         spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
     )
     .expect("standard source should parse");
@@ -740,6 +736,8 @@ where
         ("Int", TypeIdentity::Type),
         ("List", TypeIdentity::TypeConstructor),
         ("Option", TypeIdentity::TypeConstructor),
+        ("Result", TypeIdentity::TypeConstructor),
+        ("Boolean", TypeIdentity::Enum),
         ("User", TypeIdentity::Struct),
         ("Pair", TypeIdentity::Record),
         ("Choice", TypeIdentity::Enum),
@@ -4487,6 +4485,64 @@ fn test_sigil_session_rejects_cross_chunk_owner_collision() {
         .related_labels
         .iter()
         .any(|label| label.message == "first Record declaration"));
+}
+
+#[test]
+fn test_sigil_session_promotes_inherited_constructor_traits_across_chunks() {
+    let mut session = SigilSession::new();
+    session
+        .resolve(
+            spire::parse(
+                r#"deftrait RootConstructor
+where
+  Self: Type<$A>
+{
+  def map_root(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}"#,
+            )
+            .expect("root trait should parse"),
+        )
+        .expect("root constructor trait should resolve");
+
+    session
+        .resolve(
+            spire::parse(
+                r#"deftrait MiddleConstructor
+where
+  Self: RootConstructor
+{
+  def map_middle(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}"#,
+            )
+            .expect("middle trait should parse"),
+        )
+        .expect("middle constructor trait should resolve");
+    assert_eq!(
+        session
+            .owner_registry()
+            .identity_for_owner("MiddleConstructor"),
+        Some(TypeIdentity::TypeConstructor)
+    );
+
+    session
+        .resolve(
+            spire::parse(
+                r#"deftrait LeafConstructor
+where
+  Self: MiddleConstructor
+{
+  def map_leaf(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}"#,
+            )
+            .expect("leaf trait should parse"),
+        )
+        .expect("leaf constructor trait should resolve");
+    assert_eq!(
+        session
+            .owner_registry()
+            .identity_for_owner("LeafConstructor"),
+        Some(TypeIdentity::TypeConstructor)
+    );
 }
 
 #[test]

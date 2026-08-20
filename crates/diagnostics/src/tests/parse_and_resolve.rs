@@ -52,6 +52,46 @@ fn resolve_error_spec_with_labels_cycles_duplicate_binding_colors() {
 }
 
 #[test]
+fn duplicate_top_level_owner_diagnostic_preserves_each_contract_role() {
+    let first_span = Span { start: 10, end: 14 };
+    let conflicting_span = Span { start: 30, end: 34 };
+    let spec = resolve_error_spec_with_labels(
+        "defrecord Hoge(value: Int)\ndefmod Hoge {}",
+        "Duplicate top-level owner: Hoge",
+        conflicting_span.clone(),
+        &[
+            (first_span.clone(), "first Record declaration".into()),
+            (
+                conflicting_span.clone(),
+                "conflicting Mod declaration".into(),
+            ),
+        ],
+    );
+
+    assert_eq!(spec.message, "Duplicate top-level owner: Hoge");
+    assert_eq!(spec.primary_span, conflicting_span);
+    assert!(spec
+        .labels
+        .iter()
+        .any(|label| { label.span == first_span && label.message == "first Record declaration" }));
+    assert!(spec.labels.iter().any(|label| {
+        label.span == spec.primary_span && label.message == "conflicting Mod declaration"
+    }));
+    assert_eq!(
+        spec.notes,
+        ["Top-level owners share one namespace, so an owner name can be declared only once."]
+    );
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Rename one of the owners so each top-level owner has a unique name.")
+    );
+    assert!(spec
+        .labels
+        .iter()
+        .all(|label| !label.message.contains("namespace")));
+}
+
+#[test]
 fn parse_error_spec_uses_help_for_unit_pattern_guidance() {
     let source = "() = ()";
     let spec = parse_error_spec(

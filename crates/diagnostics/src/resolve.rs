@@ -118,6 +118,18 @@ pub fn resolve_error_spec(source: &str, message: impl Into<String>, span: Span) 
         }
     }
 
+    if message
+        .strip_prefix("Duplicate top-level owner: ")
+        .is_some()
+    {
+        spec.notes.push(
+            "Top-level owners share one namespace, so an owner name can be declared only once."
+                .into(),
+        );
+        spec.help =
+            Some("Rename one of the owners so each top-level owner has a unique name.".into());
+    }
+
     if let Some(target) = extract_backticked_target(&message, "Invalid import members in `", "`.") {
         if let Some(line_span) = trimmed_line_span_containing(source, span.start) {
             spec.labels.push(DiagnosticLabel {
