@@ -1707,9 +1707,45 @@ impl Resolver {
         if is_synthetic_builtin_symbol_uid(uid) {
             return builtin_symbol_identity_info(name);
         }
-        self.declaration_uid_kinds
-            .get(&uid)
-            .and_then(|kind| declaration_symbol_identity_info(name, kind))
+        let kind = self.declaration_uid_kinds.get(&uid)?;
+        let entry = self.declaration_entry_for_uid(uid);
+        let direct_owner_name = if matches!(kind, DeclarationKind::Const) {
+            entry
+                .filter(|entry| entry.fq_name.contains("::__const__::"))
+                .map(|entry| entry.fq_name.as_str())
+                .or_else(|| entry.map(|entry| entry.name.as_str()))
+                .unwrap_or(name)
+        } else {
+            entry.map(|entry| entry.name.as_str()).unwrap_or(name)
+        };
+        let inferred_owner = match kind {
+            DeclarationKind::EnumVariant | DeclarationKind::TraitMethod => {
+                name.rsplit_once("::").map(|(owner, _)| owner.to_string())
+            }
+            _ => entry.and_then(|entry| {
+                let module_path = entry
+                    .module_path
+                    .strip_suffix("::__traitimpl__")
+                    .unwrap_or(&entry.module_path);
+                (!module_path.is_empty() && module_path != "__traitimpl__")
+                    .then(|| module_path.to_string())
+            }),
+        };
+        declaration_symbol_identity_info(
+            &self.owner_registry,
+            direct_owner_name,
+            kind,
+            inferred_owner.as_deref(),
+        )
+    }
+
+    fn symbol_info_for_declaration(
+        &self,
+        name: &str,
+        kind: &DeclarationKind,
+        enclosing_owner: Option<&str>,
+    ) -> Option<SymbolIdentityInfo> {
+        declaration_symbol_identity_info(&self.owner_registry, name, kind, enclosing_owner)
     }
 
     pub(super) fn with_child_scope<T>(
@@ -2592,12 +2628,14 @@ impl Resolver {
                 self.scope.define_with_id(&name, uid);
                 define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
+                let symbol_info =
+                    self.symbol_info_for_declaration(&name, &DeclarationKind::Struct, None);
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
-                    symbol_info: user_type_symbol_identity_info(&DeclarationKind::Struct),
+                    symbol_info,
                     span: span.clone(),
                 };
                 let resolved_type_params = self.resolve_type_params(type_params)?;
@@ -2631,12 +2669,14 @@ impl Resolver {
                 self.scope.define_with_id(&name, uid);
                 define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
+                let symbol_info =
+                    self.symbol_info_for_declaration(&name, &DeclarationKind::Record, None);
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
-                    symbol_info: user_type_symbol_identity_info(&DeclarationKind::Record),
+                    symbol_info,
                     span: span.clone(),
                 };
                 let rfields = fields
@@ -2668,12 +2708,14 @@ impl Resolver {
                 self.scope.define_with_id(&name, uid);
                 define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
+                let symbol_info =
+                    self.symbol_info_for_declaration(&name, &DeclarationKind::Deferror, None);
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
-                    symbol_info: user_type_symbol_identity_info(&DeclarationKind::Deferror),
+                    symbol_info,
                     span: span.clone(),
                 };
                 let mut error_scope = self.scope.clone();
@@ -2721,12 +2763,14 @@ impl Resolver {
                 self.scope.define_with_id(&name, uid);
                 define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
+                let symbol_info =
+                    self.symbol_info_for_declaration(&name, &DeclarationKind::Enum, None);
                 let rid = ResolvedId {
                     name: name.clone(),
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
-                    symbol_info: user_type_symbol_identity_info(&DeclarationKind::Enum),
+                    symbol_info,
                     span: span.clone(),
                 };
                 let resolved_type_params = type_params
@@ -2744,13 +2788,18 @@ impl Resolver {
                     self.scope.define_with_id(&ctor_name, ctor_uid);
                     define_global_surface_alias(&mut self.scope, &ctor_name, ctor_uid);
                     let qualified_ctor_name = self.qualify_current_declaration_name(&ctor_name);
+                    let symbol_info = self.symbol_info_for_declaration(
+                        &ctor_name,
+                        &DeclarationKind::EnumVariant,
+                        Some(&name),
+                    );
                     resolved_variants.push(ResolvedEnumVariant {
                         id: ResolvedId {
                             name: ctor_name,
                             qualified_name: Some(qualified_ctor_name),
                             unique_id: ctor_uid,
                             compiler_generated: false,
-                            symbol_info: None,
+                            symbol_info,
                             span: variant.span.clone(),
                         },
                         payload: variant
@@ -2804,12 +2853,17 @@ impl Resolver {
                 self.scope.define_with_id(&name, fun_uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 define_global_surface_alias(&mut self.scope, &qualified_name, fun_uid);
+                let symbol_info = self.symbol_info_for_declaration(
+                    &name,
+                    &DeclarationKind::Def,
+                    self.current_module_path.as_deref(),
+                );
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: fun_uid,
                     compiler_generated: false,
-                    symbol_info: None,
+                    symbol_info,
                     span: span.clone(),
                 };
 
@@ -2843,12 +2897,19 @@ impl Resolver {
                 if let Some(qualified_name) = qualified_name.as_deref() {
                     define_global_surface_alias(&mut self.scope, qualified_name, uid);
                 }
+                let owner_name = if attrs.visibility == Visibility::Public {
+                    name.as_str()
+                } else {
+                    qualified_name.as_deref().unwrap_or(&name)
+                };
+                let symbol_info =
+                    self.symbol_info_for_declaration(owner_name, &DeclarationKind::Const, None);
                 let rid = ResolvedId {
                     name,
                     qualified_name,
                     unique_id: uid,
                     compiler_generated: false,
-                    symbol_info: None,
+                    symbol_info,
                     span: span.clone(),
                 };
                 Ok(Resolved::ConstDef(
@@ -2881,12 +2942,17 @@ impl Resolver {
                 self.scope.define_with_id(&name, fun_uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 define_global_surface_alias(&mut self.scope, &qualified_name, fun_uid);
+                let symbol_info = self.symbol_info_for_declaration(
+                    &name,
+                    &DeclarationKind::Extractor,
+                    self.current_module_path.as_deref(),
+                );
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: fun_uid,
                     compiler_generated: false,
-                    symbol_info: None,
+                    symbol_info,
                     span: span.clone(),
                 };
 
@@ -2907,12 +2973,14 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, trait_uid);
+                let symbol_info =
+                    self.symbol_info_for_declaration(&name, &DeclarationKind::Trait, None);
                 let rid = ResolvedId {
                     name: name.clone(),
                     qualified_name: Some(qualified_trait_name.clone()),
                     unique_id: trait_uid,
                     compiler_generated: false,
-                    symbol_info: None,
+                    symbol_info,
                     span: span.clone(),
                 };
                 let resolved_type_params = self.resolve_type_params(type_params)?;
@@ -2966,13 +3034,18 @@ impl Resolver {
                         .transpose()?;
                     self.scope
                         .advance_next_id_to(method_resolver.scope.next_id());
+                    let symbol_info = self.symbol_info_for_declaration(
+                        &qualified_method,
+                        &DeclarationKind::TraitMethod,
+                        Some(&name),
+                    );
                     resolved_methods.push(ResolvedTraitMethodSig {
                         id: ResolvedId {
                             name: method_name,
                             qualified_name: Some(qualified_method),
                             unique_id: method_uid,
                             compiler_generated: false,
-                            symbol_info: None,
+                            symbol_info,
                             span: method_span.clone(),
                         },
                         fun_params: fun_params
@@ -3020,12 +3093,14 @@ impl Resolver {
                 )?;
                 let (trait_uid, qualified_trait_name) =
                     self.resolve_trait_reference(&trait_name, &span)?;
+                let trait_symbol_info =
+                    self.symbol_info_for_declaration(&trait_name, &DeclarationKind::Trait, None);
                 let trait_id = ResolvedId {
                     name: trait_name.clone(),
                     qualified_name: Some(qualified_trait_name.clone()),
                     unique_id: trait_uid,
                     compiler_generated: attrs.compiler_generated,
-                    symbol_info: None,
+                    symbol_info: trait_symbol_info,
                     span: span.clone(),
                 };
                 let resolved_target_ty = self.resolve_type_annotation(target_ty)?;
@@ -3141,6 +3216,11 @@ impl Resolver {
                             method_name
                         )
                     };
+                    let symbol_info = self.symbol_info_for_declaration(
+                        &local_function_name,
+                        &DeclarationKind::ImplMethod,
+                        Some(&target_key),
+                    );
 
                     resolved_methods.push(ResolvedTraitImplMethod {
                         method_name: method_name.clone(),
@@ -3149,7 +3229,7 @@ impl Resolver {
                             qualified_name: Some(qualified_function_name),
                             unique_id: method_uid,
                             compiler_generated: false,
-                            symbol_info: None,
+                            symbol_info,
                             span: method_span.clone(),
                         },
                         fun_params,
@@ -3217,12 +3297,17 @@ impl Resolver {
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 self.scope.advance_next_id_to(decl_resolver.scope.next_id());
                 self.scope.define_with_id(&name, builtin_uid);
+                let symbol_info = self.symbol_info_for_declaration(
+                    &name,
+                    &DeclarationKind::Def,
+                    self.current_module_path.as_deref(),
+                );
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: builtin_uid,
                     compiler_generated: false,
-                    symbol_info: None,
+                    symbol_info,
                     span: span.clone(),
                 };
                 Ok(Resolved::BuiltinDecl(
@@ -3254,12 +3339,17 @@ impl Resolver {
                     .or_else(|| self.scope.lookup(&name))
                     .unwrap_or_else(|| self.scope.reserve_id());
                 self.scope.define_with_id(&name, uid);
+                let symbol_info = self.symbol_info_for_declaration(
+                    &name,
+                    &DeclarationKind::Extractor,
+                    self.current_module_path.as_deref(),
+                );
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
-                    symbol_info: None,
+                    symbol_info,
                     span: span.clone(),
                 };
                 let resolved_param = self.resolve_extractor_param(param)?;
@@ -3278,7 +3368,11 @@ impl Resolver {
                 self.scope.define_with_id(&head.name, builtin_type_uid);
                 define_global_surface_alias(&mut self.scope, &head.name, builtin_type_uid);
                 let qualified_name = self.qualify_current_declaration_name(&head.name);
-                let symbol_info = builtin_symbol_identity_info(&head.name);
+                let symbol_info = self.symbol_info_for_declaration(
+                    &head.name,
+                    &DeclarationKind::BuiltinType,
+                    None,
+                );
                 let rid = ResolvedId {
                     name: head.name,
                     qualified_name: Some(qualified_name),
@@ -3315,12 +3409,21 @@ impl Resolver {
                 self.scope.define_with_id(&name, uid);
                 define_global_surface_alias(&mut self.scope, &name, uid);
                 let qualified_name = self.qualify_current_declaration_name(&name);
+                let result_owner = name
+                    .rsplit_once("::")
+                    .map(|(owner, _)| owner)
+                    .unwrap_or("Result");
+                let symbol_info = self.symbol_info_for_declaration(
+                    &name,
+                    &DeclarationKind::ResultCtor,
+                    Some(result_owner),
+                );
                 let rid = ResolvedId {
                     name,
                     qualified_name: Some(qualified_name),
                     unique_id: uid,
                     compiler_generated: false,
-                    symbol_info: None,
+                    symbol_info,
                     span: span.clone(),
                 };
                 Ok(Resolved::ResultCtorDecl(
@@ -3700,13 +3803,18 @@ impl Resolver {
                         spire::ast::WhereConstraintRhs::Trait(span, name, args) => {
                             let (unique_id, qualified_name) =
                                 self.resolve_trait_reference(&name, &span)?;
+                            let symbol_info = self.symbol_info_for_declaration(
+                                &name,
+                                &DeclarationKind::Trait,
+                                None,
+                            );
                             Ok(ResolvedWhereConstraintRhs::Trait {
                                 trait_id: ResolvedId {
                                     name,
                                     qualified_name: Some(qualified_name),
                                     unique_id,
                                     compiler_generated: false,
-                                    symbol_info: None,
+                                    symbol_info,
                                     span,
                                 },
                                 args: args
@@ -3739,13 +3847,18 @@ impl Resolver {
                                     span: span.clone(),
                                     related_labels: Vec::new(),
                                 })? as u32;
+                            let symbol_info = self.symbol_info_for_declaration(
+                                &owner,
+                                &DeclarationKind::Trait,
+                                None,
+                            );
                             Ok(ResolvedWhereConstraintRhs::TraitSlot {
                                 trait_id: ResolvedId {
                                     name: owner,
                                     qualified_name: Some(qualified_name),
                                     unique_id,
                                     compiler_generated: false,
-                                    symbol_info: None,
+                                    symbol_info,
                                     span: span.clone(),
                                 },
                                 slot_name,

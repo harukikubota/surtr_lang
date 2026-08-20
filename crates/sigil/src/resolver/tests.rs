@@ -770,6 +770,60 @@ where
 }
 
 #[test]
+fn test_owner_registry_does_not_bind_module_root_in_global_scope() {
+    let ast = spire::parse_with_context("defmod Hoge {}", spire::ParserContext::project(0))
+        .expect("module owner should parse");
+    let module_stages = vec![ast
+        .into_iter()
+        .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
+        .collect::<Vec<_>>()];
+    let precollected =
+        precollect_declarations(&module_stages).expect("module owner should precollect");
+    assert_eq!(
+        precollected.owner_registry.identity_for_owner("Hoge"),
+        Some(TypeIdentity::Mod)
+    );
+
+    let declaration_uids = assign_declaration_uids(&precollected.declaration_index);
+    let scope = build_global_scope(&precollected.declaration_index, &declaration_uids);
+
+    assert_eq!(scope.lookup("Hoge"), None);
+}
+
+#[test]
+fn test_record_head_remains_bound_in_global_scope() {
+    let ast = spire::parse_with_context(
+        "defrecord Hoge(value: Int)",
+        spire::ParserContext::project(0),
+    )
+    .expect("record owner should parse");
+    let module_stages = vec![staged_modules_from_source_ast(ast, None)];
+    let precollected =
+        precollect_declarations(&module_stages).expect("record owner should precollect");
+    let declaration_uids = assign_declaration_uids(&precollected.declaration_index);
+    let expected_uid = declaration_uids
+        .get("Global::Hoge")
+        .copied()
+        .expect("record head should have a declaration UID");
+
+    let scope = build_global_scope(&precollected.declaration_index, &declaration_uids);
+
+    assert_eq!(scope.lookup("Hoge"), Some(expected_uid));
+}
+
+#[test]
+fn test_empty_module_owner_is_not_importable_from_registry_metadata_alone() {
+    let ast = spire::parse_with_context("defmod Hoge {}", spire::ParserContext::project(0))
+        .expect("module owner should parse");
+    let module_stages = vec![staged_modules_from_source_ast(ast, None)];
+
+    let err = resolve_user_with_modules("import Hoge", &module_stages)
+        .expect_err("owner metadata alone must not make an empty module importable");
+
+    assert_eq!(err.message, "Unknown module import: Hoge");
+}
+
+#[test]
 fn test_precollect_namespaced_types_can_coexist() {
     let module_stages = vec![vec![staged_module(
         "",
@@ -1560,6 +1614,214 @@ impl Add for Int {
         Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), _, methods)
             if id.name == "Add" && target == "Global::Int" && methods.len() == 1
     ));
+}
+
+#[test]
+fn test_resolved_trait_ids_use_direct_and_inherited_owner_identity() {
+    let ast = parse_module_ast(
+        r#"deftrait Functor
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>) -> Self<$A>
+}
+
+deftrait Applicative
+where
+  Self: Functor
+{
+  def pure(value: $A) -> Self<$A>
+}
+
+deftrait Show {
+  def show(self: Self) -> String
+}"#,
+        "Traits",
+    );
+    let module_stages = vec![vec![staged_module("Traits", ast)]];
+    let precollected = precollect_declarations(&module_stages).expect("traits should precollect");
+    let declaration_uids = assign_declaration_uids(&precollected.declaration_index);
+    let constructor_slots =
+        collect_staged_trait_constructor_slots(&module_stages, &declaration_uids);
+
+    for name in ["Functor", "Applicative"] {
+        let uid = declaration_uids
+            .get(&format!("Traits::{name}"))
+            .copied()
+            .expect("trait should have a declaration UID");
+        assert_eq!(
+            constructor_slots.get(&uid).map(Vec::as_slice),
+            Some(["$A".to_string()].as_slice()),
+            "{name} should retain its constructor slot"
+        );
+    }
+
+    let resolved = resolve_staged_program(
+        &module_stages,
+        Vec::new(),
+        &precollected.declaration_index,
+        None,
+    )
+    .expect("traits should resolve");
+
+    for (name, expected_identity) in [
+        ("Functor", TypeIdentity::TypeConstructor),
+        ("Applicative", TypeIdentity::TypeConstructor),
+        ("Show", TypeIdentity::Trait),
+    ] {
+        let id = resolved
+            .iter()
+            .find_map(|node| match node {
+                Resolved::TraitDef(_, id, ..) if id.name == name => Some(id),
+                _ => None,
+            })
+            .expect("resolved trait should be present");
+        assert_eq!(
+            id.symbol_info.as_ref().map(|info| info.identity),
+            Some(expected_identity),
+            "{name} should use its owner registry identity"
+        );
+    }
+}
+
+#[test]
+fn test_resolved_members_use_enclosing_or_target_owner_identity() {
+    let ast = spire::parse_with_context(
+        r#"defmod App {
+  def run() -> Int { 1 }
+}
+
+defenum Choice { First }
+
+deftrait Show {
+  def show(self: Self) -> String
+}
+
+defstruct Box { value: Int }
+
+impl Box {
+  def normalize(self: Self) -> Self { self }
+}
+
+impl Show for Box {
+  def show(self: Self) -> String { "box" }
+}"#,
+        spire::ParserContext::project(0),
+    )
+    .expect("owners and members should parse");
+    let module_stages = vec![ast
+        .into_iter()
+        .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
+        .collect::<Vec<_>>()];
+    let precollected =
+        precollect_declarations(&module_stages).expect("owners and members should precollect");
+    let resolved = resolve_staged_program(
+        &module_stages,
+        Vec::new(),
+        &precollected.declaration_index,
+        None,
+    )
+    .expect("owners and members should resolve");
+
+    let enum_variant = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::EnumDef(_, id, _, variants, _)
+                if global_surface_name(&id.name) == "Choice" =>
+            {
+                variants.first().map(|variant| &variant.id)
+            }
+            _ => None,
+        })
+        .expect("enum variant should resolve");
+    assert_eq!(
+        enum_variant.symbol_info.as_ref().map(|info| info.identity),
+        Some(TypeIdentity::Enum)
+    );
+
+    let (trait_id, trait_method) = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, _, methods, _) if id.name == "Show" => {
+                Some((id, &methods[0].id))
+            }
+            _ => None,
+        })
+        .expect("trait and method should resolve");
+    assert_eq!(
+        trait_id.symbol_info.as_ref().map(|info| info.identity),
+        Some(TypeIdentity::Trait)
+    );
+    assert_eq!(
+        trait_method.symbol_info.as_ref().map(|info| info.identity),
+        Some(TypeIdentity::Trait)
+    );
+
+    let module_member = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, ..)
+                if id.qualified_name.as_deref() == Some("Global::App::run") =>
+            {
+                Some(id)
+            }
+            _ => None,
+        })
+        .expect("module member should resolve");
+    assert_eq!(
+        module_member.symbol_info.as_ref().map(|info| info.identity),
+        Some(TypeIdentity::Mod)
+    );
+
+    let inherent_member = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, ..)
+                if id.qualified_name.as_deref() == Some("Global::Box::normalize") =>
+            {
+                Some(id)
+            }
+            _ => None,
+        })
+        .expect("inherent impl member should resolve");
+    assert_eq!(
+        inherent_member
+            .symbol_info
+            .as_ref()
+            .map(|info| info.identity),
+        Some(TypeIdentity::Struct)
+    );
+
+    let (trait_impl_id, trait_impl_member) = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), _, methods)
+                if id.name == "Show" && target == "Global::Box" =>
+            {
+                Some((id, &methods[0].function_id))
+            }
+            _ => None,
+        })
+        .expect("trait impl and member should resolve");
+    assert_eq!(
+        trait_impl_id.symbol_info.as_ref().map(|info| info.identity),
+        Some(TypeIdentity::Trait)
+    );
+    assert_eq!(
+        trait_impl_member
+            .symbol_info
+            .as_ref()
+            .map(|info| info.identity),
+        Some(TypeIdentity::Struct)
+    );
+
+    let bare = parse_and_resolve("def helper() -> Int { 1 }")
+        .expect("bare top-level definition should resolve");
+    let bare_id = match &bare[0] {
+        Resolved::Def(_, id, ..) => id,
+        other => panic!("expected bare top-level def, got {other:?}"),
+    };
+    assert_eq!(bare_id.symbol_info, None);
 }
 
 #[test]

@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use sindr::builtin::{builtin_function_metas, builtin_uid};
 use sindr::names::{
     builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities, SymbolIdentityInfo,
-    TypeIdentity,
 };
 use sindr::warning::PhaseOutput;
 use spire::ast::{
@@ -69,38 +68,50 @@ fn define_global_surface_alias(scope: &mut Scope, canonical_name: &str, uid: u32
     }
 }
 
-pub fn user_type_symbol_identity_info(kind: &DeclarationKind) -> Option<SymbolIdentityInfo> {
-    let (identity, capabilities) = match kind {
-        DeclarationKind::Struct => (
-            TypeIdentity::Struct,
-            SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot)),
-        ),
-        DeclarationKind::Record => (
-            TypeIdentity::Record,
-            SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot)),
-        ),
-        DeclarationKind::Enum => (
-            TypeIdentity::Enum,
-            SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot)),
-        ),
-        DeclarationKind::Deferror => (
-            TypeIdentity::Error,
-            SymbolCapabilities::new(true, false, false, None),
-        ),
-        _ => return None,
+pub fn user_type_symbol_identity_info(owner: &OwnerRef) -> Option<SymbolIdentityInfo> {
+    if let Some(builtin) = builtin_symbol_identity_info(&owner.canonical_key) {
+        return Some(SymbolIdentityInfo::new(
+            owner.identity,
+            builtin.capabilities,
+        ));
+    }
+
+    let capabilities = match owner.kind {
+        OwnerKind::BuiltinType => SymbolCapabilities::type_owner(),
+        OwnerKind::Struct | OwnerKind::Record | OwnerKind::Enum => {
+            SymbolCapabilities::new(true, true, true, Some(FacetRootKind::TypeRoot))
+        }
+        OwnerKind::Error => SymbolCapabilities::new(true, false, false, None),
+        OwnerKind::Trait => SymbolCapabilities::trait_owner(),
+        OwnerKind::Sig => SymbolCapabilities::signature_owner(),
+        OwnerKind::Const => SymbolCapabilities::const_owner(),
+        OwnerKind::Mod => SymbolCapabilities::module_owner(),
+        OwnerKind::Supervisor => SymbolCapabilities::supervisor_owner(),
     };
-    Some(SymbolIdentityInfo::new(identity, capabilities))
+    Some(SymbolIdentityInfo::new(owner.identity, capabilities))
 }
 
 pub fn declaration_symbol_identity_info(
+    owner_registry: &OwnerRegistry,
     name: &str,
     kind: &DeclarationKind,
+    enclosing_owner: Option<&str>,
 ) -> Option<SymbolIdentityInfo> {
-    if matches!(kind, DeclarationKind::BuiltinType) {
-        builtin_symbol_identity_info(global_surface_name(name))
-    } else {
-        user_type_symbol_identity_info(kind)
-    }
+    let direct_owner = matches!(
+        kind,
+        DeclarationKind::BuiltinType
+            | DeclarationKind::Struct
+            | DeclarationKind::Record
+            | DeclarationKind::Deferror
+            | DeclarationKind::Enum
+            | DeclarationKind::Trait
+            | DeclarationKind::Const
+    )
+    .then(|| owner_registry.owner_ref(name))
+    .flatten();
+    let owner = direct_owner
+        .or_else(|| enclosing_owner.and_then(|owner_name| owner_registry.owner_ref(owner_name)))?;
+    user_type_symbol_identity_info(&owner)
 }
 
 fn auto_import_module_names(module_stages: &[Vec<StagedModuleAst>]) -> Vec<String> {
