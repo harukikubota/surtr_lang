@@ -354,7 +354,10 @@ impl StagedCompilationSnapshot {
     }
 
     pub fn symbol_semantic_infos(&self) -> Vec<surtr_analysis::SymbolSemanticInfo> {
+        let owner_registry = sigil::precollect_owner_registry(&self.module_stages)
+            .expect("validated staged snapshot must retain a valid owner registry");
         surtr_analysis::symbol_semantic_infos_from_compile_metadata(
+            &owner_registry,
             self.declaration_index(),
             &self.docs,
             &self.signatures,
@@ -362,7 +365,10 @@ impl StagedCompilationSnapshot {
     }
 
     pub fn semantic_index(&self) -> surtr_analysis::SemanticIndex {
+        let owner_registry = sigil::precollect_owner_registry(&self.module_stages)
+            .expect("validated staged snapshot must retain a valid owner registry");
         surtr_analysis::SemanticIndex::from_compile_metadata(
+            &owner_registry,
             self.declaration_index(),
             &self.docs,
             &self.signatures,

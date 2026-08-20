@@ -1001,10 +1001,12 @@ fn analyze_project_stages(
         current_module_path.as_deref(),
     );
 
-    match sigil::precollect_declaration_index(&module_stages) {
-        Ok(declaration_index) => {
+    match sigil::precollect_declarations(&module_stages) {
+        Ok(precollected) => {
+            let declaration_index = precollected.declaration_index;
             *semantic_index = semantic_index_with_declarations(
                 semantic_index,
+                &precollected.owner_registry,
                 &declaration_index,
                 &docs,
                 &signatures,
@@ -1091,6 +1093,7 @@ fn is_load_project_statement(stmt: &Ast) -> bool {
 
 fn semantic_index_with_declarations(
     existing: &SemanticIndex,
+    owner_registry: &sigil::OwnerRegistry,
     declaration_index: &sigil::DeclarationIndex,
     docs: &[sindr::ir::DocEntry],
     signatures: &[sindr::ir::SignatureEntry],
@@ -1102,6 +1105,7 @@ fn semantic_index_with_declarations(
     let mut infos = existing.symbol_semantic_infos().to_vec();
     infos.extend(
         crate::semantic::symbol_semantic_infos_from_compile_metadata(
+            owner_registry,
             declaration_index,
             docs,
             signatures,
@@ -1116,7 +1120,11 @@ fn semantic_index_with_declarations(
         let visible_infos = visible_entries
             .into_iter()
             .filter_map(|visible| {
-                crate::semantic::symbol_semantic_info_for_effective_visible_entry(&infos, &visible)
+                crate::semantic::symbol_semantic_info_for_effective_visible_entry(
+                    owner_registry,
+                    &infos,
+                    &visible,
+                )
             })
             .collect::<Vec<_>>();
         infos.extend(visible_infos);

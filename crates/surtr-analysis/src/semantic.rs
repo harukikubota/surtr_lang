@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-use sigil::{declaration_symbol_identity_info, DeclarationIndex, DeclarationKind};
+use sigil::{
+    declaration_symbol_identity_info, user_type_symbol_identity_info, DeclarationIndex,
+    DeclarationKind, OwnerKind, OwnerRegistry,
+};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use sindr::names::{builtin_symbol_identity_info, FacetRootKind, SymbolCapabilities, TypeIdentity};
 use spire::ast::{AstTy, Visibility};
@@ -229,11 +232,13 @@ impl SemanticIndex {
     }
 
     pub fn from_compile_metadata(
+        owner_registry: &OwnerRegistry,
         declarations: &DeclarationIndex,
         docs: &[DocEntry],
         signatures: &[SignatureEntry],
     ) -> Self {
         Self::from_symbol_semantic_infos(symbol_semantic_infos_from_compile_metadata(
+            owner_registry,
             declarations,
             docs,
             signatures,
@@ -242,11 +247,12 @@ impl SemanticIndex {
 
     pub fn enrich_symbols_with_compile_metadata(
         symbols: Vec<CompletionSymbol>,
+        owner_registry: &OwnerRegistry,
         declarations: &DeclarationIndex,
         docs: &[DocEntry],
         signatures: &[SignatureEntry],
     ) -> Self {
-        let metadata = Self::from_compile_metadata(declarations, docs, signatures);
+        let metadata = Self::from_compile_metadata(owner_registry, declarations, docs, signatures);
         let mut metadata_by_key = BTreeMap::new();
         for info in metadata.symbol_semantic_infos {
             metadata_by_key.insert(
@@ -293,8 +299,14 @@ impl SemanticIndex {
         Self::from_symbol_semantic_infos(enriched)
     }
 
-    pub fn from_declaration_index(declarations: &DeclarationIndex) -> Self {
-        Self::from_symbol_semantic_infos(symbol_semantic_infos_from_declaration_index(declarations))
+    pub fn from_declaration_index(
+        owner_registry: &OwnerRegistry,
+        declarations: &DeclarationIndex,
+    ) -> Self {
+        Self::from_symbol_semantic_infos(symbol_semantic_infos_from_declaration_index(
+            owner_registry,
+            declarations,
+        ))
     }
 
     pub fn symbols(&self) -> &[CompletionSymbol] {
@@ -472,35 +484,40 @@ pub fn symbol_semantic_infos_from_metadata(
 }
 
 pub fn symbol_semantic_infos_from_declaration_index(
+    owner_registry: &OwnerRegistry,
     declarations: &DeclarationIndex,
 ) -> Vec<SymbolSemanticInfo> {
-    let mut infos = Vec::new();
-    for entry in declarations
-        .values()
-        .filter(|entry| !entry.hidden && (entry.user_importable || entry.user_callable))
-    {
-        if !entry.module_path.is_empty() {
-            let surface_module_name = surface_name(&entry.module_path);
-            infos.push(SymbolSemanticInfo {
-                canonical_name: entry.module_path.clone(),
-                surface_name: surface_module_name.clone(),
-                replacement: surface_module_name,
-                kind: CompletionKind::TypePath,
-                identity: Some(TypeIdentity::Mod),
+    let mut infos = owner_registry
+        .entries()
+        .filter(|owner| owner.kind != OwnerKind::Const)
+        .filter_map(|owner| {
+            let owner_ref = owner_registry.owner_ref(&owner.canonical_key)?;
+            let identity_info = user_type_symbol_identity_info(&owner_ref)?;
+            let surface_name = surface_name(&owner.canonical_key);
+            Some(SymbolSemanticInfo {
+                canonical_name: owner.canonical_key.clone(),
+                surface_name: surface_name.clone(),
+                replacement: surface_name,
+                kind: completion_kind_for_owner(owner.kind),
+                identity: Some(identity_info.identity),
                 detail: None,
                 documentation: None,
                 sort_text: None,
                 origin: None,
                 definition: None,
-                capabilities: completion_capabilities_for_builtin(&entry.module_path),
+                capabilities: Some(identity_info.capabilities),
                 display_metadata: None,
-            });
-        }
-
+            })
+        })
+        .collect::<Vec<_>>();
+    for entry in declarations
+        .values()
+        .filter(|entry| !entry.hidden && (entry.user_importable || entry.user_callable))
+    {
         if let Some(kind) = completion_kind_for_declaration_kind(&entry.kind) {
             let qualified_name = surface_name(&entry.fq_name);
-            let capabilities = symbol_capabilities_for_declaration_entry(entry);
-            let identity = symbol_identity_for_declaration_entry(entry);
+            let capabilities = symbol_capabilities_for_declaration_entry(owner_registry, entry);
+            let identity = symbol_identity_for_declaration_entry(owner_registry, entry);
             infos.push(SymbolSemanticInfo {
                 canonical_name: entry.fq_name.clone(),
                 surface_name: qualified_name.clone(),
@@ -533,11 +550,12 @@ pub fn symbol_semantic_infos_from_declaration_index(
 }
 
 pub fn symbol_semantic_infos_from_compile_metadata(
+    owner_registry: &OwnerRegistry,
     declarations: &DeclarationIndex,
     docs: &[DocEntry],
     signatures: &[SignatureEntry],
 ) -> Vec<SymbolSemanticInfo> {
-    let mut infos = symbol_semantic_infos_from_declaration_index(declarations);
+    let mut infos = symbol_semantic_infos_from_declaration_index(owner_registry, declarations);
     merge_semantic_info(
         &mut infos,
         symbol_semantic_infos_from_metadata(docs, signatures),
@@ -629,18 +647,53 @@ pub(crate) fn completion_capabilities_for_builtin(name: &str) -> Option<SymbolCa
     symbol_capabilities_for_builtin_surface(name)
 }
 
+fn enclosing_owner_for_declaration(entry: &sigil::DeclarationEntry) -> Option<String> {
+    match entry.kind {
+        DeclarationKind::EnumVariant | DeclarationKind::TraitMethod => entry
+            .name
+            .rsplit_once("::")
+            .map(|(owner, _)| owner.to_string()),
+        _ => {
+            let module_path = entry
+                .module_path
+                .strip_suffix("::__traitimpl__")
+                .unwrap_or(&entry.module_path);
+            (!module_path.is_empty()
+                && module_path != "__traitimpl__"
+                && module_path != "__types__")
+                .then(|| module_path.to_string())
+        }
+    }
+}
+
+fn declaration_identity_info(
+    owner_registry: &OwnerRegistry,
+    entry: &sigil::DeclarationEntry,
+) -> Option<sindr::names::SymbolIdentityInfo> {
+    let enclosing_owner = enclosing_owner_for_declaration(entry);
+    declaration_symbol_identity_info(
+        owner_registry,
+        &entry.name,
+        &entry.kind,
+        enclosing_owner.as_deref(),
+    )
+    .or_else(|| {
+        declaration_symbol_identity_info(
+            owner_registry,
+            &entry.fq_name,
+            &entry.kind,
+            enclosing_owner.as_deref(),
+        )
+    })
+}
+
 pub fn symbol_identity_for_declaration_entry(
+    owner_registry: &OwnerRegistry,
     entry: &sigil::DeclarationEntry,
 ) -> Option<TypeIdentity> {
     symbol_identity_for_builtin_surface(&entry.name)
         .or_else(|| symbol_identity_for_builtin_surface(&entry.fq_name))
-        .or_else(|| {
-            declaration_symbol_identity_info(&entry.name, &entry.kind).map(|info| info.identity)
-        })
-        .or(match entry.kind {
-            DeclarationKind::Const => Some(TypeIdentity::Const),
-            _ => None,
-        })
+        .or_else(|| declaration_identity_info(owner_registry, entry).map(|info| info.identity))
 }
 
 pub fn facet_root_capabilities(kind: FacetRootKind) -> SymbolCapabilities {
@@ -652,16 +705,16 @@ pub fn facet_type_root_capabilities() -> SymbolCapabilities {
 }
 
 pub fn symbol_capabilities_for_declaration_entry(
+    owner_registry: &OwnerRegistry,
     entry: &sigil::DeclarationEntry,
 ) -> Option<SymbolCapabilities> {
     symbol_capabilities_for_builtin_surface(&entry.name)
         .or_else(|| symbol_capabilities_for_builtin_surface(&entry.fq_name))
-        .or_else(|| {
-            declaration_symbol_identity_info(&entry.name, &entry.kind).map(|info| info.capabilities)
-        })
+        .or_else(|| declaration_identity_info(owner_registry, entry).map(|info| info.capabilities))
 }
 
 pub fn symbol_semantic_info_for_effective_visible_entry(
+    owner_registry: &OwnerRegistry,
     existing_infos: &[SymbolSemanticInfo],
     visible: &sigil::EffectiveVisibleEntry,
 ) -> Option<SymbolSemanticInfo> {
@@ -699,9 +752,9 @@ pub fn symbol_semantic_info_for_effective_visible_entry(
         merge_symbol_capabilities(&mut inherited_capabilities, info.capabilities.clone());
         merge_symbol_display_metadata(&mut display_metadata, info.display_metadata.clone());
     }
-    let identity = symbol_identity_for_declaration_entry(&visible.entry).or(inherited_identity);
-    let capabilities = declaration_symbol_identity_info(&visible.entry.name, &visible.entry.kind)
-        .map(|info| info.capabilities)
+    let identity = symbol_identity_for_declaration_entry(owner_registry, &visible.entry)
+        .or(inherited_identity);
+    let capabilities = symbol_capabilities_for_declaration_entry(owner_registry, &visible.entry)
         .or(inherited_capabilities);
     Some(SymbolSemanticInfo {
         canonical_name: visible.entry.fq_name.clone(),
@@ -3068,6 +3121,20 @@ fn completion_kind_for_doc_kind(kind: &DocKind) -> CompletionKind {
         DocKind::Module => CompletionKind::TypePath,
         DocKind::Type => CompletionKind::TypeConstructor,
         DocKind::Function => CompletionKind::FunctionCall,
+    }
+}
+
+fn completion_kind_for_owner(kind: OwnerKind) -> CompletionKind {
+    match kind {
+        OwnerKind::BuiltinType
+        | OwnerKind::Struct
+        | OwnerKind::Record
+        | OwnerKind::Enum
+        | OwnerKind::Error => CompletionKind::TypeConstructor,
+        OwnerKind::Trait | OwnerKind::Sig | OwnerKind::Mod | OwnerKind::Supervisor => {
+            CompletionKind::TypePath
+        }
+        OwnerKind::Const => CompletionKind::Variable,
     }
 }
 

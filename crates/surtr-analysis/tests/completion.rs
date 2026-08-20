@@ -1,7 +1,9 @@
-use sigil::{DeclarationEntry, DeclarationIndex, DeclarationKind};
+use sigil::{
+    DeclarationEntry, DeclarationIndex, DeclarationKind, OwnerEntry, OwnerKind, OwnerRegistry,
+};
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use sindr::names::{FacetRootKind, SymbolCapabilities, TypeIdentity};
-use spire::ast::Visibility;
+use spire::ast::{Span, Visibility};
 use surtr_analysis::{
     complete_call_argument, complete_prefix, lookup_symbol_at_cursor,
     rank_completion_candidates_by_expected_type, repl_assist_at_cursor, signature_help_at_cursor,
@@ -1341,6 +1343,7 @@ fn repl_input_support_context_produces_operator_assist_and_ranked_candidates() {
 
 #[test]
 fn semantic_index_adds_module_owner_symbols_from_declarations() {
+    let owners = owner_registry(&[("Helper", TypeIdentity::Mod, OwnerKind::Mod)]);
     let mut declarations = DeclarationIndex::new();
     declarations.insert(
         "Helper::helper".to_string(),
@@ -1354,7 +1357,7 @@ fn semantic_index_adds_module_owner_symbols_from_declarations() {
         ),
     );
 
-    let index = SemanticIndex::from_declaration_index(&declarations);
+    let index = SemanticIndex::from_declaration_index(&owners, &declarations);
     let completion = complete_prefix(CompletionRequest {
         index: &index,
         source: "He",
@@ -1445,6 +1448,24 @@ fn declaration_entry(
         user_importable,
         user_callable,
     }
+}
+
+fn owner_registry(entries: &[(&str, TypeIdentity, OwnerKind)]) -> OwnerRegistry {
+    let mut registry = OwnerRegistry::default();
+    for (canonical_key, identity, kind) in entries {
+        registry
+            .register(OwnerEntry {
+                canonical_key: (*canonical_key).to_string(),
+                identity: *identity,
+                kind: *kind,
+                span: Span { start: 0, end: 1 },
+                stage_index: 0,
+                module_path: matches!(kind, OwnerKind::Mod | OwnerKind::Supervisor)
+                    .then(|| (*canonical_key).to_string()),
+            })
+            .expect("test owner keys should be distinct");
+    }
+    registry
 }
 
 #[test]
@@ -1633,6 +1654,7 @@ fn semantic_index_upsert_preserves_existing_symbol_semantic_info() {
 
 #[test]
 fn semantic_index_compile_metadata_joins_declaration_docs_and_signatures() {
+    let owners = owner_registry(&[("User", TypeIdentity::Struct, OwnerKind::Struct)]);
     let mut declarations = DeclarationIndex::new();
     declarations.insert(
         "Global::Helper::User".to_string(),
@@ -1659,7 +1681,7 @@ fn semantic_index_compile_metadata_joins_declaration_docs_and_signatures() {
         signature: "User(name: String)".to_string(),
     }];
 
-    let index = SemanticIndex::from_compile_metadata(&declarations, &docs, &signatures);
+    let index = SemanticIndex::from_compile_metadata(&owners, &declarations, &docs, &signatures);
     let symbol = index
         .symbols()
         .iter()
@@ -1681,6 +1703,7 @@ fn semantic_index_compile_metadata_joins_declaration_docs_and_signatures() {
 
 #[test]
 fn semantic_index_enriches_symbols_with_compile_metadata_aggregate() {
+    let owners = owner_registry(&[("User", TypeIdentity::Struct, OwnerKind::Struct)]);
     let mut declarations = DeclarationIndex::new();
     declarations.insert(
         "Global::Helper::User".to_string(),
@@ -1718,6 +1741,7 @@ fn semantic_index_enriches_symbols_with_compile_metadata_aggregate() {
             definition: None,
             capabilities: None,
         }],
+        &owners,
         &declarations,
         &docs,
         &signatures,
@@ -1742,6 +1766,7 @@ fn semantic_index_enriches_symbols_with_compile_metadata_aggregate() {
 
 #[test]
 fn compile_metadata_exposes_symbol_semantic_info_before_completion_projection() {
+    let owners = owner_registry(&[("User", TypeIdentity::Struct, OwnerKind::Struct)]);
     let mut declarations = DeclarationIndex::new();
     declarations.insert(
         "Global::Helper::User".to_string(),
@@ -1769,6 +1794,7 @@ fn compile_metadata_exposes_symbol_semantic_info_before_completion_projection() 
     }];
 
     let infos = surtr_analysis::symbol_semantic_infos_from_compile_metadata(
+        &owners,
         &declarations,
         &docs,
         &signatures,
@@ -1824,7 +1850,114 @@ fn shared_builtin_surface_capability_query_excludes_runtime_aliases() {
 }
 
 #[test]
+fn semantic_index_uses_registry_for_complete_owner_and_member_identities() {
+    let owners = owner_registry(&[
+        ("Hoge", TypeIdentity::Mod, OwnerKind::Mod),
+        ("Worker", TypeIdentity::Mod, OwnerKind::Mod),
+        ("RootSup", TypeIdentity::Supervisor, OwnerKind::Supervisor),
+        ("Alias", TypeIdentity::Sig, OwnerKind::Sig),
+        ("Flag", TypeIdentity::Const, OwnerKind::Const),
+        ("Show", TypeIdentity::Trait, OwnerKind::Trait),
+        ("Functor", TypeIdentity::TypeConstructor, OwnerKind::Trait),
+    ]);
+    let mut declarations = DeclarationIndex::new();
+    declarations.insert(
+        "Hoge::test".to_string(),
+        declaration_entry(
+            "Hoge",
+            "test",
+            "Hoge::test",
+            DeclarationKind::Def,
+            true,
+            true,
+        ),
+    );
+    declarations.insert(
+        "Flag".to_string(),
+        declaration_entry("", "Flag", "Flag", DeclarationKind::Const, true, true),
+    );
+    declarations.insert(
+        "Show".to_string(),
+        declaration_entry("", "Show", "Show", DeclarationKind::Trait, true, true),
+    );
+    declarations.insert(
+        "Functor".to_string(),
+        declaration_entry("", "Functor", "Functor", DeclarationKind::Trait, true, true),
+    );
+
+    let index = SemanticIndex::from_declaration_index(&owners, &declarations);
+    for (name, identity, kind) in [
+        ("Hoge", TypeIdentity::Mod, CompletionKind::TypePath),
+        ("Worker", TypeIdentity::Mod, CompletionKind::TypePath),
+        (
+            "RootSup",
+            TypeIdentity::Supervisor,
+            CompletionKind::TypePath,
+        ),
+        ("Alias", TypeIdentity::Sig, CompletionKind::TypePath),
+        ("Flag", TypeIdentity::Const, CompletionKind::Variable),
+        ("Show", TypeIdentity::Trait, CompletionKind::TypePath),
+        (
+            "Functor",
+            TypeIdentity::TypeConstructor,
+            CompletionKind::TypePath,
+        ),
+    ] {
+        let info = index
+            .symbol_semantic_infos()
+            .iter()
+            .find(|info| info.canonical_name == name && info.kind == kind)
+            .unwrap_or_else(|| panic!("missing semantic owner info for {name}"));
+        assert_eq!(info.identity, Some(identity), "{name}");
+    }
+
+    let member = declarations.get("Hoge::test").expect("member declaration");
+    assert_eq!(
+        surtr_analysis::symbol_identity_for_declaration_entry(&owners, member),
+        Some(TypeIdentity::Mod)
+    );
+    let member_info = index
+        .symbol_semantic_infos()
+        .iter()
+        .find(|info| info.canonical_name == "Hoge::test")
+        .expect("member semantic info");
+    assert_eq!(member_info.identity, Some(TypeIdentity::Mod));
+    assert_eq!(member_info.kind, CompletionKind::FunctionCall);
+}
+
+#[test]
+fn semantic_identity_does_not_fall_back_to_declaration_shape() {
+    let owners = OwnerRegistry::default();
+    let ghost_member = declaration_entry(
+        "Ghost",
+        "test",
+        "Ghost::test",
+        DeclarationKind::Def,
+        true,
+        true,
+    );
+    let orphan_const = declaration_entry("", "Flag", "Flag", DeclarationKind::Const, true, true);
+    let declarations = DeclarationIndex::from([
+        ("Ghost::test".to_string(), ghost_member.clone()),
+        ("Flag".to_string(), orphan_const.clone()),
+    ]);
+
+    assert_eq!(
+        surtr_analysis::symbol_identity_for_declaration_entry(&owners, &ghost_member),
+        None
+    );
+    assert_eq!(
+        surtr_analysis::symbol_identity_for_declaration_entry(&owners, &orphan_const),
+        None
+    );
+    let infos =
+        surtr_analysis::symbol_semantic_infos_from_declaration_index(&owners, &declarations);
+    assert!(!infos.iter().any(|info| info.canonical_name == "Ghost"));
+}
+
+#[test]
 fn shared_declaration_capability_query_handles_user_and_builtin_surfaces() {
+    let owners = owner_registry(&[("User", TypeIdentity::Struct, OwnerKind::Struct)]);
     let user = declaration_entry(
         "Global",
         "User",
@@ -1833,11 +1966,11 @@ fn shared_declaration_capability_query_handles_user_and_builtin_surfaces() {
         true,
         false,
     );
-    let user_caps =
-        surtr_analysis::symbol_capabilities_for_declaration_entry(&user).expect("user caps");
+    let user_caps = surtr_analysis::symbol_capabilities_for_declaration_entry(&owners, &user)
+        .expect("user caps");
     assert_eq!(user_caps.facet_root_path, Some(FacetRootKind::TypeRoot));
     assert_eq!(
-        surtr_analysis::symbol_identity_for_declaration_entry(&user),
+        surtr_analysis::symbol_identity_for_declaration_entry(&owners, &user),
         Some(TypeIdentity::Struct)
     );
 
@@ -1849,12 +1982,15 @@ fn shared_declaration_capability_query_handles_user_and_builtin_surfaces() {
         true,
         false,
     );
-    let builtin_caps =
-        surtr_analysis::symbol_capabilities_for_declaration_entry(&builtin).expect("builtin caps");
+    let builtin_caps = surtr_analysis::symbol_capabilities_for_declaration_entry(
+        &OwnerRegistry::default(),
+        &builtin,
+    )
+    .expect("builtin caps");
     assert!(builtin_caps.type_annotation);
     assert_eq!(builtin_caps.facet_root_path, None);
     assert_eq!(
-        surtr_analysis::symbol_identity_for_declaration_entry(&builtin),
+        surtr_analysis::symbol_identity_for_declaration_entry(&OwnerRegistry::default(), &builtin),
         Some(TypeIdentity::Type)
     );
 }
@@ -1884,6 +2020,7 @@ fn effective_visible_entry_semantic_info_reuses_qualified_symbol_metadata() {
     };
 
     let projected = surtr_analysis::symbol_semantic_info_for_effective_visible_entry(
+        &OwnerRegistry::default(),
         &[surtr_analysis::SymbolSemanticInfo {
             canonical_name: "Global::Helper::helper".to_string(),
             surface_name: "Helper::helper".to_string(),
@@ -2034,6 +2171,12 @@ fn call_argument_completion_uses_trait_impl_signature_not_builtin_type_whitelist
 
 #[test]
 fn facet_arg_completion_includes_capability_declared_roots_without_detail_heuristics() {
+    let owners = owner_registry(&[
+        ("User", TypeIdentity::Struct, OwnerKind::Struct),
+        ("Config", TypeIdentity::Record, OwnerKind::Record),
+        ("Choice", TypeIdentity::Enum, OwnerKind::Enum),
+        ("Problem", TypeIdentity::Error, OwnerKind::Error),
+    ]);
     let mut declarations = DeclarationIndex::new();
     declarations.insert(
         "User".to_string(),
@@ -2065,7 +2208,7 @@ fn facet_arg_completion_includes_capability_declared_roots_without_detail_heuris
         "Facet::view(path: Facet<ReadablePath, $S, $A, _, _>, source: $S) -> Result<$A>",
     )];
     symbols.extend(
-        SemanticIndex::from_declaration_index(&declarations)
+        SemanticIndex::from_declaration_index(&owners, &declarations)
             .symbols()
             .iter()
             .cloned(),

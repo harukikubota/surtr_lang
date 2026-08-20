@@ -1431,6 +1431,7 @@ impl ReplEngine {
 
     pub fn symbol_semantic_infos(&self) -> Vec<surtr_analysis::SymbolSemanticInfo> {
         let mut symbols = surtr_analysis::SemanticIndex::from_compile_metadata(
+            self.sigil_session.owner_registry(),
             &self.declaration_index,
             &self.docs,
             &self.signatures,
@@ -1453,6 +1454,7 @@ impl ReplEngine {
             .into_iter()
             .filter_map(|visible| {
                 surtr_analysis::symbol_semantic_info_for_effective_visible_entry(
+                    self.sigil_session.owner_registry(),
                     &compile_semantic_infos,
                     &visible,
                 )
@@ -1618,7 +1620,7 @@ impl ReplEngine {
                         ));
                     }
                 }
-                symbol.capabilities = Self::completion_capabilities_for_declaration(decl);
+                symbol.capabilities = self.completion_capabilities_for_declaration(decl);
                 if decl.kind == sigil::DeclarationKind::TraitMethod && !symbol.label.contains("::")
                 {
                     if let Some((owner, _)) = decl.fq_name.rsplit_once("::") {
@@ -1684,7 +1686,12 @@ impl ReplEngine {
         if info.identity.is_none() {
             info.identity = self
                 .completion_symbol_declaration(symbol)
-                .and_then(surtr_analysis::symbol_identity_for_declaration_entry)
+                .and_then(|entry| {
+                    surtr_analysis::symbol_identity_for_declaration_entry(
+                        self.sigil_session.owner_registry(),
+                        entry,
+                    )
+                })
                 .or_else(|| surtr_analysis::symbol_identity_for_builtin_surface(&symbol.label));
         }
         if info.display_metadata.is_none() {
@@ -2907,9 +2914,13 @@ impl ReplEngine {
     }
 
     fn completion_capabilities_for_declaration(
+        &self,
         entry: &sigil::DeclarationEntry,
     ) -> Option<SymbolCapabilities> {
-        surtr_analysis::symbol_capabilities_for_declaration_entry(entry)
+        surtr_analysis::symbol_capabilities_for_declaration_entry(
+            self.sigil_session.owner_registry(),
+            entry,
+        )
     }
 
     pub fn prompt(&self) -> String {
@@ -3076,8 +3087,13 @@ impl ReplEngine {
     fn handle_facet_root_doc(&self, ty: &str) -> ReplResult {
         let kind = self
             .visible_declaration(ty)
-            .and_then(|decl| sigil::declaration_symbol_identity_info(&decl.fq_name, &decl.kind))
-            .and_then(|info| info.capabilities.facet_root_path)
+            .and_then(|decl| {
+                surtr_analysis::symbol_capabilities_for_declaration_entry(
+                    self.sigil_session.owner_registry(),
+                    decl,
+                )
+            })
+            .and_then(|capabilities| capabilities.facet_root_path)
             .or_else(|| {
                 sindr::names::builtin_symbol_identity_info(ty)
                     .and_then(|info| info.capabilities.facet_root_path)
