@@ -1,4 +1,4 @@
-use crate::names::{builtin_type_name, surface_path_name, TypeName};
+use crate::names::{builtin_type_name, surface_path_name, TypeIdentity, TypeName};
 
 /// Built-in function metadata shared across Sigil / Scar / Forge / Eldr.
 ///
@@ -22,6 +22,7 @@ pub struct BuiltinTypeMeta {
     /// declarations must match exactly.
     pub name: &'static str,
     pub params: &'static [&'static str],
+    pub identity: TypeIdentity,
 }
 
 /// Builtin type declaration-head metadata accepted by standard sources.
@@ -1060,106 +1061,132 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     BuiltinTypeMeta {
         name: TypeName::Int.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::Float.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::String.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::Boolean.as_str(),
         params: &[],
+        identity: TypeIdentity::Enum,
     },
     BuiltinTypeMeta {
         name: TypeName::Unit.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::Closure.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::MatchArms.as_str(),
         params: &["$Scrutinee", "$Result"],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::CondClauses.as_str(),
         params: &["$Result"],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::BulkUpdateEntries.as_str(),
         params: &["$State"],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::Error.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::Regex.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::RegexCaptures.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::RegexMatch.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::RandomGenerator.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::FileHandle.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::List.as_str(),
         params: &["$A"],
+        identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
         name: TypeName::HashMap.as_str(),
         params: &["$V"],
+        identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
         name: TypeName::Generator.as_str(),
         params: &["$State", "$Item"],
+        identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
         name: TypeName::Result.as_str(),
         params: &["$T"],
+        identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
         name: TypeName::StandbyInit.as_str(),
         params: &["$T"],
+        identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
         name: TypeName::Lazy.as_str(),
         params: &["$T"],
+        identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
         name: TypeName::Hole.as_str(),
         params: &[],
+        identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
         name: TypeName::Facet.as_str(),
         params: &["$K", "$S", "$A", "$T", "$B"],
+        identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
         name: TypeName::Workers.as_str(),
         params: &["$Worker"],
+        identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
         name: TypeName::WorkerLease.as_str(),
         params: &["$Worker"],
+        identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
         name: TypeName::TaskHandle.as_str(),
         params: &["$T"],
+        identity: TypeIdentity::TypeConstructor,
     },
 ];
 

@@ -110,18 +110,22 @@ impl ImplicitRootNamespace {
 
 /// Bump when compile-space symbol capability semantics change in a way that
 /// invalidates staged semantic snapshots.
-pub const SYMBOL_CAPABILITY_SCHEMA_VERSION: u32 = 1;
+pub const SYMBOL_CAPABILITY_SCHEMA_VERSION: u32 = 2;
 
 /// Surface-level type identity defined by the language spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TypeIdentity {
     Type,
+    TypeConstructor,
     Struct,
     Record,
     Enum,
-    ConcreteError,
+    Error,
     Mod,
+    Supervisor,
+    Sig,
     Const,
+    Trait,
 }
 
 /// Compile-space root kind used when a symbol can serve as a Facet path root.
@@ -155,6 +159,30 @@ impl SymbolCapabilities {
             impl_target,
             facet_root_path,
         }
+    }
+
+    pub const fn type_owner() -> Self {
+        Self::new(true, true, true, None)
+    }
+
+    pub const fn module_owner() -> Self {
+        Self::new(false, true, false, None)
+    }
+
+    pub const fn supervisor_owner() -> Self {
+        Self::new(false, true, false, None)
+    }
+
+    pub const fn signature_owner() -> Self {
+        Self::new(true, false, false, None)
+    }
+
+    pub const fn const_owner() -> Self {
+        Self::new(false, false, false, None)
+    }
+
+    pub const fn trait_owner() -> Self {
+        Self::new(false, true, false, None)
     }
 }
 
@@ -322,10 +350,6 @@ impl TypeName {
             Self::WorkerLease => "WorkerLease",
             Self::TaskHandle => "TaskHandle",
         }
-    }
-
-    pub const fn identity(self) -> TypeIdentity {
-        TypeIdentity::Type
     }
 
     pub const fn supports_inherent_impl(self) -> bool {
@@ -511,6 +535,9 @@ pub fn builtin_symbol_surface_meta(name: &str) -> Option<BuiltinSymbolSurfaceMet
     }
 
     let type_name = builtin_type_name(name)?;
+    let identity = crate::builtin::builtin_type_meta_by_name(type_name.as_str())
+        .map(|meta| meta.identity)
+        .unwrap_or(TypeIdentity::Type);
     let facet_root_path = match type_name {
         TypeName::Boolean => Some(FacetRootKind::TypeRoot),
         TypeName::List => Some(FacetRootKind::List),
@@ -520,7 +547,7 @@ pub fn builtin_symbol_surface_meta(name: &str) -> Option<BuiltinSymbolSurfaceMet
     let impl_target = type_name.supports_inherent_impl();
     Some(BuiltinSymbolSurfaceMeta {
         name: type_name.as_str(),
-        identity: type_name.identity(),
+        identity,
         capabilities: SymbolCapabilities::new(true, impl_target, impl_target, facet_root_path),
     })
 }
@@ -571,36 +598,38 @@ mod tests {
 
     #[test]
     fn builtin_symbol_identity_info_marks_core_type_capabilities() {
-        let string = builtin_symbol_identity_info("String").expect("String should be known");
-        assert_eq!(string.identity, TypeIdentity::Type);
-        assert!(string.capabilities.type_annotation);
-        assert!(string.capabilities.module_owner);
-        assert!(string.capabilities.impl_target);
-        assert_eq!(string.capabilities.facet_root_path, None);
+        let cases = [
+            ("Int", TypeIdentity::Type),
+            ("Error", TypeIdentity::Type),
+            ("List", TypeIdentity::TypeConstructor),
+            ("HashMap", TypeIdentity::TypeConstructor),
+            ("Result", TypeIdentity::TypeConstructor),
+        ];
+
+        for (name, identity) in cases {
+            assert_eq!(
+                builtin_symbol_identity_info(name).unwrap().identity,
+                identity
+            );
+        }
+
+        let list = builtin_symbol_identity_info("List").expect("List should be known");
+        assert!(list.capabilities.type_annotation);
+        assert!(list.capabilities.impl_target);
+        assert_eq!(list.capabilities.facet_root_path, Some(FacetRootKind::List));
+
+        let hash_map = builtin_symbol_identity_info("HashMap").expect("HashMap should be known");
+        assert!(hash_map.capabilities.type_annotation);
+        assert!(hash_map.capabilities.impl_target);
+        assert_eq!(
+            hash_map.capabilities.facet_root_path,
+            Some(FacetRootKind::HashMap)
+        );
 
         let result = builtin_symbol_identity_info("Result").expect("Result should be known");
-        assert_eq!(result.identity, TypeIdentity::Type);
         assert!(result.capabilities.type_annotation);
-        assert!(result.capabilities.module_owner);
         assert!(result.capabilities.impl_target);
         assert_eq!(result.capabilities.facet_root_path, None);
-
-        let facet = builtin_symbol_identity_info("Facet").expect("Facet should be known");
-        assert_eq!(facet.identity, TypeIdentity::Type);
-        assert!(facet.capabilities.type_annotation);
-        assert!(facet.capabilities.module_owner);
-        assert!(facet.capabilities.impl_target);
-        assert_eq!(facet.capabilities.facet_root_path, None);
-
-        let boolean = builtin_symbol_identity_info("Boolean").expect("Boolean should be known");
-        assert_eq!(boolean.identity, TypeIdentity::Type);
-        assert!(boolean.capabilities.type_annotation);
-        assert!(boolean.capabilities.module_owner);
-        assert!(boolean.capabilities.impl_target);
-        assert_eq!(
-            boolean.capabilities.facet_root_path,
-            Some(FacetRootKind::TypeRoot)
-        );
     }
 
     #[test]
@@ -616,14 +645,14 @@ mod tests {
         );
 
         let list = builtin_symbol_identity_info("List").expect("List should be known");
-        assert_eq!(list.identity, TypeIdentity::Type);
+        assert_eq!(list.identity, TypeIdentity::TypeConstructor);
         assert!(list.capabilities.type_annotation);
         assert!(list.capabilities.module_owner);
         assert!(list.capabilities.impl_target);
         assert_eq!(list.capabilities.facet_root_path, Some(FacetRootKind::List));
 
         let hash_map = builtin_symbol_identity_info("HashMap").expect("HashMap should be known");
-        assert_eq!(hash_map.identity, TypeIdentity::Type);
+        assert_eq!(hash_map.identity, TypeIdentity::TypeConstructor);
         assert!(hash_map.capabilities.type_annotation);
         assert!(hash_map.capabilities.module_owner);
         assert!(hash_map.capabilities.impl_target);
