@@ -229,15 +229,6 @@ defmod Bootstrap {
   """
   @intrinsic def cond(clauses: CondClauses<$A>) -> $A
 
-  # `def` introduces a named function declaration.
-  # `dummy` exists only to keep the module non-empty and to leave a minimal
-  # function-shaped example in the first standard source file.
-  @doc """
-  Return `()` without side effects.
-  This is a minimal placeholder helper that keeps `Bootstrap` non-empty.
-  """
-  def dummy() { () }
-
   @doc """
   Language-provided import macro function.
 

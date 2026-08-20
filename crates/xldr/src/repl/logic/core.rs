@@ -10065,6 +10065,31 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_docs_and_special_form_signatures_remain_queryable() {
+        let mut engine = ReplEngine::new().expect("REPL engine should initialize");
+
+        let module_docs = ReplEngine::repl_result_text(&engine.handle_line(":doc Bootstrap"));
+        assert!(module_docs.contains("Bootstrap module."), "{module_docs}");
+
+        for symbol in [
+            "(,)", "dbg!", "=", "=?", "match", "cond", "import", "include",
+        ] {
+            let docs = ReplEngine::repl_result_text(&engine.handle_line(&format!(":doc {symbol}")));
+            assert!(
+                !docs.contains("No docs found"),
+                ":doc {symbol} unexpectedly failed: {docs}"
+            );
+
+            let signature =
+                ReplEngine::repl_result_text(&engine.handle_line(&format!(":sig {symbol}")));
+            assert!(
+                !signature.contains("No signature found"),
+                ":sig {symbol} unexpectedly failed: {signature}"
+            );
+        }
+    }
+
+    #[test]
     fn repl_session_rejects_top_level_def_capturing_existing_value_binding() {
         let mut engine = ReplEngine::new().expect("engine should initialize");
 

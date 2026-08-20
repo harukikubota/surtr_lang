@@ -117,6 +117,104 @@ fn completion_maps_utf16_position_to_lsp_text_edits() {
 }
 
 #[test]
+fn completion_hides_bootstrap_module_but_keeps_other_modules_and_members() {
+    let workspace = PathBuf::from("/repo");
+    let path = workspace.join("main.srt");
+    let uri = path_to_file_uri(&path);
+    let mut host = LspAnalysisHost::new(workspace);
+    host.did_open(uri.clone(), Some(1), "B".to_string());
+    host.set_selected_context(Some(SelectedContext::ScriptEntry(path)));
+    host.set_semantic_index(SemanticIndex::from_symbols(vec![
+        CompletionSymbol {
+            label: "Bootstrap".to_string(),
+            replacement: "Bootstrap".to_string(),
+            kind: CompletionKind::TypePath,
+            detail: None,
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "Kernel".to_string(),
+            replacement: "Kernel".to_string(),
+            kind: CompletionKind::TypePath,
+            detail: None,
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+        CompletionSymbol {
+            label: "Bootstrap::helper".to_string(),
+            replacement: "Bootstrap::helper".to_string(),
+            kind: CompletionKind::FunctionCall,
+            detail: None,
+            documentation: None,
+            sort_text: None,
+            origin: None,
+            capabilities: None,
+            definition: None,
+        },
+    ]));
+
+    let bootstrap_labels = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: 1,
+        },
+    )
+    .into_iter()
+    .map(|item| item.label)
+    .collect::<Vec<_>>();
+
+    assert!(
+        !bootstrap_labels.iter().any(|label| label == "Bootstrap"),
+        "{bootstrap_labels:?}"
+    );
+
+    host.did_change(&uri, Some(2), "K".to_string());
+    let kernel_labels = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: 1,
+        },
+    )
+    .into_iter()
+    .map(|item| item.label)
+    .collect::<Vec<_>>();
+    assert!(
+        kernel_labels.iter().any(|label| label == "Kernel"),
+        "{kernel_labels:?}"
+    );
+
+    host.did_change(&uri, Some(3), "Bootstrap::h".to_string());
+    let member_labels = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: "Bootstrap::h".len() as u32,
+        },
+    )
+    .into_iter()
+    .map(|item| item.label)
+    .collect::<Vec<_>>();
+    assert!(
+        member_labels
+            .iter()
+            .any(|label| label == "Bootstrap::helper"),
+        "{member_labels:?}"
+    );
+}
+
+#[test]
 fn completion_uses_facet_api_first_argument_constraints_through_lsp() {
     let workspace = PathBuf::from("/repo");
     let path = workspace.join("main.srt");

@@ -231,6 +231,9 @@ pub fn completion_items(
         .completions(&snapshot, utf16_position(position))
         .candidates
         .into_iter()
+        .filter(|candidate| {
+            !(candidate.label == "Bootstrap" && candidate.kind == CompletionKind::TypePath)
+        })
         .map(|candidate| {
             let range = LspRange {
                 start: lsp_position(

@@ -111,6 +111,12 @@ aggregate であり、Eldr の runtime append policy とは別責務である。
 - `.eldr` に含まれる user-defined function は VM には常駐するが、新しい REPL 入力の名前解決対象としては復元されない
 - したがって `.eldr` 復元は現時点では部分復元であり、compile semantic aggregate の復元欠落を通知する。完全な semantic restore は後続課題とする
 
+LSP completion では stage-0 anchor `Bootstrap` 自体を候補に出さないが、REPL query
+metadata は維持する。`:doc Bootstrap` は module documentation を返し、Bootstrap 配下の
+特殊形式・builtin surface は既存の bare / qualified 名で `:doc` と `:sig` から参照できる。
+`Bootstrap` は callable owner ではないため、`:sig Bootstrap` の module signature / member
+一覧 surface は追加しない。
+
 `Bootstrap` / `Kernel` と、`@autoimport` が付いた標準 trait / 標準 `impl Type` owner helper surface は REPL でも auto import 対象とし、`Bootstrap` / `Kernel` への明示 `import` は compile error とする。
 
 ### 3.3 失敗時の扱い
