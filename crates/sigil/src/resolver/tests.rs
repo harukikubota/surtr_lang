@@ -267,6 +267,7 @@ fn test_warning_wildcard_pattern_does_not_warn() {
 
 fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
     StagedModuleAst {
+        source_index: 0,
         module_path: module_path.to_string(),
         doc_module_path: None,
         ast,
@@ -280,6 +281,7 @@ fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
 fn staged_process_module(ast: Vec<Ast>) -> StagedModuleAst {
     match ast.into_iter().next().expect("process module should exist") {
         Ast::Defagent(span, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            source_index: 0,
             owner: Some(OwnerDescriptor {
                 canonical_path: module_path.clone(),
                 span,
@@ -293,6 +295,7 @@ fn staged_process_module(ast: Vec<Ast>) -> StagedModuleAst {
             process_spec: Some(process_spec),
         },
         Ast::Defgenserver(span, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            source_index: 0,
             owner: Some(OwnerDescriptor {
                 canonical_path: module_path.clone(),
                 span,
@@ -306,6 +309,7 @@ fn staged_process_module(ast: Vec<Ast>) -> StagedModuleAst {
             process_spec: Some(process_spec),
         },
         Ast::Defsupervisor(span, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            source_index: 0,
             owner: Some(OwnerDescriptor {
                 canonical_path: module_path.clone(),
                 span,
@@ -319,6 +323,7 @@ fn staged_process_module(ast: Vec<Ast>) -> StagedModuleAst {
             process_spec: Some(process_spec),
         },
         Ast::DefdynamicSupervisor(span, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            source_index: 0,
             owner: Some(OwnerDescriptor {
                 canonical_path: module_path.clone(),
                 span,
@@ -337,6 +342,7 @@ fn staged_process_module(ast: Vec<Ast>) -> StagedModuleAst {
 
 fn staged_auto_import_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
     StagedModuleAst {
+        source_index: 0,
         module_path: module_path.to_string(),
         doc_module_path: None,
         ast,
@@ -565,6 +571,7 @@ fn test_resolve_staged_program_keeps_process_specs() {
 
     let module = match ast.into_iter().next().expect("lowered module should exist") {
         Ast::Defagent(span, module_path, ast, process_spec, attrs) => StagedModuleAst {
+            source_index: 0,
             owner: Some(OwnerDescriptor {
                 canonical_path: module_path.clone(),
                 span,
@@ -689,6 +696,91 @@ deftrait Same {}"#,
     );
 }
 
+fn assert_constructor_trait_collision_labels(
+    src: &str,
+    first_identity: &str,
+    conflicting_identity: &str,
+) {
+    let ast = spire::parse_with_context(src, spire::ParserContext::project(0))
+        .expect("constructor-trait collision source should parse");
+    let module_stages = vec![ast
+        .into_iter()
+        .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
+        .collect::<Vec<_>>()];
+
+    let err = precollect_owner_registry(&module_stages)
+        .expect_err("constructor traits must collide in the owner namespace");
+
+    assert_eq!(
+        err.related_labels[0].message,
+        format!("first {first_identity} declaration")
+    );
+    assert_eq!(
+        err.related_labels[1].message,
+        format!("conflicting {conflicting_identity} declaration")
+    );
+}
+
+#[test]
+fn test_precollect_owner_registry_classifies_direct_constructor_trait_before_collision() {
+    for (src, first_identity, conflicting_identity) in [
+        (
+            r#"deftrait Same
+where
+  Self: Type<$A>
+{}
+defstruct Same { value: Int }"#,
+            "TypeConstructor",
+            "Struct",
+        ),
+        (
+            r#"defstruct Same { value: Int }
+deftrait Same
+where
+  Self: Type<$A>
+{}"#,
+            "Struct",
+            "TypeConstructor",
+        ),
+    ] {
+        assert_constructor_trait_collision_labels(src, first_identity, conflicting_identity);
+    }
+}
+
+#[test]
+fn test_precollect_owner_registry_classifies_inherited_constructor_trait_before_collision() {
+    for (src, first_identity, conflicting_identity) in [
+        (
+            r#"deftrait Constructor
+where
+  Self: Type<$A>
+{}
+deftrait Same
+where
+  Self: Constructor
+{}
+defrecord Same(value: Int)"#,
+            "TypeConstructor",
+            "Record",
+        ),
+        (
+            r#"deftrait Constructor
+where
+  Self: Type<$A>
+{}
+defrecord Same(value: Int)
+deftrait Same
+where
+  Self: Constructor
+{}"#,
+            "Record",
+            "TypeConstructor",
+        ),
+    ] {
+        assert_constructor_trait_collision_labels(src, first_identity, conflicting_identity);
+    }
+}
+
 #[test]
 fn test_precollect_owner_registry_rejects_struct_then_sig() {
     assert_reverse_owner_collision(
@@ -703,6 +795,7 @@ fn test_precollect_owner_registry_rejects_supervisor_then_agent() {
     let first_span = Span { start: 0, end: 1 };
     let conflicting_span = Span { start: 2, end: 3 };
     let staged_owner = |span: Span, source_form| StagedModuleAst {
+        source_index: 0,
         module_path: "Global::ProcessName".to_string(),
         doc_module_path: None,
         ast: Vec::new(),
@@ -778,6 +871,7 @@ where
         .flat_map(|stmt| staged_modules_from_source_ast(vec![stmt], None))
         .collect::<Vec<_>>();
     let staged_owner = |canonical_path: &str, source_form| StagedModuleAst {
+        source_index: 0,
         module_path: canonical_path.to_string(),
         doc_module_path: None,
         ast: Vec::new(),
@@ -949,6 +1043,33 @@ fn test_precollect_declaration_index_is_deterministic_when_stage_input_order_cha
     assert_eq!(index_first, index_swapped);
     assert!(index_first.contains_key("Std::A::same"));
     assert!(index_first.contains_key("Std::B::same"));
+}
+
+#[test]
+fn test_precollect_owner_registry_preserves_cross_file_module_order_over_local_offsets() {
+    let first_ast = parse_module_ast(
+        r#"
+
+defrecord Shared(value: Int)"#,
+        "First",
+    );
+    let second_ast = parse_module_ast("type Shared = (Int -> Int)", "Second");
+    let first_span = first_ast[0].span().clone();
+    let conflicting_span = second_ast[0].span().clone();
+    assert!(first_span.start > conflicting_span.start);
+
+    let first_module = staged_module("First", first_ast);
+    let mut second_module = staged_module("Second", second_ast);
+    second_module.source_index = 1;
+    let module_stages = vec![vec![first_module, second_module]];
+    let err = precollect_owner_registry(&module_stages)
+        .expect_err("later source owner must collide with the first source owner");
+
+    assert_eq!(err.span, conflicting_span);
+    assert_eq!(err.related_labels[0].span, first_span);
+    assert_eq!(err.related_labels[0].message, "first Record declaration");
+    assert_eq!(err.related_labels[1].span, conflicting_span);
+    assert_eq!(err.related_labels[1].message, "conflicting Sig declaration");
 }
 
 #[test]

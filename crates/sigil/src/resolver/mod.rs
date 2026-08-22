@@ -69,11 +69,11 @@ fn define_global_surface_alias(scope: &mut Scope, canonical_name: &str, uid: u32
 }
 
 pub fn user_type_symbol_identity_info(owner: &OwnerRef) -> Option<SymbolIdentityInfo> {
-    if let Some(builtin) = builtin_symbol_identity_info(&owner.canonical_key) {
-        return Some(SymbolIdentityInfo::new(
-            owner.identity,
-            builtin.capabilities,
-        ));
+    if owner.kind == OwnerKind::BuiltinType {
+        let capabilities = builtin_symbol_identity_info(&owner.canonical_key)
+            .map(|builtin| builtin.capabilities)
+            .unwrap_or_else(SymbolCapabilities::type_owner);
+        return Some(SymbolIdentityInfo::new(owner.identity, capabilities));
     }
 
     let capabilities = match owner.kind {

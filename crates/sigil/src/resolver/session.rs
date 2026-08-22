@@ -82,12 +82,32 @@ impl SigilSession {
         self.resolve_with_warnings(ast).map(|output| output.value)
     }
 
+    pub fn resolve_with_owner_span_base(
+        &mut self,
+        ast: Vec<Ast>,
+        owner_span_base: usize,
+    ) -> Result<Vec<Resolved>, ResolveError> {
+        self.resolve_with_warnings_and_owner_span_base(ast, Some(owner_span_base))
+            .map(|output| output.value)
+    }
+
     pub fn resolve_with_warnings(
         &mut self,
         ast: Vec<Ast>,
     ) -> Result<PhaseOutput<Vec<Resolved>>, ResolveError> {
+        self.resolve_with_warnings_and_owner_span_base(ast, None)
+    }
+
+    fn resolve_with_warnings_and_owner_span_base(
+        &mut self,
+        ast: Vec<Ast>,
+        owner_span_base: Option<usize>,
+    ) -> Result<PhaseOutput<Vec<Resolved>>, ResolveError> {
         self.reject_duplicate_current_module_defs(&ast)?;
-        let owner_modules = ast
+        let owner_ast = owner_span_base
+            .map(|base| spire::rebase_ast_spans(ast.clone(), base))
+            .unwrap_or_else(|| ast.clone());
+        let owner_modules = owner_ast
             .iter()
             .cloned()
             .flat_map(|stmt| {

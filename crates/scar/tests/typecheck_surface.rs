@@ -7588,6 +7588,7 @@ defmod Helper {
         match stmt {
             spire::ast::Ast::Defmod(span, module_path, ast, attrs) => {
                 user_modules.push(sigil::StagedModuleAst {
+                    source_index: 0,
                     owner: Some(sigil::OwnerDescriptor::new(
                         module_path.clone(),
                         span,
@@ -7606,6 +7607,7 @@ defmod Helper {
     }
     if !global_ast.is_empty() {
         user_modules.push(sigil::StagedModuleAst {
+            source_index: 0,
             module_path: String::new(),
             doc_module_path: None,
             ast: global_ast,
@@ -7666,6 +7668,7 @@ fn typecheck_staged_program_keeps_process_specs() {
     let staged_module = match ast.into_iter().next().expect("lowered module should exist") {
         spire::ast::Ast::Defagent(span, module_path, ast, process_spec, attrs) => {
             sigil::StagedModuleAst {
+                source_index: 0,
                 owner: Some(sigil::OwnerDescriptor::new(
                     module_path.clone(),
                     span,
@@ -7727,6 +7730,7 @@ fn staged_process_module(source: &str) -> sigil::StagedModuleAst {
                 spire::ast::ProcessKind::Task => sigil::OwnerSourceForm::Defagent,
             };
             sigil::StagedModuleAst {
+                source_index: 0,
                 owner: Some(sigil::OwnerDescriptor::new(
                     module_path.clone(),
                     span,

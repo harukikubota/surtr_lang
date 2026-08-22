@@ -1429,25 +1429,70 @@ impl ReplEngine {
         surtr_analysis::SemanticIndex::from_symbol_semantic_infos(self.symbol_semantic_infos())
     }
 
+    fn resolve_diagnostic_for_repl(
+        &self,
+        error: &sigil::error::ResolveError,
+        fallback_source_id: SourceId,
+    ) -> (SourceId, DiagnosticSpec) {
+        let diagnostic_location = |span: &Span| {
+            crate::decode_rebased_module_span(span)
+                .filter(|(source_id, _)| self.sources.get(*source_id).is_some())
+                .unwrap_or((fallback_source_id, span.clone()))
+        };
+        let (source_id, primary_span) = diagnostic_location(&error.span);
+        let source = self.sources.source(source_id).unwrap_or("");
+        let labels = error
+            .related_labels
+            .iter()
+            .map(|label| {
+                let (label_source_id, span) = diagnostic_location(&label.span);
+                (label_source_id, span, label.message.clone())
+            })
+            .collect::<Vec<_>>();
+        let local_labels = labels
+            .iter()
+            .map(|(_, span, message)| (span.clone(), message.clone()))
+            .collect::<Vec<_>>();
+        let mut spec = diagnostics::resolve_error_spec_with_labels(
+            source,
+            &error.message,
+            primary_span,
+            &local_labels,
+        );
+        let related_label_start = spec.labels.len().saturating_sub(labels.len());
+        for (label, (label_source_id, _, _)) in
+            spec.labels[related_label_start..].iter_mut().zip(labels)
+        {
+            label.source_id = (label_source_id != source_id).then_some(label_source_id);
+        }
+        (source_id, spec)
+    }
+
     pub fn symbol_semantic_infos(&self) -> Vec<surtr_analysis::SymbolSemanticInfo> {
-        let mut symbols = surtr_analysis::SemanticIndex::from_compile_metadata(
+        let compile_index = surtr_analysis::SemanticIndex::from_compile_metadata(
             self.sigil_session.owner_registry(),
             &self.declaration_index,
             &self.docs,
             &self.signatures,
-        )
-        .symbols()
-        .iter()
-        .filter(|symbol| self.compile_symbol_is_repl_completion_surface(symbol))
-        .cloned()
-        .collect::<Vec<_>>();
+        );
+        let mut symbols = compile_index
+            .symbols()
+            .iter()
+            .filter(|symbol| self.compile_symbol_is_repl_completion_surface(symbol))
+            .cloned()
+            .collect::<Vec<_>>();
+        let compile_semantic_infos = compile_index
+            .symbol_semantic_infos()
+            .iter()
+            .filter(|info| {
+                symbols
+                    .iter()
+                    .any(|symbol| symbol.label == info.surface_name && symbol.kind == info.kind)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         self.enrich_compile_symbol_details(&mut symbols);
 
-        let compile_symbols = symbols.clone();
-        let compile_semantic_infos = compile_symbols
-            .iter()
-            .map(|symbol| self.symbol_semantic_info_from_completion_symbol(symbol))
-            .collect::<Vec<_>>();
         let visible_symbols = self
             .sigil_session
             .visible_declaration_entries()
@@ -1557,10 +1602,24 @@ impl ReplEngine {
             }
         }
 
-        symbols
+        let mut projected_infos = symbols
             .into_iter()
             .map(|symbol| self.symbol_semantic_info_from_completion_symbol(&symbol))
-            .collect()
+            .collect::<Vec<_>>();
+        for projected in &mut projected_infos {
+            let Some(original) = compile_semantic_infos.iter().find(|original| {
+                original.surface_name == projected.surface_name && original.kind == projected.kind
+            }) else {
+                continue;
+            };
+            if original.identity.is_some() {
+                projected.identity = original.identity;
+            }
+            if original.capabilities.is_some() {
+                projected.capabilities = original.capabilities;
+            }
+        }
+        projected_infos
     }
 
     fn typecheck_context_for_source(source_kind: SourceKind) -> scar::TypecheckContext {
@@ -5284,21 +5343,10 @@ impl ReplEngine {
         let resolved = match self.sigil_session.resolve(ast.clone()) {
             Ok(r) => r,
             Err(e) => {
-                let labels = e
-                    .related_labels
-                    .iter()
-                    .map(|label| (label.span.clone(), label.message.clone()))
-                    .collect::<Vec<_>>();
-                let diagnostic_source = self.sources.source(self.repl_source_id).unwrap_or("");
-                let spec = diagnostics::resolve_error_spec_with_labels(
-                    diagnostic_source,
-                    &e.message,
-                    e.span.clone(),
-                    &labels,
-                );
+                let (source_id, spec) = self.resolve_diagnostic_for_repl(&e, self.repl_source_id);
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
-                    self.repl_source_id,
+                    source_id,
                     &spec,
                     self.error_display_mode,
                 );
@@ -7731,6 +7779,10 @@ impl ReplEngine {
             return Self::plain(vec![]);
         }
 
+        let owner_source_id = self
+            .sources
+            .register(format!("REPL:{committed_line}"), self.pending.clone());
+
         let import_only = ast.iter().all(|stmt| matches!(stmt, Ast::Import(_, _, _)));
         let sigil_cp = self.sigil_session.checkpoint();
         let scar_cp = self.scar_session.checkpoint();
@@ -7741,21 +7793,10 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let labels = e
-                    .related_labels
-                    .iter()
-                    .map(|label| (label.span.clone(), label.message.clone()))
-                    .collect::<Vec<_>>();
-                let diagnostic_source = self.sources.source(self.repl_source_id).unwrap_or("");
-                let spec = diagnostics::resolve_error_spec_with_labels(
-                    diagnostic_source,
-                    &e.message,
-                    e.span.clone(),
-                    &labels,
-                );
+                let (source_id, spec) = self.resolve_diagnostic_for_repl(&e, self.repl_source_id);
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
-                    self.repl_source_id,
+                    source_id,
                     &spec,
                     self.error_display_mode,
                 );
@@ -7776,27 +7817,19 @@ impl ReplEngine {
         let docs = crate::collect_doc_entries(&[], &ast, Some(self.repl_module_path.as_str()));
         let signatures =
             crate::collect_signature_entries(&[], &ast, Some(self.repl_module_path.as_str()));
-        let resolved = match self.sigil_session.resolve(ast.clone()) {
+        let resolved = match self.sigil_session.resolve_with_owner_span_base(
+            ast.clone(),
+            crate::module_span_base_for_source(owner_source_id),
+        ) {
             Ok(r) => r,
             Err(e) => {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let labels = e
-                    .related_labels
-                    .iter()
-                    .map(|label| (label.span.clone(), label.message.clone()))
-                    .collect::<Vec<_>>();
-                let diagnostic_source = self.sources.source(self.repl_source_id).unwrap_or("");
-                let spec = diagnostics::resolve_error_spec_with_labels(
-                    diagnostic_source,
-                    &e.message,
-                    e.span.clone(),
-                    &labels,
-                );
+                let (source_id, spec) = self.resolve_diagnostic_for_repl(&e, self.repl_source_id);
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
-                    self.repl_source_id,
+                    source_id,
                     &spec,
                     self.error_display_mode,
                 );
@@ -8357,7 +8390,10 @@ fn compile_repl_preload_from_module_stages(
             &snapshot.auto_import_modules,
         )?;
         let user_resolved = sigil_session
-            .resolve(user_ast.clone())
+            .resolve_with_owner_span_base(
+                user_ast.clone(),
+                crate::module_span_base_for_source(user_source_id),
+            )
             .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
         bind_preload_script_qualified_names(
             &mut sigil_session,
@@ -8738,6 +8774,7 @@ fn merge_user_preload_declarations(
     }
 
     let stage = vec![sigil::StagedModuleAst {
+        source_index: 0,
         module_path: user_module_path.to_string(),
         doc_module_path: Some(user_module_path.to_string()),
         ast: user_ast.to_vec(),
@@ -9348,7 +9385,8 @@ pub(crate) fn parse_module_stages_from_sources(
     for stage in module_stages {
         let mut stage_ast = Vec::new();
         let parsed_stage = parse_stage_modules_parallel(sources, stage, compile_unit_kind);
-        for (module, lowered_modules) in stage.iter().zip(parsed_stage) {
+        for (source_index, (module, lowered_modules)) in stage.iter().zip(parsed_stage).enumerate()
+        {
             for lowered in lowered_modules? {
                 if !lowered.module_path.is_empty() && lowered.owner.is_none() {
                     let is_impl_owner = crate::lowered_module_is_impl_owner(&lowered);
@@ -9387,6 +9425,7 @@ pub(crate) fn parse_module_stages_from_sources(
                     owner
                 });
                 stage_ast.push(sigil::StagedModuleAst {
+                    source_index,
                     module_path: lowered.module_path,
                     doc_module_path: lowered.doc_module_path,
                     ast: crate::rebase_module_ast_spans(lowered.ast, module.source_id),
@@ -9662,6 +9701,24 @@ mod tests {
         fn dup(fd: i32) -> i32;
         fn dup2(src: i32, dst: i32) -> i32;
         fn pipe(fds: *mut i32) -> i32;
+    }
+
+    fn strip_ansi(input: &str) -> String {
+        let mut out = String::new();
+        let mut chars = input.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == '\u{1b}' && matches!(chars.peek(), Some('[')) {
+                chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+                continue;
+            }
+            out.push(ch);
+        }
+        out
     }
 
     #[cfg(unix)]
@@ -10137,6 +10194,77 @@ mod tests {
 
         assert_eq!(err.message, "Duplicate top-level owner: PreloadedOwner");
         assert_eq!(err.related_labels[0].message, "first Record declaration");
+    }
+
+    #[test]
+    fn prior_repl_chunk_owner_collision_renders_the_first_chunk_source() {
+        let mut engine = ReplEngine::new().expect("REPL engine should initialize");
+        let first_source = "defrecord SessionOwner(first_value: Int)";
+        let first_source_id = engine.sources.register("REPL:1", first_source);
+        engine
+            .sigil_session
+            .resolve_with_owner_span_base(
+                spire::parse(first_source).expect("first owner chunk should parse"),
+                crate::module_span_base_for_source(first_source_id),
+            )
+            .expect("first owner declaration should resolve");
+
+        let later_source = "defstruct SessionOwner { later_value: String }";
+        let later_source_id = engine.sources.register("REPL:2", later_source);
+        let err = engine
+            .sigil_session
+            .resolve_with_owner_span_base(
+                spire::parse(later_source).expect("later owner chunk should parse"),
+                crate::module_span_base_for_source(later_source_id),
+            )
+            .expect_err("later owner declaration must collide");
+        let (source_id, spec) = engine.resolve_diagnostic_for_repl(&err, later_source_id);
+        let rendered = strip_ansi(&error_display::diagnostic_text_by_id(
+            &engine.sources,
+            source_id,
+            &spec,
+        ));
+
+        assert!(
+            rendered.contains("Duplicate top-level owner: SessionOwner"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("first Record declaration"), "{rendered}");
+        assert!(rendered.contains("first_value"), "{rendered}");
+        assert!(rendered.contains("later_value"), "{rendered}");
+    }
+
+    #[test]
+    fn preloaded_owner_collision_renders_the_preload_source() {
+        let mut engine = ReplEngine::from_module_source(
+            "preloaded_owner.srt",
+            "defrecord PreloadedOwner(preloaded_value: Int)",
+        )
+        .expect("preloaded owner should initialize");
+
+        let later_source = "defstruct PreloadedOwner { later_value: String }";
+        let later_source_id = engine.sources.register("REPL:1", later_source);
+        let err = engine
+            .sigil_session
+            .resolve_with_owner_span_base(
+                spire::parse(later_source).expect("later owner chunk should parse"),
+                crate::module_span_base_for_source(later_source_id),
+            )
+            .expect_err("later owner declaration must collide");
+        let (source_id, spec) = engine.resolve_diagnostic_for_repl(&err, later_source_id);
+        let rendered = strip_ansi(&error_display::diagnostic_text_by_id(
+            &engine.sources,
+            source_id,
+            &spec,
+        ));
+
+        assert!(
+            rendered.contains("Duplicate top-level owner: PreloadedOwner"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("first Record declaration"), "{rendered}");
+        assert!(rendered.contains("preloaded_value"), "{rendered}");
+        assert!(rendered.contains("later_value"), "{rendered}");
     }
 
     #[test]

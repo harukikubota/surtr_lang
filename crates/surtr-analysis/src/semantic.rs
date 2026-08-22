@@ -696,9 +696,10 @@ pub fn symbol_identity_for_declaration_entry(
     owner_registry: &OwnerRegistry,
     entry: &sigil::DeclarationEntry,
 ) -> Option<TypeIdentity> {
-    symbol_identity_for_builtin_surface(&entry.name)
+    declaration_identity_info(owner_registry, entry)
+        .map(|info| info.identity)
+        .or_else(|| symbol_identity_for_builtin_surface(&entry.name))
         .or_else(|| symbol_identity_for_builtin_surface(&entry.fq_name))
-        .or_else(|| declaration_identity_info(owner_registry, entry).map(|info| info.identity))
 }
 
 pub fn facet_root_capabilities(kind: FacetRootKind) -> SymbolCapabilities {
@@ -713,9 +714,10 @@ pub fn symbol_capabilities_for_declaration_entry(
     owner_registry: &OwnerRegistry,
     entry: &sigil::DeclarationEntry,
 ) -> Option<SymbolCapabilities> {
-    symbol_capabilities_for_builtin_surface(&entry.name)
+    declaration_identity_info(owner_registry, entry)
+        .map(|info| info.capabilities)
+        .or_else(|| symbol_capabilities_for_builtin_surface(&entry.name))
         .or_else(|| symbol_capabilities_for_builtin_surface(&entry.fq_name))
-        .or_else(|| declaration_identity_info(owner_registry, entry).map(|info| info.capabilities))
 }
 
 pub fn symbol_semantic_info_for_effective_visible_entry(

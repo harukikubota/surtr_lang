@@ -1001,6 +1001,21 @@ defmod B {
         let infos = snapshot.symbol_semantic_infos();
         let index = snapshot.semantic_index();
 
+        let duration = infos
+            .iter()
+            .find(|info| info.surface_name == "Duration")
+            .expect("Duration semantic info should exist");
+        assert_eq!(duration.identity, Some(sindr::names::TypeIdentity::Struct));
+        assert_eq!(
+            duration.capabilities,
+            Some(sindr::names::SymbolCapabilities::new(
+                true,
+                true,
+                true,
+                Some(sindr::names::FacetRootKind::TypeRoot),
+            ))
+        );
+
         assert!(infos.iter().any(|info| {
             info.canonical_name == "Global::Kernel::print"
                 && info.surface_name == "Kernel::print"
@@ -1316,6 +1331,7 @@ deferror NoneError { "None Value." }"#,
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1347,6 +1363,7 @@ deferror NoneError { "None Value." }"#,
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1433,6 +1450,7 @@ deferror NoneError { "None Value." }"#,
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1469,6 +1487,7 @@ defmod Kernel {
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1514,6 +1533,7 @@ defmod Kernel {
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1588,6 +1608,7 @@ defmod Kernel {
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1646,6 +1667,7 @@ impl Metric for Int {
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1697,6 +1719,7 @@ impl User {
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1747,6 +1770,7 @@ impl Show for Int {
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1798,6 +1822,7 @@ defrecord Point(x: Float, y: Float)"#,
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1838,6 +1863,7 @@ defstruct Box<$A> {
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1873,6 +1899,7 @@ defstruct Pair<$A, $B> {
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,
@@ -1911,6 +1938,7 @@ impl User {
         let stages = vec![lowered
             .into_iter()
             .map(|module| sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: module.module_path,
                 doc_module_path: module.doc_module_path,
                 ast: module.ast,

@@ -115,6 +115,7 @@ mod tests {
                     let mut module_ast = shared_imports.clone();
                     module_ast.extend(body);
                     lowered.push(sigil::StagedModuleAst {
+                        source_index: 0,
                         owner: Some(sigil::OwnerDescriptor::new(
                             module_path.clone(),
                             span,
@@ -147,6 +148,7 @@ mod tests {
                     let mut module_ast = shared_imports.clone();
                     module_ast.extend(body);
                     lowered.push(sigil::StagedModuleAst {
+                        source_index: 0,
                         owner: Some(sigil::OwnerDescriptor::new(
                             module_path.clone(),
                             span,
@@ -164,6 +166,7 @@ mod tests {
                     let mut module_ast = shared_imports.clone();
                     module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
                     lowered.push(sigil::StagedModuleAst {
+                        source_index: 0,
                         module_path: target,
                         doc_module_path: None,
                         ast: module_ast,
@@ -196,6 +199,7 @@ mod tests {
             let mut global_ast = shared_imports.clone();
             global_ast.extend(shared_result_ctor_contracts);
             lowered.push(sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: String::new(),
                 doc_module_path: None,
                 ast: global_ast,
@@ -210,6 +214,7 @@ mod tests {
             let mut global_ast = shared_imports;
             global_ast.extend(shared_global_defs);
             lowered.push(sigil::StagedModuleAst {
+                source_index: 0,
                 module_path: String::new(),
                 doc_module_path: None,
                 ast: global_ast,
@@ -324,6 +329,7 @@ mod tests {
                     let mut module_ast = shared_imports.clone();
                     module_ast.extend(body);
                     Some(sigil::StagedModuleAst {
+                        source_index: 0,
                         owner: Some(sigil::OwnerDescriptor::new(
                             module_path.clone(),
                             span,
@@ -356,6 +362,7 @@ mod tests {
                     let mut module_ast = shared_imports.clone();
                     module_ast.extend(body);
                     Some(sigil::StagedModuleAst {
+                        source_index: 0,
                         owner: Some(sigil::OwnerDescriptor::new(
                             module_path.clone(),
                             span,

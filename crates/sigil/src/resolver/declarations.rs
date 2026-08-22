@@ -117,6 +117,8 @@ fn type_declaration_kind(stmt: &Ast) -> Option<DeclarationKind> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
+    /// Stage-local source order. Modules lowered from the same source share this index.
+    pub source_index: usize,
     pub module_path: String,
     pub doc_module_path: Option<String>,
     pub ast: Vec<Ast>,
@@ -178,6 +180,7 @@ impl OwnerDescriptor {
 impl From<LoweredModuleAst> for StagedModuleAst {
     fn from(lowered: LoweredModuleAst) -> Self {
         Self {
+            source_index: 0,
             module_path: lowered.module_path,
             doc_module_path: lowered.doc_module_path,
             ast: lowered.ast,
@@ -475,6 +478,7 @@ pub fn extract_process_modules_from_user_ast(ast: Vec<Ast>) -> (Vec<StagedModule
                 let mut module_ast = shared_imports.clone();
                 module_ast.extend(body);
                 process_modules.push(StagedModuleAst {
+                    source_index: 0,
                     owner: Some(OwnerDescriptor::new(
                         module_path.clone(),
                         span,
@@ -492,6 +496,7 @@ pub fn extract_process_modules_from_user_ast(ast: Vec<Ast>) -> (Vec<StagedModule
                 let mut module_ast = shared_imports.clone();
                 module_ast.extend(body);
                 process_modules.push(StagedModuleAst {
+                    source_index: 0,
                     owner: Some(OwnerDescriptor::new(
                         module_path.clone(),
                         span,
@@ -509,6 +514,7 @@ pub fn extract_process_modules_from_user_ast(ast: Vec<Ast>) -> (Vec<StagedModule
                 let mut module_ast = shared_imports.clone();
                 module_ast.extend(body);
                 process_modules.push(StagedModuleAst {
+                    source_index: 0,
                     owner: Some(OwnerDescriptor::new(
                         module_path.clone(),
                         span,
@@ -526,6 +532,7 @@ pub fn extract_process_modules_from_user_ast(ast: Vec<Ast>) -> (Vec<StagedModule
                 let mut module_ast = shared_imports.clone();
                 module_ast.extend(body);
                 process_modules.push(StagedModuleAst {
+                    source_index: 0,
                     owner: Some(OwnerDescriptor::new(
                         module_path.clone(),
                         span,
@@ -718,7 +725,12 @@ pub struct OwnerRegistry {
 }
 
 impl OwnerRegistry {
-    pub fn register(&mut self, entry: OwnerEntry) -> Result<(), ResolveError> {
+    pub fn register(&mut self, mut entry: OwnerEntry) -> Result<(), ResolveError> {
+        if entry.kind == OwnerKind::Trait
+            && self.constructor_trait_keys().contains(&entry.canonical_key)
+        {
+            entry.identity = TypeIdentity::TypeConstructor;
+        }
         if let Some(first) = self.entries.get(&entry.canonical_key) {
             return Err(ResolveError {
                 message: format!(
@@ -768,14 +780,19 @@ impl OwnerRegistry {
     }
 
     pub fn merge(&mut self, other: &OwnerRegistry) -> Result<(), ResolveError> {
-        for entry in other.entries.values() {
-            self.register(entry.clone())?;
-        }
-        self.constructor_trait_seeds
+        let mut merged = self.clone();
+        merged
+            .constructor_trait_seeds
             .extend(other.constructor_trait_seeds.iter().cloned());
-        self.trait_parent_edges
+        merged
+            .trait_parent_edges
             .extend(other.trait_parent_edges.iter().cloned());
-        self.promote_constructor_traits();
+        merged.promote_constructor_traits();
+        for entry in other.entries.values() {
+            merged.register(entry.clone())?;
+        }
+        merged.promote_constructor_traits();
+        *self = merged;
         Ok(())
     }
 
@@ -812,7 +829,7 @@ impl OwnerRegistry {
         true
     }
 
-    fn promote_constructor_traits(&mut self) {
+    fn constructor_trait_keys(&self) -> BTreeSet<String> {
         let mut constructor_traits = self.constructor_trait_seeds.clone();
         constructor_traits.extend(self.entries.iter().filter_map(|(key, entry)| {
             (entry.kind == OwnerKind::Trait && entry.identity == TypeIdentity::TypeConstructor)
@@ -831,7 +848,11 @@ impl OwnerRegistry {
             }
         }
 
-        for key in constructor_traits {
+        constructor_traits
+    }
+
+    fn promote_constructor_traits(&mut self) {
+        for key in self.constructor_trait_keys() {
             self.promote_identity(&key, TypeIdentity::TypeConstructor);
         }
     }
@@ -1801,7 +1822,7 @@ fn trait_owner_key(name: &str) -> String {
     canonical_owner_key(name)
 }
 
-fn promote_constructor_trait_owners(
+fn collect_constructor_trait_relations(
     module_stages: &[Vec<StagedModuleAst>],
     owner_registry: &mut OwnerRegistry,
 ) {
@@ -1833,14 +1854,13 @@ fn promote_constructor_trait_owners(
             }
         }
     }
-
-    owner_registry.promote_constructor_traits();
 }
 
 pub fn precollect_owner_registry(
     module_stages: &[Vec<StagedModuleAst>],
 ) -> Result<OwnerRegistry, ResolveError> {
     let mut owner_registry = OwnerRegistry::default();
+    collect_constructor_trait_relations(module_stages, &mut owner_registry);
     for (stage_index, stage) in module_stages.iter().enumerate() {
         let mut source_ordered_entries = Vec::new();
         let mut encounter_order = 0usize;
@@ -1865,6 +1885,7 @@ pub fn precollect_owner_registry(
             }
             if let Some(owner) = &module.owner {
                 source_ordered_entries.push((
+                    module.source_index,
                     owner.span.start,
                     encounter_order,
                     module_owner_entry(owner, stage_index),
@@ -1874,18 +1895,24 @@ pub fn precollect_owner_registry(
             for stmt in &module.ast {
                 reject_reserved_direct_owner_name(stmt)?;
                 if let Some(owner) = direct_owner_entry(stmt, module, stage_index) {
-                    source_ordered_entries.push((owner.span.start, encounter_order, owner));
+                    source_ordered_entries.push((
+                        module.source_index,
+                        owner.span.start,
+                        encounter_order,
+                        owner,
+                    ));
                     encounter_order += 1;
                 }
             }
         }
-        source_ordered_entries
-            .sort_by_key(|(span_start, encounter_order, _)| (*span_start, *encounter_order));
-        for (_, _, entry) in source_ordered_entries {
+        source_ordered_entries.sort_by_key(|(source_index, span_start, encounter_order, _)| {
+            (*source_index, *span_start, *encounter_order)
+        });
+        for (_, _, _, entry) in source_ordered_entries {
             owner_registry.register(entry)?;
         }
     }
-    promote_constructor_trait_owners(module_stages, &mut owner_registry);
+    owner_registry.promote_constructor_traits();
     Ok(owner_registry)
 }
 

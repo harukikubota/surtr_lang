@@ -498,7 +498,16 @@ fn core_exposes_symbol_semantic_infos_before_completion_projection() {
         .iter()
         .find(|info| info.surface_name == "Duration")
         .expect("stdlib type should be visible as semantic info");
-    assert_eq!(duration.identity, Some(sindr::names::TypeIdentity::Type));
+    assert_eq!(duration.identity, Some(sindr::names::TypeIdentity::Struct));
+    assert_eq!(
+        duration.capabilities,
+        Some(sindr::names::SymbolCapabilities::new(
+            true,
+            true,
+            true,
+            Some(sindr::names::FacetRootKind::TypeRoot),
+        ))
+    );
 }
 
 #[test]

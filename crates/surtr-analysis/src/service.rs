@@ -1226,7 +1226,7 @@ fn build_staged_modules(
     let mut module_stages = Vec::new();
     for stage in &runner.module_stages {
         let mut staged_modules = Vec::new();
-        for file in &stage.files {
+        for (source_index, file) in stage.files.iter().enumerate() {
             let Some(source) = source_for_module_file(service, &file.path) else {
                 continue;
             };
@@ -1247,10 +1247,12 @@ fn build_staged_modules(
                         semantic_index_with_source_locations(semantic_index, &file.path, &ast);
                     let fallback_module_path =
                         fallback_module_path_for_const_only_project_file(&file.path, &ast);
-                    staged_modules.extend(sigil::staged_modules_from_source_ast(
-                        ast,
-                        fallback_module_path.as_deref(),
-                    ));
+                    let mut source_modules =
+                        sigil::staged_modules_from_source_ast(ast, fallback_module_path.as_deref());
+                    for module in &mut source_modules {
+                        module.source_index = source_index;
+                    }
+                    staged_modules.extend(source_modules);
                 }
                 Err(error) => {
                     let span = error.span();
