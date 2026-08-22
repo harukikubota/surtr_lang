@@ -662,6 +662,76 @@ defrecord Hoge(a: String)"#,
     }));
 }
 
+fn assert_reverse_owner_collision(src: &str, name: &str) {
+    let ast = parse_module_ast(src, "");
+    let first_span = ast[0].span().clone();
+    let conflicting_span = ast[1].span().clone();
+    let module_stages = vec![vec![staged_module("", ast)]];
+
+    let err = precollect_declaration_index(&module_stages)
+        .expect_err("top-level owners with the same name must collide");
+
+    assert_eq!(err.message, format!("Duplicate top-level owner: {name}"));
+    assert_eq!(err.span, conflicting_span);
+    assert!(err.related_labels.iter().any(|label| {
+        label.span == first_span
+            && label.message.starts_with("first ")
+            && label.message.ends_with(" declaration")
+    }));
+}
+
+#[test]
+fn test_precollect_owner_registry_rejects_enum_then_trait() {
+    assert_reverse_owner_collision(
+        r#"defenum Same { First }
+deftrait Same {}"#,
+        "Same",
+    );
+}
+
+#[test]
+fn test_precollect_owner_registry_rejects_struct_then_sig() {
+    assert_reverse_owner_collision(
+        r#"defstruct Same { value: Int }
+type Same = ($A -> $A)"#,
+        "Same",
+    );
+}
+
+#[test]
+fn test_precollect_owner_registry_rejects_supervisor_then_agent() {
+    let first_span = Span { start: 0, end: 1 };
+    let conflicting_span = Span { start: 2, end: 3 };
+    let staged_owner = |span: Span, source_form| StagedModuleAst {
+        module_path: "Global::ProcessName".to_string(),
+        doc_module_path: None,
+        ast: Vec::new(),
+        owner: Some(OwnerDescriptor {
+            canonical_path: "Global::ProcessName".to_string(),
+            span,
+            source_form,
+        }),
+        module_doc: None,
+        auto_import: false,
+        process_spec: None,
+    };
+    let module_stages = vec![vec![
+        staged_owner(first_span.clone(), OwnerSourceForm::Defsupervisor),
+        staged_owner(conflicting_span.clone(), OwnerSourceForm::Defagent),
+    ]];
+
+    let err = precollect_declaration_index(&module_stages)
+        .expect_err("supervisor and agent owners must share one namespace");
+
+    assert_eq!(err.message, "Duplicate top-level owner: ProcessName");
+    assert_eq!(err.span, conflicting_span);
+    assert!(err.related_labels.iter().any(|label| {
+        label.span == first_span
+            && label.message.starts_with("first ")
+            && label.message.ends_with(" declaration")
+    }));
+}
+
 #[test]
 fn test_precollect_owner_registry_maps_direct_and_promoted_identities() {
     let regular_ast = spire::parse_with_context(

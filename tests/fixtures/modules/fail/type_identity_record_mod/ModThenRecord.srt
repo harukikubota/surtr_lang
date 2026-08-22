@@ -1,0 +1,4 @@
+defmod Hoge {
+    def test() { () }
+}
+defrecord Hoge(a: String)

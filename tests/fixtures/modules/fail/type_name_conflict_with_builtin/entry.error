@@ -1,2 +1,2 @@
 phase: resolve
-contains: Type name `HashMap` is reserved by a canonical builtin type declaration
+contains: Owner name `HashMap` is reserved by a canonical builtin type declaration

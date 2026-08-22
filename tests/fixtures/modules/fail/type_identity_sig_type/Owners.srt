@@ -1,0 +1,2 @@
+type Same = ($A -> $A)
+defstruct Same { value: Int }
