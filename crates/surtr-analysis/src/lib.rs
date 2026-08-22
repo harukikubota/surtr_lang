@@ -39,6 +39,7 @@ pub use semantic::{
     SymbolLookup, SymbolSemanticInfo,
 };
 pub use service::{
-    AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisHost, AnalysisRange, AnalysisService,
-    AnalysisSeverity, AnalysisSnapshot, DocumentSymbol, HoverResult, Location, SignatureHelpResult,
+    AnalysisDiagnostic, AnalysisDiagnosticKind, AnalysisDiagnosticRelated, AnalysisHost,
+    AnalysisRange, AnalysisService, AnalysisSeverity, AnalysisSnapshot, DocumentSymbol,
+    HoverResult, Location, SignatureHelpResult,
 };

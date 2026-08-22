@@ -782,6 +782,66 @@ where
 }
 
 #[test]
+fn test_precollect_owner_registry_classifies_colliding_direct_traits_independently() {
+    for (src, first_identity, conflicting_identity) in [
+        (
+            r#"deftrait Same {}
+deftrait Same
+where
+  Self: Type<$A>
+{}"#,
+            "Trait",
+            "TypeConstructor",
+        ),
+        (
+            r#"deftrait Same
+where
+  Self: Type<$A>
+{}
+deftrait Same {}"#,
+            "TypeConstructor",
+            "Trait",
+        ),
+    ] {
+        assert_constructor_trait_collision_labels(src, first_identity, conflicting_identity);
+    }
+}
+
+#[test]
+fn test_precollect_owner_registry_classifies_colliding_inherited_traits_independently() {
+    for (src, first_identity, conflicting_identity) in [
+        (
+            r#"deftrait Constructor
+where
+  Self: Type<$A>
+{}
+deftrait Same {}
+deftrait Same
+where
+  Self: Constructor
+{}"#,
+            "Trait",
+            "TypeConstructor",
+        ),
+        (
+            r#"deftrait Constructor
+where
+  Self: Type<$A>
+{}
+deftrait Same
+where
+  Self: Constructor
+{}
+deftrait Same {}"#,
+            "TypeConstructor",
+            "Trait",
+        ),
+    ] {
+        assert_constructor_trait_collision_labels(src, first_identity, conflicting_identity);
+    }
+}
+
+#[test]
 fn test_precollect_owner_registry_rejects_struct_then_sig() {
     assert_reverse_owner_collision(
         r#"defstruct Same { value: Int }
@@ -5044,6 +5104,90 @@ fn test_sigil_session_rejects_cross_chunk_owner_collision() {
         .related_labels
         .iter()
         .any(|label| label.message == "first Record declaration"));
+}
+
+fn assert_cross_session_trait_collision(
+    first_chunk: &str,
+    conflicting_chunk: &str,
+    first_identity: &str,
+    conflicting_identity: &str,
+) {
+    let mut session = SigilSession::new();
+    session
+        .resolve(spire::parse(first_chunk).expect("first trait chunk should parse"))
+        .expect("first trait chunk should resolve");
+    let registry_before_collision = session.owner_registry().clone();
+
+    let err = session
+        .resolve(spire::parse(conflicting_chunk).expect("conflicting trait chunk should parse"))
+        .expect_err("same-name trait declarations must collide across chunks");
+
+    assert_eq!(
+        err.related_labels[0].message,
+        format!("first {first_identity} declaration")
+    );
+    assert_eq!(
+        err.related_labels[1].message,
+        format!("conflicting {conflicting_identity} declaration")
+    );
+    assert_eq!(session.owner_registry(), &registry_before_collision);
+}
+
+#[test]
+fn test_sigil_session_classifies_trait_collision_candidates_and_rolls_back_merge() {
+    for (first_chunk, conflicting_chunk, first_identity, conflicting_identity) in [
+        (
+            "deftrait Same {}",
+            r#"deftrait Same
+where
+  Self: Type<$A>
+{}"#,
+            "Trait",
+            "TypeConstructor",
+        ),
+        (
+            r#"deftrait Same
+where
+  Self: Type<$A>
+{}"#,
+            "deftrait Same {}",
+            "TypeConstructor",
+            "Trait",
+        ),
+        (
+            r#"deftrait Constructor
+where
+  Self: Type<$A>
+{}
+deftrait Same {}"#,
+            r#"deftrait Same
+where
+  Self: Constructor
+{}"#,
+            "Trait",
+            "TypeConstructor",
+        ),
+        (
+            r#"deftrait Constructor
+where
+  Self: Type<$A>
+{}
+deftrait Same
+where
+  Self: Constructor
+{}"#,
+            "deftrait Same {}",
+            "TypeConstructor",
+            "Trait",
+        ),
+    ] {
+        assert_cross_session_trait_collision(
+            first_chunk,
+            conflicting_chunk,
+            first_identity,
+            conflicting_identity,
+        );
+    }
 }
 
 #[test]

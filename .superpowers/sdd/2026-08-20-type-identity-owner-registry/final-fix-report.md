@@ -74,3 +74,64 @@ the final full-workspace gate passed.
 No unresolved correctness concern remains from the review. The nextest timeout noted
 above appears transient because the exact rerun, package rerun, and final workspace
 run are all green.
+
+---
+
+## Final fix round 2 — `final-rereview.md`
+
+The re-review identified two residual gaps in the first correction. Both are fixed
+without changing runtime type or VM semantics.
+
+### I1 — declaration-specific constructor identity
+
+Constructor-trait classification now tracks each `TraitDef` by stage, source,
+module, and statement provenance. The fixed point promotes a declaration because of
+its own direct constructor constraint or inherited parent constraints; another
+colliding declaration with the same canonical key no longer changes that result.
+
+`OwnerRegistry::merge` classifies incoming declarations against existing constructor
+parents before merging relation metadata. Collision labels therefore compare the
+unchanged existing entry with the independently classified incoming entry, while a
+failed merge leaves the complete registry unchanged.
+
+RED evidence:
+
+- Direct and inherited trait-vs-trait tests both failed with
+  `first TypeConstructor declaration` where `first Trait declaration` was required.
+- The cross-session merge regression failed with the same shared-key
+  misclassification.
+
+GREEN coverage includes direct and inherited trait collisions in both orders and
+four cross-session direct/inherited order cases with full registry rollback checks.
+Existing non-trait owner collision tests remain green.
+
+### I3 — project diagnostic source provenance
+
+`OwnerEntry` now retains its stage-local source index, and owner-collision labels
+carry typed stage/source provenance. `surtr-analysis` maps that provenance back to
+the runner file and source text, computes the primary and related local UTF-16
+ranges with each file's own `LineIndex`, and exposes first-definition data through
+typed `AnalysisDiagnosticRelated` entries.
+
+The service regression uses three files: first owner, conflicting owner containing
+an astral Unicode character, and a different active document. Before the fix it
+reported the active document path. It now reports the conflicting file and exact
+UTF-16 range, with the first declaration related to its own file and range. Existing
+Xldr rebased-span diagnostics remain green.
+
+### Round 2 verification
+
+- Focused Sigil RED→GREEN regressions: **3 passed**.
+- Focused surtr-analysis multi-file provenance regression: **passed**.
+- `cargo nextest run -p sigil`: **226 passed**.
+- `cargo nextest run -p surtr-analysis`: **133 passed**.
+- Focused Xldr prior-chunk/preload rendering regressions: **2 passed**.
+- `cargo nextest run -p xldr`: **200 passed, 74 skipped**.
+- `cargo nextest run -p diagnostics`: **70 passed**.
+- `cargo nextest run -p surtr-lsp`: **17 passed**.
+- `cargo check --workspace`: **passed**.
+- `cargo fmt --check`: **passed**.
+- `cargo nextest run --workspace`: **1,662 passed, 202 skipped** in 140.905 seconds.
+- `git diff --check`: **passed**.
+
+No residual concern from `final-rereview.md` is known after the round 2 gates.

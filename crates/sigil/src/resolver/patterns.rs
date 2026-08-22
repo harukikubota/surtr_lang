@@ -301,6 +301,7 @@ fn duplicate_pattern_binding_error(pat: &AstPattern) -> Option<ResolveError> {
             .map(|(span, message)| ResolveErrorLabel {
                 span: span.clone(),
                 message: message.to_string(),
+                source: None,
             })
             .collect(),
     })

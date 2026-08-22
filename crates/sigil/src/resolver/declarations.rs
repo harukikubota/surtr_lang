@@ -93,10 +93,12 @@ pub(super) fn validate_unique_callable_names(
                     ResolveErrorLabel {
                         span: first_span.clone(),
                         message: "first definition".to_string(),
+                        source: None,
                     },
                     ResolveErrorLabel {
                         span: span.clone(),
                         message: "conflicting definition".to_string(),
+                        source: None,
                     },
                 ],
             });
@@ -695,6 +697,8 @@ pub struct OwnerEntry {
     pub kind: OwnerKind,
     pub span: Span,
     pub stage_index: usize,
+    #[serde(default)]
+    pub source_index: usize,
     pub module_path: Option<String>,
 }
 
@@ -725,12 +729,7 @@ pub struct OwnerRegistry {
 }
 
 impl OwnerRegistry {
-    pub fn register(&mut self, mut entry: OwnerEntry) -> Result<(), ResolveError> {
-        if entry.kind == OwnerKind::Trait
-            && self.constructor_trait_keys().contains(&entry.canonical_key)
-        {
-            entry.identity = TypeIdentity::TypeConstructor;
-        }
+    pub fn register(&mut self, entry: OwnerEntry) -> Result<(), ResolveError> {
         if let Some(first) = self.entries.get(&entry.canonical_key) {
             return Err(ResolveError {
                 message: format!(
@@ -745,6 +744,10 @@ impl OwnerRegistry {
                             "first {} declaration",
                             type_identity_diagnostic_name(first.identity)
                         ),
+                        source: Some(crate::error::ResolveSourceProvenance {
+                            stage_index: first.stage_index,
+                            source_index: first.source_index,
+                        }),
                     },
                     ResolveErrorLabel {
                         span: entry.span.clone(),
@@ -752,6 +755,10 @@ impl OwnerRegistry {
                             "conflicting {} declaration",
                             type_identity_diagnostic_name(entry.identity)
                         ),
+                        source: Some(crate::error::ResolveSourceProvenance {
+                            stage_index: entry.stage_index,
+                            source_index: entry.source_index,
+                        }),
                     },
                 ],
             });
@@ -780,17 +787,25 @@ impl OwnerRegistry {
     }
 
     pub fn merge(&mut self, other: &OwnerRegistry) -> Result<(), ResolveError> {
+        let existing_constructor_traits = self.constructor_trait_keys();
+        let incoming_constructor_traits =
+            other.constructor_trait_keys_with_external_parents(&existing_constructor_traits);
         let mut merged = self.clone();
+        for entry in other.entries.values() {
+            let mut incoming = entry.clone();
+            if incoming.kind == OwnerKind::Trait
+                && incoming_constructor_traits.contains(&incoming.canonical_key)
+            {
+                incoming.identity = TypeIdentity::TypeConstructor;
+            }
+            merged.register(incoming)?;
+        }
         merged
             .constructor_trait_seeds
             .extend(other.constructor_trait_seeds.iter().cloned());
         merged
             .trait_parent_edges
             .extend(other.trait_parent_edges.iter().cloned());
-        merged.promote_constructor_traits();
-        for entry in other.entries.values() {
-            merged.register(entry.clone())?;
-        }
         merged.promote_constructor_traits();
         *self = merged;
         Ok(())
@@ -830,6 +845,13 @@ impl OwnerRegistry {
     }
 
     fn constructor_trait_keys(&self) -> BTreeSet<String> {
+        self.constructor_trait_keys_with_external_parents(&BTreeSet::new())
+    }
+
+    fn constructor_trait_keys_with_external_parents(
+        &self,
+        external_parents: &BTreeSet<String>,
+    ) -> BTreeSet<String> {
         let mut constructor_traits = self.constructor_trait_seeds.clone();
         constructor_traits.extend(self.entries.iter().filter_map(|(key, entry)| {
             (entry.kind == OwnerKind::Trait && entry.identity == TypeIdentity::TypeConstructor)
@@ -839,7 +861,9 @@ impl OwnerRegistry {
         loop {
             let mut changed = false;
             for (child, parent) in &self.trait_parent_edges {
-                if constructor_traits.contains(parent) && constructor_traits.insert(child.clone()) {
+                if (constructor_traits.contains(parent) || external_parents.contains(parent))
+                    && constructor_traits.insert(child.clone())
+                {
                     changed = true;
                 }
             }
@@ -1770,6 +1794,7 @@ fn direct_owner_entry(
                 kind: OwnerKind::Const,
                 span: span.clone(),
                 stage_index,
+                source_index: module.source_index,
                 module_path: declaration_module_path(module),
             });
         }
@@ -1782,11 +1807,16 @@ fn direct_owner_entry(
         kind,
         span: span.clone(),
         stage_index,
+        source_index: module.source_index,
         module_path: declaration_module_path(module),
     })
 }
 
-fn module_owner_entry(descriptor: &OwnerDescriptor, stage_index: usize) -> OwnerEntry {
+fn module_owner_entry(
+    descriptor: &OwnerDescriptor,
+    stage_index: usize,
+    source_index: usize,
+) -> OwnerEntry {
     let kind = descriptor.owner_kind();
     let identity = match kind {
         OwnerKind::Mod => TypeIdentity::Mod,
@@ -1799,6 +1829,7 @@ fn module_owner_entry(descriptor: &OwnerDescriptor, stage_index: usize) -> Owner
         kind,
         span: descriptor.span.clone(),
         stage_index,
+        source_index,
         module_path: Some(descriptor.canonical_path.clone()),
     }
 }
@@ -1822,49 +1853,113 @@ fn trait_owner_key(name: &str) -> String {
     canonical_owner_key(name)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct TraitDeclarationProvenance {
+    stage_index: usize,
+    source_index: usize,
+    module_index: usize,
+    statement_index: usize,
+}
+
+#[derive(Debug)]
+struct TraitConstructorRelation {
+    provenance: TraitDeclarationProvenance,
+    canonical_key: String,
+    direct_constructor: bool,
+    parent_keys: BTreeSet<String>,
+}
+
 fn collect_constructor_trait_relations(
     module_stages: &[Vec<StagedModuleAst>],
     owner_registry: &mut OwnerRegistry,
-) {
-    for module in module_stages.iter().flatten() {
-        for stmt in &module.ast {
-            let Ast::TraitDef(_, name, _, Some(clause), _, _) = stmt else {
-                continue;
-            };
-            let child_key = trait_owner_key(name);
-            for constraint in &clause.constraints {
-                if !matches!(&constraint.subject, AstTy::Named(_, subject) if subject == "Self") {
+) -> BTreeSet<TraitDeclarationProvenance> {
+    let mut relations = Vec::new();
+    for (stage_index, stage) in module_stages.iter().enumerate() {
+        for (module_index, module) in stage.iter().enumerate() {
+            for (statement_index, stmt) in module.ast.iter().enumerate() {
+                let Ast::TraitDef(_, name, _, Some(clause), _, _) = stmt else {
                     continue;
-                }
-                for bound in &constraint.bounds {
-                    match bound {
-                        spire::ast::WhereConstraintRhs::TypeConstructor(..) => {
-                            owner_registry
-                                .constructor_trait_seeds
-                                .insert(child_key.clone());
+                };
+                let child_key = trait_owner_key(name);
+                let mut direct_constructor = false;
+                let mut parent_keys = BTreeSet::new();
+                for constraint in &clause.constraints {
+                    if !matches!(&constraint.subject, AstTy::Named(_, subject) if subject == "Self")
+                    {
+                        continue;
+                    }
+                    for bound in &constraint.bounds {
+                        match bound {
+                            spire::ast::WhereConstraintRhs::TypeConstructor(..) => {
+                                direct_constructor = true;
+                                owner_registry
+                                    .constructor_trait_seeds
+                                    .insert(child_key.clone());
+                            }
+                            spire::ast::WhereConstraintRhs::Trait(_, parent_name, _) => {
+                                let parent_key = trait_owner_key(parent_name);
+                                parent_keys.insert(parent_key.clone());
+                                owner_registry
+                                    .trait_parent_edges
+                                    .insert((child_key.clone(), parent_key));
+                            }
+                            spire::ast::WhereConstraintRhs::TraitSlot(..) => {}
                         }
-                        spire::ast::WhereConstraintRhs::Trait(_, parent_name, _) => {
-                            owner_registry
-                                .trait_parent_edges
-                                .insert((child_key.clone(), trait_owner_key(parent_name)));
-                        }
-                        spire::ast::WhereConstraintRhs::TraitSlot(..) => {}
                     }
                 }
+                relations.push(TraitConstructorRelation {
+                    provenance: TraitDeclarationProvenance {
+                        stage_index,
+                        source_index: module.source_index,
+                        module_index,
+                        statement_index,
+                    },
+                    canonical_key: child_key,
+                    direct_constructor,
+                    parent_keys,
+                });
             }
         }
     }
+
+    let mut constructor_declarations = relations
+        .iter()
+        .filter_map(|relation| relation.direct_constructor.then_some(relation.provenance))
+        .collect::<BTreeSet<_>>();
+    loop {
+        let constructor_owner_keys = relations
+            .iter()
+            .filter(|relation| constructor_declarations.contains(&relation.provenance))
+            .map(|relation| relation.canonical_key.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut changed = false;
+        for relation in &relations {
+            if relation
+                .parent_keys
+                .iter()
+                .any(|parent| constructor_owner_keys.contains(parent.as_str()))
+                && constructor_declarations.insert(relation.provenance)
+            {
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    constructor_declarations
 }
 
 pub fn precollect_owner_registry(
     module_stages: &[Vec<StagedModuleAst>],
 ) -> Result<OwnerRegistry, ResolveError> {
     let mut owner_registry = OwnerRegistry::default();
-    collect_constructor_trait_relations(module_stages, &mut owner_registry);
+    let constructor_trait_declarations =
+        collect_constructor_trait_relations(module_stages, &mut owner_registry);
     for (stage_index, stage) in module_stages.iter().enumerate() {
         let mut source_ordered_entries = Vec::new();
         let mut encounter_order = 0usize;
-        for module in stage {
+        for (module_index, module) in stage.iter().enumerate() {
             if !module.module_path.is_empty()
                 && !staged_module_is_impl_owner(module)
                 && reserved_owner_surface_name_constraint(&module.module_path).is_some_and(
@@ -1888,13 +1983,23 @@ pub fn precollect_owner_registry(
                     module.source_index,
                     owner.span.start,
                     encounter_order,
-                    module_owner_entry(owner, stage_index),
+                    module_owner_entry(owner, stage_index, module.source_index),
                 ));
                 encounter_order += 1;
             }
-            for stmt in &module.ast {
+            for (statement_index, stmt) in module.ast.iter().enumerate() {
                 reject_reserved_direct_owner_name(stmt)?;
-                if let Some(owner) = direct_owner_entry(stmt, module, stage_index) {
+                if let Some(mut owner) = direct_owner_entry(stmt, module, stage_index) {
+                    if owner.kind == OwnerKind::Trait
+                        && constructor_trait_declarations.contains(&TraitDeclarationProvenance {
+                            stage_index,
+                            source_index: module.source_index,
+                            module_index,
+                            statement_index,
+                        })
+                    {
+                        owner.identity = TypeIdentity::TypeConstructor;
+                    }
                     source_ordered_entries.push((
                         module.source_index,
                         owner.span.start,
@@ -1971,10 +2076,12 @@ pub fn precollect_declarations(
                                 ResolveErrorLabel {
                                     span: first_span.clone(),
                                     message: "first definition".to_string(),
+                                    source: None,
                                 },
                                 ResolveErrorLabel {
                                     span: span.clone(),
                                     message: "conflicting definition".to_string(),
+                                    source: None,
                                 },
                             ],
                         });
@@ -2530,10 +2637,12 @@ impl Resolver {
                                 ResolveErrorLabel {
                                     span: first_span.clone(),
                                     message: "first definition".to_string(),
+                                    source: None,
                                 },
                                 ResolveErrorLabel {
                                     span: span.clone(),
                                     message: "conflicting definition".to_string(),
+                                    source: None,
                                 },
                             ],
                         });

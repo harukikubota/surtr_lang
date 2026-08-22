@@ -1745,6 +1745,103 @@ Project::config({|config|
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn analysis_service_owner_collision_uses_each_project_source_provenance() {
+    let root = temp_root("project-owner-collision-provenance");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("create src dir");
+    let first_path = src.join("a_first.srt");
+    let collision_path = src.join("b_collision.srt");
+    let active_path = src.join("c_active.srt");
+    let project_file = root.join("project.srt");
+    let first_source = "defrecord Shared(first: Int)";
+    let collision_source = "deferror Shared { \"😀\" }";
+    let active_source = "defmod Main { def main() -> Int { 1 } }";
+    std::fs::write(&first_path, first_source).expect("write first owner source");
+    std::fs::write(&collision_path, collision_source).expect("write conflicting owner source");
+    std::fs::write(&active_path, active_source).expect("write active source");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::entry_fun(c, "Main::main")
+    |> Config::add_path("./src/a_first.srt")
+    |> Config::add_path("./src/b_collision.srt")
+    |> Config::add_path("./src/c_active.srt")
+  })
+})
+"#;
+
+    let mut service = AnalysisService::new();
+    service.update_document(active_path.clone(), Some(1), active_source.to_string());
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: root.clone(),
+        active_file: active_path.clone(),
+        selected_context: Some(SelectedContext::ProjectProfile {
+            project_file: project_file.clone(),
+            profile: "dev".to_string(),
+        }),
+        runner_selection: Some(RunnerSelection {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            runner_result: None,
+            source: Some(ProjectRunnerSourceInput {
+                project_file,
+                selected_profile: "dev".to_string(),
+                normalized_args: vec![("profile".to_string(), "dev".to_string())],
+                active_file: Some(active_path.clone()),
+                source: project_source.to_string(),
+            }),
+        }),
+        open_documents: service.document_store().open_document_versions(),
+    });
+
+    let snapshot = service.analyze(context);
+    let collision = service
+        .diagnostics(&snapshot)
+        .into_iter()
+        .find(|diagnostic| diagnostic.message == "Duplicate top-level owner: Shared")
+        .expect("owner collision should be reported");
+
+    assert_eq!(collision.path, collision_path);
+    let range = collision
+        .range
+        .expect("collision should have a local range");
+    assert_eq!(
+        range.start,
+        Utf16Position {
+            line: 0,
+            character: 0
+        }
+    );
+    assert_eq!(
+        range.end,
+        Utf16Position {
+            line: 0,
+            character: collision_source.encode_utf16().count() as u32,
+        }
+    );
+    assert_eq!(collision.related.len(), 1);
+    assert_eq!(collision.related[0].path, first_path);
+    assert_eq!(
+        collision.related[0].range.start,
+        Utf16Position {
+            line: 0,
+            character: 0
+        }
+    );
+    assert_eq!(
+        collision.related[0].range.end,
+        Utf16Position {
+            line: 0,
+            character: first_source.encode_utf16().count() as u32,
+        }
+    );
+    assert_eq!(collision.related[0].message, "first Record declaration");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
 fn temp_root(name: &str) -> PathBuf {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

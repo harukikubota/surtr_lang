@@ -1460,6 +1460,7 @@ fn owner_registry(entries: &[(&str, TypeIdentity, OwnerKind)]) -> OwnerRegistry 
                 kind: *kind,
                 span: Span { start: 0, end: 1 },
                 stage_index: 0,
+                source_index: 0,
                 module_path: matches!(kind, OwnerKind::Mod | OwnerKind::Supervisor)
                     .then(|| (*canonical_key).to_string()),
             })

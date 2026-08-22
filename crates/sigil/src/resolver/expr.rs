@@ -3968,10 +3968,12 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
                     ResolveErrorLabel {
                         span: first_span.clone(),
                         message: "first definition".to_string(),
+                        source: None,
                     },
                     ResolveErrorLabel {
                         span: span.clone(),
                         message: "conflicting definition".to_string(),
+                        source: None,
                     },
                 ],
             });

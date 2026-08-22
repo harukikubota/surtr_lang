@@ -59,12 +59,20 @@ pub struct AnalysisRange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalysisDiagnosticRelated {
+    pub path: PathBuf,
+    pub range: AnalysisRange,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalysisDiagnostic {
     pub kind: AnalysisDiagnosticKind,
     pub severity: AnalysisSeverity,
     pub path: PathBuf,
     pub range: Option<AnalysisRange>,
     pub message: String,
+    pub related: Vec<AnalysisDiagnosticRelated>,
 }
 
 #[derive(Debug, Clone)]
@@ -264,6 +272,7 @@ impl AnalysisService {
                 path: context.context.active_file.clone(),
                 range: None,
                 message: "active document is not open in the analysis service".to_string(),
+                related: Vec::new(),
             });
             None
         };
@@ -1005,13 +1014,11 @@ fn analyze_project_stages(
     let prefix_declarations = match sigil::precollect_declarations(&module_stages) {
         Ok(precollected) => precollected,
         Err(error) => {
-            diagnostics.push(diagnostic_from_span(
-                AnalysisDiagnosticKind::Resolve,
-                AnalysisSeverity::Error,
+            diagnostics.push(diagnostic_from_project_resolve_error(
+                service,
+                runner,
                 active_document,
-                error.span.start,
-                error.span.end,
-                error.message,
+                &error,
             ));
             return;
         }
@@ -1020,13 +1027,11 @@ fn analyze_project_stages(
         match precollect_declarations_with_active_ast(&module_stages, &user_ast, None) {
             Ok(precollected) => precollected,
             Err(error) => {
-                diagnostics.push(diagnostic_from_span(
-                    AnalysisDiagnosticKind::Resolve,
-                    AnalysisSeverity::Error,
+                diagnostics.push(diagnostic_from_project_resolve_error(
+                    service,
+                    runner,
                     active_document,
-                    error.span.start,
-                    error.span.end,
-                    error.message,
+                    &error,
                 ));
                 return;
             }
@@ -1285,6 +1290,86 @@ fn source_for_module_file(service: &AnalysisService, path: &Path) -> Option<Stri
         .or_else(|| service.host.read_to_string(path))
 }
 
+fn source_for_resolve_provenance(
+    service: &AnalysisService,
+    runner: &RunnerContext,
+    active_document: &DocumentSnapshot,
+    provenance: sigil::error::ResolveSourceProvenance,
+) -> Option<(PathBuf, String)> {
+    if provenance.stage_index == runner.module_stages.len() && provenance.source_index == 0 {
+        return Some((active_document.path.clone(), active_document.text.clone()));
+    }
+    let path = runner
+        .module_stages
+        .get(provenance.stage_index)?
+        .files
+        .get(provenance.source_index)?
+        .path
+        .clone();
+    let source = if path == active_document.path {
+        active_document.text.clone()
+    } else {
+        source_for_module_file(service, &path)?
+    };
+    Some((path, source))
+}
+
+fn diagnostic_from_project_resolve_error(
+    service: &AnalysisService,
+    runner: &RunnerContext,
+    active_document: &DocumentSnapshot,
+    error: &sigil::error::ResolveError,
+) -> AnalysisDiagnostic {
+    let primary_label_index = error
+        .related_labels
+        .iter()
+        .rposition(|label| label.source.is_some());
+    let Some((primary_path, primary_source)) = primary_label_index
+        .and_then(|index| error.related_labels[index].source)
+        .and_then(|provenance| {
+            source_for_resolve_provenance(service, runner, active_document, provenance)
+        })
+    else {
+        return diagnostic_from_span(
+            AnalysisDiagnosticKind::Resolve,
+            AnalysisSeverity::Error,
+            active_document,
+            error.span.start,
+            error.span.end,
+            error.message.clone(),
+        );
+    };
+
+    let primary_line_index = LineIndex::new(&primary_source);
+    let mut diagnostic = diagnostic_from_line_index(
+        AnalysisDiagnosticKind::Resolve,
+        AnalysisSeverity::Error,
+        primary_path,
+        &primary_line_index,
+        error.span.start,
+        error.span.end,
+        error.message.clone(),
+    );
+    diagnostic.related = error
+        .related_labels
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| Some(*index) != primary_label_index)
+        .filter_map(|(_, label)| {
+            let provenance = label.source?;
+            let (path, source) =
+                source_for_resolve_provenance(service, runner, active_document, provenance)?;
+            let line_index = LineIndex::new(&source);
+            Some(AnalysisDiagnosticRelated {
+                path,
+                range: analysis_range_for_span(&line_index, &label.span),
+                message: label.message.clone(),
+            })
+        })
+        .collect();
+    diagnostic
+}
+
 fn fallback_module_path_for_const_only_project_file(path: &Path, ast: &[Ast]) -> Option<String> {
     let fallback = path
         .file_stem()
@@ -1345,6 +1430,7 @@ fn diagnostic_from_line_index(
             end: line_index.char_to_utf16_position(end),
         }),
         message,
+        related: Vec::new(),
     }
 }
 
@@ -1435,6 +1521,7 @@ fn diagnostics_from_context(context: &ResolvedAnalysisContext) -> Vec<AnalysisDi
                 .unwrap_or_else(|| context.context.active_file.clone()),
             range: None,
             message: diagnostic.message.clone(),
+            related: Vec::new(),
         });
     }
 
@@ -1458,6 +1545,7 @@ fn diagnostics_from_context(context: &ResolvedAnalysisContext) -> Vec<AnalysisDi
                     },
                 }),
                 message: diagnostic.message.clone(),
+                related: Vec::new(),
             });
         }
     }

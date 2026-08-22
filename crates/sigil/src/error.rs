@@ -1,9 +1,16 @@
 use spire::ast::Span;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolveSourceProvenance {
+    pub stage_index: usize,
+    pub source_index: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolveErrorLabel {
     pub span: Span,
     pub message: String,
+    pub source: Option<ResolveSourceProvenance>,
 }
 
 #[derive(Debug, Clone)]
