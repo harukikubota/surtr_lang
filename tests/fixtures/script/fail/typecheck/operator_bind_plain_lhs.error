@@ -1,4 +1,4 @@
 phase: typecheck
 contains: `|>=` requires Monad implementation on the left
 contains: LHS: Int
-contains: Monad is implemented for: List<$T>, Option<$T>, Result<$T>
+contains: Monad is implemented for: Either<$L, $R>, List<$T>, Option<$T>, Result<$T>

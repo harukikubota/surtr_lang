@@ -1,4 +1,4 @@
 phase: typecheck
 contains: `|*>` requires Functor implementation on the left
 contains: LHS: Int
-contains: Functor is implemented for: List<$T>, Option<$T>, Result<$T>
+contains: Functor is implemented for: Either<$L, $R>, List<$T>, Option<$T>, Result<$T>

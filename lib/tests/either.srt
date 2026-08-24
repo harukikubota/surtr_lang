@@ -1,0 +1,26 @@
+import Test;
+
+def inc(value: Int) -> Int { value + 1 }
+
+test("Either") {
+  it("distinguishes variants") {
+    assert_eq(True, Either::is_left(Either::Left("x")))
+    assert_eq(Either::Right("wrapped"), Either::wrap("wrapped"))
+    assert_eq(Either::Right("x"), Either::swap(Either::Left("x")))
+    assert_eq(Either::Left("x!"), Either::map_left(Either::Left("x"), {|value| value ++ "!"}))
+  }
+
+  it("maps and binds the right slot") {
+    assert_eq(Either::Right(8), Either::Right(7) |*> &inc)
+    assert_eq(Either::Left("stop"), Either::Left("stop") |*> &inc)
+    assert_eq(Either::Right(8), Either::Right(7) |>= {|value| Either::Right(value + 1)})
+    assert_eq(Either::Left("stop"), Either::Left("stop") |>= {|value| Either::Right(value + 1)})
+  }
+
+  it("applies within the captured left family") {
+    mapper_left: Either<String, (Int -> Int)> = Either::Left("mapper")
+    assert_eq(Either::Right(3), Either::Right(&inc) |*| Either::Right(2))
+    assert_eq(Either::Left("mapper"), mapper_left |*| Either::Right(2))
+    assert_eq(Either::Left("value"), Either::Right(&inc) |*| Either::Left("value"))
+  }
+}

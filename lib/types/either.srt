@@ -1,0 +1,87 @@
+@doc """
+One of two independently typed values.
+Either is a general choice value, not Result-style error control flow.
+"""
+defenum Either<$L, $R> {
+  Left($L),
+  Right($R),
+}
+
+impl Either {
+  def is_left(value: Either<$L, $R>) -> Boolean {
+    match value {
+      Either::Left(_) => True,
+      Either::Right(_) => False,
+    }
+  }
+
+  def is_right(value: Either<$L, $R>) -> Boolean {
+    Boolean::not(Either::is_left(value))
+  }
+
+  def wrap(value: $R) -> Either<$L, $R> { Either::Right(value) }
+
+  def swap(value: Either<$L, $R>) -> Either<$R, $L> {
+    match value {
+      Either::Left(left) => Either::Right(left),
+      Either::Right(right) => Either::Left(right),
+    }
+  }
+
+  def fold(value: Either<$L, $R>, on_left: ($L -> $A), on_right: ($R -> $A)) -> $A {
+    match value {
+      Either::Left(left) => on_left(left),
+      Either::Right(right) => on_right(right),
+    }
+  }
+
+  def map_left(value: Either<$L, $R>, mapper: ($L -> $A)) -> Either<$A, $R> {
+    match value {
+      Either::Left(left) => Either::Left(mapper(left)),
+      Either::Right(right) => Either::Right(right),
+    }
+  }
+}
+
+impl Functor for Either<$L, $R>
+where
+  $R: Functor.$A
+{
+  def fmap(self: Either<$L, $A>, mapper: ($A -> $B)) -> Either<$L, $B> {
+    match self {
+      Either::Left(left) => Either::Left(left),
+      Either::Right(right) => Either::Right(mapper(right)),
+    }
+  }
+}
+
+impl Applicative for Either<$L, $R>
+where
+  $R: Applicative.$A
+{
+  def pure::<Either<$L, $R>>(value: $A) -> Either<$L, $A> { Either::Right(value) }
+
+  def ap(mapper: Either<$L, ($A -> $B)>, value: Either<$L, $A>) -> Either<$L, $B> {
+    match mapper {
+      Either::Left(left) => Either::Left(left),
+      Either::Right(f) => match value {
+        Either::Left(left) => Either::Left(left),
+        Either::Right(inner) => Either::Right(f(inner)),
+      },
+    }
+  }
+}
+
+impl Monad for Either<$L, $R>
+where
+  $R: Monad.$A
+{
+  def return::<Either<$L, $R>>(value: $A) -> Either<$L, $A> { Either::Right(value) }
+
+  def bind(self: Either<$L, $A>, mapper: ($A -> Either<$L, $B>)) -> Either<$L, $B> {
+    match self {
+      Either::Left(left) => Either::Left(left),
+      Either::Right(right) => mapper(right),
+    }
+  }
+}
