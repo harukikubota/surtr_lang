@@ -1,0 +1,4 @@
+True
+left:x
+Either::Right(3)
+Either::Left("x")

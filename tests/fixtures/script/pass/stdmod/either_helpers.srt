@@ -1,0 +1,9 @@
+def inc(value: Int) -> Int {
+  value + 1
+}
+
+print(to_string(Either::is_left(Either::Left("x"))))
+folded: Either<String, Int> = Either::Left("x")
+print(Either::fold(folded, {|value| "left:" ++ value}, {|value| to_string(value)}))
+print(inspect(Either::Right(2) |*> &inc))
+print(inspect(Either::Left("x") |>= {|value| Either::Right(value + 1)}))
