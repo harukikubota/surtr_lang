@@ -11,6 +11,24 @@ fn typecheck_without_std_prelude(source: &str) -> Result<Vec<TypedNode>, scar::e
     scar::typecheck(resolve_without_std_prelude(source))
 }
 
+fn typecheck_std_surface_without_prelude(
+    std_source: &str,
+    project_source: &str,
+) -> Result<Vec<TypedNode>, scar::error::TypeError> {
+    let mut ast = spire::parse_with_context(
+        std_source,
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("standard surface should parse without the std prelude");
+    ast.extend(
+        spire::parse_with_context(project_source, spire::ParserContext::project(1))
+            .expect("project source should parse without the std prelude"),
+    );
+    let resolved =
+        sigil::resolve(ast).expect("standard surface should resolve without the prelude");
+    scar::typecheck(resolved)
+}
+
 #[test]
 fn synthesized_trait_default_does_not_require_an_explicit_resolved_impl_method() {
     let typed = typecheck_without_std_prelude(
@@ -134,4 +152,48 @@ result = Use::use(value)"#,
     .expect_err("a bare capability must not prove a missing Marker<Int> body obligation");
 
     assert!(err.message.contains("Marker<Int>"), "{err:?}");
+}
+
+#[test]
+fn builtin_contract_forwarding_consumes_the_callers_bare_capability() {
+    typecheck_std_surface_without_prelude(
+        r#"deftrait Equal {
+  def equal(self: Self, rhs: Self) -> Int
+}
+
+@builtin def group_count(values: List<$A>) -> List<($A, Int)>
+where
+  $A: Equal"#,
+        r#"def count(values: List<$A>) -> List<($A, Int)>
+where
+  $A: Equal
+{
+  group_count(values)
+}
+"#,
+    )
+    .expect("the builtin's Equal proof forwarding must consume the caller capability");
+}
+
+#[test]
+fn builtin_contract_forwarding_still_rejects_a_missing_capability() {
+    let err = typecheck_std_surface_without_prelude(
+        r#"deftrait Equal {
+  def equal(self: Self, rhs: Self) -> Int
+}
+
+@builtin def group_count(values: List<$A>) -> List<($A, Int)>
+where
+  $A: Equal"#,
+        r#"def count(values: List<$A>) -> List<($A, Int)> {
+  group_count(values)
+}
+"#,
+    )
+    .expect_err("builtin proof forwarding without Equal must be rejected");
+
+    assert!(
+        err.message.contains("Builtin group_count requires Equal"),
+        "{err:?}"
+    );
 }

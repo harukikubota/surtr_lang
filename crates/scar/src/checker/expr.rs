@@ -8688,6 +8688,9 @@ impl Checker {
                         )),
                     });
                 }
+                if let Ty::Var(var) = subject {
+                    let _ = self.tyvar_has_bound(var, &trait_key);
+                }
             }
         }
         Ok(())
