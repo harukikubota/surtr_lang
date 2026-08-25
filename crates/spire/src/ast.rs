@@ -287,8 +287,8 @@ pub struct WhereConstraint {
 /// The right-hand side of a `where` constraint.
 #[derive(Debug, Clone, PartialEq)]
 pub enum WhereConstraintRhs {
-    /// An ordinary trait requirement such as `Eq` or `Convert<Int>`.
-    Trait(Span, Symbol, Vec<AstTy>),
+    /// An ordinary bare trait requirement such as `Eq` or `Convert`.
+    Trait(Span, Symbol),
     /// A type-constructor shape requirement such as `Type<$A>`.
     TypeConstructor(Span, Vec<AstTy>),
     /// A trait constructor-slot projection such as `Functor.$A`.

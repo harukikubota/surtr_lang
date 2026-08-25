@@ -9,9 +9,65 @@ use super::Parser;
 
 fn where_constraint_rhs_span(rhs: &WhereConstraintRhs) -> &Span {
     match rhs {
-        WhereConstraintRhs::Trait(span, _, _)
+        WhereConstraintRhs::Trait(span, _)
         | WhereConstraintRhs::TypeConstructor(span, _)
         | WhereConstraintRhs::TraitSlot(span, _, _) => span,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WhereClauseBlock {
+    Function,
+    TraitDefinition,
+    TraitMethod,
+    TraitImplementation,
+    InherentImplementationMethod,
+}
+
+#[derive(Debug, Clone)]
+struct WhereClauseContext {
+    block: WhereClauseBlock,
+    self_context: Option<String>,
+}
+
+impl WhereClauseContext {
+    fn function() -> Self {
+        Self {
+            block: WhereClauseBlock::Function,
+            self_context: None,
+        }
+    }
+
+    fn trait_definition() -> Self {
+        Self {
+            block: WhereClauseBlock::TraitDefinition,
+            self_context: Some("Self".to_string()),
+        }
+    }
+
+    fn trait_method() -> Self {
+        Self {
+            block: WhereClauseBlock::TraitMethod,
+            self_context: Some("Self".to_string()),
+        }
+    }
+
+    fn trait_implementation(self_target: String) -> Self {
+        Self {
+            block: WhereClauseBlock::TraitImplementation,
+            self_context: Some(self_target),
+        }
+    }
+
+    fn inherent_implementation_method(target: String) -> Self {
+        Self {
+            block: WhereClauseBlock::InherentImplementationMethod,
+            self_context: Some(target),
+        }
+    }
+
+    fn permits_type_constructor_shape(&self, subject: &AstTy) -> bool {
+        self.block == WhereClauseBlock::TraitDefinition && Parser::is_self_type(subject)
     }
 }
 
@@ -1590,7 +1646,9 @@ impl Parser<'_> {
             let target_ty =
                 Self::canonicalize_impl_target_ty(self.parse_type_in_impl_context(None)?);
             let self_target = self.trait_impl_self_target_name(&target_ty)?;
-            let where_clause = self.parse_optional_where_clause(Some(self_target.clone()))?;
+            let where_clause = self.parse_optional_where_clause(
+                WhereClauseContext::trait_implementation(self_target.clone()),
+            )?;
             self.skip_newlines();
             self.expect(&Token::LBrace)?;
             self.skip_newlines();
@@ -1778,7 +1836,8 @@ impl Parser<'_> {
                         if matches!(self.peek(), Token::Colon) {
                             self.advance();
                             self.skip_newlines();
-                            let ty = self.parse_type_in_impl_context(Some(target.to_string()))?;
+                            let ty = self
+                                .parse_direct_signature_parameter_type(Some(target.to_string()))?;
                             if !Self::is_impl_receiver_type(&ty, target) {
                                 return Err(ParseError::syntax(
                                     "`self` receiver type must be `Self` or the impl target type",
@@ -1792,7 +1851,7 @@ impl Parser<'_> {
                     } else {
                         self.expect(&Token::Colon)?;
                         self.skip_newlines();
-                        self.parse_type_in_impl_context(Some(target.to_string()))?
+                        self.parse_direct_signature_parameter_type(Some(target.to_string()))?
                     };
 
                     params.push(FunParam {
@@ -1819,11 +1878,13 @@ impl Parser<'_> {
         let ret_ty = if matches!(self.peek(), Token::Arrow) {
             self.advance();
             self.skip_newlines();
-            Some(self.parse_type_in_impl_context(Some(target.to_string()))?)
+            Some(self.parse_direct_signature_return_type(Some(target.to_string()))?)
         } else {
             None
         };
-        let where_clause = self.parse_optional_where_clause(Some(target.to_string()))?;
+        let where_clause = self.parse_optional_where_clause(
+            WhereClauseContext::inherent_implementation_method(target.to_string()),
+        )?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.impl_target_stack.push(target.to_string());
@@ -1938,7 +1999,8 @@ impl Parser<'_> {
                         if matches!(self.peek(), Token::Colon) {
                             self.advance();
                             self.skip_newlines();
-                            let ty = self.parse_type_in_impl_context(Some(target.to_string()))?;
+                            let ty = self
+                                .parse_direct_signature_parameter_type(Some(target.to_string()))?;
                             if !Self::is_impl_receiver_type(&ty, target) {
                                 return Err(ParseError::syntax(
                                     "`self` receiver type must be `Self` or the impl target type",
@@ -1952,7 +2014,7 @@ impl Parser<'_> {
                     } else {
                         self.expect(&Token::Colon)?;
                         self.skip_newlines();
-                        self.parse_type_in_impl_context(Some(target.to_string()))?
+                        self.parse_direct_signature_parameter_type(Some(target.to_string()))?
                     };
                     params.push(FunParam {
                         name: param_name,
@@ -1978,7 +2040,7 @@ impl Parser<'_> {
         let ret_ty = if matches!(self.peek(), Token::Arrow) {
             self.advance();
             self.skip_newlines();
-            Some(self.parse_type_in_impl_context(Some(target.to_string()))?)
+            Some(self.parse_direct_signature_return_type(Some(target.to_string()))?)
         } else {
             None
         };
@@ -2374,7 +2436,8 @@ impl Parser<'_> {
         self.expect(&Token::Deftrait)?;
         let (name, _) = self.expect_ident()?;
         let type_params = self.parse_decl_type_params()?;
-        let where_clause = self.parse_optional_where_clause(Some("Self".to_string()))?;
+        let where_clause =
+            self.parse_optional_where_clause(WhereClauseContext::trait_definition())?;
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -2498,14 +2561,14 @@ impl Parser<'_> {
         self.skip_newlines();
         self.expect(&Token::Arrow)?;
         self.skip_newlines();
-        let ret_ty = self.parse_type_in_impl_context(self_context.clone())?;
+        let ret_ty = self.parse_direct_signature_return_type(self_context.clone())?;
         if matches!(ret_ty, AstTy::ImplTrait(_, _)) {
             return Err(ParseError::syntax(
                 "return-position `impl Trait` is not supported; name the type parameter explicitly",
                 ast_ty_span(&ret_ty).clone(),
             ));
         }
-        let where_clause = self.parse_optional_where_clause(self_context.clone())?;
+        let where_clause = self.parse_optional_where_clause(WhereClauseContext::trait_method())?;
 
         let mut lookahead = self.pos;
         while matches!(
@@ -2633,7 +2696,7 @@ impl Parser<'_> {
             let ty = if matches!(self.peek(), Token::Colon) {
                 self.advance();
                 self.skip_newlines();
-                let ty = self.parse_type_in_impl_context(self_context)?;
+                let ty = self.parse_direct_signature_parameter_type(self_context)?;
                 if !Self::is_self_type(&ty) {
                     return Err(ParseError::syntax(
                         "`self` receiver type must be `Self`",
@@ -2648,7 +2711,7 @@ impl Parser<'_> {
         }
 
         self.expect(&Token::Colon)?;
-        let ty = self.parse_type_in_impl_context(self_context)?;
+        let ty = self.parse_direct_signature_parameter_type(self_context)?;
         Ok(FunParam { name, ty, span })
     }
 
@@ -3147,7 +3210,7 @@ impl Parser<'_> {
         let ret_ty = if matches!(self.peek(), Token::Arrow) {
             self.advance();
             self.skip_newlines();
-            let ret_ty = self.parse_type()?;
+            let ret_ty = self.parse_direct_signature_return_type(None)?;
             if matches!(ret_ty, AstTy::ImplTrait(_, _)) {
                 return Err(ParseError::syntax(
                     "return-position `impl Trait` is not supported; name the type parameter explicitly",
@@ -3159,7 +3222,7 @@ impl Parser<'_> {
             None
         };
 
-        let where_clause = self.parse_optional_where_clause(None)?;
+        let where_clause = self.parse_optional_where_clause(WhereClauseContext::function())?;
 
         Ok((
             sp,
@@ -3257,9 +3320,9 @@ impl Parser<'_> {
         Ok(())
     }
 
-    pub(super) fn parse_optional_where_clause(
+    fn parse_optional_where_clause(
         &mut self,
-        self_context: Option<String>,
+        context: WhereClauseContext,
     ) -> Result<Option<WhereClause>, ParseError> {
         let mut lookahead = self.pos;
         while matches!(
@@ -3288,17 +3351,23 @@ impl Parser<'_> {
                 ));
             }
 
-            let subject = self.parse_type_in_impl_context(self_context.clone())?;
+            let subject = self.parse_type_in_impl_context(context.self_context.clone())?;
             let constraint_start = ast_ty_span(&subject).start;
             self.skip_newlines();
             self.expect(&Token::Colon)?;
             self.skip_newlines();
 
-            let mut bounds = vec![self.parse_where_constraint_rhs(self_context.clone())?];
+            let mut bounds = vec![self.parse_where_constraint_rhs(
+                context.self_context.clone(),
+                context.permits_type_constructor_shape(&subject),
+            )?];
             while matches!(self.peek(), Token::Plus) {
                 self.advance();
                 self.skip_newlines();
-                bounds.push(self.parse_where_constraint_rhs(self_context.clone())?);
+                bounds.push(self.parse_where_constraint_rhs(
+                    context.self_context.clone(),
+                    context.permits_type_constructor_shape(&subject),
+                )?);
             }
 
             let end = where_constraint_rhs_span(bounds.last().expect("non-empty bounds")).end;
@@ -3354,9 +3423,16 @@ impl Parser<'_> {
     fn parse_where_constraint_rhs(
         &mut self,
         self_context: Option<String>,
+        permits_type_constructor_shape: bool,
     ) -> Result<WhereConstraintRhs, ParseError> {
         let start = self.peek_span().start;
         if matches!(self.peek(), Token::Type) {
+            if !permits_type_constructor_shape {
+                return Err(ParseError::syntax(
+                    "`Type<...>` is only allowed as `Self: Type<...>` in a deftrait where clause",
+                    self.peek_span(),
+                ));
+            }
             self.advance();
             self.skip_newlines();
             self.expect(&Token::Lt)?;
@@ -3403,28 +3479,21 @@ impl Parser<'_> {
             ));
         }
 
-        let mut trait_args = Vec::new();
-        let mut end = trait_span.end;
         if matches!(self.peek(), Token::Lt) {
-            self.advance();
-            self.skip_newlines();
-            loop {
-                trait_args.push(self.parse_type_in_impl_context(self_context.clone())?);
-                self.skip_newlines();
-                if matches!(self.peek(), Token::Comma) {
-                    self.advance();
-                    self.skip_newlines();
-                    continue;
-                }
-                break;
-            }
-            end = self.expect_type_gt()?.end;
+            return Err(ParseError::syntax(
+                format!(
+                    "Parameterized trait bounds are not allowed in `where`; use bare `{trait_name}`"
+                ),
+                self.peek_span(),
+            ));
         }
 
         Ok(WhereConstraintRhs::Trait(
-            Span { start, end },
+            Span {
+                start,
+                end: trait_span.end,
+            },
             trait_name,
-            trait_args,
         ))
     }
 
@@ -5392,7 +5461,7 @@ impl Parser<'_> {
         self.skip_newlines();
         self.expect(&Token::Arrow)?;
         self.skip_newlines();
-        let ret_ty = self.parse_type()?;
+        let ret_ty = self.parse_direct_signature_return_type(None)?;
 
         if matches!(self.peek(), Token::LBrace) {
             return Err(ParseError::syntax(
@@ -5642,7 +5711,7 @@ impl Parser<'_> {
         }
         self.ensure_non_const_identifier(&name, span.clone(), "Function parameter")?;
         self.expect(&Token::Colon)?;
-        let ty = self.parse_type()?;
+        let ty = self.parse_direct_signature_parameter_type(None)?;
         Ok(FunParam { name, ty, span })
     }
 }

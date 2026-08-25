@@ -46,6 +46,7 @@ pub fn parse(source: &str) -> Result<Vec<Ast>, ParseError> {
 pub fn parse_with_context(source: &str, context: ParserContext) -> Result<Vec<Ast>, ParseError> {
     let tokens = tokenize(source)?;
     reject_excessive_delimiter_nesting(&tokens)?;
+    reject_marker_owner_paths(&tokens)?;
     let ast = chumsky_program::parse_program_with_chumsky(source, &tokens, context.clone())?;
     validate::validate_program_by_context(&context, &ast)?;
     let ast = lower_namespaces(ast)?;
@@ -59,6 +60,7 @@ pub fn parse_with_context_diagnostic(
 ) -> Result<Vec<Ast>, ParseDiagnostic> {
     let tokens = tokenize(source).map_err(ParseDiagnostic::from)?;
     reject_excessive_delimiter_nesting(&tokens).map_err(ParseDiagnostic::from)?;
+    reject_marker_owner_paths(&tokens).map_err(ParseDiagnostic::from)?;
     let ast =
         chumsky_program::parse_program_with_chumsky_diagnostic(source, &tokens, context.clone())
             .map_err(ParseDiagnostic::from)?;
@@ -84,6 +86,27 @@ fn reject_excessive_delimiter_nesting(tokens: &[Spanned<Token>]) -> Result<(), P
                 depth = depth.saturating_sub(1);
             }
             _ => {}
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn reject_marker_owner_paths(tokens: &[Spanned<Token>]) -> Result<(), ParseError> {
+    for window in tokens.windows(4) {
+        let is_marker = matches!(&window[0].token, Token::Ident(name) if name == "Self")
+            || matches!(window[0].token, Token::Type);
+        if is_marker
+            && matches!(window[1].token, Token::Colon)
+            && matches!(window[2].token, Token::Colon)
+            && matches!(window[3].token, Token::Ident(_))
+        {
+            return Err(ParseError::syntax(
+                "`Self` and `Type` are type markers, not value-level call owners",
+                Span {
+                    start: window[0].span.start,
+                    end: window[3].span.end,
+                },
+            ));
         }
     }
     Ok(())
@@ -687,14 +710,8 @@ fn qualify_namespace_where_clause(
                         .bounds
                         .into_iter()
                         .map(|bound| match bound {
-                            WhereConstraintRhs::Trait(span, name, args) => {
-                                Ok(WhereConstraintRhs::Trait(
-                                    span,
-                                    name,
-                                    args.into_iter()
-                                        .map(|arg| qualify_namespace_type(arg, namespace))
-                                        .collect::<Result<Vec<_>, ParseError>>()?,
-                                ))
+                            WhereConstraintRhs::Trait(span, name) => {
+                                Ok(WhereConstraintRhs::Trait(span, name))
                             }
                             WhereConstraintRhs::TypeConstructor(span, slots) => {
                                 Ok(WhereConstraintRhs::TypeConstructor(
@@ -1339,12 +1356,9 @@ fn rewrite_process_owner_where_clause(
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        WhereConstraintRhs::Trait(span, name, args) => WhereConstraintRhs::Trait(
+                        WhereConstraintRhs::Trait(span, name) => WhereConstraintRhs::Trait(
                             span,
                             rewrite_process_owner_symbol(name, old_name, new_name),
-                            args.into_iter()
-                                .map(|arg| rewrite_process_owner_ty(arg, old_name, new_name))
-                                .collect(),
                         ),
                         WhereConstraintRhs::TypeConstructor(span, slots) => {
                             WhereConstraintRhs::TypeConstructor(
@@ -1563,13 +1577,9 @@ fn shift_where_clause(clause: WhereClause, delta: usize) -> WhereClause {
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        WhereConstraintRhs::Trait(span, name, args) => WhereConstraintRhs::Trait(
-                            shift_span(span, delta),
-                            name,
-                            args.into_iter()
-                                .map(|arg| shift_ast_ty(arg, delta))
-                                .collect(),
-                        ),
+                        WhereConstraintRhs::Trait(span, name) => {
+                            WhereConstraintRhs::Trait(shift_span(span, delta), name)
+                        }
                         WhereConstraintRhs::TypeConstructor(span, slots) => {
                             WhereConstraintRhs::TypeConstructor(
                                 shift_span(span, delta),

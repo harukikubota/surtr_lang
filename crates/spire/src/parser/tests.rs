@@ -1533,9 +1533,166 @@ where
     assert!(matches!(&constraint.subject, AstTy::Named(_, name) if name == "$A"));
     assert!(matches!(
         constraint.bounds.as_slice(),
-        [WhereConstraintRhs::Trait(_, eq, _), WhereConstraintRhs::Trait(_, concat, _)]
+        [WhereConstraintRhs::Trait(_, eq), WhereConstraintRhs::Trait(_, concat)]
             if eq.ends_with("Eq") && concat.ends_with("Concat")
     ));
+}
+
+#[test]
+fn test_where_trait_rhs_is_bare_in_every_declaration_context() {
+    let cases = [
+        (
+            "function",
+            "def use_it(value: $A) -> $A where $A: Convert<$B> { value }",
+        ),
+        (
+            "trait definition",
+            "deftrait Child where Self: Parent<$A> { def use_it(self: Self) -> Self }",
+        ),
+        (
+            "trait method",
+            "deftrait Child { def use_it(value: $A) -> $A where $A: Convert<$B> }",
+        ),
+        (
+            "trait implementation",
+            "impl Child for Box<$A> where $A: Convert<$B> { def use_it(self: Self) -> Self { self } }",
+        ),
+        (
+            "inherent implementation method",
+            "impl Box { def use_it(self: Self) -> Self where Self: Convert<$B> { self } }",
+        ),
+    ];
+
+    for (context, source) in cases {
+        let err = parse(source).expect_err(&format!(
+            "parameterized trait RHS must be rejected in {context}"
+        ));
+        assert!(err.message().contains("where"), "{context}: {err}");
+    }
+}
+
+#[test]
+fn test_type_constructor_where_rhs_is_limited_to_deftrait_self() {
+    let cases = [
+        (
+            "ordinary function subject",
+            "def use_it(value: $A) -> $A where $A: Type<$B> { value }",
+        ),
+        (
+            "ordinary function Self subject",
+            "def use_it(value: $A) -> $A where Self: Type<$B> { value }",
+        ),
+        (
+            "trait definition non-Self subject",
+            "deftrait Bad where $A: Type<$B> { def use_it(self: Self) -> Self }",
+        ),
+        (
+            "trait method",
+            "deftrait Bad { def use_it(value: $A) -> $A where Self: Type<$B> }",
+        ),
+        (
+            "trait implementation",
+            "impl Bad for Box<$A> where Self: Type<$B> { def use_it(self: Self) -> Self { self } }",
+        ),
+        (
+            "inherent implementation method",
+            "impl Box { def use_it(self: Self) -> Self where Self: Type<$B> { self } }",
+        ),
+    ];
+
+    for (context, source) in cases {
+        let err = parse(source).expect_err(&format!("Type RHS must be rejected in {context}"));
+        assert!(!err.message().is_empty(), "{context}: {err}");
+    }
+}
+
+#[test]
+fn test_type_constructor_where_rhs_and_trait_slot_remain_distinct() {
+    let ast = parse(
+        r#"deftrait Functor
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}
+
+impl Functor for Result<$T>
+where
+  $T: Functor.$A
+{
+  def fmap(self: Self) -> Self { self }
+}"#,
+    )
+    .expect("shape and slot-map RHS forms should parse");
+
+    assert!(matches!(
+        &ast[0],
+        Ast::TraitDef(_, _, _, Some(WhereClause { constraints, .. }), _, _)
+            if matches!(constraints[0].bounds.as_slice(), [WhereConstraintRhs::TypeConstructor(_, _)])
+    ));
+    assert!(matches!(
+        &ast[1],
+        Ast::TraitImplDef(_, _, _, _, Some(WhereClause { constraints, .. }), _, _)
+            if matches!(constraints[0].bounds.as_slice(), [WhereConstraintRhs::TraitSlot(_, _, _)])
+    ));
+}
+
+#[test]
+fn test_marker_names_cannot_be_value_owner_paths() {
+    for source in ["Self::f()", "Type::f()"] {
+        let err = parse(source).expect_err("marker owner path must be rejected");
+        assert!(err.message().contains("owner"), "{err}");
+    }
+}
+
+#[test]
+fn test_constructor_application_parser_preserves_type_identity_boundaries() {
+    let allowed = [
+        "def map(value: Applicative<$A>) -> Applicative<$B> { value }",
+        "deftrait Mapper { def map(value: Applicative<$A>) -> Applicative<$B> }",
+    ];
+    for source in allowed {
+        parse(source)
+            .expect("direct normal-function and trait-method signature application should parse");
+    }
+
+    // `Applicative` is syntactically indistinguishable from a concrete generic
+    // owner such as `List`. Spire therefore preserves these forms for the
+    // identity-aware resolver/checker, which rejects constructor-trait use in
+    // the non-direct positions below.
+    let identity_dependent = [
+        "value: Applicative<$A> = value",
+        "defstruct Holder { value: Applicative<$A> }",
+        "defrecord Holder(value: Applicative<$A>)",
+        "deferror Holder(value: Applicative<$A>) { \"holder\" }",
+        "callback = {|value: Applicative<$A>| value}",
+        "def nested(value: List<Applicative<$A>>) -> Int { 0 }",
+        "def paired(value: (Applicative<$A>, Int)) -> Int { 0 }",
+    ];
+    for source in identity_dependent {
+        parse(source).expect("parser must leave constructor-trait identity checks downstream");
+    }
+}
+
+#[test]
+fn test_self_application_is_limited_to_direct_impl_or_trait_method_signatures() {
+    let allowed = [
+        "deftrait Functor { def fmap(value: Self<$A>) -> Self<$B> }",
+        "impl Box { def map(self: Self<$A>) -> Self<$B> { self } }",
+    ];
+    for source in allowed {
+        parse(source).expect("direct Self application should parse");
+    }
+
+    let forbidden = [
+        "impl Box { def map(self: Self) -> Self { value: Self<$A> = self; value } }",
+        "deftrait Functor { def map(value: List<Self<$A>>) -> Self<$B> }",
+        "impl Box { def map(self: Self) -> Self { callback = {|value: Self<$A>| value}; self } }",
+    ];
+    for source in forbidden {
+        let err = parse(source).expect_err("nested or local Self application must be rejected");
+        assert!(err.message().contains("Self<...>"), "{err}");
+    }
 }
 
 #[test]
@@ -1612,7 +1769,7 @@ fn test_trait_method_where_clause_parses() {
 
 #[test]
 fn test_where_type_constructor_requires_a_slot() {
-    let err = parse("def bad(x: Int) -> Int where $A: Type<> { x }")
+    let err = parse("deftrait Bad where Self: Type<> { def make() -> Self }")
         .expect_err("empty Type constraint should be rejected");
     assert!(err.message().contains("at least one constructor slot"));
 }
@@ -5510,7 +5667,7 @@ namespace Auth {
     assert!(matches!(
         clause.constraints[0].bounds.as_slice(),
         [
-            WhereConstraintRhs::Trait(_, trait_name, _),
+            WhereConstraintRhs::Trait(_, trait_name),
             WhereConstraintRhs::TraitSlot(_, owner, slot)
         ] if trait_name == "Equal" && owner == "Functor" && slot == "$A"
     ));

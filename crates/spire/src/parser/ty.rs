@@ -4,6 +4,62 @@ use crate::token::Token;
 
 use super::Parser;
 
+/// The syntactic position occupied by a parsed type.
+///
+/// Type constructor *identity* is not available in Spire, so this tracks only
+/// source-determinable structure while parsing a declaration. Identity-aware
+/// position checks remain in later phases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TypePosition {
+    General,
+    DirectSignatureParameter,
+    DirectSignatureReturn,
+    Nested,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct TypeParseContext {
+    impl_target: Option<String>,
+    position: TypePosition,
+}
+
+impl TypeParseContext {
+    pub(super) fn general(impl_target: Option<String>) -> Self {
+        Self {
+            impl_target,
+            position: TypePosition::General,
+        }
+    }
+
+    pub(super) fn direct_signature_parameter(impl_target: Option<String>) -> Self {
+        Self {
+            impl_target,
+            position: TypePosition::DirectSignatureParameter,
+        }
+    }
+
+    pub(super) fn direct_signature_return(impl_target: Option<String>) -> Self {
+        Self {
+            impl_target,
+            position: TypePosition::DirectSignatureReturn,
+        }
+    }
+
+    fn nested(&self) -> Self {
+        Self {
+            impl_target: self.impl_target.clone(),
+            position: TypePosition::Nested,
+        }
+    }
+
+    fn permits_direct_self_application(&self) -> bool {
+        matches!(
+            self.position,
+            TypePosition::DirectSignatureParameter | TypePosition::DirectSignatureReturn
+        )
+    }
+}
+
 impl Parser<'_> {
     // ── Type annotation parsing ──
 
@@ -21,15 +77,40 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_type(&mut self) -> Result<AstTy, ParseError> {
-        self.parse_type_in_impl_context(self.impl_target_stack.last().cloned())
+        self.parse_type_in_context(TypeParseContext::general(
+            self.impl_target_stack.last().cloned(),
+        ))
     }
 
     pub(super) fn parse_type_in_impl_context(
         &mut self,
         impl_target: Option<String>,
     ) -> Result<AstTy, ParseError> {
+        self.parse_type_in_context(TypeParseContext::general(impl_target))
+    }
+
+    pub(super) fn parse_direct_signature_parameter_type(
+        &mut self,
+        impl_target: Option<String>,
+    ) -> Result<AstTy, ParseError> {
+        self.parse_type_in_context(TypeParseContext::direct_signature_parameter(impl_target))
+    }
+
+    pub(super) fn parse_direct_signature_return_type(
+        &mut self,
+        impl_target: Option<String>,
+    ) -> Result<AstTy, ParseError> {
+        self.parse_type_in_context(TypeParseContext::direct_signature_return(impl_target))
+    }
+
+    pub(super) fn parse_type_in_context(
+        &mut self,
+        context: TypeParseContext,
+    ) -> Result<AstTy, ParseError> {
         self.skip_newlines();
         let sp = self.peek_span();
+        let impl_target = context.impl_target.clone();
+        let nested_context = context.nested();
 
         if matches!(self.peek(), Token::LParen) {
             return self.with_parse_nesting(sp.clone(), |parser| {
@@ -37,7 +118,7 @@ impl Parser<'_> {
                 parser.skip_newlines();
                 if matches!(parser.peek(), Token::Arrow) {
                     parser.advance();
-                    let ret = parser.parse_type_in_impl_context(impl_target.clone())?;
+                    let ret = parser.parse_type_in_context(nested_context.clone())?;
                     parser.skip_newlines();
                     let end = parser.expect(&Token::RParen)?;
                     return Ok(parser.parse_optional_type_suffix(AstTy::Func(
@@ -51,7 +132,7 @@ impl Parser<'_> {
                 }
 
                 let mut params = Vec::new();
-                params.push(parser.parse_type_in_impl_context(impl_target.clone())?);
+                params.push(parser.parse_type_in_context(nested_context.clone())?);
                 parser.skip_newlines();
                 while matches!(parser.peek(), Token::Comma) {
                     parser.advance();
@@ -65,12 +146,12 @@ impl Parser<'_> {
                             },
                         ));
                     }
-                    params.push(parser.parse_type_in_impl_context(impl_target.clone())?);
+                    params.push(parser.parse_type_in_context(nested_context.clone())?);
                     parser.skip_newlines();
                 }
                 if matches!(parser.peek(), Token::Arrow) {
                     parser.advance();
-                    let ret = parser.parse_type_in_impl_context(impl_target.clone())?;
+                    let ret = parser.parse_type_in_context(nested_context.clone())?;
                     parser.skip_newlines();
                     let end = parser.expect(&Token::RParen)?;
                     return Ok(parser.parse_optional_type_suffix(AstTy::Func(
@@ -153,15 +234,21 @@ impl Parser<'_> {
                 ));
             }
             if matches!(self.peek(), Token::Lt) {
+                if !context.permits_direct_self_application() {
+                    return Err(ParseError::syntax(
+                        "`Self<...>` is only allowed as a direct impl or trait-method signature type",
+                        sp,
+                    ));
+                }
                 return self.with_parse_nesting(sp.clone(), |parser| {
                     parser.advance();
                     parser.skip_newlines();
-                    let mut args = vec![parser.parse_type_in_impl_context(impl_target.clone())?];
+                    let mut args = vec![parser.parse_type_in_context(nested_context.clone())?];
                     parser.skip_newlines();
                     while matches!(parser.peek(), Token::Comma) {
                         parser.advance();
                         parser.skip_newlines();
-                        args.push(parser.parse_type_in_impl_context(impl_target.clone())?);
+                        args.push(parser.parse_type_in_context(nested_context.clone())?);
                         parser.skip_newlines();
                     }
                     let end = parser.expect_type_gt()?;
@@ -192,12 +279,12 @@ impl Parser<'_> {
             return self.with_parse_nesting(sp.clone(), |parser| {
                 parser.advance();
                 parser.skip_newlines();
-                let mut args = vec![parser.parse_type_in_impl_context(impl_target.clone())?];
+                let mut args = vec![parser.parse_type_in_context(nested_context.clone())?];
                 parser.skip_newlines();
                 while matches!(parser.peek(), Token::Comma) {
                     parser.advance();
                     parser.skip_newlines();
-                    args.push(parser.parse_type_in_impl_context(impl_target.clone())?);
+                    args.push(parser.parse_type_in_context(nested_context.clone())?);
                     parser.skip_newlines();
                 }
                 let end = parser.expect_type_gt()?;

@@ -5,8 +5,8 @@ use sindr::primitives::SurtrInt;
 
 use super::context::{DeclLevel, ParseUnitKind, TopLevelDeclKind};
 use super::{
-    canonicalize_root_owner_heads, lower_namespaces, reject_excessive_delimiter_nesting, validate,
-    ParseDiagnostic, ParseRules, Parser, ParserContext,
+    canonicalize_root_owner_heads, lower_namespaces, reject_excessive_delimiter_nesting,
+    reject_marker_owner_paths, validate, ParseDiagnostic, ParseRules, Parser, ParserContext,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +98,9 @@ pub fn parse_tolerant_with_context(
     let mut diagnostics = scan.diagnostics;
 
     if let Err(error) = reject_excessive_delimiter_nesting(&scan.parser_tokens) {
+        diagnostics.push(ParseDiagnostic::from(error));
+    }
+    if let Err(error) = reject_marker_owner_paths(&scan.parser_tokens) {
         diagnostics.push(ParseDiagnostic::from(error));
     }
 
