@@ -1,5 +1,5 @@
 use super::*;
-use sindr::builtin::builtin_type_meta_by_name;
+use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
 use sindr::names::builtin_type_usage_policy;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
@@ -970,7 +970,9 @@ impl Checker {
         let Some((target, _)) = Self::split_impl_method_id(id) else {
             return self.resolve_signature_ast_ty_in_context(ast_ty, context, tyvars);
         };
-        if self.env.lookup_type_def(&target).is_none() {
+        if self.env.lookup_type_def(&target).is_none()
+            && !builtin_type_supports_inherent_impl(Self::surface_name(&target))
+        {
             return self.resolve_signature_ast_ty_in_context(ast_ty, context, tyvars);
         }
         let rewritten = Self::rewrite_inherent_self_apps(ast_ty, &target);
@@ -3245,24 +3247,11 @@ impl Checker {
         };
         for parent in &child_trait.parents {
             let parent_key = self.trait_key(&parent.trait_id);
-            let parent_trait = self.traits.get(&parent_key).ok_or_else(|| TypeError {
+            self.traits.get(&parent_key).ok_or_else(|| TypeError {
                 message: format!("Unknown parent trait: {}", parent.trait_id.name),
                 span: parent.trait_id.span.clone(),
                 hint: None,
             })?;
-            if !parent_trait.type_params.is_empty() {
-                return Err(TypeError {
-                    message: format!(
-                        "Parent trait {} expects {} type argument(s), got {}",
-                        parent.trait_id.name,
-                        parent_trait.type_params.len(),
-                        0
-                    ),
-                    span: parent.trait_id.span.clone(),
-                    hint: None,
-                });
-            }
-            let parent_args = Vec::new();
             let parent_candidates = self
                 .trait_impls
                 .values()
@@ -3271,9 +3260,7 @@ impl Checker {
                 .collect::<Vec<_>>();
             let parent_impl = parent_candidates
                 .into_iter()
-                .find(|impl_info| {
-                    self.parent_impl_covers_child(impl_info, &parent_args, child_impl)
-                })
+                .find(|impl_info| self.parent_impl_covers_child(impl_info, child_impl))
                 .ok_or_else(|| TypeError {
                     message: format!(
                         "Trait impl {} for {} requires parent impl {} for the same target",
@@ -3305,7 +3292,6 @@ impl Checker {
     fn parent_impl_covers_child(
         &mut self,
         parent_impl: &TraitImplInfo,
-        requested_parent_args: &[Ty],
         child_impl: &TraitImplInfo,
     ) -> bool {
         let before_substitutions = self.substitutions.clone();
@@ -3322,17 +3308,14 @@ impl Checker {
         // declaration environment.
         let mut fresh = HashMap::new();
         let parent_target = self.instantiate_ty_with_fresh(&parent_impl.target_ty, &mut fresh);
-        let parent_args = parent_impl
-            .trait_arg_tys
-            .iter()
-            .map(|arg| self.instantiate_ty_with_fresh(arg, &mut fresh))
-            .collect::<Vec<_>>();
-        let head_covers = parent_args.len() == requested_parent_args.len()
-            && parent_args
-                .iter()
-                .zip(requested_parent_args)
-                .all(|(candidate, requested)| self.types_compatible(candidate, requested))
-            && self.types_compatible(&parent_target, &child_impl.target_ty);
+        // A declaration bound `Self: Parent` names the Parent capability
+        // family, not a zero-argument Parent instance. Instantiate the full
+        // parent head so its variables remain available to its where clause,
+        // but coverage is determined by the target and declared obligations.
+        for arg in &parent_impl.trait_arg_tys {
+            self.instantiate_ty_with_fresh(arg, &mut fresh);
+        }
+        let head_covers = self.types_compatible(&parent_target, &child_impl.target_ty);
         let obligations_hold =
             head_covers && self.parent_where_is_entailed_by_child(parent_impl, child_impl, &fresh);
 

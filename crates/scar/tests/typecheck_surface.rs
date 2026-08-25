@@ -3815,51 +3815,62 @@ where
 }
 
 #[test]
-fn parameterized_parent_trait_coverage_uses_the_child_trait_arguments() {
-    let covered = resolve_with_builtin_prelude(
+fn parameterized_parent_trait_bounds_cover_the_parent_family() {
+    typecheck_without_std_prelude(
         r#"deftrait Parent<$Tag> {
   def parent(self: Self) -> String
 }
 
 deftrait Child<$Tag>
 where
-  Self: Parent<$Tag>
+  Self: Parent
 {
   def child(self: Self) -> String
 }
 
-impl Parent<Int> for List<$A> {
-  def parent(self: List<$A>) -> String { "parent" }
+defenum Boxed<$A> {
+  Boxed($A),
 }
 
-impl Child<Int> for List<$A> {
-  def child(self: List<$A>) -> String { "child" }
-}"#,
-    );
-    typecheck(covered).expect("Child<Int> must require and find Parent<Int>");
+impl Parent<Int> for Boxed<$A> {
+  def parent(self: Boxed<$A>) -> String { "parent" }
+}
 
-    let mismatched = resolve_with_builtin_prelude(
+impl Child<String> for Boxed<$A> {
+  def child(self: Boxed<$A>) -> String { "child" }
+}"#,
+    )
+    .expect("a bare Parent bound should require any Parent family instance for the target");
+
+    let err = typecheck_without_std_prelude(
         r#"deftrait Parent<$Tag> {
   def parent(self: Self) -> String
 }
 
 deftrait Child<$Tag>
 where
-  Self: Parent<$Tag>
+  Self: Parent
 {
   def child(self: Self) -> String
 }
 
-impl Parent<String> for List<$A> {
-  def parent(self: List<$A>) -> String { "parent" }
+defenum Boxed<$A> {
+  Boxed($A),
 }
 
-impl Child<Int> for List<$A> {
-  def child(self: List<$A>) -> String { "child" }
+defenum Other<$A> {
+  Other($A),
+}
+
+impl Parent<Int> for Other<$A> {
+  def parent(self: Other<$A>) -> String { "parent" }
+}
+
+impl Child<String> for Boxed<$A> {
+  def child(self: Boxed<$A>) -> String { "child" }
 }"#,
-    );
-    let err = typecheck(mismatched)
-        .expect_err("Parent<String> cannot cover Child<Int>'s Parent<Int> requirement");
+    )
+    .expect_err("the parent family instance must still cover the same target");
     assert!(
         err.message.contains("requires parent impl Parent"),
         "{err:?}"
@@ -4351,6 +4362,20 @@ boxed: Box<Int> = Box::wrap(1)
 value: Int = Box::get(boxed)"#,
     )
     .expect("Self<$A> in a plain inherent owner should mean Box<$A>");
+}
+
+#[test]
+fn canonical_builtin_inherent_owners_expand_self_applications_to_their_targets() {
+    for owner in ["List", "HashMap", "Workers", "TaskHandle"] {
+        let source = format!(
+            r#"impl {owner} {{
+  def keep(value: Self<$A>) -> Self<$A> {{ value }}
+}}"#
+        );
+        typecheck_without_std_prelude(&source).unwrap_or_else(|err| {
+            panic!("Self<$A> in canonical builtin owner {owner} should expand: {err:?}")
+        });
+    }
 }
 
 #[test]
