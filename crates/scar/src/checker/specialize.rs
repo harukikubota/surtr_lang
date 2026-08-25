@@ -47,6 +47,20 @@ impl Checker {
         }
 
         rewritten.extend(generated_defs);
+        if let Some(pending) = rewritten
+            .iter()
+            .find(|node| Self::typed_node_has_pending_trait_call(node))
+        {
+            return Err(TypeError {
+                message: "UnresolvedTraitObligation: pending trait dispatch reached the Forge boundary"
+                    .into(),
+                span: pending.span.clone(),
+                hint: Some(
+                    "Concretize the generic receiver and all trait arguments before code generation."
+                        .into(),
+                ),
+            });
+        }
         self.specialization_fun_idxs = specialization_fun_idxs;
         Ok(rewritten)
     }
@@ -218,6 +232,7 @@ impl Checker {
                 trait_name,
                 method_name,
                 receiver_ty,
+                obligation,
                 dispatch,
                 origin,
                 args,
@@ -236,9 +251,23 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let receiver_ty = self.resolve_ty(&receiver_ty);
+                let obligation = TraitObligation {
+                    trait_id: obligation.trait_id,
+                    trait_args: obligation
+                        .trait_args
+                        .iter()
+                        .map(|arg| self.resolve_ty(arg))
+                        .collect(),
+                    receiver: self.resolve_ty(&obligation.receiver),
+                };
                 let dispatch = match dispatch {
                     TraitDispatch::Pending => self
-                        .trait_dispatch_target(&trait_name, &method_name, &receiver_ty)
+                        .trait_dispatch_target_for_args(
+                            &obligation.trait_id,
+                            &method_name,
+                            &obligation.receiver,
+                            &obligation.trait_args,
+                        )
                         .ok_or_else(|| TypeError {
                             message: format!(
                                 "{}::{} could not be specialized to a concrete dispatch target",
@@ -304,6 +333,7 @@ impl Checker {
                     trait_name,
                     method_name,
                     receiver_ty,
+                    obligation,
                     dispatch,
                     origin,
                     args,
@@ -1848,6 +1878,7 @@ impl Checker {
                 trait_name,
                 method_name,
                 receiver_ty,
+                obligation,
                 dispatch,
                 origin,
                 args,
@@ -1855,6 +1886,15 @@ impl Checker {
                 trait_name,
                 method_name,
                 receiver_ty: self.substitute_ty_with_mapping(&receiver_ty, mapping),
+                obligation: TraitObligation {
+                    trait_id: obligation.trait_id,
+                    trait_args: obligation
+                        .trait_args
+                        .iter()
+                        .map(|arg| self.substitute_ty_with_mapping(arg, mapping))
+                        .collect(),
+                    receiver: self.substitute_ty_with_mapping(&obligation.receiver, mapping),
+                },
                 dispatch,
                 origin: self.substitute_trait_call_origin_with_mapping(origin, mapping),
                 args: args

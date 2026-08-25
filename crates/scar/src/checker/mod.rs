@@ -477,6 +477,16 @@ struct TraitImplInfo {
 struct PendingTraitObligation {
     trait_id: String,
     args: Vec<Ty>,
+    receiver: Ty,
+}
+
+#[derive(Debug, Clone)]
+struct CapabilityUse {
+    subject_var: u32,
+    subject_name: String,
+    trait_id: String,
+    span: Span,
+    consumed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2158,6 +2168,10 @@ struct Checker {
     /// These are deliberately separate from signature bounds: solving an
     /// expression must never strengthen a declaration-owned generic.
     pending_trait_obligations: HashMap<u32, Vec<PendingTraitObligation>>,
+    /// Bare declaration capabilities currently in scope. They become used
+    /// only when checking an expression requests the matching full trait
+    /// family obligation (or forwards that proof to a generic callee).
+    active_capabilities: Vec<CapabilityUse>,
     /// Static constructor-trait capabilities attached to abstract bindings.
     /// These are intentionally binding-local: constructor roots may share a
     /// witness while different bindings expose different trait capabilities.
@@ -2249,6 +2263,7 @@ impl Checker {
             substitutions: HashMap::new(),
             tyvar_bounds: state.tyvar_bounds,
             pending_trait_obligations: HashMap::new(),
+            active_capabilities: Vec::new(),
             constructor_capabilities: HashMap::new(),
             signature_aliases: state.signature_aliases,
             alias_expansion_stack: Vec::new(),
@@ -2296,6 +2311,7 @@ impl Checker {
         checker.error_observer_bindings = self.error_observer_bindings.clone();
         checker.substitutions = self.substitutions.clone();
         checker.pending_trait_obligations = self.pending_trait_obligations.clone();
+        checker.active_capabilities = self.active_capabilities.clone();
         checker.trait_obligation_cycle = self.trait_obligation_cycle.clone();
         checker.constructor_capabilities = self.constructor_capabilities.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
@@ -3288,6 +3304,13 @@ impl Checker {
         let profile = self.profiler.start();
         self.substitutions = child.substitutions.clone();
         self.tyvar_bounds = child.tyvar_bounds.clone();
+        for (current, child_use) in self
+            .active_capabilities
+            .iter_mut()
+            .zip(child.active_capabilities.iter())
+        {
+            current.consumed |= child_use.consumed;
+        }
         self.env.next_tyvar = self.env.next_tyvar.max(child.env.next_tyvar);
         self.env.next_tag = self.env.next_tag.max(child.env.next_tag);
         if self.seen_builtin_type_decls.len() != child.seen_builtin_type_decls.len() {
@@ -3427,6 +3450,382 @@ impl Checker {
             .collect()
     }
 
+    fn contextual_constructor_trait_names(&self, stmts: &[Resolved]) -> HashSet<String> {
+        let mut names = self
+            .traits
+            .iter()
+            .filter(|(_, info)| !info.constructor_slots.is_empty())
+            .flat_map(|(key, info)| {
+                [
+                    key.clone(),
+                    Self::surface_name(key).to_string(),
+                    info.id.name.clone(),
+                ]
+            })
+            .collect::<HashSet<_>>();
+        for stmt in stmts {
+            let Resolved::TraitDef(_, id, _, where_clause, _, _) = stmt else {
+                continue;
+            };
+            let is_direct = where_clause.as_ref().is_some_and(|clause| {
+                clause.constraints.iter().any(|constraint| {
+                    matches!(constraint.subject, AstTy::Named(_, ref name) if name == "Self")
+                        && constraint.bounds.iter().any(|bound| {
+                            matches!(bound, ResolvedWhereConstraintRhs::TypeConstructor { .. })
+                        })
+                })
+            });
+            if is_direct {
+                names.insert(id.name.clone());
+                if let Some(qualified) = &id.qualified_name {
+                    names.insert(qualified.clone());
+                }
+            }
+        }
+        loop {
+            let before = names.len();
+            for stmt in stmts {
+                let Resolved::TraitDef(_, id, _, where_clause, _, _) = stmt else {
+                    continue;
+                };
+                let inherits =
+                    where_clause.as_ref().is_some_and(|clause| {
+                        clause.constraints.iter().any(|constraint| {
+                        matches!(constraint.subject, AstTy::Named(_, ref name) if name == "Self")
+                            && constraint.bounds.iter().any(|bound| match bound {
+                                ResolvedWhereConstraintRhs::Trait { trait_id } => names.contains(
+                                    trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name),
+                                ) || names.contains(Self::surface_name(&trait_id.name)),
+                                _ => false,
+                            })
+                    })
+                    });
+                if inherits {
+                    names.insert(id.name.clone());
+                    if let Some(qualified) = &id.qualified_name {
+                        names.insert(qualified.clone());
+                    }
+                }
+            }
+            if names.len() == before {
+                break;
+            }
+        }
+        names
+    }
+
+    fn constructor_position_error(ast_ty: &AstTy) -> TypeError {
+        TypeError {
+            message: format!(
+                "ConstructorTraitApplicationPosition: {} is only allowed as a direct ordinary-function or trait-method parameter or return type",
+                Self::surface_ast_ty(ast_ty)
+            ),
+            span: Self::ast_ty_span(ast_ty).clone(),
+            hint: Some(
+                "Move this constructor-trait application to a direct signature position, or use a concrete type here."
+                    .into(),
+            ),
+        }
+    }
+
+    fn validate_constructor_ast_ty(
+        ast_ty: &AstTy,
+        direct: bool,
+        constructor_traits: &HashSet<String>,
+    ) -> Result<(), TypeError> {
+        let root = match ast_ty {
+            AstTy::Named(_, name) | AstTy::Generic(_, name, _) => Some(name.as_str()),
+            _ => None,
+        };
+        let is_constructor = root.is_some_and(|name| {
+            constructor_traits.contains(name)
+                || constructor_traits.contains(Self::surface_name(name))
+        });
+        if is_constructor && !direct {
+            return Err(Self::constructor_position_error(ast_ty));
+        }
+        match ast_ty {
+            AstTy::Generic(_, _, args) => {
+                for arg in args {
+                    Self::validate_constructor_ast_ty(arg, false, constructor_traits)?;
+                }
+            }
+            AstTy::Tuple(_, items) => {
+                for item in items {
+                    Self::validate_constructor_ast_ty(item, false, constructor_traits)?;
+                }
+            }
+            AstTy::Func(_, params, ret) => {
+                for param in params {
+                    Self::validate_constructor_ast_ty(param, false, constructor_traits)?;
+                }
+                Self::validate_constructor_ast_ty(ret, false, constructor_traits)?;
+            }
+            AstTy::Named(..) | AstTy::ImplTrait(..) => {}
+        }
+        Ok(())
+    }
+
+    fn validate_constructor_pattern(
+        pattern: &ResolvedPattern,
+        constructor_traits: &HashSet<String>,
+    ) -> Result<(), TypeError> {
+        match pattern {
+            ResolvedPattern::Annotated(_, ty) | ResolvedPattern::As(_, _, Some(ty)) => {
+                Self::validate_constructor_ast_ty(ty, false, constructor_traits)?;
+            }
+            ResolvedPattern::ListCons(head, tail) => {
+                Self::validate_constructor_pattern(head, constructor_traits)?;
+                Self::validate_constructor_pattern(tail, constructor_traits)?;
+            }
+            ResolvedPattern::Constructor(_, items)
+            | ResolvedPattern::Extractor(_, items)
+            | ResolvedPattern::Tuple(items)
+            | ResolvedPattern::Or(items) => {
+                for item in items {
+                    Self::validate_constructor_pattern(item, constructor_traits)?;
+                }
+            }
+            ResolvedPattern::As(inner, _, None) => {
+                Self::validate_constructor_pattern(inner, constructor_traits)?;
+            }
+            ResolvedPattern::Var(_)
+            | ResolvedPattern::Pin(_)
+            | ResolvedPattern::Wildcard(_)
+            | ResolvedPattern::ListNil(_)
+            | ResolvedPattern::IntLit(..)
+            | ResolvedPattern::StrLit(..)
+            | ResolvedPattern::BoolLit(..)
+            | ResolvedPattern::DurationLit(..) => {}
+        }
+        Ok(())
+    }
+
+    fn validate_constructor_body_positions(
+        node: &Resolved,
+        constructor_traits: &HashSet<String>,
+    ) -> Result<(), TypeError> {
+        match node {
+            Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs) => {
+                Self::validate_constructor_pattern(pattern, constructor_traits)?;
+                Self::validate_constructor_body_positions(rhs, constructor_traits)?;
+            }
+            Resolved::Closure(_, params, _, body) => {
+                for param in params {
+                    if let Some(ty) = &param.ty {
+                        Self::validate_constructor_ast_ty(ty, false, constructor_traits)?;
+                    }
+                }
+                Self::validate_constructor_body_positions(body, constructor_traits)?;
+            }
+            Resolved::App(_, function, args) => {
+                Self::validate_constructor_body_positions(function, constructor_traits)?;
+                for arg in args {
+                    match arg {
+                        ResolvedRecordLitArg::Positional(expr)
+                        | ResolvedRecordLitArg::Named(_, expr) => {
+                            Self::validate_constructor_body_positions(expr, constructor_traits)?;
+                        }
+                    }
+                }
+            }
+            Resolved::Block(_, nodes)
+            | Resolved::ListLiteral(_, nodes)
+            | Resolved::TupleLiteral(_, nodes)
+            | Resolved::Dbg(_, nodes) => {
+                for node in nodes {
+                    Self::validate_constructor_body_positions(node, constructor_traits)?;
+                }
+            }
+            Resolved::BinOp(_, _, left, right)
+            | Resolved::Pipe(_, left, right)
+            | Resolved::ContextMap(_, left, right)
+            | Resolved::ContextApply(_, left, right)
+            | Resolved::ContextBind(_, left, right)
+            | Resolved::Compose(_, left, right)
+            | Resolved::LiftedCompose(_, left, right)
+            | Resolved::KleisliCompose(_, left, right)
+            | Resolved::ListCons(_, left, right)
+            | Resolved::RangeLiteral(_, left, right)
+            | Resolved::Assert(_, left, right)
+            | Resolved::MapErr(_, left, right)
+            | Resolved::Cause(_, left, right) => {
+                Self::validate_constructor_body_positions(left, constructor_traits)?;
+                Self::validate_constructor_body_positions(right, constructor_traits)?;
+            }
+            Resolved::If(_, cond, then_branch, else_branch) => {
+                Self::validate_constructor_body_positions(cond, constructor_traits)?;
+                Self::validate_constructor_body_positions(then_branch, constructor_traits)?;
+                if let Some(branch) = else_branch {
+                    Self::validate_constructor_body_positions(branch, constructor_traits)?;
+                }
+            }
+            Resolved::Ensure(_, a, b, c) | Resolved::RecoverKind(_, a, b, c) => {
+                Self::validate_constructor_body_positions(a, constructor_traits)?;
+                Self::validate_constructor_body_positions(b, constructor_traits)?;
+                Self::validate_constructor_body_positions(c, constructor_traits)?;
+            }
+            Resolved::Match(_, scrutinee, arms) => {
+                Self::validate_constructor_body_positions(scrutinee, constructor_traits)?;
+                for arm in arms {
+                    Self::validate_constructor_pattern(&arm.pattern, constructor_traits)?;
+                    if let Some(guard) = &arm.guard {
+                        Self::validate_constructor_body_positions(guard, constructor_traits)?;
+                    }
+                    Self::validate_constructor_body_positions(&arm.body, constructor_traits)?;
+                }
+            }
+            Resolved::Grouped(_, inner)
+            | Resolved::FieldAccess(_, inner, _)
+            | Resolved::FacetCapture(_, inner)
+            | Resolved::Semi(_, inner) => {
+                Self::validate_constructor_body_positions(inner, constructor_traits)?;
+            }
+            Resolved::Capture(_, function, args) => {
+                Self::validate_constructor_body_positions(function, constructor_traits)?;
+                for arg in args {
+                    Self::validate_constructor_body_positions(arg, constructor_traits)?;
+                }
+            }
+            Resolved::InterpolatedStr(_, parts) => {
+                for part in parts {
+                    if let ResolvedInterpolatedPart::Expr(expr) = part {
+                        Self::validate_constructor_body_positions(expr, constructor_traits)?;
+                    }
+                }
+            }
+            Resolved::HashMapLiteral(_, entries) => {
+                for entry in entries {
+                    Self::validate_constructor_body_positions(&entry.key, constructor_traits)?;
+                    Self::validate_constructor_body_positions(&entry.value, constructor_traits)?;
+                }
+            }
+            Resolved::StructLit(_, _, fields) => {
+                for field in fields {
+                    match field {
+                        ResolvedStructLitField::Explicit(_, expr)
+                        | ResolvedStructLitField::Shorthand(_, expr) => {
+                            Self::validate_constructor_body_positions(expr, constructor_traits)?;
+                        }
+                    }
+                }
+            }
+            Resolved::ConstructorCall(_, _, args) => {
+                for arg in args {
+                    match arg {
+                        ResolvedRecordLitArg::Positional(expr)
+                        | ResolvedRecordLitArg::Named(_, expr) => {
+                            Self::validate_constructor_body_positions(expr, constructor_traits)?;
+                        }
+                    }
+                }
+            }
+            Resolved::FacetSegmentAccess(..)
+            | Resolved::InferredFacetCapture(..)
+            | Resolved::TypeApply(..)
+            | Resolved::Lit(..)
+            | Resolved::Var(..)
+            | Resolved::ListNil(..)
+            | Resolved::ProcessContextHandler(..)
+            | Resolved::StructDef(..)
+            | Resolved::RecordDef(..)
+            | Resolved::DeferrorDef(..)
+            | Resolved::EnumDef(..)
+            | Resolved::Def(..)
+            | Resolved::ConstDef(..)
+            | Resolved::ExtractorDef(..)
+            | Resolved::TraitDef(..)
+            | Resolved::TraitImplDef(..)
+            | Resolved::BuiltinDecl(..)
+            | Resolved::BuiltinExtractorDecl(..)
+            | Resolved::BuiltinTypeDecl(..)
+            | Resolved::TypeAlias(..)
+            | Resolved::ResultCtorDecl(..) => {}
+        }
+        Ok(())
+    }
+
+    fn validate_constructor_application_positions(
+        &self,
+        stmts: &[Resolved],
+    ) -> Result<(), TypeError> {
+        let constructor_traits = self.contextual_constructor_trait_names(stmts);
+        for stmt in stmts {
+            match stmt {
+                Resolved::Def(_, _, _, params, ret, _, body, _) => {
+                    for param in params {
+                        Self::validate_constructor_ast_ty(&param.ty, true, &constructor_traits)?;
+                    }
+                    if let Some(ret) = ret {
+                        Self::validate_constructor_ast_ty(ret, true, &constructor_traits)?;
+                    }
+                    Self::validate_constructor_body_positions(body, &constructor_traits)?;
+                }
+                Resolved::BuiltinDecl(_, _, params, ret, _, _) => {
+                    for param in params {
+                        Self::validate_constructor_ast_ty(&param.ty, true, &constructor_traits)?;
+                    }
+                    if let Some(ret) = ret {
+                        Self::validate_constructor_ast_ty(ret, true, &constructor_traits)?;
+                    }
+                }
+                Resolved::TraitDef(_, _, _, _, methods, _) => {
+                    for method in methods {
+                        for param in &method.params {
+                            Self::validate_constructor_ast_ty(
+                                &param.ty,
+                                true,
+                                &constructor_traits,
+                            )?;
+                        }
+                        Self::validate_constructor_ast_ty(
+                            &method.ret_ty,
+                            true,
+                            &constructor_traits,
+                        )?;
+                        if let Some(body) = &method.body {
+                            Self::validate_constructor_body_positions(body, &constructor_traits)?;
+                        }
+                    }
+                }
+                Resolved::TraitImplDef(_, _, _, _, _, methods) => {
+                    for method in methods {
+                        for param in &method.params {
+                            Self::validate_constructor_ast_ty(
+                                &param.ty,
+                                true,
+                                &constructor_traits,
+                            )?;
+                        }
+                        if let Some(ret) = &method.ret_ty {
+                            Self::validate_constructor_ast_ty(ret, true, &constructor_traits)?;
+                        }
+                        Self::validate_constructor_body_positions(
+                            &method.body,
+                            &constructor_traits,
+                        )?;
+                    }
+                }
+                Resolved::StructDef(_, _, _, fields, _)
+                | Resolved::RecordDef(_, _, fields, _)
+                | Resolved::DeferrorDef(_, _, fields, _) => {
+                    for field in fields {
+                        Self::validate_constructor_ast_ty(&field.ty, false, &constructor_traits)?;
+                    }
+                }
+                Resolved::EnumDef(_, _, _, variants, _) => {
+                    for variant in variants {
+                        for payload in &variant.payload {
+                            Self::validate_constructor_ast_ty(payload, false, &constructor_traits)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn check_program(&mut self, stmts: Vec<Resolved>) -> Result<Vec<TypedNode>, TypeError> {
         let profile_enabled = self.profiler.enabled();
         if profile_enabled {
@@ -3447,6 +3846,7 @@ impl Checker {
 
         let result = (|| -> Result<Vec<TypedNode>, TypeError> {
             self.validate_declaration_where_well_formedness(&stmts)?;
+            self.validate_constructor_application_positions(&stmts)?;
             self.collect_unused_type_parameter_warnings(&stmts)?;
 
             let t = profile_enabled.then(Instant::now);

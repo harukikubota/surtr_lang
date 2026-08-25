@@ -4407,6 +4407,414 @@ where
 }
 
 #[test]
+fn constructor_application_parameter_witnesses_are_scoped_by_signature_position() {
+    typecheck_without_std_prelude(
+        r#"deftrait Context
+where
+  Self: Type<$A>
+{}
+
+defenum Left<$T> {
+  Left($T),
+}
+
+defenum Right<$T> {
+  Right($T),
+}
+
+impl Context for Left<$T>
+where
+  $T: Context.$A
+{}
+
+impl Context for Right<$T>
+where
+  $T: Context.$A
+{}
+
+def accept(left: Context<Int>, right: Context<String>) -> Unit { () }
+
+accept(Left::Left(1), Right::Right("ok"))"#,
+    )
+    .expect("each direct parameter position must own an independent constructor witness");
+}
+
+#[test]
+fn constructor_application_result_witness_is_fresh_and_resolves_from_the_body() {
+    let typed = typecheck_without_std_prelude(
+        r#"deftrait Context
+where
+  Self: Type<$A>
+{}
+
+defenum Left<$T> {
+  Left($T),
+}
+
+defenum Right<$T> {
+  Right($T),
+}
+
+impl Context for Left<$T>
+where
+  $T: Context.$A
+{}
+
+impl Context for Right<$T>
+where
+  $T: Context.$A
+{}
+
+def replace(value: Context<Int>) -> Context<String> {
+  Right::Right("ok")
+}
+
+result: Right<String> = replace(Left::Left(1))"#,
+    )
+    .expect("a contextual result must resolve independently from its input witness");
+
+    let replace = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Def(_, id, _, _, ret_ty, _, _, _) if id.name == "replace" => Some(ret_ty),
+            _ => None,
+        })
+        .expect("replace definition must be present");
+    assert!(
+        matches!(replace, Ty::Enum(name, args) if name.ends_with("Right") && args == &[Ty::Str]),
+        "contextual result witness must be erased to its concrete constructor, got {replace:?}"
+    );
+}
+
+#[test]
+fn constructor_application_result_rejects_an_unresolved_input_witness() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait Context
+where
+  Self: Type<$A>
+{}
+
+def preserve(value: Context<Int>) -> Context<Int> { value }"#,
+    )
+    .expect_err("a fresh result witness cannot be inferred from an abstract input witness");
+
+    assert!(
+        err.message.contains("UnresolvedConstructorResult"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn constructor_application_result_rejects_mixed_concrete_constructors() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait Context
+where
+  Self: Type<$A>
+{}
+
+defenum Left<$T> {
+  Left($T),
+}
+
+defenum Right<$T> {
+  Right($T),
+}
+
+impl Context for Left<$T>
+where
+  $T: Context.$A
+{}
+
+impl Context for Right<$T>
+where
+  $T: Context.$A
+{}
+
+def make(flag: Boolean) -> Context<Int> {
+  if(flag, Left::Left(1), Right::Right(1))
+}"#,
+    )
+    .expect_err("all contextual result paths must resolve to one constructor");
+
+    assert!(err.message.contains("MixedConstructorResult"), "{err:?}");
+}
+
+#[test]
+fn identity_dependent_constructor_applications_are_rejected_outside_direct_signatures() {
+    let declarations = r#"deftrait Context
+where
+  Self: Type<$A>
+{}
+
+defenum Boxed<$T> {
+  Boxed($T),
+}
+
+impl Context for Boxed<$T>
+where
+  $T: Context.$A
+{}"#;
+    let cases = [
+        ("field", r#"defrecord Holder(value: Context<Int>)"#),
+        (
+            "local annotation",
+            r#"def invalid(value: Boxed<Int>) -> Unit {
+  local: Context<Int> = value
+  ()
+}"#,
+        ),
+        (
+            "closure signature",
+            r#"def invalid(value: Boxed<Int>) -> Unit {
+  mapper = {|item: Context<Int>| ()}
+  ()
+}"#,
+        ),
+        (
+            "nested signature",
+            r#"def invalid(values: List<Context<Int>>) -> Unit { () }"#,
+        ),
+    ];
+
+    for (label, case) in cases {
+        let err =
+            typecheck_without_std_prelude(&format!("{declarations}\n\n{case}")).expect_err(label);
+        assert!(
+            err.message.contains("ConstructorTraitApplicationPosition"),
+            "{label}: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn bare_capability_is_consumed_by_a_full_parameterized_trait_obligation() {
+    let typed = typecheck_without_std_prelude(
+        r#"deftrait Convert<$To> {
+  def convert::<$To>(self: Self) -> $To
+}
+
+impl Convert<String> for Int {
+  def convert::<String>(self: Int) -> String { "converted" }
+}
+
+def convert_to_string(value: $From) -> String
+where
+  $From: Convert
+{
+  Convert::convert::<String>(value)
+}
+
+result: String = convert_to_string(1)"#,
+    )
+    .expect(
+        "the bare family capability must authorize forwarding a full Convert<String> obligation",
+    );
+
+    let obligation = typed.iter().find_map(|node| match &node.node {
+        TypedInner::Def(_, id, _, _, _, _, body, _) if id.name == "convert_to_string" => {
+            match &body.node {
+                TypedInner::Block(stmts) => stmts.last(),
+                _ => Some(body.as_ref()),
+            }
+            .and_then(|node| match &node.node {
+                TypedInner::TraitCall {
+                    obligation,
+                    dispatch,
+                    ..
+                } => Some((obligation, dispatch)),
+                _ => None,
+            })
+        }
+        _ => None,
+    });
+    let (obligation, dispatch) =
+        obligation.expect("the trait call must retain its structural obligation");
+    assert!(obligation.trait_id.ends_with("Convert"));
+    assert_eq!(obligation.trait_args, vec![Ty::Str]);
+    assert_eq!(obligation.receiver, Ty::Int);
+    assert!(matches!(dispatch, scar::typed::TraitDispatch::Static(_)));
+}
+
+#[test]
+fn unused_function_capability_is_rejected_at_its_bound() {
+    let source = r#"deftrait Marker {
+  def mark(self: Self) -> Unit
+}
+
+def ignore(value: $T) -> Unit
+where
+  $T: Marker
+{
+  ()
+}"#;
+    let marker_start = source.find("Marker\n{").expect("bound marker span");
+    let err = typecheck_without_std_prelude(source)
+        .expect_err("a bare capability that creates no full obligation must be rejected");
+
+    assert!(err.message.contains("UnusedTraitConstraint"), "{err:?}");
+    assert_eq!(err.span.start, marker_start);
+}
+
+#[test]
+fn unused_trait_method_capability_is_rejected_at_its_bound() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> Unit
+}
+
+deftrait Consumer {
+  def consume(value: $T) -> Unit
+  where
+    $T: Marker
+  {
+    ()
+  }
+}"#,
+    )
+    .expect_err("an unused default-method capability must be rejected");
+    assert!(err.message.contains("UnusedTraitConstraint"), "{err:?}");
+}
+
+#[test]
+fn unused_trait_impl_method_capability_is_rejected_at_its_bound() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> Unit
+}
+
+deftrait Consumer {
+  def consume(value: $T) -> Unit
+  where
+    $T: Marker
+}
+
+impl Consumer for Int {
+  def consume(value: $T) -> Unit
+  where
+    $T: Marker
+  {
+    ()
+  }
+}"#,
+    )
+    .expect_err("an unused impl-method capability must be rejected");
+    assert!(err.message.contains("UnusedTraitConstraint"), "{err:?}");
+}
+
+#[test]
+fn unused_trait_impl_block_capability_is_rejected_after_all_methods() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> Unit
+}
+
+deftrait Keep {
+  def keep(self: Self) -> Self
+}
+
+defenum Boxed<$T> {
+  Boxed($T),
+}
+
+impl Keep for Boxed<$T>
+where
+  $T: Marker
+{
+  def keep(self: Boxed<$T>) -> Boxed<$T> { self }
+}"#,
+    )
+    .expect_err("an impl-block capability unused by every method must be rejected");
+    assert!(err.message.contains("UnusedTraitConstraint"), "{err:?}");
+}
+
+#[test]
+fn operator_obligation_consumes_a_bare_capability() {
+    typecheck_without_std_prelude(
+        r#"deftrait Add {
+  def add(self: Self, rhs: Self) -> Self
+}
+
+impl Add for Int {
+  def add(self: Int, rhs: Int) -> Int { self }
+}
+
+def duplicate(value: $T) -> $T
+where
+  $T: Add
+{
+  value + value
+}
+
+result: Int = duplicate(1)"#,
+    )
+    .expect("operator lowering must consume the matching bare capability");
+}
+
+#[test]
+fn generic_call_forwards_and_consumes_a_bare_capability() {
+    typecheck_without_std_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> Unit
+}
+
+impl Marker for Int {
+  def mark(self: Int) -> Unit { () }
+}
+
+def consume(value: $T) -> Unit
+where
+  $T: Marker
+{
+  Marker::mark(value)
+}
+
+def forward(value: $T) -> Unit
+where
+  $T: Marker
+{
+  consume(value)
+}
+
+forward(1)"#,
+    )
+    .expect("a generic call must consume the proof it forwards to its callee");
+}
+
+#[test]
+fn different_constructor_roots_keep_independent_parameter_witnesses() {
+    typecheck_without_std_prelude(
+        r#"deftrait LeftContext
+where
+  Self: Type<$A>
+{}
+
+deftrait RightContext
+where
+  Self: Type<$A>
+{}
+
+defenum Boxed<$T> {
+  Boxed($T),
+}
+
+impl LeftContext for Boxed<$T>
+where
+  $T: LeftContext.$A
+{}
+
+impl RightContext for Boxed<$T>
+where
+  $T: RightContext.$A
+{}
+
+def accept(left: LeftContext<Int>, right: RightContext<String>) -> Unit { () }
+
+accept(Boxed::Boxed(1), Boxed::Boxed("ok"))"#,
+    )
+    .expect("different constructor roots must never share a parameter witness");
+}
+
+#[test]
 fn parent_trait_constraints_require_matching_impls_and_inherit_slots() {
     let declarations = r#"deftrait Parent
 where

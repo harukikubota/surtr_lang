@@ -183,6 +183,16 @@ pub enum TraitDispatch {
     Static(TraitDispatchTarget),
 }
 
+/// The complete trait proof requested by an expression.  Keep this structural
+/// while dispatch is pending so specialization never has to recover type
+/// arguments from a rendered trait name.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TraitObligation {
+    pub trait_id: String,
+    pub trait_args: Vec<Ty>,
+    pub receiver: Ty,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TraitDispatchTarget {
     BinOp(BinOp),
@@ -388,6 +398,7 @@ pub enum TypedInner {
         trait_name: String,
         method_name: String,
         receiver_ty: Ty,
+        obligation: TraitObligation,
         dispatch: TraitDispatch,
         origin: TraitCallOrigin,
         args: Vec<TypedNode>,

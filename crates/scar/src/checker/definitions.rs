@@ -696,10 +696,95 @@ impl Checker {
         Ok(())
     }
 
-    fn check_body_in_isolated_scope(
+    pub(super) fn resolved_capability_uses(
+        &mut self,
+        where_clause: Option<&ResolvedWhereClause>,
+        tyvars: &HashMap<String, Ty>,
+    ) -> Result<Vec<CapabilityUse>, TypeError> {
+        let Some(where_clause) = where_clause else {
+            return Ok(Vec::new());
+        };
+        let mut uses = Vec::new();
+        for constraint in &where_clause.constraints {
+            let subject = match &constraint.subject {
+                AstTy::Named(_, name) | AstTy::Generic(_, name, _) if tyvars.contains_key(name) => {
+                    tyvars.get(name).cloned().expect("checked above")
+                }
+                _ => continue,
+            };
+            let Ty::Var(subject_var) = self.resolve_ty(&subject) else {
+                continue;
+            };
+            let subject_name = Self::surface_ast_ty(&constraint.subject);
+            for bound in &constraint.bounds {
+                if let ResolvedWhereConstraintRhs::Trait { trait_id } = bound {
+                    uses.push(CapabilityUse {
+                        subject_var,
+                        subject_name: subject_name.clone(),
+                        trait_id: self.trait_key(trait_id),
+                        span: trait_id.span.clone(),
+                        consumed: false,
+                    });
+                }
+            }
+        }
+        Ok(uses)
+    }
+
+    pub(super) fn collect_signature_ty_bindings(
+        ast_ty: &AstTy,
+        resolved_ty: &Ty,
+        bindings: &mut HashMap<String, Ty>,
+    ) {
+        match (ast_ty, resolved_ty) {
+            (AstTy::Named(_, name), ty) if name.starts_with('$') => {
+                bindings.entry(name.clone()).or_insert_with(|| ty.clone());
+            }
+            (AstTy::Generic(_, name, args), Ty::SelfApp(items))
+                if name != "Self" && Self::constructor_application_parts(items).is_some() =>
+            {
+                let (_, slots) = Self::constructor_application_parts(items).expect("checked above");
+                for (arg, slot) in args.iter().zip(slots.iter()) {
+                    Self::collect_signature_ty_bindings(arg, slot, bindings);
+                }
+            }
+            (AstTy::Generic(_, _, args), Ty::List(inner)) if args.len() == 1 => {
+                Self::collect_signature_ty_bindings(&args[0], inner, bindings);
+            }
+            (AstTy::Generic(_, _, args), Ty::Result(ok, err)) => {
+                if let Some(arg) = args.first() {
+                    Self::collect_signature_ty_bindings(arg, ok, bindings);
+                }
+                if let Some(arg) = args.get(1) {
+                    Self::collect_signature_ty_bindings(arg, err, bindings);
+                }
+            }
+            (AstTy::Generic(_, _, args), Ty::Enum(_, resolved_args)) => {
+                for (arg, resolved) in args.iter().zip(resolved_args.iter()) {
+                    Self::collect_signature_ty_bindings(arg, resolved, bindings);
+                }
+            }
+            (AstTy::Tuple(_, items), Ty::Tuple(resolved_items)) => {
+                for (item, resolved) in items.iter().zip(resolved_items.iter()) {
+                    Self::collect_signature_ty_bindings(item, resolved, bindings);
+                }
+            }
+            (AstTy::Func(_, params, ret), Ty::Func(resolved_params, resolved_ret)) => {
+                for (param, resolved) in params.iter().zip(resolved_params.iter()) {
+                    Self::collect_signature_ty_bindings(param, resolved, bindings);
+                }
+                Self::collect_signature_ty_bindings(ret, resolved_ret, bindings);
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn check_body_in_isolated_scope(
         &mut self,
         local_bindings: &[(u32, Ty)],
         local_capabilities: &[(u32, String)],
+        declaration_capabilities: &[CapabilityUse],
+        deferred_capabilities: &mut [CapabilityUse],
         local_annotation_tyvars: HashMap<String, Ty>,
         rigid_tyvars: HashSet<u32>,
         function_return_ty: Ty,
@@ -717,6 +802,7 @@ impl Checker {
         let saved_closure_depth = self.closure_depth;
         let saved_facet_bindings = self.facet_bindings.clone();
         let saved_constructor_capabilities = self.constructor_capabilities.clone();
+        let saved_active_capabilities = self.active_capabilities.clone();
 
         self.env.push_var_scope();
         self.function_return_ty = Some(function_return_ty);
@@ -725,6 +811,11 @@ impl Checker {
         self.current_function_symbol = Some(function_symbol);
         self.current_impl_struct_target = impl_target;
         self.in_extractor_body = in_extractor_body;
+        self.active_capabilities = declaration_capabilities
+            .iter()
+            .chain(deferred_capabilities.iter())
+            .cloned()
+            .collect();
         for (unique_id, ty) in local_bindings {
             self.env.bind_var(*unique_id, ty.clone());
         }
@@ -738,6 +829,20 @@ impl Checker {
         // single resolve_typed_node pass in check_program.
         let profile = self.profiler.start();
         let result = self.check_node(body);
+        for (deferred, checked) in deferred_capabilities.iter_mut().zip(
+            self.active_capabilities
+                .iter()
+                .skip(declaration_capabilities.len()),
+        ) {
+            deferred.consumed |= checked.consumed;
+        }
+        let unused_capability = result.as_ref().ok().and_then(|_| {
+            self.active_capabilities
+                .iter()
+                .take(declaration_capabilities.len())
+                .find(|capability| !capability.consumed)
+                .cloned()
+        });
         self.profiler
             .finish(ProfileEvent::CheckBodyIsolated, profile);
 
@@ -751,7 +856,22 @@ impl Checker {
         self.closure_depth = saved_closure_depth;
         self.facet_bindings = saved_facet_bindings;
         self.constructor_capabilities = saved_constructor_capabilities;
+        self.active_capabilities = saved_active_capabilities;
 
+        if let Some(unused) = unused_capability {
+            return Err(TypeError {
+                message: format!(
+                    "UnusedTraitConstraint: {}: {} is never consumed",
+                    unused.subject_name,
+                    Self::surface_name(&unused.trait_id)
+                ),
+                span: unused.span,
+                hint: Some(
+                    "Remove this bound, or use it in a trait call or generic proof forwarding expression."
+                        .into(),
+                ),
+            });
+        }
         result
     }
 
@@ -813,7 +933,7 @@ impl Checker {
             });
         }
 
-        let expected_ret = match ret_ty {
+        let mut expected_ret = match ret_ty {
             Some(ty) => self.resolve_def_signature_ast_ty_in_context(
                 id,
                 ty,
@@ -823,6 +943,7 @@ impl Checker {
             None => Ty::Unit,
         };
         self.apply_resolved_where_trait_bounds(where_clause, &tyvars, None)?;
+        let declaration_capabilities = self.resolved_capability_uses(where_clause, &tyvars)?;
         if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
                 message:
@@ -891,6 +1012,8 @@ impl Checker {
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
             &local_capabilities,
+            &declaration_capabilities,
+            &mut [],
             tyvars.clone(),
             Self::signature_tyvar_ids(&tyvars),
             expected_ret.clone(),
@@ -899,6 +1022,76 @@ impl Checker {
             false,
             body,
         )?;
+
+        if let Some(trait_key) = ret_ty
+            .as_ref()
+            .and_then(|ast_ty| self.constructor_trait_key_for_ast_ty(ast_ty))
+        {
+            let actual = self.resolve_ty(&typed_body.ty);
+            let concrete_slots = Self::constructor_application_slots(&actual);
+            let expected_parts = match &expected_ret {
+                Ty::SelfApp(items) => Self::constructor_application_parts(items),
+                _ => None,
+            };
+            let Some((witness, expected_slots)) = expected_parts else {
+                unreachable!("constructor result annotation must lower to a contextual application")
+            };
+            if matches!(actual, Ty::Var(_) | Ty::SelfApp(_)) || concrete_slots.is_none() {
+                return Err(TypeError {
+                    message: format!(
+                        "UnresolvedConstructorResult: {} must resolve to one concrete constructor",
+                        Self::surface_ast_ty(ret_ty.as_ref().expect("checked above"))
+                    ),
+                    span: self.return_mismatch_span(&typed_body),
+                    hint: Some(
+                        "Return a concrete constructor value from every branch of this function."
+                            .into(),
+                    ),
+                });
+            }
+            if !self.trait_impl_exists(&trait_key, &actual) {
+                return Err(TypeError {
+                    message: format!(
+                        "{} does not implement constructor trait {}",
+                        self.ty_name(&actual),
+                        Self::surface_name(&trait_key)
+                    ),
+                    span: self.return_mismatch_span(&typed_body),
+                    hint: None,
+                });
+            }
+            let concrete_slots = concrete_slots.expect("validated above");
+            if expected_slots.len() != concrete_slots.len()
+                || !expected_slots
+                    .iter()
+                    .zip(concrete_slots.iter())
+                    .all(|(expected, actual)| {
+                        self.types_compatible_with_rigid(
+                            expected,
+                            actual,
+                            &Self::signature_tyvar_ids(&tyvars),
+                        )
+                    })
+                || !self.bind_tyvar(
+                    match witness {
+                        Ty::Var(var) => *var,
+                        _ => unreachable!("fresh constructor witness must be a type variable"),
+                    },
+                    &actual,
+                )
+            {
+                return Err(TypeError {
+                    message: format!(
+                        "expected {}, got {}",
+                        self.ty_name(&expected_ret),
+                        self.ty_name(&actual)
+                    ),
+                    span: self.return_mismatch_span(&typed_body),
+                    hint: None,
+                });
+            }
+            expected_ret = actual;
+        }
 
         let actual_ret = self.resolve_ty(&typed_body.ty);
         if let Some(err) = self.bare_return_typevar_result_mismatch(
@@ -971,6 +1164,22 @@ impl Checker {
                 });
             }
         };
+        if let Some(Ty::UserFunc {
+            type_params,
+            params,
+            ..
+        }) = self.env.lookup_var(id.unique_id).cloned()
+        {
+            self.env.bind_var(
+                id.unique_id,
+                Ty::UserFunc {
+                    fun_idx,
+                    type_params,
+                    params,
+                    ret: Box::new(expected_ret.clone()),
+                },
+            );
+        }
         let typed_type_params = type_params
             .iter()
             .filter_map(|param| match tyvars.get(&param.name) {
@@ -1064,6 +1273,8 @@ impl Checker {
         let typed_body = self.check_body_in_isolated_scope(
             &local_bindings,
             &[],
+            &[],
+            &mut [],
             tyvars.clone(),
             Self::signature_tyvar_ids(&tyvars),
             expected_ret.clone(),
@@ -1138,7 +1349,7 @@ impl Checker {
         trait_args: &[AstTy],
         target_ast_ty: &AstTy,
         where_clause: Option<&ResolvedWhereClause>,
-        _methods: &[ResolvedTraitImplMethod],
+        resolved_methods: &[ResolvedTraitImplMethod],
     ) -> Result<Vec<TypedNode>, TypeError> {
         let (_, target_ty, _, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
         let target_name = self
@@ -1167,6 +1378,12 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
+        let impl_tyvars = impl_info
+            .type_param_vars_by_name
+            .iter()
+            .map(|(name, var)| (name.clone(), Ty::Var(*var)))
+            .collect::<HashMap<_, _>>();
+        let mut block_capabilities = self.resolved_capability_uses(where_clause, &impl_tyvars)?;
         let mut typed_nodes = vec![TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
@@ -1181,6 +1398,14 @@ impl Checker {
         methods.sort_by(|left, right| left.method_name.cmp(&right.method_name));
 
         for method in methods {
+            let resolved_method = resolved_methods
+                .iter()
+                .find(|candidate| candidate.function_id.unique_id == method.function_id.unique_id)
+                .ok_or_else(|| TypeError {
+                    message: format!("Unknown resolved impl method {}", method.method_name),
+                    span: method.span.clone(),
+                    hint: None,
+                })?;
             let trait_method =
                 trait_info
                     .methods
@@ -1205,8 +1430,10 @@ impl Checker {
 
             let mut typed_params = Vec::new();
             let mut local_bindings = Vec::new();
+            let mut method_tyvars = HashMap::new();
             for (param, param_ty) in method.params.iter().zip(param_tys.iter()) {
                 local_bindings.push((param.id.unique_id, param_ty.clone()));
+                Self::collect_signature_ty_bindings(&param.ty, param_ty, &mut method_tyvars);
                 typed_params.push(TypedFunParam {
                     id: param.id.clone(),
                     ty: param_ty.clone(),
@@ -1215,6 +1442,23 @@ impl Checker {
 
             if method.is_builtin {
                 continue;
+            }
+            Self::collect_signature_ty_bindings(
+                method.ret_ty.as_ref().unwrap_or(&trait_method.ret_ty),
+                &expected_ret,
+                &mut method_tyvars,
+            );
+            let method_capabilities = self
+                .resolved_capability_uses(resolved_method.where_clause.as_ref(), &method_tyvars)?;
+            let mut method_block_capabilities =
+                self.resolved_capability_uses(where_clause, &method_tyvars)?;
+            for capability in &mut method_block_capabilities {
+                capability.consumed = block_capabilities.iter().any(|existing| {
+                    existing.consumed
+                        && existing.subject_name == capability.subject_name
+                        && Self::base_trait_key(&existing.trait_id)
+                            == Self::base_trait_key(&capability.trait_id)
+                });
             }
 
             let impl_target = self
@@ -1225,7 +1469,9 @@ impl Checker {
             let typed_body = self.check_body_in_isolated_scope(
                 &local_bindings,
                 &[],
-                HashMap::new(),
+                &method_capabilities,
+                &mut method_block_capabilities,
+                method_tyvars.clone(),
                 type_params.iter().copied().collect(),
                 expected_ret.clone(),
                 method.function_id.name.clone(),
@@ -1233,6 +1479,17 @@ impl Checker {
                 false,
                 &method.body,
             )?;
+            for checked in method_block_capabilities {
+                if checked.consumed {
+                    if let Some(existing) = block_capabilities.iter_mut().find(|existing| {
+                        existing.subject_name == checked.subject_name
+                            && Self::base_trait_key(&existing.trait_id)
+                                == Self::base_trait_key(&checked.trait_id)
+                    }) {
+                        existing.consumed = true;
+                    }
+                }
+            }
 
             let actual_ret = self.resolve_ty(&typed_body.ty);
             if let Some(err) = self.bare_return_typevar_result_mismatch(
@@ -1306,6 +1563,24 @@ impl Checker {
                     method.where_clause.clone(),
                     Box::new(typed_body),
                     method.attrs.visibility,
+                ),
+            });
+        }
+
+        if let Some(unused) = block_capabilities
+            .into_iter()
+            .find(|capability| !capability.consumed)
+        {
+            return Err(TypeError {
+                message: format!(
+                    "UnusedTraitConstraint: {}: {} is never consumed by this impl block",
+                    unused.subject_name,
+                    Self::surface_name(&unused.trait_id)
+                ),
+                span: unused.span,
+                hint: Some(
+                    "Remove this impl bound, or consume it from at least one implementation method."
+                        .into(),
                 ),
             });
         }

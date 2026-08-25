@@ -49,21 +49,6 @@ impl Checker {
         }
     }
 
-    fn constructor_root_trait_key(&self, trait_key: &str) -> Option<String> {
-        let trait_info = self.traits.get(trait_key)?;
-        if let Some(root) = &trait_info.constructor_root {
-            return Some(root.clone());
-        }
-        trait_info.parents.iter().find_map(|parent| {
-            let parent_key = parent
-                .trait_id
-                .qualified_name
-                .as_deref()
-                .unwrap_or(parent.trait_id.name.as_str());
-            self.constructor_root_trait_key(parent_key)
-        })
-    }
-
     pub(super) fn constructor_application_slots(ty: &Ty) -> Option<Vec<Ty>> {
         match ty {
             Ty::List(inner) => Some(vec![inner.as_ref().clone()]),
@@ -508,13 +493,28 @@ impl Checker {
         self.tyvar_bounds.get(&var).cloned().unwrap_or_default()
     }
 
-    pub(super) fn tyvar_has_bound(&self, var: u32, trait_name: &str) -> bool {
-        self.tyvar_bounds.get(&var).is_some_and(|bounds| {
+    pub(super) fn tyvar_has_bound(&mut self, var: u32, trait_name: &str) -> bool {
+        let requested_family = Self::base_trait_key(trait_name);
+        let matched = self.tyvar_bounds.get(&var).is_some_and(|bounds| {
             bounds.iter().any(|bound| {
-                bound == trait_name
-                    || self.trait_display_name(bound) == self.trait_display_name(trait_name)
+                let bound_family = Self::base_trait_key(bound);
+                bound_family == requested_family
+                    || Self::surface_name(bound_family) == Self::surface_name(requested_family)
             })
-        })
+        });
+        if matched {
+            for capability in &mut self.active_capabilities {
+                let capability_family = Self::base_trait_key(&capability.trait_id);
+                if capability.subject_var == var
+                    && (capability_family == requested_family
+                        || Self::surface_name(capability_family)
+                            == Self::surface_name(requested_family))
+                {
+                    capability.consumed = true;
+                }
+            }
+        }
+        matched
     }
 
     pub(super) fn lit_type(&self, lit: &Lit) -> Ty {
@@ -1042,7 +1042,7 @@ impl Checker {
                 {
                     return Ok(alias);
                 }
-                if let Some((trait_key, _trait_info)) = self.traits.iter().find(|(key, info)| {
+                if let Some((_trait_key, _trait_info)) = self.traits.iter().find(|(key, info)| {
                     !info.constructor_slots.is_empty()
                         && (Self::surface_name(key) == Self::surface_name(name)
                             || Self::surface_name(&info.id.name) == Self::surface_name(name))
@@ -1060,14 +1060,10 @@ impl Checker {
                             hint: Some("Use an explicit application such as `Applicative<$A>` in callable signatures.".into()),
                         });
                     }
-                    let witness = tyvars
-                        .entry(format!(
-                            "@constructor-witness:{}",
-                            self.constructor_root_trait_key(trait_key)
-                                .unwrap_or_else(|| trait_key.clone())
-                        ))
-                        .or_insert_with(|| self.env.fresh_tyvar())
-                        .clone();
+                    // A constructor witness belongs to this direct signature
+                    // position.  Even applications of the same root in two
+                    // parameters must remain independently instantiable.
+                    let witness = self.env.fresh_tyvar();
                     return Ok(Ty::SelfApp(vec![Ty::Hole, witness]));
                 }
             }
@@ -1077,7 +1073,7 @@ impl Checker {
                 {
                     return Ok(alias);
                 }
-                if let Some((trait_key, trait_info)) = self.traits.iter().find(|(key, info)| {
+                if let Some((_trait_key, trait_info)) = self.traits.iter().find(|(key, info)| {
                     !info.constructor_slots.is_empty()
                         && (Self::surface_name(key) == Self::surface_name(name)
                             || Self::surface_name(&info.id.name) == Self::surface_name(name))
@@ -1094,14 +1090,10 @@ impl Checker {
                             hint: None,
                         });
                     }
-                    let witness = tyvars
-                        .entry(format!(
-                            "@constructor-witness:{}",
-                            self.constructor_root_trait_key(trait_key)
-                                .unwrap_or_else(|| trait_key.clone())
-                        ))
-                        .or_insert_with(|| self.env.fresh_tyvar())
-                        .clone();
+                    // Return positions also pass through this path, so they
+                    // receive a fresh witness rather than inheriting an input
+                    // constructor by root identity.
+                    let witness = self.env.fresh_tyvar();
                     let mut application = vec![Ty::Hole, witness];
                     for arg in args {
                         application.push(self.resolve_signature_like_ast_ty_in_context(
@@ -1748,6 +1740,14 @@ impl Checker {
                 .unwrap_or_default();
             match &ty {
                 Ty::Var(other) => {
+                    if self.rigid_tyvars.contains(other)
+                        && !var_bounds
+                            .iter()
+                            .all(|bound| self.tyvar_has_bound(*other, bound))
+                    {
+                        self.profiler.finish(ProfileEvent::BindTyVar, profile);
+                        return false;
+                    }
                     let mut combined = var_bounds;
                     for bound in self.tyvar_bound_names(*other) {
                         if !combined.iter().any(|existing| existing == &bound) {
@@ -1758,7 +1758,8 @@ impl Checker {
                     self.tyvar_bounds.insert(var, combined.clone());
                     self.tyvar_bounds.insert(*other, combined);
                     let pending = self.pending_trait_obligations.entry(*other).or_default();
-                    for obligation in pending_obligations {
+                    for mut obligation in pending_obligations {
+                        obligation.receiver = Ty::Var(*other);
                         if !pending.contains(&obligation) {
                             pending.push(obligation);
                         }
@@ -1770,7 +1771,15 @@ impl Checker {
                         return false;
                     }
                     if !pending_obligations.iter().all(|obligation| {
-                        self.trait_impl_exists_for_args(&obligation.trait_id, &obligation.args, &ty)
+                        let receiver = match self.resolve_ty(&obligation.receiver) {
+                            Ty::Var(pending_var) if pending_var == var => ty.clone(),
+                            other => other,
+                        };
+                        self.trait_impl_exists_for_args(
+                            &obligation.trait_id,
+                            &obligation.args,
+                            &receiver,
+                        )
                     }) {
                         self.profiler.finish(ProfileEvent::BindTyVar, profile);
                         return false;
@@ -1792,10 +1801,32 @@ impl Checker {
 
         match self.resolve_ty(ty) {
             Ty::Var(var) => bounds.iter().all(|bound| self.tyvar_has_bound(var, bound)),
-            concrete => bounds
-                .iter()
-                .all(|bound| self.trait_impl_exists(bound, &concrete)),
+            concrete => bounds.iter().all(|bound| {
+                if bound.contains('<') {
+                    self.trait_impl_exists(bound, &concrete)
+                } else {
+                    self.trait_family_impl_exists(bound, &concrete)
+                }
+            }),
         }
+    }
+
+    fn trait_family_impl_exists(&mut self, trait_name: &str, concrete: &Ty) -> bool {
+        for impl_key in self.trait_impl_candidate_keys(trait_name) {
+            let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
+                continue;
+            };
+            let checkpoint = self.substitutions.clone();
+            let mut fresh = HashMap::new();
+            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+            let matches = self.types_compatible(&target, concrete)
+                && self.impl_where_obligations_satisfied(&impl_info, &fresh);
+            self.substitutions = checkpoint;
+            if matches {
+                return true;
+            }
+        }
+        false
     }
 
     pub(super) fn ty_contains_var(&self, ty: &Ty, needle: u32) -> bool {
@@ -2487,6 +2518,7 @@ impl Checker {
                 trait_name,
                 method_name,
                 receiver_ty,
+                obligation,
                 dispatch,
                 origin,
                 args,
@@ -2494,6 +2526,15 @@ impl Checker {
                 trait_name,
                 method_name,
                 receiver_ty: self.resolve_ty(&receiver_ty),
+                obligation: TraitObligation {
+                    trait_id: obligation.trait_id,
+                    trait_args: obligation
+                        .trait_args
+                        .iter()
+                        .map(|arg| self.resolve_ty(arg))
+                        .collect(),
+                    receiver: self.resolve_ty(&obligation.receiver),
+                },
                 dispatch,
                 origin: self.resolve_trait_call_origin(origin),
                 args: args

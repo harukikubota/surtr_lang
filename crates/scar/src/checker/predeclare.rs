@@ -2025,6 +2025,7 @@ impl Checker {
             let obligation = PendingTraitObligation {
                 trait_id: trait_name.to_string(),
                 args: trait_args.to_vec(),
+                receiver: Ty::Var(var),
             };
             if !pending.contains(&obligation) {
                 pending.push(obligation);

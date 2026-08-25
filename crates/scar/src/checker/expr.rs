@@ -108,7 +108,7 @@ impl Checker {
     pub(super) fn pending_trait_helper_error(&self, method_name: &str, span: &Span) -> TypeError {
         TypeError {
             message: format!(
-                "Trait helper `{}` could not be concretized for this callable binding",
+                "UnresolvedTraitObligation: Trait helper `{}` could not be concretized for this callable binding",
                 method_name
             ),
             span: span.clone(),
@@ -375,23 +375,38 @@ impl Checker {
                 trait_name,
                 method_name,
                 receiver_ty,
+                obligation,
                 dispatch,
                 origin,
                 args,
             } => {
                 let receiver_ty = self.resolve_ty(&receiver_ty);
+                let obligation = TraitObligation {
+                    trait_id: obligation.trait_id,
+                    trait_args: obligation
+                        .trait_args
+                        .iter()
+                        .map(|arg| self.resolve_ty(arg))
+                        .collect(),
+                    receiver: self.resolve_ty(&obligation.receiver),
+                };
                 let args = args
                     .into_iter()
                     .map(|arg| self.concretize_pending_trait_calls(arg))
                     .collect::<Result<Vec<_>, _>>()?;
                 let dispatch = match dispatch {
                     crate::typed::TraitDispatch::Pending
-                        if !trait_name.contains('<') && !matches!(receiver_ty, Ty::Var(_)) =>
+                        if !matches!(obligation.receiver, Ty::Var(_)) =>
                     {
-                        self.trait_dispatch_target(&trait_name, &method_name, &receiver_ty)
-                            .ok_or_else(|| {
-                                self.pending_trait_helper_error(method_name.as_str(), &span)
-                            })?
+                        self.trait_dispatch_target_for_args(
+                            &obligation.trait_id,
+                            &method_name,
+                            &obligation.receiver,
+                            &obligation.trait_args,
+                        )
+                        .ok_or_else(|| {
+                            self.pending_trait_helper_error(method_name.as_str(), &span)
+                        })?
                     }
                     other => other,
                 };
@@ -399,6 +414,7 @@ impl Checker {
                     trait_name,
                     method_name,
                     receiver_ty,
+                    obligation,
                     dispatch,
                     origin,
                     args,
@@ -1125,6 +1141,44 @@ impl Checker {
                         method_info,
                         &deferred_self,
                     )?;
+                    if let Some(body) = &method.body {
+                        let mut tyvars = HashMap::new();
+                        for (param, resolved) in method.params.iter().zip(params.iter()) {
+                            Self::collect_signature_ty_bindings(
+                                &param.ty,
+                                resolved,
+                                &mut tyvars,
+                            );
+                        }
+                        Self::collect_signature_ty_bindings(
+                            &method.ret_ty,
+                            &ret_ty,
+                            &mut tyvars,
+                        );
+                        let declaration_capabilities = self.resolved_capability_uses(
+                            method.where_clause.as_ref(),
+                            &tyvars,
+                        )?;
+                        let local_bindings = method
+                            .params
+                            .iter()
+                            .zip(params.iter())
+                            .map(|(param, ty)| (param.id.unique_id, ty.clone()))
+                            .collect::<Vec<_>>();
+                        self.check_body_in_isolated_scope(
+                            &local_bindings,
+                            &[],
+                            &declaration_capabilities,
+                            &mut [],
+                            tyvars.clone(),
+                            Self::signature_tyvar_ids(&tyvars),
+                            ret_ty.clone(),
+                            method.id.name.clone(),
+                            None,
+                            false,
+                            body,
+                        )?;
+                    }
                     typed_methods.push(TypedTraitMethodInfo {
                         name: method.id.name.clone(),
                         params,
@@ -2821,9 +2875,8 @@ impl Checker {
         let receiver_ty = self.resolve_ty(receiver_ty);
         let result = match receiver_ty {
             Ty::Var(var) => {
-                if !self.rigid_tyvars.contains(&var) {
-                    Some(TraitDispatch::Pending)
-                } else if self.tyvar_has_bound(var, trait_name)
+                if !self.rigid_tyvars.contains(&var)
+                    || self.tyvar_has_bound(var, trait_name)
                     || self.tyvar_satisfies_compiler_trait(var, trait_name)
                 {
                     Some(TraitDispatch::Pending)
@@ -3002,7 +3055,7 @@ impl Checker {
         result
     }
 
-    fn impl_where_obligations_satisfied(
+    pub(super) fn impl_where_obligations_satisfied(
         &mut self,
         impl_info: &TraitImplInfo,
         fresh: &HashMap<u32, Ty>,
@@ -3656,6 +3709,11 @@ impl Checker {
                     trait_name: trait_name.to_string(),
                     method_name: "pure".into(),
                     receiver_ty: self.resolve_ty(expected),
+                    obligation: TraitObligation {
+                        trait_id: trait_name.to_string(),
+                        trait_args: Vec::new(),
+                        receiver: self.resolve_ty(expected),
+                    },
                     dispatch,
                     origin: TraitCallOrigin::Explicit,
                     args: vec![typed_value],
@@ -3688,6 +3746,11 @@ impl Checker {
                     trait_name: trait_name.to_string(),
                     method_name: "return".into(),
                     receiver_ty: self.resolve_ty(expected),
+                    obligation: TraitObligation {
+                        trait_id: trait_name.to_string(),
+                        trait_args: Vec::new(),
+                        receiver: self.resolve_ty(expected),
+                    },
                     dispatch,
                     origin: TraitCallOrigin::Explicit,
                     args: vec![typed_value],
@@ -3763,6 +3826,11 @@ impl Checker {
                         trait_name: trait_name.to_string(),
                         method_name: method_name.to_string(),
                         receiver_ty: self.resolve_ty(expected),
+                        obligation: TraitObligation {
+                            trait_id: trait_name.to_string(),
+                            trait_args: Vec::new(),
+                            receiver: self.resolve_ty(expected),
+                        },
                         dispatch,
                         origin: TraitCallOrigin::Explicit,
                         args: Vec::new(),
@@ -3851,6 +3919,11 @@ impl Checker {
                     trait_name: trait_name.to_string(),
                     method_name: "ap".into(),
                     receiver_ty: self.resolve_ty(&typed_value.ty),
+                    obligation: TraitObligation {
+                        trait_id: trait_name.to_string(),
+                        trait_args: Vec::new(),
+                        receiver: self.resolve_ty(&typed_value.ty),
+                    },
                     dispatch,
                     origin: TraitCallOrigin::Explicit,
                     args: vec![typed_mapper, typed_value],
@@ -3920,6 +3993,11 @@ impl Checker {
                                     trait_name: trait_name.to_string(),
                                     method_name: method_name.to_string(),
                                     receiver_ty,
+                                    obligation: TraitObligation {
+                                        trait_id: trait_name.to_string(),
+                                        trait_args: Vec::new(),
+                                        receiver: self.resolve_ty(&typed_receiver.ty),
+                                    },
                                     dispatch: TraitDispatch::Pending,
                                     origin: TraitCallOrigin::Explicit,
                                     args: typed_args,
@@ -4168,6 +4246,7 @@ impl Checker {
                 let obligation = PendingTraitObligation {
                     trait_id: trait_name.to_string(),
                     args: trait_arg_tys.clone(),
+                    receiver: Ty::Var(var),
                 };
                 if !obligations.contains(&obligation) {
                     obligations.push(obligation);
@@ -4230,7 +4309,12 @@ impl Checker {
             node: TypedInner::TraitCall {
                 trait_name: trait_call_name,
                 method_name: method_name.into(),
-                receiver_ty,
+                receiver_ty: receiver_ty.clone(),
+                obligation: TraitObligation {
+                    trait_id: trait_name.to_string(),
+                    trait_args: trait_arg_tys,
+                    receiver: receiver_ty,
+                },
                 dispatch,
                 origin: TraitCallOrigin::Explicit,
                 args: typed_args,
@@ -4493,6 +4577,11 @@ impl Checker {
                 trait_name,
                 method_name: method_name.into(),
                 receiver_ty: self.resolve_ty(receiver_ty),
+                obligation: TraitObligation {
+                    trait_id: trait_key,
+                    trait_args: resolved_trait_args,
+                    receiver: self.resolve_ty(receiver_ty),
+                },
                 dispatch,
                 origin: TraitCallOrigin::Operator { op, lhs_ty, rhs_ty },
                 args,
@@ -4680,6 +4769,9 @@ impl Checker {
         let (_, result_ty) = self
             .constructor_functor_dispatch("Applicative", "ap", &typed_value.ty, &input, &output)
             .expect("the same Applicative impl already matched");
+        let applicative_trait = self
+            .trait_key_by_short_name("Applicative")
+            .unwrap_or_else(|| "Applicative".into());
         Ok(TypedNode {
             ty: result_ty,
             span: span.clone(),
@@ -4687,6 +4779,11 @@ impl Checker {
                 trait_name: "Applicative".into(),
                 method_name: "ap".into(),
                 receiver_ty: self.resolve_ty(&typed_value.ty),
+                obligation: TraitObligation {
+                    trait_id: applicative_trait,
+                    trait_args: Vec::new(),
+                    receiver: self.resolve_ty(&typed_value.ty),
+                },
                 dispatch,
                 origin: TraitCallOrigin::Operator {
                     op: OperatorTraitOp::ContextApply,
@@ -4851,9 +4948,14 @@ impl Checker {
                     ty: Ty::SelfApp(vec![Ty::Hole, witness.clone(), rhs_out.clone()]),
                     span: span.clone(),
                     node: TypedInner::TraitCall {
-                        trait_name: functor_trait,
+                        trait_name: functor_trait.clone(),
                         method_name: "fmap".into(),
                         receiver_ty: receiver_ty.clone(),
+                        obligation: TraitObligation {
+                            trait_id: functor_trait,
+                            trait_args: Vec::new(),
+                            receiver: receiver_ty.clone(),
+                        },
                         dispatch: TraitDispatch::Pending,
                         origin: TraitCallOrigin::Operator {
                             op: OperatorTraitOp::PipeMap,
@@ -4896,9 +4998,14 @@ impl Checker {
             ty: result_ty,
             span: span.clone(),
             node: TypedInner::TraitCall {
-                trait_name: functor_trait,
+                trait_name: functor_trait.clone(),
                 method_name: "fmap".into(),
                 receiver_ty: receiver_ty.clone(),
+                obligation: TraitObligation {
+                    trait_id: functor_trait,
+                    trait_args: Vec::new(),
+                    receiver: receiver_ty.clone(),
+                },
                 dispatch,
                 origin: TraitCallOrigin::Operator {
                     op: OperatorTraitOp::PipeMap,
@@ -5038,9 +5145,14 @@ impl Checker {
                 ty: result_ty,
                 span: span.clone(),
                 node: TypedInner::TraitCall {
-                    trait_name: monad_trait,
+                    trait_name: monad_trait.clone(),
                     method_name: "bind".into(),
                     receiver_ty: self.resolve_ty(&context),
+                    obligation: TraitObligation {
+                        trait_id: monad_trait,
+                        trait_args: Vec::new(),
+                        receiver: self.resolve_ty(&context),
+                    },
                     dispatch,
                     origin: TraitCallOrigin::Operator {
                         op: OperatorTraitOp::PipeBind,
@@ -5351,9 +5463,14 @@ impl Checker {
             ty: result_ty,
             span: span.clone(),
             node: TypedInner::TraitCall {
-                trait_name: monad_trait,
+                trait_name: monad_trait.clone(),
                 method_name: "bind".into(),
                 receiver_ty: receiver_ty.clone(),
+                obligation: TraitObligation {
+                    trait_id: monad_trait,
+                    trait_args: Vec::new(),
+                    receiver: receiver_ty.clone(),
+                },
                 dispatch,
                 origin: TraitCallOrigin::Operator {
                     op: OperatorTraitOp::PipeBind,
@@ -9839,9 +9956,14 @@ impl Checker {
                 ty: result_ty,
                 span: span.clone(),
                 node: TypedInner::TraitCall {
-                    trait_name,
+                    trait_name: trait_name.clone(),
                     method_name: method_name.into(),
-                    receiver_ty,
+                    receiver_ty: receiver_ty.clone(),
+                    obligation: TraitObligation {
+                        trait_id: trait_name,
+                        trait_args: Vec::new(),
+                        receiver: receiver_ty,
+                    },
                     dispatch,
                     origin,
                     args: vec![typed_left, typed_right],
@@ -10188,6 +10310,11 @@ impl Checker {
                 trait_name,
                 method_name: "chain".into(),
                 receiver_ty: receiver_ty.clone(),
+                obligation: TraitObligation {
+                    trait_id: compose_trait,
+                    trait_args: resolved_trait_args,
+                    receiver: receiver_ty.clone(),
+                },
                 dispatch,
                 origin: TraitCallOrigin::Operator {
                     op: OperatorTraitOp::SlashCompose,
@@ -10813,6 +10940,24 @@ impl Checker {
             Some(else_branch) => {
                 let typed_else = self.check_lazy_argument(else_branch, span)?;
                 if !self.types_compatible(&typed_then.ty, &typed_else.ty) {
+                    if self.function_return_ty.as_ref().is_some_and(|expected| {
+                        matches!(expected, Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some())
+                    }) && Self::constructor_application_slots(&typed_then.ty).is_some()
+                        && Self::constructor_application_slots(&typed_else.ty).is_some()
+                    {
+                        return Err(TypeError {
+                            message: format!(
+                                "MixedConstructorResult: contextual return branches resolve to {} and {}",
+                                self.ty_name(&typed_then.ty),
+                                self.ty_name(&typed_else.ty)
+                            ),
+                            span: span.clone(),
+                            hint: Some(
+                                "Return the same concrete constructor family from every branch."
+                                    .into(),
+                            ),
+                        });
+                    }
                     return Err(TypeError {
                         message: format!(
                             "if branches have different types: {} and {}",
