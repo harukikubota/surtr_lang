@@ -1,0 +1,137 @@
+use scar::typed::{TypedInner, TypedNode};
+use sigil::resolved::Resolved;
+
+fn resolve_without_std_prelude(source: &str) -> Vec<Resolved> {
+    let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+        .expect("source should parse without the std prelude");
+    sigil::resolve(ast).expect("source should resolve without the std prelude")
+}
+
+fn typecheck_without_std_prelude(source: &str) -> Result<Vec<TypedNode>, scar::error::TypeError> {
+    scar::typecheck(resolve_without_std_prelude(source))
+}
+
+#[test]
+fn synthesized_trait_default_does_not_require_an_explicit_resolved_impl_method() {
+    let typed = typecheck_without_std_prelude(
+        r#"deftrait Choice {
+  def choose(self: Self) -> Self
+
+  def fallback(self: Self) -> Self { Choice::choose(self) }
+}
+
+impl Choice for Int {
+  def choose(self: Int) -> Int { self }
+}
+
+value: Int = Choice::fallback(1)"#,
+    )
+    .expect("the omitted fallback method must be synthesized from its trait default");
+
+    assert!(typed.iter().any(|node| {
+        matches!(
+            &node.node,
+            TypedInner::Def(_, id, _, _, _, _, _, _)
+                if id.compiler_generated && id.name == "fallback"
+        )
+    }));
+}
+
+#[test]
+fn impl_block_capability_consumed_by_one_explicit_method_survives_default_synthesis() {
+    typecheck_without_std_prelude(
+        r#"defenum Verdict {
+  Same,
+}
+
+deftrait Equal {
+  def equal(self: Self, rhs: Self) -> Verdict
+
+  def compare(self: Self, rhs: Self) -> Verdict { Equal::equal(self, rhs) }
+}
+
+impl Equal for Int {
+  def equal(self: Int, rhs: Int) -> Verdict { Verdict::Same }
+}
+
+impl Equal for ($A, Int)
+where
+  $A: Equal
+{
+  def equal(self: Self, rhs: Self) -> Verdict {
+    Equal::equal(self._0, rhs._0)
+  }
+}"#,
+    )
+    .expect("the impl-block capability is consumed by the explicit equal method");
+}
+
+#[test]
+fn bare_impl_capability_defers_candidate_proof_to_the_full_body_obligation() {
+    typecheck_without_std_prelude(
+        r#"deftrait Marker<$Tag> {
+  def mark::<$Tag>(self: Self) -> $Tag
+}
+
+deftrait Use {
+  def use(self: Self) -> Int
+}
+
+defenum Box<$A> {
+  Box($A),
+}
+
+impl Marker<Int> for Int {
+  def mark::<Int>(self: Int) -> Int { self }
+}
+
+impl Use for Box<$A>
+where
+  $A: Marker
+{
+  def use(self: Box<$A>) -> Int {
+    match self { Box::Box(value) => Marker::mark::<Int>(value) }
+  }
+}
+
+value: Box<Int> = Box::Box(1)
+result = Use::use(value)"#,
+    )
+    .expect("the body-emitted Marker<Int> obligation must prove the generic Use candidate");
+}
+
+#[test]
+fn bare_impl_capability_does_not_replace_the_full_body_obligation() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait Marker<$Tag> {
+  def mark::<$Tag>(self: Self) -> $Tag
+}
+
+deftrait Use {
+  def use(self: Self) -> Int
+}
+
+defenum Box<$A> {
+  Box($A),
+}
+
+impl Marker<String> for Int {
+  def mark::<String>(self: Int) -> String { "wrong" }
+}
+
+impl Use for Box<$A>
+where
+  $A: Marker
+{
+  def use(self: Box<$A>) -> Int {
+    match self { Box::Box(value) => Marker::mark::<Int>(value) }
+  }
+}
+
+value: Box<Int> = Box::Box(1)
+result = Use::use(value)"#,
+    )
+    .expect_err("a bare capability must not prove a missing Marker<Int> body obligation");
+
+    assert!(err.message.contains("Marker<Int>"), "{err:?}");
+}

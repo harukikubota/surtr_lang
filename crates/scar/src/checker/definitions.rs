@@ -789,6 +789,41 @@ impl Checker {
         Ok(uses)
     }
 
+    fn typed_capability_uses(
+        &mut self,
+        where_clause: Option<&TypedWhereClause>,
+        tyvars: &HashMap<String, Ty>,
+    ) -> Vec<CapabilityUse> {
+        let Some(where_clause) = where_clause else {
+            return Vec::new();
+        };
+        let mut uses = Vec::new();
+        for constraint in &where_clause.constraints {
+            let subject = match &constraint.subject {
+                AstTy::Named(_, name) | AstTy::Generic(_, name, _) if tyvars.contains_key(name) => {
+                    tyvars.get(name).cloned().expect("checked above")
+                }
+                _ => continue,
+            };
+            let Ty::Var(subject_var) = self.resolve_ty(&subject) else {
+                continue;
+            };
+            let subject_name = Self::surface_ast_ty(&constraint.subject);
+            for bound in &constraint.bounds {
+                if let TypedWhereConstraintRhs::Trait { trait_id } = bound {
+                    uses.push(CapabilityUse {
+                        subject_var,
+                        subject_name: subject_name.clone(),
+                        trait_id: self.trait_key(trait_id),
+                        span: trait_id.span.clone(),
+                        consumed: false,
+                    });
+                }
+            }
+        }
+        uses
+    }
+
     pub(super) fn seed_missing_method_type_params(
         &mut self,
         type_params: &[ResolvedTypeParam],
@@ -802,49 +837,154 @@ impl Checker {
         self.seed_signature_type_params(&missing, tyvars);
     }
 
+    fn collect_declared_type_var_instances(
+        pattern: &Ty,
+        actual: &Ty,
+        declared_vars: &HashSet<u32>,
+        instances: &mut HashMap<u32, Ty>,
+    ) {
+        match (pattern, actual) {
+            (Ty::Var(var), actual) if declared_vars.contains(var) => {
+                instances.entry(*var).or_insert_with(|| actual.clone());
+            }
+            (Ty::List(pattern), Ty::List(actual)) | (Ty::Lazy(pattern), Ty::Lazy(actual)) => {
+                Self::collect_declared_type_var_instances(
+                    pattern,
+                    actual,
+                    declared_vars,
+                    instances,
+                );
+            }
+            (Ty::Result(pattern_ok, pattern_err), Ty::Result(actual_ok, actual_err)) => {
+                Self::collect_declared_type_var_instances(
+                    pattern_ok,
+                    actual_ok,
+                    declared_vars,
+                    instances,
+                );
+                Self::collect_declared_type_var_instances(
+                    pattern_err,
+                    actual_err,
+                    declared_vars,
+                    instances,
+                );
+            }
+            (Ty::Tuple(patterns), Ty::Tuple(actuals))
+            | (Ty::SelfApp(patterns), Ty::SelfApp(actuals))
+            | (Ty::Enum(_, patterns), Ty::Enum(_, actuals)) => {
+                for (pattern, actual) in patterns.iter().zip(actuals.iter()) {
+                    Self::collect_declared_type_var_instances(
+                        pattern,
+                        actual,
+                        declared_vars,
+                        instances,
+                    );
+                }
+            }
+            (Ty::Struct(_, patterns), Ty::Struct(_, actuals))
+            | (Ty::Record(_, patterns), Ty::Record(_, actuals)) => {
+                for ((_, pattern), (_, actual)) in patterns.iter().zip(actuals.iter()) {
+                    Self::collect_declared_type_var_instances(
+                        pattern,
+                        actual,
+                        declared_vars,
+                        instances,
+                    );
+                }
+            }
+            (Ty::Func(pattern_params, pattern_ret), Ty::Func(actual_params, actual_ret)) => {
+                for (pattern, actual) in pattern_params.iter().zip(actual_params.iter()) {
+                    Self::collect_declared_type_var_instances(
+                        pattern,
+                        actual,
+                        declared_vars,
+                        instances,
+                    );
+                }
+                Self::collect_declared_type_var_instances(
+                    pattern_ret,
+                    actual_ret,
+                    declared_vars,
+                    instances,
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn resolved_named_type_args(&self, type_name: &str, resolved_ty: &Ty) -> Option<Vec<Ty>> {
+        let def = self.env.lookup_type_def(type_name)?;
+        let resolved_fields = match resolved_ty {
+            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields,
+            _ => return None,
+        };
+        let declared_vars = def.type_param_vars.iter().copied().collect::<HashSet<_>>();
+        let mut instances = HashMap::new();
+        for ((_, pattern), (_, actual)) in def.fields.iter().zip(resolved_fields.iter()) {
+            Self::collect_declared_type_var_instances(
+                pattern,
+                actual,
+                &declared_vars,
+                &mut instances,
+            );
+        }
+        def.type_param_vars
+            .iter()
+            .map(|var| instances.get(var).cloned())
+            .collect()
+    }
+
     pub(super) fn collect_signature_ty_bindings(
+        &self,
         ast_ty: &AstTy,
         resolved_ty: &Ty,
         bindings: &mut HashMap<String, Ty>,
     ) {
         match (ast_ty, resolved_ty) {
             (AstTy::Named(_, name), ty) if name.starts_with('$') => {
-                bindings.entry(name.clone()).or_insert_with(|| ty.clone());
+                bindings.insert(name.clone(), ty.clone());
             }
             (AstTy::Generic(_, name, args), Ty::SelfApp(items))
                 if name != "Self" && Self::constructor_application_parts(items).is_some() =>
             {
                 let (_, slots) = Self::constructor_application_parts(items).expect("checked above");
                 for (arg, slot) in args.iter().zip(slots.iter()) {
-                    Self::collect_signature_ty_bindings(arg, slot, bindings);
+                    self.collect_signature_ty_bindings(arg, slot, bindings);
+                }
+            }
+            (AstTy::Generic(_, name, args), Ty::Struct(_, _) | Ty::Record(_, _)) => {
+                if let Some(resolved_args) = self.resolved_named_type_args(name, resolved_ty) {
+                    for (arg, resolved) in args.iter().zip(resolved_args.iter()) {
+                        self.collect_signature_ty_bindings(arg, resolved, bindings);
+                    }
                 }
             }
             (AstTy::Generic(_, _, args), Ty::List(inner)) if args.len() == 1 => {
-                Self::collect_signature_ty_bindings(&args[0], inner, bindings);
+                self.collect_signature_ty_bindings(&args[0], inner, bindings);
             }
             (AstTy::Generic(_, _, args), Ty::Result(ok, err)) => {
                 if let Some(arg) = args.first() {
-                    Self::collect_signature_ty_bindings(arg, ok, bindings);
+                    self.collect_signature_ty_bindings(arg, ok, bindings);
                 }
                 if let Some(arg) = args.get(1) {
-                    Self::collect_signature_ty_bindings(arg, err, bindings);
+                    self.collect_signature_ty_bindings(arg, err, bindings);
                 }
             }
             (AstTy::Generic(_, _, args), Ty::Enum(_, resolved_args)) => {
                 for (arg, resolved) in args.iter().zip(resolved_args.iter()) {
-                    Self::collect_signature_ty_bindings(arg, resolved, bindings);
+                    self.collect_signature_ty_bindings(arg, resolved, bindings);
                 }
             }
             (AstTy::Tuple(_, items), Ty::Tuple(resolved_items)) => {
                 for (item, resolved) in items.iter().zip(resolved_items.iter()) {
-                    Self::collect_signature_ty_bindings(item, resolved, bindings);
+                    self.collect_signature_ty_bindings(item, resolved, bindings);
                 }
             }
             (AstTy::Func(_, params, ret), Ty::Func(resolved_params, resolved_ret)) => {
                 for (param, resolved) in params.iter().zip(resolved_params.iter()) {
-                    Self::collect_signature_ty_bindings(param, resolved, bindings);
+                    self.collect_signature_ty_bindings(param, resolved, bindings);
                 }
-                Self::collect_signature_ty_bindings(ret, resolved_ret, bindings);
+                self.collect_signature_ty_bindings(ret, resolved_ret, bindings);
             }
             _ => {}
         }
@@ -1484,12 +1624,14 @@ impl Checker {
         for method in methods {
             let resolved_method = resolved_methods
                 .iter()
-                .find(|candidate| candidate.function_id.unique_id == method.function_id.unique_id)
-                .ok_or_else(|| TypeError {
+                .find(|candidate| candidate.function_id.unique_id == method.function_id.unique_id);
+            if resolved_method.is_none() && !method.function_id.compiler_generated {
+                return Err(TypeError {
                     message: format!("Unknown resolved impl method {}", method.method_name),
                     span: method.span.clone(),
                     hint: None,
-                })?;
+                });
+            }
             let trait_method =
                 trait_info
                     .methods
@@ -1514,10 +1656,14 @@ impl Checker {
 
             let mut typed_params = Vec::new();
             let mut local_bindings = Vec::new();
-            let mut method_tyvars = HashMap::new();
+            let mut method_tyvars = impl_tyvars.clone();
             for (param, param_ty) in method.params.iter().zip(param_tys.iter()) {
                 local_bindings.push((param.id.unique_id, param_ty.clone()));
-                Self::collect_signature_ty_bindings(&param.ty, param_ty, &mut method_tyvars);
+                let binding_source = match &param.ty {
+                    AstTy::Named(_, name) if name == "Self" => target_ast_ty,
+                    _ => &param.ty,
+                };
+                self.collect_signature_ty_bindings(binding_source, param_ty, &mut method_tyvars);
                 typed_params.push(TypedFunParam {
                     id: param.id.clone(),
                     ty: param_ty.clone(),
@@ -1527,14 +1673,19 @@ impl Checker {
             if method.is_builtin {
                 continue;
             }
-            Self::collect_signature_ty_bindings(
+            self.collect_signature_ty_bindings(
                 method.ret_ty.as_ref().unwrap_or(&trait_method.ret_ty),
                 &expected_ret,
                 &mut method_tyvars,
             );
             self.seed_missing_method_type_params(&method.type_params, &mut method_tyvars);
-            let method_capabilities = self
-                .resolved_capability_uses(resolved_method.where_clause.as_ref(), &method_tyvars)?;
+            let method_capabilities = match resolved_method {
+                Some(resolved_method) => self.resolved_capability_uses(
+                    resolved_method.where_clause.as_ref(),
+                    &method_tyvars,
+                )?,
+                None => self.typed_capability_uses(method.where_clause.as_ref(), &method_tyvars),
+            };
             let mut method_block_capabilities =
                 self.resolved_capability_uses(where_clause, &method_tyvars)?;
             for capability in &mut method_block_capabilities {

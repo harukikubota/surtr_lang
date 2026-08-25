@@ -1144,13 +1144,13 @@ impl Checker {
                     if let Some(body) = &method.body {
                         let mut tyvars = HashMap::new();
                         for (param, resolved) in method.params.iter().zip(params.iter()) {
-                            Self::collect_signature_ty_bindings(
+                            self.collect_signature_ty_bindings(
                                 &param.ty,
                                 resolved,
                                 &mut tyvars,
                             );
                         }
-                        Self::collect_signature_ty_bindings(
+                        self.collect_signature_ty_bindings(
                             &method.ret_ty,
                             &ret_ty,
                             &mut tyvars,
@@ -3074,34 +3074,23 @@ impl Checker {
             return true;
         };
         for constraint in &where_clause.constraints {
-            let concrete = match &constraint.subject {
-                AstTy::Named(_, subject) if subject == "Self" => {
-                    self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, fresh))
-                }
+            match &constraint.subject {
+                AstTy::Named(_, subject) if subject == "Self" => {}
                 AstTy::Named(_, subject) => {
                     let Some(original_var) = impl_info.type_param_vars_by_name.get(subject) else {
                         return false;
                     };
-                    let Some(instantiated) = fresh.get(original_var) else {
+                    if !fresh.contains_key(original_var) {
                         return false;
-                    };
-                    self.resolve_ty(instantiated)
+                    }
                 }
                 _ => return false,
-            };
-            for bound in &constraint.bounds {
-                let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
-                    // Constructor and slot obligations are validated when the
-                    // impl head is declared. They do not establish runtime
-                    // dispatch applicability in V1.
-                    continue;
-                };
-                let trait_key = self.trait_key(trait_id);
-                if !self.trait_impl_exists_for_args(&trait_key, &[], &concrete) {
-                    return false;
-                }
             }
         }
+        // Bare impl bounds are capabilities, not standalone arity-zero proofs.
+        // Candidate selection only establishes the impl-head substitution; the
+        // full trait-call obligations emitted by the method body are checked
+        // when that body is specialized with `fresh`.
         true
     }
 
