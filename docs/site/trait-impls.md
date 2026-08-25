@@ -43,15 +43,10 @@ deftrait Encode<$Format> {
   def encode(self: Self) -> $Format
 }
 
-impl Encode<String> for List<$A>
-where
-  $A: Encode
-{
-  def encode(self: List<$A>) -> String { # ... }
-}
+impl Encode<String> for List<$A> { # ... }
 ```
 
-ここで要求しているのは `Encode` family の capability です。`Encode<String>` のような完全な identity は impl head と expression dispatch が保持します。`$A: Encode<String>` は where RHS として不正です。candidate が target に一致しても、impl 自身の bare capability が式で必要になれば、その完全 obligation を満たさなければ dispatch されません。
+実装本体が `$A` の値に `Encode::encode::<String>(value)` のような式を使う場合だけ、impl の `where` に `$A: Encode` を宣言する。この bare capability は注釈ではなく、その式が消費する proof である。消費しない impl に bound を置くと `UnusedTraitConstraint` になる。`Encode<String>` のような完全な identity は impl head と expression dispatch が保持し、`$A: Encode<String>` は where RHS として不正である。candidate が target に一致しても、式が発行する完全 obligation を満たさなければ dispatch されない。
 
 親 Trait は bare capability として継承します。child impl の `where` が親 capability を包含していれば利用できます。
 
