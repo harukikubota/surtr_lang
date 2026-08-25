@@ -36,7 +36,7 @@ FunParams は、型変数が value parameter の型から導入できない場�
 
 ### 型引数を持つ Trait と `where`
 
-Trait 引数と impl target の両方を明示して、必要な capability を `where` に書けます。
+Trait 引数は impl head で明示しますが、`where` の capability は bare trait 名で書きます。
 
 ```surtr
 deftrait Encode<$Format> {
@@ -45,15 +45,15 @@ deftrait Encode<$Format> {
 
 impl Encode<String> for List<$A>
 where
-  $A: Encode<String>
+  $A: Encode
 {
   def encode(self: List<$A>) -> String { # ... }
 }
 ```
 
-ここで要求しているのは `Encode<String>` です。`Encode<JsonValue>` だけを実装した要素型にはこの impl を使えません。candidate が target に一致しても、impl 自身の `where` 条件を満たさなければ dispatch されません。
+ここで要求しているのは `Encode` family の capability です。`Encode<String>` のような完全な identity は impl head と expression dispatch が保持します。`$A: Encode<String>` は where RHS として不正です。candidate が target に一致しても、impl 自身の bare capability が式で必要になれば、その完全 obligation を満たさなければ dispatch されません。
 
-親 Trait を持つ Trait を実装するときは、対応する親 Trait も同じ型引数で満たします。child impl の `where` が親 impl の条件を包含していれば利用できますが、親の条件を弱めたり別の Trait 引数に替えたりはできません。
+親 Trait は bare capability として継承します。child impl の `where` が親 capability を包含していれば利用できます。
 
 ### default method と同名 method
 

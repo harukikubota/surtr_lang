@@ -38,6 +38,8 @@ source span を必要としない説明や修正案を `labels` に置かない�
 - extractor の `input source` は `notes`、extractor 定義は関連 source label に置く。
 - runtime の失敗値・pattern・`call target` は label、`expected rule`・`runtime rule`・`opcode`・入力分類は `notes` に置く。
 - `assert_eq` の LHS/RHS term は比較対象の span を指すため label、失敗の説明は `help` に置く。
+- contextual type syntax では、`Trait<...>` を where RHS に置いた parser diagnostic、`Type<...>` の位置違反、constructor application の位置違反、`Self::...` / `Type::...` の owner-path 違反を parser phase にする。position rule は `notes`、bare bound や許可された位置への書換えは `help` に置く。
+- bare capability の未使用、fresh result witness の未確定、full obligation / pending dispatch の未解決は typecheck phase にする。position rule は `notes`、constraint の削除または必要な式の利用は `help` に置く。
 
 ## 出力契約
 
@@ -79,6 +81,7 @@ contains: got String
 ```
 
 - `stdout`、exit code、runtime value、無関係な CLI 文言の厳密な検証は弱めない。
+- contextual type syntax の fixture は parser/typecheck phase、primary span、position-rule note、rewrite help を検証する。rule や rewrite を source label に置かない。
 
 ## 検証コマンド
 

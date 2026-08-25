@@ -18,7 +18,7 @@ Spire surface syntax
   -> Forge invariant
 ```
 
-- Spire は parameterized `where` RHS を構文として保持する。
+- Spire は where RHS を `Type<...>`、bare `Trait`、`TypeConstructorTrait.$Slot` に分類して保持する。通常 trait RHS の argument は保持しない。
 - Sigil は Trait と type の canonical identity を解決する。block 内の callable 重複は map 登録前に拒否する。
 - Scar は user source の overlap、不足 bound、未解決 dispatch を typecheck error として停止する。
 - Forge は concrete dispatch だけを受け取る。ユーザ入力由来の trait conflict を `CodegenError` にしない。
@@ -59,7 +59,7 @@ canonical variable を使い、alpha-equivalence は source 名ではなく出�
 - `trait_name.contains('<')`、`split_once('<')`
 - `ty_name`、`trait_display_name`、型の表示省略規則
 - source generic 名や内部 variable 番号
-- `TypedWhereConstraintRhs::Trait` の `args` を捨てた base Trait 名
+- where の bare capability を expression の full obligation と取り違えること
 
 表示名は診断生成にだけ用いる。
 
@@ -130,8 +130,24 @@ child impl target に lower する。head coverage、constructor slot mapping、
 
 ## 4. Well-formedness と lifecycle
 
-`where` bound を登録する前に、resolved Trait の存在、argument arity、argument 内 generic の scope、`Self` の
-owner target への lowering、nested type 内までの再帰検査を行う。where clause が未知の type variable を導入してはならない。
+`where` bound を登録する前に、RHS の kind、resolved Trait / slot の存在、generic の scope、`Self` の
+target substitution を検査する。通常 bound は bare trait family capability として proof environment に登録し、
+where clause が未知の type variable を導入してはならない。`Type<...>` は trait definition where の `Self`
+だけ、`Trait.$Slot` は TypeConstructor trait impl の slot map だけで受理する。
+
+`Self<$...>` は declaration の既知 impl target への型位置 substitution であり、任意の generic application
+ではない。`Self::...` と `Type::...` は value owner path として受理しない。
+
+TypeConstructor trait application（例: `Applicative<$A>`）は通常関数または trait method signature の
+direct parameter / return のみで受理する。parameter ごとに position-keyed の独立 witness を作り、return
+には parameter witness と共有しない fresh concrete result witness を作る。nested type、field、local annotation、
+closure signature では拒否する。return witness は本体検査の終了時に単一 concrete constructor へ確定しなければ
+ならない。
+
+bare capability は expression が trait call、operator lowering、または generic call の proof 引渡しで消費した
+ときだけ full obligation を発行する。full obligation は `(trait_id, trait_args, receiver)` を構造化して保持する。
+body / impl block の scope 終了時に未消費の bare capability は `UnusedTraitConstraint` TypeError とする。
+trait parent、shape、slot map はこの判定から除外する。
 
 ### 4.1 Trait method の入力型スロット
 
@@ -207,7 +223,7 @@ pending obligation、substitution、declared bound、source generic name は次�
 複数 variable を待つ obligation は、1 variable の bind 後も残りの variable へ再 home する。bind は substitution を
 仮適用して関連 obligation を再実行し、失敗時は substitution と pending state の両方を rollback する。
 definition boundary では pending を監査し、rigid generic は `MissingGenericBound`、concrete type は obligation
-error、なお不明な型は ambiguity error として止める。scheme に制約を保存しない V1 経路で obligation を黙って落としてはならない。
+error、なお不明な型は ambiguity error として止める。scheme に制約を保存しない V1 経路で obligation を黙って落としてはならない。Scar は Forge 前に全 pending dispatch を監査し、concrete dispatch 以外を渡してはならない。
 
 ## 5. Cycle、cache、visitor
 
@@ -228,8 +244,8 @@ default/inherited method table、Scar typed dispatch、Forge function index は�
 diamond inheritance の同名 method は qualified call で区別し、bare alias の衝突は import 規則で処理する。
 
 diagnostic は source generic name と declaration span を保持する。内部 ID を `$6257` のように見せず、
-`$A must implement Convert<Int>` と必要な `where` hint を示す。compile-fail contract は phase、error kind/message、
-primary/related span を安定させ、宣言・file・map iteration 順に依存させない。
+full obligation に必要な trait target を示す。位置規則は note、bare capability への書換えは help に置く。
+compile-fail contract は phase、error kind/message、primary/related span を安定させ、宣言・file・map iteration順に依存させない。
 
 ## 7. Call-site inference の境界
 
@@ -246,7 +262,8 @@ expected type が unbound variable なら actual を synthesize して unify し
 
 テスト配置・fixture の phase/error assertion・visitor 変更時の配置 matrix は
 [`テスト方針.md`](./テスト方針.md) の 3.6.1 を正本とする。coherence の正逆順、nested pattern、parameterized
-argument mismatch、deferred rehome/rollback、finite recursion、parent `Self` assumption、qualified diamond、
+impl-head / expression obligation の argument mismatch、deferred rehome/rollback、finite recursion、bare capability
+consumption、position-keyed parameter witness、fresh result witness、parent `Self` assumption、qualified diamond、
 call-site scheme と expected propagation を unit と Rune fixture の両方で保持する。
 
 workspace は既定 nextest profile で 2 回連続成功させる。timeout 引上げで性能問題を隠さず、新しい prelude-heavy

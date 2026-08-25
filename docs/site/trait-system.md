@@ -66,7 +66,7 @@ deftrait TryFrom<$To> {
 
 ## `where` bound と generic 呼び出し
 
-型引数を持つ Trait を bound にするときは、必要な型引数まで明示します。
+通常の `where` bound は、型引数を付けない bare capability です。
 
 ```surtr
 deftrait Marker<$Tag> {
@@ -75,20 +75,23 @@ deftrait Marker<$Tag> {
 
 def render(value: $A) -> String
 where
-  $A: Marker<Int>
+  $A: Marker
 {
   Marker::mark(value)
 }
 ```
 
-`Marker<Int>` と `Marker<String>` は別の制約です。Trait 名だけが同じでも、一方をもう一方の証明には使えません。
-bound の型引数には、その signature、Trait head、または impl head ですでに導入された型変数だけを使えます。`where` clause 自体が新しい型変数を導入することはありません。
+`where` の `Marker<Int>` は不正です。trait parameter は `deftrait Marker<$Tag>`、`impl Marker<Int> for Type`、
+または `marker::<Int>(value)` のような式の dispatch target で選びます。where clause 自体が新しい型変数を導入することはありません。
 
 generic receiver で Trait helper を直接呼ぶには、必要な bound を signature に書きます。compiler が呼び出しを見て `$A` に暗黙の capability を追加することはありません。bound がない呼び出しは typecheck error です。
+bare capability は式検査専用であり、対象 scope で一度も消費されなければ `UnusedTraitConstraint` です。
 
 ## 型コンストラクタ Trait
 
 `Self` が型コンストラクタであることは `Type` constraint で宣言する。
+
+`Self: Type<...>` は `deftrait` の where で、左辺が `Self` のときだけ使えます。これは通常 trait bound ではありません。
 
 ```surtr
 deftrait Functor
@@ -121,6 +124,11 @@ where
 ```
 
 `$L` は capture parameter、`$R` は `Functor.$A` に対応する parameter である。
+`Functor.$A` は通常 trait bound の例外ではなく、TypeConstructor trait の slot-map RHS です。
+
+`Self<$A>` は declaration の impl target を置換する型位置 marker です。`Self::f()` と `Type::f()` は value-level owner path としては不正です。
+
+`Applicative<$A>` のような constructor application は、通常関数または trait method signature の direct parameter / return にだけ書けます。parameter ごとに capability は独立し、return は本体が確定する fresh concrete constructor を表します。field、local annotation、tuple / container、closure signature には書けません。
 
 ## impl の一致規則
 
@@ -195,7 +203,7 @@ Trait 自身が型引数を持つ場合は、target と Trait 引数の両方を
 
 ## 親 Trait と method identity
 
-Trait は `where Self: Parent` で親 Trait を要求できます。generic な親では Trait 引数も引き継がれます。
+Trait は `where Self: Parent` で bare parent Trait を要求できます。parent の trait parameter は where では指定しません。
 
 ```surtr
 deftrait Parent<$Tag> {
@@ -204,13 +212,13 @@ deftrait Parent<$Tag> {
 
 deftrait Child<$Tag>
 where
-  Self: Parent<$Tag>
+  Self: Parent
 {
   def child(self: Self) -> String
 }
 ```
 
-`Child<Int>` を実装する型は、その全ての適用例で `Parent<Int>` も満たさなければなりません。`Parent<String>` の実装や、たまたま一部の型だけで成立する実装では代用できません。
+親 capability は trait family として継承されます。完全な trait argument は impl head と expression dispatch で保持され、where bound 自体には書きません。
 
 同じ method 名を別 Trait が持つことはできます。呼び出す契約を `T1::f(value)`、`T2::f(value)` のように Trait 名で指定します。Trait impl の method は target 型の inherent method を追加するものではありません。
 

@@ -206,6 +206,7 @@ where
 - trait 側の型引数を使う実装は `impl Trait<Concrete> for Type { ... }` の形で書く
 - 匿名 `impl Trait` 型は使わず、名前付き型変数と `where` clause で制約を書く
 - 戻り値でも同じ型を使いたいときは signature slot と `where $T: Describable` を使う
+- 通常の `where` bound は bare trait 名だけを使う。`TryFrom<$To>` のような trait application は trait / impl head と `try_from::<$To>(value)` の dispatch target に残る
 - 匿名 `impl Trait` 型は parameter / return / generic argument / impl target component のいずれでも禁止。`where ...` で名前付き型 slot に制約を書く
 
 target type を明示する trait では、compiler-reserved な witness type

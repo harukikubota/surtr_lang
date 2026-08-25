@@ -115,12 +115,14 @@ match expr {
 - `::<Int>` は `try_from::<Int>(value)` のような Trait helper の target specialization にだけ使える。`Self` は値引数または期待 callable 型から推論する
 - FunParams は、型変数が value parameter の型から導入できない場合にだけ使い、その型変数は戻り値にも現れなければならない。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で FunParams に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として FunParams に置く
 - trait は method のみを持つ
-- parameterized bound は `$A: Trait<Arg, ...>` と書く。Trait 名と全ての型引数が一致して初めて同じ bound である
+- 通常の bound は `$A: Trait` と書く。`Trait<Arg, ...>` は where RHS ではなく trait / impl head または expression dispatch target にだけ書ける
 - generic receiver の Trait 呼び出しには、signature 上で宣言した `where` bound が必要である。呼び出しから implicit bound は追加されない
 - body を持つ Trait method は default method として override でき、`where Self: Parent` は parent Trait を要求する
 - Trait の詳細な利用規則は [`trait-system.md`](./trait-system.md)、実装例は [`trait-impls.md`](./trait-impls.md) を参照する
 - 匿名 `impl Trait` 型は使えず、名前付き型変数と `where` clause で制約する
 - `where` clause は宣言・trait・impl に制約を追加する
+- `Self: Type<...>` は trait definition where の `Self` だけ、`Trait.$Slot` は TypeConstructor trait impl の slot map だけで受理する
+- constructor application は通常関数／trait method signature の direct parameter・return に限り、`Self::...` / `Type::...` は value owner path として不正
 - `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
 - 数値 helper は `Int::abs` / `Float::safe_div` のような concrete type owner surface として提供する
 - `Compare` が三値比較の正本で、`< <= > >=` も `Compare` を前提に動く
