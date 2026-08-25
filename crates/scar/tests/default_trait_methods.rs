@@ -251,6 +251,69 @@ value: Int = make(1)"#,
 }
 
 #[test]
+fn receiverless_value_trait_call_receives_the_declared_tail_result() {
+    typecheck_without_std_prelude(
+        r#"deftrait Applicative
+where
+  Self: Type<$A>
+{
+  def pure::<Self>(value: $A) -> Self<$A>
+}
+
+defenum Boxed<$A> { Boxed($A) }
+
+impl Applicative for Boxed<$A> {
+  def pure::<Boxed<$A>>(value: $B) -> Boxed<$B> { Boxed::Boxed(value) }
+}
+
+def lift(value: $A) -> Boxed<$A> {
+  Applicative::pure(value)
+}
+
+result: Boxed<Int> = lift(1)"#,
+    )
+    .expect("the receiverless Applicative tail must receive Boxed<$A> as its expected result");
+}
+
+#[test]
+fn inherited_rigid_bound_forwards_and_consumes_the_declared_capability() {
+    typecheck_without_std_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> Int
+}
+
+deftrait StrongMarker
+where
+  Self: Marker
+{}
+
+deftrait Use {
+  def use(self: Self) -> Int
+}
+
+impl Use for List<$A>
+where
+  $A: Marker
+{
+  def use(self: List<$A>) -> Int {
+    match self {
+      [] => 0,
+      [head, ..tail] => Marker::mark(head),
+    }
+  }
+}
+
+def forward(values: List<$T>) -> Int
+where
+  $T: StrongMarker
+{
+  Use::use(values)
+}"#,
+    )
+    .expect("StrongMarker must entail Marker and be consumed by generic proof forwarding");
+}
+
+#[test]
 fn generic_trait_candidate_does_not_hide_an_unproven_rigid_bound() {
     let err = typecheck_without_std_prelude(
         r#"deftrait Marker {
@@ -325,7 +388,8 @@ result = Use::use(value)"#,
     .expect_err("the concrete Use candidate must prove the nested Equal obligation");
 
     assert!(
-        err.message.contains("Equal") || err.message.contains("Use"),
+        err.message
+            .contains("Equal::equal could not be specialized to a concrete dispatch target"),
         "{err:?}"
     );
 }
@@ -358,6 +422,46 @@ where
 value = First::first(1)"#,
     )
     .expect_err("mutually recursive concrete obligations must not prove one another");
+
+    assert!(err.message.contains("CyclicTraitObligation"), "{err:?}");
+}
+
+#[test]
+fn receiverless_constructor_dispatch_checks_concrete_impl_cycles() {
+    let err = typecheck_without_std_prelude(
+        r#"defenum Boxed<$A> { Boxed($A) }
+
+deftrait FirstFactory
+where
+  Self: Type<$A>
+{
+  def make::<Self>() -> Self<Int>
+}
+
+deftrait SecondFactory
+where
+  Self: Type<$A>
+{
+  def make::<Self>() -> Self<Int>
+}
+
+impl FirstFactory for Boxed<$A>
+where
+  Self: SecondFactory
+{
+  def make::<Boxed<$A>>() -> Boxed<Int> { SecondFactory::make() }
+}
+
+impl SecondFactory for Boxed<$A>
+where
+  Self: FirstFactory
+{
+  def make::<Boxed<$A>>() -> Boxed<Int> { FirstFactory::make() }
+}
+
+value: Boxed<Int> = FirstFactory::make()"#,
+    )
+    .expect_err("receiverless constructor dispatch must reject mutually recursive impl proofs");
 
     assert!(err.message.contains("CyclicTraitObligation"), "{err:?}");
 }

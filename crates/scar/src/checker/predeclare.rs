@@ -2112,7 +2112,7 @@ impl Checker {
             .any(|bound| self.trait_bound_entails(bound, requested, visiting))
     }
 
-    fn trait_bound_entails(
+    pub(super) fn trait_bound_entails(
         &self,
         bound: &str,
         requested: &str,

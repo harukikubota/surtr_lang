@@ -495,26 +495,35 @@ impl Checker {
 
     pub(super) fn tyvar_has_bound(&mut self, var: u32, trait_name: &str) -> bool {
         let requested_family = Self::base_trait_key(trait_name);
-        let matched = self.tyvar_bounds.get(&var).is_some_and(|bounds| {
-            bounds.iter().any(|bound| {
+        let matching_bounds = self
+            .tyvar_bounds
+            .get(&var)
+            .into_iter()
+            .flatten()
+            .filter(|bound| {
                 let bound_family = Self::base_trait_key(bound);
                 bound_family == requested_family
                     || Self::surface_name(bound_family) == Self::surface_name(requested_family)
+                    || self.trait_bound_entails(bound_family, requested_family, &mut HashSet::new())
             })
-        });
-        if matched {
+            .cloned()
+            .collect::<Vec<_>>();
+        if !matching_bounds.is_empty() {
             for capability in &mut self.active_capabilities {
                 let capability_family = Self::base_trait_key(&capability.trait_id);
                 if capability.subject_var == var
-                    && (capability_family == requested_family
-                        || Self::surface_name(capability_family)
-                            == Self::surface_name(requested_family))
+                    && matching_bounds.iter().any(|bound| {
+                        let bound_family = Self::base_trait_key(bound);
+                        capability_family == bound_family
+                            || Self::surface_name(capability_family)
+                                == Self::surface_name(bound_family)
+                    })
                 {
                     capability.consumed = true;
                 }
             }
         }
-        matched
+        !matching_bounds.is_empty()
     }
 
     pub(super) fn lit_type(&self, lit: &Lit) -> Ty {

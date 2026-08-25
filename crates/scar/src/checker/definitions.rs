@@ -1168,10 +1168,33 @@ impl Checker {
                 .last()
                 .is_some_and(|tail| self.body_tail_is_receiverless_trait_call(tail)),
             Resolved::Grouped(_, inner) => self.body_tail_is_receiverless_trait_call(inner),
-            Resolved::App(_, function, arguments) => {
-                arguments.is_empty() && self.trait_method_ref(function).is_some()
-            }
+            Resolved::App(_, function, _) => self
+                .trait_method_ref(function)
+                .and_then(|(_, trait_name, method_name)| {
+                    self.traits
+                        .get(&trait_name)
+                        .and_then(|trait_info| trait_info.methods.get(&method_name))
+                })
+                .is_some_and(|method| {
+                    !method
+                        .params
+                        .iter()
+                        .any(|param| Self::ast_ty_mentions_self(&param.ty))
+                }),
             _ => false,
+        }
+    }
+
+    fn ast_ty_mentions_self(ty: &AstTy) -> bool {
+        match ty {
+            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name == "Self",
+            AstTy::Generic(_, name, args) => {
+                name == "Self" || args.iter().any(Self::ast_ty_mentions_self)
+            }
+            AstTy::Tuple(_, items) => items.iter().any(Self::ast_ty_mentions_self),
+            AstTy::Func(_, params, ret) => {
+                params.iter().any(Self::ast_ty_mentions_self) || Self::ast_ty_mentions_self(ret)
+            }
         }
     }
 

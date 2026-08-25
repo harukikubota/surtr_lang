@@ -3375,7 +3375,9 @@ impl Checker {
             let mut fresh = HashMap::new();
             let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
             let before = self.substitutions.clone();
-            if self.types_compatible(&target, expected_ty) {
+            if self.types_compatible(&target, expected_ty)
+                && self.impl_where_obligations_satisfied(&impl_info, &fresh)
+            {
                 if let Some(dispatch) = self.constructor_trait_method_dispatch(method) {
                     return Some(dispatch);
                 }
@@ -3859,12 +3861,14 @@ impl Checker {
                 let dispatch = self
                     .constructor_target_dispatch(trait_name, method_name, expected)
                     .ok_or_else(|| TypeError {
-                        message: format!(
-                            "{}::{} cannot construct {}",
-                            trait_name,
-                            method_name,
-                            self.ty_name(expected)
-                        ),
+                        message: self.trait_obligation_cycle.clone().unwrap_or_else(|| {
+                            format!(
+                                "{}::{} cannot construct {}",
+                                trait_name,
+                                method_name,
+                                self.ty_name(expected)
+                            )
+                        }),
                         span: span.clone(),
                         hint: Some(self.trait_implementation_summary(trait_name)),
                     })?;
