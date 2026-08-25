@@ -438,7 +438,6 @@ fn make_derived_impl(
                     bounds: vec![WhereConstraintRhs::Trait(
                         span.clone(),
                         trait_name.as_str().into(),
-                        Vec::new(),
                     )],
                     span: span.clone(),
                 })

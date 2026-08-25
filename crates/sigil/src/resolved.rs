@@ -440,7 +440,6 @@ pub struct ResolvedWhereConstraint {
 pub enum ResolvedWhereConstraintRhs {
     Trait {
         trait_id: ResolvedId,
-        args: Vec<AstTy>,
     },
     TypeConstructor {
         span: Span,

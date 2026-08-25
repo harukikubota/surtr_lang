@@ -1326,8 +1326,8 @@ fn rewrite_self_where_clause(
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        spire::ast::WhereConstraintRhs::Trait(span, name, args) => {
-                            spire::ast::WhereConstraintRhs::Trait(span, name, args)
+                        spire::ast::WhereConstraintRhs::Trait(span, name) => {
+                            spire::ast::WhereConstraintRhs::Trait(span, name)
                         }
                         spire::ast::WhereConstraintRhs::TypeConstructor(span, slots) => {
                             spire::ast::WhereConstraintRhs::TypeConstructor(
@@ -1896,7 +1896,7 @@ fn collect_constructor_trait_relations(
                                     .constructor_trait_seeds
                                     .insert(child_key.clone());
                             }
-                            spire::ast::WhereConstraintRhs::Trait(_, parent_name, _) => {
+                            spire::ast::WhereConstraintRhs::Trait(_, parent_name) => {
                                 let parent_key = trait_owner_key(parent_name);
                                 parent_keys.insert(parent_key.clone());
                                 owner_registry

@@ -2294,6 +2294,162 @@ where
 }
 
 #[test]
+fn test_resolve_bare_bounds_parent_edges_and_constructor_slot_maps() {
+    let ast = parse_module_ast(
+        r#"deftrait Parent
+where
+  Self: Type<$A>
+{}
+
+deftrait Child
+where
+  Self: Parent
+{}
+
+deftrait Equal {}
+
+def identity(value: $T) -> $T
+where
+  $T: Equal
+{
+  value
+}
+
+defstruct Boxed<$T> { value: $T }
+
+impl Child for Boxed<$T>
+where
+  $T: Child.$A
+{}"#,
+        "BareBounds",
+    );
+
+    let resolved = resolve(ast).expect("bare bounds and constructor slot map should resolve");
+    let parent_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, _, _, _) if id.name == "Parent" => Some(id.clone()),
+            _ => None,
+        })
+        .expect("Parent trait id");
+    let equal_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, _, _, _) if id.name == "Equal" => Some(id.clone()),
+            _ => None,
+        })
+        .expect("Equal trait id");
+
+    let child = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, Some(clause), _, _) if id.name == "Child" => {
+                Some((id, clause))
+            }
+            _ => None,
+        })
+        .expect("Child trait and parent bound");
+    assert_eq!(
+        child.0.symbol_info.as_ref().map(|info| info.identity),
+        Some(TypeIdentity::TypeConstructor),
+        "a bare parent edge must promote Child to its parent's constructor identity"
+    );
+    assert!(matches!(
+        child.1.constraints[0].bounds.as_slice(),
+        [ResolvedWhereConstraintRhs::Trait { trait_id }]
+            if trait_id.unique_id == parent_id.unique_id
+    ));
+
+    let identity_clause = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, Some(clause), _, _) if id.name == "identity" => {
+                Some(clause)
+            }
+            _ => None,
+        })
+        .expect("identity where clause");
+    assert!(matches!(
+        identity_clause.constraints[0].bounds.as_slice(),
+        [ResolvedWhereConstraintRhs::Trait { trait_id }]
+            if trait_id.unique_id == equal_id.unique_id
+    ));
+
+    let slot_map = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, id, _, _, Some(clause), _) if id.name == "Child" => {
+                Some(clause)
+            }
+            _ => None,
+        })
+        .expect("Child impl slot map");
+    assert!(matches!(
+        slot_map.constraints[0].bounds.as_slice(),
+        [ResolvedWhereConstraintRhs::TraitSlot {
+            trait_id,
+            slot_name,
+            slot_ordinal,
+            ..
+        }] if trait_id.unique_id == child.0.unique_id && slot_name == "$A" && *slot_ordinal == 0
+    ));
+}
+
+#[test]
+fn test_resolve_rejects_slot_map_for_non_constructor_trait() {
+    let ast = parse_module_ast(
+        r#"deftrait Plain {}
+
+def identity(value: $T) -> $T
+where
+  $T: Plain.$A
+{
+  value
+}"#,
+        "NonConstructorSlot",
+    );
+
+    let err = resolve(ast).expect_err("a non-constructor trait cannot own a slot map");
+    assert!(err.message.contains("not a TypeConstructor trait"));
+}
+
+#[test]
+fn test_resolve_preserves_full_arguments_for_trait_heads_impl_heads_and_calls() {
+    let resolved = parse_and_resolve(
+        r#"deftrait Convert<$To> {
+  def convert(self: Self) -> $To
+}
+
+impl Convert<String> for Int {
+  def convert(self: Self) -> String { "ok" }
+}
+
+value = Convert::convert::<String>(1)"#,
+    )
+    .expect("parameterized trait declarations and calls should resolve");
+
+    assert!(matches!(
+        &resolved[0],
+        Resolved::TraitDef(_, id, type_params, _, _, _)
+            if id.name == "Convert"
+                && matches!(type_params.as_slice(), [ResolvedTypeParam { name, .. }] if name == "$To")
+    ));
+    assert!(matches!(
+        &resolved[1],
+        Resolved::TraitImplDef(_, id, trait_args, _, _, _)
+            if id.name == "Convert"
+                && matches!(trait_args.as_slice(), [AstTy::Named(_, name)] if name == "String")
+    ));
+    assert!(matches!(
+        &resolved[2],
+        Resolved::Bind(_, _, rhs)
+            if matches!(rhs.as_ref(), Resolved::App(_, callee, _)
+                if matches!(callee.as_ref(), Resolved::TypeApply(_, _, args)
+                    if matches!(args.as_slice(), [AstTy::Named(_, name)] if name == "String")))
+    ));
+}
+
+#[test]
 fn test_resolve_trait_default_method_body_can_reference_later_sibling() {
     let ast = parse_module_ast(
         r#"deftrait Metric {

@@ -184,7 +184,7 @@ fn collect_staged_trait_constructor_slots(
                                     .collect(),
                             );
                         }
-                        spire::ast::WhereConstraintRhs::Trait(_, parent_name, _) => {
+                        spire::ast::WhereConstraintRhs::Trait(_, parent_name) => {
                             if let Some(parent_uid) = lookup_uid(parent_name, &module.module_path) {
                                 parents.push((uid, parent_uid));
                             }

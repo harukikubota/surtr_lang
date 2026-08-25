@@ -6,7 +6,7 @@ use super::scope_init::{
 };
 use super::special_forms::{IfKind, LogicKind};
 use super::*;
-use sindr::names::surface_path_name;
+use sindr::names::{surface_path_name, TypeIdentity};
 use spire::ast::{
     AstPath, BinOp, BulkUpdateEntry, BulkUpdateEntryKind, BulkUpdatePath, DbgArg, FacetPathSegment,
     HashMapLiteralEntry, InterpolatedPart,
@@ -2045,7 +2045,7 @@ impl Resolver {
                     continue;
                 }
                 for bound in &constraint.bounds {
-                    let spire::ast::WhereConstraintRhs::Trait(_, parent_name, _) = bound else {
+                    let spire::ast::WhereConstraintRhs::Trait(_, parent_name) = bound else {
                         continue;
                     };
                     if let Some(parent_uid) = self.scope.lookup(parent_name) {
@@ -3826,7 +3826,7 @@ impl Resolver {
                     .bounds
                     .into_iter()
                     .map(|bound| match bound {
-                        spire::ast::WhereConstraintRhs::Trait(span, name, args) => {
+                        spire::ast::WhereConstraintRhs::Trait(span, name) => {
                             let (unique_id, qualified_name) =
                                 self.resolve_trait_reference(&name, &span)?;
                             let symbol_info = self.symbol_info_for_declaration(
@@ -3843,10 +3843,6 @@ impl Resolver {
                                     symbol_info,
                                     span,
                                 },
-                                args: args
-                                    .into_iter()
-                                    .map(|arg| self.resolve_type_annotation(arg))
-                                    .collect::<Result<Vec<_>, ResolveError>>()?,
                             })
                         }
                         spire::ast::WhereConstraintRhs::TypeConstructor(span, slots) => {
@@ -3861,6 +3857,23 @@ impl Resolver {
                         spire::ast::WhereConstraintRhs::TraitSlot(span, owner, slot_name) => {
                             let (unique_id, qualified_name) =
                                 self.resolve_trait_reference(&owner, &span)?;
+                            let symbol_info = self.symbol_info_for_declaration(
+                                &owner,
+                                &DeclarationKind::Trait,
+                                None,
+                            );
+                            if symbol_info.as_ref().map(|info| info.identity)
+                                != Some(TypeIdentity::TypeConstructor)
+                            {
+                                return Err(ResolveError {
+                                    message: format!(
+                                        "Trait {} is not a TypeConstructor trait",
+                                        owner
+                                    ),
+                                    span,
+                                    related_labels: Vec::new(),
+                                });
+                            }
                             let slot_ordinal = self
                                 .trait_constructor_slots
                                 .get(&unique_id)
@@ -3873,11 +3886,6 @@ impl Resolver {
                                     span: span.clone(),
                                     related_labels: Vec::new(),
                                 })? as u32;
-                            let symbol_info = self.symbol_info_for_declaration(
-                                &owner,
-                                &DeclarationKind::Trait,
-                                None,
-                            );
                             Ok(ResolvedWhereConstraintRhs::TraitSlot {
                                 trait_id: ResolvedId {
                                     name: owner,
