@@ -1,4 +1,3 @@
-use super::types::SignatureTyMode;
 use super::*;
 use sindr::builtin::builtin_type_meta_by_name;
 use sindr::names::builtin_type_usage_policy;
@@ -8,6 +7,72 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 static SYNTHETIC_DEFAULT_METHOD_UID: AtomicU32 = AtomicU32::new(0x6000_0000);
 
 impl Checker {
+    fn validate_type_shape_clause(
+        clause: Option<&ResolvedWhereClause>,
+        trait_definition: bool,
+    ) -> Result<(), TypeError> {
+        let Some(clause) = clause else {
+            return Ok(());
+        };
+        let mut shape_seen = false;
+        for constraint in &clause.constraints {
+            for bound in &constraint.bounds {
+                let ResolvedWhereConstraintRhs::TypeConstructor { span, .. } = bound else {
+                    continue;
+                };
+                if !trait_definition
+                    || !matches!(&constraint.subject, AstTy::Named(_, name) if name == "Self")
+                {
+                    return Err(TypeError {
+                        message:
+                            "`Type<...>` is only allowed as `Self: Type<...>` in a trait definition where clause"
+                                .into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                if shape_seen {
+                    return Err(TypeError {
+                        message: "A trait definition cannot declare more than one Self type-constructor constraint"
+                            .into(),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                shape_seen = true;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_declaration_where_well_formedness(
+        &self,
+        stmts: &[Resolved],
+    ) -> Result<(), TypeError> {
+        for stmt in stmts {
+            match stmt {
+                Resolved::Def(_, _, _, _, _, clause, _, _)
+                | Resolved::BuiltinDecl(_, _, _, _, clause, _) => {
+                    Self::validate_type_shape_clause(clause.as_ref(), false)?;
+                }
+                Resolved::TraitDef(_, _, _, clause, methods, _) => {
+                    Self::validate_type_shape_clause(clause.as_ref(), true)?;
+                    for method in methods {
+                        Self::validate_type_shape_clause(method.where_clause.as_ref(), false)?;
+                    }
+                }
+                Resolved::TraitImplDef(_, _, _, _, clause, methods) => {
+                    Self::validate_type_shape_clause(clause.as_ref(), false)?;
+                    for method in methods {
+                        Self::validate_type_shape_clause(method.where_clause.as_ref(), false)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn predeclare_signature_aliases(
         &mut self,
         stmts: &[Resolved],
@@ -98,44 +163,13 @@ impl Checker {
         &mut self,
         subject: &Ty,
         trait_id: &ResolvedId,
-        args: &[AstTy],
-        tyvars: &HashMap<String, Ty>,
-        self_ty: Option<&Ty>,
     ) -> Result<(), TypeError> {
         let trait_key = self.trait_key(trait_id);
-        let trait_info = self.traits.get(&trait_key).ok_or_else(|| TypeError {
+        self.traits.get(&trait_key).ok_or_else(|| TypeError {
             message: format!("Unknown trait: {}", trait_id.name),
             span: trait_id.span.clone(),
             hint: None,
         })?;
-        if args.len() != trait_info.type_params.len() {
-            return Err(TypeError {
-                message: format!(
-                    "Trait {} expects {} type argument(s), got {}",
-                    trait_id.name,
-                    trait_info.type_params.len(),
-                    args.len()
-                ),
-                span: trait_id.span.clone(),
-                hint: None,
-            });
-        }
-        let trait_args = args
-            .iter()
-            .map(|arg| {
-                self.validate_where_bound_arg_scope(arg, tyvars, self_ty)?;
-                self.resolve_signature_like_ast_ty_in_context(
-                    arg,
-                    TypeSyntaxContext::General,
-                    &mut tyvars.clone(),
-                    match self_ty {
-                        Some(self_ty) => SignatureTyMode::Trait { self_ty },
-                        None => SignatureTyMode::Normal,
-                    },
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let trait_key = self.trait_instance_key_from_tys(&trait_key, &trait_args);
         match self.resolve_ty(subject) {
             Ty::Var(var) => {
                 self.register_tyvar_bound(var, &trait_key);
@@ -145,51 +179,6 @@ impl Checker {
             // validation. Signature where clauses primarily add bounds to
             // variables that must survive instantiation at call sites.
             _ => Ok(()),
-        }
-    }
-
-    /// A where clause refines variables introduced by its owner; it never
-    /// introduces a new one.  Check this before normal signature lowering,
-    /// whose general-purpose mode is allowed to allocate fresh variables for
-    /// declarations that are still being assembled.
-    fn validate_where_bound_arg_scope(
-        &self,
-        ast_ty: &AstTy,
-        tyvars: &HashMap<String, Ty>,
-        self_ty: Option<&Ty>,
-    ) -> Result<(), TypeError> {
-        match ast_ty {
-            AstTy::Named(span, name) if name == "Self" => {
-                if self_ty.is_some() {
-                    Ok(())
-                } else {
-                    Err(TypeError {
-                        message: "`Self` is only available in trait and trait impl where clauses"
-                            .into(),
-                        span: span.clone(),
-                        hint: None,
-                    })
-                }
-            }
-            AstTy::Named(span, name) if name.starts_with('$') && !tyvars.contains_key(name) => {
-                Err(TypeError {
-                    message: format!(
-                        "where clause type variable `{name}` does not appear in the declaration signature"
-                    ),
-                    span: span.clone(),
-                    hint: Some("where clauses add constraints; they do not declare type variables".into()),
-                })
-            }
-            AstTy::Named(..) | AstTy::ImplTrait(..) => Ok(()),
-            AstTy::Generic(_, _, args) | AstTy::Tuple(_, args) => args
-                .iter()
-                .try_for_each(|arg| self.validate_where_bound_arg_scope(arg, tyvars, self_ty)),
-            AstTy::Func(_, params, ret) => {
-                for param in params {
-                    self.validate_where_bound_arg_scope(param, tyvars, self_ty)?;
-                }
-                self.validate_where_bound_arg_scope(ret, tyvars, self_ty)
-            }
         }
     }
 
@@ -210,8 +199,8 @@ impl Checker {
                 &constraint.span,
             )?;
             for bound in &constraint.bounds {
-                if let ResolvedWhereConstraintRhs::Trait { trait_id, args } = bound {
-                    self.apply_where_trait_bound(&subject, trait_id, args, tyvars, self_ty)?;
+                if let ResolvedWhereConstraintRhs::Trait { trait_id } = bound {
+                    self.apply_where_trait_bound(&subject, trait_id)?;
                 }
             }
         }
@@ -235,8 +224,8 @@ impl Checker {
                 &constraint.span,
             )?;
             for bound in &constraint.bounds {
-                if let TypedWhereConstraintRhs::Trait { trait_id, args } = bound {
-                    self.apply_where_trait_bound(&subject, trait_id, args, tyvars, self_ty)?;
+                if let TypedWhereConstraintRhs::Trait { trait_id } = bound {
+                    self.apply_where_trait_bound(&subject, trait_id)?;
                 }
             }
         }
@@ -938,6 +927,56 @@ impl Checker {
         }
     }
 
+    fn rewrite_inherent_self_apps(ast_ty: &AstTy, target: &str) -> AstTy {
+        match ast_ty {
+            AstTy::Named(span, name) => AstTy::Named(span.clone(), name.clone()),
+            AstTy::ImplTrait(span, name) => AstTy::ImplTrait(span.clone(), name.clone()),
+            AstTy::Generic(span, name, args) => AstTy::Generic(
+                span.clone(),
+                if name == "Self" {
+                    target.to_string()
+                } else {
+                    name.clone()
+                },
+                args.iter()
+                    .map(|arg| Self::rewrite_inherent_self_apps(arg, target))
+                    .collect(),
+            ),
+            AstTy::Tuple(span, items) => AstTy::Tuple(
+                span.clone(),
+                items
+                    .iter()
+                    .map(|item| Self::rewrite_inherent_self_apps(item, target))
+                    .collect(),
+            ),
+            AstTy::Func(span, params, ret) => AstTy::Func(
+                span.clone(),
+                params
+                    .iter()
+                    .map(|param| Self::rewrite_inherent_self_apps(param, target))
+                    .collect(),
+                Box::new(Self::rewrite_inherent_self_apps(ret, target)),
+            ),
+        }
+    }
+
+    pub(super) fn resolve_def_signature_ast_ty_in_context(
+        &mut self,
+        id: &ResolvedId,
+        ast_ty: &AstTy,
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Ty, TypeError> {
+        let Some((target, _)) = Self::split_impl_method_id(id) else {
+            return self.resolve_signature_ast_ty_in_context(ast_ty, context, tyvars);
+        };
+        if self.env.lookup_type_def(&target).is_none() {
+            return self.resolve_signature_ast_ty_in_context(ast_ty, context, tyvars);
+        }
+        let rewritten = Self::rewrite_inherent_self_apps(ast_ty, &target);
+        self.resolve_signature_ast_ty_in_context(&rewritten, context, tyvars)
+    }
+
     pub(super) fn current_impl_self_ty(&self) -> Option<Ty> {
         let symbol = self.current_function_symbol.as_deref()?;
         let mut parts = symbol.split("::").collect::<Vec<_>>();
@@ -1461,9 +1500,8 @@ impl Checker {
             })
             .flat_map(|constraint| constraint.bounds.iter())
             .filter_map(|bound| match bound {
-                ResolvedWhereConstraintRhs::Trait { trait_id, args } => Some(TraitParent {
+                ResolvedWhereConstraintRhs::Trait { trait_id } => Some(TraitParent {
                     trait_id: trait_id.clone(),
-                    args: args.clone(),
                 }),
                 _ => None,
             })
@@ -1534,6 +1572,21 @@ impl Checker {
         for (key, slots) in resolved {
             if let Some(info) = self.traits.get_mut(&key) {
                 info.constructor_slots = slots;
+            }
+        }
+        for info in self.traits.values() {
+            if !info.constructor_slots.is_empty() && !info.type_params.is_empty() {
+                return Err(TypeError {
+                    message: format!(
+                        "Constructor trait {} cannot declare trait type parameter(s)",
+                        info.id.name
+                    ),
+                    span: info.id.span.clone(),
+                    hint: Some(
+                        "Put element slots in `Self: Type<$A, ...>` and introduce them through method inputs."
+                            .into(),
+                    ),
+                });
             }
         }
         Ok(())
@@ -2103,17 +2156,13 @@ impl Checker {
                 _ => return false,
             };
             for bound in &constraint.bounds {
-                let TypedWhereConstraintRhs::Trait { trait_id, args } = bound else {
+                let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
                     continue;
                 };
                 let trait_key = self.trait_key(trait_id);
-                let Ok(trait_args) = self.instantiate_impl_where_trait_args(impl_info, fresh, args)
-                else {
-                    return false;
-                };
                 if !self.trait_obligation_satisfied_with_args(
                     &trait_key,
-                    &trait_args,
+                    &[],
                     &subject_ty,
                     visiting,
                 ) {
@@ -2122,36 +2171,6 @@ impl Checker {
             }
         }
         true
-    }
-
-    /// Instantiate a bound using the same fresh mapping used for the impl
-    /// head.  This keeps `$T` in `Marker<$T> for Int` tied to both the
-    /// requested trait argument and all nested where obligations.
-    pub(super) fn instantiate_impl_where_trait_args(
-        &mut self,
-        impl_info: &TraitImplInfo,
-        fresh: &HashMap<u32, Ty>,
-        args: &[AstTy],
-    ) -> Result<Vec<Ty>, TypeError> {
-        let mut tyvars = impl_info
-            .type_param_vars_by_name
-            .iter()
-            .filter_map(|(name, original)| {
-                fresh.get(original).cloned().map(|ty| (name.clone(), ty))
-            })
-            .collect::<HashMap<_, _>>();
-        let self_ty =
-            self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, fresh));
-        args.iter()
-            .map(|arg| {
-                self.resolve_signature_like_ast_ty_in_context(
-                    arg,
-                    TypeSyntaxContext::General,
-                    &mut tyvars,
-                    SignatureTyMode::Trait { self_ty: &self_ty },
-                )
-            })
-            .collect()
     }
 
     pub(super) fn trait_dispatch_override(
@@ -2592,19 +2611,6 @@ impl Checker {
             let trait_key = self.trait_key(id);
             let constructor_slots = self.trait_constructor_slots(id, where_clause.as_ref())?;
             let parents = Self::trait_parents(where_clause.as_ref());
-            if !constructor_slots.is_empty() && !type_params.is_empty() {
-                return Err(TypeError {
-                    message: format!(
-                        "Constructor trait {} cannot declare trait type parameter(s)",
-                        id.name
-                    ),
-                    span: id.span.clone(),
-                    hint: Some(
-                        "Put element slots in `Self: Type<$A, ...>` and introduce them through method inputs."
-                            .into(),
-                    ),
-                });
-            }
             let mut direct_parents = HashSet::new();
             for parent in &parents {
                 let key = parent
@@ -3244,20 +3250,19 @@ impl Checker {
                 span: parent.trait_id.span.clone(),
                 hint: None,
             })?;
-            if parent_trait.type_params.len() != parent.args.len() {
+            if !parent_trait.type_params.is_empty() {
                 return Err(TypeError {
                     message: format!(
                         "Parent trait {} expects {} type argument(s), got {}",
                         parent.trait_id.name,
                         parent_trait.type_params.len(),
-                        parent.args.len()
+                        0
                     ),
                     span: parent.trait_id.span.clone(),
                     hint: None,
                 });
             }
-            let parent_args =
-                self.instantiate_child_parent_args(&child_trait, child_impl, parent)?;
+            let parent_args = Vec::new();
             let parent_candidates = self
                 .trait_impls
                 .values()
@@ -3336,34 +3341,6 @@ impl Checker {
         obligations_hold
     }
 
-    fn instantiate_child_parent_args(
-        &mut self,
-        child_trait: &TraitInfo,
-        child_impl: &TraitImplInfo,
-        parent: &TraitParent,
-    ) -> Result<Vec<Ty>, TypeError> {
-        let mut tyvars = child_trait
-            .type_params
-            .iter()
-            .zip(child_impl.trait_arg_tys.iter())
-            .map(|(param, ty)| (param.name.clone(), ty.clone()))
-            .collect::<HashMap<_, _>>();
-        parent
-            .args
-            .iter()
-            .map(|arg| {
-                self.resolve_signature_like_ast_ty_in_context(
-                    arg,
-                    TypeSyntaxContext::General,
-                    &mut tyvars,
-                    SignatureTyMode::Trait {
-                        self_ty: &child_impl.target_ty,
-                    },
-                )
-            })
-            .collect()
-    }
-
     /// Prove a parent's `where` requirements from the child's declared
     /// assumptions.  This is deliberately a local proof environment: unlike
     /// the old implementation it never writes assumptions into
@@ -3396,19 +3373,14 @@ impl Checker {
             };
 
             constraint.bounds.iter().all(|bound| {
-                let TypedWhereConstraintRhs::Trait { trait_id, args } = bound else {
+                let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
                     return true;
                 };
                 let required = self.trait_key(trait_id);
-                let Ok(required_args) =
-                    self.instantiate_impl_where_trait_args(parent_impl, fresh, args)
-                else {
-                    return false;
-                };
-                self.child_where_entails(child_impl, &parent_subject, &required, &required_args)
+                self.child_where_entails(child_impl, &parent_subject, &required)
                     || self.trait_obligation_satisfied_with_args(
                         &required,
-                        &required_args,
+                        &[],
                         &parent_subject,
                         &mut HashSet::new(),
                     )
@@ -3421,7 +3393,6 @@ impl Checker {
         child_impl: &TraitImplInfo,
         subject: &Ty,
         required: &str,
-        required_args: &[Ty],
     ) -> bool {
         let Some(child_where) = &child_impl.where_clause else {
             return false;
@@ -3437,26 +3408,8 @@ impl Checker {
             };
             self.resolve_ty(&child_subject) == self.resolve_ty(subject)
                 && constraint.bounds.iter().any(|bound| match bound {
-                    TypedWhereConstraintRhs::Trait { trait_id, args } => {
-                        let child_args = self.instantiate_impl_where_trait_args(
-                            child_impl,
-                            &child_impl
-                                .type_param_vars
-                                .iter()
-                                .map(|var| (*var, Ty::Var(*var)))
-                                .collect(),
-                            args,
-                        );
+                    TypedWhereConstraintRhs::Trait { trait_id } => {
                         self.trait_key(trait_id) == required
-                            && child_args.is_ok_and(|child_args| {
-                                child_args.len() == required_args.len()
-                                    && child_args.iter().zip(required_args).all(
-                                        |(child, required)| {
-                                            self.canonical_ty_key(child)
-                                                == self.canonical_ty_key(required)
-                                        },
-                                    )
-                            })
                     }
                     _ => false,
                 })
@@ -3580,7 +3533,8 @@ impl Checker {
                     let param_tys = params
                         .iter()
                         .map(|param| {
-                            let param_ty = self.resolve_signature_ast_ty_in_context(
+                            let param_ty = self.resolve_def_signature_ast_ty_in_context(
+                                id,
                                 &param.ty,
                                 TypeSyntaxContext::General,
                                 &mut tyvars,
@@ -3601,7 +3555,8 @@ impl Checker {
                         .map(|param| param.id.name.clone())
                         .collect::<Vec<_>>();
                     let ret = match ret_ty {
-                        Some(ty) => self.resolve_signature_ast_ty_in_context(
+                        Some(ty) => self.resolve_def_signature_ast_ty_in_context(
+                            id,
                             ty,
                             TypeSyntaxContext::FunctionReturn,
                             &mut tyvars,

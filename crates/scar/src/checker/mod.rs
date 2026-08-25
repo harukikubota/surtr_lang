@@ -433,7 +433,6 @@ struct TraitInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitParent {
     trait_id: ResolvedId,
-    args: Vec<AstTy>,
 }
 
 #[allow(dead_code)]
@@ -3447,6 +3446,7 @@ impl Checker {
         let mut stmt_kind_totals = HashMap::<String, (u64, Duration)>::new();
 
         let result = (|| -> Result<Vec<TypedNode>, TypeError> {
+            self.validate_declaration_where_well_formedness(&stmts)?;
             self.collect_unused_type_parameter_warnings(&stmts)?;
 
             let t = profile_enabled.then(Instant::now);

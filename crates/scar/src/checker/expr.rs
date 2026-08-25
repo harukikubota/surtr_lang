@@ -3027,18 +3027,14 @@ impl Checker {
                 _ => return false,
             };
             for bound in &constraint.bounds {
-                let TypedWhereConstraintRhs::Trait { trait_id, args } = bound else {
+                let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
                     // Constructor and slot obligations are validated when the
                     // impl head is declared. They do not establish runtime
                     // dispatch applicability in V1.
                     continue;
                 };
                 let trait_key = self.trait_key(trait_id);
-                let Ok(trait_args) = self.instantiate_impl_where_trait_args(impl_info, fresh, args)
-                else {
-                    return false;
-                };
-                if !self.trait_impl_exists_for_args(&trait_key, &trait_args, &concrete) {
+                if !self.trait_impl_exists_for_args(&trait_key, &[], &concrete) {
                     return false;
                 }
             }
@@ -8553,22 +8549,12 @@ impl Checker {
                 &mut type_vars,
             )?;
             for bound in constraint.bounds {
-                let TypedWhereConstraintRhs::Trait { trait_id, args } = bound else {
+                let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
                     continue;
                 };
                 let trait_key = self.trait_key(&trait_id);
-                let trait_args = args
-                    .iter()
-                    .map(|arg| {
-                        self.resolve_builtin_ast_ty_in_context(
-                            arg,
-                            TypeSyntaxContext::General,
-                            &mut type_vars,
-                        )
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
                 let subject = self.resolve_ty(&subject);
-                let satisfied = self.trait_impl_exists_for_args(&trait_key, &trait_args, &subject);
+                let satisfied = self.trait_impl_exists_for_args(&trait_key, &[], &subject);
                 if !satisfied {
                     return Err(TypeError {
                         message: format!(

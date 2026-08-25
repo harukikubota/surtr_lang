@@ -6,12 +6,12 @@ use scar::typed::{
 use scar::types::Ty;
 use sigil::resolved::{
     Resolved, ResolvedFacetBracketExpr, ResolvedFacetPathSegment, ResolvedHashMapLiteralEntry,
-    ResolvedId, ResolvedPattern,
+    ResolvedId, ResolvedPattern, ResolvedWhereConstraintRhs,
 };
 use sindr::names::TypeIdentity;
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 use sindr::primitives::int;
-use spire::ast::{Lit, Span};
+use spire::ast::{AstTy, Lit, Span};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -23,6 +23,16 @@ const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
 
 const SURFACE_WORKER_COUNT: usize = 1;
 const SURFACE_BUCKET_COUNT: usize = 32;
+
+fn resolve_without_std_prelude(source: &str) -> Vec<Resolved> {
+    let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
+        .expect("source should parse without the std prelude");
+    sigil::resolve(ast).expect("source should resolve without the std prelude")
+}
+
+fn typecheck_without_std_prelude(source: &str) -> Result<Vec<TypedNode>, scar::error::TypeError> {
+    scar::typecheck(resolve_without_std_prelude(source))
+}
 
 const SURFACE_CASES: &[(&str, fn())] = &[
     (
@@ -3879,7 +3889,7 @@ print(right)"#,
 
 #[test]
 fn where_constraint_kinds_survive_in_typed_metadata() {
-    let typed = typecheck_with_rules(
+    let typed = typecheck_without_std_prelude(
         r#"deftrait Marker
 where
   Self: Type<$Slot>
@@ -3903,40 +3913,9 @@ where
   {
     self
   }
-}
-
-def keep(value: $A) -> $A
-where
-  $A: Marker + Type<$B> + Marker.$Slot
-{
-  value
-}
-
-kept: Boxed<Int> = keep(Boxed::Box(1))
-marked: Boxed<Int> = Marker::mark(Boxed::Box(1))"#,
-        RuntimeSourcePolicy::script(),
+}"#,
     )
     .expect("constraint kinds should survive after semantic validation");
-
-    let where_clause = typed
-        .iter()
-        .find_map(|node| match &node.node {
-            TypedInner::Def(_, id, _, _, _, where_clause, _, _) if id.name == "keep" => {
-                where_clause.as_ref()
-            }
-            _ => None,
-        })
-        .expect("typed def should retain its where clause");
-    let bounds = &where_clause.constraints[0].bounds;
-    assert!(matches!(bounds[0], TypedWhereConstraintRhs::Trait { .. }));
-    assert!(matches!(
-        bounds[1],
-        TypedWhereConstraintRhs::TypeConstructor { .. }
-    ));
-    assert!(matches!(
-        bounds[2],
-        TypedWhereConstraintRhs::TraitSlot { .. }
-    ));
 
     let (trait_where, trait_methods) = typed
         .iter()
@@ -3947,15 +3926,30 @@ marked: Boxed<Int> = Marker::mark(Boxed::Box(1))"#,
             _ => None,
         })
         .expect("typed trait should retain metadata");
-    assert!(trait_where.is_some());
-    assert!(trait_methods[0].where_clause.is_some());
-    assert!(typed
+    let trait_where = trait_where.expect("typed trait should retain its shape");
+    assert!(matches!(
+        trait_where.constraints[0].bounds[0],
+        TypedWhereConstraintRhs::TypeConstructor { .. }
+    ));
+    let method_where = trait_methods[0]
+        .where_clause
+        .as_ref()
+        .expect("typed trait method should retain its bare capability");
+    assert!(matches!(
+        method_where.constraints[0].bounds[0],
+        TypedWhereConstraintRhs::Trait { .. }
+    ));
+    let impl_where = typed
         .iter()
-        .any(|node| matches!(node.node, TypedInner::TraitImplDef(_, _, Some(_)))));
-    assert!(typed.iter().any(|node| match &node.node {
-        TypedInner::Def(_, id, _, _, _, Some(_), _, _) => id.name.contains("mark"),
-        _ => false,
-    }));
+        .find_map(|node| match &node.node {
+            TypedInner::TraitImplDef(_, _, Some(clause)) => Some(clause),
+            _ => None,
+        })
+        .expect("typed impl should retain its slot map");
+    assert!(matches!(
+        impl_where.constraints[0].bounds[0],
+        TypedWhereConstraintRhs::TraitSlot { .. }
+    ));
 }
 
 #[test]
@@ -4125,6 +4119,266 @@ where
     let err = typecheck_with_rules(&duplicate, RuntimeSourcePolicy::script())
         .expect_err("one constructor slot cannot map to two target parameters");
     assert!(err.message.contains("mapped more than once"), "{err:?}");
+}
+
+#[test]
+fn malformed_resolved_type_shape_requires_self_lhs() {
+    let mut resolved = resolve_without_std_prelude(
+        r#"deftrait Shape
+where
+  Self: Type<$A>
+{}"#,
+    );
+    let constraint = resolved
+        .iter_mut()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, Some(clause), _, _) if id.name == "Shape" => {
+                clause.constraints.first_mut()
+            }
+            _ => None,
+        })
+        .expect("Shape should retain its resolved where constraint");
+    constraint.subject = AstTy::Named(constraint.span.clone(), "$A".into());
+
+    let err = scar::typecheck(resolved).expect_err("Type<...> must require a Self subject in Scar");
+    assert!(
+        err.message.contains("only allowed") && err.message.contains("Self: Type"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn malformed_resolved_type_shape_is_rejected_outside_trait_definition_where() {
+    let mut function = resolve_without_std_prelude(
+        r#"deftrait Marker {}
+
+def keep(value: $A) -> $A
+where
+  $A: Marker
+{
+  value
+}"#,
+    );
+    let constraint = function
+        .iter_mut()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, Some(clause), _, _) if id.name == "keep" => {
+                clause.constraints.first_mut()
+            }
+            _ => None,
+        })
+        .expect("keep should retain its resolved where constraint");
+    constraint.bounds[0] = ResolvedWhereConstraintRhs::TypeConstructor {
+        span: constraint.span.clone(),
+        slots: vec![AstTy::Named(constraint.span.clone(), "$A".into())],
+    };
+    let err = scar::typecheck(function).expect_err("function where must reject Type<...> in Scar");
+    assert!(err.message.contains("trait definition where"), "{err:?}");
+
+    let mut trait_impl = resolve_without_std_prelude(
+        r#"deftrait Marker {}
+
+defenum LocalList<$A> {
+  Item($A),
+}
+
+impl Marker for LocalList<$A>
+where
+  $A: Marker
+{}"#,
+    );
+    let constraint = trait_impl
+        .iter_mut()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, id, _, _, Some(clause), _) if id.name == "Marker" => {
+                clause.constraints.first_mut()
+            }
+            _ => None,
+        })
+        .expect("Marker impl should retain its resolved where constraint");
+    constraint.bounds[0] = ResolvedWhereConstraintRhs::TypeConstructor {
+        span: constraint.span.clone(),
+        slots: vec![AstTy::Named(constraint.span.clone(), "$A".into())],
+    };
+    let err =
+        scar::typecheck(trait_impl).expect_err("trait impl where must reject Type<...> in Scar");
+    assert!(err.message.contains("trait definition where"), "{err:?}");
+
+    let mut trait_method = resolve_without_std_prelude(
+        r#"deftrait Marker {}
+
+deftrait HasMethod {
+  def keep(self: Self) -> Self
+  where
+    Self: Marker
+}"#,
+    );
+    let constraint = trait_method
+        .iter_mut()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, _, methods, _) if id.name == "HasMethod" => methods
+                .iter_mut()
+                .find(|method| method.id.name == "keep")
+                .and_then(|method| method.where_clause.as_mut())
+                .and_then(|clause| clause.constraints.first_mut()),
+            _ => None,
+        })
+        .expect("trait method should retain its resolved where constraint");
+    constraint.bounds[0] = ResolvedWhereConstraintRhs::TypeConstructor {
+        span: constraint.span.clone(),
+        slots: vec![AstTy::Named(constraint.span.clone(), "$A".into())],
+    };
+    let err = scar::typecheck(trait_method)
+        .expect_err("trait method where must reject Type<...> in Scar");
+    assert!(err.message.contains("trait definition where"), "{err:?}");
+}
+
+#[test]
+fn type_constructor_shape_must_be_unique_in_a_trait_definition() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait InvalidShape
+where
+  Self: Type<$A> + Type<$B>
+{}"#,
+    )
+    .expect_err("a trait must declare at most one Type<...> shape");
+    assert!(err.message.contains("more than one"), "{err:?}");
+}
+
+#[test]
+fn inherited_constructor_trait_rejects_trait_head_parameters_after_closure() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait InvalidDirect<$Tag>
+where
+  Self: Type<$A>
+{}"#,
+    )
+    .expect_err("a direct constructor trait cannot retain trait head parameters");
+    assert!(
+        err.message.contains("InvalidDirect")
+            && err.message.contains("cannot declare trait type parameter"),
+        "{err:?}"
+    );
+
+    let err = typecheck_without_std_prelude(
+        r#"deftrait RootShape
+where
+  Self: Type<$A>
+{}
+
+deftrait InvalidChild<$Tag>
+where
+  Self: RootShape
+{}"#,
+    )
+    .expect_err("an inherited constructor trait cannot retain trait head parameters");
+    assert!(
+        err.message.contains("InvalidChild")
+            && err.message.contains("cannot declare trait type parameter"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn constructor_slot_maps_require_top_level_target_parameters_and_completeness() {
+    let declarations = r#"deftrait PairShape
+where
+  Self: Type<$Left, $Right>
+{}
+
+defenum Pair<$Left, $Right> {
+  Pair($Left, $Right),
+}
+
+defenum Wrapper<$Item> {
+  Wrap($Item),
+}"#;
+
+    let nested = format!(
+        r#"{declarations}
+
+impl PairShape for Pair<Wrapper<$Item>, $Right>
+where
+  $Item: PairShape.$Left
+  $Right: PairShape.$Right
+{{}}"#
+    );
+    let err = typecheck_without_std_prelude(&nested)
+        .expect_err("a nested target variable cannot own a constructor slot");
+    assert!(
+        err.message.contains("not a top-level type parameter"),
+        "{err:?}"
+    );
+
+    let incomplete = format!(
+        r#"{declarations}
+
+impl PairShape for Pair<$Left, $Right>
+where
+  $Left: PairShape.$Left
+{{}}"#
+    );
+    let err = typecheck_without_std_prelude(&incomplete)
+        .expect_err("every constructor slot must be mapped");
+    assert!(
+        err.message.contains("map every constructor slot"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn plain_inherent_owner_expands_self_applications_to_its_target() {
+    typecheck_without_std_prelude(
+        r#"defstruct Box<$A> {
+  value: $A,
+}
+
+impl Box {
+  def new(value: $A) -> Self<$A> {
+    Box { value: value }
+  }
+
+  def wrap(value: $A) -> Self<$A> {
+    Box { value: value }
+  }
+
+  def get(self: Self<$A>) -> $A {
+    self.value
+  }
+}
+
+boxed: Box<Int> = Box::wrap(1)
+value: Int = Box::get(boxed)"#,
+    )
+    .expect("Self<$A> in a plain inherent owner should mean Box<$A>");
+}
+
+#[test]
+fn trait_contract_self_substitution_preserves_captured_target_parameters() {
+    typecheck_without_std_prelude(
+        r#"deftrait ReplaceRight
+where
+  Self: Type<$A>
+{
+  def replace(self: Self<$A>, value: $B) -> Self<$B>
+}
+
+defenum Pair<$Left, $Right> {
+  Pair($Left, $Right),
+}
+
+impl ReplaceRight for Pair<$Captured, $Slot>
+where
+  $Slot: ReplaceRight.$A
+{
+  def replace(self: Pair<$Captured, $A>, value: $B) -> Pair<$Captured, $B> {
+    match self {
+      Pair::Pair(left, _) => Pair::Pair(left, value),
+    }
+  }
+}"#,
+    )
+    .expect("trait contract expansion must preserve captured target parameters");
 }
 
 #[test]

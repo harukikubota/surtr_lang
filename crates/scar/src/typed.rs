@@ -43,7 +43,6 @@ pub struct TypedWhereConstraint {
 pub enum TypedWhereConstraintRhs {
     Trait {
         trait_id: ResolvedId,
-        args: Vec<AstTy>,
     },
     TypeConstructor {
         span: Span,
@@ -69,10 +68,9 @@ impl From<&ResolvedWhereClause> for TypedWhereClause {
                         .bounds
                         .iter()
                         .map(|bound| match bound {
-                            ResolvedWhereConstraintRhs::Trait { trait_id, args } => {
+                            ResolvedWhereConstraintRhs::Trait { trait_id } => {
                                 TypedWhereConstraintRhs::Trait {
                                     trait_id: trait_id.clone(),
-                                    args: args.clone(),
                                 }
                             }
                             ResolvedWhereConstraintRhs::TypeConstructor { span, slots } => {

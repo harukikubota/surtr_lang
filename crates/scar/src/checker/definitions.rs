@@ -773,7 +773,8 @@ impl Checker {
         self.seed_signature_type_params(type_params, &mut tyvars);
 
         for param in params {
-            let param_ty = self.resolve_signature_ast_ty_in_context(
+            let param_ty = self.resolve_def_signature_ast_ty_in_context(
+                id,
                 &param.ty,
                 TypeSyntaxContext::General,
                 &mut tyvars,
@@ -813,7 +814,8 @@ impl Checker {
         }
 
         let expected_ret = match ret_ty {
-            Some(ty) => self.resolve_signature_ast_ty_in_context(
+            Some(ty) => self.resolve_def_signature_ast_ty_in_context(
+                id,
                 ty,
                 TypeSyntaxContext::FunctionReturn,
                 &mut tyvars,
