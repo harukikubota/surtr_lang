@@ -2348,6 +2348,15 @@ impl Checker {
         constructor_slot_vars: &[u32],
     ) -> Result<Ty, TypeError> {
         Ok(match ty {
+            Ty::SelfApp(args) if Self::constructor_application_parts(&args).is_some() => {
+                Ty::SelfApp(
+                    args.into_iter()
+                        .map(|arg| {
+                            self.expand_trait_self_apps(arg, target_ty, constructor_slot_vars)
+                        })
+                        .collect::<Result<_, _>>()?,
+                )
+            }
             Ty::SelfApp(args) => {
                 if args.len() != constructor_slot_vars.len() {
                     return Err(TypeError {

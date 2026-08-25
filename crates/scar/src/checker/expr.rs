@@ -1136,7 +1136,7 @@ impl Checker {
                             hint: None,
                         }
                     })?;
-                    let (params, ret_ty, _, _) = self.resolve_trait_method_signature(
+                    let (params, mut ret_ty, _, _) = self.resolve_trait_method_signature(
                         &trait_info,
                         method_info,
                         &deferred_self,
@@ -1155,6 +1155,7 @@ impl Checker {
                             &ret_ty,
                             &mut tyvars,
                         );
+                        self.seed_missing_method_type_params(&method.type_params, &mut tyvars);
                         let declaration_capabilities = self.resolved_capability_uses(
                             method.where_clause.as_ref(),
                             &tyvars,
@@ -1165,19 +1166,28 @@ impl Checker {
                             .zip(params.iter())
                             .map(|(param, ty)| (param.id.unique_id, ty.clone()))
                             .collect::<Vec<_>>();
-                        self.check_body_in_isolated_scope(
+                        let rigid_tyvars = Self::signature_tyvar_ids(&tyvars);
+                        let typed_body = self.check_body_in_isolated_scope(
                             &local_bindings,
                             &[],
                             &declaration_capabilities,
                             &mut [],
                             tyvars.clone(),
-                            Self::signature_tyvar_ids(&tyvars),
+                            rigid_tyvars.clone(),
                             ret_ty.clone(),
                             method.id.name.clone(),
                             None,
                             false,
                             body,
                         )?;
+                        if let Some(concrete) = self.resolve_contextual_return_body(
+                            &method.ret_ty,
+                            &ret_ty,
+                            &typed_body,
+                            &rigid_tyvars,
+                        )? {
+                            ret_ty = concrete;
+                        }
                     }
                     typed_methods.push(TypedTraitMethodInfo {
                         name: method.id.name.clone(),

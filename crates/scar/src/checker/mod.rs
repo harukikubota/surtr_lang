@@ -3769,6 +3769,19 @@ impl Checker {
                         Self::validate_constructor_ast_ty(ret, true, &constructor_traits)?;
                     }
                 }
+                Resolved::ExtractorDef(_, _, _, param, ret, body, _) => {
+                    if let Some(param) = &param.ty {
+                        Self::validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                    }
+                    Self::validate_constructor_ast_ty(ret, false, &constructor_traits)?;
+                    Self::validate_constructor_body_positions(body, &constructor_traits)?;
+                }
+                Resolved::BuiltinExtractorDecl(_, _, param, ret, _) => {
+                    if let Some(param) = &param.ty {
+                        Self::validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                    }
+                    Self::validate_constructor_ast_ty(ret, false, &constructor_traits)?;
+                }
                 Resolved::TraitDef(_, _, _, _, methods, _) => {
                     for method in methods {
                         for param in &method.params {

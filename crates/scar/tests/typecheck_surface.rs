@@ -4587,6 +4587,135 @@ where
 }
 
 #[test]
+fn extractor_signatures_reject_identity_dependent_constructor_applications() {
+    let declarations = r#"deftrait Context
+where
+  Self: Type<$A>
+{}
+
+defenum Option<$T> {
+  Some($T),
+  None,
+}"#;
+    let cases = [
+        (
+            "builtin extractor parameter",
+            r#"@builtin defextractor invalid(term: Context<Int>) -> Option<Int>"#,
+        ),
+        (
+            "ordinary extractor return",
+            r#"defstruct Owner {}
+
+impl Owner {
+  def new() -> Self { Owner {} }
+  defextractor invalid(self: Self) -> Option<Context<Int>> { Option::None }
+}"#,
+        ),
+    ];
+
+    for (label, case) in cases {
+        let source = format!("{declarations}\n\n{case}");
+        let result = if label == "builtin extractor parameter" {
+            let ast = spire::parse_with_context(
+                &source,
+                spire::ParserContext::project(0).with_rules(spire::ParseRules::std_module()),
+            )
+            .expect("builtin extractor source should parse under std rules");
+            scar::typecheck(sigil::resolve(ast).expect("builtin extractor source should resolve"))
+        } else {
+            typecheck_without_std_prelude(&source)
+        };
+        let err = result.expect_err(label);
+        assert!(
+            err.message.contains("ConstructorTraitApplicationPosition"),
+            "{label}: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn trait_default_contextual_result_requires_constructor_trait_membership() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait Context
+where
+  Self: Type<$A>
+{}
+
+defenum Other<$T> {
+  Other($T),
+}
+
+deftrait Maker {
+  def make(value: Int) -> Context<Int> { Other::Other(value) }
+}"#,
+    )
+    .expect_err("a default body cannot return a constructor outside Context");
+
+    assert!(
+        err.message
+            .contains("does not implement constructor trait Context"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn trait_impl_contextual_result_requires_constructor_trait_membership() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait Context
+where
+  Self: Type<$A>
+{}
+
+defenum Other<$T> {
+  Other($T),
+}
+
+deftrait Maker {
+  def make(value: Int) -> Context<Int>
+}
+
+impl Maker for Int {
+  def make(value: Int) { Other::Other(value) }
+}"#,
+    )
+    .expect_err("an impl body cannot return a constructor outside Context");
+
+    assert!(
+        err.message
+            .contains("does not implement constructor trait Context"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn trait_impl_contextual_result_accepts_an_implementing_constructor() {
+    typecheck_without_std_prelude(
+        r#"deftrait Context
+where
+  Self: Type<$A>
+{}
+
+defenum Boxed<$T> {
+  Boxed($T),
+}
+
+impl Context for Boxed<$T>
+where
+  $T: Context.$A
+{}
+
+deftrait Maker {
+  def make(value: Int) -> Context<Int>
+}
+
+impl Maker for Int {
+  def make(value: Int) { Boxed::Boxed(value) }
+}"#,
+    )
+    .expect("an impl body may resolve its contextual result to a Context constructor");
+}
+
+#[test]
 fn bare_capability_is_consumed_by_a_full_parameterized_trait_obligation() {
     let typed = typecheck_without_std_prelude(
         r#"deftrait Convert<$To> {

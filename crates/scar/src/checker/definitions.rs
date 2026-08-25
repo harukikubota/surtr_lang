@@ -6,6 +6,64 @@ struct SpecialFormBuiltinContract {
     shape_ok: fn(&[ResolvedFunParam], &Option<AstTy>) -> bool,
 }
 
+#[cfg(test)]
+mod contextual_capability_tests {
+    use super::*;
+
+    #[test]
+    fn declared_method_generic_absent_from_signature_still_tracks_unused_capability() {
+        let span = Span { start: 10, end: 16 };
+        let mut checker = Checker::new(TypecheckContext::default());
+        let declared = vec![ResolvedTypeParam {
+            name: "$T".into(),
+            bound: None,
+            span: span.clone(),
+        }];
+        let mut method_tyvars = HashMap::new();
+        checker.seed_missing_method_type_params(&declared, &mut method_tyvars);
+        let marker_id = ResolvedId {
+            name: "Marker".into(),
+            qualified_name: Some("Marker".into()),
+            unique_id: 1,
+            compiler_generated: false,
+            symbol_info: None,
+            span: span.clone(),
+        };
+        let where_clause = ResolvedWhereClause {
+            constraints: vec![ResolvedWhereConstraint {
+                subject: AstTy::Named(span.clone(), "$T".into()),
+                bounds: vec![ResolvedWhereConstraintRhs::Trait {
+                    trait_id: marker_id,
+                }],
+                span: span.clone(),
+            }],
+            span: span.clone(),
+        };
+        let capabilities = checker
+            .resolved_capability_uses(Some(&where_clause), &method_tyvars)
+            .expect("declared method capability should resolve");
+
+        let err = checker
+            .check_body_in_isolated_scope(
+                &[],
+                &[],
+                &capabilities,
+                &mut [],
+                method_tyvars.clone(),
+                Checker::signature_tyvar_ids(&method_tyvars),
+                Ty::Unit,
+                "unused".into(),
+                None,
+                false,
+                &Resolved::Lit(span.clone(), Lit::Unit),
+            )
+            .expect_err("a where-only declared method generic must remain an unused capability");
+
+        assert!(err.message.contains("UnusedTraitConstraint"), "{err:?}");
+        assert_eq!(err.span, span);
+    }
+}
+
 fn special_form_shape_if(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 3
         && Checker::is_named_type(&params[0].ty, "Boolean")
@@ -731,6 +789,19 @@ impl Checker {
         Ok(uses)
     }
 
+    pub(super) fn seed_missing_method_type_params(
+        &mut self,
+        type_params: &[ResolvedTypeParam],
+        tyvars: &mut HashMap<String, Ty>,
+    ) {
+        let missing = type_params
+            .iter()
+            .filter(|param| !tyvars.contains_key(&param.name))
+            .cloned()
+            .collect::<Vec<_>>();
+        self.seed_signature_type_params(&missing, tyvars);
+    }
+
     pub(super) fn collect_signature_ty_bindings(
         ast_ty: &AstTy,
         resolved_ty: &Ty,
@@ -777,6 +848,78 @@ impl Checker {
             }
             _ => {}
         }
+    }
+
+    pub(super) fn resolve_contextual_return_body(
+        &mut self,
+        return_ast: &AstTy,
+        expected_ret: &Ty,
+        typed_body: &TypedNode,
+        rigid_tyvars: &HashSet<u32>,
+    ) -> Result<Option<Ty>, TypeError> {
+        let Some(trait_key) = self.constructor_trait_key_for_ast_ty(return_ast) else {
+            return Ok(None);
+        };
+        let actual = self.resolve_ty(&typed_body.ty);
+        let concrete_slots = Self::constructor_application_slots(&actual);
+        let expected_parts = match expected_ret {
+            Ty::SelfApp(items) => Self::constructor_application_parts(items),
+            _ => None,
+        };
+        let Some((witness, expected_slots)) = expected_parts else {
+            unreachable!("constructor result annotation must lower to a contextual application")
+        };
+        if matches!(actual, Ty::Var(_) | Ty::SelfApp(_)) || concrete_slots.is_none() {
+            return Err(TypeError {
+                message: format!(
+                    "UnresolvedConstructorResult: {} must resolve to one concrete constructor",
+                    Self::surface_ast_ty(return_ast)
+                ),
+                span: self.return_mismatch_span(typed_body),
+                hint: Some(
+                    "Return a concrete constructor value from every branch of this function."
+                        .into(),
+                ),
+            });
+        }
+        if !self.trait_impl_exists(&trait_key, &actual) {
+            return Err(TypeError {
+                message: format!(
+                    "{} does not implement constructor trait {}",
+                    self.ty_name(&actual),
+                    Self::surface_name(&trait_key)
+                ),
+                span: self.return_mismatch_span(typed_body),
+                hint: None,
+            });
+        }
+        let concrete_slots = concrete_slots.expect("validated above");
+        if expected_slots.len() != concrete_slots.len()
+            || !expected_slots
+                .iter()
+                .zip(concrete_slots.iter())
+                .all(|(expected, actual)| {
+                    self.types_compatible_with_rigid(expected, actual, rigid_tyvars)
+                })
+            || !self.bind_tyvar(
+                match witness {
+                    Ty::Var(var) => *var,
+                    _ => unreachable!("fresh constructor witness must be a type variable"),
+                },
+                &actual,
+            )
+        {
+            return Err(TypeError {
+                message: format!(
+                    "expected {}, got {}",
+                    self.ty_name(expected_ret),
+                    self.ty_name(&actual)
+                ),
+                span: self.return_mismatch_span(typed_body),
+                hint: None,
+            });
+        }
+        Ok(Some(actual))
     }
 
     pub(super) fn check_body_in_isolated_scope(
@@ -1023,74 +1166,15 @@ impl Checker {
             body,
         )?;
 
-        if let Some(trait_key) = ret_ty
-            .as_ref()
-            .and_then(|ast_ty| self.constructor_trait_key_for_ast_ty(ast_ty))
-        {
-            let actual = self.resolve_ty(&typed_body.ty);
-            let concrete_slots = Self::constructor_application_slots(&actual);
-            let expected_parts = match &expected_ret {
-                Ty::SelfApp(items) => Self::constructor_application_parts(items),
-                _ => None,
-            };
-            let Some((witness, expected_slots)) = expected_parts else {
-                unreachable!("constructor result annotation must lower to a contextual application")
-            };
-            if matches!(actual, Ty::Var(_) | Ty::SelfApp(_)) || concrete_slots.is_none() {
-                return Err(TypeError {
-                    message: format!(
-                        "UnresolvedConstructorResult: {} must resolve to one concrete constructor",
-                        Self::surface_ast_ty(ret_ty.as_ref().expect("checked above"))
-                    ),
-                    span: self.return_mismatch_span(&typed_body),
-                    hint: Some(
-                        "Return a concrete constructor value from every branch of this function."
-                            .into(),
-                    ),
-                });
+        if let Some(return_ast) = ret_ty.as_ref() {
+            if let Some(concrete) = self.resolve_contextual_return_body(
+                return_ast,
+                &expected_ret,
+                &typed_body,
+                &Self::signature_tyvar_ids(&tyvars),
+            )? {
+                expected_ret = concrete;
             }
-            if !self.trait_impl_exists(&trait_key, &actual) {
-                return Err(TypeError {
-                    message: format!(
-                        "{} does not implement constructor trait {}",
-                        self.ty_name(&actual),
-                        Self::surface_name(&trait_key)
-                    ),
-                    span: self.return_mismatch_span(&typed_body),
-                    hint: None,
-                });
-            }
-            let concrete_slots = concrete_slots.expect("validated above");
-            if expected_slots.len() != concrete_slots.len()
-                || !expected_slots
-                    .iter()
-                    .zip(concrete_slots.iter())
-                    .all(|(expected, actual)| {
-                        self.types_compatible_with_rigid(
-                            expected,
-                            actual,
-                            &Self::signature_tyvar_ids(&tyvars),
-                        )
-                    })
-                || !self.bind_tyvar(
-                    match witness {
-                        Ty::Var(var) => *var,
-                        _ => unreachable!("fresh constructor witness must be a type variable"),
-                    },
-                    &actual,
-                )
-            {
-                return Err(TypeError {
-                    message: format!(
-                        "expected {}, got {}",
-                        self.ty_name(&expected_ret),
-                        self.ty_name(&actual)
-                    ),
-                    span: self.return_mismatch_span(&typed_body),
-                    hint: None,
-                });
-            }
-            expected_ret = actual;
         }
 
         let actual_ret = self.resolve_ty(&typed_body.ty);
@@ -1418,7 +1502,7 @@ impl Checker {
                         span: method.span.clone(),
                         hint: None,
                     })?;
-            let (param_tys, expected_ret, type_params, _) = self
+            let (param_tys, mut expected_ret, type_params, _) = self
                 .resolve_trait_impl_method_signature(
                     &trait_info,
                     trait_args,
@@ -1448,6 +1532,7 @@ impl Checker {
                 &expected_ret,
                 &mut method_tyvars,
             );
+            self.seed_missing_method_type_params(&method.type_params, &mut method_tyvars);
             let method_capabilities = self
                 .resolved_capability_uses(resolved_method.where_clause.as_ref(), &method_tyvars)?;
             let mut method_block_capabilities =
@@ -1491,6 +1576,17 @@ impl Checker {
                 }
             }
 
+            let rigid_tyvars = type_params.iter().copied().collect::<HashSet<_>>();
+            let return_ast = method.ret_ty.as_ref().unwrap_or(&trait_method.ret_ty);
+            if let Some(concrete) = self.resolve_contextual_return_body(
+                return_ast,
+                &expected_ret,
+                &typed_body,
+                &rigid_tyvars,
+            )? {
+                expected_ret = concrete;
+            }
+
             let actual_ret = self.resolve_ty(&typed_body.ty);
             if let Some(err) = self.bare_return_typevar_result_mismatch(
                 &expected_ret,
@@ -1499,7 +1595,6 @@ impl Checker {
             ) {
                 return Err(err);
             }
-            let rigid_tyvars = type_params.iter().copied().collect::<HashSet<_>>();
             if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars) {
                 if let Some(err) = self.facet_replace_result_context_error(
                     &typed_body,
