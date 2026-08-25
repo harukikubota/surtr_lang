@@ -12,9 +12,11 @@ use super::Parser;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TypePosition {
     General,
+    /// The root position of a trait or impl method signature. Nested types
+    /// inherit this position so `Self<$...>` remains available as a
+    /// substitution marker throughout that signature.
     DirectSignatureParameter,
     DirectSignatureReturn,
-    Nested,
 }
 
 #[derive(Debug, Clone)]
@@ -48,11 +50,11 @@ impl TypeParseContext {
     fn nested(&self) -> Self {
         Self {
             impl_target: self.impl_target.clone(),
-            position: TypePosition::Nested,
+            position: self.position,
         }
     }
 
-    fn permits_direct_self_application(&self) -> bool {
+    fn permits_signature_self_application(&self) -> bool {
         matches!(
             self.position,
             TypePosition::DirectSignatureParameter | TypePosition::DirectSignatureReturn
@@ -234,9 +236,9 @@ impl Parser<'_> {
                 ));
             }
             if matches!(self.peek(), Token::Lt) {
-                if !context.permits_direct_self_application() {
+                if !context.permits_signature_self_application() {
                     return Err(ParseError::syntax(
-                        "`Self<...>` is only allowed as a direct impl or trait-method signature type",
+                        "`Self<...>` is only allowed inside an impl or trait-method signature",
                         sp,
                     ));
                 }

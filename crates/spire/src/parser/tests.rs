@@ -1701,23 +1701,27 @@ fn test_constructor_application_parser_preserves_type_identity_boundaries() {
 }
 
 #[test]
-fn test_self_application_is_limited_to_direct_impl_or_trait_method_signatures() {
+fn test_self_application_is_allowed_recursively_in_trait_and_impl_signatures() {
     let allowed = [
         "deftrait Functor { def fmap(value: Self<$A>) -> Self<$B> }",
         "impl Box { def map(self: Self<$A>) -> Self<$B> { self } }",
+        r#"deftrait Monad {
+  def bind(self: Self<$A>, mapper: ($A -> Self<$B>)) -> Self<$B>
+}"#,
+        "impl Box { def map(mapper: ($A -> Self<$B>)) -> List<Self<$B>> { self } }",
     ];
     for source in allowed {
-        parse(source).expect("direct Self application should parse");
+        parse(source).expect("Self substitution should parse throughout trait or impl signatures");
     }
 
     let forbidden = [
         "impl Box { def map(self: Self) -> Self { value: Self<$A> = self; value } }",
-        "deftrait Functor { def map(value: List<Self<$A>>) -> Self<$B> }",
         "impl Box { def map(self: Self) -> Self { callback = {|value: Self<$A>| value}; self } }",
+        "defstruct Holder { value: Self<$A> }",
     ];
     for source in forbidden {
-        let err = parse(source).expect_err("nested or local Self application must be rejected");
-        assert!(err.message().contains("Self<...>"), "{err}");
+        let err = parse(source).expect_err("Self application outside a signature must be rejected");
+        assert!(err.message().contains("Self"), "{err}");
     }
 }
 
