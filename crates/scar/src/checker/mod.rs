@@ -451,6 +451,8 @@ struct TraitImplMethodInfo {
     display_name_override: Option<String>,
     dispatch_override: Option<TraitDispatchTarget>,
     is_builtin: bool,
+    #[serde(default)]
+    body_obligations: Vec<TraitObligation>,
 }
 
 #[allow(dead_code)]
@@ -482,7 +484,7 @@ struct PendingTraitObligation {
 
 #[derive(Debug, Clone)]
 struct CapabilityUse {
-    subject_var: u32,
+    subject_ty: Ty,
     subject_name: String,
     trait_id: String,
     span: Span,
@@ -1127,6 +1129,7 @@ struct PersistentCheckerState {
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    constructor_witness_traits: HashMap<u32, String>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
 }
 
@@ -1148,6 +1151,7 @@ impl PersistentCheckerState {
             trait_impl_index_by_base_trait: HashMap::new(),
             trait_methods_by_qualified_name: HashMap::new(),
             tyvar_bounds: HashMap::new(),
+            constructor_witness_traits: HashMap::new(),
             signature_aliases: HashMap::new(),
         }
     }
@@ -1169,6 +1173,7 @@ impl PersistentCheckerState {
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
+            constructor_witness_traits: self.constructor_witness_traits.clone(),
             signature_aliases: self.signature_aliases.clone(),
             process_specs,
         }
@@ -1193,6 +1198,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             trait_impl_index_by_base_trait: checkpoint.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: checkpoint.trait_methods_by_qualified_name,
             tyvar_bounds: checkpoint.tyvar_bounds,
+            constructor_witness_traits: checkpoint.constructor_witness_traits,
             signature_aliases: checkpoint.signature_aliases,
         }
     }
@@ -1218,6 +1224,8 @@ pub struct ScarCheckpoint {
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
+    #[serde(default)]
+    constructor_witness_traits: HashMap<u32, String>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     process_specs: Vec<TypedProcessSpec>,
 }
@@ -2176,6 +2184,8 @@ struct Checker {
     /// These are intentionally binding-local: constructor roots may share a
     /// witness while different bindings expose different trait capabilities.
     constructor_capabilities: HashMap<u32, String>,
+    /// Constructor-trait identity for each signature-position witness.
+    constructor_witness_traits: HashMap<u32, String>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
@@ -2265,6 +2275,7 @@ impl Checker {
             pending_trait_obligations: HashMap::new(),
             active_capabilities: Vec::new(),
             constructor_capabilities: HashMap::new(),
+            constructor_witness_traits: state.constructor_witness_traits,
             signature_aliases: state.signature_aliases,
             alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
@@ -2314,6 +2325,7 @@ impl Checker {
         checker.active_capabilities = self.active_capabilities.clone();
         checker.trait_obligation_cycle = self.trait_obligation_cycle.clone();
         checker.constructor_capabilities = self.constructor_capabilities.clone();
+        checker.constructor_witness_traits = self.constructor_witness_traits.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();
@@ -3395,6 +3407,7 @@ impl Checker {
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait.clone(),
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
+            constructor_witness_traits: self.constructor_witness_traits.clone(),
             signature_aliases: self.signature_aliases.clone(),
         }
     }
@@ -3416,6 +3429,7 @@ impl Checker {
             trait_impl_index_by_base_trait: self.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name,
             tyvar_bounds: self.tyvar_bounds,
+            constructor_witness_traits: self.constructor_witness_traits,
             signature_aliases: self.signature_aliases,
         }
     }
@@ -3528,11 +3542,90 @@ impl Checker {
         }
     }
 
+    fn substitute_constructor_validation_alias_ty(
+        ast_ty: &AstTy,
+        bindings: &HashMap<String, AstTy>,
+    ) -> AstTy {
+        match ast_ty {
+            AstTy::Named(_, name) if bindings.contains_key(name) => {
+                bindings.get(name).cloned().expect("checked above")
+            }
+            AstTy::Generic(span, name, args) => AstTy::Generic(
+                span.clone(),
+                name.clone(),
+                args.iter()
+                    .map(|arg| Self::substitute_constructor_validation_alias_ty(arg, bindings))
+                    .collect(),
+            ),
+            AstTy::Tuple(span, items) => AstTy::Tuple(
+                span.clone(),
+                items
+                    .iter()
+                    .map(|item| Self::substitute_constructor_validation_alias_ty(item, bindings))
+                    .collect(),
+            ),
+            AstTy::Func(span, params, ret) => AstTy::Func(
+                span.clone(),
+                params
+                    .iter()
+                    .map(|param| Self::substitute_constructor_validation_alias_ty(param, bindings))
+                    .collect(),
+                Box::new(Self::substitute_constructor_validation_alias_ty(
+                    ret, bindings,
+                )),
+            ),
+            other => other.clone(),
+        }
+    }
+
     fn validate_constructor_ast_ty(
+        &self,
         ast_ty: &AstTy,
         direct: bool,
         constructor_traits: &HashSet<String>,
     ) -> Result<(), TypeError> {
+        self.validate_constructor_ast_ty_inner(
+            ast_ty,
+            direct,
+            constructor_traits,
+            &mut HashSet::new(),
+        )
+    }
+
+    fn validate_constructor_ast_ty_inner(
+        &self,
+        ast_ty: &AstTy,
+        direct: bool,
+        constructor_traits: &HashSet<String>,
+        expanding_aliases: &mut HashSet<String>,
+    ) -> Result<(), TypeError> {
+        let alias_head = match ast_ty {
+            AstTy::Named(_, name) => Some((name, Vec::new())),
+            AstTy::Generic(_, name, args) => Some((name, args.clone())),
+            _ => None,
+        };
+        if let Some((name, args)) = alias_head {
+            if let Some(alias) = self.signature_aliases.get(name) {
+                if expanding_aliases.insert(name.clone()) {
+                    let bindings = alias
+                        .params
+                        .iter()
+                        .zip(args)
+                        .map(|(param, arg)| (param.name.clone(), arg))
+                        .collect::<HashMap<_, _>>();
+                    let expanded =
+                        Self::substitute_constructor_validation_alias_ty(&alias.rhs, &bindings);
+                    let result = self.validate_constructor_ast_ty_inner(
+                        &expanded,
+                        direct,
+                        constructor_traits,
+                        expanding_aliases,
+                    );
+                    expanding_aliases.remove(name);
+                    return result;
+                }
+            }
+        }
         let root = match ast_ty {
             AstTy::Named(_, name) | AstTy::Generic(_, name, _) => Some(name.as_str()),
             _ => None,
@@ -3547,19 +3640,39 @@ impl Checker {
         match ast_ty {
             AstTy::Generic(_, _, args) => {
                 for arg in args {
-                    Self::validate_constructor_ast_ty(arg, false, constructor_traits)?;
+                    self.validate_constructor_ast_ty_inner(
+                        arg,
+                        false,
+                        constructor_traits,
+                        expanding_aliases,
+                    )?;
                 }
             }
             AstTy::Tuple(_, items) => {
                 for item in items {
-                    Self::validate_constructor_ast_ty(item, false, constructor_traits)?;
+                    self.validate_constructor_ast_ty_inner(
+                        item,
+                        false,
+                        constructor_traits,
+                        expanding_aliases,
+                    )?;
                 }
             }
             AstTy::Func(_, params, ret) => {
                 for param in params {
-                    Self::validate_constructor_ast_ty(param, false, constructor_traits)?;
+                    self.validate_constructor_ast_ty_inner(
+                        param,
+                        false,
+                        constructor_traits,
+                        expanding_aliases,
+                    )?;
                 }
-                Self::validate_constructor_ast_ty(ret, false, constructor_traits)?;
+                self.validate_constructor_ast_ty_inner(
+                    ret,
+                    false,
+                    constructor_traits,
+                    expanding_aliases,
+                )?;
             }
             AstTy::Named(..) | AstTy::ImplTrait(..) => {}
         }
@@ -3567,27 +3680,28 @@ impl Checker {
     }
 
     fn validate_constructor_pattern(
+        &self,
         pattern: &ResolvedPattern,
         constructor_traits: &HashSet<String>,
     ) -> Result<(), TypeError> {
         match pattern {
             ResolvedPattern::Annotated(_, ty) | ResolvedPattern::As(_, _, Some(ty)) => {
-                Self::validate_constructor_ast_ty(ty, false, constructor_traits)?;
+                self.validate_constructor_ast_ty(ty, false, constructor_traits)?;
             }
             ResolvedPattern::ListCons(head, tail) => {
-                Self::validate_constructor_pattern(head, constructor_traits)?;
-                Self::validate_constructor_pattern(tail, constructor_traits)?;
+                self.validate_constructor_pattern(head, constructor_traits)?;
+                self.validate_constructor_pattern(tail, constructor_traits)?;
             }
             ResolvedPattern::Constructor(_, items)
             | ResolvedPattern::Extractor(_, items)
             | ResolvedPattern::Tuple(items)
             | ResolvedPattern::Or(items) => {
                 for item in items {
-                    Self::validate_constructor_pattern(item, constructor_traits)?;
+                    self.validate_constructor_pattern(item, constructor_traits)?;
                 }
             }
             ResolvedPattern::As(inner, _, None) => {
-                Self::validate_constructor_pattern(inner, constructor_traits)?;
+                self.validate_constructor_pattern(inner, constructor_traits)?;
             }
             ResolvedPattern::Var(_)
             | ResolvedPattern::Pin(_)
@@ -3602,29 +3716,30 @@ impl Checker {
     }
 
     fn validate_constructor_body_positions(
+        &self,
         node: &Resolved,
         constructor_traits: &HashSet<String>,
     ) -> Result<(), TypeError> {
         match node {
             Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs) => {
-                Self::validate_constructor_pattern(pattern, constructor_traits)?;
-                Self::validate_constructor_body_positions(rhs, constructor_traits)?;
+                self.validate_constructor_pattern(pattern, constructor_traits)?;
+                self.validate_constructor_body_positions(rhs, constructor_traits)?;
             }
             Resolved::Closure(_, params, _, body) => {
                 for param in params {
                     if let Some(ty) = &param.ty {
-                        Self::validate_constructor_ast_ty(ty, false, constructor_traits)?;
+                        self.validate_constructor_ast_ty(ty, false, constructor_traits)?;
                     }
                 }
-                Self::validate_constructor_body_positions(body, constructor_traits)?;
+                self.validate_constructor_body_positions(body, constructor_traits)?;
             }
             Resolved::App(_, function, args) => {
-                Self::validate_constructor_body_positions(function, constructor_traits)?;
+                self.validate_constructor_body_positions(function, constructor_traits)?;
                 for arg in args {
                     match arg {
                         ResolvedRecordLitArg::Positional(expr)
                         | ResolvedRecordLitArg::Named(_, expr) => {
-                            Self::validate_constructor_body_positions(expr, constructor_traits)?;
+                            self.validate_constructor_body_positions(expr, constructor_traits)?;
                         }
                     }
                 }
@@ -3634,7 +3749,7 @@ impl Checker {
             | Resolved::TupleLiteral(_, nodes)
             | Resolved::Dbg(_, nodes) => {
                 for node in nodes {
-                    Self::validate_constructor_body_positions(node, constructor_traits)?;
+                    self.validate_constructor_body_positions(node, constructor_traits)?;
                 }
             }
             Resolved::BinOp(_, _, left, right)
@@ -3650,54 +3765,54 @@ impl Checker {
             | Resolved::Assert(_, left, right)
             | Resolved::MapErr(_, left, right)
             | Resolved::Cause(_, left, right) => {
-                Self::validate_constructor_body_positions(left, constructor_traits)?;
-                Self::validate_constructor_body_positions(right, constructor_traits)?;
+                self.validate_constructor_body_positions(left, constructor_traits)?;
+                self.validate_constructor_body_positions(right, constructor_traits)?;
             }
             Resolved::If(_, cond, then_branch, else_branch) => {
-                Self::validate_constructor_body_positions(cond, constructor_traits)?;
-                Self::validate_constructor_body_positions(then_branch, constructor_traits)?;
+                self.validate_constructor_body_positions(cond, constructor_traits)?;
+                self.validate_constructor_body_positions(then_branch, constructor_traits)?;
                 if let Some(branch) = else_branch {
-                    Self::validate_constructor_body_positions(branch, constructor_traits)?;
+                    self.validate_constructor_body_positions(branch, constructor_traits)?;
                 }
             }
             Resolved::Ensure(_, a, b, c) | Resolved::RecoverKind(_, a, b, c) => {
-                Self::validate_constructor_body_positions(a, constructor_traits)?;
-                Self::validate_constructor_body_positions(b, constructor_traits)?;
-                Self::validate_constructor_body_positions(c, constructor_traits)?;
+                self.validate_constructor_body_positions(a, constructor_traits)?;
+                self.validate_constructor_body_positions(b, constructor_traits)?;
+                self.validate_constructor_body_positions(c, constructor_traits)?;
             }
             Resolved::Match(_, scrutinee, arms) => {
-                Self::validate_constructor_body_positions(scrutinee, constructor_traits)?;
+                self.validate_constructor_body_positions(scrutinee, constructor_traits)?;
                 for arm in arms {
-                    Self::validate_constructor_pattern(&arm.pattern, constructor_traits)?;
+                    self.validate_constructor_pattern(&arm.pattern, constructor_traits)?;
                     if let Some(guard) = &arm.guard {
-                        Self::validate_constructor_body_positions(guard, constructor_traits)?;
+                        self.validate_constructor_body_positions(guard, constructor_traits)?;
                     }
-                    Self::validate_constructor_body_positions(&arm.body, constructor_traits)?;
+                    self.validate_constructor_body_positions(&arm.body, constructor_traits)?;
                 }
             }
             Resolved::Grouped(_, inner)
             | Resolved::FieldAccess(_, inner, _)
             | Resolved::FacetCapture(_, inner)
             | Resolved::Semi(_, inner) => {
-                Self::validate_constructor_body_positions(inner, constructor_traits)?;
+                self.validate_constructor_body_positions(inner, constructor_traits)?;
             }
             Resolved::Capture(_, function, args) => {
-                Self::validate_constructor_body_positions(function, constructor_traits)?;
+                self.validate_constructor_body_positions(function, constructor_traits)?;
                 for arg in args {
-                    Self::validate_constructor_body_positions(arg, constructor_traits)?;
+                    self.validate_constructor_body_positions(arg, constructor_traits)?;
                 }
             }
             Resolved::InterpolatedStr(_, parts) => {
                 for part in parts {
                     if let ResolvedInterpolatedPart::Expr(expr) = part {
-                        Self::validate_constructor_body_positions(expr, constructor_traits)?;
+                        self.validate_constructor_body_positions(expr, constructor_traits)?;
                     }
                 }
             }
             Resolved::HashMapLiteral(_, entries) => {
                 for entry in entries {
-                    Self::validate_constructor_body_positions(&entry.key, constructor_traits)?;
-                    Self::validate_constructor_body_positions(&entry.value, constructor_traits)?;
+                    self.validate_constructor_body_positions(&entry.key, constructor_traits)?;
+                    self.validate_constructor_body_positions(&entry.value, constructor_traits)?;
                 }
             }
             Resolved::StructLit(_, _, fields) => {
@@ -3705,7 +3820,7 @@ impl Checker {
                     match field {
                         ResolvedStructLitField::Explicit(_, expr)
                         | ResolvedStructLitField::Shorthand(_, expr) => {
-                            Self::validate_constructor_body_positions(expr, constructor_traits)?;
+                            self.validate_constructor_body_positions(expr, constructor_traits)?;
                         }
                     }
                 }
@@ -3715,7 +3830,7 @@ impl Checker {
                     match arg {
                         ResolvedRecordLitArg::Positional(expr)
                         | ResolvedRecordLitArg::Named(_, expr) => {
-                            Self::validate_constructor_body_positions(expr, constructor_traits)?;
+                            self.validate_constructor_body_positions(expr, constructor_traits)?;
                         }
                     }
                 }
@@ -3750,70 +3865,82 @@ impl Checker {
         stmts: &[Resolved],
     ) -> Result<(), TypeError> {
         let constructor_traits = self.contextual_constructor_trait_names(stmts);
+        let type_owners = stmts
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Resolved::StructDef(_, id, ..)
+                | Resolved::RecordDef(_, id, ..)
+                | Resolved::DeferrorDef(_, id, ..)
+                | Resolved::EnumDef(_, id, ..)
+                | Resolved::BuiltinTypeDecl(_, id, ..) => {
+                    Some(id.qualified_name.as_ref().unwrap_or(&id.name).clone())
+                }
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
         for stmt in stmts {
             match stmt {
-                Resolved::Def(_, _, _, params, ret, _, body, _) => {
+                Resolved::Def(_, id, _, params, ret, _, body, _) => {
+                    let owner = id
+                        .qualified_name
+                        .as_deref()
+                        .unwrap_or(&id.name)
+                        .rsplit_once("::")
+                        .map(|(owner, _)| owner);
+                    let direct = owner.is_none_or(|owner| !type_owners.contains(owner));
                     for param in params {
-                        Self::validate_constructor_ast_ty(&param.ty, true, &constructor_traits)?;
+                        self.validate_constructor_ast_ty(&param.ty, direct, &constructor_traits)?;
                     }
                     if let Some(ret) = ret {
-                        Self::validate_constructor_ast_ty(ret, true, &constructor_traits)?;
+                        self.validate_constructor_ast_ty(ret, direct, &constructor_traits)?;
                     }
-                    Self::validate_constructor_body_positions(body, &constructor_traits)?;
+                    self.validate_constructor_body_positions(body, &constructor_traits)?;
                 }
                 Resolved::BuiltinDecl(_, _, params, ret, _, _) => {
                     for param in params {
-                        Self::validate_constructor_ast_ty(&param.ty, true, &constructor_traits)?;
+                        self.validate_constructor_ast_ty(&param.ty, true, &constructor_traits)?;
                     }
                     if let Some(ret) = ret {
-                        Self::validate_constructor_ast_ty(ret, true, &constructor_traits)?;
+                        self.validate_constructor_ast_ty(ret, true, &constructor_traits)?;
                     }
                 }
                 Resolved::ExtractorDef(_, _, _, param, ret, body, _) => {
                     if let Some(param) = &param.ty {
-                        Self::validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                        self.validate_constructor_ast_ty(param, false, &constructor_traits)?;
                     }
-                    Self::validate_constructor_ast_ty(ret, false, &constructor_traits)?;
-                    Self::validate_constructor_body_positions(body, &constructor_traits)?;
+                    self.validate_constructor_ast_ty(ret, false, &constructor_traits)?;
+                    self.validate_constructor_body_positions(body, &constructor_traits)?;
                 }
                 Resolved::BuiltinExtractorDecl(_, _, param, ret, _) => {
                     if let Some(param) = &param.ty {
-                        Self::validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                        self.validate_constructor_ast_ty(param, false, &constructor_traits)?;
                     }
-                    Self::validate_constructor_ast_ty(ret, false, &constructor_traits)?;
+                    self.validate_constructor_ast_ty(ret, false, &constructor_traits)?;
                 }
                 Resolved::TraitDef(_, _, _, _, methods, _) => {
                     for method in methods {
                         for param in &method.params {
-                            Self::validate_constructor_ast_ty(
-                                &param.ty,
-                                true,
-                                &constructor_traits,
-                            )?;
+                            self.validate_constructor_ast_ty(&param.ty, true, &constructor_traits)?;
                         }
-                        Self::validate_constructor_ast_ty(
+                        self.validate_constructor_ast_ty(
                             &method.ret_ty,
                             true,
                             &constructor_traits,
                         )?;
                         if let Some(body) = &method.body {
-                            Self::validate_constructor_body_positions(body, &constructor_traits)?;
+                            self.validate_constructor_body_positions(body, &constructor_traits)?;
                         }
                     }
                 }
                 Resolved::TraitImplDef(_, _, _, _, _, methods) => {
                     for method in methods {
                         for param in &method.params {
-                            Self::validate_constructor_ast_ty(
-                                &param.ty,
-                                true,
-                                &constructor_traits,
-                            )?;
+                            self.validate_constructor_ast_ty(&param.ty, true, &constructor_traits)?;
                         }
                         if let Some(ret) = &method.ret_ty {
-                            Self::validate_constructor_ast_ty(ret, true, &constructor_traits)?;
+                            self.validate_constructor_ast_ty(ret, true, &constructor_traits)?;
                         }
-                        Self::validate_constructor_body_positions(
+                        self.validate_constructor_body_positions(
                             &method.body,
                             &constructor_traits,
                         )?;
@@ -3823,15 +3950,18 @@ impl Checker {
                 | Resolved::RecordDef(_, _, fields, _)
                 | Resolved::DeferrorDef(_, _, fields, _) => {
                     for field in fields {
-                        Self::validate_constructor_ast_ty(&field.ty, false, &constructor_traits)?;
+                        self.validate_constructor_ast_ty(&field.ty, false, &constructor_traits)?;
                     }
                 }
                 Resolved::EnumDef(_, _, _, variants, _) => {
                     for variant in variants {
                         for payload in &variant.payload {
-                            Self::validate_constructor_ast_ty(payload, false, &constructor_traits)?;
+                            self.validate_constructor_ast_ty(payload, false, &constructor_traits)?;
                         }
                     }
+                }
+                Resolved::TypeAlias(_, _, _, rhs, _) => {
+                    self.validate_constructor_ast_ty(rhs, false, &constructor_traits)?;
                 }
                 _ => {}
             }
@@ -3859,6 +3989,7 @@ impl Checker {
 
         let result = (|| -> Result<Vec<TypedNode>, TypeError> {
             self.validate_declaration_where_well_formedness(&stmts)?;
+            self.predeclare_signature_aliases(&stmts)?;
             self.validate_constructor_application_positions(&stmts)?;
             self.collect_unused_type_parameter_warnings(&stmts)?;
 
@@ -3867,8 +3998,6 @@ impl Checker {
             if let Some(start) = t {
                 predeclare_error_types_dur = start.elapsed();
             }
-
-            self.predeclare_signature_aliases(&stmts)?;
 
             let t = profile_enabled.then(Instant::now);
             self.predeclare_type_signatures(&stmts)?;

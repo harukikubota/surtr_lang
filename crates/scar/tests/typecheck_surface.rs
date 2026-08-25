@@ -3820,14 +3820,14 @@ impl Parent for List<$A>
 where
   Self: Marker
 {
-  def parent(self: List<$A>) -> String { "parent" }
+  def parent(self: List<$A>) -> String { Marker::mark(self) }
 }
 
 impl Child for List<$A>
 where
   Self: Marker
 {
-  def child(self: List<$A>) -> String { "child" }
+  def child(self: List<$A>) -> String { Marker::mark(self) }
 }"#,
     );
 
@@ -3942,7 +3942,7 @@ where
   where
     Self: Marker
   {
-    self
+    Marker::mark(self)
   }
 }"#,
     )

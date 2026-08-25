@@ -1638,6 +1638,38 @@ where
 }
 
 #[test]
+fn test_trait_slot_mapping_is_limited_to_trait_impl_where_blocks() {
+    let cases = [
+        (
+            "ordinary function",
+            "def use_it(value: $A) -> $A where $A: Functor.$A { value }",
+        ),
+        (
+            "trait definition",
+            "deftrait Bad where Self: Functor.$A { def use_it(self: Self) -> Self }",
+        ),
+        (
+            "trait method",
+            "deftrait Bad { def use_it(value: $A) -> $A where $A: Functor.$A }",
+        ),
+        (
+            "inherent implementation method",
+            "impl Box { def use_it(self: Self) -> Self where Self: Functor.$A { self } }",
+        ),
+    ];
+
+    for (context, source) in cases {
+        let err = parse(source).expect_err(&format!(
+            "constructor slot mappings must be rejected in {context}"
+        ));
+        assert!(
+            err.message().contains("trait implementation where clause"),
+            "{context}: {err}"
+        );
+    }
+}
+
+#[test]
 fn test_marker_names_cannot_be_value_owner_paths() {
     for source in [
         "Self::f()",
@@ -5676,7 +5708,7 @@ where
 namespace Auth {
   deftrait Comparable
   where
-    Self: Equal + Functor.$A
+    Self: Equal + Functor
   {
     def compare(self: Self, rhs: Self) -> Boolean
   }
@@ -5698,8 +5730,8 @@ namespace Auth {
         clause.constraints[0].bounds.as_slice(),
         [
             WhereConstraintRhs::Trait(_, trait_name),
-            WhereConstraintRhs::TraitSlot(_, owner, slot)
-        ] if trait_name == "Equal" && owner == "Functor" && slot == "$A"
+            WhereConstraintRhs::Trait(_, constructor_trait)
+        ] if trait_name == "Equal" && constructor_trait == "Functor"
     ));
 }
 

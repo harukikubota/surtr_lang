@@ -770,14 +770,12 @@ impl Checker {
                 }
                 _ => continue,
             };
-            let Ty::Var(subject_var) = self.resolve_ty(&subject) else {
-                continue;
-            };
+            let subject_ty = self.resolve_ty(&subject);
             let subject_name = Self::surface_ast_ty(&constraint.subject);
             for bound in &constraint.bounds {
                 if let ResolvedWhereConstraintRhs::Trait { trait_id } = bound {
                     uses.push(CapabilityUse {
-                        subject_var,
+                        subject_ty: subject_ty.clone(),
                         subject_name: subject_name.clone(),
                         trait_id: self.trait_key(trait_id),
                         span: trait_id.span.clone(),
@@ -805,14 +803,12 @@ impl Checker {
                 }
                 _ => continue,
             };
-            let Ty::Var(subject_var) = self.resolve_ty(&subject) else {
-                continue;
-            };
+            let subject_ty = self.resolve_ty(&subject);
             let subject_name = Self::surface_ast_ty(&constraint.subject);
             for bound in &constraint.bounds {
                 if let TypedWhereConstraintRhs::Trait { trait_id } = bound {
                     uses.push(CapabilityUse {
-                        subject_var,
+                        subject_ty: subject_ty.clone(),
                         subject_name: subject_name.clone(),
                         trait_id: self.trait_key(trait_id),
                         span: trait_id.span.clone(),
@@ -1001,7 +997,7 @@ impl Checker {
             return Ok(None);
         };
         let actual = self.resolve_ty(&typed_body.ty);
-        let concrete_slots = Self::constructor_application_slots(&actual);
+        let has_concrete_constructor_shape = Self::constructor_application_slots(&actual).is_some();
         let expected_parts = match expected_ret {
             Ty::SelfApp(items) => Self::constructor_application_parts(items),
             _ => None,
@@ -1009,7 +1005,7 @@ impl Checker {
         let Some((witness, expected_slots)) = expected_parts else {
             unreachable!("constructor result annotation must lower to a contextual application")
         };
-        if matches!(actual, Ty::Var(_) | Ty::SelfApp(_)) || concrete_slots.is_none() {
+        if matches!(actual, Ty::Var(_) | Ty::SelfApp(_)) || !has_concrete_constructor_shape {
             return Err(TypeError {
                 message: format!(
                     "UnresolvedConstructorResult: {} must resolve to one concrete constructor",
@@ -1033,7 +1029,9 @@ impl Checker {
                 hint: None,
             });
         }
-        let concrete_slots = concrete_slots.expect("validated above");
+        let concrete_slots = self
+            .constructor_application_slots_for_trait(&trait_key, &actual)
+            .expect("a validated constructor-trait impl must expose its declared slots");
         if expected_slots.len() != concrete_slots.len()
             || !expected_slots
                 .iter()
@@ -1649,11 +1647,12 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        let impl_tyvars = impl_info
+        let mut impl_tyvars = impl_info
             .type_param_vars_by_name
             .iter()
             .map(|(name, var)| (name.clone(), Ty::Var(*var)))
             .collect::<HashMap<_, _>>();
+        impl_tyvars.insert("Self".into(), target_ty.clone());
         let mut block_capabilities = self.resolved_capability_uses(where_clause, &impl_tyvars)?;
         let mut typed_nodes = vec![TypedNode {
             ty: Ty::Unit,
@@ -1762,6 +1761,17 @@ impl Checker {
                 false,
                 &method.body,
             )?;
+            let body_obligations = Self::full_trait_obligations(&typed_body);
+            for registered_impl in self.trait_impls.values_mut() {
+                if let Some(registered_method) =
+                    registered_impl.methods.get_mut(&method.method_name)
+                {
+                    if registered_method.function_id.unique_id == method.function_id.unique_id {
+                        registered_method.body_obligations = body_obligations.clone();
+                        break;
+                    }
+                }
+            }
             for checked in method_block_capabilities {
                 if checked.consumed {
                     if let Some(existing) = block_capabilities.iter_mut().find(|existing| {

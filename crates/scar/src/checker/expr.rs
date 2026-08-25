@@ -207,7 +207,9 @@ impl Checker {
         let Some((_, abstract_slots)) = Self::constructor_application_parts(items) else {
             return false;
         };
-        let Some(concrete_slots) = Self::constructor_application_slots(concrete_ty) else {
+        let Some(concrete_slots) =
+            self.constructor_application_slots_for_trait(trait_key, concrete_ty)
+        else {
             return false;
         };
         if abstract_slots.len() != concrete_slots.len() {
@@ -365,6 +367,123 @@ impl Checker {
             | TypedInner::StructDef(..)
             | TypedInner::RecordDef(..) => None,
         }
+    }
+
+    pub(super) fn full_trait_obligations(node: &TypedNode) -> Vec<TraitObligation> {
+        fn collect(node: &TypedNode, obligations: &mut Vec<TraitObligation>) {
+            match &node.node {
+                TypedInner::TraitCall {
+                    obligation, args, ..
+                } => {
+                    obligations.push(obligation.clone());
+                    for arg in args {
+                        collect(arg, obligations);
+                    }
+                }
+                TypedInner::App(func, args)
+                | TypedInner::InjectCall(func, args)
+                | TypedInner::Capture(func, args) => {
+                    collect(func, obligations);
+                    for arg in args {
+                        collect(arg, obligations);
+                    }
+                }
+                TypedInner::Block(items)
+                | TypedInner::ListLiteral(items)
+                | TypedInner::TupleLiteral(items)
+                | TypedInner::ConstructorCall(_, items)
+                | TypedInner::StructLit(_, items) => {
+                    for item in items {
+                        collect(item, obligations);
+                    }
+                }
+                TypedInner::HashMapLiteral(entries) => {
+                    for (key, value) in entries {
+                        collect(key, obligations);
+                        collect(value, obligations);
+                    }
+                }
+                TypedInner::Bind(_, rhs)
+                | TypedInner::SafeBind(_, rhs)
+                | TypedInner::Semi(rhs)
+                | TypedInner::FieldAccess(rhs, _)
+                | TypedInner::EagerBoundary(rhs) => collect(rhs, obligations),
+                TypedInner::BinOp(_, left, right)
+                | TypedInner::Pipe(left, right)
+                | TypedInner::Compose(_, left, right)
+                | TypedInner::ListCons(left, right)
+                | TypedInner::Assert(left, right)
+                | TypedInner::MapErr(left, right)
+                | TypedInner::Cause(left, right) => {
+                    collect(left, obligations);
+                    collect(right, obligations);
+                }
+                TypedInner::If(cond, then_branch, else_branch) => {
+                    collect(cond, obligations);
+                    collect(then_branch, obligations);
+                    if let Some(branch) = else_branch {
+                        collect(branch, obligations);
+                    }
+                }
+                TypedInner::Ensure(value, pred, err) => {
+                    collect(value, obligations);
+                    collect(pred, obligations);
+                    collect(err, obligations);
+                }
+                TypedInner::RecoverKind(value, marker, handler) => {
+                    collect(value, obligations);
+                    collect(marker, obligations);
+                    collect(handler, obligations);
+                }
+                TypedInner::Match(scrutinee, arms) => {
+                    collect(scrutinee, obligations);
+                    for arm in arms {
+                        if let Some(guard) = &arm.guard {
+                            collect(guard, obligations);
+                        }
+                        collect(&arm.body, obligations);
+                    }
+                }
+                TypedInner::InterpolatedStr(parts) => {
+                    for part in parts {
+                        if let TypedInterpolatedPart::Expr(expr) = part {
+                            collect(expr, obligations);
+                        }
+                    }
+                }
+                TypedInner::Dbg(args) => {
+                    for arg in args {
+                        collect(&arg.expr, obligations);
+                    }
+                }
+                TypedInner::DeferrorDef(_, _, _, _, body)
+                | TypedInner::Def(_, _, _, _, _, _, body, _)
+                | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
+                | TypedInner::Closure(_, _, body) => collect(body, obligations),
+                TypedInner::SupervisorSpawn { init, .. } => collect(init, obligations),
+                TypedInner::SupervisorAdopt { pid, .. } => collect(pid, obligations),
+                TypedInner::SupervisorWorkers { init, strategy, .. } => {
+                    collect(init, obligations);
+                    collect(strategy, obligations);
+                }
+                TypedInner::FacetView { source, .. } => collect(source, obligations),
+                TypedInner::FacetSet { source, value, .. } => {
+                    collect(source, obligations);
+                    collect(value, obligations);
+                }
+                TypedInner::FacetOver {
+                    source, update_fun, ..
+                } => {
+                    collect(source, obligations);
+                    collect(update_fun, obligations);
+                }
+                _ => {}
+            }
+        }
+
+        let mut obligations = Vec::new();
+        collect(node, &mut obligations);
+        obligations
     }
 
     fn concretize_pending_trait_calls(&mut self, node: TypedNode) -> Result<TypedNode, TypeError> {
@@ -2883,6 +3002,7 @@ impl Checker {
     ) -> Option<TraitDispatch> {
         let profile = self.profiler.start();
         let receiver_ty = self.resolve_ty(receiver_ty);
+        let forwarded_capability = self.consume_matching_capability(&receiver_ty, trait_name);
         let result = match receiver_ty {
             Ty::Var(var) => {
                 if !self.rigid_tyvars.contains(&var)
@@ -2895,6 +3015,9 @@ impl Checker {
                 }
             }
             concrete => {
+                if !self.trait_impl_exists_for_args(trait_name, requested_trait_args, &concrete) {
+                    return forwarded_capability.then_some(TraitDispatch::Pending);
+                }
                 if let Some(target_name) = self.trait_target_name(&concrete) {
                     if let Some(impl_info) = self
                         .trait_impls
@@ -3088,20 +3211,7 @@ impl Checker {
         };
         for constraint in &where_clause.constraints {
             let mapped_rigid = match &constraint.subject {
-                AstTy::Named(_, subject) if subject == "Self" => {
-                    let concrete = self
-                        .resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, fresh));
-                    for bound in &constraint.bounds {
-                        let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
-                            continue;
-                        };
-                        let trait_key = self.trait_key(trait_id);
-                        if !self.trait_impl_exists_for_args(&trait_key, &[], &concrete) {
-                            return false;
-                        }
-                    }
-                    None
-                }
+                AstTy::Named(_, subject) if subject == "Self" => None,
                 AstTy::Named(_, subject) => {
                     let Some(original_var) = impl_info.type_param_vars_by_name.get(subject) else {
                         return false;
@@ -3365,6 +3475,11 @@ impl Checker {
                 None
             };
         }
+        let expected_ty = self.resolve_ty(expected_ty);
+        self.consume_matching_capability(&expected_ty, trait_name);
+        if !self.trait_impl_exists_for_args(trait_name, &[], &expected_ty) {
+            return None;
+        }
         for impl_key in self.trait_impl_candidate_keys(trait_name) {
             let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
                 continue;
@@ -3375,7 +3490,7 @@ impl Checker {
             let mut fresh = HashMap::new();
             let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
             let before = self.substitutions.clone();
-            if self.types_compatible(&target, expected_ty)
+            if self.types_compatible(&target, &expected_ty)
                 && self.impl_where_obligations_satisfied(&impl_info, &fresh)
             {
                 if let Some(dispatch) = self.constructor_trait_method_dispatch(method) {

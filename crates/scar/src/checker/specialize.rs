@@ -377,7 +377,7 @@ impl Checker {
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedInner::Bind(pattern, rhs) => TypedInner::Bind(
-                pattern,
+                self.concretize_specialized_typed_pattern(pattern, &span)?,
                 Box::new(self.rewrite_specializations_in_node(
                     *rhs,
                     defs_by_fun_idx,
@@ -388,7 +388,7 @@ impl Checker {
                 )?),
             ),
             TypedInner::SafeBind(pattern, rhs) => TypedInner::SafeBind(
-                pattern,
+                self.concretize_specialized_typed_pattern(pattern, &span)?,
                 Box::new(self.rewrite_specializations_in_node(
                     *rhs,
                     defs_by_fun_idx,
@@ -723,7 +723,8 @@ impl Checker {
                 arms.into_iter()
                     .map(|arm| {
                         Ok(TypedMatchArm {
-                            pattern: arm.pattern,
+                            pattern: self
+                                .concretize_specialized_match_pattern(arm.pattern, &span)?,
                             guard: arm
                                 .guard
                                 .map(|guard| {
@@ -1231,7 +1232,7 @@ impl Checker {
     }
 
     fn infer_specialization_mapping(
-        &self,
+        &mut self,
         def: &TypedNode,
         args: &[TypedNode],
         bound_tyvars: &[u32],
@@ -1260,7 +1261,7 @@ impl Checker {
     }
 
     fn match_specialization_ty(
-        &self,
+        &mut self,
         expected: &Ty,
         actual: &Ty,
         bound_tyvars: &[u32],
@@ -1275,7 +1276,11 @@ impl Checker {
             {
                 let (witness, expected_slots) =
                     Self::constructor_application_parts(items).expect("checked above");
-                if let Some(actual_slots) = Self::constructor_application_slots(actual) {
+                if let Some(actual_slots) = self.constructor_application_slots_for_witness(
+                    witness,
+                    expected_slots.len(),
+                    actual,
+                ) {
                     self.match_specialization_ty(witness, actual, bound_tyvars, mapping);
                     for (expected_slot, actual_slot) in
                         expected_slots.iter().zip(actual_slots.iter())
@@ -2518,6 +2523,186 @@ impl Checker {
         }
     }
 
+    fn concretize_specialized_typed_pattern(
+        &mut self,
+        pattern: TypedPattern,
+        span: &Span,
+    ) -> Result<TypedPattern, TypeError> {
+        Ok(match pattern {
+            TypedPattern::Pin(ty, id, dispatch) => {
+                let dispatch =
+                    if matches!(dispatch, TraitDispatch::Pending) && !matches!(ty, Ty::Var(_)) {
+                        self.eq_dispatch_for_pattern_pin(&ty, span)?
+                    } else {
+                        dispatch
+                    };
+                TypedPattern::Pin(ty, id, dispatch)
+            }
+            TypedPattern::As(ty, inner, id) => TypedPattern::As(
+                ty,
+                Box::new(self.concretize_specialized_typed_pattern(*inner, span)?),
+                id,
+            ),
+            TypedPattern::ListCons(ty, head, tail) => TypedPattern::ListCons(
+                ty,
+                Box::new(self.concretize_specialized_typed_pattern(*head, span)?),
+                Box::new(self.concretize_specialized_typed_pattern(*tail, span)?),
+            ),
+            TypedPattern::Tuple(ty, items) => TypedPattern::Tuple(
+                ty,
+                items
+                    .into_iter()
+                    .map(|item| self.concretize_specialized_typed_pattern(item, span))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            TypedPattern::ResultOk(ty, inner) => TypedPattern::ResultOk(
+                ty,
+                Box::new(self.concretize_specialized_typed_pattern(*inner, span)?),
+            ),
+            TypedPattern::Extractor {
+                input_ty,
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+            } => TypedPattern::Extractor {
+                input_ty,
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items: items
+                    .into_iter()
+                    .map(|item| self.concretize_specialized_typed_pattern(item, span))
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
+            other => other,
+        })
+    }
+
+    fn concretize_specialized_match_pattern(
+        &mut self,
+        pattern: TypedMatchPattern,
+        span: &Span,
+    ) -> Result<TypedMatchPattern, TypeError> {
+        Ok(match pattern {
+            TypedMatchPattern::Pin { id, ty, dispatch } => {
+                let dispatch = if matches!(dispatch, TraitDispatch::Pending) {
+                    if matches!(ty, Ty::Var(_)) {
+                        dispatch
+                    } else {
+                        self.eq_dispatch_for_pattern_pin(&ty, span)?
+                    }
+                } else {
+                    dispatch
+                };
+                TypedMatchPattern::Pin { id, ty, dispatch }
+            }
+            TypedMatchPattern::As(inner, id) => TypedMatchPattern::As(
+                Box::new(self.concretize_specialized_match_pattern(*inner, span)?),
+                id,
+            ),
+            TypedMatchPattern::Or(items) => TypedMatchPattern::Or(
+                items
+                    .into_iter()
+                    .map(|item| self.concretize_specialized_match_pattern(item, span))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| self.concretize_specialized_match_pattern(item, span))
+                    .collect::<Result<Vec<_>, _>>()?,
+            ),
+            TypedMatchPattern::Constructor {
+                tag,
+                fields,
+                field_offset,
+            } => TypedMatchPattern::Constructor {
+                tag,
+                fields: fields
+                    .into_iter()
+                    .map(|item| self.concretize_specialized_match_pattern(item, span))
+                    .collect::<Result<Vec<_>, _>>()?,
+                field_offset,
+            },
+            TypedMatchPattern::ListCons(head, tail) => TypedMatchPattern::ListCons(
+                Box::new(self.concretize_specialized_match_pattern(*head, span)?),
+                Box::new(self.concretize_specialized_match_pattern(*tail, span)?),
+            ),
+            TypedMatchPattern::Extractor {
+                input_ty,
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items,
+            } => TypedMatchPattern::Extractor {
+                input_ty,
+                extractor,
+                extractor_ty,
+                success_tag,
+                no_match_tag,
+                err_tag,
+                seq_tys,
+                items: items
+                    .into_iter()
+                    .map(|item| self.concretize_specialized_match_pattern(item, span))
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
+            other => other,
+        })
+    }
+
+    fn typed_match_pattern_has_pending_dispatch(pattern: &TypedMatchPattern) -> bool {
+        match pattern {
+            TypedMatchPattern::Pin { dispatch, .. } => {
+                matches!(dispatch, TraitDispatch::Pending)
+            }
+            TypedMatchPattern::As(inner, _) => {
+                Self::typed_match_pattern_has_pending_dispatch(inner)
+            }
+            TypedMatchPattern::Or(items) | TypedMatchPattern::Tuple(items) => items
+                .iter()
+                .any(Self::typed_match_pattern_has_pending_dispatch),
+            TypedMatchPattern::Constructor { fields, .. } => fields
+                .iter()
+                .any(Self::typed_match_pattern_has_pending_dispatch),
+            TypedMatchPattern::ListCons(head, tail) => {
+                Self::typed_match_pattern_has_pending_dispatch(head)
+                    || Self::typed_match_pattern_has_pending_dispatch(tail)
+            }
+            TypedMatchPattern::Extractor { items, .. } => items
+                .iter()
+                .any(Self::typed_match_pattern_has_pending_dispatch),
+            _ => false,
+        }
+    }
+
+    fn typed_pattern_has_pending_dispatch(pattern: &TypedPattern) -> bool {
+        match pattern {
+            TypedPattern::Pin(_, _, dispatch) => matches!(dispatch, TraitDispatch::Pending),
+            TypedPattern::As(_, inner, _) | TypedPattern::ResultOk(_, inner) => {
+                Self::typed_pattern_has_pending_dispatch(inner)
+            }
+            TypedPattern::ListCons(_, head, tail) => {
+                Self::typed_pattern_has_pending_dispatch(head)
+                    || Self::typed_pattern_has_pending_dispatch(tail)
+            }
+            TypedPattern::Tuple(_, items) | TypedPattern::Extractor { items, .. } => {
+                items.iter().any(Self::typed_pattern_has_pending_dispatch)
+            }
+            _ => false,
+        }
+    }
+
     fn typed_node_has_pending_trait_call(node: &TypedNode) -> bool {
         match &node.node {
             TypedInner::TraitCall {
@@ -2537,9 +2722,11 @@ impl Checker {
                     || args.iter().any(Self::typed_node_has_pending_trait_call)
             }
             TypedInner::Block(stmts) => stmts.iter().any(Self::typed_node_has_pending_trait_call),
-            TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) | TypedInner::Semi(rhs) => {
-                Self::typed_node_has_pending_trait_call(rhs)
+            TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs) => {
+                Self::typed_pattern_has_pending_dispatch(pattern)
+                    || Self::typed_node_has_pending_trait_call(rhs)
             }
+            TypedInner::Semi(rhs) => Self::typed_node_has_pending_trait_call(rhs),
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right) => {
@@ -2593,9 +2780,11 @@ impl Checker {
             TypedInner::Match(scrutinee, arms) => {
                 Self::typed_node_has_pending_trait_call(scrutinee)
                     || arms.iter().any(|arm| {
-                        arm.guard
-                            .as_ref()
-                            .is_some_and(Self::typed_node_has_pending_trait_call)
+                        Self::typed_match_pattern_has_pending_dispatch(&arm.pattern)
+                            || arm
+                                .guard
+                                .as_ref()
+                                .is_some_and(Self::typed_node_has_pending_trait_call)
                             || Self::typed_node_has_pending_trait_call(&arm.body)
                     })
             }

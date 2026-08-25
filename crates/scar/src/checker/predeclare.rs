@@ -10,6 +10,7 @@ impl Checker {
     fn validate_type_shape_clause(
         clause: Option<&ResolvedWhereClause>,
         trait_definition: bool,
+        trait_implementation: bool,
     ) -> Result<(), TypeError> {
         let Some(clause) = clause else {
             return Ok(());
@@ -17,6 +18,16 @@ impl Checker {
         let mut shape_seen = false;
         for constraint in &clause.constraints {
             for bound in &constraint.bounds {
+                if let ResolvedWhereConstraintRhs::TraitSlot { span, .. } = bound {
+                    if !trait_implementation {
+                        return Err(TypeError {
+                            message: "`Trait.$Slot` mappings are only allowed in a trait implementation where clause".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    continue;
+                }
                 let ResolvedWhereConstraintRhs::TypeConstructor { span, .. } = bound else {
                     continue;
                 };
@@ -53,18 +64,26 @@ impl Checker {
             match stmt {
                 Resolved::Def(_, _, _, _, _, clause, _, _)
                 | Resolved::BuiltinDecl(_, _, _, _, clause, _) => {
-                    Self::validate_type_shape_clause(clause.as_ref(), false)?;
+                    Self::validate_type_shape_clause(clause.as_ref(), false, false)?;
                 }
                 Resolved::TraitDef(_, _, _, clause, methods, _) => {
-                    Self::validate_type_shape_clause(clause.as_ref(), true)?;
+                    Self::validate_type_shape_clause(clause.as_ref(), true, false)?;
                     for method in methods {
-                        Self::validate_type_shape_clause(method.where_clause.as_ref(), false)?;
+                        Self::validate_type_shape_clause(
+                            method.where_clause.as_ref(),
+                            false,
+                            false,
+                        )?;
                     }
                 }
                 Resolved::TraitImplDef(_, _, _, _, clause, methods) => {
-                    Self::validate_type_shape_clause(clause.as_ref(), false)?;
+                    Self::validate_type_shape_clause(clause.as_ref(), false, true)?;
                     for method in methods {
-                        Self::validate_type_shape_clause(method.where_clause.as_ref(), false)?;
+                        Self::validate_type_shape_clause(
+                            method.where_clause.as_ref(),
+                            false,
+                            false,
+                        )?;
                     }
                 }
                 _ => {}
@@ -2084,8 +2103,8 @@ impl Checker {
                 }
                 let before = self.substitutions.clone();
                 let target_matches = self.types_compatible(&impl_target, &receiver_ty);
-                let applicable = target_matches
-                    && self.impl_where_obligations_hold(&impl_info, &fresh, visiting);
+                let applicable =
+                    target_matches && self.impl_body_obligations_hold(&impl_info, &fresh, visiting);
                 self.substitutions = before;
                 if applicable {
                     return true;
@@ -2133,40 +2152,66 @@ impl Checker {
         entails
     }
 
-    fn impl_where_obligations_hold(
+    fn impl_body_obligations_hold(
         &mut self,
         impl_info: &TraitImplInfo,
         fresh: &HashMap<u32, Ty>,
         visiting: &mut HashSet<ObligationKey>,
     ) -> bool {
-        let Some(where_clause) = &impl_info.where_clause else {
-            return true;
-        };
-        for constraint in &where_clause.constraints {
-            let subject_ty = match &constraint.subject {
-                AstTy::Named(_, subject) if subject == "Self" => {
-                    self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, fresh))
-                }
-                AstTy::Named(_, subject) => {
-                    let Some(original_var) = impl_info.type_param_vars_by_name.get(subject) else {
-                        return false;
-                    };
-                    let Some(instantiated) = fresh.get(original_var) else {
-                        return false;
-                    };
-                    self.resolve_ty(instantiated)
-                }
-                _ => return false,
-            };
-            for bound in &constraint.bounds {
-                let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
+        for method in impl_info.methods.values() {
+            for obligation in &method.body_obligations {
+                let consumes_capability = impl_info.where_clause.as_ref().is_some_and(|clause| {
+                    clause.constraints.iter().any(|constraint| {
+                        let subject = match &constraint.subject {
+                            AstTy::Named(_, name) if name == "Self" => self.resolve_ty(
+                                &self.substitute_ty_with_mapping(&impl_info.target_ty, fresh),
+                            ),
+                            AstTy::Named(_, name) => impl_info
+                                .type_param_vars_by_name
+                                .get(name)
+                                .and_then(|var| fresh.get(var))
+                                .map(|ty| self.resolve_ty(ty))
+                                .unwrap_or(Ty::Hole),
+                            _ => Ty::Hole,
+                        };
+                        let obligation_receiver = self.resolve_ty(
+                            &self.substitute_ty_with_mapping(&obligation.receiver, fresh),
+                        );
+                        let subject_matches = subject == obligation_receiver
+                            || (matches!(&constraint.subject, AstTy::Named(_, name) if name == "Self")
+                                && self.trait_target_name(&subject)
+                                    == self.trait_target_name(&obligation_receiver));
+                        subject_matches
+                            && constraint.bounds.iter().any(|bound| {
+                                let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
+                                    return false;
+                                };
+                                let capability = self.trait_key(trait_id);
+                                let requested = Self::base_trait_key(&obligation.trait_id);
+                                let capability = Self::base_trait_key(&capability);
+                                capability == requested
+                                    || self.trait_bound_entails(
+                                        capability,
+                                        requested,
+                                        &mut HashSet::new(),
+                                    )
+                            })
+                    })
+                });
+                if !consumes_capability {
                     continue;
-                };
-                let trait_key = self.trait_key(trait_id);
+                }
+                let receiver =
+                    self.resolve_ty(&self.substitute_ty_with_mapping(&obligation.receiver, fresh));
+                let args = obligation
+                    .trait_args
+                    .iter()
+                    .map(|arg| self.resolve_ty(&self.substitute_ty_with_mapping(arg, fresh)))
+                    .collect::<Vec<_>>();
                 if !self.trait_obligation_satisfied_with_args(
-                    &trait_key,
-                    &[],
-                    &subject_ty,
+                    &obligation.trait_id,
+                    &args,
+                    &receiver,
                     visiting,
                 ) {
                     return false;
@@ -2800,6 +2845,7 @@ impl Checker {
                             &target_name,
                         ),
                         is_builtin: method.is_builtin,
+                        body_obligations: Vec::new(),
                     },
                 );
             }
@@ -2850,6 +2896,7 @@ impl Checker {
                             &target_name,
                         ),
                         is_builtin: false,
+                        body_obligations: Vec::new(),
                     },
                 );
             }

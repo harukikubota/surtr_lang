@@ -69,6 +69,10 @@ impl WhereClauseContext {
     fn permits_type_constructor_shape(&self, subject: &AstTy) -> bool {
         self.block == WhereClauseBlock::TraitDefinition && Parser::is_self_type(subject)
     }
+
+    fn permits_trait_slot_mapping(&self) -> bool {
+        self.block == WhereClauseBlock::TraitImplementation
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3360,6 +3364,7 @@ impl Parser<'_> {
             let mut bounds = vec![self.parse_where_constraint_rhs(
                 context.self_context.clone(),
                 context.permits_type_constructor_shape(&subject),
+                context.permits_trait_slot_mapping(),
             )?];
             while matches!(self.peek(), Token::Plus) {
                 self.advance();
@@ -3367,6 +3372,7 @@ impl Parser<'_> {
                 bounds.push(self.parse_where_constraint_rhs(
                     context.self_context.clone(),
                     context.permits_type_constructor_shape(&subject),
+                    context.permits_trait_slot_mapping(),
                 )?);
             }
 
@@ -3424,6 +3430,7 @@ impl Parser<'_> {
         &mut self,
         self_context: Option<String>,
         permits_type_constructor_shape: bool,
+        permits_trait_slot_mapping: bool,
     ) -> Result<WhereConstraintRhs, ParseError> {
         let start = self.peek_span().start;
         if matches!(self.peek(), Token::Type) {
@@ -3466,6 +3473,12 @@ impl Parser<'_> {
 
         let (trait_name, trait_span) = self.expect_qualified_ident(2, "trait constraint")?;
         if matches!(self.peek(), Token::Dot) {
+            if !permits_trait_slot_mapping {
+                return Err(ParseError::syntax(
+                    "`Trait.$Slot` mappings are only allowed in a trait implementation where clause",
+                    self.peek_span(),
+                ));
+            }
             self.advance();
             self.expect(&Token::Dollar)?;
             let (slot_name, slot_span) = self.expect_ident()?;
