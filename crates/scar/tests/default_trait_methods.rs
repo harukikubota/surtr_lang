@@ -197,3 +197,167 @@ where
         "{err:?}"
     );
 }
+
+#[test]
+fn checked_generic_constructor_signature_replaces_predeclared_type_variables() {
+    let typed = typecheck_without_std_prelude(
+        r#"defstruct Box<$A> { value: $A }
+impl Box {
+  def new(value: $A) -> Box<$A> { Box { value: value } }
+}
+
+value = Box(1)"#,
+    )
+    .expect("generic struct construction should typecheck");
+    let value_ty = typed.iter().find_map(|node| match &node.node {
+        TypedInner::Bind(pattern, _) => match pattern {
+            scar::typed::TypedPattern::Var(ty, id) if id.name == "value" => Some(ty),
+            _ => None,
+        },
+        _ => None,
+    });
+    assert!(
+        matches!(
+            value_ty,
+            Some(scar::types::Ty::Struct(name, fields))
+                if name == "Global::Box"
+                    && matches!(fields.as_slice(), [(field, scar::types::Ty::Int)] if field == "value")
+        ),
+        "generic constructor result must retain its concrete argument, got {value_ty:?}"
+    );
+}
+
+#[test]
+fn receiverless_trait_call_consumes_the_contextual_return_capability() {
+    typecheck_without_std_prelude(
+        r#"deftrait Default {
+  def default::<Self>() -> Self
+}
+
+impl Default for Int {
+  def default::<Int>() -> Int { 0 }
+}
+
+def make(seed: $A) -> $A
+where
+  $A: Default
+{
+  Default::default()
+}
+
+value: Int = make(1)"#,
+    )
+    .expect("the contextual Default call must consume $A: Default");
+}
+
+#[test]
+fn generic_trait_candidate_does_not_hide_an_unproven_rigid_bound() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait Marker {
+  def mark(self: Self) -> Int
+}
+
+deftrait Use {
+  def use(self: Self) -> Int
+}
+
+impl Use for List<$A>
+where
+  $A: Marker
+{
+  def use(self: List<$A>) -> Int {
+    match self {
+      [] => 0,
+      [head, ..tail] => Marker::mark(head),
+    }
+  }
+}
+
+def hidden(values: List<$A>) -> Int { Use::use(values) }"#,
+    )
+    .expect_err("an unbounded rigid caller must not select the generic Use implementation");
+
+    assert!(err.message.contains("implementing Use"), "{err:?}");
+}
+
+#[test]
+fn concrete_trait_candidate_checks_transitive_body_obligations() {
+    let err = typecheck_without_std_prelude(
+        r#"defenum Box<$A> { Box($A) }
+
+deftrait Equal {
+  def equal(self: Self, rhs: Self) -> Int
+}
+
+deftrait Marker {
+  def mark(self: Self) -> Int
+}
+
+deftrait Use {
+  def use(self: Self) -> Int
+}
+
+impl Marker for List<$A>
+where
+  $A: Equal
+{
+  def mark(self: List<$A>) -> Int {
+    match self {
+      [] => 0,
+      [head, ..tail] => Equal::equal(head, head),
+    }
+  }
+}
+
+impl Use for Box<$A>
+where
+  $A: Marker
+{
+  def use(self: Box<$A>) -> Int {
+    match self { Box::Box(value) => Marker::mark(value) }
+  }
+}
+
+f = {|n: Int| n}
+value = Box::Box([f])
+result = Use::use(value)"#,
+    )
+    .expect_err("the concrete Use candidate must prove the nested Equal obligation");
+
+    assert!(
+        err.message.contains("Equal") || err.message.contains("Use"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn mutually_recursive_concrete_impl_obligations_report_a_cycle() {
+    let err = typecheck_without_std_prelude(
+        r#"deftrait First {
+  def first(self: Self) -> Int
+}
+
+deftrait Second {
+  def second(self: Self) -> Int
+}
+
+impl First for Int
+where
+  Self: Second
+{
+  def first(self: Int) -> Int { Second::second(self) }
+}
+
+impl Second for Int
+where
+  Self: First
+{
+  def second(self: Int) -> Int { First::first(self) }
+}
+
+value = First::first(1)"#,
+    )
+    .expect_err("mutually recursive concrete obligations must not prove one another");
+
+    assert!(err.message.contains("CyclicTraitObligation"), "{err:?}");
+}

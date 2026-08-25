@@ -2899,29 +2899,39 @@ impl Checker {
                     if let Some(impl_info) = self
                         .trait_impls
                         .get(&(trait_name.into(), target_name.clone()))
+                        .cloned()
                     {
-                        let method = impl_info.methods.get(method_name)?;
+                        let mut fresh = HashMap::new();
+                        let impl_target =
+                            self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
+                        let before = self.substitutions.clone();
+                        let applicable = self.types_compatible(&impl_target, &concrete)
+                            && self.impl_where_obligations_satisfied(&impl_info, &fresh);
+                        if !applicable {
+                            self.substitutions = before;
+                        } else {
+                            let method = impl_info.methods.get(method_name)?;
 
-                        if let Some(dispatch_override) = &method.dispatch_override {
-                            return Some(TraitDispatch::Static(dispatch_override.clone()));
-                        }
-                        let function_key = method
-                            .function_id
-                            .qualified_name
-                            .as_ref()
-                            .unwrap_or(&method.function_id.name);
-                        let fun_idx = self
-                            .specializable_fun_idx_for_function_key(function_key)
-                            .or_else(|| {
-                                let function_id = self.function_ids_by_name.get(function_key)?;
-                                let function_ty = self.env.lookup_var(function_id.unique_id)?;
-                                let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                                    return None;
-                                };
-                                Some(*fun_idx)
-                            })?;
-                        let display_name =
-                            method
+                            if let Some(dispatch_override) = &method.dispatch_override {
+                                return Some(TraitDispatch::Static(dispatch_override.clone()));
+                            }
+                            let function_key = method
+                                .function_id
+                                .qualified_name
+                                .as_ref()
+                                .unwrap_or(&method.function_id.name);
+                            let fun_idx = self
+                                .specializable_fun_idx_for_function_key(function_key)
+                                .or_else(|| {
+                                    let function_id =
+                                        self.function_ids_by_name.get(function_key)?;
+                                    let function_ty = self.env.lookup_var(function_id.unique_id)?;
+                                    let Ty::UserFunc { fun_idx, .. } = function_ty else {
+                                        return None;
+                                    };
+                                    Some(*fun_idx)
+                                })?;
+                            let display_name = method
                                 .display_name_override
                                 .clone()
                                 .or_else(|| {
@@ -2937,10 +2947,13 @@ impl Checker {
                                 .unwrap_or_else(|| {
                                     Checker::surface_name(&method.function_id.name).into()
                                 });
-                        return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                            name: display_name,
-                            fun_idx,
-                        }));
+                            return Some(TraitDispatch::Static(
+                                TraitDispatchTarget::UserFunction {
+                                    name: display_name,
+                                    fun_idx,
+                                },
+                            ));
+                        }
                     }
                 }
                 if let Some(dispatch) = self.generic_trait_dispatch_target(
@@ -3074,17 +3087,44 @@ impl Checker {
             return true;
         };
         for constraint in &where_clause.constraints {
-            match &constraint.subject {
-                AstTy::Named(_, subject) if subject == "Self" => {}
+            let mapped_rigid = match &constraint.subject {
+                AstTy::Named(_, subject) if subject == "Self" => {
+                    let concrete = self
+                        .resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, fresh));
+                    for bound in &constraint.bounds {
+                        let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
+                            continue;
+                        };
+                        let trait_key = self.trait_key(trait_id);
+                        if !self.trait_impl_exists_for_args(&trait_key, &[], &concrete) {
+                            return false;
+                        }
+                    }
+                    None
+                }
                 AstTy::Named(_, subject) => {
                     let Some(original_var) = impl_info.type_param_vars_by_name.get(subject) else {
                         return false;
                     };
-                    if !fresh.contains_key(original_var) {
+                    let Some(mapped) = fresh.get(original_var) else {
                         return false;
+                    };
+                    match self.resolve_ty(mapped) {
+                        Ty::Var(var) if self.rigid_tyvars.contains(&var) => Some(var),
+                        _ => None,
                     }
                 }
                 _ => return false,
+            };
+            if let Some(var) = mapped_rigid {
+                for bound in &constraint.bounds {
+                    let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
+                        continue;
+                    };
+                    if !self.tyvar_has_bound(var, &self.trait_key(trait_id)) {
+                        return false;
+                    }
+                }
             }
         }
         // Bare impl bounds are capabilities, not standalone arity-zero proofs.
@@ -3315,6 +3355,16 @@ impl Checker {
         method_name: &str,
         expected_ty: &Ty,
     ) -> Option<TraitDispatch> {
+        if let Ty::Var(var) = self.resolve_ty(expected_ty) {
+            return if !self.rigid_tyvars.contains(&var)
+                || self.tyvar_has_bound(var, trait_name)
+                || self.tyvar_satisfies_compiler_trait(var, trait_name)
+            {
+                Some(TraitDispatch::Pending)
+            } else {
+                None
+            };
+        }
         for impl_key in self.trait_impl_candidate_keys(trait_name) {
             let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
                 continue;
@@ -3766,7 +3816,7 @@ impl Checker {
             if matches!(probe_ret, Ty::SelfApp(_))
                 || (self.trait_matches_short_name(trait_name, "Default")
                     && method_name == "default"
-                    && explicit_type_args.is_some())
+                    && (explicit_type_args.is_some() || expected_ret_ty.is_some()))
             {
                 let explicit_target = if self.trait_matches_short_name(trait_name, "Default")
                     && method_name == "default"

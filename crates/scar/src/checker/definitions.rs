@@ -1088,7 +1088,7 @@ impl Checker {
         let saved_active_capabilities = self.active_capabilities.clone();
 
         self.env.push_var_scope();
-        self.function_return_ty = Some(function_return_ty);
+        self.function_return_ty = Some(function_return_ty.clone());
         self.local_annotation_tyvars = local_annotation_tyvars;
         self.rigid_tyvars = rigid_tyvars;
         self.current_function_symbol = Some(function_symbol);
@@ -1111,7 +1111,11 @@ impl Checker {
         // definition. Check the body now, but defer subtree normalization to the
         // single resolve_typed_node pass in check_program.
         let profile = self.profiler.start();
-        let result = self.check_node(body);
+        let result = if self.body_tail_is_receiverless_trait_call(body) {
+            self.check_node_with_expected(body, Some(&function_return_ty))
+        } else {
+            self.check_node(body)
+        };
         for (deferred, checked) in deferred_capabilities.iter_mut().zip(
             self.active_capabilities
                 .iter()
@@ -1156,6 +1160,19 @@ impl Checker {
             });
         }
         result
+    }
+
+    fn body_tail_is_receiverless_trait_call(&self, body: &Resolved) -> bool {
+        match body {
+            Resolved::Block(_, statements) => statements
+                .last()
+                .is_some_and(|tail| self.body_tail_is_receiverless_trait_call(tail)),
+            Resolved::Grouped(_, inner) => self.body_tail_is_receiverless_trait_call(inner),
+            Resolved::App(_, function, arguments) => {
+                arguments.is_empty() && self.trait_method_ref(function).is_some()
+            }
+            _ => false,
+        }
     }
 
     pub(super) fn check_def(
@@ -1388,22 +1405,29 @@ impl Checker {
                 });
             }
         };
-        if let Some(Ty::UserFunc {
-            type_params,
-            params,
-            ..
-        }) = self.env.lookup_var(id.unique_id).cloned()
-        {
-            self.env.bind_var(
-                id.unique_id,
-                Ty::UserFunc {
-                    fun_idx,
-                    type_params,
-                    params,
-                    ret: Box::new(expected_ret.clone()),
-                },
-            );
+        let checked_params = typed_params
+            .iter()
+            .map(|param| param.ty.clone())
+            .collect::<Vec<_>>();
+        let mut checked_type_params = Vec::new();
+        for param in type_params {
+            if let Some(ty) = tyvars.get(&param.name) {
+                Self::collect_ty_vars(ty, &mut checked_type_params);
+            }
         }
+        for param in &checked_params {
+            Self::collect_ty_vars(param, &mut checked_type_params);
+        }
+        Self::collect_ty_vars(&expected_ret, &mut checked_type_params);
+        self.env.bind_var(
+            id.unique_id,
+            Ty::UserFunc {
+                fun_idx,
+                type_params: checked_type_params,
+                params: checked_params,
+                ret: Box::new(expected_ret.clone()),
+            },
+        );
         let typed_type_params = type_params
             .iter()
             .filter_map(|param| match tyvars.get(&param.name) {
