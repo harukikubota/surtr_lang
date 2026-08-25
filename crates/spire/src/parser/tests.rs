@@ -1639,9 +1639,35 @@ where
 
 #[test]
 fn test_marker_names_cannot_be_value_owner_paths() {
-    for source in ["Self::f()", "Type::f()"] {
+    for source in [
+        "Self::f()",
+        "Type::f()",
+        "`Self::f`()",
+        "`Type::f`()",
+        "capture = &`Self::f`",
+        "capture = &`Type::f`",
+    ] {
         let err = parse(source).expect_err("marker owner path must be rejected");
         assert!(err.message().contains("owner"), "{err}");
+    }
+}
+
+#[test]
+fn test_tolerant_parser_rejects_quoted_marker_owner_paths() {
+    for source in [
+        "`Self::f`()",
+        "`Type::f`()",
+        "capture = &`Self::f`",
+        "capture = &`Type::f`",
+    ] {
+        let result = parse_tolerant_with_context(source, ParserContext::default(), None);
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.error.message().contains("owner")),
+            "quoted marker owner path must produce a tolerant diagnostic: {source}"
+        );
     }
 }
 

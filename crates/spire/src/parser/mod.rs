@@ -92,6 +92,19 @@ fn reject_excessive_delimiter_nesting(tokens: &[Spanned<Token>]) -> Result<(), P
 }
 
 pub(super) fn reject_marker_owner_paths(tokens: &[Spanned<Token>]) -> Result<(), ParseError> {
+    for token in tokens {
+        if matches!(
+            &token.token,
+            Token::FuncLiteral(body)
+                if matches!(body.split_once("::"), Some(("Self" | "Type", _)))
+        ) {
+            return Err(ParseError::syntax(
+                "`Self` and `Type` are type markers, not value-level call owners",
+                token.span.clone(),
+            ));
+        }
+    }
+
     for window in tokens.windows(4) {
         let is_marker = matches!(&window[0].token, Token::Ident(name) if name == "Self")
             || matches!(window[0].token, Token::Type);
