@@ -1,2 +1,2 @@
 phase: typecheck
-contains: requires a receiver type implementing Use
+contains: Marker<Int>::mark could not be specialized

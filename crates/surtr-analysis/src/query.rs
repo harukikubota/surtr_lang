@@ -485,11 +485,23 @@ pub fn parse_signature_type(input: &str) -> Option<AstTy> {
 }
 
 pub fn parse_user_query_type_loose(input: &str) -> Result<Option<AstTy>, String> {
+    if contains_contextual_type_marker(input) {
+        return Err(
+            "Command queries require a concrete type; `Self` and `Type` are contextual markers."
+                .to_string(),
+        );
+    }
     let Some(ty) = parse_query_type(input) else {
         return Ok(None);
     };
     validate_user_query_type(&ty)?;
     Ok(Some(ty))
+}
+
+fn contains_contextual_type_marker(input: &str) -> bool {
+    input
+        .split(|ch: char| !(ch == '_' || ch == '$' || ch.is_ascii_alphanumeric()))
+        .any(|segment| matches!(segment, "Self" | "Type"))
 }
 
 pub fn parse_binding_query_type(input: &str) -> Option<AstTy> {
@@ -762,6 +774,16 @@ mod tests {
             "{}",
             err.message()
         );
+    }
+
+    #[test]
+    fn reject_contextual_markers_as_concrete_query_types() {
+        for marker in ["Self", "Type", "List<Self>", "(Type -> Int)"] {
+            let source = format!("id({marker})");
+            let err =
+                parse_command_query(&source).expect_err("context marker must not be concrete");
+            assert!(err.message().contains("concrete type"), "{source}: {err:?}");
+        }
     }
 
     #[test]

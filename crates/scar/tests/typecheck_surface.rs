@@ -3655,7 +3655,7 @@ result: Int = chooser(1) + matched(1)"#,
 fn trait_dispatch_rejects_impl_with_unsatisfied_where_obligation() {
     let resolved = resolve_with_builtin_prelude(
         r#"deftrait Marker {
-  def mark(self: Self) -> Self
+  def mark(self: Self) -> String
 }
 
 deftrait Use {
@@ -3666,7 +3666,12 @@ impl Use for List<$A>
 where
   $A: Marker
 {
-  def use(self: List<$A>) -> String { "usable" }
+  def use(self: List<$A>) -> String {
+    match self {
+      [] => "usable",
+      [head, ..tail] => Marker::mark(head),
+    }
+  }
 }
 
 values: List<Int> = [1]
@@ -3676,7 +3681,7 @@ result = Use::use(values)"#,
     let err = typecheck(resolved).expect_err("unsatisfied impl bound must reject dispatch");
     assert!(
         err.message
-            .contains("requires a receiver type implementing Use"),
+            .contains("Marker::mark could not be specialized to a concrete dispatch target"),
         "{err:?}"
     );
 }
@@ -3723,7 +3728,7 @@ impl Use for ObligationBox<$A>
 where
   $A: Marker
 {
-  def use(self: ObligationBox<$A>) -> String { "used" }
+  def use(self: ObligationBox<$A>) -> String { Marker::mark(self.value) }
 }
 
 call = {|value| Use::use(ObligationBox(value))}
@@ -3733,7 +3738,8 @@ result = call(1)"#,
     let err = typecheck(resolved)
         .expect_err("binding the deferred receiver to Int must re-check its Marker obligation");
     assert!(
-        err.message.contains("Argument type mismatch"),
+        err.message
+            .contains("Marker::mark could not be specialized to a concrete dispatch target"),
         "unexpected phase-boundary diagnostic: {err:?}"
     );
 }
@@ -3764,14 +3770,28 @@ impl Parent for List<$A>
 where
   $A: FixtureEq
 {
-  def parent(self: List<$A>) -> String { "parent" }
+  def parent(self: List<$A>) -> String {
+    match self {
+      [] => "parent",
+      [head, ..tail] => if(FixtureEq::eq(head, head), "parent", "parent"),
+    }
+  }
 }
 
 impl Child for List<$A>
 where
   $A: FixtureEq + FixtureShow
 {
-  def child(self: List<$A>) -> String { "child" }
+  def child(self: List<$A>) -> String {
+    match self {
+      [] => "child",
+      [head, ..tail] => if(
+        FixtureEq::eq(head, head),
+        FixtureShow::show(head),
+        FixtureShow::show(head)
+      ),
+    }
+  }
 }"#,
     );
 
@@ -8960,176 +8980,160 @@ bad: Int = identity::<Int>(1)"#,
 }
 
 #[test]
-fn parameterized_trait_bound_controls_rigid_generic_dispatch() {
-    let missing = resolve_with_builtin_prelude(
-        r#"deftrait Convert<$To> {
+fn bare_trait_capability_controls_full_parameterized_dispatch() {
+    let missing = r#"deftrait Convert<$To> {
   def convert::<$To>(self: Self) -> $To
 }
 
 def hidden(value: $A) -> Int {
   Convert::convert::<Int>(value)
-}"#,
-    );
-    let err = typecheck(missing).expect_err("missing parameterized bound must be rejected");
+}"#;
+    let err = typecheck_without_std_prelude(missing)
+        .expect_err("missing bare capability must be rejected");
     assert!(err.message.contains("MissingGenericBound"), "{err:?}");
     assert!(
         err.message.contains("$A must implement Convert<Int>"),
         "{err:?}"
     );
 
-    let mismatched = resolve_with_builtin_prelude(
-        r#"deftrait Convert<$To> {
+    let bounded = r#"deftrait Convert<$To> {
   def convert::<$To>(self: Self) -> $To
 }
 
 def hidden(value: $A) -> Int
 where
-  $A: Convert<String>
+  $A: Convert
 {
   Convert::convert::<Int>(value)
-}"#,
-    );
-    let err = typecheck(mismatched).expect_err("a different trait argument is not a bound");
-    assert!(err.message.contains("MissingGenericBound"), "{err:?}");
-    assert!(err.message.contains("Convert<Int>"), "{err:?}");
-
-    let bounded = resolve_with_builtin_prelude(
-        r#"deftrait Convert<$To> {
-  def convert::<$To>(self: Self) -> $To
-}
-
-def hidden(value: $A) -> Int
-where
-  $A: Convert<Int>
-{
-  Convert::convert::<Int>(value)
-}"#,
-    );
-    typecheck(bounded).expect("matching parameterized bound must permit dispatch");
+}"#;
+    typecheck_without_std_prelude(bounded)
+        .expect("bare capability must permit a full parameterized dispatch");
 }
 
 #[test]
-fn parameterized_trait_bounds_validate_arity_and_generic_scope() {
-    let arity = resolve_with_builtin_prelude(
-        r#"deftrait Marker<$A> {
-  def mark(self: Self) -> String
+fn trait_heads_and_expression_obligations_retain_nested_arguments() {
+    let source = r#"deftrait Marker<$Tag> {
+  def mark::<$Tag>(self: Self) -> $Tag
 }
 
-def broken(value: $A) -> String
-where
-  $A: Marker<Int, String>
-{
-  "broken"
-}"#,
-    );
-    let err = typecheck(arity).expect_err("trait bound arity must be checked");
-    assert!(
-        err.message
-            .contains("Trait Marker expects 1 type argument(s), got 2"),
-        "{err:?}"
-    );
-
-    let scope = resolve_with_builtin_prelude(
-        r#"deftrait Marker<$A> {
-  def mark(self: Self) -> String
+impl Marker<List<Int>> for String {
+  def mark::<List<Int>>(self: String) -> List<Int> { [1] }
 }
 
-def broken(value: $A) -> String
+def mark_list(value: $A) -> List<Int>
 where
-  $A: Marker<List<$B>>
+  $A: Marker
 {
-  "broken"
-}"#,
-    );
-    let err = typecheck(scope).expect_err("where clauses must not declare nested variables");
-    assert!(
-        err.message.contains("type variable `$B` does not appear"),
-        "{err:?}"
-    );
+  Marker::mark::<List<Int>>(value)
+}
+
+result: List<Int> = mark_list("ok")"#;
+    typecheck_without_std_prelude(source)
+        .expect("trait-head and expression arguments must stay structural");
 }
 
 #[test]
-fn impl_where_obligations_match_parameterized_trait_arguments() {
-    let satisfied = resolve_with_builtin_prelude(
-        r#"deftrait Marker<$Tag> {
-  def mark(self: Self) -> String
+fn impl_bare_capabilities_emit_full_parameterized_obligations() {
+    let satisfied = r#"deftrait Marker<$Tag> {
+  def mark::<$Tag>(self: Self) -> $Tag
 }
 
 deftrait Use {
-  def use(self: Self) -> String
+  def use(self: Self) -> Int
+}
+
+defenum Box<$A> {
+  Box($A),
 }
 
 impl Marker<Int> for Int {
-  def mark(self: Int) -> String { "int" }
+  def mark::<Int>(self: Int) -> Int { self }
 }
 
-impl Use for List<$A>
+impl Use for Box<$A>
 where
-  $A: Marker<Int>
+  $A: Marker
 {
-  def use(self: List<$A>) -> String { "used" }
+  def use(self: Box<$A>) -> Int {
+    match self { Box::Box(value) => Marker::mark::<Int>(value) }
+  }
 }
 
-value: List<Int> = [1]
-result = Use::use(value)"#,
-    );
-    typecheck(satisfied).expect("the exact parameterized obligation must be proved");
+value: Box<Int> = Box::Box(1)
+result = Use::use(value)"#;
+    typecheck_without_std_prelude(satisfied)
+        .expect("the full expression obligation must be proved");
 
-    let mismatched = resolve_with_builtin_prelude(
-        r#"deftrait Marker<$Tag> {
-  def mark(self: Self) -> String
+    let mismatched = r#"deftrait Marker<$Tag> {
+  def mark::<$Tag>(self: Self) -> $Tag
 }
 
 deftrait Use {
-  def use(self: Self) -> String
+  def use(self: Self) -> Int
+}
+
+defenum Box<$A> {
+  Box($A),
 }
 
 impl Marker<String> for Int {
-  def mark(self: Int) -> String { "string" }
+  def mark::<String>(self: Int) -> String { "string" }
 }
 
-impl Use for List<$A>
+impl Use for Box<$A>
 where
-  $A: Marker<Int>
+  $A: Marker
 {
-  def use(self: List<$A>) -> String { "used" }
+  def use(self: Box<$A>) -> Int {
+    match self { Box::Box(value) => Marker::mark::<Int>(value) }
+  }
 }
 
-value: List<Int> = [1]
-result = Use::use(value)"#,
-    );
-    let err = typecheck(mismatched)
+value: Box<Int> = Box::Box(1)
+result = Use::use(value)"#;
+    let err = typecheck_without_std_prelude(mismatched)
         .expect_err("a same-name trait with different arguments must not prove an obligation");
     assert!(
         err.message
-            .contains("requires a receiver type implementing Use"),
+            .contains("Marker<Int>::mark could not be specialized"),
         "{err:?}"
     );
 
-    let generic = resolve_with_builtin_prelude(
-        r#"deftrait Marker<$Tag> {
-  def mark(self: Self) -> String
+    let generic = r#"deftrait Marker<$Tag> {
+  def mark::<$Tag>(self: Self) -> $Tag
 }
 
 deftrait Use {
   def use(self: Self) -> String
 }
 
-impl Marker<$Tag> for Int {
-  def mark(self: Int) -> String { "generic" }
+defenum Box<$A> {
+  Box($A),
 }
 
-impl Use for List<$A>
+defenum Tagged<$Tag> {
+  Tagged($Tag),
+}
+
+impl Marker<$Tag> for Tagged<$Tag> {
+  def mark::<$Tag>(self: Tagged<$Tag>) -> $Tag {
+    match self { Tagged::Tagged(value) => value }
+  }
+}
+
+impl Use for Box<$A>
 where
-  $A: Marker<String>
+  $A: Marker
 {
-  def use(self: List<$A>) -> String { "used" }
+  def use(self: Box<$A>) -> String {
+    match self { Box::Box(value) => Marker::mark::<String>(value) }
+  }
 }
 
-value: List<Int> = [1]
-result = Use::use(value)"#,
-    );
-    typecheck(generic).expect("a generic trait argument must unify with the requested argument");
+value: Box<Tagged<String>> = Box::Box(Tagged::Tagged("generic"))
+result = Use::use(value)"#;
+    typecheck_without_std_prelude(generic)
+        .expect("a generic trait argument must unify with the requested argument");
 }
 
 #[test]

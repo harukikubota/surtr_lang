@@ -144,6 +144,47 @@ fn analysis_service_does_not_resolve_or_typecheck_tolerant_parse_results() {
 }
 
 #[test]
+fn analysis_service_keeps_parameterized_where_rhs_in_parse_category() {
+    let mut service = AnalysisService::new();
+    let path = PathBuf::from("/repo/lib/user.srt");
+    service.update_document(
+        path.clone(),
+        Some(1),
+        r#"deftrait Marker<$Tag> {
+  def mark::<$Tag>(self: Self) -> $Tag
+}
+
+def mark(value: $A) -> String
+where
+  $A: Marker<Int>
+{
+  Marker::mark::<Int>(value)
+}"#
+        .to_string(),
+    );
+
+    let context = resolve_context(AnalysisContextRequest {
+        workspace_root: PathBuf::from("/repo"),
+        active_file: path.clone(),
+        selected_context: Some(SelectedContext::DefinitionStandalone),
+        runner_selection: None,
+        open_documents: service.document_store().open_document_versions(),
+    });
+    let snapshot = service.analyze(context);
+    let diagnostics = service.diagnostics(&snapshot);
+
+    let parse = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.kind == AnalysisDiagnosticKind::Parse)
+        .expect("parameterized where RHS should remain a parser diagnostic");
+    assert!(parse.message.contains("Parameterized trait bounds"));
+    assert!(!diagnostics.iter().any(|diagnostic| matches!(
+        diagnostic.kind,
+        AnalysisDiagnosticKind::Resolve | AnalysisDiagnosticKind::Typecheck
+    )));
+}
+
+#[test]
 fn analysis_service_document_symbols_use_tolerant_outline_when_parse_fails() {
     let mut service = AnalysisService::new();
     let path = PathBuf::from("/repo/lib/user.srt");

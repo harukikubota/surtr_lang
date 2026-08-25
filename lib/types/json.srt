@@ -176,7 +176,7 @@ impl JsonValue {
   """
   def encode::<JsonValue>(value: $T) -> Result<JsonValue, Error>
   where
-    $T: Encode<JsonValue>
+    $T: Encode
   {
     Encode::encode::<JsonValue>(value)
   }

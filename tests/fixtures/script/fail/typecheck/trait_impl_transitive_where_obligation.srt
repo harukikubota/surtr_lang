@@ -18,14 +18,19 @@ impl Marker for List<$A>
 where
   $A: Eq
 {
-  def mark(self: List<$A>) -> String { "marked" }
+  def mark(self: List<$A>) -> String {
+    match self {
+      [] => "marked",
+      [head, ..tail] => to_string(Eq::eq(head, head)),
+    }
+  }
 }
 
 impl Use for ObligationBox<$A>
 where
   $A: Marker
 {
-  def use(self: ObligationBox<$A>) -> String { "used" }
+  def use(self: ObligationBox<$A>) -> String { Marker::mark(self.value) }
 }
 
 f = {|n: Int| n + 1}

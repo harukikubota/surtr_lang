@@ -1,0 +1,9 @@
+deftrait Marker<$Tag> {
+  def mark::<$Tag>(self: Self) -> $Tag
+}
+
+deftrait Use {
+  def use(value: $A) -> String
+  where
+    $A: Marker<Int>
+}

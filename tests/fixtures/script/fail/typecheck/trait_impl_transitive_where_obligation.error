@@ -1,2 +1,2 @@
 phase: typecheck
-contains: requires a receiver type implementing Use
+contains: Eq::eq could not be specialized to a concrete dispatch target

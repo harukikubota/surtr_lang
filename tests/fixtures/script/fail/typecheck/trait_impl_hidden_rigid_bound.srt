@@ -10,7 +10,12 @@ impl Use for List<$A>
 where
   $A: Marker
 {
-  def use(self: List<$A>) -> String { "used" }
+  def use(self: List<$A>) -> String {
+    match self {
+      [] => "used",
+      [head, ..tail] => Marker::mark(head),
+    }
+  }
 }
 
 def hidden_bound(values: List<$A>) -> String {

@@ -1973,6 +1973,17 @@ where
         assert_eq!(matching[0].kind, CompletionKind::TypePath, "{name}");
         assert!(matching[0].detail.is_some(), "{name} signature metadata");
     }
+
+    let fmap = index
+        .symbol_semantic_infos()
+        .iter()
+        .find(|info| info.canonical_name == "Functor::fmap")
+        .expect("Functor method signature metadata");
+    assert_eq!(fmap.kind, CompletionKind::FunctionCall);
+    assert_eq!(
+        fmap.detail.as_deref(),
+        Some("Functor::fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>")
+    );
 }
 
 #[test]

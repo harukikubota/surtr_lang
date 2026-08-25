@@ -1,21 +1,27 @@
 deftrait Marker<$Tag> {
-  def mark(self: Self) -> String
+  def mark::<$Tag>(self: Self) -> $Tag
 }
 
 deftrait Use {
-  def use(self: Self) -> String
+  def use(self: Self) -> Int
+}
+
+defenum Box<$A> {
+  Box($A),
 }
 
 impl Marker<String> for Int {
-  def mark(self: Int) -> String { "string" }
+  def mark::<String>(self: Int) -> String { "string" }
 }
 
-impl Use for List<$A>
+impl Use for Box<$A>
 where
-  $A: Marker<Int>
+  $A: Marker
 {
-  def use(self: List<$A>) -> String { "used" }
+  def use(self: Box<$A>) -> Int {
+    match self { Box::Box(value) => Marker::mark::<Int>(value) }
+  }
 }
 
-value: List<Int> = [1]
-print(Use::use(value))
+value: Box<Int> = Box::Box(1)
+print(to_string(Use::use(value)))

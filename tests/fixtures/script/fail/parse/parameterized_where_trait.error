@@ -1,0 +1,2 @@
+phase: parse
+contains: Parameterized trait bounds are not allowed

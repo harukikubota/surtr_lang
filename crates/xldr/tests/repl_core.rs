@@ -3476,6 +3476,21 @@ fn core_repl_command_and_query_errors_use_diagnostics() {
 }
 
 #[test]
+fn core_sig_queries_reject_contextual_markers_as_concrete_types() {
+    let mut engine = engine();
+
+    for source in [":sig id(Self)", ":sig id(Type)", ":sig id(List<Self>)"] {
+        let result = engine.handle_line(source);
+        let text = strip_ansi(&rendered_text(&result));
+        assert!(
+            text.contains("Error: ReplQueryParseError"),
+            "{source}: {text}"
+        );
+        assert!(text.contains("concrete type"), "{source}: {text}");
+    }
+}
+
+#[test]
 fn core_value_recall_uses_engine_history_and_prompt_index() {
     let mut engine = engine();
     assert_eq!(engine.prompt(), "xldr(1)> ");

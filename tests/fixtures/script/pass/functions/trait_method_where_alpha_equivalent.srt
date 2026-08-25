@@ -11,7 +11,7 @@ impl Render for Int {
     $D: Show
     $B: Eq
   {
-    "ok"
+    if(Eq::eq(value, value), Show::to_string(other), Show::to_string(other))
   }
 }
 
