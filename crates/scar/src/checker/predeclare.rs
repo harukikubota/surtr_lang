@@ -10,7 +10,8 @@ impl Checker {
     fn validate_type_shape_clause(
         clause: Option<&ResolvedWhereClause>,
         trait_definition: bool,
-        trait_implementation: bool,
+        enclosing_impl_trait: Option<&ResolvedId>,
+        constructor_trait_ids: &HashSet<u32>,
     ) -> Result<(), TypeError> {
         let Some(clause) = clause else {
             return Ok(());
@@ -18,10 +19,30 @@ impl Checker {
         let mut shape_seen = false;
         for constraint in &clause.constraints {
             for bound in &constraint.bounds {
-                if let ResolvedWhereConstraintRhs::TraitSlot { span, .. } = bound {
-                    if !trait_implementation {
+                if let ResolvedWhereConstraintRhs::TraitSlot { trait_id, span, .. } = bound {
+                    let Some(enclosing_trait) = enclosing_impl_trait else {
                         return Err(TypeError {
                             message: "`Trait.$Slot` mappings are only allowed in a trait implementation where clause".into(),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    };
+                    if !constructor_trait_ids.contains(&enclosing_trait.unique_id) {
+                        return Err(TypeError {
+                            message: format!(
+                                "Trait {} is not a TypeConstructor trait and cannot own a slot mapping",
+                                enclosing_trait.name
+                            ),
+                            span: span.clone(),
+                            hint: None,
+                        });
+                    }
+                    if trait_id.unique_id != enclosing_trait.unique_id {
+                        return Err(TypeError {
+                            message: format!(
+                                "`Trait.$Slot` mapping owner {} must be the same trait as enclosing impl {}",
+                                trait_id.name, enclosing_trait.name
+                            ),
                             span: span.clone(),
                             hint: None,
                         });
@@ -60,29 +81,97 @@ impl Checker {
         &self,
         stmts: &[Resolved],
     ) -> Result<(), TypeError> {
+        let mut constructor_trait_ids = self
+            .traits
+            .values()
+            .filter(|info| !info.constructor_slots.is_empty())
+            .map(|info| info.id.unique_id)
+            .collect::<HashSet<_>>();
+        constructor_trait_ids.extend(stmts.iter().filter_map(|stmt| {
+            let Resolved::TraitDef(_, id, _, Some(clause), _, _) = stmt else {
+                return None;
+            };
+            clause
+                .constraints
+                .iter()
+                .any(|constraint| {
+                    matches!(&constraint.subject, AstTy::Named(_, name) if name == "Self")
+                        && constraint.bounds.iter().any(|bound| {
+                            matches!(bound, ResolvedWhereConstraintRhs::TypeConstructor { .. })
+                        })
+                })
+                .then_some(id.unique_id)
+        }));
+        // A trait may inherit its contextual shape through a parent (for
+        // example `Applicative: Functor`).  This validation runs before the
+        // trait table has been predeclared, so reproduce the same closure
+        // over the resolved declarations here rather than mistaking those
+        // inherited constructor traits for ordinary traits.
+        loop {
+            let mut changed = false;
+            for stmt in stmts {
+                let Resolved::TraitDef(_, id, _, Some(clause), _, _) = stmt else {
+                    continue;
+                };
+                if constructor_trait_ids.contains(&id.unique_id) {
+                    continue;
+                }
+                let inherits_constructor_shape = clause.constraints.iter().any(|constraint| {
+                    matches!(&constraint.subject, AstTy::Named(_, name) if name == "Self")
+                        && constraint.bounds.iter().any(|bound| {
+                            matches!(bound, ResolvedWhereConstraintRhs::Trait { trait_id }
+                                if constructor_trait_ids.contains(&trait_id.unique_id))
+                        })
+                });
+                if inherits_constructor_shape {
+                    constructor_trait_ids.insert(id.unique_id);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
         for stmt in stmts {
             match stmt {
                 Resolved::Def(_, _, _, _, _, clause, _, _)
                 | Resolved::BuiltinDecl(_, _, _, _, clause, _) => {
-                    Self::validate_type_shape_clause(clause.as_ref(), false, false)?;
+                    Self::validate_type_shape_clause(
+                        clause.as_ref(),
+                        false,
+                        None,
+                        &constructor_trait_ids,
+                    )?;
                 }
                 Resolved::TraitDef(_, _, _, clause, methods, _) => {
-                    Self::validate_type_shape_clause(clause.as_ref(), true, false)?;
+                    Self::validate_type_shape_clause(
+                        clause.as_ref(),
+                        true,
+                        None,
+                        &constructor_trait_ids,
+                    )?;
                     for method in methods {
                         Self::validate_type_shape_clause(
                             method.where_clause.as_ref(),
                             false,
-                            false,
+                            None,
+                            &constructor_trait_ids,
                         )?;
                     }
                 }
-                Resolved::TraitImplDef(_, _, _, _, clause, methods) => {
-                    Self::validate_type_shape_clause(clause.as_ref(), false, true)?;
+                Resolved::TraitImplDef(_, trait_id, _, _, clause, methods) => {
+                    Self::validate_type_shape_clause(
+                        clause.as_ref(),
+                        false,
+                        Some(trait_id),
+                        &constructor_trait_ids,
+                    )?;
                     for method in methods {
                         Self::validate_type_shape_clause(
                             method.where_clause.as_ref(),
                             false,
-                            false,
+                            None,
+                            &constructor_trait_ids,
                         )?;
                     }
                 }
@@ -2177,10 +2266,16 @@ impl Checker {
                         let obligation_receiver = self.resolve_ty(
                             &self.substitute_ty_with_mapping(&obligation.receiver, fresh),
                         );
-                        let subject_matches = subject == obligation_receiver
-                            || (matches!(&constraint.subject, AstTy::Named(_, name) if name == "Self")
-                                && self.trait_target_name(&subject)
-                                    == self.trait_target_name(&obligation_receiver));
+                        let subject_matches = constraint.bounds.iter().any(|bound| {
+                            let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
+                                return false;
+                            };
+                            self.capability_receiver_matches(
+                                &self.trait_key(trait_id),
+                                &subject,
+                                &obligation_receiver,
+                            )
+                        });
                         subject_matches
                             && constraint.bounds.iter().any(|bound| {
                                 let TypedWhereConstraintRhs::Trait { trait_id } = bound else {

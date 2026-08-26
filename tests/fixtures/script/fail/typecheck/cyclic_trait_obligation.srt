@@ -10,14 +10,14 @@ impl First for Int
 where
   Self: Second
 {
-  def first(self: Int) -> String { "first" }
+  def first(self: Int) -> String { Second::second(self) }
 }
 
 impl Second for Int
 where
   Self: First
 {
-  def second(self: Int) -> String { "second" }
+  def second(self: Int) -> String { First::first(self) }
 }
 
 print(First::first(1))

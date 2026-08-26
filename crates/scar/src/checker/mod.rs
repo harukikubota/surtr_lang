@@ -3887,7 +3887,9 @@ impl Checker {
                         .unwrap_or(&id.name)
                         .rsplit_once("::")
                         .map(|(owner, _)| owner);
-                    let direct = owner.is_none_or(|owner| !type_owners.contains(owner));
+                    let direct = owner.is_none_or(|owner| {
+                        !type_owners.contains(owner) && self.env.lookup_type_def(owner).is_none()
+                    });
                     for param in params {
                         self.validate_constructor_ast_ty(&param.ty, direct, &constructor_traits)?;
                     }
@@ -3898,10 +3900,10 @@ impl Checker {
                 }
                 Resolved::BuiltinDecl(_, _, params, ret, _, _) => {
                     for param in params {
-                        self.validate_constructor_ast_ty(&param.ty, true, &constructor_traits)?;
+                        self.validate_constructor_ast_ty(&param.ty, false, &constructor_traits)?;
                     }
                     if let Some(ret) = ret {
-                        self.validate_constructor_ast_ty(ret, true, &constructor_traits)?;
+                        self.validate_constructor_ast_ty(ret, false, &constructor_traits)?;
                     }
                 }
                 Resolved::ExtractorDef(_, _, _, param, ret, body, _) => {

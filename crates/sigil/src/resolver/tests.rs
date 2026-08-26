@@ -2400,11 +2400,14 @@ fn test_resolve_rejects_slot_map_for_non_constructor_trait() {
     let ast = parse_module_ast(
         r#"deftrait Plain {}
 
-def identity(value: $T) -> $T
+defenum Boxed<$T> {
+  Boxed($T),
+}
+
+impl Plain for Boxed<$T>
 where
   $T: Plain.$A
 {
-  value
 }"#,
         "NonConstructorSlot",
     );

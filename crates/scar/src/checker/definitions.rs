@@ -908,7 +908,11 @@ impl Checker {
         }
     }
 
-    fn resolved_named_type_args(&self, type_name: &str, resolved_ty: &Ty) -> Option<Vec<Ty>> {
+    pub(super) fn resolved_named_type_args(
+        &self,
+        type_name: &str,
+        resolved_ty: &Ty,
+    ) -> Option<Vec<Ty>> {
         let def = self.env.lookup_type_def(type_name)?;
         let resolved_fields = match resolved_ty {
             Ty::Struct(_, fields) | Ty::Record(_, fields) => fields,
