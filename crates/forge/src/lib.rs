@@ -20,8 +20,8 @@ mod tests {
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
     use scar::typed::{
-        ComposeFlavor, TypedClosureParam, TypedFunParam, TypedInner, TypedMatchArm,
-        TypedMatchPattern, TypedNode, TypedPattern,
+        ComposeFlavor, TypedClosureParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode,
+        TypedPattern, TypedValueParameter,
     };
     use scar::types::Ty;
     use sigil::resolved::ResolvedId;
@@ -420,10 +420,12 @@ mod tests {
         }
     }
 
-    fn fun_param(name: &str, unique_id: u32, ty: Ty) -> TypedFunParam {
-        TypedFunParam {
+    fn value_parameter(name: &str, unique_id: u32, ty: Ty) -> TypedValueParameter {
+        TypedValueParameter {
             id: resolved_id(name, unique_id),
+            mode: spire::ast::ValueParameterMode::PositionalOrNamed,
             ty,
+            span: test_span(),
         }
     }
 
@@ -511,7 +513,7 @@ mod tests {
     }
 
     fn identity_def(name: &str, fun_idx: u32, fun_uid: u32, param_uid: u32, ty: Ty) -> TypedNode {
-        let param = fun_param("value", param_uid, ty.clone());
+        let param = value_parameter("value", param_uid, ty.clone());
         TypedNode {
             ty: Ty::Unit,
             span: test_span(),
@@ -529,8 +531,8 @@ mod tests {
     }
 
     fn binary_first_def(name: &str, fun_idx: u32, fun_uid: u32) -> TypedNode {
-        let left = fun_param("left", fun_uid + 1, Ty::Int);
-        let right = fun_param("right", fun_uid + 2, Ty::Int);
+        let left = value_parameter("left", fun_uid + 1, Ty::Int);
+        let right = value_parameter("right", fun_uid + 2, Ty::Int);
         TypedNode {
             ty: Ty::Unit,
             span: test_span(),
@@ -750,7 +752,7 @@ mod tests {
                 0,
                 resolved_id("deep", 1),
                 Vec::new(),
-                Vec::<TypedFunParam>::new(),
+                Vec::<TypedValueParameter>::new(),
                 Ty::Int,
                 None,
                 Box::new(body),
@@ -776,7 +778,10 @@ mod tests {
                     0,
                     resolved_id("add", 1),
                     Vec::new(),
-                    vec![fun_param("x", 2, Ty::Int), fun_param("y", 3, Ty::Int)],
+                    vec![
+                        value_parameter("x", 2, Ty::Int),
+                        value_parameter("y", 3, Ty::Int),
+                    ],
                     Ty::Int,
                     None,
                     Box::new(TypedNode {
@@ -891,8 +896,8 @@ print(to_string(add(1, 2)))"#,
 
     #[test]
     fn tail_closure_call_lowers_to_fused_tail_opcode() {
-        let f = fun_param("f", 30, Ty::Func(vec![Ty::Int], Box::new(Ty::Int)));
-        let value = fun_param("value", 31, Ty::Int);
+        let f = value_parameter("f", 30, Ty::Func(vec![Ty::Int], Box::new(Ty::Int)));
+        let value = value_parameter("value", 31, Ty::Int);
         let bytecode = codegen_typed(vec![TypedNode {
             ty: Ty::Unit,
             span: test_span(),

@@ -1,8 +1,9 @@
 use super::*;
 use sindr::derive::{derive_trait_meta, DeriveGenerator, DeriveTraitMeta, FieldTraitRequirement};
 use spire::ast::{
-    AstMatchArm, AstPath, AstPattern, AstTy, DeclAttrs, EnumVariant, FunParam, Lit, RecordLitArg,
-    Span, StructLitField, TypeParam, WhereClause, WhereConstraint, WhereConstraintRhs,
+    AstMatchArm, AstPath, AstPattern, AstTy, DeclAttrs, EnumVariant, Lit, RecordLitArg,
+    ReturnTypeArgument, Span, StructLitField, TypeParam, ValueParameter, ValueParameterMode,
+    WhereClause, WhereConstraint, WhereConstraintRhs,
 };
 
 pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
@@ -450,26 +451,33 @@ fn make_derived_impl(
         generator,
         DeriveGenerator::InspectShow | DeriveGenerator::Default
     ) {
-        params.push(FunParam {
+        params.push(ValueParameter {
             name: "self".into(),
+            mode: ValueParameterMode::PositionalOrNamed,
             ty: named(span, "Self"),
             span: span.clone(),
         });
-        params.push(FunParam {
+        params.push(ValueParameter {
             name: "rhs".into(),
+            mode: ValueParameterMode::PositionalOrNamed,
             ty: named(span, "Self"),
             span: span.clone(),
         });
     } else if generator == DeriveGenerator::InspectShow {
-        params.push(FunParam {
+        params.push(ValueParameter {
             name: "self".into(),
+            mode: ValueParameterMode::PositionalOrNamed,
             ty: named(span, "Self"),
             span: span.clone(),
         });
     }
     let mut generated_attrs = DeclAttrs::default();
     if generator == DeriveGenerator::Default {
-        generated_attrs.fun_params = vec![named(span, "Self")];
+        generated_attrs.return_type_arguments = vec![ReturnTypeArgument {
+            ordinal: 0,
+            ty: named(span, "Self"),
+            span: span.clone(),
+        }];
     }
     let mut methods = vec![Ast::Def(
         span.clone(),

@@ -36,7 +36,7 @@ pub struct DeclAttrs {
     pub user_importable: bool,
     pub user_callable: bool,
     /// Impl-method dispatch slots, populated only for trait impl methods.
-    pub fun_params: Vec<AstTy>,
+    pub return_type_arguments: Vec<ReturnTypeArgument>,
 }
 
 impl Default for DeclAttrs {
@@ -53,7 +53,7 @@ impl Default for DeclAttrs {
             visibility: Visibility::Public,
             user_importable: true,
             user_callable: true,
-            fun_params: Vec::new(),
+            return_type_arguments: Vec::new(),
         }
     }
 }
@@ -456,10 +456,26 @@ pub struct TypeParam {
     pub span: Span,
 }
 
-/// Function parameter.
+/// A type supplied through declaration or call-site `::<...>` syntax.
 #[derive(Debug, Clone, PartialEq)]
-pub struct FunParam {
+pub struct ReturnTypeArgument {
+    pub ordinal: u32,
+    pub ty: AstTy,
+    pub span: Span,
+}
+
+/// Declaration-side value parameter mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ValueParameterMode {
+    PositionalOrNamed,
+    Variadic,
+}
+
+/// A declaration-side value parameter written in `(...)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueParameter {
     pub name: Symbol,
+    pub mode: ValueParameterMode,
     pub ty: AstTy,
     pub span: Span,
 }
@@ -468,9 +484,9 @@ pub struct FunParam {
 pub struct TraitMethodSig {
     pub name: Symbol,
     /// Explicit dispatch type slots written as `method::<Self, $A>`.
-    pub fun_params: Vec<AstTy>,
+    pub return_type_arguments: Vec<ReturnTypeArgument>,
     pub type_params: Vec<TypeParam>,
-    pub params: Vec<FunParam>,
+    pub value_parameters: Vec<ValueParameter>,
     pub ret_ty: AstTy,
     pub where_clause: Option<WhereClause>,
     pub body: Option<Box<Ast>>,
@@ -573,7 +589,7 @@ pub enum Ast {
     App(Span, Box<Ast>, Vec<RecordLitArg>),
 
     /// Explicit generic-slot application: `identity::<Int>`, `Trait::method::<Int>`
-    TypeApply(Span, Box<Ast>, Vec<AstTy>),
+    ReturnTypeArgumentApply(Span, Box<Ast>, Vec<ReturnTypeArgument>),
 
     /// Statement sequence used by declaration bodies and lowered closure bodies.
     Block(Span, Vec<Ast>),
@@ -672,8 +688,8 @@ pub enum Ast {
     Def(
         Span,
         Symbol,
-        Vec<TypeParam>,
-        Vec<FunParam>,
+        Vec<ReturnTypeArgument>,
+        Vec<ValueParameter>,
         Option<AstTy>,
         Option<WhereClause>,
         Box<Ast>,
@@ -700,7 +716,8 @@ pub enum Ast {
     BuiltinDecl(
         Span,
         Symbol,
-        Vec<FunParam>,
+        Vec<ReturnTypeArgument>,
+        Vec<ValueParameter>,
         Option<AstTy>,
         Option<WhereClause>,
         DeclAttrs,

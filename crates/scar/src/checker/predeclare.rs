@@ -135,7 +135,7 @@ impl Checker {
         for stmt in stmts {
             match stmt {
                 Resolved::Def(_, _, _, _, _, clause, _, _)
-                | Resolved::BuiltinDecl(_, _, _, _, clause, _) => {
+                | Resolved::BuiltinDecl(_, _, _, _, _, clause, _) => {
                     Self::validate_type_shape_clause(
                         clause.as_ref(),
                         false,
@@ -2443,7 +2443,7 @@ impl Checker {
         let mut tyvars = trait_head_bindings.clone();
         self.seed_signature_type_params(&method.type_params, &mut tyvars);
         let params = method
-            .params
+            .value_parameters
             .iter()
             .map(|param| {
                 self.resolve_trait_signature_ast_ty_in_context(
@@ -2466,19 +2466,19 @@ impl Checker {
             .iter()
             .filter_map(|param| trait_head_bindings.get(&param.name).cloned())
             .collect::<Vec<_>>();
-        let fun_params = method
-            .fun_params
+        let return_type_arguments = method
+            .return_type_arguments
             .iter()
-            .map(|param| {
+            .map(|argument| {
                 self.resolve_trait_signature_ast_ty_in_context(
-                    param,
+                    &argument.ty,
                     TypeSyntaxContext::General,
                     self_ty,
                     &mut tyvars,
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        Ok((params, ret, trait_args, fun_params))
+        Ok((params, ret, trait_args, return_type_arguments))
     }
 
     fn expand_trait_self_apps(
@@ -2630,13 +2630,13 @@ impl Checker {
 
     fn alpha_normalized_signature(
         &self,
-        fun_params: &[Ty],
+        return_type_arguments: &[Ty],
         params: &[Ty],
         ret: &Ty,
     ) -> (Vec<Ty>, Vec<Ty>, Ty) {
         let mut vars = Vec::new();
-        for fun_param in fun_params {
-            Self::collect_ty_vars(fun_param, &mut vars);
+        for return_type_argument in return_type_arguments {
+            Self::collect_ty_vars(return_type_argument, &mut vars);
         }
         for param in params {
             Self::collect_ty_vars(param, &mut vars);
@@ -2648,7 +2648,7 @@ impl Checker {
             .map(|(ordinal, var)| (var, Ty::Var(ordinal as u32)))
             .collect::<HashMap<_, _>>();
         (
-            fun_params
+            return_type_arguments
                 .iter()
                 .map(|param| self.substitute_ty_with_mapping(param, &mapping))
                 .collect(),
@@ -2704,7 +2704,7 @@ impl Checker {
         tyvars.extend(trait_head_bindings.clone());
         self.seed_signature_type_params(&method.type_params, &mut tyvars);
         let params = method
-            .params
+            .value_parameters
             .iter()
             .map(|param| {
                 self.resolve_trait_signature_ast_ty_in_context(
@@ -2715,12 +2715,12 @@ impl Checker {
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let fun_params = method
-            .fun_params
+        let return_type_arguments = method
+            .return_type_arguments
             .iter()
-            .map(|param| {
+            .map(|argument| {
                 self.resolve_trait_signature_ast_ty_in_context(
-                    param,
+                    &argument.ty,
                     TypeSyntaxContext::General,
                     &self_ty,
                     &mut tyvars,
@@ -2752,7 +2752,7 @@ impl Checker {
                 type_params.push(var);
             }
         }
-        Ok((params, ret, type_params, fun_params))
+        Ok((params, ret, type_params, return_type_arguments))
     }
 
     pub(super) fn predeclare_traits(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
@@ -2783,21 +2783,27 @@ impl Checker {
             }
             if !constructor_slots.is_empty() {
                 for method in methods {
-                    let mut fun_param_slots = HashSet::new();
-                    for fun_param in &method.fun_params {
-                        Self::collect_constructor_signature_slots(fun_param, &mut fun_param_slots);
+                    let mut return_type_argument_slots = HashSet::new();
+                    for return_type_argument in &method.return_type_arguments {
+                        Self::collect_constructor_signature_slots(
+                            &return_type_argument.ty,
+                            &mut return_type_argument_slots,
+                        );
                     }
                     let mut value_param_slots = HashSet::new();
-                    for param in &method.params {
+                    for param in &method.value_parameters {
                         Self::collect_constructor_signature_slots(
                             &param.ty,
                             &mut value_param_slots,
                         );
                     }
-                    if let Some(slot) = fun_param_slots.intersection(&value_param_slots).next() {
+                    if let Some(slot) = return_type_argument_slots
+                        .intersection(&value_param_slots)
+                        .next()
+                    {
                         return Err(TypeError {
                             message: format!(
-                                "Constructor trait method {} introduces {} through both FunParams and value arguments",
+                                "Constructor trait method {} introduces {} through both ReturnTypeArguments and value arguments",
                                 method.id.name, slot
                             ),
                             span: method.span.clone(),
@@ -2807,7 +2813,7 @@ impl Checker {
                             ),
                         });
                     }
-                    let mut input_slots = fun_param_slots;
+                    let mut input_slots = return_type_argument_slots;
                     input_slots.extend(value_param_slots);
                     let mut return_slots = HashSet::new();
                     Self::collect_constructor_signature_slots(&method.ret_ty, &mut return_slots);
@@ -2819,7 +2825,7 @@ impl Checker {
                             ),
                             span: method.span.clone(),
                             hint: Some(
-                                "Introduce the type variable through FunParams or a value argument."
+                                "Introduce the type variable through ReturnTypeArguments or a value argument."
                                     .into(),
                             ),
                         });
@@ -2838,9 +2844,9 @@ impl Checker {
                     method.id.name.clone(),
                     TraitMethodInfo {
                         id: method.id.clone(),
-                        fun_params: method.fun_params.clone(),
+                        return_type_arguments: method.return_type_arguments.clone(),
                         type_params: method.type_params.clone(),
-                        params: method.params.clone(),
+                        value_parameters: method.value_parameters.clone(),
                         ret_ty: method.ret_ty.clone(),
                         where_clause: method.where_clause.as_ref().map(TypedWhereClause::from),
                         attrs: method.attrs.clone(),
@@ -2925,9 +2931,9 @@ impl Checker {
                     TraitImplMethodInfo {
                         method_name: method.method_name.clone(),
                         function_id: method.function_id.clone(),
-                        fun_params: method.fun_params.clone(),
+                        return_type_arguments: method.return_type_arguments.clone(),
                         type_params: method.type_params.clone(),
-                        params: method.params.clone(),
+                        value_parameters: method.value_parameters.clone(),
                         ret_ty: method.ret_ty.clone(),
                         where_clause: method.where_clause.as_ref().map(TypedWhereClause::from),
                         body: method.body.clone(),
@@ -2973,9 +2979,9 @@ impl Checker {
                             required_method,
                             &trait_method.span,
                         ),
-                        fun_params: trait_method.fun_params.clone(),
+                        return_type_arguments: trait_method.return_type_arguments.clone(),
                         type_params: trait_method.type_params.clone(),
-                        params: trait_method.params.clone(),
+                        value_parameters: trait_method.value_parameters.clone(),
                         ret_ty: None,
                         where_clause: trait_method.where_clause.clone(),
                         body: default_body,
@@ -3044,7 +3050,7 @@ impl Checker {
                     });
                 }
 
-                let (trait_params, trait_ret, trait_head_vars, trait_fun_params) =
+                let (trait_params, trait_ret, trait_head_vars, trait_return_type_arguments) =
                     self.resolve_trait_method_signature(&trait_info, trait_method, &target_ty)?;
                 let trait_head_mapping = trait_head_vars
                     .into_iter()
@@ -3064,14 +3070,14 @@ impl Checker {
                 let trait_ret = self.substitute_ty_with_mapping(&trait_ret, &trait_head_mapping);
                 let trait_ret =
                     self.expand_trait_self_apps(trait_ret, &target_ty, &constructor_slot_vars)?;
-                let trait_fun_params = trait_fun_params
+                let trait_return_type_arguments = trait_return_type_arguments
                     .into_iter()
                     .map(|param| {
                         let param = self.substitute_ty_with_mapping(&param, &trait_head_mapping);
                         self.expand_trait_self_apps(param, &target_ty, &constructor_slot_vars)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let (impl_params, impl_ret, _, impl_fun_params) = self
+                let (impl_params, impl_ret, _, impl_return_type_arguments) = self
                     .resolve_trait_impl_method_signature(
                         &trait_info,
                         trait_args,
@@ -3092,10 +3098,16 @@ impl Checker {
                     });
                 }
 
-                let expected_signature =
-                    self.alpha_normalized_signature(&trait_fun_params, &trait_params, &trait_ret);
-                let impl_signature =
-                    self.alpha_normalized_signature(&impl_fun_params, &impl_params, &impl_ret);
+                let expected_signature = self.alpha_normalized_signature(
+                    &trait_return_type_arguments,
+                    &trait_params,
+                    &trait_ret,
+                );
+                let impl_signature = self.alpha_normalized_signature(
+                    &impl_return_type_arguments,
+                    &impl_params,
+                    &impl_ret,
+                );
                 if expected_signature != impl_signature {
                     return Err(TypeError {
                         message: format!(
@@ -3124,17 +3136,17 @@ impl Checker {
                 if self.canonical_where_clause_key(
                     trait_method.where_clause.as_ref(),
                     &Self::method_constraint_vars(
-                        &trait_method.params,
+                        &trait_method.value_parameters,
                         &trait_method.ret_ty,
-                        &trait_method.fun_params,
+                        &trait_method.return_type_arguments,
                         &trait_method.type_params,
                     ),
                 ) != self.canonical_where_clause_key(
                     impl_method.where_clause.as_ref(),
                     &Self::method_constraint_vars(
-                        &impl_method.params,
+                        &impl_method.value_parameters,
                         impl_method.ret_ty.as_ref().unwrap_or(&trait_method.ret_ty),
-                        &impl_method.fun_params,
+                        &impl_method.return_type_arguments,
                         &impl_method.type_params,
                     ),
                 ) {
@@ -3302,9 +3314,9 @@ impl Checker {
     }
 
     fn method_constraint_vars(
-        params: &[ResolvedFunParam],
+        params: &[ResolvedValueParameter],
         ret: &AstTy,
-        fun_params: &[AstTy],
+        return_type_arguments: &[ResolvedReturnTypeArgument],
         type_params: &[ResolvedTypeParam],
     ) -> HashMap<String, usize> {
         let mut names = type_params
@@ -3315,7 +3327,7 @@ impl Checker {
             .iter()
             .map(|param| &param.ty)
             .chain(std::iter::once(ret))
-            .chain(fun_params)
+            .chain(return_type_arguments.iter().map(|argument| &argument.ty))
         {
             Self::collect_constraint_var_names(ty, &mut names);
         }
@@ -3580,7 +3592,7 @@ impl Checker {
 
         for stmt in stmts {
             match stmt {
-                Resolved::BuiltinDecl(_, id, params, ret_ty, where_clause, _) => {
+                Resolved::BuiltinDecl(_, id, _, params, ret_ty, where_clause, _) => {
                     self.register_function_id(id);
                     let mut tyvars = HashMap::new();
                     let param_tys = params
@@ -3649,7 +3661,16 @@ impl Checker {
                         },
                     );
                 }
-                Resolved::Def(_, id, type_params, params, ret_ty, where_clause, _, attrs) => {
+                Resolved::Def(
+                    _,
+                    id,
+                    return_type_arguments,
+                    params,
+                    ret_ty,
+                    where_clause,
+                    _,
+                    attrs,
+                ) => {
                     self.register_function_id(id);
                     if !attrs.builtin
                         && Self::split_impl_method_name(
@@ -3664,7 +3685,14 @@ impl Checker {
                         )?;
                     }
                     let mut tyvars = HashMap::new();
-                    self.seed_signature_type_params(type_params, &mut tyvars);
+                    for argument in return_type_arguments {
+                        self.resolve_def_signature_ast_ty_in_context(
+                            id,
+                            &argument.ty,
+                            TypeSyntaxContext::General,
+                            &mut tyvars,
+                        )?;
+                    }
                     let param_tys = params
                         .iter()
                         .map(|param| {
@@ -3715,7 +3743,7 @@ impl Checker {
                         });
                     }
                     let type_params =
-                        Self::signature_type_param_vars(type_params, &tyvars, &param_tys, &ret);
+                        Self::signature_type_param_vars(&[], &tyvars, &param_tys, &ret);
                     self.env.bind_var(
                         id.unique_id,
                         Ty::UserFunc {
@@ -3855,7 +3883,7 @@ impl Checker {
                     trait_impl.where_clause.as_ref(),
                 )?;
                 let param_names = method
-                    .params
+                    .value_parameters
                     .iter()
                     .map(|param| param.id.name.clone())
                     .collect::<Vec<_>>();

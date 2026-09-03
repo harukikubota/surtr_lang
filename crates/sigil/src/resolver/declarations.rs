@@ -79,7 +79,7 @@ pub(super) fn validate_unique_callable_names(
     for method in methods {
         let (span, name) = match method {
             Ast::Def(span, name, _, _, _, _, _, _)
-            | Ast::BuiltinDecl(span, name, _, _, _, _)
+            | Ast::BuiltinDecl(span, name, ..)
             | Ast::ExtractorDef(span, name, _, _, _, _, _)
             | Ast::BuiltinExtractorDecl(span, name, _, _, _) => (span, name),
             Ast::IntrinsicDecl(span, name, _, _) => (span, name),
@@ -1312,6 +1312,17 @@ fn rewrite_self_type(ty: AstTy, target: &str) -> AstTy {
     }
 }
 
+fn rewrite_self_return_type_argument(
+    argument: ReturnTypeArgument,
+    target: &str,
+) -> ReturnTypeArgument {
+    ReturnTypeArgument {
+        ordinal: argument.ordinal,
+        ty: rewrite_self_type(argument.ty, target),
+        span: argument.span,
+    }
+}
+
 fn rewrite_self_where_clause(
     clause: spire::ast::WhereClause,
     target: &str,
@@ -1571,11 +1582,15 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
         Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, attrs) => Ast::Def(
             span,
             name,
-            type_params,
+            type_params
+                .into_iter()
+                .map(|argument| rewrite_self_return_type_argument(argument, target))
+                .collect(),
             params
                 .into_iter()
-                .map(|param| FunParam {
+                .map(|param| ValueParameter {
                     name: param.name,
+                    mode: param.mode,
                     ty: rewrite_self_type(param.ty, target),
                     span: param.span,
                 })
@@ -1607,13 +1622,26 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 attrs,
             )
         }
-        Ast::BuiltinDecl(span, name, params, ret_ty, where_clause, attrs) => Ast::BuiltinDecl(
+        Ast::BuiltinDecl(
             span,
             name,
+            return_type_arguments,
+            params,
+            ret_ty,
+            where_clause,
+            attrs,
+        ) => Ast::BuiltinDecl(
+            span,
+            name,
+            return_type_arguments
+                .into_iter()
+                .map(|argument| rewrite_self_return_type_argument(argument, target))
+                .collect(),
             params
                 .into_iter()
-                .map(|param| FunParam {
+                .map(|param| ValueParameter {
                     name: param.name,
+                    mode: param.mode,
                     ty: rewrite_self_type(param.ty, target),
                     span: param.span,
                 })
@@ -1671,11 +1699,11 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .map(|arg| rewrite_self_ast(arg, target))
                 .collect(),
         ),
-        Ast::TypeApply(span, target_expr, args) => Ast::TypeApply(
+        Ast::ReturnTypeArgumentApply(span, target_expr, args) => Ast::ReturnTypeArgumentApply(
             span,
             Box::new(rewrite_self_ast(*target_expr, target)),
             args.into_iter()
-                .map(|arg| rewrite_self_type(arg, target))
+                .map(|argument| rewrite_self_return_type_argument(argument, target))
                 .collect(),
         ),
         Ast::FuncLiteralRef(span, func) => Ast::FuncLiteralRef(span, func),
@@ -2108,7 +2136,7 @@ pub fn precollect_declarations(
                                 };
                                 (method_span, method_name, kind, attrs)
                             }
-                            Ast::BuiltinDecl(method_span, method_name, _, _, _, attrs) => {
+                            Ast::BuiltinDecl(method_span, method_name, _, _, _, _, attrs) => {
                                 (method_span, method_name, DeclarationKind::Def, attrs)
                             }
                             Ast::ExtractorDef(method_span, method_name, _, _, _, _, attrs) => {
@@ -2219,7 +2247,7 @@ pub fn precollect_declarations(
                     for method in methods {
                         let (method_span, method_name) = match method {
                             Ast::Def(method_span, method_name, _, _, _, _, _, _)
-                            | Ast::BuiltinDecl(method_span, method_name, _, _, _, _) => {
+                            | Ast::BuiltinDecl(method_span, method_name, _, _, _, _, _) => {
                                 (method_span, method_name)
                             }
                             _ => {
@@ -2336,7 +2364,7 @@ pub fn precollect_declarations(
                             entry_user_importable(attrs),
                             entry_user_callable(attrs),
                         ),
-                        Ast::BuiltinDecl(span, name, _, _, _, attrs) => (
+                        Ast::BuiltinDecl(span, name, _, _, _, _, attrs) => (
                             span,
                             name.as_str(),
                             DeclarationKind::Def,
@@ -2406,7 +2434,7 @@ pub fn precollect_declarations(
                         _ => continue,
                     };
 
-                if matches!(stmt, Ast::BuiltinDecl(_, name, _, _, _, _) if is_doc_only_builtin_decl(name))
+                if matches!(stmt, Ast::BuiltinDecl(_, name, _, _, _, _, _) if is_doc_only_builtin_decl(name))
                 {
                     continue;
                 }
@@ -2682,8 +2710,9 @@ impl Resolver {
                                 );
                                 let lowered_params = params
                                     .into_iter()
-                                    .map(|param| FunParam {
+                                    .map(|param| ValueParameter {
                                         name: param.name,
+                                        mode: param.mode,
                                         ty: rewrite_self_type(param.ty, &target),
                                         span: param.span,
                                     })
@@ -2695,7 +2724,12 @@ impl Resolver {
                                 lowered.push(Ast::Def(
                                     method_span,
                                     lowered_name,
-                                    type_params,
+                                    type_params
+                                        .into_iter()
+                                        .map(|argument| {
+                                            rewrite_self_return_type_argument(argument, &target)
+                                        })
+                                        .collect(),
                                     lowered_params,
                                     lowered_ret_ty,
                                     where_clause
@@ -2739,6 +2773,7 @@ impl Resolver {
                             Ast::BuiltinDecl(
                                 method_span,
                                 method_name,
+                                return_type_arguments,
                                 params,
                                 ret_ty,
                                 where_clause,
@@ -2751,8 +2786,9 @@ impl Resolver {
                                 );
                                 let lowered_params = params
                                     .into_iter()
-                                    .map(|param| FunParam {
+                                    .map(|param| ValueParameter {
                                         name: param.name,
+                                        mode: param.mode,
                                         ty: rewrite_self_type(param.ty, &target),
                                         span: param.span,
                                     })
@@ -2763,6 +2799,12 @@ impl Resolver {
                                 lowered.push(Ast::BuiltinDecl(
                                     method_span,
                                     lowered_name,
+                                    return_type_arguments
+                                        .into_iter()
+                                        .map(|argument| {
+                                            rewrite_self_return_type_argument(argument, &target)
+                                        })
+                                        .collect(),
                                     lowered_params,
                                     lowered_ret_ty,
                                     where_clause,
@@ -2949,7 +2991,7 @@ impl Resolver {
                         self.predeclare_scope_binding(&method_alias, method_uid, None);
                     }
                 }
-                Ast::BuiltinDecl(_, name, _, _, _, _) => {
+                Ast::BuiltinDecl(_, name, _, _, _, _, _) => {
                     if is_doc_only_builtin_decl(name) {
                         continue;
                     }

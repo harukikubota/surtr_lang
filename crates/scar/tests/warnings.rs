@@ -1,7 +1,7 @@
 use scar::typecheck_with_warnings;
 use sigil::resolved::{
-    Resolved, ResolvedDeclAttrs, ResolvedEnumVariant, ResolvedId, ResolvedTraitMethodSig,
-    ResolvedTypeParam,
+    Resolved, ResolvedDeclAttrs, ResolvedEnumVariant, ResolvedId, ResolvedReturnTypeArgument,
+    ResolvedTraitMethodSig, ResolvedTypeParam,
 };
 use sindr::primitives::int;
 use sindr::warning::WarningKind;
@@ -57,7 +57,11 @@ fn empty_new_def(struct_name: &str, uid: u32) -> Resolved {
             compiler_generated: false,
             span: span(uid as usize, uid as usize + 1),
         },
-        vec![type_param("$A", 100 + uid as usize)],
+        vec![ResolvedReturnTypeArgument {
+            ordinal: 0,
+            ty: named_ty("$A", 100 + uid as usize),
+            span: span(100 + uid as usize, 102 + uid as usize),
+        }],
         Vec::new(),
         Some(generic_ty(
             struct_name,
@@ -198,9 +202,9 @@ fn trait_head_type_parameter_unused_by_methods_warns_even_with_bound() {
         None,
         vec![ResolvedTraitMethodSig {
             id: id("Describe::describe", 31),
-            fun_params: Vec::new(),
+            return_type_arguments: Vec::new(),
             type_params: Vec::new(),
-            params: Vec::new(),
+            value_parameters: Vec::new(),
             ret_ty: named_ty("String", 35),
             where_clause: None,
             body: None,

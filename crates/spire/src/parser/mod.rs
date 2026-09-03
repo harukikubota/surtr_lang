@@ -1138,8 +1138,9 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             type_params,
             params
                 .into_iter()
-                .map(|param| FunParam {
+                .map(|param| ValueParameter {
                     name: param.name,
+                    mode: param.mode,
                     ty: rewrite_process_owner_ty(param.ty, old_name, new_name),
                     span: param.span,
                 })
@@ -1192,13 +1193,23 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                 attrs,
             )
         }
-        Ast::BuiltinDecl(span, name, params, ret_ty, where_clause, attrs) => Ast::BuiltinDecl(
+        Ast::BuiltinDecl(
             span,
             name,
+            return_type_arguments,
+            params,
+            ret_ty,
+            where_clause,
+            attrs,
+        ) => Ast::BuiltinDecl(
+            span,
+            name,
+            return_type_arguments,
             params
                 .into_iter()
-                .map(|param| FunParam {
+                .map(|param| ValueParameter {
                     name: param.name,
+                    mode: param.mode,
                     ty: rewrite_process_owner_ty(param.ty, old_name, new_name),
                     span: param.span,
                 })
@@ -1500,7 +1511,7 @@ pub fn rebase_ast_spans(ast: Vec<Ast>, delta: usize) -> Vec<Ast> {
         .collect()
 }
 
-fn ast_ty_span(ty: &AstTy) -> &Span {
+pub(super) fn ast_ty_span(ty: &AstTy) -> &Span {
     match ty {
         AstTy::Named(span, _)
         | AstTy::ImplTrait(span, _)
@@ -1671,11 +1682,20 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
     }
 }
 
-fn shift_fun_param(param: FunParam, delta: usize) -> FunParam {
-    FunParam {
+fn shift_value_parameter(param: ValueParameter, delta: usize) -> ValueParameter {
+    ValueParameter {
         name: param.name,
+        mode: param.mode,
         ty: shift_ast_ty(param.ty, delta),
         span: shift_span(param.span, delta),
+    }
+}
+
+fn shift_return_type_argument(argument: ReturnTypeArgument, delta: usize) -> ReturnTypeArgument {
+    ReturnTypeArgument {
+        ordinal: argument.ordinal,
+        ty: shift_ast_ty(argument.ty, delta),
+        span: shift_span(argument.span, delta),
     }
 }
 
@@ -1829,11 +1849,11 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|a| shift_record_lit_arg(a, delta))
                 .collect(),
         ),
-        Ast::TypeApply(span, target, args) => Ast::TypeApply(
+        Ast::ReturnTypeArgumentApply(span, target, args) => Ast::ReturnTypeArgumentApply(
             shift_span(span, delta),
             Box::new(shift_ast_span(*target, delta)),
             args.into_iter()
-                .map(|arg| shift_ast_ty(arg, delta))
+                .map(|arg| shift_return_type_argument(arg, delta))
                 .collect(),
         ),
         Ast::Block(span, stmts) => Ast::Block(
@@ -2097,26 +2117,24 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             shift_decl_attrs(attrs),
         ),
-        Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, attrs) => Ast::Def(
-            shift_span(span, delta),
-            name,
-            type_params
-                .into_iter()
-                .map(|param| TypeParam {
-                    name: param.name,
-                    bound: param.bound,
-                    span: shift_span(param.span, delta),
-                })
-                .collect(),
-            params
-                .into_iter()
-                .map(|p| shift_fun_param(p, delta))
-                .collect(),
-            ret_ty.map(|ty| shift_ast_ty(ty, delta)),
-            where_clause.map(|clause| shift_where_clause(clause, delta)),
-            Box::new(shift_ast_span(*body, delta)),
-            shift_decl_attrs(attrs),
-        ),
+        Ast::Def(span, name, return_type_arguments, params, ret_ty, where_clause, body, attrs) => {
+            Ast::Def(
+                shift_span(span, delta),
+                name,
+                return_type_arguments
+                    .into_iter()
+                    .map(|argument| shift_return_type_argument(argument, delta))
+                    .collect(),
+                params
+                    .into_iter()
+                    .map(|p| shift_value_parameter(p, delta))
+                    .collect(),
+                ret_ty.map(|ty| shift_ast_ty(ty, delta)),
+                where_clause.map(|clause| shift_where_clause(clause, delta)),
+                Box::new(shift_ast_span(*body, delta)),
+                shift_decl_attrs(attrs),
+            )
+        }
         Ast::ConstDef(span, name, ty, value, attrs) => Ast::ConstDef(
             shift_span(span, delta),
             name,
@@ -2219,12 +2237,24 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 shift_decl_attrs(attrs),
             )
         }
-        Ast::BuiltinDecl(span, name, params, ret_ty, where_clause, attrs) => Ast::BuiltinDecl(
+        Ast::BuiltinDecl(
+            span,
+            name,
+            return_type_arguments,
+            params,
+            ret_ty,
+            where_clause,
+            attrs,
+        ) => Ast::BuiltinDecl(
             shift_span(span, delta),
             name,
+            return_type_arguments
+                .into_iter()
+                .map(|argument| shift_return_type_argument(argument, delta))
+                .collect(),
             params
                 .into_iter()
-                .map(|p| shift_fun_param(p, delta))
+                .map(|p| shift_value_parameter(p, delta))
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
             where_clause.map(|clause| shift_where_clause(clause, delta)),
@@ -2329,10 +2359,10 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .into_iter()
                 .map(|method| TraitMethodSig {
                     name: method.name,
-                    fun_params: method
-                        .fun_params
+                    return_type_arguments: method
+                        .return_type_arguments
                         .into_iter()
-                        .map(|ty| shift_ast_ty(ty, delta))
+                        .map(|argument| shift_return_type_argument(argument, delta))
                         .collect(),
                     type_params: method
                         .type_params
@@ -2343,10 +2373,10 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                             span: shift_span(param.span, delta),
                         })
                         .collect(),
-                    params: method
-                        .params
+                    value_parameters: method
+                        .value_parameters
                         .into_iter()
-                        .map(|param| shift_fun_param(param, delta))
+                        .map(|param| shift_value_parameter(param, delta))
                         .collect(),
                     ret_ty: shift_ast_ty(method.ret_ty, delta),
                     where_clause: method
@@ -2427,7 +2457,7 @@ impl Ast {
             | Ast::Path(s, _)
             | Ast::FuncLiteralRef(s, _)
             | Ast::App(s, _, _)
-            | Ast::TypeApply(s, _, _)
+            | Ast::ReturnTypeArgumentApply(s, _, _)
             | Ast::Block(s, _)
             | Ast::Bind(s, _, _)
             | Ast::SafeBind(s, _, _)

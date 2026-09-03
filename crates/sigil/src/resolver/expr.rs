@@ -518,7 +518,7 @@ impl Resolver {
                 }
                 Ok(())
             }
-            Ast::TypeApply(_, target, _) => self.collect_capture_placeholders(
+            Ast::ReturnTypeArgumentApply(_, target, _) => self.collect_capture_placeholders(
                 target,
                 allow_placeholders,
                 inside_placeholder_capture,
@@ -2018,7 +2018,7 @@ impl Resolver {
             if matches!(stmt, Ast::Import(_, _, _))
                 || matches!(stmt, Ast::SupervisorInit(_, _))
                 || matches!(stmt, Ast::IntrinsicDecl(_, _, _, _))
-                || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _, _) if is_doc_only_builtin_decl(name))
+                || matches!(&stmt, Ast::BuiltinDecl(_, name, _, _, _, _, _) if is_doc_only_builtin_decl(name))
             {
                 // `import` declarations are consumed by resolver-side module/import handling.
                 // Until full module resolution lands, they are intentionally no-op here.
@@ -2365,14 +2365,14 @@ impl Resolver {
                 related_labels: Vec::new(),
             }),
 
-            Ast::TypeApply(span, target, args) => {
+            Ast::ReturnTypeArgumentApply(span, target, args) => {
                 let resolved_target = self.resolve_node(*target)?;
                 self.ensure_user_callable_surface(&resolved_target, &span, 0)?;
                 let resolved_args = args
                     .into_iter()
-                    .map(|arg| self.resolve_type_annotation(arg))
+                    .map(|argument| self.resolve_return_type_argument(argument))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(Resolved::TypeApply(
+                Ok(Resolved::ReturnTypeArgumentApply(
                     span,
                     Box::new(resolved_target),
                     resolved_args,
@@ -2837,7 +2837,16 @@ impl Resolver {
                 ))
             }
 
-            Ast::Def(span, name, type_params, params, ret_ty, where_clause, body, attrs) => {
+            Ast::Def(
+                span,
+                name,
+                return_type_arguments,
+                params,
+                ret_ty,
+                where_clause,
+                body,
+                attrs,
+            ) => {
                 let fun_uid = self
                     .take_predeclared_id(&name)
                     .or_else(|| self.scope.lookup(&name))
@@ -2858,10 +2867,13 @@ impl Resolver {
                         self.top_level_value_bindings();
                     body_resolver.current_top_level_def_name = Some(name.clone());
                 }
-                let resolved_type_params = self.resolve_type_params(type_params)?;
+                let resolved_return_type_arguments = return_type_arguments
+                    .into_iter()
+                    .map(|argument| self.resolve_return_type_argument(argument))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let resolved_params = params
                     .into_iter()
-                    .map(|param| body_resolver.resolve_fun_param(param))
+                    .map(|param| body_resolver.resolve_value_parameter(param))
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 let resolved_body = body_resolver.resolve_node(*body)?;
 
@@ -2886,7 +2898,7 @@ impl Resolver {
                 Ok(Resolved::Def(
                     span,
                     rid,
-                    resolved_type_params,
+                    resolved_return_type_arguments,
                     resolved_params,
                     ret_ty
                         .map(|ty| self.resolve_type_annotation(ty))
@@ -3024,9 +3036,9 @@ impl Resolver {
                 {
                     let spire::ast::TraitMethodSig {
                         name: method_name,
-                        fun_params,
+                        return_type_arguments,
                         type_params,
-                        params,
+                        value_parameters: params,
                         ret_ty,
                         where_clause,
                         body,
@@ -3043,7 +3055,7 @@ impl Resolver {
                     method_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                     let resolved_params = params
                         .into_iter()
-                        .map(|param| method_resolver.resolve_fun_param(param))
+                        .map(|param| method_resolver.resolve_value_parameter(param))
                         .collect::<Result<Vec<_>, ResolveError>>()?;
                     let resolved_body = body
                         .map(|body| method_resolver.resolve_node(*body).map(Box::new))
@@ -3064,12 +3076,12 @@ impl Resolver {
                             symbol_info,
                             span: method_span.clone(),
                         },
-                        fun_params: fun_params
+                        return_type_arguments: return_type_arguments
                             .into_iter()
-                            .map(|ty| self.resolve_type_annotation(ty))
+                            .map(|argument| self.resolve_return_type_argument(argument))
                             .collect::<Result<Vec<_>, _>>()?,
                         type_params: self.resolve_type_params(type_params)?,
-                        params: resolved_params,
+                        value_parameters: resolved_params,
                         ret_ty: self.resolve_type_annotation(ret_ty)?,
                         where_clause: where_clause
                             .map(|clause| self.resolve_where_clause(clause))
@@ -3129,6 +3141,7 @@ impl Resolver {
                         method_span,
                         method_name,
                         type_params,
+                        return_type_arguments,
                         params,
                         ret_ty,
                         method_where_clause,
@@ -3139,7 +3152,7 @@ impl Resolver {
                         Ast::Def(
                             method_span,
                             method_name,
-                            type_params,
+                            return_type_arguments,
                             params,
                             ret_ty,
                             method_where_clause,
@@ -3148,7 +3161,8 @@ impl Resolver {
                         ) => (
                             method_span,
                             method_name,
-                            type_params,
+                            Vec::new(),
+                            return_type_arguments,
                             params,
                             ret_ty,
                             method_where_clause,
@@ -3159,6 +3173,7 @@ impl Resolver {
                         Ast::BuiltinDecl(
                             method_span,
                             method_name,
+                            return_type_arguments,
                             params,
                             ret_ty,
                             method_where_clause,
@@ -3167,6 +3182,7 @@ impl Resolver {
                             method_span,
                             method_name,
                             Vec::new(),
+                            return_type_arguments,
                             params,
                             ret_ty,
                             method_where_clause,
@@ -3184,11 +3200,27 @@ impl Resolver {
                             });
                         }
                     };
-                    let fun_params = attrs
-                        .fun_params
-                        .clone()
+                    // Surface `::<...>` slots live on the declaration itself.
+                    // Compiler-generated impls retain their slots in declaration
+                    // attributes, so use those only when no surface list exists.
+                    let return_type_arguments = if return_type_arguments.is_empty() {
+                        attrs
+                            .return_type_arguments
+                            .clone()
+                            .into_iter()
+                            .map(|mut argument| {
+                                if matches!(&argument.ty, AstTy::Named(_, name) if name == "Self") {
+                                    argument.ty = resolved_target_ty.clone();
+                                }
+                                argument
+                            })
+                            .collect()
+                    } else {
+                        return_type_arguments
+                    };
+                    let return_type_arguments = return_type_arguments
                         .into_iter()
-                        .map(|ty| self.resolve_type_annotation(ty))
+                        .map(|argument| self.resolve_return_type_argument(argument))
                         .collect::<Result<Vec<_>, _>>()?;
                     let qualified_function_name = trait_impl_method_qualified_name(
                         self.current_module_path.as_deref(),
@@ -3215,7 +3247,7 @@ impl Resolver {
                     method_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                     let resolved_params = params
                         .into_iter()
-                        .map(|param| method_resolver.resolve_fun_param(param))
+                        .map(|param| method_resolver.resolve_value_parameter(param))
                         .collect::<Result<Vec<_>, ResolveError>>()?;
                     let resolved_body = if let Some(body) = body {
                         method_resolver.resolve_node(*body)?
@@ -3250,9 +3282,9 @@ impl Resolver {
                             symbol_info,
                             span: method_span.clone(),
                         },
-                        fun_params,
+                        return_type_arguments,
                         type_params: self.resolve_type_params(type_params)?,
-                        params: resolved_params,
+                        value_parameters: resolved_params,
                         ret_ty: ret_ty
                             .map(|ty| self.resolve_type_annotation(ty))
                             .transpose()?,
@@ -3281,7 +3313,15 @@ impl Resolver {
                 ))
             }
 
-            Ast::BuiltinDecl(span, name, params, ret_ty, where_clause, attrs) => {
+            Ast::BuiltinDecl(
+                span,
+                name,
+                return_type_arguments,
+                params,
+                ret_ty,
+                where_clause,
+                attrs,
+            ) => {
                 let qualified_name = self.qualify_current_declaration_name(&name);
                 let is_io_builtin =
                     sindr::builtin::builtin_meta_for_decl(&name, Some(&qualified_name)).is_some();
@@ -3311,7 +3351,7 @@ impl Resolver {
                 decl_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_params = params
                     .into_iter()
-                    .map(|param| decl_resolver.resolve_fun_param(param))
+                    .map(|param| decl_resolver.resolve_value_parameter(param))
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 self.scope.advance_next_id_to(decl_resolver.scope.next_id());
                 self.scope.define_with_id(&name, builtin_uid);
@@ -3328,9 +3368,14 @@ impl Resolver {
                     symbol_info,
                     span: span.clone(),
                 };
+                let resolved_return_type_arguments = return_type_arguments
+                    .into_iter()
+                    .map(|argument| self.resolve_return_type_argument(argument))
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(Resolved::BuiltinDecl(
                     span,
                     rid,
+                    resolved_return_type_arguments,
                     resolved_params,
                     ret_ty
                         .map(|ty| self.resolve_type_annotation(ty))
@@ -3718,21 +3763,34 @@ impl Resolver {
         }
     }
 
-    pub(super) fn resolve_fun_param(
+    pub(super) fn resolve_value_parameter(
         &mut self,
-        param: FunParam,
-    ) -> Result<ResolvedFunParam, ResolveError> {
+        param: ValueParameter,
+    ) -> Result<ResolvedValueParameter, ResolveError> {
         let uid = self.scope.define(&param.name, param.span.clone());
-        Ok(ResolvedFunParam {
+        Ok(ResolvedValueParameter {
             id: ResolvedId {
                 name: param.name,
                 qualified_name: None,
                 unique_id: uid,
                 compiler_generated: false,
                 symbol_info: None,
-                span: param.span,
+                span: param.span.clone(),
             },
+            mode: param.mode,
             ty: self.resolve_type_annotation(param.ty)?,
+            span: param.span.clone(),
+        })
+    }
+
+    fn resolve_return_type_argument(
+        &self,
+        argument: ReturnTypeArgument,
+    ) -> Result<ResolvedReturnTypeArgument, ResolveError> {
+        Ok(ResolvedReturnTypeArgument {
+            ordinal: argument.ordinal,
+            ty: self.resolve_type_annotation(argument.ty)?,
+            span: argument.span,
         })
     }
 

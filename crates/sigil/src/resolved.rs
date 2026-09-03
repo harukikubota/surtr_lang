@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sindr::names::SymbolIdentityInfo;
 use sindr::primitives::SurtrInt;
-use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, Visibility};
+use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, ValueParameterMode, Visibility};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDeclAttrs {
@@ -98,7 +98,7 @@ pub enum Resolved {
     App(Span, Box<Resolved>, Vec<ResolvedRecordLitArg>),
 
     /// Explicit generic-slot application.
-    TypeApply(Span, Box<Resolved>, Vec<AstTy>),
+    ReturnTypeArgumentApply(Span, Box<Resolved>, Vec<ResolvedReturnTypeArgument>),
 
     /// Block of statements
     Block(Span, Vec<Resolved>),
@@ -227,8 +227,8 @@ pub enum Resolved {
     Def(
         Span,
         ResolvedId,
-        Vec<ResolvedTypeParam>,
-        Vec<ResolvedFunParam>,
+        Vec<ResolvedReturnTypeArgument>,
+        Vec<ResolvedValueParameter>,
         Option<AstTy>,
         Option<ResolvedWhereClause>,
         Box<Resolved>,
@@ -278,7 +278,8 @@ pub enum Resolved {
     BuiltinDecl(
         Span,
         ResolvedId,
-        Vec<ResolvedFunParam>,
+        Vec<ResolvedReturnTypeArgument>,
+        Vec<ResolvedValueParameter>,
         Option<AstTy>,
         Option<ResolvedWhereClause>,
         ResolvedDeclAttrs,
@@ -382,11 +383,21 @@ pub struct ResolvedField {
     pub readonly: bool,
 }
 
-/// Function parameter (resolved).
+/// A resolved declaration or call-site return type argument.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ResolvedFunParam {
-    pub id: ResolvedId,
+pub struct ResolvedReturnTypeArgument {
+    pub ordinal: u32,
     pub ty: AstTy,
+    pub span: Span,
+}
+
+/// A resolved declaration-side value parameter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedValueParameter {
+    pub id: ResolvedId,
+    pub mode: ValueParameterMode,
+    pub ty: AstTy,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -413,9 +424,9 @@ pub struct ResolvedEnumVariant {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedTraitMethodSig {
     pub id: ResolvedId,
-    pub fun_params: Vec<AstTy>,
+    pub return_type_arguments: Vec<ResolvedReturnTypeArgument>,
     pub type_params: Vec<ResolvedTypeParam>,
-    pub params: Vec<ResolvedFunParam>,
+    pub value_parameters: Vec<ResolvedValueParameter>,
     pub ret_ty: AstTy,
     pub where_clause: Option<ResolvedWhereClause>,
     pub body: Option<Box<Resolved>>,
@@ -457,9 +468,9 @@ pub enum ResolvedWhereConstraintRhs {
 pub struct ResolvedTraitImplMethod {
     pub method_name: Symbol,
     pub function_id: ResolvedId,
-    pub fun_params: Vec<AstTy>,
+    pub return_type_arguments: Vec<ResolvedReturnTypeArgument>,
     pub type_params: Vec<ResolvedTypeParam>,
-    pub params: Vec<ResolvedFunParam>,
+    pub value_parameters: Vec<ResolvedValueParameter>,
     pub ret_ty: Option<AstTy>,
     pub where_clause: Option<ResolvedWhereClause>,
     pub body: Box<Resolved>,

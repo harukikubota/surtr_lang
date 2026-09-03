@@ -3144,9 +3144,11 @@ impl Checker {
                 id,
                 params
                     .into_iter()
-                    .map(|param| TypedFunParam {
+                    .map(|param| TypedValueParameter {
                         id: param.id,
+                        mode: param.mode,
                         ty: self.resolve_ty(&param.ty),
+                        span: param.span,
                     })
                     .collect(),
                 Box::new(self.resolve_typed_node(*show)),
@@ -3165,17 +3167,19 @@ impl Checker {
                 id,
                 type_params
                     .into_iter()
-                    .map(|param| TypedTypeParam {
-                        name: param.name,
-                        ty_var: param.ty_var,
-                        bound: param.bound,
+                    .map(|argument| TypedReturnTypeArgument {
+                        ordinal: argument.ordinal,
+                        ty: self.resolve_ty(&argument.ty),
+                        span: argument.span,
                     })
                     .collect(),
                 params
                     .into_iter()
-                    .map(|param| TypedFunParam {
+                    .map(|param| TypedValueParameter {
                         id: param.id,
+                        mode: param.mode,
                         ty: self.resolve_ty(&param.ty),
+                        span: param.span,
                     })
                     .collect(),
                 self.resolve_ty(&ret_ty),
@@ -3195,9 +3199,11 @@ impl Checker {
                             bound: param.bound,
                         })
                         .collect(),
-                    TypedFunParam {
+                    TypedValueParameter {
                         id: param.id,
+                        mode: param.mode,
                         ty: self.resolve_ty(&param.ty),
+                        span: param.span,
                     },
                     self.resolve_ty(&ret_ty),
                     Box::new(self.resolve_typed_node(*body)),
