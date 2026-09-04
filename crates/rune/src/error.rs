@@ -186,6 +186,10 @@ impl RuneError {
                     expected: None,
                     got: None,
                     hint: Some(USAGE_TEXT.to_string()),
+                    reason: None,
+                    origin: None,
+                    data: serde_json::Value::Null,
+                    related: Vec::new(),
                 }],
             },
             Self::Message { message, .. } => diagnostics::SerializableDiagnosticReport {
@@ -203,6 +207,10 @@ impl RuneError {
                     expected: None,
                     got: None,
                     hint: None,
+                    reason: None,
+                    origin: None,
+                    data: serde_json::Value::Null,
+                    related: Vec::new(),
                 }],
             },
         }

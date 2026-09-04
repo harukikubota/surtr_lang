@@ -10,12 +10,14 @@ impl Checker {
         let eq_trait = self
             .trait_key_by_short_name("Eq")
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: "Unknown trait: Eq".into(),
                 span: span.clone(),
                 hint: None,
             })?;
         self.trait_dispatch_target(&eq_trait, "eq", &receiver_ty)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("`==` is not defined for {}", self.ty_name(&receiver_ty)),
                 span: span.clone(),
                 hint: Some(self.trait_implementation_summary("Eq")),
@@ -63,6 +65,7 @@ impl Checker {
                         return Err(err);
                     }
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "expected {}, got {}",
                             self.ty_name(&expected),
@@ -81,6 +84,7 @@ impl Checker {
                         .lookup_var(id.unique_id)
                         .cloned()
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!(
                                 "Pinned pattern requires an existing value `{}`",
                                 id.name
@@ -92,6 +96,7 @@ impl Checker {
                 let pinned_ty = self.resolve_ty(&pinned_ty);
                 if !self.types_compatible(&pinned_ty, &rhs_ty) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Pinned pattern type mismatch: expected {}, got {}",
                             self.ty_name(&pinned_ty),
@@ -114,6 +119,7 @@ impl Checker {
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                     if !self.types_compatible(&expected, &inner_ty) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "expected {}, got {}",
                                 self.ty_name(&expected),
@@ -141,6 +147,7 @@ impl Checker {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 let Ty::Tuple(item_tys) = &rhs_ty else {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "tuple pattern requires tuple scrutinee, got {}",
                             self.ty_name(&rhs_ty)
@@ -151,6 +158,7 @@ impl Checker {
                 };
                 if items.len() != item_tys.len() {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "tuple pattern expects {} value(s), got {}",
                             item_tys.len(),
@@ -168,6 +176,7 @@ impl Checker {
                 Ok((TypedPattern::Tuple(rhs_ty.clone(), typed_items), rhs_ty))
             }
             ResolvedPattern::Or(_) => Err(TypeError {
+                structured: None,
                 message: "Pattern alternatives are only supported in match expressions.".into(),
                 span: span.clone(),
                 hint: None,
@@ -178,6 +187,7 @@ impl Checker {
                     Ty::List(_) => Ok((TypedPattern::ListNil(rhs_ty.clone()), rhs_ty)),
                     Ty::Str => Ok((TypedPattern::StrLit(Ty::Str, String::new()), rhs_ty)),
                     other => Err(TypeError {
+                        structured: None,
                         message: format!(
                             "empty list pattern requires List<...> or String, got {}",
                             self.ty_name(&other)
@@ -226,6 +236,7 @@ impl Checker {
                         ))
                     }
                     other => Err(TypeError {
+                        structured: None,
                         message: format!(
                             "list pattern requires List<...> or String, got {}",
                             self.ty_name(other)
@@ -239,6 +250,7 @@ impl Checker {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if !self.types_compatible(&Ty::Int, &rhs_ty) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "integer literal pattern requires Int, got {}",
                             self.ty_name(&rhs_ty)
@@ -253,6 +265,7 @@ impl Checker {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if !self.types_compatible(&Ty::Str, &rhs_ty) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "string literal pattern requires String, got {}",
                             self.ty_name(&rhs_ty)
@@ -267,6 +280,7 @@ impl Checker {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if !self.types_compatible(&Ty::Bool, &rhs_ty) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "boolean literal pattern requires Boolean, got {}",
                             self.ty_name(&rhs_ty)
@@ -281,6 +295,7 @@ impl Checker {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if !Self::is_duration_ty(&rhs_ty) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "duration literal pattern requires Duration, got {}",
                             self.ty_name(&rhs_ty)
@@ -294,6 +309,7 @@ impl Checker {
             ResolvedPattern::Constructor(ctor_id, inners) => {
                 if ctor_id.name != "Ok" {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "SafeBind constructor pattern only supports Ok(...), got {}(...)",
                             ctor_id.name
@@ -308,6 +324,7 @@ impl Checker {
                     Ty::Result(ok, _) => ok.as_ref().clone(),
                     other => {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "`Ok(...)` pattern requires Result<...>, got {}",
                                 self.ty_name(other)
@@ -322,6 +339,7 @@ impl Checker {
 
                 if inners.len() != 1 {
                     return Err(TypeError {
+                        structured: None,
                         message: "SafeBind Ok(...) pattern requires exactly one inner pattern"
                             .into(),
                         span: ctor_id.span.clone(),
@@ -345,6 +363,7 @@ impl Checker {
                     )?;
                 if !self.types_compatible(&input_ty, &rhs_ty) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Extractor {} expects {}, got {}",
                             extractor_id.name,
@@ -362,6 +381,7 @@ impl Checker {
                 }
                 if items.len() != seq_tys.len() {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Extractor {} returns {} value(s), but pattern expects {}",
                             extractor_id.name,

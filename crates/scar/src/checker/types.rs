@@ -199,6 +199,7 @@ impl Checker {
         };
         if alias.params.len() != args.len() {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Type alias {} requires {} type argument(s), got {}",
                     Self::surface_name(name),
@@ -213,6 +214,7 @@ impl Checker {
             let mut cycle = self.alias_expansion_stack.clone();
             cycle.push(name.to_string());
             return Err(TypeError {
+                structured: None,
                 message: format!("Cyclic type alias: {}", cycle.join(" -> ")),
                 span: span.clone(),
                 hint: None,
@@ -246,6 +248,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         let AstTy::Named(span, name) = ast else {
             return Err(TypeError {
+                structured: None,
                 message: "Facet kind slot K must be a compiler-managed path kind name".into(),
                 span: Self::ast_ty_span(ast).clone(),
                 hint: None,
@@ -263,12 +266,14 @@ impl Checker {
             Ok(())
         } else if alias {
             Err(TypeError {
+                structured: None,
                 message: "Facet kind-set aliases are only valid in compiler intrinsic constraints, not user Facet annotations".into(),
                 span: span.clone(),
                 hint: Some("Use the derived atomic kind InfallibleStructural, FallibleStructural, or VariantPath.".into()),
             })
         } else {
             Err(TypeError {
+                structured: None,
                 message: format!("Unknown Facet path kind `{}`", Self::surface_name(name)),
                 span: span.clone(),
                 hint: None,
@@ -331,6 +336,7 @@ impl Checker {
 
     fn seq_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
+            structured: None,
             message: "Seq is not a surface type in this version of Surtr".into(),
             span: span.clone(),
             hint: Some(
@@ -341,6 +347,7 @@ impl Checker {
 
     pub(super) fn error_function_param_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
+            structured: None,
             message: "Error cannot be used as a user-defined function parameter type".into(),
             span: span.clone(),
             hint: Some(
@@ -352,6 +359,7 @@ impl Checker {
 
     fn lazy_type_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
+            structured: None,
             message: "Lazy<T> is reserved for std-module special-form declarations".into(),
             span: span.clone(),
             hint: Some(
@@ -408,6 +416,7 @@ impl Checker {
 
     pub(super) fn error_observer_escape_error(&self, span: &Span) -> TypeError {
         TypeError {
+            structured: None,
             message: "Error observer closure cannot escape its Error-observation call".into(),
             span: span.clone(),
             hint: Some(
@@ -419,6 +428,7 @@ impl Checker {
 
     pub(super) fn error_observer_call_error(&self, span: &Span) -> TypeError {
         TypeError {
+            structured: None,
             message: "Error observer closure can only be passed to Error-observation APIs".into(),
             span: span.clone(),
             hint: Some(
@@ -445,6 +455,7 @@ impl Checker {
     fn resolve_pid_surface_ty(&self, span: &Span, args: &[AstTy]) -> Result<Ty, TypeError> {
         if args.len() != 1 {
             return Err(TypeError {
+                structured: None,
                 message: "PID<T> requires exactly 1 type argument".into(),
                 span: span.clone(),
                 hint: None,
@@ -461,6 +472,7 @@ impl Checker {
     ) -> Result<Ty, TypeError> {
         if args.len() != 1 {
             return Err(TypeError {
+                structured: None,
                 message: format!("{handle_name}<Worker> requires exactly 1 type argument"),
                 span: span.clone(),
                 hint: None,
@@ -475,6 +487,7 @@ impl Checker {
     fn resolve_task_handle_surface_ty(&self, span: &Span, args: &[AstTy]) -> Result<Ty, TypeError> {
         if args.len() != 1 {
             return Err(TypeError {
+                structured: None,
                 message: "TaskHandle<T> requires exactly 1 type argument".into(),
                 span: span.clone(),
                 hint: None,
@@ -499,6 +512,7 @@ impl Checker {
         match ast_ty {
             AstTy::Named(_, name) => Ok(name.clone()),
             other => Err(TypeError {
+                structured: None,
                 message: "PID<T> expects a process marker such as PID<Counter>".into(),
                 span: Self::ast_ty_span(other).clone(),
                 hint: Some(
@@ -533,6 +547,7 @@ impl Checker {
             ),
         };
         TypeError {
+            structured: None,
             message: format!("{rendered} is reserved for the {special_form} special form"),
             span: span.clone(),
             hint: Some(hint.into()),
@@ -541,6 +556,7 @@ impl Checker {
 
     fn hole_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
+            structured: None,
             message: "`_` is only allowed as an ignored-input marker inside callable types used by variable annotations or function return signatures.".into(),
             span: span.clone(),
             hint: Some(
@@ -552,6 +568,7 @@ impl Checker {
 
     fn reserved_hole_type_error(&self, span: &Span) -> TypeError {
         TypeError {
+            structured: None,
             message: "`Hole` is compiler-reserved; write `_` only in a callable input type or Facet deferred slots.".into(),
             span: span.clone(),
             hint: Some("`Hole` has no user-facing type spelling.".into()),
@@ -708,6 +725,7 @@ impl Checker {
     ) -> Result<&'a [AstTy], TypeError> {
         if args.len() != expected {
             return Err(TypeError {
+                structured: None,
                 message: message.into(),
                 span: span.clone(),
                 hint: None,
@@ -733,6 +751,7 @@ impl Checker {
                         .get(generic_name)
                         .cloned()
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!("Unknown type: {}", name),
                             span: span.clone(),
                             hint: Some(
@@ -755,6 +774,7 @@ impl Checker {
                                 crate::env::TypeKind::Struct => {
                                     if !def.type_params.is_empty() {
                                         return Err(TypeError {
+                                            structured: None,
                                             message: format!(
                                                 "Type {} requires {} type argument(s)",
                                                 name,
@@ -780,6 +800,7 @@ impl Checker {
                                         return Ok(Ty::Enum(def.name.clone(), Vec::new()));
                                     }
                                     return Err(TypeError {
+                                        structured: None,
                                         message: format!(
                                             "Type {} requires {} type argument(s)",
                                             name,
@@ -836,6 +857,7 @@ impl Checker {
                                 | TypeName::TaskHandle,
                             )
                             | None => Err(TypeError {
+                                structured: None,
                                 message: format!("Unknown type: {}", name),
                                 span: span.clone(),
                                 hint: None,
@@ -933,6 +955,7 @@ impl Checker {
                         ))
                     } else {
                         Err(TypeError {
+                            structured: None,
                             message: "Facet update slots T and B must both be `_` or both be concrete types".into(),
                             span: span.clone(),
                             hint: None,
@@ -956,6 +979,7 @@ impl Checker {
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
+                            structured: None,
                             message: "Result<T> or Result<T, E> requires 1 or 2 type arguments"
                                 .into(),
                             span: span.clone(),
@@ -970,6 +994,7 @@ impl Checker {
                         if context != TypeSyntaxContext::FunctionReturn && !allow_none_error_surface
                         {
                             return Err(TypeError {
+                                structured: None,
                                 message:
                                     "Result<T, E> is only allowed in function return signatures."
                                         .into(),
@@ -997,12 +1022,14 @@ impl Checker {
                         return self.resolve_task_handle_surface_ty(span, args);
                     }
                     let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!("Unknown generic type: {}", name),
                         span: span.clone(),
                         hint: None,
                     })?;
                     if def.type_params.len() != args.len() {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Type {} requires {} type argument(s), got {}",
                                 name,
@@ -1032,6 +1059,7 @@ impl Checker {
                             }
                         }
                         _ => Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Generic type {} is not supported in this context",
                                 name
@@ -1045,6 +1073,7 @@ impl Checker {
             AstTy::Tuple(span, items) => {
                 if items.len() < 2 {
                     return Err(TypeError {
+                        structured: None,
                         message: "Tuple types require at least 2 item types".into(),
                         span: span.clone(),
                         hint: None,
@@ -1077,6 +1106,7 @@ impl Checker {
                 Ok(Ty::Func(params, Box::new(ret)))
             }
             AstTy::ImplTrait(span, name) => Err(TypeError {
+                structured: None,
                 message: format!(
                     "`impl {}` is only supported in function and extractor parameters",
                     name
@@ -1192,6 +1222,7 @@ impl Checker {
                         TypeSyntaxContext::General | TypeSyntaxContext::BindingAnnotation
                     ) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Bare constructor trait {} is only allowed for a value parameter or local binding",
                                 Self::surface_name(name)
@@ -1230,6 +1261,7 @@ impl Checker {
                 {
                     if args.len() != constructor_slot_count {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Constructor trait {} requires {} slot argument(s), got {}",
                                 Self::surface_name(name),
@@ -1284,6 +1316,7 @@ impl Checker {
             AstTy::Named(_, name) if name.starts_with('$') => {
                 if context == TypeSyntaxContext::ErrorMarker {
                     return Err(TypeError {
+                        structured: None,
                         message:
                             "The error marker E in Result<T, E> must be a deferror-defined type."
                                 .into(),
@@ -1311,6 +1344,7 @@ impl Checker {
                 Err(self.seq_not_allowed_error(span))
             }
             AstTy::ImplTrait(_, _) => Err(TypeError {
+                structured: None,
                 message: "Anonymous `impl Trait` types are not supported; introduce a named type slot and constrain it with `where`".into(),
                 span: Self::ast_ty_span(ast_ty).clone(),
                 hint: Some("Use a named `$T` type slot and add `$T: Trait` to the `where` clause.".into()),
@@ -1482,6 +1516,7 @@ impl Checker {
                         && (matches!(update_source, Ty::Hole) || matches!(update_focus, Ty::Hole))
                     {
                         return Err(TypeError {
+                            structured: None,
                             message: "Facet update slots T and B must both be `_` or both be concrete types".into(),
                             span: span.clone(),
                             hint: None,
@@ -1516,6 +1551,7 @@ impl Checker {
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
+                            structured: None,
                             message: "Result<T> or Result<T, E> requires 1 or 2 type arguments"
                                 .into(),
                             span: span.clone(),
@@ -1531,6 +1567,7 @@ impl Checker {
                     let err = if args.len() == 2 {
                         if context != TypeSyntaxContext::FunctionReturn {
                             return Err(TypeError {
+                                structured: None,
                                 message:
                                     "Result<T, E> is only allowed in function return signatures."
                                         .into(),
@@ -1555,12 +1592,14 @@ impl Checker {
                         .lookup_type_def(name)
                         .cloned()
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!("Unknown generic type: {}", name),
                             span: span.clone(),
                             hint: None,
                         })?;
                     if def.type_params.len() != args.len() {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Type {} requires {} type argument(s), got {}",
                                 name,
@@ -1597,6 +1636,7 @@ impl Checker {
                             }
                         }
                         _ => Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Generic type {} is not supported in this context",
                                 name
@@ -1611,6 +1651,7 @@ impl Checker {
             AstTy::Tuple(span, items) => {
                 if items.len() < 2 {
                     return Err(TypeError {
+                        structured: None,
                         message: "Tuple types require at least 2 item types".into(),
                         span: span.clone(),
                         hint: None,
@@ -1653,6 +1694,7 @@ impl Checker {
         let span = Self::ast_ty_span(ast_ty).clone();
         let AstTy::Named(_, name) = ast_ty else {
             return Err(TypeError {
+                structured: None,
                 message: "The error marker E in Result<T, E> must be a deferror-defined type."
                     .into(),
                 span,
@@ -1665,6 +1707,7 @@ impl Checker {
         }
 
         let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
+            structured: None,
             message: "The error marker E in Result<T, E> must be a deferror-defined type.".into(),
             span: span.clone(),
             hint: None,
@@ -1673,6 +1716,7 @@ impl Checker {
         if let Ok(def) = def {
             if def.kind != crate::env::TypeKind::ConcreteError {
                 return Err(TypeError {
+                    structured: None,
                     message: "The error marker E in Result<T, E> must be a deferror-defined type."
                         .into(),
                     span,
@@ -1684,6 +1728,7 @@ impl Checker {
 
         if !self.env.is_declared_error_type_name(name) {
             return Err(TypeError {
+                structured: None,
                 message: "The error marker E in Result<T, E> must be a deferror-defined type."
                     .into(),
                 span,

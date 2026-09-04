@@ -254,7 +254,7 @@ git commit -m "refactor(types): replace legacy function parameter vocabulary"
 - Consumes: phase-specific error reason code, source spans, canonical rendered type facts.
 - Invariant: Ariadne and JSON consume the same object; existing JSON fields remain with their current meaning.
 
-- [ ] **Step 1: Write failing serialization and rendering tests**
+- [x] **Step 1: Write failing serialization and rendering tests**
 
 ```rust
 let input = StructuredDiagnostic {
@@ -270,14 +270,14 @@ let input = StructuredDiagnostic {
     related: vec![SourceFact::typed(SourceRole::Value, source_id, value_span, "List<Int>")],
     remediation: None,
 };
-let spec = type_error_spec(&input);
+let spec = structured_type_error_spec(&input);
 let json = serializable_report_by_id(&sources, source_id, "typecheck", &spec);
 assert_eq!(json.errors[0].reason.as_deref(), Some("ReturnTypeArgumentMismatch"));
 assert_eq!(json.errors[0].related.len(), 1);
 assert_eq!(json.errors[0].data["ordinal"], 0);
 ```
 
-- [ ] **Step 2: Run diagnostics tests and observe the missing structured fields**
+- [x] **Step 2: Run diagnostics tests and observe the missing structured fields**
 
 ```bash
 cargo nextest run -p diagnostics
@@ -285,7 +285,7 @@ cargo nextest run -p diagnostics
 
 Expected: compilation fails because structured data and additive JSON fields are absent.
 
-- [ ] **Step 3: Add closed diagnostic data types**
+- [x] **Step 3: Add closed diagnostic data types**
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -359,17 +359,17 @@ pub struct SourceFact {
 
 Add the policy, resolve, parse, and runtime reason enums beside this type when their phase is migrated; do not flatten phase ownership into one cross-phase enum. Do not replace any reason or data enum with `String` or `HashMap<String, String>`.
 
-- [ ] **Step 4: Extend phase TypeError without changing phase ownership**
+- [x] **Step 4: Extend phase TypeError without changing phase ownership**
 
 `scar::TypeError` remains the typecheck error type and gains reason, origin, typed data, and related facts. Add a `diagnostics` dependency to Scar for the shared envelope. Existing not-yet-migrated errors travel in a separate explicitly unstable legacy payload with no stable `reason`; do not add `UnmigratedMessage`, and do not infer a reason from legacy text. Tasks 4--10 eliminate that payload family by family.
 
-- [ ] **Step 5: Make Rune and Xldr pass structured input through**
+- [x] **Step 5: Make Rune and Xldr pass structured input through**
 
 Replace every `TypeErrorDiagnostic::new(e.message, e.span, e.hint)` construction in Rune and Xldr with a conversion that localizes and preserves reason/data/facts, including multi-source related spans. Render templates select message, labels, notes, and help from the reason and optional remediation overlay.
 
 Because this task changes the Xldr REPL path, run it in the required iTerm2 profile `Codex` tmux session, present `tmux attach -t surtr-repl`, and present `Ctrl-b` then `d` for detach. Compare one type error in Rune and Xldr before committing.
 
-- [ ] **Step 6: Verify human and JSON output share facts**
+- [x] **Step 6: Verify human and JSON output share facts**
 
 ```bash
 cargo nextest run -p diagnostics
@@ -378,7 +378,7 @@ cargo nextest run -p rune --test integration run_srt
 
 Expected: tests pass; JSON old fields remain and new fields serialize additively.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/diagnostics crates/scar crates/rune/src crates/xldr tests/integration docs/dev/diagnostics.md

@@ -52,6 +52,7 @@ impl Checker {
             .find(|node| Self::typed_node_has_pending_trait_call(node))
         {
             return Err(TypeError {
+                structured: None,
                 message: "UnresolvedTraitObligation: pending trait dispatch reached the Forge boundary"
                     .into(),
                 span: pending.span.clone(),
@@ -166,6 +167,7 @@ impl Checker {
                     if needs_specialization.contains(fun_idx) {
                         let original_def =
                             defs_by_fun_idx.get(fun_idx).ok_or_else(|| TypeError {
+                                structured: None,
                                 message: format!(
                                     "Missing generic definition for fun_idx {}",
                                     fun_idx
@@ -269,6 +271,7 @@ impl Checker {
                             &obligation.trait_args,
                         )
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!(
                                 "{}::{} could not be specialized to a concrete dispatch target",
                                 trait_name, method_name
@@ -284,6 +287,7 @@ impl Checker {
                     {
                         let original_def =
                             defs_by_fun_idx.get(&fun_idx).ok_or_else(|| TypeError {
+                                structured: None,
                                 message: format!(
                                     "Missing generic definition for fun_idx {}",
                                     fun_idx
@@ -1005,6 +1009,7 @@ impl Checker {
         let original_def = defs_by_fun_idx
             .get(&original_fun_idx)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!(
                     "Missing generic definition for fun_idx {}",
                     original_fun_idx
@@ -1053,6 +1058,7 @@ impl Checker {
         concrete_tys: &[Ty],
     ) -> Result<SpecializationKey, TypeError> {
         let function_name = Self::specialization_function_name(def).ok_or_else(|| TypeError {
+            structured: None,
             message: "Expected def/extractor for specialization key".into(),
             span: def.span.clone(),
             hint: None,
@@ -1218,6 +1224,7 @@ impl Checker {
             }
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Expected def/extractor for specialization, got {:?}", other),
                     span,
                     hint: None,
@@ -1246,6 +1253,7 @@ impl Checker {
             TypedInner::ExtractorDef(_, _, _, param, _, _, _) => vec![param.ty.clone()],
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Expected def/extractor for specialization, got {:?}", other),
                     span: def.span.clone(),
                     hint: None,

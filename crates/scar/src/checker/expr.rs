@@ -107,6 +107,7 @@ impl Checker {
 
     pub(super) fn pending_trait_helper_error(&self, method_name: &str, span: &Span) -> TypeError {
         TypeError {
+            structured: None,
             message: format!(
                 "UnresolvedTraitObligation: Trait helper `{}` could not be concretized for this callable binding",
                 method_name
@@ -165,6 +166,7 @@ impl Checker {
             return Ok(());
         }
         Err(TypeError {
+            structured: None,
             message: format!(
                 "{}::{} is not available for a value constrained by {}",
                 Self::surface_name(required_trait),
@@ -832,6 +834,7 @@ impl Checker {
             Resolved::Var(span, id) => {
                 if self.trait_method_ref(node).is_some() {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait helper `{}` cannot be referenced directly",
                             id.name
@@ -912,6 +915,7 @@ impl Checker {
                             });
                         }
                         return Err(TypeError {
+                            structured: None,
                             message: "Facet value is not statically resolvable at this usage site"
                                 .into(),
                             span: span.clone(),
@@ -932,6 +936,7 @@ impl Checker {
                     if Self::surface_name(&variant.enum_name) == "Boolean" {
                         if !variant.payload.is_empty() {
                             return Err(TypeError {
+                                structured: None,
                                 message: format!(
                                     "Builtin Boolean variant {} unexpectedly requires payload",
                                     id.name
@@ -945,6 +950,7 @@ impl Checker {
                             "False" => false,
                             _ => {
                                 return Err(TypeError {
+                                    structured: None,
                                     message: format!(
                                         "Unknown builtin Boolean variant: {}",
                                         variant.short_name
@@ -969,6 +975,7 @@ impl Checker {
                     }
                     if !variant.payload.is_empty() {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Enum constructor {} expects {} argument(s)",
                                 id.name,
@@ -992,6 +999,7 @@ impl Checker {
 
                 if let Some(index) = Self::parse_tuple_index_name(id.name.as_str()) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Standalone tuple root _{} is not allowed; use tuple access with ._{}",
                             index, index
@@ -1002,6 +1010,7 @@ impl Checker {
                 }
 
                 Err(TypeError {
+                    structured: None,
                     message: format!("Undefined variable: {}", id.name),
                     span: span.clone(),
                     hint: None,
@@ -1015,6 +1024,7 @@ impl Checker {
             Resolved::Bind(span, pat, rhs) => {
                 if !Self::is_total_bind_pattern(pat) {
                     return Err(TypeError {
+                        structured: None,
                         message: "Only total MatchBlock patterns can be used with `=`".into(),
                         span: span.clone(),
                         hint: Some(
@@ -1078,6 +1088,7 @@ impl Checker {
                 };
                 if matches!(typed_rhs.ty, Ty::Error) {
                     return Err(TypeError {
+                        structured: None,
                         message: "Error values must be wrapped with Err(...)".into(),
                         span: typed_rhs.span.clone(),
                         hint: None,
@@ -1169,6 +1180,7 @@ impl Checker {
                 self.check_facet_segment_access_with_expected(span, expr, segment, None)
             }
             Resolved::InferredFacetCapture(span, segments) => Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} requires expected unary function context",
                     Self::inferred_facet_capture_display(segments)
@@ -1180,6 +1192,7 @@ impl Checker {
                 ),
             }),
             Resolved::FacetCapture(span, _) => Err(TypeError {
+                structured: None,
                 message: "`~source.path` is Facet API shorthand and must be consumed as the first argument of Facet::view/preview/put/set/over/over_result".into(),
                 span: span.clone(),
                 hint: Some(
@@ -1241,6 +1254,7 @@ impl Checker {
             Resolved::TraitDef(span, id, _, where_clause, methods, _) => {
                 let trait_key = self.trait_key(id);
                 let trait_info = self.traits.get(&trait_key).cloned().ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!("Unknown trait: {}", id.name),
                     span: span.clone(),
                     hint: None,
@@ -1250,6 +1264,7 @@ impl Checker {
                 for method in methods {
                     let method_info = trait_info.methods.get(&method.id.name).ok_or_else(|| {
                         TypeError {
+                            structured: None,
                             message: format!("Unknown trait method: {}::{}", id.name, method.id.name),
                             span: method.span.clone(),
                             hint: None,
@@ -1377,6 +1392,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if self.trait_method_ref(target).is_some() {
             return Err(TypeError {
+                structured: None,
                 message: "A specialized trait helper needs call or capture context".into(),
                 span: span.clone(),
                 hint: Some(
@@ -1386,6 +1402,7 @@ impl Checker {
         }
         let Resolved::Var(_, id) = target else {
             return Err(TypeError {
+                structured: None,
                 message: "Explicit type arguments require a named callable".into(),
                 span: span.clone(),
                 hint: None,
@@ -1393,6 +1410,7 @@ impl Checker {
         };
         let _ = args;
         Err(TypeError {
+            structured: None,
             message: format!(
                 "{} is a regular callable; explicit type arguments are only allowed for trait helpers",
                 id.name
@@ -1415,6 +1433,7 @@ impl Checker {
                     let typed = self.check_closure(span, params, captures, body, None)?;
                     if !self.types_compatible(&expected_ty, &typed.ty) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Expected {}, got {}",
                                 self.ty_name(&expected_ty),
@@ -1448,6 +1467,7 @@ impl Checker {
                     self.ensure_no_runtime_facet_value(typed, "List literal")?;
                     if !self.types_compatible(element_ty.as_ref(), &typed.ty) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "expected List<{}>, got List<{}>",
                                 self.ty_name(element_ty.as_ref()),
@@ -1481,6 +1501,7 @@ impl Checker {
                     self.ensure_no_runtime_facet_value(typed, "Tuple literal")?;
                     if !self.types_compatible(expected, &typed.ty) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "expected {}, got {}",
                                 self.ty_name(expected),
@@ -1662,6 +1683,7 @@ impl Checker {
             || !self.types_compatible(expected_focus, actual_focus)
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Facet annotation does not match this path: expected {}, got {}",
                     self.ty_name(&expected),
@@ -1712,6 +1734,7 @@ impl Checker {
         }
 
         Some(TypeError {
+            structured: None,
             message: format!(
                 "Facet::put returns plain {}, not {}",
                 self.ty_name(&actual),
@@ -1740,6 +1763,7 @@ impl Checker {
             return None;
         }
         Some(TypeError {
+            structured: None,
             message: format!(
                 "Result context expects {}, but the expression returns plain {}",
                 self.ty_name(&expected),
@@ -1789,6 +1813,7 @@ impl Checker {
             })),
             TypedInner::PendingFacetPath(path) => Ok(StoredFacetPath::Pending(path)),
             _ => Err(TypeError {
+                structured: None,
                 message:
                     "Facet values are compile-time only in Stage1 and cannot be stored or passed around"
                         .into(),
@@ -1816,6 +1841,7 @@ impl Checker {
             }
             TypedPattern::Wildcard(_) => Ok(()),
             _ => Err(TypeError {
+                structured: None,
                 message: "Facet values can only be bound to variables or `_` patterns".into(),
                 span: span.clone(),
                 hint: Some("Use `facet = User.name` or `_ = User.name`.".into()),
@@ -1866,6 +1892,7 @@ impl Checker {
         let typed_rhs = self.check_node(rhs)?;
         if matches!(typed_rhs.ty, Ty::Facet(..)) {
             return Err(TypeError {
+                structured: None,
                 message: "Facet values cannot be bound with `=?`".into(),
                 span: typed_rhs.span.clone(),
                 hint: Some("Use `=` for compile-time Facet bindings.".into()),
@@ -1874,6 +1901,7 @@ impl Checker {
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
         if matches!(&rhs_ty, Ty::Enum(name, _) if Self::surface_name(name) == "Option") {
             return Err(TypeError {
+                structured: None,
                 message: "Option is not a SafeBind target; `=?` propagates Result-style failures, not optional values.".into(),
                 span: typed_rhs.span.clone(),
                 hint: Some(
@@ -1908,6 +1936,7 @@ impl Checker {
                 Ty::Result(_, fn_err_ty) => fn_err_ty,
                 other => {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`=?` can only be used in functions returning Result<...>, got {}",
                             self.ty_name(&other)
@@ -1923,6 +1952,7 @@ impl Checker {
             for propagated in propagated_err_tys {
                 if !self.types_compatible(fn_err_ty.as_ref(), &propagated) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`=?` error type mismatch: function returns {}, but expression returns {}",
                             self.ty_name(fn_err_ty.as_ref()),
@@ -1959,6 +1989,7 @@ impl Checker {
                 self.check_function_value_operand(node, op_name)
             }
             _ => Err(TypeError {
+                structured: None,
                 message: format!("{} requires a function value", op_name),
                 span: self.resolved_span(node).clone(),
                 hint: Some(format!(
@@ -1989,6 +2020,7 @@ impl Checker {
             }
             Resolved::App(span, func, args) => self.check_injected_call(span, func, args, op_name),
             _ => Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} requires a function value or a function call like `f(...)`",
                     op_name
@@ -2201,6 +2233,7 @@ impl Checker {
         let expected_ty = self.resolve_ty(expected_ty);
         let Ty::Func(params, _) = &expected_ty else {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} requires expected unary function context",
                     Self::inferred_facet_capture_display(segments)
@@ -2214,6 +2247,7 @@ impl Checker {
         };
         if params.len() != 1 {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} requires expected unary function context",
                     Self::inferred_facet_capture_display(segments)
@@ -2247,6 +2281,7 @@ impl Checker {
         let typed = self.check_node_with_expected(&synthetic, Some(&expected_ty))?;
         if !self.types_compatible(&expected_ty, &typed.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} inferred type mismatch: expected {}, got {}",
                     Self::inferred_facet_capture_display(segments),
@@ -2305,6 +2340,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let [ResolvedRecordLitArg::Positional(source)] = args else {
             return Err(TypeError {
+                structured: None,
                 message: "Function::curry expects exactly one positional callable".into(),
                 span: span.clone(),
                 hint: None,
@@ -2312,6 +2348,7 @@ impl Checker {
         };
         if matches!(source, Resolved::App(..)) {
             return Err(TypeError {
+                structured: None,
                 message: "Function::curry requires a function value, not a function call".into(),
                 span: self.resolved_span(source).clone(),
                 hint: Some(
@@ -2344,6 +2381,7 @@ impl Checker {
             // function-value restriction.
             Ty::UserFunc { .. } | Ty::BuiltinFunc { .. } => {
                 return Err(TypeError {
+                    structured: None,
                     message: "Function::curry requires an explicit function capture".into(),
                     span: self.resolved_span(source).clone(),
                     hint: Some(
@@ -2353,6 +2391,7 @@ impl Checker {
             }
             _ => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Function::curry requires a function value, got {}",
                         self.ty_name(&source_ty)
@@ -2364,6 +2403,7 @@ impl Checker {
         };
         if params.len() < 2 {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Function::curry requires a function with at least two arguments, got {}",
                     params.len()
@@ -2463,6 +2503,7 @@ impl Checker {
         let typed_key = self.check_node_with_expected(key_expr, Some(&key_expected))?;
         if !self.types_compatible(&key_expected, &typed_key.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Function::on key type mismatch: expected {}, got {}",
                     self.ty_name(&key_expected),
@@ -2477,6 +2518,7 @@ impl Checker {
             Ty::Func(_, focus) => focus.as_ref().clone(),
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Function::on key must be unary, got {}",
                         self.ty_name(&other)
@@ -2493,6 +2535,7 @@ impl Checker {
         let typed_compare = self.check_node_with_expected(compare_expr, Some(&compare_expected))?;
         if !self.types_compatible(&compare_expected, &typed_compare.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Function::on comparator type mismatch: expected {}, got {}",
                     self.ty_name(&compare_expected),
@@ -2530,6 +2573,7 @@ impl Checker {
             let span = typed.span.clone();
             let hint = self.compose_function_value_hint(&typed, op_name);
             Err(TypeError {
+                structured: None,
                 message: format!("{} requires a function value", op_name),
                 span,
                 hint: Some(hint),
@@ -2559,6 +2603,7 @@ impl Checker {
         }
 
         TypeError {
+            structured: None,
             message: format!("Undefined function {}/{}", name, arity),
             span: self.resolved_span(func).clone(),
             hint: Some(format!(
@@ -2939,6 +2984,7 @@ impl Checker {
     ) -> Result<(Ty, Ty), TypeError> {
         let Some((params, ret)) = self.function_parts(ty) else {
             return Err(TypeError {
+                structured: None,
                 message: format!("{} expects a function value", op_name),
                 span: span.clone(),
                 hint: None,
@@ -2946,6 +2992,7 @@ impl Checker {
         };
         if params.len() != 1 {
             return Err(TypeError {
+                structured: None,
                 message: format!("{} expects a unary callable", op_name),
                 span: span.clone(),
                 hint: Some(format!(
@@ -3744,6 +3791,7 @@ impl Checker {
             "try_from"
         };
         Some(TypeError {
+            structured: None,
             message: format!(
                 "{} -> {} implements {}, not {}. Use {}::<{}>(value).",
                 receiver_name,
@@ -3777,6 +3825,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{}::{} does not accept named arguments",
                     trait_name, method_name
@@ -3791,6 +3840,7 @@ impl Checker {
             .get(trait_name)
             .cloned()
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown trait: {}", trait_name),
                 span: span.clone(),
                 hint: None,
@@ -3800,6 +3850,7 @@ impl Checker {
             .get(method_name)
             .cloned()
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown trait method: {}::{}", trait_name, method_name),
                 span: span.clone(),
                 hint: None,
@@ -3850,6 +3901,7 @@ impl Checker {
             && positional_args.len() == 1
         {
             let expected = expected_ret_ty.ok_or_else(|| TypeError {
+                structured: None,
                 message: "Applicative::pure requires an expected return type".into(),
                 span: span.clone(),
                 hint: Some(
@@ -3861,6 +3913,7 @@ impl Checker {
             let dispatch = self
                 .constructor_pure_dispatch(trait_name, expected, &typed_value.ty)
                 .ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!(
                         "Applicative::pure cannot construct {}",
                         self.ty_name(expected)
@@ -3891,6 +3944,7 @@ impl Checker {
             && positional_args.len() == 1
         {
             let expected = expected_ret_ty.ok_or_else(|| TypeError {
+                structured: None,
                 message: "Monad::return requires an expected return type".into(),
                 span: span.clone(),
                 hint: Some(
@@ -3901,6 +3955,7 @@ impl Checker {
             let dispatch = self
                 .constructor_slot_value_dispatch(trait_name, "return", expected, &typed_value.ty)
                 .ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!("Monad::return cannot construct {}", self.ty_name(expected)),
                     span: span.clone(),
                     hint: Some(self.trait_implementation_summary("Monad")),
@@ -3944,6 +3999,7 @@ impl Checker {
                         }
                         Some(args) => {
                             return Err(TypeError {
+                                structured: None,
                                 message: format!(
                                     "{}::{} expects one explicit target type, got {}",
                                     trait_name,
@@ -3963,6 +4019,7 @@ impl Checker {
                     .as_ref()
                     .or(expected_ret_ty)
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!(
                             "{}::{} requires an expected return type",
                             trait_name, method_name
@@ -3976,6 +4033,7 @@ impl Checker {
                 let dispatch = self
                     .constructor_target_dispatch(trait_name, method_name, expected)
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: self.trait_obligation_cycle.clone().unwrap_or_else(|| {
                             format!(
                                 "{}::{} cannot construct {}",
@@ -4007,6 +4065,7 @@ impl Checker {
                 if let Some(expected_ret_ty) = expected_ret_ty {
                     if !self.types_compatible(&typed.ty, expected_ret_ty) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "{}::{} target {} does not match expected return type {}",
                                 trait_name,
@@ -4031,6 +4090,7 @@ impl Checker {
             let mapper_inner = self
                 .constructor_slot_type_for(trait_name, &typed_mapper.ty)
                 .ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!(
                         "Applicative::ap requires a contextual callable, got {}",
                         self.ty_name(&typed_mapper.ty)
@@ -4043,6 +4103,7 @@ impl Checker {
             let expected_value_ty = self
                 .constructor_context_type_for(trait_name, &typed_mapper.ty, &input)
                 .ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!(
                         "Applicative::ap cannot infer value context from {}",
                         self.ty_name(&typed_mapper.ty)
@@ -4062,6 +4123,7 @@ impl Checker {
                 &callable_ty,
             ) else {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Applicative::ap requires Applicative implementation for {}",
                         self.ty_name(&typed_value.ty)
@@ -4072,6 +4134,7 @@ impl Checker {
             };
             if !self.types_compatible(&expected_mapper, &typed_mapper.ty) {
                 return Err(TypeError {
+                    structured: None,
                     message: "Applicative::ap requires mapper and value in the same context".into(),
                     span: span.clone(),
                     hint: None,
@@ -4131,6 +4194,7 @@ impl Checker {
                             let ret_ty = apply_witness(ret_ty);
                             if args.len() != param_tys.len() {
                                 return Err(TypeError {
+                                    structured: None,
                                     message: format!(
                                         "{}::{} expects {} argument(s), got {}",
                                         trait_name,
@@ -4184,6 +4248,7 @@ impl Checker {
         if let Some(explicit_args) = explicit_type_args {
             if explicit_args.len() != explicit_slots.len() {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "{}::{} expects {} explicit type argument(s), got {}",
                         trait_name,
@@ -4214,6 +4279,7 @@ impl Checker {
                 };
                 if !self.types_compatible(slot, &explicit_ty) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Explicit type argument {} does not match generic slot {}",
                             self.ty_name(&explicit_ty),
@@ -4245,6 +4311,7 @@ impl Checker {
 
         if args.len() != param_tys.len() {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{}::{} expects {} argument(s), got {}",
                     trait_name,
@@ -4265,6 +4332,7 @@ impl Checker {
                     self.check_node_with_expected(expr, Some(expected))
                 }
                 ResolvedRecordLitArg::Named(_, _) => Err(TypeError {
+                    structured: None,
                     message: format!(
                         "{}::{} does not accept named arguments",
                         trait_name, method_name
@@ -4286,6 +4354,7 @@ impl Checker {
                 if let Some(receiver_name) = self.trait_target_name(&receiver_ty) {
                     if Self::surface_name(&receiver_name) != owner_hint {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "{}::{} helper requires receiver type {}, got {}",
                                 owner_hint,
@@ -4311,6 +4380,7 @@ impl Checker {
                     let right_ty = self.ty_name(&typed_args[1].ty);
                     if self.trait_matches_short_name(trait_name, "Eq") && method_name == "eq" {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Eq::eq helper cannot compare {} and {}",
                                 left_ty, right_ty
@@ -4321,6 +4391,7 @@ impl Checker {
                     }
                     if self.trait_matches_short_name(trait_name, "Eq") && method_name == "neq" {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Eq::neq helper cannot compare {} and {}",
                                 left_ty, right_ty
@@ -4333,6 +4404,7 @@ impl Checker {
                         && method_name == "compare"
                     {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Compare::compare helper cannot compare {} and {}",
                                 left_ty, right_ty
@@ -4343,6 +4415,7 @@ impl Checker {
                     }
                     if self.trait_matches_short_name(trait_name, "Concat") {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Concat::concat helper requires String on both sides, but got {} and {}",
                                 left_ty, right_ty,
@@ -4357,6 +4430,7 @@ impl Checker {
                     && self.trait_impl_exists(trait_name, &receiver_ty)
                 {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "{}::{} expects argument {} to match receiver type {}, got {}",
                             trait_display_name,
@@ -4370,6 +4444,7 @@ impl Checker {
                     });
                 }
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Argument type mismatch in {}::{}: expected {}, got {}",
                         trait_display_name,
@@ -4393,6 +4468,7 @@ impl Checker {
                 && !self.tyvar_satisfies_compiler_trait(var, &trait_call_name)
             {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "MissingGenericBound: {} must implement {}",
                         self.ty_name(&receiver_ty),
@@ -4455,6 +4531,7 @@ impl Checker {
                 &trait_arg_tys,
             )
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: self.trait_obligation_cycle.clone().unwrap_or_else(|| {
                     format!(
                         "{}::{} requires a receiver type implementing {}, got {}",
@@ -4502,6 +4579,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} does not support named arguments on the right-hand side",
                     op_name
@@ -4519,6 +4597,7 @@ impl Checker {
             Ty::Func(params, ret) => (params, ret.as_ref().clone()),
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "{} right-hand side is not a function call target: {}",
                         op_name,
@@ -4532,6 +4611,7 @@ impl Checker {
 
         if params.len() != args.len() + 1 {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} injects the left value as the first argument, so the call expects {} explicit argument(s), got {}",
                     op_name,
@@ -4545,6 +4625,7 @@ impl Checker {
 
         if matches!(self.resolve_ty(&params[0]), Ty::Lazy(_)) {
             return Err(TypeError {
+                structured: None,
                 message: "pipe injection into a Lazy parameter is not allowed".into(),
                 span: span.clone(),
                 hint: Some(
@@ -4571,6 +4652,7 @@ impl Checker {
                 && !self.types_compatible(expected, &arg.ty)
             {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Argument type mismatch: expected {}, got {}",
                         self.ty_name(expected),
@@ -4609,6 +4691,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} does not support named arguments on the right-hand side",
                     op_name
@@ -4660,6 +4743,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         match self.resolve_ty(output_ty) {
             Ty::Result(_, _) | Ty::List(_) => Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} expects a plain function on the right-hand side; use {} for contextual output",
                     op_name,
@@ -4669,6 +4753,7 @@ impl Checker {
                 hint: None,
             }),
             Ty::Enum(name, _) if Self::surface_name(&name) == "Option" => Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} expects a plain function on the right-hand side; use {} for contextual output",
                     op_name,
@@ -4696,6 +4781,7 @@ impl Checker {
         let trait_key = self
             .trait_key_by_short_name(trait_short_name)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown trait: {}", trait_short_name),
                 span: span.clone(),
                 hint: None,
@@ -4708,6 +4794,7 @@ impl Checker {
         ) else {
             let summary = self.trait_implementation_summary(trait_short_name);
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} requires {} implementation on the left, got {}",
                     op_name,
@@ -4811,6 +4898,7 @@ impl Checker {
                     "`|>`",
                 )?
                 .ok_or_else(|| TypeError {
+                    structured: None,
                     message: "`|>` requires a specialized trait helper on the right".into(),
                     span: call_span.clone(),
                     hint: None,
@@ -4822,6 +4910,7 @@ impl Checker {
             && !self.types_compatible(&param, &typed_left.ty)
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "`|>` type mismatch: expected {}, got {}",
                     self.ty_name(&param),
@@ -4875,6 +4964,7 @@ impl Checker {
         let value_inner = self
             .constructor_slot_type_for("Applicative", &typed_value.ty)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!(
                     "`|*|` requires an Applicative value on the right, got {}",
                     self.ty_name(&typed_value.ty)
@@ -4887,6 +4977,7 @@ impl Checker {
         let expected_mapper_ty = self
             .constructor_context_type_for("Applicative", &typed_value.ty, &callable_hint)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: "`|*|` cannot infer mapper context from the value".into(),
                 span: typed_value.span.clone(),
                 hint: None,
@@ -4895,6 +4986,7 @@ impl Checker {
         let mapper_inner = self
             .constructor_slot_type_for("Applicative", &typed_mapper.ty)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!(
                     "`|*|` requires a contextual callable on the left, got {}",
                     self.ty_name(&typed_mapper.ty)
@@ -4905,6 +4997,7 @@ impl Checker {
         let (input, output) = self.unary_function_parts(&mapper_inner, "`|*|`", span)?;
         if !self.types_compatible(&input, &value_inner) {
             return Err(TypeError {
+                structured: None,
                 message: "`|*|` mapper input and value type do not match".into(),
                 span: span.clone(),
                 hint: None,
@@ -4919,6 +5012,7 @@ impl Checker {
             &callable_ty,
         ) else {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "`|*|` requires Applicative implementation for {}",
                     self.ty_name(&typed_value.ty)
@@ -4929,6 +5023,7 @@ impl Checker {
         };
         if !self.types_compatible(&expected_mapper, &typed_mapper.ty) {
             return Err(TypeError {
+                structured: None,
                 message: "`|*|` requires mapper and value in the same context".into(),
                 span: span.clone(),
                 hint: None,
@@ -5035,6 +5130,7 @@ impl Checker {
             Ty::Result(ok, _) => {
                 if !self.callable_accepts_input(&rhs_in, ok.as_ref()) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`|*>` type mismatch: expected {}, got {}",
                             self.ty_name(ok.as_ref()),
@@ -5054,6 +5150,7 @@ impl Checker {
             Ty::List(item) => {
                 if !self.callable_accepts_input(&rhs_in, item.as_ref()) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`|*>` type mismatch: expected {}, got {}",
                             self.ty_name(item.as_ref()),
@@ -5073,6 +5170,7 @@ impl Checker {
             Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
                 if !self.callable_accepts_input(&rhs_in, &args[0]) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`|*>` type mismatch: expected {}, got {}",
                             self.ty_name(&args[0]),
@@ -5095,6 +5193,7 @@ impl Checker {
         let functor_trait = self
             .trait_key_by_short_name("Functor")
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: "Unknown trait: Functor".into(),
                 span: span.clone(),
                 hint: None,
@@ -5103,6 +5202,7 @@ impl Checker {
             if let Some((witness, [input])) = Self::constructor_application_parts(items) {
                 if !self.callable_accepts_input(&rhs_in, input) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`|*>` type mismatch: expected {}, got {}",
                             self.ty_name(input),
@@ -5144,6 +5244,7 @@ impl Checker {
         ) else {
             let functor_summary = self.trait_implementation_summary("Functor");
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "`|*>` requires Functor implementation on the left, got {}",
                     self.ty_name(&receiver_ty)
@@ -5221,6 +5322,7 @@ impl Checker {
         let monad_trait = self
             .trait_key_by_short_name("Monad")
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: "Unknown trait: Monad".into(),
                 span: span.clone(),
                 hint: None,
@@ -5277,6 +5379,7 @@ impl Checker {
                         "`|>=`",
                     )?
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: "`|>=` requires a specialized trait helper on the right".into(),
                         span: call_span.clone(),
                         hint: None,
@@ -5408,6 +5511,7 @@ impl Checker {
                     "`|>=`",
                 )?
                 .ok_or_else(|| TypeError {
+                    structured: None,
                     message: "`|>=` requires a specialized trait helper on the right".into(),
                     span: call_span.clone(),
                     hint: None,
@@ -5425,6 +5529,7 @@ impl Checker {
                     || !self.types_compatible(err.as_ref(), next_err.as_ref())
                 {
                     return Err(TypeError {
+                        structured: None,
                         message: "`|>=` requires matching Result context on both sides".into(),
                         span: span.clone(),
                         hint: Some(self.operator_rule_hint(
@@ -5445,6 +5550,7 @@ impl Checker {
             (Ty::List(item), Ty::List(_)) => {
                 if !self.callable_accepts_input(&rhs_in, item.as_ref()) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`|>=` type mismatch: expected {}, got {}",
                             self.ty_name(item.as_ref()),
@@ -5468,6 +5574,7 @@ impl Checker {
             {
                 if !self.callable_accepts_input(&rhs_in, &args[0]) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`|>=` type mismatch: expected {}, got {}",
                             self.ty_name(&args[0]),
@@ -5486,6 +5593,7 @@ impl Checker {
             }
             (lhs_ctx, Ty::Result(_, _)) if is_option_ctx(lhs_ctx) => {
                 return Err(TypeError {
+                    structured: None,
                     message: "`|>=` cannot use Option as a standard failure container for Result bind"
                         .into(),
                     span: span.clone(),
@@ -5502,6 +5610,7 @@ impl Checker {
             }
             (Ty::Result(_, _), rhs_ctx) if is_option_ctx(&rhs_ctx) => {
                 return Err(TypeError {
+                    structured: None,
                     message: "`|>=` cannot switch from Result into Option bind context".into(),
                     span: span.clone(),
                     hint: Some(self.operator_rule_hint(
@@ -5525,6 +5634,7 @@ impl Checker {
                             || matches!(rhs_ctx, Ty::List(_)))) =>
             {
                 return Err(TypeError {
+                structured: None,
                 message: "`|>=` container context mismatch: cannot mix Result, List, and Option context"
                     .into(),
                 span: span.clone(),
@@ -5539,6 +5649,7 @@ impl Checker {
             }
             (Ty::Result(_, _), rhs_plain) => {
                 return Err(TypeError {
+                structured: None,
                 message: format!(
                     "`|>=` requires the right-hand side to return Result, got {}",
                     self.ty_name(&rhs_plain)
@@ -5558,6 +5669,7 @@ impl Checker {
             }
             (Ty::List(_), rhs_plain) => {
                 return Err(TypeError {
+                structured: None,
                 message: format!(
                     "`|>=` requires the right-hand side to return List, got {}",
                     self.ty_name(&rhs_plain)
@@ -5577,6 +5689,7 @@ impl Checker {
             }
             (Ty::Enum(name, _), rhs_plain) if Self::surface_name(&name) == "Option" => {
                 return Err(TypeError {
+                structured: None,
                 message: format!(
                     "`|>=` requires the right-hand side to return Option, got {}",
                     self.ty_name(&rhs_plain)
@@ -5600,6 +5713,7 @@ impl Checker {
         let monad_trait = self
             .trait_key_by_short_name("Monad")
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: "Unknown trait: Monad".into(),
                 span: span.clone(),
                 hint: None,
@@ -5609,6 +5723,7 @@ impl Checker {
         else {
             let monad_summary = self.trait_implementation_summary("Monad");
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "`|>=` requires Monad implementation on the left, got {}",
                     self.ty_name(&receiver_ty)
@@ -5693,6 +5808,7 @@ impl Checker {
                 _ => None,
             };
             return Err(TypeError {
+                structured: None,
                 message: "`>>` requires the left output type to match the right input type".into(),
                 span: span.clone(),
                 hint: Some(self.operator_rule_hint(
@@ -5809,6 +5925,7 @@ impl Checker {
             Ty::Result(ok, err) => {
                 if !self.callable_accepts_input(&right_in, ok.as_ref()) {
                     return Err(TypeError {
+                        structured: None,
                         message:
                             "`>*` requires the left contextual output to match the right input type"
                                 .into(),
@@ -5853,6 +5970,7 @@ impl Checker {
             Ty::List(item) => {
                 if !self.callable_accepts_input(&right_in, item.as_ref()) {
                     return Err(TypeError {
+                        structured: None,
                         message:
                             "`>*` requires the left contextual output to match the right input type"
                                 .into(),
@@ -5894,6 +6012,7 @@ impl Checker {
             Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
                 if !self.callable_accepts_input(&right_in, &args[0]) {
                     return Err(TypeError {
+                        structured: None,
                         message:
                             "`>*` requires the left contextual output to match the right input type"
                                 .into(),
@@ -5955,6 +6074,7 @@ impl Checker {
                 )
                 .or_else(|_| {
                     Err(TypeError {
+                        structured: None,
                         message: "`>*` requires Result, List, or Option on the left-hand side"
                             .into(),
                         span: span.clone(),
@@ -6060,6 +6180,7 @@ impl Checker {
                     || !self.types_compatible(err.as_ref(), next_err.as_ref())
                 {
                     return Err(TypeError {
+                        structured: None,
                         message: "`>=>` requires matching Result context on both sides".into(),
                         span: span.clone(),
                         hint: Some(self.operator_rule_hint(
@@ -6103,6 +6224,7 @@ impl Checker {
             (Ty::List(item), Ty::List(next_item)) => {
                 if !self.callable_accepts_input(&right_in, item.as_ref()) {
                     return Err(TypeError {
+                        structured: None,
                         message: "`>=>` requires matching List element types across both sides"
                             .into(),
                         span: span.clone(),
@@ -6149,6 +6271,7 @@ impl Checker {
             {
                 if !self.callable_accepts_input(&right_in, &args[0]) {
                     return Err(TypeError {
+                        structured: None,
                         message: "`>=>` requires matching Option payload types across both sides"
                             .into(),
                         span: span.clone(),
@@ -6211,6 +6334,7 @@ impl Checker {
                 )
                 .or_else(|_| {
                     Err(TypeError {
+                        structured: None,
                         message:
                             "`>=>` requires matching Result, List, or Option context on both sides"
                                 .into(),
@@ -6236,6 +6360,7 @@ impl Checker {
         let variants = self
             .lookup_enum_variants_of("Option")
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: "Option enum is not available in the current environment".into(),
                 span: span.clone(),
                 hint: None,
@@ -6252,6 +6377,7 @@ impl Checker {
         match (some_tag, none_tag) {
             (Some(some), Some(none)) => Ok((some, none, 0)),
             _ => Err(TypeError {
+                structured: None,
                 message: "Option enum must define Some and None variants".into(),
                 span: span.clone(),
                 hint: None,
@@ -6269,6 +6395,7 @@ impl Checker {
             .lookup_var(extractor_id.unique_id)
             .cloned()
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Undefined extractor: {}", extractor_id.name),
                 span: span.clone(),
                 hint: None,
@@ -6280,6 +6407,7 @@ impl Checker {
             | Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Extractor {} is not callable (got {})",
                         extractor_id.name,
@@ -6292,6 +6420,7 @@ impl Checker {
         };
         if params.len() != 1 {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Extractor {} must accept exactly one input value, got {} parameter(s)",
                     extractor_id.name,
@@ -6321,6 +6450,7 @@ impl Checker {
             .lookup_var(extractor_id.unique_id)
             .cloned()
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Undefined extractor: {}", extractor_id.name),
                 span: span.clone(),
                 hint: None,
@@ -6335,6 +6465,7 @@ impl Checker {
             .or_else(|| self.function_ids_by_name.get("uncons"))
             .cloned()
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: "Missing helper function: Kernel::uncons".into(),
                 span: span.clone(),
                 hint: None,
@@ -6358,6 +6489,7 @@ impl Checker {
             }
             Ty::Str => Ok((Ty::Str, vec![Ty::Str, Ty::Str])),
             other => Err(TypeError {
+                structured: None,
                 message: format!(
                     "Extractor uncons expects List<...> or String, got {}",
                     self.ty_name(&other)
@@ -6407,6 +6539,7 @@ impl Checker {
                 }
             }
             other => Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} must return Option<T> or Option<(...)>, got {}",
                     context,
@@ -6435,6 +6568,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Positional(_)));
         if has_named && has_positional {
             return Err(TypeError {
+                structured: None,
                 message: "Cannot mix positional and named arguments".into(),
                 span: span.clone(),
                 hint: None,
@@ -6446,6 +6580,7 @@ impl Checker {
 
         if has_named {
             let names = param_names.as_ref().ok_or_else(|| TypeError {
+                structured: None,
                 message: "This function value does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
@@ -6453,6 +6588,7 @@ impl Checker {
 
             if args.len() != params.len() {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "function expects {} argument(s), got {}",
                         params.len(),
@@ -6467,6 +6603,7 @@ impl Checker {
             for arg in args {
                 let ResolvedRecordLitArg::Named(name, expr) = arg else {
                     return Err(TypeError {
+                        structured: None,
                         message: "Cannot mix positional and named arguments".into(),
                         span: span.clone(),
                         hint: None,
@@ -6476,12 +6613,14 @@ impl Checker {
                     .iter()
                     .position(|n| n == name)
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!("Unknown argument name '{}' for function", name),
                         span: span.clone(),
                         hint: None,
                     })?;
                 if reordered[idx].is_some() {
                     return Err(TypeError {
+                        structured: None,
                         message: format!("Duplicate argument '{}'", name),
                         span: span.clone(),
                         hint: None,
@@ -6492,6 +6631,7 @@ impl Checker {
 
             for (idx, expected_ty) in params.iter().enumerate() {
                 let expr = reordered[idx].ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!("Missing argument '{}'", names[idx]),
                     span: span.clone(),
                     hint: None,
@@ -6506,6 +6646,7 @@ impl Checker {
                     && !self.types_compatible(expected_ty, &typed.ty)
                 {
                     return Err(TypeError {
+                        structured: None,
                         message: self.argument_type_mismatch_message(expected_ty, &typed.ty),
                         span: typed.span.clone(),
                         hint: callable_hint.map(str::to_string),
@@ -6518,6 +6659,7 @@ impl Checker {
 
         if args.len() != params.len() {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "function expects {} argument(s), got {}",
                     params.len(),
@@ -6531,6 +6673,7 @@ impl Checker {
         for (expected_ty, arg) in params.iter().zip(args) {
             let ResolvedRecordLitArg::Positional(expr) = arg else {
                 return Err(TypeError {
+                    structured: None,
                     message: "Cannot mix positional and named arguments".into(),
                     span: span.clone(),
                     hint: None,
@@ -6546,6 +6689,7 @@ impl Checker {
                 && !self.types_compatible(expected_ty, &typed.ty)
             {
                 return Err(TypeError {
+                    structured: None,
                     message: self.argument_type_mismatch_message(expected_ty, &typed.ty),
                     span: typed.span.clone(),
                     hint: callable_hint.map(str::to_string),
@@ -6752,6 +6896,7 @@ impl Checker {
                 Ok(())
             }
             ("Tuple", actual) => Err(TypeError {
+                structured: None,
                 message: format!(
                     "Tuple root Facet path requires tuple source context, got {}",
                     self.ty_name(&actual)
@@ -6760,6 +6905,7 @@ impl Checker {
                 hint: Some("Expected source type like (A, B, ...) for Tuple._N.".into()),
             }),
             ("List", actual) => Err(TypeError {
+                structured: None,
                 message: format!(
                     "List root Facet path requires List<T>, got {}",
                     self.ty_name(&actual)
@@ -6768,6 +6914,7 @@ impl Checker {
                 hint: Some("Use List.[N] with a List source value.".into()),
             }),
             ("HashMap", actual) => Err(TypeError {
+                structured: None,
                 message: format!(
                     "HashMap root Facet path requires HashMap<T>, got {}",
                     self.ty_name(&actual)
@@ -6789,6 +6936,7 @@ impl Checker {
             if let Some(expected_source) = expected_source {
                 if !self.types_compatible(&source_ty_hint, expected_source) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Facet path source type mismatch: path expects {}, got {}",
                             self.ty_name(&source_ty_hint),
@@ -6803,6 +6951,7 @@ impl Checker {
         } else {
             let Some(expected_source) = expected_source else {
                 return Err(TypeError {
+                    structured: None,
                     message:
                         "Tuple._N requires Facet type context (e.g. Facet::view(Tuple._1, source_tuple))"
                             .into(),
@@ -6859,6 +7008,7 @@ impl Checker {
         let facet_ty = self.resolve_ty(&typed.ty);
         if !matches!(facet_ty, Ty::Facet(..)) {
             return Err(TypeError {
+                structured: None,
                 message: format!("Expected Facet<...> value, got {}", self.ty_name(&typed.ty)),
                 span: typed.span.clone(),
                 hint: None,
@@ -6886,6 +7036,7 @@ impl Checker {
                 self.specialize_pending_facet_path(path, span, expected_source)
             }
             _ => Err(TypeError {
+                structured: None,
                 message:
                     "Facet values are compile-time only in Stage1 and cannot be stored or passed around"
                         .into(),
@@ -6918,6 +7069,7 @@ impl Checker {
 
         if !self.types_compatible(&left_path.focus_ty, &right_path.source_ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} source/focus mismatch: left focus is {}, right source is {}",
                     operator_name,
@@ -6982,6 +7134,7 @@ impl Checker {
                 Ok(self.pending_facet_node(span, left_path))
             }
             _ => Err(TypeError {
+                structured: None,
                 message:
                     "Facet values are compile-time only in Stage1 and cannot be stored or passed around"
                         .into(),
@@ -6998,6 +7151,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if args.len() != 2 {
             return Err(TypeError {
+                structured: None,
                 message: format!("Facet::chain expects 2 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
@@ -7008,6 +7162,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
+                structured: None,
                 message: "Facet::chain does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
@@ -7040,6 +7195,7 @@ impl Checker {
                 self.compose_pending_facet_paths(span, path, right_expr)
             }
             _ => Err(TypeError {
+                structured: None,
                 message: format!("Expected Facet<...> value, got {}", self.ty_name(&left.ty)),
                 span: left.span.clone(),
                 hint: None,
@@ -7055,6 +7211,7 @@ impl Checker {
         let typed_source = self.check_node(source_expr)?;
         if matches!(typed_source.ty, Ty::Facet(..)) {
             return Err(TypeError {
+                structured: None,
                 message: format!("{} source value cannot be a Facet", op_name),
                 span: typed_source.span.clone(),
                 hint: None,
@@ -7095,6 +7252,7 @@ impl Checker {
         }
         if segments.is_empty() {
             return Err(TypeError {
+                structured: None,
                 message: format!("{op_name} shorthand requires a field or tuple path").into(),
                 span: span.clone(),
                 hint: Some(
@@ -7134,6 +7292,7 @@ impl Checker {
                 let path = self.specialize_pending_facet_path(path, span, Some(source_value_ty))?;
                 if !self.types_compatible(&path.source_ty, source_value_ty) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "{} source type mismatch: facet expects {}, got {}",
                             op_name,
@@ -7170,6 +7329,7 @@ impl Checker {
 
         if !self.types_compatible(&path.source_ty, source_value_ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} source type mismatch: facet expects {}, got {}",
                     op_name,
@@ -7195,6 +7355,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
+                structured: None,
                 message: format!("{op_name} does not accept named arguments"),
                 span: span.clone(),
                 hint: None,
@@ -7202,6 +7363,7 @@ impl Checker {
         }
         if args.len() != 1 && args.len() != 2 {
             return Err(TypeError {
+                structured: None,
                 message: format!("{op_name} expects 1 or 2 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
@@ -7232,6 +7394,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
+                structured: None,
                 message: format!("{op_name} does not accept named arguments"),
                 span: span.clone(),
                 hint: None,
@@ -7239,6 +7402,7 @@ impl Checker {
         }
         if args.len() != 2 && args.len() != 3 {
             return Err(TypeError {
+                structured: None,
                 message: format!("{op_name} expects 2 or 3 argument(s), got {}", args.len()),
                 span: span.clone(),
                 hint: None,
@@ -7299,6 +7463,7 @@ impl Checker {
             return Ok(());
         }
         Err(TypeError {
+            structured: None,
             message: format!("{op_name} requires a Facet with deferred update slots `_, _`"),
             span: span.clone(),
             hint: Some("Use a deferred Facet path for read-only consumption.".into()),
@@ -7333,6 +7498,7 @@ impl Checker {
                 let index = *field_index as usize;
                 let Some(field_ty) = items.get(index).cloned() else {
                     return Err(TypeError {
+                        structured: None,
                         message: "Facet tuple path is inconsistent with its source type".into(),
                         span: span.clone(),
                         hint: None,
@@ -7346,6 +7512,7 @@ impl Checker {
                 let index = *field_index as usize;
                 let Some((_, field_ty)) = fields.get(index).cloned() else {
                     return Err(TypeError {
+                        structured: None,
                         message: "Facet field path is inconsistent with its source type".into(),
                         span: span.clone(),
                         hint: None,
@@ -7367,6 +7534,7 @@ impl Checker {
                 let index = *field_index as usize;
                 let Some((_, field_ty)) = fields.get(index).cloned() else {
                     return Err(TypeError {
+                        structured: None,
                         message: "Facet field path is inconsistent with its source type".into(),
                         span: span.clone(),
                         hint: None,
@@ -7388,6 +7556,7 @@ impl Checker {
                 let rebuilt = self.rebuild_facet_source_type(&inner, rest, replacement_ty, span)?;
                 if !self.types_compatible(&inner, &rebuilt) {
                     return Err(TypeError {
+                        structured: None,
                         message:
                             "Facet updates through List segments cannot change the element type"
                                 .into(),
@@ -7403,6 +7572,7 @@ impl Checker {
                     self.rebuild_facet_source_type(&expected, rest, replacement_ty, span)?;
                 if !self.types_compatible(&expected, &rebuilt) {
                     return Err(TypeError {
+                        structured: None,
                         message:
                             "Facet updates through List segments cannot change the element type"
                                 .into(),
@@ -7420,6 +7590,7 @@ impl Checker {
                     self.rebuild_facet_source_type(&value_ty, rest, replacement_ty, span)?;
                 if !self.types_compatible(&value_ty, &rebuilt) {
                     return Err(TypeError {
+                        structured: None,
                         message:
                             "Facet updates through HashMap segments cannot change the value type"
                                 .into(),
@@ -7441,6 +7612,7 @@ impl Checker {
                     .lookup_enum_variant_by_short_name(enum_name, variant_name)
                     .map(|variant| self.instantiate_enum_variant(&variant))
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: "Facet enum path is inconsistent with its source type".into(),
                         span: span.clone(),
                         hint: None,
@@ -7448,6 +7620,7 @@ impl Checker {
                 let enum_template = variant.enum_ty.clone();
                 if !self.types_compatible(&variant.enum_ty, &source) {
                     return Err(TypeError {
+                        structured: None,
                         message: "Facet enum path is inconsistent with its source type".into(),
                         span: span.clone(),
                         hint: None,
@@ -7480,6 +7653,7 @@ impl Checker {
                 Ok(self.replace_facet_rebuild_tyvars(&enum_template, &replacements))
             }
             _ => Err(TypeError {
+                structured: None,
                 message: "Facet path is inconsistent with its source type".into(),
                 span: span.clone(),
                 hint: None,
@@ -7553,6 +7727,7 @@ impl Checker {
                 if let Some(existing) = replacements.get(var) {
                     if self.resolve_ty(existing) != replacement {
                         return Err(TypeError {
+                            structured: None,
                             message: "Facet enum case update would assign incompatible types to the same generic parameter".into(),
                             span: span.clone(),
                             hint: Some("A type-changing enum case update must determine each generic parameter exactly once.".into()),
@@ -7634,6 +7809,7 @@ impl Checker {
 
     fn facet_rebuild_not_generic_error(&self, span: &Span) -> Result<(), TypeError> {
         Err(TypeError {
+            structured: None,
             message: "Facet cannot change this enum case payload because it does not map to a generic parameter".into(),
             span: span.clone(),
             hint: Some("Only uniquely rebuildable generic enum cases support a type-changing Facet update.".into()),
@@ -7655,6 +7831,7 @@ impl Checker {
         let variants = self
             .lookup_enum_variants_of(enum_name)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: "Facet enum path is inconsistent with its source type".into(),
                 span: span.clone(),
                 hint: None,
@@ -7687,6 +7864,7 @@ impl Checker {
                 .sum::<usize>();
             if occurrences != 1 {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Facet cannot rebuild {} because a generic parameter occurs outside the updated case payload",
                         Self::surface_name(enum_name)
@@ -7810,6 +7988,7 @@ impl Checker {
         }
         let Some(def) = self.env.lookup_type_def(type_name) else {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Facet cannot derive a rebuilt type for {}",
                     Self::surface_name(type_name)
@@ -7846,6 +8025,7 @@ impl Checker {
                 continue;
             }
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Facet cannot rebuild {} because a generic parameter occurs outside the updated field",
                     Self::surface_name(type_name)
@@ -7858,6 +8038,7 @@ impl Checker {
             Ok(())
         } else {
             Err(TypeError {
+                structured: None,
                 message: format!(
                     "Facet cannot rebuild {} because the updated field does not determine a generic parameter",
                     Self::surface_name(type_name)
@@ -7882,6 +8063,7 @@ impl Checker {
             && !self.types_compatible(&path.update_focus_ty, &replacement_ty)
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Facet replacement type mismatch: annotation requires {}, got {}",
                     self.ty_name(&path.update_focus_ty),
@@ -7895,6 +8077,7 @@ impl Checker {
             && !self.types_compatible(&path.update_source_ty, &update_source_ty)
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Facet rebuilt source type mismatch: annotation requires {}, got {}",
                     self.ty_name(&path.update_source_ty),
@@ -7959,6 +8142,7 @@ impl Checker {
         self.ensure_deferred_facet_slots("Facet::preview", &path, span)?;
         if !path.has_variant_segment() {
             return Err(TypeError {
+                structured: None,
                 message: "Facet::preview requires a variant Facet".into(),
                 span: span.clone(),
                 hint: Some("Use Facet::view for structural field and tuple paths.".into()),
@@ -7997,6 +8181,7 @@ impl Checker {
             && !matches!(self.resolve_ty(&typed_value.ty), Ty::Result(_, _))
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Facet::set value type mismatch: expected {}, got {}",
                     self.ty_name(&path.focus_ty),
@@ -8036,6 +8221,7 @@ impl Checker {
         } = self.prepare_facet_input(span, "Facet::put", &source_expr, path_input)?;
         if source_is_result {
             return Err(TypeError {
+                structured: None,
                 message: "Facet::put requires a plain source value".into(),
                 span: typed_source.span.clone(),
                 hint: Some("Use Facet::set when the source is already Result<T>.".into()),
@@ -8043,6 +8229,7 @@ impl Checker {
         }
         if !path.is_infallible_structural() {
             return Err(TypeError {
+                structured: None,
                 message: "Facet::put requires an infallible structural Facet path".into(),
                 span: span.clone(),
                 hint: Some("Use Facet::set for fallible or variant-sensitive updates.".into()),
@@ -8113,6 +8300,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         if !path.has_variant_segment() {
             return Err(TypeError {
+                structured: None,
                 message: format!("{op_name} requires an enum Facet path"),
                 span: span.clone(),
                 hint: Some("Use Facet::set/over for structural, list, or map paths.".into()),
@@ -8137,6 +8325,7 @@ impl Checker {
         self.require_enum_facet_path("Facet::case_set", &path, span)?;
         if !path.final_segment_is_variant() {
             return Err(TypeError {
+                structured: None,
                 message: "Facet::case_set requires the final Facet segment to be an enum case"
                     .into(),
                 span: span.clone(),
@@ -8231,6 +8420,7 @@ impl Checker {
 
         if !matches!(self.resolve_ty(&path.focus_ty), Ty::Result(_, _)) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Facet::over_result requires Result focus, got {}",
                     self.ty_name(&path.focus_ty)
@@ -8302,6 +8492,7 @@ impl Checker {
                 TypedFacetOverMode::FocusResult
             } else {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "{op_name} update function input mismatch: expected {}, got {}",
                         self.ty_name(value_focus_ty),
@@ -8323,6 +8514,7 @@ impl Checker {
         };
         if !self.types_compatible(expected_input_ty, &in_ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{op_name} update function input mismatch: expected {}, got {}",
                     self.ty_name(expected_input_ty),
@@ -8337,6 +8529,7 @@ impl Checker {
             Ty::Result(ok, err) => (ok.as_ref().clone(), err.as_ref().clone()),
             _ => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "{op_name} update function must return Result<...>, got {}",
                         self.ty_name(&out_ty)
@@ -8348,6 +8541,7 @@ impl Checker {
         };
         if require_result_focus && !matches!(out_ok, Ty::Result(_, _)) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{op_name} update function output mismatch: must return Result<Result<...>>, got {}",
                     self.ty_name(&out_ty)
@@ -8361,6 +8555,7 @@ impl Checker {
         }
         if !self.types_compatible(&Ty::Error, &out_err) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{op_name} update function error type must be Error-compatible, got {}",
                     self.ty_name(&out_err)
@@ -8396,6 +8591,7 @@ impl Checker {
             let resolved_source_ty = self.resolve_ty(&path.source_ty);
             let type_name = Self::readonly_type_name(&resolved_source_ty).unwrap_or("<anonymous>");
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} cannot mutably traverse readonly type {}",
                     facet_name, type_name
@@ -8438,6 +8634,7 @@ impl Checker {
                                 )
                             };
                             return Err(TypeError {
+                                structured: None,
                                 message: format!(
                                     "{} cannot mutably traverse readonly field {}.{}; only the owner can replace the property itself",
                                     facet_name, container_type_name, field_name
@@ -8453,6 +8650,7 @@ impl Checker {
                             .as_deref()
                             .unwrap_or(container_type_name.as_str());
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "{} cannot mutably traverse readonly type {}",
                                 facet_name, type_name
@@ -8492,6 +8690,7 @@ impl Checker {
                 } => {
                     if *focus_readonly_root && !is_final {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "{} cannot mutably traverse readonly type {}",
                                 facet_name,
@@ -8545,6 +8744,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         if args.iter().any(|arg| self.ty_contains_facet(&arg.ty)) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} cannot accept Facet values in Stage1 (Facet is compile-time only)",
                     callee
@@ -8563,6 +8763,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         if self.ty_contains_facet(&value.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} cannot contain Facet values in Stage1 (Facet is compile-time only)",
                     context
@@ -8662,6 +8863,7 @@ impl Checker {
                     for (param, arg) in params.iter().zip(&typed_args) {
                         if !self.types_compatible(param, &arg.ty) {
                             return Err(TypeError {
+                                structured: None,
                                 message: self.argument_type_mismatch_message(param, &arg.ty),
                                 span: arg.span.clone(),
                                 hint: callable_hint.clone(),
@@ -8674,6 +8876,7 @@ impl Checker {
                 if name == "__process_self" {
                     let Some(process_name) = self.current_process_name() else {
                         return Err(TypeError {
+                            structured: None,
                             message: "Process::self() is only available inside process handlers"
                                 .into(),
                             span: span.clone(),
@@ -8695,6 +8898,7 @@ impl Checker {
                         ExitCodePolicy::Anywhere => {}
                         ExitCodePolicy::Forbidden => {
                             return Err(TypeError {
+                                structured: None,
                                 message: format!(
                                     "set_exit_code is forbidden by source policy ({})",
                                     self.runtime_policy.exit_code_policy.as_str()
@@ -8711,6 +8915,7 @@ impl Checker {
                                 self.runtime_policy.normalized_entrypoint.as_ref()
                             else {
                                 return Err(TypeError {
+                                    structured: None,
                                     message:
                                         "set_exit_code requires a normalized entrypoint but none was provided".into(),
                                     span: span.clone(),
@@ -8723,6 +8928,7 @@ impl Checker {
                             if self.current_function_symbol.as_deref() != Some(entrypoint.as_str())
                             {
                                 return Err(TypeError {
+                                    structured: None,
                                     message: format!(
                                         "set_exit_code is only allowed inside entrypoint `{}` (policy: {})",
                                         entrypoint,
@@ -8754,6 +8960,7 @@ impl Checker {
                     _ if !has_named => u32::MAX,
                     _ => {
                         return Err(TypeError {
+                            structured: None,
                             message: "This function value does not accept named arguments".into(),
                             span: span.clone(),
                             hint: None,
@@ -8802,6 +9009,7 @@ impl Checker {
                 })
             }
             _ => Err(TypeError {
+                structured: None,
                 message: format!("Not a function: {}", self.ty_name(&typed_func.ty)),
                 span: span.clone(),
                 hint: None,
@@ -8842,6 +9050,7 @@ impl Checker {
                 let satisfied = self.trait_impl_exists_for_args(&trait_key, &[], &subject);
                 if !satisfied {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Builtin {} requires {} for {}, got {}",
                             builtin_name,
@@ -8879,6 +9088,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
+                structured: None,
                 message: named_arg_error,
                 span: span.clone(),
                 hint: None,
@@ -8887,6 +9097,7 @@ impl Checker {
 
         if args.len() != params.len() {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} expects {} argument(s), got {}",
                     callee_name,
@@ -8907,6 +9118,7 @@ impl Checker {
                     _ => self.check_node_with_expected(expr, Some(expected)),
                 },
                 ResolvedRecordLitArg::Named(_, _) => Err(TypeError {
+                    structured: None,
                     message: named_arg_error.clone(),
                     span: span.clone(),
                     hint: None,
@@ -8918,6 +9130,7 @@ impl Checker {
             if !matches!(self.resolve_ty(param), Ty::Hole) && !self.types_compatible(param, &arg.ty)
             {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Argument type mismatch: expected {}, got {}",
                         self.ty_name(param),
@@ -8980,6 +9193,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
+                structured: None,
                 message: format!("{supervisor_process}::spawn does not accept named arguments"),
                 span: span.clone(),
                 hint: None,
@@ -8987,6 +9201,7 @@ impl Checker {
         }
         if args.len() != 1 {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{}::spawn expects 1 argument(s), got {}",
                     supervisor_process,
@@ -9012,6 +9227,7 @@ impl Checker {
             Ty::Func(params, _) if params.is_empty() => {}
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "supervisor spawn expects a zero-argument worker init route, got {}",
                         self.ty_name(&other)
@@ -9054,6 +9270,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
+                structured: None,
                 message: format!("{supervisor_process}::adopt does not accept named arguments"),
                 span: span.clone(),
                 hint: None,
@@ -9061,6 +9278,7 @@ impl Checker {
         }
         if args.len() != 1 {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{}::adopt expects 1 argument(s), got {}",
                     supervisor_process,
@@ -9078,6 +9296,7 @@ impl Checker {
             Ty::Pid(process_name) => process_name,
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "supervisor adopt expects PID<Worker>, got {}",
                         self.ty_name(&other)
@@ -9090,6 +9309,7 @@ impl Checker {
         let supervisor_spec = self
             .supervisor_spec_by_name(&supervisor_process)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("unknown supervisor process `{supervisor_process}`"),
                 span: span.clone(),
                 hint: None,
@@ -9102,6 +9322,7 @@ impl Checker {
             .unwrap_or(false)
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{}::adopt is not available because allow_adopt is False",
                     supervisor_process
@@ -9139,6 +9360,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
+                structured: None,
                 message: format!("{supervisor_process}::status does not accept named arguments"),
                 span: span.clone(),
                 hint: None,
@@ -9146,6 +9368,7 @@ impl Checker {
         }
         if !args.is_empty() {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{}::status expects 0 argument(s), got {}",
                     supervisor_process,
@@ -9160,6 +9383,7 @@ impl Checker {
             .lookup_type_def("SupervisorStatus")
             .map(|def| Ty::Struct(def.name.clone(), def.fields.clone()))
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: "SupervisorStatus type is not available".into(),
                 span: span.clone(),
                 hint: None,
@@ -9186,6 +9410,7 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
+                structured: None,
                 message: format!("{supervisor_process}::workers does not accept named arguments"),
                 span: span.clone(),
                 hint: None,
@@ -9193,6 +9418,7 @@ impl Checker {
         }
         if args.len() != 2 {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{}::workers expects 2 argument(s), got {}",
                     supervisor_process,
@@ -9207,6 +9433,7 @@ impl Checker {
         }
         if !self.supervisor_workers_allowed_in_current_context() {
             return Err(TypeError {
+                structured: None,
                 message: "supervisor workers can only be called from Singleton GenServer @init"
                     .into(),
                 span: span.clone(),
@@ -9227,6 +9454,7 @@ impl Checker {
             Ty::Func(params, _) if params.is_empty() => {}
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "supervisor workers expects a zero-argument worker init route, got {}",
                         self.ty_name(&other)
@@ -9244,6 +9472,7 @@ impl Checker {
             .lookup_type_def("WorkerStrategy")
             .map(|def| Ty::Struct(def.name.clone(), def.fields.clone()))
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: "WorkerStrategy type is not available".into(),
                 span: span.clone(),
                 hint: None,
@@ -9251,6 +9480,7 @@ impl Checker {
         let typed_strategy = self.check_node_with_expected(strategy_expr, Some(&strategy_ty))?;
         if !self.types_compatible(&strategy_ty, &typed_strategy.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "supervisor workers expects WorkerStrategy as worker strategy, got {}",
                     self.ty_name(&typed_strategy.ty)
@@ -9328,6 +9558,7 @@ impl Checker {
             return Ok(());
         }
         Err(TypeError {
+            structured: None,
             message: format!(
                 "supervisor surface `{}::{method}` is not available in this compile unit; add the supervisor to supervisor_init",
                 Self::surface_name(supervisor_process)
@@ -9575,6 +9806,7 @@ impl Checker {
         }
         let Resolved::App(_, func, args) = worker_init else {
             return Err(TypeError {
+                structured: None,
                 message: "supervisor spawn expects a worker init route reference".into(),
                 span,
                 hint: Some("Use `MyWorker::init(args)`.".into()),
@@ -9582,6 +9814,7 @@ impl Checker {
         };
         let Resolved::Var(_, id) = func.as_ref() else {
             return Err(TypeError {
+                structured: None,
                 message: "supervisor spawn expects a worker init route reference".into(),
                 span,
                 hint: Some("Use `MyWorker::init(args)`.".into()),
@@ -9591,6 +9824,7 @@ impl Checker {
         let Some((process_spec, init_handler)) = self.worker_process_spec_for_init_route(qualified)
         else {
             return Err(TypeError {
+                structured: None,
                 message: "supervisor spawn expects a worker init route reference".into(),
                 span,
                 hint: Some("Use `MyWorker::init(args)`.".into()),
@@ -9630,6 +9864,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let Some(process_name) = self.current_process_name() else {
             return Err(TypeError {
+                structured: None,
                 message: "ctx.<slot> is only available inside process handlers".into(),
                 span: span.clone(),
                 hint: Some("Use ctx.<slot> inside @init/@get/@set/@call/@cast bodies.".into()),
@@ -9642,6 +9877,7 @@ impl Checker {
             .cloned()
         else {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "handler slot `{}` is not declared for process `{}`",
                     slot,
@@ -9684,6 +9920,7 @@ impl Checker {
                 Some(Ty::Func(expected_params, _)) => {
                     if expected_params.len() != params.len() {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "closure expects {} parameter(s), got {}",
                                 expected_params.len(),
@@ -9697,6 +9934,7 @@ impl Checker {
                 }
                 Some(other) => {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Expected function type, got {}",
                             self.diagnostic_ty_name(other)
@@ -9727,6 +9965,7 @@ impl Checker {
                     }
                     if !self.types_compatible(param_ty, &annotated) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "closure parameter `{}` expected {}, got {}",
                                 param.id.name,
@@ -9786,6 +10025,7 @@ impl Checker {
             }
             if matches!(typed_body.ty, Ty::Facet(..)) {
                 return Err(TypeError {
+                    structured: None,
                     message:
                         "Facet is compile-time only in Stage1 and cannot be returned from closures"
                             .into(),
@@ -9802,6 +10042,7 @@ impl Checker {
                     && !self.types_compatible(&expected_ret, &body_ty)
                 {
                     let err = TypeError {
+                        structured: None,
                         message: format!(
                             "Argument type mismatch: expected {}, got {}",
                             self.ty_name(&expected_ret),
@@ -9854,6 +10095,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if !args.is_empty() {
             return Err(TypeError {
+                structured: None,
                 message: "capture calls with arguments must be lowered before type checking".into(),
                 span: span.clone(),
                 hint: None,
@@ -9864,6 +10106,7 @@ impl Checker {
             let Some(expected_ty) = expected else {
                 if let Resolved::Var(_, id) = target {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait helper `{}` needs expected callable type or same-expression inference evidence",
                             id.name
@@ -9876,6 +10119,7 @@ impl Checker {
                     });
                 }
                 return Err(TypeError {
+                    structured: None,
                     message:
                         "Trait helper capture needs expected callable type or same-expression inference evidence"
                             .into(),
@@ -9888,6 +10132,7 @@ impl Checker {
             };
             let Ty::Func(params, _) = self.resolve_ty(expected_ty) else {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Expected function type, got {}",
                         self.diagnostic_ty_name(&self.resolve_ty(expected_ty))
@@ -10022,6 +10267,7 @@ impl Checker {
             Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Not a function: {}", self.diagnostic_ty_name(other)),
                     span: typed_target.span.clone(),
                     hint: Some(
@@ -10071,6 +10317,7 @@ impl Checker {
 
     fn unsupported_binop_type_error(op: &BinOp, span: &Span) -> TypeError {
         TypeError {
+            structured: None,
             message: format!("Unsupported binary operator in trait lowering: {op:?}"),
             span: span.clone(),
             hint: None,
@@ -10154,6 +10401,7 @@ impl Checker {
                     self.substitutions = compatibility_checkpoint;
                     let summary = self.trait_implementation_summary(trait_short_name);
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`{}` requires the same type on both sides, but got {} and {}",
                             symbol,
@@ -10174,6 +10422,7 @@ impl Checker {
                 let operator_trait =
                     self.trait_key_by_short_name(trait_short_name)
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!("Unknown trait: {}", trait_short_name),
                             span: span.clone(),
                             hint: None,
@@ -10181,6 +10430,7 @@ impl Checker {
                 let dispatch = self
                     .trait_dispatch_target(&operator_trait, method_name, &receiver_ty)
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!(
                             "`{}` is not defined for {}",
                             symbol,
@@ -10205,6 +10455,7 @@ impl Checker {
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`<|>` requires the same type on both sides, but got {} and {}",
                             self.ty_name(&lt),
@@ -10218,6 +10469,7 @@ impl Checker {
                 let alternative_trait =
                     self.trait_key_by_short_name("Alternative")
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: "Unknown trait: Alternative".into(),
                             span: span.clone(),
                             hint: None,
@@ -10225,6 +10477,7 @@ impl Checker {
                 let dispatch = self
                     .trait_dispatch_target(&alternative_trait, "choose", &receiver_ty)
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!("`<|>` is not defined for {}", self.ty_name(&receiver_ty)),
                         span: typed_right.span.clone(),
                         hint: Some(self.trait_implementation_summary("Alternative")),
@@ -10249,6 +10502,7 @@ impl Checker {
                         _ => return Err(Self::unsupported_binop_type_error(op, span)),
                     });
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`{}` requires the same type on both sides, but got {} and {}",
                             match op {
@@ -10272,6 +10526,7 @@ impl Checker {
                 let eq_trait = self
                     .trait_key_by_short_name(trait_short_name)
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!("Unknown trait: {}", trait_short_name),
                         span: span.clone(),
                         hint: None,
@@ -10279,6 +10534,7 @@ impl Checker {
                 let dispatch = self
                     .trait_dispatch_target(&eq_trait, method_name, &receiver_ty)
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!(
                             "`{}` is not defined for {}",
                             symbol,
@@ -10303,6 +10559,7 @@ impl Checker {
                     self.substitutions = compatibility_checkpoint;
                     let summary = self.trait_implementation_summary("Compare");
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`{}` requires the same type on both sides, but got {} and {}",
                             match op {
@@ -10336,6 +10593,7 @@ impl Checker {
                 let compare_trait =
                     self.trait_key_by_short_name("Compare")
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: "Unknown trait: Compare".into(),
                             span: span.clone(),
                             hint: None,
@@ -10343,6 +10601,7 @@ impl Checker {
                 let dispatch = self
                     .trait_dispatch_target(&compare_trait, method_name, &receiver_ty)
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!(
                             "`{}` is not defined for {}",
                             symbol,
@@ -10370,6 +10629,7 @@ impl Checker {
                 if !compatible {
                     self.substitutions = compatibility_checkpoint;
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "++ requires (String, String), got ({}, {})",
                             self.ty_name(&lt),
@@ -10383,6 +10643,7 @@ impl Checker {
                 let concat_trait =
                     self.trait_key_by_short_name("Concat")
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: "Unknown trait: Concat".into(),
                             span: span.clone(),
                             hint: None,
@@ -10390,6 +10651,7 @@ impl Checker {
                 let dispatch = self
                     .trait_dispatch_target(&concat_trait, "concat", &receiver_ty)
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!("`++` is not defined for {}", self.ty_name(&receiver_ty)),
                         span: typed_right.span.clone(),
                         hint: Some(self.trait_implementation_summary("Concat")),
@@ -10422,6 +10684,7 @@ impl Checker {
                     self.compose_pending_facet_paths(span, path, right)
                 }
                 _ => Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Expected Facet<...> value, got {}",
                         self.ty_name(&typed_left.ty)
@@ -10438,6 +10701,7 @@ impl Checker {
         let compose_trait = self
             .trait_key_by_short_name("Compose")
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: "Unknown trait: Compose".into(),
                 span: span.clone(),
                 hint: None,
@@ -10460,6 +10724,7 @@ impl Checker {
                 None
             };
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "`/` requires Compose implementation on the left, got {} and {}",
                     self.ty_name(&receiver_ty),
@@ -10520,6 +10785,7 @@ impl Checker {
             Ty::List(inner) => inner.as_ref().clone(),
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("list tail must be List<...>, got {}", self.ty_name(other)),
                     span: typed_tail.span.clone(),
                     hint: Some("Use `[head, ..tail]` with a list tail value".into()),
@@ -10529,6 +10795,7 @@ impl Checker {
 
         if !self.types_compatible(&typed_head.ty, &tail_elem_ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "expected {}, got {}",
                     self.ty_name(&tail_elem_ty),
@@ -10568,6 +10835,7 @@ impl Checker {
         for te in typed_elems.iter().skip(1) {
             if !self.types_compatible(&elem_ty, &te.ty) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "expected {}, got {}",
                         self.ty_name(&elem_ty),
@@ -10605,6 +10873,7 @@ impl Checker {
             self.ensure_no_runtime_facet_value(&typed_key, "HashMap literal key")?;
             if !self.types_compatible(&Ty::Str, &typed_key.ty) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "HashMap literal key must be String, got {}",
                         self.ty_name(&typed_key.ty)
@@ -10626,6 +10895,7 @@ impl Checker {
         for (_, value) in typed_entries.iter().skip(1) {
             if !self.types_compatible(&value_ty, &value.ty) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "expected {}, got {}",
                         self.ty_name(&value_ty),
@@ -10681,6 +10951,7 @@ impl Checker {
                 self.lower_string_range_runtime(span, start.clone(), stop.clone())
             }
             _ => Err(TypeError {
+                structured: None,
                 message: "range literal endpoints must both be Int or both be String".into(),
                 span: span.clone(),
                 hint: Some("Use `[start..stop]` with matching Int endpoints or matching single-char String endpoints.".into()),
@@ -10800,6 +11071,7 @@ impl Checker {
             });
         }
         Err(TypeError {
+            structured: None,
             message: format!("internal error: missing std helper `{qualified_name}`"),
             span: span.clone(),
             hint: None,
@@ -10896,6 +11168,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         if elems.len() < 2 {
             return Err(TypeError {
+                structured: None,
                 message: "Tuple literals require at least 2 values".into(),
                 span: span.clone(),
                 hint: None,
@@ -10934,6 +11207,7 @@ impl Checker {
                     self.ensure_no_runtime_facet_value(&typed_expr, "String interpolation")?;
                     if matches!(typed_expr.ty, Ty::Result(_, _)) {
                         return Err(TypeError {
+                            structured: None,
                             message: "Interpolation does not allow Result type".into(),
                             span: typed_expr.span.clone(),
                             hint: Some(
@@ -10970,6 +11244,7 @@ impl Checker {
         if let Resolved::Var(span, id) = arg {
             if id.name.starts_with("__pipe_slot_") {
                 return Err(TypeError {
+                    structured: None,
                     message: "pipe injection into a Lazy parameter is not allowed".into(),
                     span: span.clone(),
                     hint: Some(
@@ -11028,6 +11303,7 @@ impl Checker {
         let typed_cond = self.check_node(cond)?;
         if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "if condition must be Boolean, got {}",
                     self.ty_name(&typed_cond.ty)
@@ -11039,6 +11315,7 @@ impl Checker {
         let typed_then = self.check_lazy_argument_with_expected(then, expected, span)?;
         if !self.types_compatible(expected, &typed_then.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "if branches have different types: {} and {}",
                     self.ty_name(&self.resolve_ty(expected)),
@@ -11054,6 +11331,7 @@ impl Checker {
             .transpose()?;
         if typed_else.is_none() && !self.types_compatible(expected, &Ty::Unit) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "expected {}, got Unit",
                     self.ty_name(&self.resolve_ty(expected))
@@ -11065,6 +11343,7 @@ impl Checker {
         if let Some(typed_else) = &typed_else {
             if !self.types_compatible(expected, &typed_else.ty) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "if branches have different types: {} and {}",
                         self.ty_name(&self.resolve_ty(expected)),
@@ -11096,6 +11375,7 @@ impl Checker {
         let typed_cond = self.check_node(cond)?;
         if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "if condition must be Boolean, got {}",
                     self.ty_name(&typed_cond.ty)
@@ -11117,6 +11397,7 @@ impl Checker {
                         && Self::constructor_application_slots(&typed_else.ty).is_some()
                     {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "MixedConstructorResult: contextual return branches resolve to {} and {}",
                                 self.ty_name(&typed_then.ty),
@@ -11130,6 +11411,7 @@ impl Checker {
                         });
                     }
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "if branches have different types: {} and {}",
                             self.ty_name(&typed_then.ty),
@@ -11191,6 +11473,7 @@ impl Checker {
         let typed_cond = self.check_node(cond)?;
         if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "assert condition must be Boolean, got {}",
                     self.ty_name(&typed_cond.ty)
@@ -11220,6 +11503,7 @@ impl Checker {
         let typed_value = self.check_node(value)?;
         if matches!(pred, Resolved::App(_, _, _)) {
             return Err(TypeError {
+                structured: None,
                 message: "ensure requires a closure or capture predicate".into(),
                 span: self.resolved_span(pred).clone(),
                 hint: Some("Use `&predicate` or `{|value| predicate(value) }`; call expressions such as `predicate()` are not accepted here.".into()),
@@ -11230,6 +11514,7 @@ impl Checker {
             self.unary_function_parts(&typed_pred.ty, "ensure", &typed_pred.span)?;
         if !self.types_compatible(&pred_in, &typed_value.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "ensure predicate type mismatch: expected {}, got {}",
                     self.ty_name(&typed_value.ty),
@@ -11241,6 +11526,7 @@ impl Checker {
         }
         if !self.types_compatible(&Ty::Bool, &pred_out) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "ensure predicate must return Boolean, got {}",
                     self.ty_name(&pred_out)
@@ -11324,6 +11610,7 @@ impl Checker {
             self.unary_function_parts(&typed_handler.ty, "recover_kind", &typed_handler.span)?;
         if !self.types_compatible(&Ty::Error, &handler_in) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "recover_kind handler must accept Error, got {}",
                     self.ty_name(&handler_in)
@@ -11334,6 +11621,7 @@ impl Checker {
         }
         if !self.types_compatible(&expected_handler, &typed_handler.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "recover_kind handler must return Result<{}>, got {}",
                     self.ty_name(&ok_ty),
@@ -11347,6 +11635,7 @@ impl Checker {
         let value_ty = self.resolve_ty(&typed_value.ty);
         let Ty::Result(ok_ty, _) = &value_ty else {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "recover_kind value must resolve to Result<...>, got {}",
                     self.ty_name(&value_ty)
@@ -11386,6 +11675,7 @@ impl Checker {
         let value_ty = self.resolve_ty(&typed_value.ty);
         if !self.types_compatible(&expected_result_ty, &value_ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} value must be Result<...>, got {}",
                     form_name,
@@ -11416,6 +11706,7 @@ impl Checker {
                     if let Ty::Result(ok, _) = &expr_ty {
                         if self.types_compatible(ok.as_ref(), &Ty::Int) {
                             return Err(TypeError {
+                                structured: None,
                                 message: "Facet bracket expression must be plain Int; unwrap Result<Int> before using it".into(),
                                 span: typed_expr.span.clone(),
                                 hint: None,
@@ -11424,6 +11715,7 @@ impl Checker {
                     }
                     if !self.types_compatible(&Ty::Int, &expr_ty) {
                         return Err(TypeError {
+                            structured: None,
                             message: "List Facet index expression must be Int".into(),
                             span: typed_expr.span.clone(),
                             hint: None,
@@ -11455,6 +11747,7 @@ impl Checker {
                     if let Ty::Result(ok, _) = &expr_ty {
                         if self.types_compatible(ok.as_ref(), &Ty::Str) {
                             return Err(TypeError {
+                                structured: None,
                                 message: "Facet bracket expression must be plain String; unwrap Result<String> before using it".into(),
                                 span: typed_expr.span.clone(),
                                 hint: None,
@@ -11463,6 +11756,7 @@ impl Checker {
                     }
                     if !self.types_compatible(&Ty::Str, &expr_ty) {
                         return Err(TypeError {
+                            structured: None,
                             message: "HashMap Facet key expression must be String".into(),
                             span: typed_expr.span.clone(),
                             hint: None,
@@ -11488,6 +11782,7 @@ impl Checker {
                     ))
                 }
                 other => Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Facet segment {} is not supported for {} yet",
                         Self::pending_segment_display(segment),
@@ -11519,6 +11814,7 @@ impl Checker {
                         if let Ty::Result(ok, _) = &expr_ty {
                             if self.types_compatible(ok.as_ref(), &Ty::Int) {
                                 return Err(TypeError {
+                                    structured: None,
                                     message: "Facet bracket expression must be plain Int; unwrap Result<Int> before using it".into(),
                                     span: typed_expr.span.clone(),
                                     hint: None,
@@ -11527,6 +11823,7 @@ impl Checker {
                         }
                         if !self.types_compatible(&Ty::Int, &expr_ty) {
                             return Err(TypeError {
+                                structured: None,
                                 message: "List Facet index expression must be Int".into(),
                                 span: typed_expr.span.clone(),
                                 hint: None,
@@ -11559,6 +11856,7 @@ impl Checker {
                     ))
                 }
                 other => Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Facet segment {} is not supported for {} yet",
                         Self::pending_segment_display(segment),
@@ -11575,6 +11873,7 @@ impl Checker {
         } = segment
         else {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Facet segment {} is not supported for {} yet",
                     Self::pending_segment_display(segment),
@@ -11586,6 +11885,7 @@ impl Checker {
         };
         if *optional {
             return Err(TypeError {
+                structured: None,
                 message: "optional Facet selectors are no longer supported".into(),
                 span: span.clone(),
                 hint: Some(
@@ -11599,17 +11899,20 @@ impl Checker {
                 let index = field
                     .strip_prefix('_')
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: "Tuple elements are accessed with ._0, ._1, ...".into(),
                         span: span.clone(),
                         hint: None,
                     })?
                     .parse::<usize>()
                     .map_err(|_| TypeError {
+                        structured: None,
                         message: "Tuple elements are accessed with ._0, ._1, ...".into(),
                         span: span.clone(),
                         hint: None,
                     })?;
                 let field_ty = items.get(index).cloned().ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!(
                         "Tuple index ._{} is out of bounds for {}",
                         index,
@@ -11638,6 +11941,7 @@ impl Checker {
                         self.current_impl_struct_target.as_deref() != Some(display_name);
                     if outside_impl && !self.allow_private_facet_inspection {
                         return Err(TypeError {
+                            structured: None,
                             message: format!("Field '{}.{}' is private", display_name, field),
                             span: span.clone(),
                             hint: Some(format!(
@@ -11653,6 +11957,7 @@ impl Checker {
                     .find(|(_, (field_name, _))| field_name == field)
                     .map(|(i, (_, ty))| (i as u32, ty.clone()))
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!("No field '{}' on {}", field, self.ty_name(source_ty)),
                         span: span.clone(),
                         hint: None,
@@ -11678,6 +11983,7 @@ impl Checker {
                     Self::facet_enum_source_name(&source).expect("checked enum-like Facet source");
                 if self.lookup_enum_variants_of(&enum_name).is_none() {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "No variants found for enum {}",
                             Self::surface_name(&enum_name)
@@ -11689,6 +11995,7 @@ impl Checker {
                 let Some(variant) = self.lookup_enum_variant_by_short_name(&enum_name, field)
                 else {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "No variant selector '{}' on {} (use PascalCase constructor names)",
                             field,
@@ -11701,6 +12008,7 @@ impl Checker {
                 let variant = self.instantiate_enum_variant(&variant);
                 if !self.types_compatible(&variant.enum_ty, source_ty) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Variant selector {}.{} does not match {}",
                             enum_name,
@@ -11748,6 +12056,7 @@ impl Checker {
                     format!("Cannot access field on {}", self.ty_name(&other))
                 };
                 Err(TypeError {
+                    structured: None,
                     message,
                     span: span.clone(),
                     hint: None,
@@ -11789,6 +12098,7 @@ impl Checker {
             Ty::Facet(_, source, focus, ..) => (source.as_ref().clone(), focus.as_ref().clone()),
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Tuple.{} requires expected Facet<..., ...> context, got {}",
                         field,
@@ -11806,6 +12116,7 @@ impl Checker {
             Ty::Tuple(items) => items,
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Tuple.{} requires tuple source context, got {}",
                         field,
@@ -11818,6 +12129,7 @@ impl Checker {
         };
 
         let focus_ty = tuple_items.get(index).cloned().ok_or_else(|| TypeError {
+            structured: None,
             message: format!(
                 "Tuple index ._{} is out of bounds for ({})",
                 index,
@@ -11833,6 +12145,7 @@ impl Checker {
 
         if !self.types_compatible(&focus_ty, &expected_focus) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Tuple.{} focus type mismatch: expected {}, got {}",
                     field,
@@ -11903,6 +12216,7 @@ impl Checker {
             Ty::Facet(_, source, focus, ..) => (source.as_ref().clone(), focus.as_ref().clone()),
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "{root_path_name} root Facet path requires expected Facet<..., ...> context, got {}",
                         self.ty_name(&other)
@@ -11921,6 +12235,7 @@ impl Checker {
         let focus_ty = self.resolve_ty(&focus_ty);
         if !self.types_compatible(&focus_ty, &expected_focus) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{root_path_name} root Facet path focus type mismatch: expected {}, got {}",
                     self.ty_name(&expected_focus),
@@ -11972,6 +12287,7 @@ impl Checker {
         if let Some(expected_focus_ty) = expected_focus_ty {
             if !self.types_compatible(&focus_ty, &expected_focus_ty) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Facet path focus type mismatch: expected {}, got {}",
                         self.ty_name(&expected_focus_ty),
@@ -12020,6 +12336,7 @@ impl Checker {
 
     fn known_non_facet_root_error(root: &str, span: &Span) -> TypeError {
         TypeError {
+            structured: None,
             message: format!(
                 "{root} is not a Facet path root; primitive types are not path-constructable"
             ),

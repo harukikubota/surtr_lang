@@ -313,6 +313,7 @@ version = "0.1.0"
 dependencies = [
  "ariadne",
  "serde",
+ "serde_json",
  "sindr",
  "spire",
 ]
@@ -919,6 +920,7 @@ dependencies = [
 name = "scar"
 version = "0.1.0"
 dependencies = [
+ "diagnostics",
  "serde",
  "sigil",
  "sindr",

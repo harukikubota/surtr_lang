@@ -8,8 +8,8 @@ use crate::heuristics::{
     serializable_callable_hint_from_labels, should_render_related_label_with_own_source,
 };
 use crate::{
-    Color, DiagnosticSpec, SerializableDiagnostic, SerializableDiagnosticReport, SourceId,
-    SourceRegistry,
+    Color, DiagnosticData, DiagnosticSpec, SerializableDiagnostic, SerializableDiagnosticReport,
+    SerializableSourceFact, SourceId, SourceRegistry,
 };
 use ariadne::{Label, Report, ReportKind};
 use std::fmt;
@@ -314,11 +314,33 @@ pub fn serializable_diagnostic_by_id(
     let phase = phase.into();
     let source = sources.source(source_id).unwrap_or("");
     let (line, column) = line_column_for_offset(source, spec.primary_span.start);
-    let (expected, got) = extract_expected_got(&spec.message);
+    let (expected, got) = structured_expected_got(spec)
+        .filter(|(expected, got)| expected.is_some() || got.is_some())
+        .or_else(|| Some(extract_expected_got(&spec.message)))
+        .unwrap_or((None, None));
     let hint = spec
         .help
         .clone()
         .or_else(|| serializable_callable_hint_from_labels(spec));
+    let (reason, origin, data, related) = match spec.structured.as_ref() {
+        Some(structured) => (
+            Some(structured.reason.as_str().to_string()),
+            Some(structured.origin.clone()),
+            structured.data.to_json_value(),
+            structured
+                .related
+                .iter()
+                .map(|fact| SerializableSourceFact {
+                    role: fact.role.as_str().to_string(),
+                    source_id: fact.source_id.0,
+                    span: [fact.span.start as u32, fact.span.end as u32],
+                    ty: fact.ty.clone(),
+                    declaration_identity: fact.declaration_identity.clone(),
+                })
+                .collect(),
+        ),
+        None => (None, None, serde_json::Value::Null, Vec::new()),
+    };
     SerializableDiagnostic {
         kind: spec.kind.clone(),
         phase,
@@ -329,5 +351,26 @@ pub fn serializable_diagnostic_by_id(
         expected,
         got,
         hint,
+        reason,
+        origin,
+        data,
+        related,
     }
+}
+
+fn structured_expected_got(spec: &DiagnosticSpec) -> Option<(Option<String>, Option<String>)> {
+    let data = spec.structured.as_ref()?.data.clone();
+    Some(match data {
+        DiagnosticData::ArgumentRelation(value) => (value.expected_type, value.actual_type),
+        DiagnosticData::ReturnTypeArgument(value) => {
+            (Some(value.expected_type), Some(value.actual_type))
+        }
+        DiagnosticData::TypeConstructorCarrier(value) => {
+            (Some(value.expected_carrier), Some(value.actual_carrier))
+        }
+        DiagnosticData::BranchAssertion(value) => {
+            (Some(value.expected_type), Some(value.actual_type))
+        }
+        _ => (None, None),
+    })
 }

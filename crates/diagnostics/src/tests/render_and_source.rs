@@ -14,6 +14,7 @@ fn fallback_diagnostic_preserves_core_fields() {
         }],
         notes: Vec::new(),
         help: Some("The type annotation requires Int".into()),
+        structured: None,
     };
 
     let mut buf = Vec::new();
@@ -126,6 +127,52 @@ fn serializable_report_uses_character_offsets_for_utf8_source() {
     assert_eq!(report.errors[0].line, 1);
     assert_eq!(report.errors[0].column, 2);
     assert_eq!(report.errors[0].span, [1, 2]);
+}
+
+#[test]
+fn structured_type_diagnostic_projects_the_same_facts_to_json_and_rendering() {
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register("main.srt", "guard::<Option>(value)");
+    let input = StructuredDiagnostic {
+        reason: TypeDiagnosticReason::ReturnTypeArgumentMismatch,
+        origin: DiagnosticOrigin::ReturnTypeArgument { ordinal: 0 },
+        data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+            callable: "guard".into(),
+            ordinal: 0,
+            expected_type: "Option".into(),
+            actual_type: "List".into(),
+        }),
+        primary: SourceFact::typed(
+            SourceRole::ReturnTypeArgument,
+            source_id,
+            Span { start: 7, end: 13 },
+            "Option",
+        ),
+        related: vec![SourceFact::typed(
+            SourceRole::Value,
+            source_id,
+            Span { start: 14, end: 19 },
+            "List<Int>",
+        )],
+        remediation: None,
+    };
+
+    let spec = structured_type_error_spec(&input);
+    let rendered = strip_ansi(&render_error_by_id(&sources, source_id, &spec));
+    assert!(rendered.contains("Return type argument 0"));
+    assert!(rendered.contains("ReturnTypeArgument: Option"));
+    assert!(rendered.contains("Value: List<Int>"));
+
+    let report = serializable_report_by_id(&sources, source_id, "typecheck", &spec);
+    let diagnostic = &report.errors[0];
+    assert_eq!(
+        diagnostic.reason.as_deref(),
+        Some("ReturnTypeArgumentMismatch")
+    );
+    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(diagnostic.data["ordinal"], 0);
+    assert_eq!(diagnostic.expected.as_deref(), Some("Option"));
+    assert_eq!(diagnostic.got.as_deref(), Some("List"));
 }
 
 #[test]

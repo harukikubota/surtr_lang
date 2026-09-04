@@ -32,6 +32,7 @@ pub fn surtr_assert_eq_error_spec(
         ],
         notes: Vec::new(),
         help: Some(format!("assert_eq failed: {}", message)),
+        structured: None,
     }
 }
 

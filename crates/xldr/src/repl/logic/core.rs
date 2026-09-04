@@ -34,6 +34,21 @@ use super::query::{
     parse_signature_type, OperatorTargetQuery, QueryArg, QueryArgKind, ReplQuery, TypedCallQuery,
 };
 use super::{eval, render, session};
+
+fn type_error_spec_from_scar(
+    sources: &SourceRegistry,
+    source_id: SourceId,
+    error: &scar::error::TypeError,
+    span: Span,
+) -> DiagnosticSpec {
+    let legacy =
+        diagnostics::TypeErrorDiagnostic::new(error.message.clone(), span, error.hint.clone());
+    error
+        .structured
+        .as_ref()
+        .map(diagnostics::structured_type_error_spec)
+        .unwrap_or_else(|| diagnostics::type_error_spec_by_id(sources, source_id, &legacy))
+}
 use crate::error_display::StackTraceDisplayMode;
 use crate::loader::{self, StagedModule};
 use crate::ErrorDisplayMode;
@@ -5363,9 +5378,12 @@ impl ReplEngine {
         let typed = match self.scar_session.typecheck_with_context(resolved, context) {
             Ok(t) => t,
             Err(e) => {
-                let error = diagnostics::TypeErrorDiagnostic::new(e.message, e.span, e.hint);
-                let spec =
-                    diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &error);
+                let spec = type_error_spec_from_scar(
+                    &self.sources,
+                    self.repl_source_id,
+                    &e,
+                    e.span.clone(),
+                );
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
@@ -7856,9 +7874,12 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let error = diagnostics::TypeErrorDiagnostic::new(e.message, e.span, e.hint);
-                let spec =
-                    diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &error);
+                let spec = type_error_spec_from_scar(
+                    &self.sources,
+                    self.repl_source_id,
+                    &e,
+                    e.span.clone(),
+                );
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
@@ -8413,17 +8434,16 @@ fn compile_repl_preload_from_module_stages(
             ),
         )
         .map_err(|e| ReplLoadError::Diagnostic {
+            // Keep the structured checker envelope intact when this error
+            // crosses the REPL loader boundary.
             phase: "typecheck".to_string(),
             sources: compile_sources.sources.clone(),
             source_id: diagnostic_source_id(&compile_sources, &e.span),
-            spec: diagnostics::type_error_spec_by_id(
+            spec: type_error_spec_from_scar(
                 &compile_sources.sources,
                 diagnostic_source_id(&compile_sources, &e.span),
-                &diagnostics::TypeErrorDiagnostic::new(
-                    e.message,
-                    local_diagnostic_span(&compile_sources, &e.span),
-                    e.hint,
-                ),
+                &e,
+                local_diagnostic_span(&compile_sources, &e.span),
             ),
         })?;
 

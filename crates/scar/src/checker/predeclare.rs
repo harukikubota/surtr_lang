@@ -22,6 +22,7 @@ impl Checker {
                 if let ResolvedWhereConstraintRhs::TraitSlot { trait_id, span, .. } = bound {
                     let Some(enclosing_trait) = enclosing_impl_trait else {
                         return Err(TypeError {
+                            structured: None,
                             message: "`Trait.$Slot` mappings are only allowed in a trait implementation where clause".into(),
                             span: span.clone(),
                             hint: None,
@@ -29,6 +30,7 @@ impl Checker {
                     };
                     if !constructor_trait_ids.contains(&enclosing_trait.unique_id) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Trait {} is not a TypeConstructor trait and cannot own a slot mapping",
                                 enclosing_trait.name
@@ -39,6 +41,7 @@ impl Checker {
                     }
                     if trait_id.unique_id != enclosing_trait.unique_id {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "`Trait.$Slot` mapping owner {} must be the same trait as enclosing impl {}",
                                 trait_id.name, enclosing_trait.name
@@ -56,6 +59,7 @@ impl Checker {
                     || !matches!(&constraint.subject, AstTy::Named(_, name) if name == "Self")
                 {
                     return Err(TypeError {
+                        structured: None,
                         message:
                             "`Type<...>` is only allowed as `Self: Type<...>` in a trait definition where clause"
                                 .into(),
@@ -65,6 +69,7 @@ impl Checker {
                 }
                 if shape_seen {
                     return Err(TypeError {
+                        structured: None,
                         message: "A trait definition cannot declare more than one Self type-constructor constraint"
                             .into(),
                         span: span.clone(),
@@ -192,6 +197,7 @@ impl Checker {
             if self.signature_aliases.contains_key(name) || self.env.lookup_type_def(name).is_some()
             {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Internal consistency error: duplicate type owner `{}` reached Scar after resolution",
                         name
@@ -206,6 +212,7 @@ impl Checker {
             Self::collect_ast_ty_type_params(rhs, &mut used);
             if let Some(param) = params.iter().find(|param| !used.contains(&param.name)) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Type alias {} has an unused type parameter {}",
                         name, param.name
@@ -237,6 +244,7 @@ impl Checker {
     ) -> Result<Ty, TypeError> {
         let AstTy::Named(_, name) = subject else {
             return Err(TypeError {
+                structured: None,
                 message: "where constraint subjects must be `Self` or a signature type variable"
                     .into(),
                 span: span.clone(),
@@ -245,6 +253,7 @@ impl Checker {
         };
         if name == "Self" {
             return self_ty.cloned().ok_or_else(|| TypeError {
+                structured: None,
                 message: "`Self` is only available in trait and trait impl where clauses".into(),
                 span: span.clone(),
                 hint: None,
@@ -252,6 +261,7 @@ impl Checker {
         }
         if !name.starts_with('$') {
             return Err(TypeError {
+                structured: None,
                 message: "where constraint subjects must be `Self` or a signature type variable"
                     .into(),
                 span: span.clone(),
@@ -259,6 +269,7 @@ impl Checker {
             });
         }
         tyvars.get(name).cloned().ok_or_else(|| TypeError {
+            structured: None,
             message: format!(
                 "where clause constraint `{name}` does not appear in the declaration signature"
             ),
@@ -274,6 +285,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         let trait_key = self.trait_key(trait_id);
         self.traits.get(&trait_key).ok_or_else(|| TypeError {
+            structured: None,
             message: format!("Unknown trait: {}", trait_id.name),
             span: trait_id.span.clone(),
             hint: None,
@@ -398,6 +410,7 @@ impl Checker {
             .map(|ty| format!("; got {}", self.ty_name(ty)))
             .unwrap_or_default();
         TypeError {
+            structured: None,
             message: format!(
                 "Struct `{}::{}` `new` must return Self or Result<Self, E>{}",
                 struct_name, "new", actual_suffix
@@ -486,6 +499,7 @@ impl Checker {
             if !self.const_surface_is_allowed(value) {
                 if self.const_has_dynamic_bracket_segment(value) {
                     return Err(TypeError {
+                        structured: None,
                         message:
                             "const Facet path bracket segments must use literal Int or String values"
                                 .into(),
@@ -496,6 +510,7 @@ impl Checker {
                     });
                 }
                 return Err(TypeError {
+                    structured: None,
                     message: "const value must be a primitive literal or a facet path".into(),
                     span: span.clone(),
                     hint: Some(
@@ -522,6 +537,7 @@ impl Checker {
                 ),
                 _ => {
                     return Err(TypeError {
+                        structured: None,
                         message: "const value must be a primitive literal or a facet path".into(),
                         span: span.clone(),
                         hint: Some(
@@ -597,6 +613,7 @@ impl Checker {
                 && builtin_type_meta_by_name(Self::surface_name(name)).is_some()
             {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Type name `{}` is reserved by a canonical builtin type declaration",
                         Self::surface_name(name)
@@ -608,6 +625,7 @@ impl Checker {
 
             if let Some(first_span) = seen_type_spans.get(name) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Internal consistency error: duplicate type owner `{}` reached Scar after resolution",
                         name
@@ -643,6 +661,7 @@ impl Checker {
                             )?;
                             if self.ty_contains_process_init(&field_ty) {
                                 return Err(TypeError {
+                                    structured: None,
                                     message:
                                         "StandbyInit<T> is only allowed as Standby @init return type"
                                             .into(),
@@ -680,6 +699,7 @@ impl Checker {
                             attrs.readonly,
                         )
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
                             hint: None,
@@ -696,6 +716,7 @@ impl Checker {
                                 self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?;
                             if self.ty_contains_process_init(&field_ty) {
                                 return Err(TypeError {
+                                    structured: None,
                                     message:
                                         "StandbyInit<T> is only allowed as Standby @init return type"
                                             .into(),
@@ -721,6 +742,7 @@ impl Checker {
                             false,
                         )
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
                             hint: None,
@@ -754,6 +776,7 @@ impl Checker {
                             false,
                         )
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
                             hint: None,
@@ -771,6 +794,7 @@ impl Checker {
                             false,
                         )
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!("Unknown type declaration: {}", id.name),
                             span: id.span.clone(),
                             hint: None,
@@ -814,6 +838,7 @@ impl Checker {
                         };
                         if seen_discriminants.contains(&discriminant) {
                             return Err(TypeError {
+                                structured: None,
                                 message: format!(
                                     "Duplicate enum discriminant {} in {}",
                                     discriminant, id.name
@@ -836,6 +861,7 @@ impl Checker {
                                 )?;
                                 if self.ty_contains_process_init(&payload_ty) {
                                     return Err(TypeError {
+                                        structured: None,
                                         message:
                                             "StandbyInit<T> is only allowed as Standby @init return type"
                                                 .into(),
@@ -875,6 +901,7 @@ impl Checker {
                         self.env
                             .register_enum_variant(variant.id.unique_id, info.clone())
                             .map_err(|message| TypeError {
+                                structured: None,
                                 message,
                                 span: variant.span.clone(),
                                 hint: None,
@@ -991,6 +1018,7 @@ impl Checker {
             if let Some(cycle) = dfs(name, &edges, &mut states, &mut stack) {
                 let head = cycle.first().cloned().unwrap_or_else(|| name.clone());
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Cyclic type definition detected: {}", cycle.join(" -> ")),
                     span: decl_spans
                         .get(&head)
@@ -1124,6 +1152,7 @@ impl Checker {
                 if id.name == "self" {
                     let Some(expected) = expected_self else {
                         return Err(TypeError {
+                            structured: None,
                             message: "`self` can only be rebound inside impl methods".to_string(),
                             span: span.clone(),
                             hint: None,
@@ -1131,6 +1160,7 @@ impl Checker {
                     };
                     if !self.types_compatible(expected, bind_ty) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "`self` rebinding requires Self type ({}), got {}",
                                 self.ty_name(expected),
@@ -1147,6 +1177,7 @@ impl Checker {
                 if id.name == "self" {
                     let Some(expected) = expected_self else {
                         return Err(TypeError {
+                            structured: None,
                             message: "`self` can only be rebound inside impl methods".to_string(),
                             span: span.clone(),
                             hint: None,
@@ -1154,6 +1185,7 @@ impl Checker {
                     };
                     if !self.types_compatible(expected, alias_ty) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "`self` rebinding requires Self type ({}), got {}",
                                 self.ty_name(expected),
@@ -1269,6 +1301,7 @@ impl Checker {
         for (struct_name, (span, _)) in struct_defs {
             if !structs_with_new.contains(&struct_name) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Struct `{}` must define `new` in its impl block (e.g. `impl {} {{ def new(...) -> Self {{ ... }} }}` or `impl {} {{ def new(...) -> Result<Self, Error> {{ ... }} }}`)",
                         struct_name, struct_name
@@ -1549,6 +1582,7 @@ impl Checker {
                 };
                 if slots.is_some() {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait {} declares more than one Self type-constructor constraint",
                             trait_id.name
@@ -1559,6 +1593,7 @@ impl Checker {
                 }
                 if declared_slots.is_empty() {
                     return Err(TypeError {
+                        structured: None,
                         message: "Type constructor constraints require at least one slot".into(),
                         span: span.clone(),
                         hint: None,
@@ -1569,6 +1604,7 @@ impl Checker {
                 for slot in declared_slots {
                     let AstTy::Named(slot_span, name) = slot else {
                         return Err(TypeError {
+                            structured: None,
                             message: "Type constructor slots must be type variables such as `$A`"
                                 .into(),
                             span: Self::ast_ty_span(slot).clone(),
@@ -1577,6 +1613,7 @@ impl Checker {
                     };
                     if !name.starts_with('$') {
                         return Err(TypeError {
+                            structured: None,
                             message: "Type constructor slots must be type variables such as `$A`"
                                 .into(),
                             span: slot_span.clone(),
@@ -1585,6 +1622,7 @@ impl Checker {
                     }
                     if !seen.insert(name.clone()) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!("Duplicate type constructor slot: {}", name),
                             span: slot_span.clone(),
                             hint: None,
@@ -1633,12 +1671,14 @@ impl Checker {
                 cycle.push(key.to_string());
                 let info = traits.get(key).expect("visited trait must exist");
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Parent trait constraint cycle: {}", cycle.join(" -> ")),
                     span: info.id.span.clone(),
                     hint: None,
                 });
             }
             let info = traits.get(key).ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown parent trait: {key}"),
                 span: Span { start: 0, end: 0 },
                 hint: None,
@@ -1656,6 +1696,7 @@ impl Checker {
                     slots = parent_slots;
                 } else if !parent_slots.is_empty() && slots.len() != parent_slots.len() {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait {} exposes {} constructor slot(s), but parent {} exposes {}",
                             info.id.name,
@@ -1687,6 +1728,7 @@ impl Checker {
         for info in self.traits.values() {
             if !info.constructor_slots.is_empty() && !info.type_params.is_empty() {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Constructor trait {} cannot declare trait type parameter(s)",
                         info.id.name
@@ -1745,6 +1787,7 @@ impl Checker {
                     }
                     if !target_params.contains(subject) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "{} is not a top-level type parameter of the impl target",
                                 subject
@@ -1756,6 +1799,7 @@ impl Checker {
                     let slot_ordinal = *slot_ordinal as usize;
                     if slot_ordinal >= trait_info.constructor_slots.len() {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Trait {} has no constructor slot {}",
                                 trait_info.id.name, slot_name
@@ -1766,6 +1810,7 @@ impl Checker {
                     }
                     if mapped_slots[slot_ordinal].is_some() {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Trait constructor slot {} is mapped more than once",
                                 slot_name
@@ -1776,6 +1821,7 @@ impl Checker {
                     }
                     if !mapped_params.insert(subject.clone()) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Impl target parameter {} is mapped to more than one constructor slot",
                                 subject
@@ -1798,6 +1844,7 @@ impl Checker {
 
         if mapped_slots.iter().any(Option::is_none) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} does not satisfy Type<{}>: map every constructor slot in the impl where clause",
                     Self::surface_ast_ty_key(target_ast_ty),
@@ -2500,6 +2547,7 @@ impl Checker {
             Ty::SelfApp(args) => {
                 if args.len() != constructor_slot_vars.len() {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Self requires {} constructor argument(s), got {}",
                             constructor_slot_vars.len(),
@@ -2671,6 +2719,7 @@ impl Checker {
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>, Vec<Ty>), TypeError> {
         if trait_info.type_params.len() != trait_args.len() {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Trait {} requires {} type argument(s), got {}",
                     trait_info.id.name,
@@ -2772,6 +2821,7 @@ impl Checker {
                     .unwrap_or(parent.trait_id.name.as_str());
                 if !direct_parents.insert(key.to_string()) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait {} declares parent {} more than once",
                             id.name, parent.trait_id.name
@@ -2796,6 +2846,7 @@ impl Checker {
                     }
                     if let Some(slot) = fun_param_slots.intersection(&value_param_slots).next() {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Constructor trait method {} introduces {} through both FunParams and value arguments",
                                 method.id.name, slot
@@ -2813,6 +2864,7 @@ impl Checker {
                     Self::collect_constructor_signature_slots(&method.ret_ty, &mut return_slots);
                     if let Some(slot) = return_slots.difference(&input_slots).next() {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Constructor trait method {} has {} only in its return type",
                                 method.id.name, slot
@@ -2885,12 +2937,14 @@ impl Checker {
                 .get(&trait_key)
                 .cloned()
                 .ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!("Unknown trait: {}", trait_id.name),
                     span: span.clone(),
                     hint: None,
                 })?;
             if trait_info.type_params.len() != trait_args.len() {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Trait {} requires {} type argument(s), got {}",
                         trait_id.name,
@@ -2905,6 +2959,7 @@ impl Checker {
             let (trait_arg_tys, target_ty, type_param_vars, target_param_vars) =
                 self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
+                structured: None,
                 message: "trait impl target must be a concrete named type, tuple type, or function type".into(),
                 span: Self::ast_ty_span(target_ast_ty).clone(),
                 hint: Some("Use `impl Trait for Int` / `impl Trait for UserType` / `impl Trait for (Int, String)` / `impl Trait for ($A -> $B)`.".into()),
@@ -2954,6 +3009,7 @@ impl Checker {
                         continue;
                     }
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait impl {} for {} is missing method `{}`",
                             trait_id.name, target_name, required_method
@@ -2999,6 +3055,7 @@ impl Checker {
             for method_name in method_map.keys() {
                 if !trait_info.methods.contains_key(method_name) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait impl {} for {} defines unknown method `{}`",
                             trait_id.name, target_name, method_name
@@ -3015,6 +3072,7 @@ impl Checker {
                         .methods
                         .get(method_name)
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!(
                                 "Trait impl {} for {} defines unknown method `{}`",
                                 trait_id.name, target_name, method_name
@@ -3024,6 +3082,7 @@ impl Checker {
                         })?;
                 if trait_method.type_params.len() != impl_method.type_params.len() {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait impl method {}::{} has incompatible type parameter arity",
                             trait_id.name, method_name
@@ -3035,6 +3094,7 @@ impl Checker {
 
                 if trait_method.attrs.visibility != impl_method.attrs.visibility {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait impl method {}::{} has incompatible visibility",
                             trait_id.name, method_name
@@ -3083,6 +3143,7 @@ impl Checker {
 
                 if trait_params.len() != impl_params.len() {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait impl method {}::{} has incompatible arity",
                             trait_id.name, method_name
@@ -3098,6 +3159,7 @@ impl Checker {
                     self.alpha_normalized_signature(&impl_fun_params, &impl_params, &impl_ret);
                 if expected_signature != impl_signature {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait impl method {}::{} has an incompatible signature",
                             trait_id.name, method_name
@@ -3139,6 +3201,7 @@ impl Checker {
                     ),
                 ) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Trait impl method {}::{} has incompatible trait constraints",
                             trait_id.name, method_name
@@ -3161,6 +3224,7 @@ impl Checker {
                     &existing.target_ty,
                 ) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Overlapping trait impls for {}: {} and {}",
                             trait_id.name,
@@ -3197,6 +3261,7 @@ impl Checker {
                 });
                 if let Some(existing) = peer {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "{} and {} cannot both be implemented for {} -> {}",
                             trait_id.name,
@@ -3400,6 +3465,7 @@ impl Checker {
         for parent in &child_trait.parents {
             let parent_key = self.trait_key(&parent.trait_id);
             self.traits.get(&parent_key).ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown parent trait: {}", parent.trait_id.name),
                 span: parent.trait_id.span.clone(),
                 hint: None,
@@ -3414,6 +3480,7 @@ impl Checker {
                 .into_iter()
                 .find(|impl_info| self.parent_impl_covers_child(impl_info, child_impl))
                 .ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!(
                         "Trait impl {} for {} requires parent impl {} for the same target",
                         child_impl.trait_id.name, child_impl.target_name, parent.trait_id.name
@@ -3423,6 +3490,7 @@ impl Checker {
                 })?;
             if child_impl.constructor_slot_positions != parent_impl.constructor_slot_positions {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Trait impl {} for {} must use the same constructor slot mapping as parent {}",
                         child_impl.trait_id.name, child_impl.target_name, parent.trait_id.name
@@ -3564,6 +3632,7 @@ impl Checker {
             self.trait_target_name(&target_ty)
                 .ok_or_else(|| {
                     TypeError {
+                structured: None,
                 message:
                     "trait impl target must be a concrete named type, tuple type, or function type"
                         .into(),
@@ -3704,6 +3773,7 @@ impl Checker {
                         && !self.is_lazy_init_function_symbol(function_symbol)
                     {
                         return Err(TypeError {
+                            structured: None,
                             message: "StandbyInit<T> is only allowed as Standby @init return type"
                                 .into(),
                             span: ret_ty
@@ -3822,6 +3892,7 @@ impl Checker {
                 .get(&trait_key)
                 .cloned()
                 .ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!("Unknown trait: {}", trait_impl.trait_id.name),
                     span: trait_impl.trait_id.span.clone(),
                     hint: None,
@@ -3839,6 +3910,7 @@ impl Checker {
                         .methods
                         .get(method_name)
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!(
                                 "Unknown trait method: {}::{}",
                                 trait_impl.trait_id.name, method_name

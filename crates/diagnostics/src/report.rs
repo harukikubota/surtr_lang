@@ -1,4 +1,4 @@
-use crate::{Color, SourceId};
+use crate::{Color, SourceId, StructuredDiagnostic};
 use serde::{Deserialize, Serialize};
 use spire::ast::Span;
 
@@ -10,6 +10,9 @@ pub struct DiagnosticSpec {
     pub labels: Vec<DiagnosticLabel>,
     pub notes: Vec<String>,
     pub help: Option<String>,
+    /// Structured source of truth for diagnostics that have completed the
+    /// migration. `None` explicitly denotes the legacy message payload.
+    pub structured: Option<StructuredDiagnostic>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +44,25 @@ pub struct SerializableDiagnostic {
     pub got: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<crate::DiagnosticOrigin>,
+    #[serde(default)]
+    pub data: serde_json::Value,
+    #[serde(default)]
+    pub related: Vec<SerializableSourceFact>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SerializableSourceFact {
+    pub role: String,
+    pub source_id: u32,
+    pub span: [u32; 2],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ty: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub declaration_identity: Option<crate::DeclarationIdentity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -61,5 +83,6 @@ pub fn simple_error(
         labels: Vec::new(),
         notes: Vec::new(),
         help,
+        structured: None,
     }
 }

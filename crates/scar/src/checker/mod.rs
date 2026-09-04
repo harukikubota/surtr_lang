@@ -2447,6 +2447,7 @@ impl Checker {
                             .unwrap_or(false)
                         {
                             return Err(TypeError {
+                                structured: None,
                                 message: format!(
                                     "Trait method {} has a type variable used only by where constraints",
                                     method.id.name
@@ -2462,6 +2463,7 @@ impl Checker {
                             )
                         {
                             return Err(TypeError {
+                                structured: None,
                                 message: "Default::default must declare Self in FunParams".into(),
                                 span: method.span.clone(),
                                 hint: Some("Use `def default::<Self>() -> Self`.".into()),
@@ -2522,6 +2524,7 @@ impl Checker {
         }
         if let Some(slot) = fun_param_slots.intersection(&value_param_slots).next() {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Trait method {} introduces {slot} through both FunParams and value arguments",
                     method.id.name
@@ -2537,6 +2540,7 @@ impl Checker {
         Self::collect_trait_method_slots(&method.ret_ty, &mut return_slots);
         if let Some(slot) = fun_param_slots.difference(&return_slots).next() {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Trait method {} declares {slot} in FunParams but does not use it in its return type",
                     method.id.name
@@ -2550,6 +2554,7 @@ impl Checker {
         input_slots.extend(value_param_slots);
         if let Some(slot) = return_slots.difference(&input_slots).next() {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Trait method {} has {slot} only in its return type",
                     method.id.name
@@ -2606,6 +2611,7 @@ impl Checker {
         }
         if let Some(name) = return_slots.difference(&parameter_slots).next().cloned() {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Signature type slot {name} appears only in the return type and has no introduction site"
                 ),
@@ -2961,6 +2967,7 @@ impl Checker {
         }
 
         Err(TypeError {
+            structured: None,
             message: format!(
                 "@{} handler `{}` first parameter must match process state type `{}`",
                 handler_kind,
@@ -2990,6 +2997,7 @@ impl Checker {
         }
 
         Err(TypeError {
+            structured: None,
             message: format!(
                 "@{} handler `{}` Result ok type must match process state type `{}`",
                 handler_kind,
@@ -3021,6 +3029,7 @@ impl Checker {
         }
 
         Err(TypeError {
+            structured: None,
             message: format!(
                 "@call handler `{}` Result ok type must be CallResult<Reply, {}>",
                 Self::process_handler_public_name(process, handler_name),
@@ -3051,6 +3060,7 @@ impl Checker {
         }
 
         Err(TypeError {
+            structured: None,
             message: format!(
                 "@cast handler `{}` Result ok type must be CastResult<{}>",
                 Self::process_handler_public_name(process, handler_name),
@@ -3083,6 +3093,7 @@ impl Checker {
             let init_state_ty = if process.spec.standby {
                 self.process_init_state_ty(&init_ok_ty)
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!(
                             "Standby @init for process `{}` must return Result<StandbyInit<State>>",
                             process.process_name
@@ -3093,6 +3104,7 @@ impl Checker {
             } else {
                 if self.ty_contains_process_init(&init_ok_ty) {
                     return Err(TypeError {
+                        structured: None,
                         message: "StandbyInit<T> is only allowed as Standby @init return type"
                             .into(),
                         span: Span { start: 0, end: 0 },
@@ -3107,6 +3119,7 @@ impl Checker {
             let state_name = Self::surface_ast_ty(&process.spec.state);
             if init_state_ty != state_ty {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "@init handler `{}::init` Result ok type must match process state type `{}`",
                         Self::surface_name(&process.process_name),
@@ -3252,6 +3265,7 @@ impl Checker {
 
     pub(super) fn stop_constructor_error(&self, span: &Span, enum_name: &str) -> TypeError {
         TypeError {
+            structured: None,
             message: format!(
                 "{} can only be used inside Worker GenServer @call/@cast handlers or local helper functions",
                 enum_name
@@ -3530,6 +3544,7 @@ impl Checker {
 
     fn constructor_position_error(ast_ty: &AstTy) -> TypeError {
         TypeError {
+            structured: None,
             message: format!(
                 "ConstructorTraitApplicationPosition: {} is only allowed as a direct ordinary-function or trait-method parameter or return type",
                 Self::surface_ast_ty(ast_ty)

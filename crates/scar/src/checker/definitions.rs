@@ -183,6 +183,7 @@ impl Checker {
     ) -> Option<TypeError> {
         match (self.resolve_ty(expected_ret), self.resolve_ty(actual_ret)) {
             (Ty::Var(_), Ty::Result(_, _)) => Some(TypeError {
+                structured: None,
                 message: format!(
                     "expected {}, got {}",
                     self.ty_name(expected_ret),
@@ -221,12 +222,14 @@ impl Checker {
         let builtin_name =
             sindr::builtin::builtin_runtime_name(&id.name, id.qualified_name.as_deref());
         let meta = sindr::builtin::builtin_meta_by_name(builtin_name).ok_or_else(|| TypeError {
+            structured: None,
             message: format!("Unknown builtin declaration: {}", id.name),
             span: span.clone(),
             hint: None,
         })?;
         if params.len() != usize::from(meta.arity) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Builtin {} arity mismatch: expected {}, got {}",
                     id.name,
@@ -292,6 +295,7 @@ impl Checker {
             != Some(contract.expected_qname)
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Special-form declaration `{}` is only allowed at `{}`.",
                     id.name, contract.expected_qname
@@ -303,6 +307,7 @@ impl Checker {
 
         if !(contract.shape_ok)(params, ret_ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Special-form declaration must match the canonical contract: {}",
                     contract.expected_signature
@@ -352,6 +357,7 @@ impl Checker {
         if let Some(members) = &attrs.facet_path_kind {
             if attrs.builtin {
                 return Err(TypeError {
+                    structured: None,
                     message: "@FacetPathKind Type declarations are only allowed in canonical lib/facet.srt".into(),
                     span: span.clone(),
                     hint: None,
@@ -359,6 +365,7 @@ impl Checker {
             }
             if !params.is_empty() {
                 return Err(TypeError {
+                    structured: None,
                     message: "Facet path kind types cannot have generic parameters".into(),
                     span: span.clone(),
                     hint: None,
@@ -371,6 +378,7 @@ impl Checker {
             if members.is_empty() {
                 if !atomic {
                     return Err(TypeError {
+                        structured: None,
                         message: format!("Facet path kind `{}` must be an alias or one of the compiler-derived atomic kinds", id.name),
                         span: span.clone(),
                         hint: None,
@@ -379,6 +387,7 @@ impl Checker {
             } else {
                 if atomic {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Atomic Facet path kind `{}` cannot declare an alias RHS",
                             id.name
@@ -390,6 +399,7 @@ impl Checker {
                 for member in members {
                     if !self.facet_path_kind_decls.contains_key(member) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!("Facet path kind alias `{}` must reference a previously declared kind; `{member}` is not available", id.name),
                             span: span.clone(),
                             hint: None,
@@ -403,6 +413,7 @@ impl Checker {
                 .is_some()
             {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Duplicate Facet path kind declaration: {}", id.name),
                     span: span.clone(),
                     hint: None,
@@ -416,6 +427,7 @@ impl Checker {
         }
         let Some(meta) = builtin_type_meta_by_name(Self::surface_name(&id.name)) else {
             return Err(TypeError {
+                structured: None,
                 message: format!("Unknown builtin type declaration: {}", id.name),
                 span: span.clone(),
                 hint: None,
@@ -429,6 +441,7 @@ impl Checker {
                 .all(|(actual, expected)| actual == expected);
         if !exact_params_match {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Builtin type {} must be declared as {}{}",
                     id.name,
@@ -443,6 +456,7 @@ impl Checker {
         if self.enforce_builtin_type_contracts {
             if let Some((_, first_span)) = self.seen_builtin_type_decls.get(&id.name) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Duplicate builtin type declaration: {}", id.name),
                     span: span.clone(),
                     hint: Some(format!(
@@ -516,6 +530,7 @@ impl Checker {
             "Err" => "Result::Err",
             other => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Unknown Result constructor declaration: {}. Only Ok and Err are supported.",
                         other
@@ -528,6 +543,7 @@ impl Checker {
 
         if Self::surface_qualified_name(id.qualified_name.as_deref()) != Some(expected_qname) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Result constructor declaration `{}` is only allowed in std module `Result`.",
                     id.name
@@ -552,6 +568,7 @@ impl Checker {
                 _ => unreachable!(),
             };
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "Result constructor declaration must match the canonical contract: {}",
                     expected
@@ -740,6 +757,7 @@ impl Checker {
         for meta in builtin_type_head_metas() {
             if !self.seen_builtin_type_decls.contains_key(meta.name) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Missing builtin type declaration: {}{}",
                         meta.name,
@@ -1011,6 +1029,7 @@ impl Checker {
         };
         if matches!(actual, Ty::Var(_) | Ty::SelfApp(_)) || !has_concrete_constructor_shape {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "UnresolvedConstructorResult: {} must resolve to one concrete constructor",
                     Self::surface_ast_ty(return_ast)
@@ -1024,6 +1043,7 @@ impl Checker {
         }
         if !self.trait_impl_exists(&trait_key, &actual) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} does not implement constructor trait {}",
                     self.ty_name(&actual),
@@ -1052,6 +1072,7 @@ impl Checker {
             )
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "expected {}, got {}",
                     self.ty_name(expected_ret),
@@ -1149,6 +1170,7 @@ impl Checker {
 
         if let Some(unused) = unused_capability {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "UnusedTraitConstraint: {}: {} is never consumed",
                     unused.subject_name,
@@ -1226,6 +1248,7 @@ impl Checker {
             )?;
             if self.ty_contains_process_init(&param_ty) {
                 return Err(TypeError {
+                    structured: None,
                     message: "StandbyInit<T> is only allowed as Standby @init return type".into(),
                     span: param.id.span.clone(),
                     hint: None,
@@ -1241,6 +1264,7 @@ impl Checker {
             }
             if self.ty_contains_facet(&param_ty) {
                 return Err(TypeError {
+                    structured: None,
                     message:
                         "Facet is compile-time only in Stage1 and cannot appear in function parameter types"
                             .into(),
@@ -1271,6 +1295,7 @@ impl Checker {
         let declaration_capabilities = self.resolved_capability_uses(where_clause, &tyvars)?;
         if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
+                structured: None,
                 message:
                     "Facet is compile-time only in Stage1 and cannot appear in function return types"
                         .into(),
@@ -1282,6 +1307,7 @@ impl Checker {
         let current_symbol = id.qualified_name.clone().unwrap_or_else(|| id.name.clone());
         if self.process_handler_return_exposes_context_pid(&current_symbol, &expected_ret) {
             return Err(TypeError {
+                structured: None,
                 message: "handler dependency cannot be returned from process handlers".into(),
                 span: span.clone(),
                 hint: Some("Keep ctx.<slot> usage inside the process handler body.".into()),
@@ -1295,6 +1321,7 @@ impl Checker {
         if is_entrypoint {
             if !params.is_empty() {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "entrypoint `{}` must have signature () -> Result<()>",
                         current_symbol
@@ -1311,6 +1338,7 @@ impl Checker {
                         .as_deref()
                         .is_some_and(|entry| entry == "main");
                 return Err(TypeError {
+                    structured: None,
                     message: if legacy_main {
                         "main must declare return type Result<()>".into()
                     } else {
@@ -1402,6 +1430,7 @@ impl Checker {
                 None
             };
             return Err(TypeError {
+                structured: None,
                 message: if ret_ty.is_some() {
                     format!(
                         "expected {}, got {}",
@@ -1424,6 +1453,7 @@ impl Checker {
             Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
             _ => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Undefined function: {}", id.name),
                     span: span.clone(),
                     hint: None,
@@ -1503,6 +1533,7 @@ impl Checker {
         };
         if self.ty_contains_facet(&param_ty) {
             return Err(TypeError {
+                structured: None,
                 message:
                     "Facet is compile-time only in Stage1 and cannot appear in extractor parameter types"
                         .into(),
@@ -1523,6 +1554,7 @@ impl Checker {
         )?;
         if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
+                structured: None,
                 message:
                     "Facet is compile-time only in Stage1 and cannot appear in extractor return types"
                         .into(),
@@ -1566,6 +1598,7 @@ impl Checker {
                 None
             };
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "expected {}, got {}",
                     self.ty_name(&expected_ret),
@@ -1580,6 +1613,7 @@ impl Checker {
             Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
             _ => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Undefined extractor: {}", id.name),
                     span: span.clone(),
                     hint: None,
@@ -1628,6 +1662,7 @@ impl Checker {
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message:
                     "trait impl target must be a concrete named type, tuple type, or function type"
                         .into(),
@@ -1640,6 +1675,7 @@ impl Checker {
             .get(&trait_key)
             .cloned()
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown trait: {}", trait_id.name),
                 span: span.clone(),
                 hint: None,
@@ -1647,6 +1683,7 @@ impl Checker {
         let impl_info = self
             .trait_impl_for_head(trait_id, trait_args, target_ast_ty)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown trait impl {} for {}", trait_id.name, target_name),
                 span: span.clone(),
                 hint: None,
@@ -1677,6 +1714,7 @@ impl Checker {
                 .find(|candidate| candidate.function_id.unique_id == method.function_id.unique_id);
             if resolved_method.is_none() && !method.function_id.compiler_generated {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Unknown resolved impl method {}", method.method_name),
                     span: method.span.clone(),
                     hint: None,
@@ -1687,6 +1725,7 @@ impl Checker {
                     .methods
                     .get(&method.method_name)
                     .ok_or_else(|| TypeError {
+                        structured: None,
                         message: format!(
                             "Trait impl {} for {} defines unknown method `{}`",
                             trait_id.name, target_name, method.method_name
@@ -1828,6 +1867,7 @@ impl Checker {
                     None
                 };
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "expected {}, got {}",
                         self.ty_name(&expected_ret),
@@ -1842,6 +1882,7 @@ impl Checker {
                 Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
                 _ => {
                     return Err(TypeError {
+                        structured: None,
                         message: format!("Undefined function: {}", method.function_id.name),
                         span: method.span.clone(),
                         hint: None,
@@ -1879,6 +1920,7 @@ impl Checker {
             .find(|capability| !capability.consumed)
         {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "UnusedTraitConstraint: {}: {} is never consumed by this impl block",
                     unused.subject_name,
@@ -1908,6 +1950,7 @@ impl Checker {
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message:
                     "trait impl target must be a concrete named type, tuple type, or function type"
                         .into(),
@@ -1989,6 +2032,7 @@ impl Checker {
                 readonly_root,
             )
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown struct type declaration: {}", id.name),
                 span: span.clone(),
                 hint: None,
@@ -2040,6 +2084,7 @@ impl Checker {
                         || !matches!(&variants[1].payload[0], AstTy::Named(_, name) if name == "Error")
                     {
                         return Err(TypeError {
+                            structured: None,
                             message: "Builtin Result enum must match `defenum Result<$T> { Ok($T), Err(Error) }`.".into(),
                             span: span.clone(),
                             hint: None,
@@ -2056,6 +2101,7 @@ impl Checker {
                         || !variants.iter().all(|variant| variant.payload.is_empty())
                     {
                         return Err(TypeError {
+                            structured: None,
                             message:
                                 "Builtin Boolean enum must match `defenum Boolean { True, False }`."
                                     .into(),
@@ -2073,6 +2119,7 @@ impl Checker {
         let enum_variants = self
             .lookup_enum_variants_of(&id.name)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown enum type declaration: {}", id.name),
                 span: span.clone(),
                 hint: None,
@@ -2080,6 +2127,7 @@ impl Checker {
 
         if enum_variants.len() != variants.len() {
             return Err(TypeError {
+                structured: None,
                 message: format!("Enum variant metadata mismatch: {}", id.name),
                 span: span.clone(),
                 hint: None,
@@ -2146,6 +2194,7 @@ impl Checker {
                 readonly_root,
             )
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown record type declaration: {}", id.name),
                 span: span.clone(),
                 hint: None,
@@ -2186,6 +2235,7 @@ impl Checker {
             .env
             .lookup_type_def(&id.name)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown struct type: {}", id.name),
                 span: span.clone(),
                 hint: None,
@@ -2196,6 +2246,7 @@ impl Checker {
             let owner_name = Self::surface_name(&def.name);
             if self.current_impl_struct_target.as_deref() != Some(owner_name) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Struct literal `{}` is only allowed inside `impl {} {{ ... }}` method bodies",
                         id.name, id.name
@@ -2219,6 +2270,7 @@ impl Checker {
             };
             if !def.fields.iter().any(|(field_name, _)| field_name == name) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Unknown field '{}' in {}", name, id.name),
                     span: span.clone(),
                     hint: None,
@@ -2226,6 +2278,7 @@ impl Checker {
             }
             if !seen.insert(name.clone()) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Duplicate field '{}' in {}", name, id.name),
                     span: span.clone(),
                     hint: None,
@@ -2247,6 +2300,7 @@ impl Checker {
                     _ => None,
                 })
                 .ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!("Missing field '{}' in {}", def_name, id.name),
                     span: span.clone(),
                     hint: None,
@@ -2254,6 +2308,7 @@ impl Checker {
             let typed_val = self.check_node(resolved_val)?;
             if self.ty_contains_facet(&typed_val.ty) {
                 return Err(TypeError {
+                    structured: None,
                     message:
                         "Struct literal fields cannot contain Facet values in Stage1 (Facet is compile-time only)"
                             .into(),
@@ -2263,6 +2318,7 @@ impl Checker {
             }
             if !self.types_compatible(def_ty, &typed_val.ty) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Field '{}': expected {}, got {}",
                         def_name,
@@ -2306,6 +2362,7 @@ impl Checker {
         if id.name == "Ok" || id.name == "Err" {
             if args.len() != 1 {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("{} expects 1 argument(s), got {}", id.name, args.len()),
                     span: span.clone(),
                     hint: None,
@@ -2323,6 +2380,7 @@ impl Checker {
                     let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
                     if self.ty_contains_facet(&typed.ty) {
                         return Err(TypeError {
+                            structured: None,
                             message:
                                 "Result constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
@@ -2337,6 +2395,7 @@ impl Checker {
                 }
                 ResolvedRecordLitArg::Named(_, _) => {
                     return Err(TypeError {
+                        structured: None,
                         message: format!("{} does not accept named arguments", id.name),
                         span: span.clone(),
                         hint: None,
@@ -2346,6 +2405,7 @@ impl Checker {
             if id.name == "Err" {
                 if matches!(self.resolve_ty(&inner.ty), Ty::Result(_, _)) {
                     return Err(TypeError {
+                        structured: None,
                         message: "Nested Result errors are not allowed: use Err(ConcreteError) for the outer failure, or Ok(Err(ConcreteError)) for an inner failure.".into(),
                         span: inner.span.clone(),
                         hint: Some(
@@ -2355,6 +2415,7 @@ impl Checker {
                 }
                 if !matches!(inner.ty, Ty::Error) {
                     return Err(TypeError {
+                        structured: None,
                         message: "Err(...) requires a concrete deferror value.".into(),
                         span: inner.span.clone(),
                         hint: Some(
@@ -2364,6 +2425,7 @@ impl Checker {
                 }
                 if self.is_abstract_error_marker_value(&inner) {
                     return Err(TypeError {
+                        structured: None,
                         message: "Error is abstract and cannot be constructed directly.".into(),
                         span: inner.span.clone(),
                         hint: Some("Use a concrete deferror value in Err(...).".into()),
@@ -2399,6 +2461,7 @@ impl Checker {
             if enum_surface_name == "Boolean" {
                 if !args.is_empty() {
                     return Err(TypeError {
+                        structured: None,
                         message: format!("{} expects 0 argument(s), got {}", id.name, args.len()),
                         span: span.clone(),
                         hint: None,
@@ -2409,6 +2472,7 @@ impl Checker {
                     "False" => false,
                     _ => {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Unknown builtin Boolean variant: {}",
                                 variant.short_name
@@ -2427,6 +2491,7 @@ impl Checker {
             if enum_surface_name == "Result" {
                 if args.len() != 1 {
                     return Err(TypeError {
+                        structured: None,
                         message: format!("{} expects 1 argument(s), got {}", id.name, args.len()),
                         span: span.clone(),
                         hint: None,
@@ -2449,6 +2514,7 @@ impl Checker {
                         let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
                         if self.ty_contains_facet(&typed.ty) {
                             return Err(TypeError {
+                                structured: None,
                                 message:
                                     "Result constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                         .into(),
@@ -2463,6 +2529,7 @@ impl Checker {
                     }
                     ResolvedRecordLitArg::Named(_, _) => {
                         return Err(TypeError {
+                            structured: None,
                             message: format!("{} does not accept named arguments", id.name),
                             span: span.clone(),
                             hint: None,
@@ -2472,6 +2539,7 @@ impl Checker {
                 if variant.short_name == "Err" {
                     if matches!(self.resolve_ty(&inner.ty), Ty::Result(_, _)) {
                         return Err(TypeError {
+                            structured: None,
                             message: "Nested Result errors are not allowed: use Err(ConcreteError) for the outer failure, or Ok(Err(ConcreteError)) for an inner failure.".into(),
                             span: inner.span.clone(),
                             hint: Some(
@@ -2481,6 +2549,7 @@ impl Checker {
                     }
                     if !matches!(inner.ty, Ty::Error) {
                         return Err(TypeError {
+                            structured: None,
                             message: "Err(...) requires a concrete deferror value.".into(),
                             span: inner.span.clone(),
                             hint: Some(
@@ -2491,6 +2560,7 @@ impl Checker {
                     }
                     if self.is_abstract_error_marker_value(&inner) {
                         return Err(TypeError {
+                            structured: None,
                             message: "Error is abstract and cannot be constructed directly.".into(),
                             span: inner.span.clone(),
                             hint: Some("Use a concrete deferror value in Err(...).".into()),
@@ -2524,6 +2594,7 @@ impl Checker {
             }
             if args.len() != variant.payload.len() {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "{} expects {} argument(s), got {}",
                         id.name,
@@ -2541,6 +2612,7 @@ impl Checker {
                     ResolvedRecordLitArg::Positional(expr) => self.check_node(expr)?,
                     ResolvedRecordLitArg::Named(_, _) => {
                         return Err(TypeError {
+                            structured: None,
                             message: "Enum constructors do not accept named arguments".into(),
                             span: span.clone(),
                             hint: None,
@@ -2549,6 +2621,7 @@ impl Checker {
                 };
                 if self.ty_contains_facet(&typed.ty) {
                     return Err(TypeError {
+                        structured: None,
                         message:
                             "Enum constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                 .into(),
@@ -2558,6 +2631,7 @@ impl Checker {
                 }
                 if !self.types_compatible(expected, &typed.ty) {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "Argument type mismatch: expected {}, got {}",
                             self.ty_name(expected),
@@ -2592,6 +2666,7 @@ impl Checker {
                         Some(self.call_target_signature_hint_for_id(id, params, ret.as_ref()));
                     if args.len() != params.len() {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "function expects {} argument(s), got {}",
                                 params.len(),
@@ -2608,6 +2683,7 @@ impl Checker {
                             ResolvedRecordLitArg::Positional(expr) => self.check_node(expr)?,
                             ResolvedRecordLitArg::Named(_, _) => {
                                 return Err(TypeError {
+                                    structured: None,
                                     message: "Function calls do not accept named arguments".into(),
                                     span: span.clone(),
                                     hint: None,
@@ -2616,6 +2692,7 @@ impl Checker {
                         };
                         if self.ty_contains_facet(&typed_val.ty) {
                             return Err(TypeError {
+                                structured: None,
                                 message:
                                     "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                         .into(),
@@ -2628,6 +2705,7 @@ impl Checker {
                         }
                         if !self.types_compatible(param_ty, &typed_val.ty) {
                             return Err(TypeError {
+                                structured: None,
                                 message: format!(
                                     "Argument type mismatch: expected {}, got {}",
                                     self.ty_name(param_ty),
@@ -2684,6 +2762,7 @@ impl Checker {
                         .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
                     {
                         return Err(TypeError {
+                            structured: None,
                             message: "Function calls do not accept named arguments".into(),
                             span: span.clone(),
                             hint: None,
@@ -2691,6 +2770,7 @@ impl Checker {
                     }
                     if args.len() != params.len() {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "function expects {} argument(s), got {}",
                                 params.len(),
@@ -2709,6 +2789,7 @@ impl Checker {
                         let typed = self.check_node(expr)?;
                         if self.ty_contains_facet(&typed.ty) {
                             return Err(TypeError {
+                                structured: None,
                                 message:
                                     "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                         .into(),
@@ -2721,6 +2802,7 @@ impl Checker {
                         }
                         if !self.types_compatible(expected_ty, &typed.ty) {
                             return Err(TypeError {
+                                structured: None,
                                 message: format!(
                                     "Argument type mismatch: expected {}, got {}",
                                     self.ty_name(expected_ty),
@@ -2754,6 +2836,7 @@ impl Checker {
             .env
             .lookup_type_def(&id.name)
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown constructor type: {}", id.name),
                 span: span.clone(),
                 hint: None,
@@ -2764,6 +2847,7 @@ impl Checker {
             let new_name = format!("{}::new", id.name);
             let Some(new_uid) = self.impl_method_uids.get(&new_name).copied() else {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "Struct `{}` constructor call requires `{}` but no such method was found",
                         id.name, new_name
@@ -2780,6 +2864,7 @@ impl Checker {
                 .lookup_var(new_uid)
                 .cloned()
                 .ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!("Undefined function: {}", new_name),
                     span: span.clone(),
                     hint: None,
@@ -2796,6 +2881,7 @@ impl Checker {
                 | Ty::Func(params, ret) => (params, *ret),
                 other => {
                     return Err(TypeError {
+                        structured: None,
                         message: format!(
                             "`{}` is not callable (got {})",
                             new_name,
@@ -2817,6 +2903,7 @@ impl Checker {
             };
             if !(returns_self || returns_result_self) {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "`{}` must return Self ({}) or Result<Self, E>, got {}",
                         new_name,
@@ -2854,6 +2941,7 @@ impl Checker {
             crate::env::TypeKind::Record | crate::env::TypeKind::ConcreteError
         ) {
             return Err(TypeError {
+                structured: None,
                 message: format!("{} is not a constructor-call type", id.name),
                 span: span.clone(),
                 hint: None,
@@ -2873,6 +2961,7 @@ impl Checker {
         if all_positional {
             if args.len() != def.fields.len() {
                 return Err(TypeError {
+                    structured: None,
                     message: format!(
                         "{} expects {} field(s), got {}",
                         id.name,
@@ -2888,6 +2977,7 @@ impl Checker {
                     let typed_val = self.check_node(expr)?;
                     if self.ty_contains_facet(&typed_val.ty) {
                         return Err(TypeError {
+                            structured: None,
                             message:
                                 "Record constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
@@ -2898,6 +2988,7 @@ impl Checker {
                     let (_, def_ty) = &def.fields[i];
                     if !self.types_compatible(def_ty, &typed_val.ty) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Field '{}': expected {}, got {}",
                                 def.fields[i].0,
@@ -2917,6 +3008,7 @@ impl Checker {
                 if let ResolvedRecordLitArg::Named(name, expr) = arg {
                     if !seen.insert(name.clone()) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!("Duplicate field '{}' in {}", name, id.name),
                             span: span.clone(),
                             hint: None,
@@ -2927,6 +3019,7 @@ impl Checker {
                         .iter()
                         .position(|(n, _)| n == name)
                         .ok_or_else(|| TypeError {
+                            structured: None,
                             message: format!("Unknown field '{}' in {}", name, id.name),
                             span: span.clone(),
                             hint: None,
@@ -2934,6 +3027,7 @@ impl Checker {
                     let typed_val = self.check_node(expr)?;
                     if self.ty_contains_facet(&typed_val.ty) {
                         return Err(TypeError {
+                            structured: None,
                             message:
                                 "Record constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
                                     .into(),
@@ -2944,6 +3038,7 @@ impl Checker {
                     let (_, def_ty) = &def.fields[idx];
                     if !self.types_compatible(def_ty, &typed_val.ty) {
                         return Err(TypeError {
+                            structured: None,
                             message: format!(
                                 "Field '{}': expected {}, got {}",
                                 name,
@@ -2959,6 +3054,7 @@ impl Checker {
             }
         } else {
             return Err(TypeError {
+                structured: None,
                 message: "Cannot mix positional and named arguments".into(),
                 span: span.clone(),
                 hint: None,
@@ -2970,6 +3066,7 @@ impl Checker {
             .enumerate()
             .map(|(i, f)| {
                 f.ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!("Missing field '{}' in {}", def.fields[i].0, id.name),
                     span: span.clone(),
                     hint: None,
@@ -3003,6 +3100,7 @@ impl Checker {
             .map(|f| {
                 let ty = self.resolve_ast_ty_in_context(&f.ty, TypeSyntaxContext::General)?;
                 let id = f.id.clone().ok_or_else(|| TypeError {
+                    structured: None,
                     message: format!("Missing resolved field id for {}", f.name),
                     span: f.span.clone(),
                     hint: None,
@@ -3029,6 +3127,7 @@ impl Checker {
                 false,
             )
             .ok_or_else(|| TypeError {
+                structured: None,
                 message: format!("Unknown error type declaration: {}", id.name),
                 span: span.clone(),
                 hint: None,
@@ -3050,6 +3149,7 @@ impl Checker {
             Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
             _ => {
                 return Err(TypeError {
+                    structured: None,
                     message: format!("Undefined function: {}", id.name),
                     span: span.clone(),
                     hint: None,
@@ -3075,6 +3175,7 @@ impl Checker {
         let typed_show = show_checker
             .check_node(show_expr)
             .map_err(|err| TypeError {
+                structured: None,
                 message: err.message,
                 span: err.span,
                 hint: err.hint,
@@ -3083,6 +3184,7 @@ impl Checker {
         self.absorb_child_progress(&show_checker);
         if !self.types_compatible(&Ty::Str, &typed_show.ty) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "deferror show block must return String, got {}",
                     self.ty_name(&typed_show.ty)
@@ -3131,6 +3233,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         if !matches!(node.ty, Ty::Error) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} error branch must evaluate to Error, got {}",
                     form_name,
@@ -3150,6 +3253,7 @@ impl Checker {
     ) -> Result<(), TypeError> {
         if !matches!(node.ty, Ty::Error) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "{} error argument must evaluate to Error, got {}",
                     form_name,
@@ -3165,6 +3269,7 @@ impl Checker {
     pub(super) fn ensure_recover_kind_marker(&self, node: &TypedNode) -> Result<(), TypeError> {
         if !matches!(node.ty, Ty::Error) {
             return Err(TypeError {
+                structured: None,
                 message: format!(
                     "recover_kind marker must evaluate to Error, got {}",
                     self.ty_name(&node.ty)
@@ -3175,6 +3280,7 @@ impl Checker {
         }
         if !self.is_concrete_error_value(node) {
             return Err(TypeError {
+                structured: None,
                 message: "recover_kind marker must be a concrete deferror name or constructor"
                     .into(),
                 span: node.span.clone(),

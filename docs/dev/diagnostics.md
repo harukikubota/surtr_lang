@@ -24,6 +24,16 @@
 
 source span を必要としない説明や修正案を `labels` に置かない。迷う場合は「その文がコード上のどこを指すか」を基準にし、指さない説明は `notes`、利用者への命令は `help` に置く。
 
+## Task 2: 構造化診断契約
+
+typecheck 診断は、phase 固有の error 型を維持したまま、次の構造化入力を正本とする。
+
+- `TypeDiagnosticReason` は意味上の失敗を表す閉じた reason enum、`DiagnosticOrigin` は `Call`、`TraitCall`、`Operator`、`Annotation`、`Return`、`Branch` などの発生文脈を表す。reason に callable 名や演算子名を埋め込まない。
+- `DiagnosticData` は reason ごとの閉じた型付き variant、`SourceFact` は `role`、`source_id`、`span`、必要に応じた完全な `ty` と `declaration_identity` を保持する。structured envelope は `reason`、`origin`、`data`、`primary`、`related`（および remediation）を持つ。
+- Human-readable 出力（`DiagnosticSpec` の message / labels / notes / help）と JSON は、同じ structured input から投影する。自然言語、label 本文、source text を再解析して reason や typed field を推測しない。
+- JSON の既存フィールド `kind`、`phase`、`line`、`column`、`span`、`message`、`expected`、`got`、`hint` は意味を変えずに保持し、`reason`、`origin`、`data`、`related` を additive に追加する。
+- 移行中の未移行診断は明示的に不安定な legacy payload として扱い、legacy message から安定した reason を推測したり、偽の reason を付与したりしない。各診断 family の移行完了時に対応する legacy payload を削除する。
+
 ## 実装規則
 
 - `labels` の各 `span` は、表示する本文と対応するソース範囲を指す。関連ファイルの定義は `source_id` を設定する。

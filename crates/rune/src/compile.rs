@@ -382,14 +382,16 @@ fn build_cached_script_compile_prefix(
             )
             .map_err(|e| {
                 let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
-                let local_error = diagnostics::TypeErrorDiagnostic::new(e.message, span, e.hint);
-                RuneError::diagnostic(
-                    1,
-                    sources,
-                    source_id,
-                    "typecheck",
-                    diagnostics::type_error_spec_by_id(sources, source_id, &local_error),
-                )
+                let local_error =
+                    diagnostics::TypeErrorDiagnostic::new(e.message.clone(), span, e.hint.clone());
+                let spec = e
+                    .structured
+                    .as_ref()
+                    .map(diagnostics::structured_type_error_spec)
+                    .unwrap_or_else(|| {
+                        diagnostics::type_error_spec_by_id(sources, source_id, &local_error)
+                    });
+                RuneError::diagnostic(1, sources, source_id, "typecheck", spec)
             })?;
         let mut forge_session = std_snapshot.compile_prefix().forge_session();
         let (chunk, _) = forge_session
@@ -603,14 +605,16 @@ pub(crate) fn compile_source(
         )
         .map_err(|e| {
             let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
-            let local_error = diagnostics::TypeErrorDiagnostic::new(e.message, span, e.hint);
-            RuneError::diagnostic(
-                1,
-                sources,
-                source_id,
-                "typecheck",
-                diagnostics::type_error_spec_by_id(sources, source_id, &local_error),
-            )
+            let local_error =
+                diagnostics::TypeErrorDiagnostic::new(e.message.clone(), span, e.hint.clone());
+            let spec = e
+                .structured
+                .as_ref()
+                .map(diagnostics::structured_type_error_spec)
+                .unwrap_or_else(|| {
+                    diagnostics::type_error_spec_by_id(sources, source_id, &local_error)
+                });
+            RuneError::diagnostic(1, sources, source_id, "typecheck", spec)
         })?;
 
     let mut forge_session = active_prefix.forge_session();

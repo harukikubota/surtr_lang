@@ -6,7 +6,10 @@ use crate::heuristics::{
     infer_type_error_template, is_flow_operator_message, line_index_for_span, line_spans,
     parse_binary_operator_error,
 };
-use crate::{simple_error, Color, DiagnosticLabel, DiagnosticSpec, SourceId, SourceRegistry};
+use crate::{
+    simple_error, Color, DiagnosticData, DiagnosticLabel, DiagnosticSpec, SourceFact, SourceId,
+    SourceRegistry, StructuredDiagnostic, TypeDiagnosticReason,
+};
 use spire::ast::Span;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +127,71 @@ pub fn type_error_spec_by_id(
         }
     }
     spec
+}
+
+/// Project a completed structured type diagnostic into the renderer's common
+/// representation.  This is deliberately separate from `type_error_spec`,
+/// whose two-argument form remains the compatibility boundary for checker
+/// errors that have not migrated off their legacy message payload yet.
+pub fn structured_type_error_spec(input: &StructuredDiagnostic) -> DiagnosticSpec {
+    let mut spec = simple_error(
+        "TypeError",
+        structured_headline(input),
+        input.primary.span.clone(),
+        input.remediation_text(),
+    );
+    spec.structured = Some(input.clone());
+    spec.labels = std::iter::once(&input.primary)
+        .chain(input.related.iter())
+        .map(source_fact_label)
+        .collect();
+    spec
+}
+
+/// Explicitly named alias for callers that want to make the structured
+/// boundary visible at the call site.
+pub fn type_error_spec_from_structured(input: &StructuredDiagnostic) -> DiagnosticSpec {
+    structured_type_error_spec(input)
+}
+
+fn structured_headline(input: &StructuredDiagnostic) -> String {
+    match &input.data {
+        DiagnosticData::ReturnTypeArgument(value) => format!(
+            "Return type argument {} for `{}` does not match the callable signature",
+            value.ordinal, value.callable
+        ),
+        DiagnosticData::ArgumentRelation(value) => format!(
+            "Argument {} does not match the callable signature `{}`",
+            value.ordinal, value.callable
+        ),
+        DiagnosticData::TypeConstructorCarrier(_value) => {
+            "Type constructor carrier does not match the required family".into()
+        }
+        DiagnosticData::BranchAssertion(_) => "Branch types do not match".into(),
+        _ => match input.reason {
+            TypeDiagnosticReason::ArityMismatch
+            | TypeDiagnosticReason::ReturnTypeArgumentArityMismatch
+            | TypeDiagnosticReason::TraitMethodTypeListArityMismatch => {
+                "Callable arity does not match".into()
+            }
+            TypeDiagnosticReason::ReturnTypeMismatch => "Return type does not match".into(),
+            TypeDiagnosticReason::AnnotationTypeMismatch => "Annotation type does not match".into(),
+            _ => "Type checking failed".into(),
+        },
+    }
+}
+
+fn source_fact_label(fact: &SourceFact) -> DiagnosticLabel {
+    let message = match fact.ty.as_deref() {
+        Some(ty) => format!("{}: {}", fact.role.as_str(), ty),
+        None => fact.role.as_str().to_string(),
+    };
+    DiagnosticLabel {
+        source_id: Some(fact.source_id),
+        span: fact.span.clone(),
+        message,
+        color: Some(Color::Blue),
+    }
 }
 
 fn apply_extractor_context_by_id(

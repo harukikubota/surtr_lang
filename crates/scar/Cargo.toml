@@ -5,6 +5,7 @@ edition = "2021"
 description = "Surtr's Checker And type Reasoner"
 
 [dependencies]
+diagnostics = { path = "../diagnostics" }
 spire = { path = "../spire" }
 sigil = { path = "../sigil" }
 sindr = { path = "../sindr" }
