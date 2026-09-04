@@ -417,6 +417,13 @@ fn build_cached_script_compile_prefix(
                 diagnostics::simple_error("CodegenError", &e.message, span, None),
             )
         })?;
+        let next_fun_idx = bytecode
+            .functions
+            .iter()
+            .map(|entry| entry.fun_idx.saturating_add(1))
+            .max()
+            .unwrap_or(0);
+        scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
         scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
             entry
                 .qualified_name
@@ -424,14 +431,7 @@ fn build_cached_script_compile_prefix(
                 .map(|qualified_name| (qualified_name, entry.fun_idx))
         }));
         let resolve_state = sigil::ResolveResumeState {
-            next_local_id: resume_state.next_local_id.max(
-                bytecode
-                    .functions
-                    .iter()
-                    .map(|entry| entry.fun_idx.saturating_add(1))
-                    .max()
-                    .unwrap_or(0),
-            ),
+            next_local_id: resume_state.next_local_id.max(next_fun_idx),
         };
         let prefix = Arc::new(xldr::CompilationPrefixSnapshot::from_parts(
             rebuilt_declaration_index.clone(),

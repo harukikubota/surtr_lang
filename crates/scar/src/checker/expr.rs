@@ -1017,8 +1017,12 @@ impl Checker {
                 })
             }
 
-            Resolved::TypeApply(span, target, args) => {
-                self.check_explicit_type_apply(span, target, args)
+            Resolved::ReturnTypeArgumentApply(span, target, args) => {
+                self.check_explicit_return_type_argument_apply(
+                    span,
+                    target,
+                    &args.iter().map(|argument| argument.ty.clone()).collect::<Vec<_>>(),
+                )
             }
 
             Resolved::Bind(span, pat, rhs) => {
@@ -1231,11 +1235,11 @@ impl Checker {
             Resolved::DeferrorDef(span, id, fields, show_expr) => {
                 self.check_deferror_def(span, id, fields, show_expr)
             }
-            Resolved::Def(span, id, type_params, params, ret_ty, where_clause, body, attrs) => {
+            Resolved::Def(span, id, return_type_arguments, params, ret_ty, where_clause, body, attrs) => {
                 self.check_def(
                     span,
                     id,
-                    type_params,
+                    return_type_arguments,
                     params,
                     ret_ty,
                     where_clause.as_ref(),
@@ -1277,7 +1281,7 @@ impl Checker {
                     )?;
                     if let Some(body) = &method.body {
                         let mut tyvars = HashMap::new();
-                        for (param, resolved) in method.params.iter().zip(params.iter()) {
+                        for (param, resolved) in method.value_parameters.iter().zip(params.iter()) {
                             self.collect_signature_ty_bindings(
                                 &param.ty,
                                 resolved,
@@ -1295,7 +1299,7 @@ impl Checker {
                             &tyvars,
                         )?;
                         let local_bindings = method
-                            .params
+                            .value_parameters
                             .iter()
                             .zip(params.iter())
                             .map(|(param, ty)| (param.id.unique_id, ty.clone()))
@@ -1360,7 +1364,7 @@ impl Checker {
                     methods,
                 )
             }
-            Resolved::BuiltinDecl(span, id, params, ret_ty, where_clause, _) => {
+            Resolved::BuiltinDecl(span, id, _, params, ret_ty, where_clause, _) => {
                 self.check_builtin_decl(span, id, params, ret_ty, where_clause.as_ref())
             }
             Resolved::BuiltinExtractorDecl(span, id, param, ret_ty, _) => {
@@ -1384,7 +1388,7 @@ impl Checker {
         }
     }
 
-    fn check_explicit_type_apply(
+    fn check_explicit_return_type_argument_apply(
         &mut self,
         span: &Span,
         target: &Resolved,
@@ -1576,6 +1580,7 @@ impl Checker {
                     .name
                     .strip_suffix(&format!("::{}", method_name))
                     .filter(|owner| *owner == "JsonValue");
+                let explicit_type_arguments = Self::explicit_type_args(func);
                 self.check_trait_method_call(
                     span,
                     &trait_name,
@@ -1583,7 +1588,7 @@ impl Checker {
                     args,
                     receiver_owner_hint,
                     Some(expected_ty),
-                    Self::explicit_type_args(func),
+                    explicit_type_arguments.as_deref(),
                 )
             }
             (Resolved::App(span, func, args), Some(expected_ty))
@@ -1985,7 +1990,7 @@ impl Checker {
             | Resolved::Compose(_, _, _)
             | Resolved::LiftedCompose(_, _, _)
             | Resolved::KleisliCompose(_, _, _) => self.check_node(node),
-            Resolved::Var(_, _) | Resolved::Grouped(_, _) | Resolved::TypeApply(_, _, _) => {
+            Resolved::Var(_, _) | Resolved::Grouped(_, _) | Resolved::ReturnTypeArgumentApply(_, _, _) => {
                 self.check_function_value_operand(node, op_name)
             }
             _ => Err(TypeError {
@@ -2015,7 +2020,7 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         match node {
             Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => self.check_node(node),
-            Resolved::Var(_, _) | Resolved::Grouped(_, _) | Resolved::TypeApply(_, _, _) => {
+            Resolved::Var(_, _) | Resolved::Grouped(_, _) | Resolved::ReturnTypeArgumentApply(_, _, _) => {
                 self.check_function_value_operand(node, op_name)
             }
             Resolved::App(span, func, args) => self.check_injected_call(span, func, args, op_name),
@@ -2038,7 +2043,7 @@ impl Checker {
                 | Resolved::Capture(_, _, _)
                 | Resolved::Closure(_, _, _, _)
                 | Resolved::Grouped(_, _)
-                | Resolved::TypeApply(_, _, _)
+                | Resolved::ReturnTypeArgumentApply(_, _, _)
         )
     }
 
@@ -2731,7 +2736,7 @@ impl Checker {
             Resolved::Lit(span, _)
             | Resolved::Var(span, _)
             | Resolved::App(span, _, _)
-            | Resolved::TypeApply(span, _, _)
+            | Resolved::ReturnTypeArgumentApply(span, _, _)
             | Resolved::Block(span, _)
             | Resolved::Bind(span, _, _)
             | Resolved::SafeBind(span, _, _)
@@ -2773,7 +2778,7 @@ impl Checker {
             | Resolved::Def(span, _, _, _, _, _, _, _)
             | Resolved::ConstDef(span, _, _, _, _)
             | Resolved::ExtractorDef(span, _, _, _, _, _, _)
-            | Resolved::BuiltinDecl(span, _, _, _, _, _)
+            | Resolved::BuiltinDecl(span, _, _, _, _, _, _)
             | Resolved::BuiltinExtractorDecl(span, _, _, _, _)
             | Resolved::BuiltinTypeDecl(span, _, _, _)
             | Resolved::TypeAlias(span, _, _, _, _)
@@ -3010,7 +3015,7 @@ impl Checker {
         func: &'a Resolved,
     ) -> Option<(&'a ResolvedId, String, String)> {
         let func = match func {
-            Resolved::TypeApply(_, target, _) => target.as_ref(),
+            Resolved::ReturnTypeArgumentApply(_, target, _) => target.as_ref(),
             other => other,
         };
         let Resolved::Var(_, id) = func else {
@@ -3024,9 +3029,11 @@ impl Checker {
         Some((id, trait_name, method_name))
     }
 
-    fn explicit_type_args(func: &Resolved) -> Option<&[AstTy]> {
+    fn explicit_type_args(func: &Resolved) -> Option<Vec<AstTy>> {
         match func {
-            Resolved::TypeApply(_, _, args) => Some(args),
+            Resolved::ReturnTypeArgumentApply(_, _, args) => {
+                Some(args.iter().map(|argument| argument.ty.clone()).collect())
+            }
             _ => None,
         }
     }
@@ -4888,7 +4895,7 @@ impl Checker {
                     self.check_apply_callable(right, "`|>`")?
                 }
             }
-            Resolved::TypeApply(call_span, _, _) => self
+            Resolved::ReturnTypeArgumentApply(call_span, _, _) => self
                 .check_trait_helper_pipe_callable(
                     call_span,
                     right,
@@ -5369,7 +5376,7 @@ impl Checker {
                             .or_else(|_| self.check_apply_callable(right, "`|>=`"))
                     }
                 }
-                Resolved::TypeApply(call_span, _, _) => self
+                Resolved::ReturnTypeArgumentApply(call_span, _, _) => self
                     .check_trait_helper_pipe_callable(
                         call_span,
                         right,
@@ -5501,7 +5508,7 @@ impl Checker {
                         .or_else(|_| self.check_apply_callable(right, "`|>=`"))?
                 }
             }
-            (Resolved::TypeApply(call_span, _, _), Some(contract)) => self
+            (Resolved::ReturnTypeArgumentApply(call_span, _, _), Some(contract)) => self
                 .check_trait_helper_pipe_callable(
                     call_span,
                     right,
@@ -8800,6 +8807,7 @@ impl Checker {
                 .name
                 .strip_suffix(&format!("::{}", method_name))
                 .filter(|owner| *owner == "JsonValue");
+            let explicit_type_arguments = Self::explicit_type_args(func);
             return self.check_trait_method_call(
                 span,
                 &trait_name,
@@ -8807,7 +8815,7 @@ impl Checker {
                 args,
                 receiver_owner_hint,
                 None,
-                Self::explicit_type_args(func),
+                explicit_type_arguments.as_deref(),
             );
         }
 

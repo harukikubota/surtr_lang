@@ -408,9 +408,9 @@ enum TypeSyntaxContext {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitMethodInfo {
     id: ResolvedId,
-    fun_params: Vec<AstTy>,
+    return_type_arguments: Vec<ResolvedReturnTypeArgument>,
     type_params: Vec<ResolvedTypeParam>,
-    params: Vec<ResolvedFunParam>,
+    value_parameters: Vec<ResolvedValueParameter>,
     ret_ty: AstTy,
     where_clause: Option<TypedWhereClause>,
     attrs: ResolvedDeclAttrs,
@@ -440,9 +440,9 @@ struct TraitParent {
 struct TraitImplMethodInfo {
     method_name: String,
     function_id: ResolvedId,
-    fun_params: Vec<AstTy>,
+    return_type_arguments: Vec<ResolvedReturnTypeArgument>,
     type_params: Vec<ResolvedTypeParam>,
-    params: Vec<ResolvedFunParam>,
+    value_parameters: Vec<ResolvedValueParameter>,
     ret_ty: Option<AstTy>,
     where_clause: Option<TypedWhereClause>,
     body: Box<Resolved>,
@@ -1433,7 +1433,8 @@ impl ScarSession {
             .copied()
             .max()
             .map(|idx| idx + 1)
-            .unwrap_or(self.state.env.next_fun_idx);
+            .unwrap_or(0)
+            .max(self.state.env.next_fun_idx);
         let mut specializable_rekeys = Vec::new();
         let mut fun_idx_rewrites = HashMap::new();
         for (qualified_name, id) in function_id_entries {
@@ -1830,7 +1831,7 @@ impl ScarSession {
             }
             TypedInner::DeferrorDef(_, _, _, params, body) => {
                 for param in params {
-                    Self::rewrite_fun_indices_in_fun_param(param, rewrites);
+                    Self::rewrite_fun_indices_in_value_parameter(param, rewrites);
                 }
                 Self::rewrite_fun_indices_in_node(body, rewrites);
             }
@@ -1839,7 +1840,7 @@ impl ScarSession {
                     let _ = type_param;
                 }
                 for param in params {
-                    Self::rewrite_fun_indices_in_fun_param(param, rewrites);
+                    Self::rewrite_fun_indices_in_value_parameter(param, rewrites);
                 }
                 Self::rewrite_fun_indices_in_ty(ret_ty, rewrites);
                 Self::rewrite_fun_indices_in_node(body, rewrites);
@@ -1848,7 +1849,7 @@ impl ScarSession {
                 for type_param in type_params {
                     let _ = type_param;
                 }
-                Self::rewrite_fun_indices_in_fun_param(param, rewrites);
+                Self::rewrite_fun_indices_in_value_parameter(param, rewrites);
                 Self::rewrite_fun_indices_in_ty(ret_ty, rewrites);
                 Self::rewrite_fun_indices_in_node(body, rewrites);
             }
@@ -1966,7 +1967,10 @@ impl ScarSession {
         Self::rewrite_fun_indices_in_node(&mut arm.body, rewrites);
     }
 
-    fn rewrite_fun_indices_in_fun_param(param: &mut TypedFunParam, rewrites: &HashMap<u32, u32>) {
+    fn rewrite_fun_indices_in_value_parameter(
+        param: &mut TypedValueParameter,
+        rewrites: &HashMap<u32, u32>,
+    ) {
         Self::rewrite_fun_indices_in_ty(&mut param.ty, rewrites);
     }
 
@@ -2021,9 +2025,11 @@ mod specialization_state_tests {
                 fun_idx,
                 id.clone(),
                 Vec::new(),
-                vec![TypedFunParam {
+                vec![TypedValueParameter {
                     id: resolved_id("value", "", uid + 1000),
+                    mode: spire::ast::ValueParameterMode::PositionalOrNamed,
                     ty: Ty::Int,
+                    span: test_span(),
                 }],
                 Ty::Int,
                 None,
@@ -2145,6 +2151,38 @@ mod specialization_state_tests {
             names_by_index.get(&453),
             Some(&"Global::b_compare".to_string())
         );
+    }
+
+    #[test]
+    fn reconcile_function_indices_preserves_materialized_function_floor() {
+        let mut session = ScarSession::new();
+        let helper_id = resolved_id("helper", "Global::helper", 10);
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::helper".to_string(), helper_id.clone());
+        session
+            .state
+            .env
+            .vars
+            .insert(helper_id.unique_id, user_func_ty(500));
+        session
+            .state
+            .specializable_defs
+            .insert(500, specializable_def(500, "helper", 10));
+
+        session.ensure_next_fun_idx_at_least(512);
+        session.reconcile_function_indices([("Global::other", 499)]);
+
+        let helper_fun_idx = session
+            .state
+            .specializable_defs
+            .iter()
+            .find_map(|(fun_idx, def)| {
+                (ScarSession::def_qualified_name(def).as_deref() == Some("Global::helper"))
+                    .then_some(*fun_idx)
+            });
+        assert_eq!(helper_fun_idx, Some(512));
     }
 }
 
@@ -2398,9 +2436,9 @@ impl Checker {
                     }
                     self.warn_unused_type_params(type_params, &used, &id.name);
                 }
-                Resolved::Def(_, id, type_params, params, ret_ty, _, _, _) => {
+                Resolved::Def(_, id, _return_type_arguments, params, ret_ty, _, _, _) => {
                     let used = Self::signature_type_param_uses(params, ret_ty.as_ref());
-                    self.warn_unused_type_params(type_params, &used, &id.name);
+                    self.warn_unused_type_params(&[], &used, &id.name);
                 }
                 Resolved::ExtractorDef(_, id, type_params, param, ret_ty, _, _) => {
                     let mut used = HashSet::new();
@@ -2414,16 +2452,19 @@ impl Checker {
                     let mut trait_used = HashSet::new();
                     for method in methods {
                         Self::validate_trait_method_input_slots(method)?;
-                        let mut fun_param_slots = HashSet::new();
-                        for fun_param in &method.fun_params {
-                            Self::collect_ast_ty_type_params(fun_param, &mut fun_param_slots);
+                        let mut return_type_argument_slots = HashSet::new();
+                        for return_type_argument in &method.return_type_arguments {
+                            Self::collect_ast_ty_type_params(
+                                &return_type_argument.ty,
+                                &mut return_type_argument_slots,
+                            );
                         }
                         let mut value_param_slots = HashSet::new();
-                        for param in &method.params {
+                        for param in &method.value_parameters {
                             Self::collect_ast_ty_type_params(&param.ty, &mut trait_used);
                             Self::collect_ast_ty_type_params(&param.ty, &mut value_param_slots);
                         }
-                        let mut method_input_used = fun_param_slots;
+                        let mut method_input_used = return_type_argument_slots;
                         method_input_used.extend(value_param_slots);
                         let mut method_output_used = HashSet::new();
                         Self::collect_ast_ty_type_params(&method.ret_ty, &mut trait_used);
@@ -2453,18 +2494,18 @@ impl Checker {
                                     method.id.name
                                 ),
                                 span: method.span.clone(),
-                                hint: Some("Add the type variable to FunParams or a value argument.".into()),
+                                hint: Some("Add the type variable to ReturnTypeArguments or a value argument.".into()),
                             });
                         }
                         if id.name == "Default"
                             && method.id.name == "default"
-                            && !method.fun_params.iter().any(
-                                |param| matches!(param, AstTy::Named(_, name) if name == "Self"),
+                            && !method.return_type_arguments.iter().any(
+                                |param| matches!(&param.ty, AstTy::Named(_, name) if name == "Self"),
                             )
-                        {
+                            {
                             return Err(TypeError {
                                 structured: None,
-                                message: "Default::default must declare Self in FunParams".into(),
+                                message: "Default::default must declare Self in ReturnTypeArguments".into(),
                                 span: method.span.clone(),
                                 hint: Some("Use `def default::<Self>() -> Self`.".into()),
                             });
@@ -2480,8 +2521,10 @@ impl Checker {
                 }
                 Resolved::TraitImplDef(_, _, _, _, _, methods) => {
                     for method in methods {
-                        let used =
-                            Self::signature_type_param_uses(&method.params, method.ret_ty.as_ref());
+                        let used = Self::signature_type_param_uses(
+                            &method.value_parameters,
+                            method.ret_ty.as_ref(),
+                        );
                         self.warn_unused_type_params(
                             &method.type_params,
                             &used,
@@ -2496,7 +2539,7 @@ impl Checker {
     }
 
     fn signature_type_param_uses(
-        params: &[ResolvedFunParam],
+        params: &[ResolvedValueParameter],
         ret_ty: Option<&AstTy>,
     ) -> HashSet<String> {
         let mut used = HashSet::new();
@@ -2510,23 +2553,29 @@ impl Checker {
     }
 
     /// Trait type slots have exactly one input introduction channel: either
-    /// explicit `::<...>` FunParams or value parameters. A FunParam slot must
+    /// explicit `::<...>` ReturnTypeArguments or value parameters. A ValueParameter slot must
     /// also flow into the return type, so explicit specialization is observable
     /// in the method contract.
     fn validate_trait_method_input_slots(method: &ResolvedTraitMethodSig) -> Result<(), TypeError> {
-        let mut fun_param_slots = HashSet::new();
-        for fun_param in &method.fun_params {
-            Self::collect_trait_method_slots(fun_param, &mut fun_param_slots);
+        let mut return_type_argument_slots = HashSet::new();
+        for return_type_argument in &method.return_type_arguments {
+            Self::collect_trait_method_slots(
+                &return_type_argument.ty,
+                &mut return_type_argument_slots,
+            );
         }
         let mut value_param_slots = HashSet::new();
-        for param in &method.params {
+        for param in &method.value_parameters {
             Self::collect_trait_method_slots(&param.ty, &mut value_param_slots);
         }
-        if let Some(slot) = fun_param_slots.intersection(&value_param_slots).next() {
+        if let Some(slot) = return_type_argument_slots
+            .intersection(&value_param_slots)
+            .next()
+        {
             return Err(TypeError {
                 structured: None,
                 message: format!(
-                    "Trait method {} introduces {slot} through both FunParams and value arguments",
+                    "Trait method {} introduces {slot} through both ReturnTypeArguments and value arguments",
                     method.id.name
                 ),
                 span: method.span.clone(),
@@ -2538,19 +2587,19 @@ impl Checker {
 
         let mut return_slots = HashSet::new();
         Self::collect_trait_method_slots(&method.ret_ty, &mut return_slots);
-        if let Some(slot) = fun_param_slots.difference(&return_slots).next() {
+        if let Some(slot) = return_type_argument_slots.difference(&return_slots).next() {
             return Err(TypeError {
                 structured: None,
                 message: format!(
-                    "Trait method {} declares {slot} in FunParams but does not use it in its return type",
+                    "Trait method {} declares {slot} in ReturnTypeArguments but does not use it in its return type",
                     method.id.name
                 ),
                 span: method.span.clone(),
-                hint: Some("FunParams type variables must appear in the return type.".into()),
+                hint: Some("ReturnTypeArguments type variables must appear in the return type.".into()),
             });
         }
 
-        let mut input_slots = fun_param_slots;
+        let mut input_slots = return_type_argument_slots;
         input_slots.extend(value_param_slots);
         if let Some(slot) = return_slots.difference(&input_slots).next() {
             return Err(TypeError {
@@ -2561,7 +2610,8 @@ impl Checker {
                 ),
                 span: method.span.clone(),
                 hint: Some(
-                    "Introduce the type variable through FunParams or a value argument.".into(),
+                    "Introduce the type variable through ReturnTypeArguments or a value argument."
+                        .into(),
                 ),
             });
         }
@@ -2597,7 +2647,7 @@ impl Checker {
     }
 
     fn reject_return_only_signature_slots(
-        params: &[ResolvedFunParam],
+        params: &[ResolvedValueParameter],
         ret_ty: Option<&AstTy>,
         span: &Span,
     ) -> Result<(), TypeError> {
@@ -3852,7 +3902,7 @@ impl Checker {
             }
             Resolved::FacetSegmentAccess(..)
             | Resolved::InferredFacetCapture(..)
-            | Resolved::TypeApply(..)
+            | Resolved::ReturnTypeArgumentApply(..)
             | Resolved::Lit(..)
             | Resolved::Var(..)
             | Resolved::ListNil(..)
@@ -3913,7 +3963,7 @@ impl Checker {
                     }
                     self.validate_constructor_body_positions(body, &constructor_traits)?;
                 }
-                Resolved::BuiltinDecl(_, _, params, ret, _, _) => {
+                Resolved::BuiltinDecl(_, _, _, params, ret, _, _) => {
                     for param in params {
                         self.validate_constructor_ast_ty(&param.ty, false, &constructor_traits)?;
                     }
@@ -3936,7 +3986,7 @@ impl Checker {
                 }
                 Resolved::TraitDef(_, _, _, _, methods, _) => {
                     for method in methods {
-                        for param in &method.params {
+                        for param in &method.value_parameters {
                             self.validate_constructor_ast_ty(&param.ty, true, &constructor_traits)?;
                         }
                         self.validate_constructor_ast_ty(
@@ -3951,7 +4001,7 @@ impl Checker {
                 }
                 Resolved::TraitImplDef(_, _, _, _, _, methods) => {
                     for method in methods {
-                        for param in &method.params {
+                        for param in &method.value_parameters {
                             self.validate_constructor_ast_ty(&param.ty, true, &constructor_traits)?;
                         }
                         if let Some(ret) = &method.ret_ty {

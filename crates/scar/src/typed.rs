@@ -4,7 +4,9 @@ use sigil::resolved::{
     ResolvedWhereConstraintRhs,
 };
 use sindr::primitives::SurtrInt;
-use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, Visibility};
+use spire::ast::{
+    AstTy, BinOp, Lit, ProcessSpec, Span, SupervisorInitSpec, ValueParameterMode, Visibility,
+};
 
 use crate::types::Ty;
 
@@ -501,7 +503,13 @@ pub enum TypedInner {
     ConstructorCall(u32, Vec<TypedNode>),
 
     /// Error type definition — tag + binding id + params + show expression
-    DeferrorDef(u32, u32, ResolvedId, Vec<TypedFunParam>, Box<TypedNode>),
+    DeferrorDef(
+        u32,
+        u32,
+        ResolvedId,
+        Vec<TypedValueParameter>,
+        Box<TypedNode>,
+    ),
 
     /// Enum definition — enum type name + variants
     EnumDef(String, Vec<TypedEnumVariantDef>),
@@ -510,8 +518,8 @@ pub enum TypedInner {
     Def(
         u32,
         ResolvedId,
-        Vec<TypedTypeParam>,
-        Vec<TypedFunParam>,
+        Vec<TypedReturnTypeArgument>,
+        Vec<TypedValueParameter>,
         Ty,
         Option<TypedWhereClause>,
         Box<TypedNode>,
@@ -523,7 +531,7 @@ pub enum TypedInner {
         u32,
         ResolvedId,
         Vec<TypedTypeParam>,
-        TypedFunParam,
+        TypedValueParameter,
         Ty,
         Box<TypedNode>,
         Visibility,
@@ -648,11 +656,21 @@ pub struct TypedMatchArm {
     pub body: TypedNode,
 }
 
-/// Function parameter (typed).
+/// A checked declaration or call-site return type argument.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TypedFunParam {
-    pub id: ResolvedId,
+pub struct TypedReturnTypeArgument {
+    pub ordinal: u32,
     pub ty: Ty,
+    pub span: Span,
+}
+
+/// A checked declaration-side value parameter.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedValueParameter {
+    pub id: ResolvedId,
+    pub mode: ValueParameterMode,
+    pub ty: Ty,
+    pub span: Span,
 }
 
 /// Typed closure parameter.

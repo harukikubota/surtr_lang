@@ -113,7 +113,7 @@ match expr {
 - `defmod` / inherent `impl` / trait `impl` block 内の callable 名は一意であり、signature や `def` / `defp` の違いによる overload はできない
 - 通常 callable は型引数を明示できない。型スロットは signature の引数型・receiver 型から推論する
 - `::<Int>` は `try_from::<Int>(value)` のような Trait helper の target specialization にだけ使える。`Self` は値引数または期待 callable 型から推論する
-- FunParams は、型変数が value parameter の型から導入できない場合にだけ使い、その型変数は戻り値にも現れなければならない。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で FunParams に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として FunParams に置く
+- ReturnTypeArguments は、型変数が value parameter の型から導入できない場合にだけ使い、その型変数は戻り値にも現れなければならない。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で ReturnTypeArguments に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として ReturnTypeArguments に置く
 - trait は method のみを持つ
 - 通常の bound は `$A: Trait` と書く。`Trait<Arg, ...>` は where RHS ではなく trait / impl head または expression dispatch target にだけ書ける
 - generic receiver の Trait 呼び出しには、signature 上で宣言した `where` bound が必要である。呼び出しから implicit bound は追加されない

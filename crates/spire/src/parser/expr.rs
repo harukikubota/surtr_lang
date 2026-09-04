@@ -7,7 +7,7 @@ use crate::func_literal::{
 use crate::token::Token;
 use sindr::primitives::ToPrimitive;
 
-use super::Parser;
+use super::{ast_ty_span, Parser};
 
 #[derive(Debug, Clone, PartialEq)]
 enum FuncLiteralBodyKind {
@@ -595,7 +595,10 @@ impl Parser<'_> {
         self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Lt))
     }
 
-    fn parse_explicit_type_apply(&mut self, target: Ast) -> Result<Ast, ParseError> {
+    fn parse_explicit_return_type_argument_apply(
+        &mut self,
+        target: Ast,
+    ) -> Result<Ast, ParseError> {
         let start = target.span().start;
         self.consume_path_separator()?;
         self.expect(&Token::Lt)?;
@@ -606,7 +609,12 @@ impl Parser<'_> {
                 self.peek_span(),
             ));
         }
-        let mut args = vec![self.parse_type_in_impl_context(None)?];
+        let first = self.parse_type_in_impl_context(None)?;
+        let mut args = vec![ReturnTypeArgument {
+            ordinal: 0,
+            span: ast_ty_span(&first).clone(),
+            ty: first,
+        }];
         self.skip_newlines();
         while matches!(self.peek(), Token::Comma) {
             self.advance();
@@ -617,11 +625,16 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             }
-            args.push(self.parse_type_in_impl_context(None)?);
+            let ty = self.parse_type_in_impl_context(None)?;
+            args.push(ReturnTypeArgument {
+                ordinal: args.len() as u32,
+                span: ast_ty_span(&ty).clone(),
+                ty,
+            });
             self.skip_newlines();
         }
         let end = self.expect_type_gt()?;
-        Ok(Ast::TypeApply(
+        Ok(Ast::ReturnTypeArgumentApply(
             Span {
                 start,
                 end: end.end,
@@ -1228,7 +1241,7 @@ impl Parser<'_> {
                         self.peek_span(),
                     ));
                 }
-                path_expr = self.parse_explicit_type_apply(path_expr)?;
+                path_expr = self.parse_explicit_return_type_argument_apply(path_expr)?;
             }
             if matches!(self.peek(), Token::LParen) {
                 self.advance();
@@ -1344,8 +1357,9 @@ impl Parser<'_> {
                     self.peek_span(),
                 ));
             }
-            let func = self
-                .parse_explicit_type_apply(self.std_hidden_ref(name_span.clone(), name.clone()))?;
+            let func = self.parse_explicit_return_type_argument_apply(
+                self.std_hidden_ref(name_span.clone(), name.clone()),
+            )?;
             if matches!(self.peek(), Token::LParen) {
                 self.advance();
                 let args = self.parse_call_args()?;
@@ -2244,7 +2258,7 @@ impl Parser<'_> {
         }
 
         if self.explicit_type_args_start() {
-            target = self.parse_explicit_type_apply(target)?;
+            target = self.parse_explicit_return_type_argument_apply(target)?;
             end = target.span().end;
         }
 
@@ -2774,7 +2788,9 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
                     }
                 })
         }
-        Ast::TypeApply(_, target, _) => bulk_update_proc_contains_operation_call(target),
+        Ast::ReturnTypeArgumentApply(_, target, _) => {
+            bulk_update_proc_contains_operation_call(target)
+        }
         Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
             stmts.iter().any(bulk_update_proc_contains_operation_call)
         }

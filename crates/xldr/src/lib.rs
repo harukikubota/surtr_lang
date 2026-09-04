@@ -728,6 +728,13 @@ fn build_stdlib_snapshot(
             file_name: "<stdlib>".into(),
             message: e.message,
         })?;
+    let next_fun_idx = bytecode
+        .functions
+        .iter()
+        .map(|entry| entry.fun_idx.saturating_add(1))
+        .max()
+        .unwrap_or(0);
+    scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
     scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
         entry
             .qualified_name
@@ -736,12 +743,6 @@ fn build_stdlib_snapshot(
     }));
     bytecode.docs = docs.clone();
     bytecode.signatures = signatures.clone();
-    let next_fun_idx = bytecode
-        .functions
-        .iter()
-        .map(|entry| entry.fun_idx.saturating_add(1))
-        .max()
-        .unwrap_or(0);
     let resolve_state = sigil::ResolveResumeState {
         next_local_id: resume_state.next_local_id.max(next_fun_idx),
     };
@@ -1219,7 +1220,7 @@ impl Int {
         assert!(lowered[1]
             .ast
             .iter()
-            .any(|stmt| matches!(stmt, spire::ast::Ast::BuiltinDecl(_, name, _, _, _, _) if name == "safe_mod")));
+            .any(|stmt| matches!(stmt, spire::ast::Ast::BuiltinDecl(_, name, _, _, _, _, _) if name == "safe_mod")));
     }
 
     #[test]
@@ -1395,7 +1396,7 @@ deferror NoneError { "None Value." }"#,
                 if name == "Global::Bootstrap"
                 && body.iter().any(|stmt| matches!(
                     stmt,
-                    spire::ast::Ast::BuiltinDecl(_, builtin_name, _, _, _, _) if builtin_name == "import"
+                    spire::ast::Ast::BuiltinDecl(_, builtin_name, _, _, _, _, _) if builtin_name == "import"
                 ))
         )));
     }

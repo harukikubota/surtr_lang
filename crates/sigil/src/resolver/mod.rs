@@ -8,8 +8,9 @@ use sindr::names::{
 };
 use sindr::warning::PhaseOutput;
 use spire::ast::{
-    Ast, AstMatchArm, AstPattern, AstTy, ClosureParam, DeclAttrs, ExtractorParam, FunParam, Lit,
-    RecordLitArg, Span, StructLitField, SupervisorInitSpec, Visibility,
+    Ast, AstMatchArm, AstPattern, AstTy, ClosureParam, DeclAttrs, ExtractorParam, Lit,
+    RecordLitArg, ReturnTypeArgument, Span, StructLitField, SupervisorInitSpec, ValueParameter,
+    Visibility,
 };
 
 use crate::error::{ResolveError, ResolveErrorLabel};
@@ -647,7 +648,9 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_record_arg(arg, base, offset);
             }
         }
-        Resolved::TypeApply(_, target, _) => rebase_resolved_node(target, base, offset),
+        Resolved::ReturnTypeArgumentApply(_, target, _) => {
+            rebase_resolved_node(target, base, offset)
+        }
         Resolved::Block(_, nodes)
         | Resolved::ListLiteral(_, nodes)
         | Resolved::TupleLiteral(_, nodes) => {
@@ -766,10 +769,9 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 rebase_resolved_id(&mut variant.id, base, offset);
             }
         }
-        Resolved::Def(_, id, type_params, params, _, where_clause, body, _) => {
+        Resolved::Def(_, id, _return_type_arguments, params, _, where_clause, body, _) => {
             rebase_resolved_id(id, base, offset);
-            rebase_type_params(type_params, base, offset);
-            rebase_fun_params(params, base, offset);
+            rebase_value_parameters(params, base, offset);
             if let Some(clause) = where_clause {
                 rebase_where_clause(clause, base, offset);
             }
@@ -794,7 +796,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             for method in methods {
                 rebase_resolved_id(&mut method.id, base, offset);
                 rebase_type_params(&mut method.type_params, base, offset);
-                rebase_fun_params(&mut method.params, base, offset);
+                rebase_value_parameters(&mut method.value_parameters, base, offset);
                 if let Some(clause) = &mut method.where_clause {
                     rebase_where_clause(clause, base, offset);
                 }
@@ -811,16 +813,16 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             for method in methods {
                 rebase_resolved_id(&mut method.function_id, base, offset);
                 rebase_type_params(&mut method.type_params, base, offset);
-                rebase_fun_params(&mut method.params, base, offset);
+                rebase_value_parameters(&mut method.value_parameters, base, offset);
                 if let Some(clause) = &mut method.where_clause {
                     rebase_where_clause(clause, base, offset);
                 }
                 rebase_resolved_node(&mut method.body, base, offset);
             }
         }
-        Resolved::BuiltinDecl(_, id, params, _, where_clause, _) => {
+        Resolved::BuiltinDecl(_, id, _, params, _, where_clause, _) => {
             rebase_resolved_id(id, base, offset);
-            rebase_fun_params(params, base, offset);
+            rebase_value_parameters(params, base, offset);
             if let Some(clause) = where_clause {
                 rebase_where_clause(clause, base, offset);
             }
@@ -897,7 +899,7 @@ fn rebase_fields(fields: &mut [ResolvedField], base: u32, offset: u32) {
     }
 }
 
-fn rebase_fun_params(params: &mut [ResolvedFunParam], base: u32, offset: u32) {
+fn rebase_value_parameters(params: &mut [ResolvedValueParameter], base: u32, offset: u32) {
     for param in params {
         rebase_resolved_id(&mut param.id, base, offset);
     }

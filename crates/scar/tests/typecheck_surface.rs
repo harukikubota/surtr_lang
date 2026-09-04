@@ -5488,7 +5488,7 @@ fn bitwidth_zero_arg_variant_reference_reuses_std_enum_constructor_uid() {
     let colliding_defs = resolved
         .iter()
         .filter_map(|node| match node {
-            sigil::resolved::Resolved::BuiltinDecl(_, id, _, _, _, _)
+            sigil::resolved::Resolved::BuiltinDecl(_, id, _, _, _, _, _)
                 if id.unique_id == use_uid =>
             {
                 Some(format!("builtin {}", id.name))
@@ -9157,7 +9157,7 @@ fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
 }
 
 #[test]
-fn trait_method_type_slots_have_one_input_channel_and_funparams_flow_to_return() {
+fn trait_method_type_slots_have_one_input_channel_and_return_type_arguments_flow_to_return() {
     let duplicated = resolve_with_builtin_prelude(
         r#"deftrait DuplicateInput {
   def duplicate::<$A>(value: $A) -> $A
@@ -9166,20 +9166,20 @@ fn trait_method_type_slots_have_one_input_channel_and_funparams_flow_to_return()
     let err = typecheck(duplicated).expect_err("a slot cannot use both input channels");
     assert!(
         err.message
-            .contains("introduces $A through both FunParams and value arguments"),
+            .contains("introduces $A through both ReturnTypeArguments and value arguments"),
         "{err:?}"
     );
 
-    let unconsumed_fun_param = resolve_with_builtin_prelude(
-        r#"deftrait UnconsumedFunParam<$A> {
+    let unconsumed_return_type_argument = resolve_with_builtin_prelude(
+        r#"deftrait UnconsumedReturnTypeArgument<$A> {
   def render::<$A>(self: Self) -> String
 }"#,
     );
-    let err = typecheck(unconsumed_fun_param)
-        .expect_err("a FunParams slot must be represented by the return type");
+    let err = typecheck(unconsumed_return_type_argument)
+        .expect_err("a ReturnTypeArguments slot must be represented by the return type");
     assert!(
         err.message
-            .contains("declares $A in FunParams but does not use it in its return type"),
+            .contains("declares $A in ReturnTypeArguments but does not use it in its return type"),
         "{err:?}"
     );
 
@@ -9196,7 +9196,7 @@ fn trait_method_type_slots_have_one_input_channel_and_funparams_flow_to_return()
 }
 
 #[test]
-fn trait_impl_funparams_must_match_the_trait_slots() {
+fn trait_impl_return_type_arguments_must_match_the_trait_slots() {
     let matching = resolve_with_builtin_prelude(
         r#"deftrait Convert<$To> {
   def convert::<$To>(self: Self) -> $To
@@ -9217,7 +9217,8 @@ impl Convert<Int> for String {
   def convert(self: String) -> Int { 1 }
 }"#,
     );
-    let err = typecheck(omitted).expect_err("an impl cannot omit a required FunParams slot");
+    let err =
+        typecheck(omitted).expect_err("an impl cannot omit a required ReturnTypeArguments slot");
     assert!(err.message.contains("incompatible signature"), "{err:?}");
 }
 

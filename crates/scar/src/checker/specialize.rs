@@ -299,8 +299,28 @@ impl Checker {
                             .get(&fun_idx)
                             .cloned()
                             .unwrap_or_default();
-                        let mapping =
+                        let mut mapping =
                             self.infer_specialization_mapping(original_def, &args, &bound_tyvars)?;
+                        let return_type_argument_sources: &[Ty] =
+                            if obligation.trait_args.is_empty() {
+                                std::slice::from_ref(&obligation.receiver)
+                            } else {
+                                &obligation.trait_args
+                            };
+                        if let TypedInner::Def(_, _, return_type_arguments, ..) = &original_def.node
+                        {
+                            for (argument, source) in return_type_arguments
+                                .iter()
+                                .zip(return_type_argument_sources.iter())
+                            {
+                                self.match_specialization_ty(
+                                    &argument.ty,
+                                    source,
+                                    &bound_tyvars,
+                                    &mut mapping,
+                                );
+                            }
+                        }
                         if mapping.len() == bound_tyvars.len()
                             && bound_tyvars.iter().all(|var| {
                                 mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_)))
@@ -1198,9 +1218,11 @@ impl Checker {
                 Vec::new(),
                 params
                     .into_iter()
-                    .map(|param| TypedFunParam {
+                    .map(|param| TypedValueParameter {
                         id: param.id,
+                        mode: param.mode,
                         ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                        span: param.span,
                     })
                     .collect(),
                 self.substitute_ty_with_mapping(&ret_ty, mapping),
@@ -1213,9 +1235,11 @@ impl Checker {
                     specialized_fun_idx,
                     id,
                     Vec::new(),
-                    TypedFunParam {
+                    TypedValueParameter {
                         id: param.id,
+                        mode: param.mode,
                         ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                        span: param.span,
                     },
                     self.substitute_ty_with_mapping(&ret_ty, mapping),
                     Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
@@ -1398,10 +1422,14 @@ impl Checker {
         let mut ordered = Vec::new();
         let mut seen = HashSet::new();
         match &def.node {
-            TypedInner::Def(_, _, type_params, params, ret_ty, _, _body, _) => {
-                for type_param in type_params {
-                    if type_param.bound.is_some() && seen.insert(type_param.ty_var) {
-                        ordered.push(type_param.ty_var);
+            TypedInner::Def(_, _, return_type_arguments, params, ret_ty, _, _body, _) => {
+                for argument in return_type_arguments {
+                    let mut declared = Vec::new();
+                    Self::collect_ty_vars(&argument.ty, &mut declared);
+                    for var in declared {
+                        if seen.insert(var) {
+                            ordered.push(var);
+                        }
                     }
                 }
                 for param in params {
@@ -2154,9 +2182,11 @@ impl Checker {
                 id,
                 params
                     .into_iter()
-                    .map(|param| TypedFunParam {
+                    .map(|param| TypedValueParameter {
                         id: param.id,
+                        mode: param.mode,
                         ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                        span: param.span,
                     })
                     .collect(),
                 Box::new(self.substitute_typed_node_with_mapping(*show, mapping)),
@@ -2175,17 +2205,19 @@ impl Checker {
                 id,
                 type_params
                     .into_iter()
-                    .map(|param| TypedTypeParam {
-                        name: param.name,
-                        ty_var: param.ty_var,
-                        bound: param.bound,
+                    .map(|argument| TypedReturnTypeArgument {
+                        ordinal: argument.ordinal,
+                        ty: self.substitute_ty_with_mapping(&argument.ty, mapping),
+                        span: argument.span,
                     })
                     .collect(),
                 params
                     .into_iter()
-                    .map(|param| TypedFunParam {
+                    .map(|param| TypedValueParameter {
                         id: param.id,
+                        mode: param.mode,
                         ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                        span: param.span,
                     })
                     .collect(),
                 self.substitute_ty_with_mapping(&ret_ty, mapping),
@@ -2205,9 +2237,11 @@ impl Checker {
                             bound: typed_param.bound,
                         })
                         .collect(),
-                    TypedFunParam {
+                    TypedValueParameter {
                         id: param.id,
+                        mode: param.mode,
                         ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                        span: param.span,
                     },
                     self.substitute_ty_with_mapping(&ret_ty, mapping),
                     Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
@@ -2889,14 +2923,16 @@ mod tests {
             node: TypedInner::Def(
                 fun_idx,
                 id,
-                vec![TypedTypeParam {
-                    name: "$A".to_string(),
-                    ty_var,
-                    bound: Some("Add".to_string()),
-                }],
-                vec![TypedFunParam {
-                    id: param_id.clone(),
+                vec![TypedReturnTypeArgument {
+                    ordinal: 0,
                     ty: Ty::Var(ty_var),
+                    span: test_span(),
+                }],
+                vec![TypedValueParameter {
+                    id: param_id.clone(),
+                    mode: spire::ast::ValueParameterMode::PositionalOrNamed,
+                    ty: Ty::Var(ty_var),
+                    span: test_span(),
                 }],
                 Ty::Var(ty_var),
                 None,

@@ -1,8 +1,8 @@
 use sindr::ir::{DocEntry, DocKind, SignatureEntry};
 use sindr::names::surface_path_name;
 use spire::ast::{
-    Ast, AstTy, BuiltinTypeHead, EnumVariant, ExtractorParam, FunParam, RecordField,
-    TraitMethodSig, TypeParam, WhereClause, WhereConstraintRhs,
+    Ast, AstTy, BuiltinTypeHead, EnumVariant, ExtractorParam, RecordField, TraitMethodSig,
+    TypeParam, ValueParameter, WhereClause, WhereConstraintRhs,
 };
 
 use crate::StagedModuleAst;
@@ -90,7 +90,7 @@ fn format_type_params(type_params: &[TypeParam]) -> String {
 fn format_fun_signature(
     name: &str,
     _type_params: &[TypeParam],
-    params: &[FunParam],
+    params: &[ValueParameter],
     ret_ty: &Option<AstTy>,
 ) -> String {
     let params = params
@@ -212,7 +212,7 @@ fn format_impl_method_signature(
     target: &str,
     name: &str,
     type_params: &[TypeParam],
-    params: &[FunParam],
+    params: &[ValueParameter],
     ret_ty: &Option<AstTy>,
 ) -> String {
     let self_ty = AstTy::Named(spire::ast::Span { start: 0, end: 0 }, target.to_string());
@@ -274,7 +274,7 @@ fn format_trait_method_signature(trait_name: &str, method: &TraitMethodSig) -> S
     let signature = format_fun_signature(
         &method.name,
         &method.type_params,
-        &method.params,
+        &method.value_parameters,
         &Some(method.ret_ty.clone()),
     );
     if let Some(rest) = signature.strip_prefix(&method.name) {
@@ -307,7 +307,7 @@ fn format_trait_impl_method_signature(
     target_ty: &AstTy,
     method_name: &str,
     type_params: &[TypeParam],
-    params: &[FunParam],
+    params: &[ValueParameter],
     ret_ty: &Option<AstTy>,
     where_clause: Option<&WhereClause>,
 ) -> String {
@@ -389,18 +389,18 @@ fn qualified_name(module_path: &str, name: &str) -> String {
 fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<DocEntry>) {
     for stmt in ast {
         match stmt {
-            Ast::Def(_, name, type_params, params, ret_ty, _, _, attrs) => {
+            Ast::Def(_, name, _return_type_arguments, params, ret_ty, _, _, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
                         module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(format_fun_signature(name, type_params, params, ret_ty)),
+                        signature: Some(format_fun_signature(name, &[], params, ret_ty)),
                         doc: doc.clone(),
                     });
                 }
             }
-            Ast::BuiltinDecl(_, name, params, ret_ty, _, attrs) => {
+            Ast::BuiltinDecl(_, name, _, params, ret_ty, _, attrs) => {
                 if let Some(doc) = &attrs.doc {
                     out.push(DocEntry {
                         qualified_name: qualified_name(module_path, name),
@@ -463,7 +463,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                                 .map(|method| format_fun_signature(
                                     &method.name,
                                     &method.type_params,
-                                    &method.params,
+                                    &method.value_parameters,
                                     &Some(method.ret_ty.clone()),
                                 ))
                                 .collect::<Vec<_>>()
@@ -510,7 +510,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
             Ast::ImplDef(_, target, methods, _attrs) => {
                 for method in methods {
                     match method {
-                        Ast::Def(_, name, type_params, params, ret_ty, _, _, attrs) => {
+                        Ast::Def(_, name, _return_type_arguments, params, ret_ty, _, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
                                 let qualified_method_name = if surface_path_name(module_path)
                                     == surface_path_name(target)
@@ -526,7 +526,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                                     signature: Some(format_impl_method_signature(
                                         target,
                                         name,
-                                        type_params,
+                                        &[],
                                         params,
                                         ret_ty,
                                     )),
@@ -534,7 +534,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                                 });
                             }
                         }
-                        Ast::BuiltinDecl(_, name, params, ret_ty, _, attrs) => {
+                        Ast::BuiltinDecl(_, name, _, params, ret_ty, _, attrs) => {
                             if let Some(doc) = &attrs.doc {
                                 let qualified_method_name = if surface_path_name(module_path)
                                     == surface_path_name(target)
@@ -626,7 +626,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                         Ast::Def(
                             _,
                             name,
-                            type_params,
+                            _return_type_arguments,
                             params,
                             ret_ty,
                             where_clause,
@@ -634,13 +634,13 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                             method_attrs,
                         ) => Some((
                             name,
-                            type_params.as_slice(),
+                            [].as_slice(),
                             params.as_slice(),
                             ret_ty,
                             where_clause.as_ref(),
                             method_attrs,
                         )),
-                        Ast::BuiltinDecl(_, name, params, ret_ty, _, method_attrs) => Some((
+                        Ast::BuiltinDecl(_, name, _, params, ret_ty, _, method_attrs) => Some((
                             name,
                             [].as_slice(),
                             params.as_slice(),
@@ -774,16 +774,16 @@ fn collect_signature_entries_for_ast(
 ) {
     for stmt in ast {
         match stmt {
-            Ast::Def(_, name, type_params, params, ret_ty, _, _, _) => {
+            Ast::Def(_, name, _return_type_arguments, params, ret_ty, _, _, _) => {
                 push_signature_entry(
                     out,
                     module_path,
                     qualified_name(module_path, name),
                     DocKind::Function,
-                    format_fun_signature(name, type_params, params, ret_ty),
+                    format_fun_signature(name, &[], params, ret_ty),
                 );
             }
-            Ast::BuiltinDecl(_, name, params, ret_ty, _, _) => {
+            Ast::BuiltinDecl(_, name, _, params, ret_ty, _, _) => {
                 push_signature_entry(
                     out,
                     module_path,
@@ -833,7 +833,7 @@ fn collect_signature_entries_for_ast(
                             .map(|method| format_fun_signature(
                                 &method.name,
                                 &method.type_params,
-                                &method.params,
+                                &method.value_parameters,
                                 &Some(method.ret_ty.clone()),
                             ))
                             .collect::<Vec<_>>()
@@ -871,7 +871,7 @@ fn collect_signature_entries_for_ast(
             Ast::ImplDef(_, target, methods, _) => {
                 for method in methods {
                     match method {
-                        Ast::Def(_, name, type_params, params, ret_ty, _, _, _) => {
+                        Ast::Def(_, name, _return_type_arguments, params, ret_ty, _, _, _) => {
                             let qualified_method_name =
                                 if surface_path_name(module_path) == surface_path_name(target) {
                                     format!("{}::{name}", surface_path_name(target))
@@ -883,16 +883,10 @@ fn collect_signature_entries_for_ast(
                                 module_path,
                                 qualified_method_name,
                                 DocKind::Function,
-                                format_impl_method_signature(
-                                    target,
-                                    name,
-                                    type_params,
-                                    params,
-                                    ret_ty,
-                                ),
+                                format_impl_method_signature(target, name, &[], params, ret_ty),
                             );
                         }
-                        Ast::BuiltinDecl(_, name, params, ret_ty, _, _) => {
+                        Ast::BuiltinDecl(_, name, _, params, ret_ty, _, _) => {
                             let qualified_method_name =
                                 if surface_path_name(module_path) == surface_path_name(target) {
                                     format!("{}::{name}", surface_path_name(target))
@@ -958,16 +952,23 @@ fn collect_signature_entries_for_ast(
                 );
                 for method in methods {
                     let method_parts = match method {
-                        Ast::Def(_, name, type_params, params, ret_ty, where_clause, _, _) => {
-                            Some((
-                                name,
-                                type_params.as_slice(),
-                                params.as_slice(),
-                                ret_ty,
-                                where_clause.as_ref(),
-                            ))
-                        }
-                        Ast::BuiltinDecl(_, name, params, ret_ty, _, _) => {
+                        Ast::Def(
+                            _,
+                            name,
+                            _return_type_arguments,
+                            params,
+                            ret_ty,
+                            where_clause,
+                            _,
+                            _,
+                        ) => Some((
+                            name,
+                            [].as_slice(),
+                            params.as_slice(),
+                            ret_ty,
+                            where_clause.as_ref(),
+                        )),
+                        Ast::BuiltinDecl(_, name, _, params, ret_ty, _, _) => {
                             Some((name, [].as_slice(), params.as_slice(), ret_ty, None))
                         }
                         _ => None,

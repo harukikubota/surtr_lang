@@ -2216,8 +2216,8 @@ mod tests {
     use scar::typed::TypedProcessHandlerUid;
     use scar::typed::{
         ComposeFlavor, TypedDbgArg, TypedFacetPath, TypedFacetPathKind, TypedFacetSegment,
-        TypedFunParam, TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern,
-        TypedProcessSpec, TypedProgram, TypedTypeParam,
+        TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern, TypedProcessSpec,
+        TypedProgram, TypedReturnTypeArgument, TypedValueParameter,
     };
     use scar::types::Ty;
     use sigil::resolved::ResolvedId;
@@ -2258,10 +2258,12 @@ mod tests {
         }
     }
 
-    fn typed_fun_param(name: &str, unique_id: u32, ty: Ty) -> TypedFunParam {
-        TypedFunParam {
+    fn typed_value_parameter(name: &str, unique_id: u32, ty: Ty) -> TypedValueParameter {
+        TypedValueParameter {
             id: resolved_id(name, None, unique_id),
+            mode: spire::ast::ValueParameterMode::PositionalOrNamed,
             ty,
+            span: span(0, 0),
         }
     }
 
@@ -2279,23 +2281,23 @@ mod tests {
 
     #[test]
     fn format_function_signature_preserves_generic_surface_names() {
-        let type_params = vec![TypedTypeParam {
-            name: "$A".into(),
-            ty_var: 42,
-            bound: None,
+        let return_type_arguments = vec![TypedReturnTypeArgument {
+            ordinal: 0,
+            ty: Ty::Var(42),
+            span: span(0, 0),
         }];
         let range_ty = Ty::Struct(
             "Global::Range".into(),
             vec![("min".into(), Ty::Var(42)), ("max".into(), Ty::Var(42))],
         );
         let params = vec![
-            typed_fun_param("min", 1, Ty::Var(42)),
-            typed_fun_param("max", 2, Ty::Var(42)),
+            typed_value_parameter("min", 1, Ty::Var(42)),
+            typed_value_parameter("max", 2, Ty::Var(42)),
         ];
 
         assert_eq!(
-            format_function_signature("new", &type_params, &params, &range_ty),
-            "new<$A>(min: $A, max: $A) -> Range<$A>"
+            format_function_signature("new", &return_type_arguments, &params, &range_ty),
+            "new<_>(min: _, max: _) -> Range"
         );
     }
 
@@ -2567,7 +2569,7 @@ mod tests {
                         1,
                         get_id,
                         Vec::new(),
-                        vec![typed_fun_param("state", 201, Ty::Int)],
+                        vec![typed_value_parameter("state", 201, Ty::Int)],
                         result_ty,
                         None,
                         Box::new(lit_node(Ty::Int, Lit::Int(1.into()), span(0, 0))),
@@ -5041,43 +5043,34 @@ fn ty_contains_var(ty: &Ty, needle: u32) -> bool {
 
 fn format_function_signature(
     name: &str,
-    type_params: &[TypedTypeParam],
-    params: &[TypedFunParam],
+    return_type_arguments: &[TypedReturnTypeArgument],
+    params: &[TypedValueParameter],
     ret_ty: &Ty,
 ) -> String {
-    let type_params_surface = if type_params.is_empty() {
+    let return_type_arguments_surface = if return_type_arguments.is_empty() {
         String::new()
     } else {
         format!(
             "<{}>",
-            type_params
+            return_type_arguments
                 .iter()
-                .map(|param| match &param.bound {
-                    Some(bound) => format!("{}: {}", param.name, bound),
-                    None => param.name.clone(),
-                })
+                .map(|argument| ty_to_string(&argument.ty))
                 .collect::<Vec<_>>()
                 .join(", ")
         )
     };
     let params = params
         .iter()
-        .map(|param| {
-            format!(
-                "{}: {}",
-                param.id.name,
-                ty_to_string_with_type_params(&param.ty, type_params)
-            )
-        })
+        .map(|param| format!("{}: {}", param.id.name, ty_to_string(&param.ty)))
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "{name}{type_params_surface}({params}) -> {}",
-        ty_to_string_with_type_params(ret_ty, type_params)
+        "{name}{return_type_arguments_surface}({params}) -> {}",
+        ty_to_string(ret_ty)
     )
 }
 
-fn format_error_constructor_signature(name: &str, params: &[TypedFunParam]) -> String {
+fn format_error_constructor_signature(name: &str, params: &[TypedValueParameter]) -> String {
     let params = params
         .iter()
         .map(|param| format!("{}: {}", param.id.name, ty_to_string(&param.ty)))

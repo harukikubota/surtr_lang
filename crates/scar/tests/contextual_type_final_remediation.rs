@@ -306,7 +306,7 @@ def forbidden(value: Functor<Int>) -> Int {{ 1 }}"#
         if id.name != "forbidden" {
             return false;
         }
-        *node = Resolved::BuiltinDecl(span, id, params, ret, where_clause, attrs);
+        *node = Resolved::BuiltinDecl(span, id, Vec::new(), params, ret, where_clause, attrs);
         true
     });
     assert!(

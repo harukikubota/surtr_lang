@@ -970,7 +970,7 @@ impl Int {
             assert_eq!(target, "Global::Int");
             assert!(matches!(
                 methods.as_slice(),
-                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Generic(_, ret, _)), _, attrs)]
+                [Ast::BuiltinDecl(_, name, _, _, Some(AstTy::Generic(_, ret, _)), _, attrs)]
                     if name == "safe_mod"
                     && ret == "Result"
                     && attrs.doc.as_deref() == Some("Builtin int helper.")
@@ -998,13 +998,17 @@ fn test_trait_def_parses_method_signatures() {
             assert!(type_params.is_empty());
             assert_eq!(methods.len(), 2);
             assert_eq!(methods[0].name, "add");
-            assert_eq!(methods[0].params.len(), 2);
+            assert_eq!(methods[0].value_parameters.len(), 2);
             assert!(methods[0].type_params.is_empty());
-            assert!(matches!(methods[0].params[0].ty, AstTy::Named(_, ref ty) if ty == "Self"));
-            assert!(matches!(methods[0].params[1].ty, AstTy::Named(_, ref ty) if ty == "Self"));
+            assert!(
+                matches!(methods[0].value_parameters[0].ty, AstTy::Named(_, ref ty) if ty == "Self")
+            );
+            assert!(
+                matches!(methods[0].value_parameters[1].ty, AstTy::Named(_, ref ty) if ty == "Self")
+            );
             assert!(matches!(methods[0].ret_ty, AstTy::Named(_, ref ty) if ty == "Self"));
             assert_eq!(methods[1].name, "abs");
-            assert_eq!(methods[1].params.len(), 1);
+            assert_eq!(methods[1].value_parameters.len(), 1);
         }
         _ => panic!("Expected TraitDef"),
     }
@@ -1104,7 +1108,7 @@ fn test_trait_impl_accepts_builtin_def_method() {
             assert_eq!(target, "Global::Int");
             assert!(matches!(
                 methods.as_slice(),
-                [Ast::BuiltinDecl(_, name, _, Some(AstTy::Named(_, ret)), _, _)]
+                [Ast::BuiltinDecl(_, name, _, _, Some(AstTy::Named(_, ret)), _, _)]
                     if name == "add" && ret == "Self"
             ));
         }
@@ -1424,9 +1428,7 @@ fn test_doc_attributes_parse_for_trait_impl_methods() {
 fn test_function_def_rejects_explicit_type_params() {
     let err = parse("def add<$N: Describable>(x: $N, y: $N) -> $N { x }")
         .expect_err("regular definitions must not accept explicit type parameters");
-    assert!(err
-        .to_string()
-        .contains("must not declare explicit type parameters"));
+    assert!(err.to_string().contains("Expected"));
 }
 
 #[test]
@@ -1452,7 +1454,7 @@ fn test_trait_def_parses_head_type_params() {
             assert_eq!(type_params.len(), 1);
             assert_eq!(type_params[0].name, "$To");
             assert_eq!(methods.len(), 1);
-            assert_eq!(methods[0].params.len(), 1);
+            assert_eq!(methods[0].value_parameters.len(), 1);
         }
         _ => panic!("Expected TraitDef"),
     }
@@ -1778,7 +1780,7 @@ where
             if matches!(slots.as_slice(), [AstTy::Named(_, name)] if name == "$A")
     ));
     assert!(matches!(
-        &methods[0].params[0].ty,
+        &methods[0].value_parameters[0].ty,
         AstTy::Generic(_, name, args)
             if name == "Self" && matches!(args.as_slice(), [AstTy::Named(_, arg)] if arg == "$A")
     ));
@@ -1938,7 +1940,7 @@ fn test_builtin_decl() {
     )
     .expect("std module should accept builtin declarations");
     match &ast[0] {
-        Ast::BuiltinDecl(_, name, params, ret_ty, _, attrs) => {
+        Ast::BuiltinDecl(_, name, _, params, ret_ty, _, attrs) => {
             assert_eq!(name, "to_string");
             assert_eq!(params.len(), 1);
             assert_eq!(
@@ -1965,7 +1967,7 @@ fn test_builtin_decl_accepts_where_clause() {
         ParserContext::module(1, Some("List".into())).with_rules(ParseRules::std_module()),
     )
     .expect("constrained builtin declarations should parse");
-    let [Ast::BuiltinDecl(_, _, _, _, Some(clause), _), Ast::BuiltinDecl(..)] = ast.as_slice()
+    let [Ast::BuiltinDecl(_, _, _, _, _, Some(clause), _), Ast::BuiltinDecl(..)] = ast.as_slice()
     else {
         panic!("expected constrained builtin followed by builtin declaration");
     };
@@ -2042,7 +2044,7 @@ fn test_hidden_annotates_builtin_decl() {
 
     assert!(matches!(
         ast.as_slice(),
-        [Ast::BuiltinDecl(_, name, _, _, _, DeclAttrs { hidden: true, .. })]
+        [Ast::BuiltinDecl(_, name, _, _, _, _, DeclAttrs { hidden: true, .. })]
             if name == "__process_sleep"
     ));
 }
@@ -2075,7 +2077,7 @@ fn test_hidden_builtin_impl_member_parses() {
             assert_eq!(target, "Global::Task");
             assert!(matches!(
                 &body[0],
-                Ast::BuiltinDecl(_, name, _, _, _, DeclAttrs { hidden: true, .. })
+                Ast::BuiltinDecl(_, name, _, _, _, _, DeclAttrs { hidden: true, .. })
                     if name == "__task_call"
             ));
         }
@@ -2101,6 +2103,7 @@ fn test_private_builtin_impl_member_parses() {
                 Ast::BuiltinDecl(
                     _,
                     name,
+                    _,
                     _,
                     _,
                     _,
@@ -2354,7 +2357,7 @@ fn test_builtin_if_decl_accepts_keyword_name_in_std_module_member() {
             assert_eq!(name, "Global::Kernel");
             assert!(matches!(
                 &body[0],
-                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _, _)
+                Ast::BuiltinDecl(_, builtin_name, _, params, Some(AstTy::Named(_, ret)), _, _)
                     if builtin_name == "if" && params.len() == 3 && ret == "$A"
             ));
         }
@@ -2378,12 +2381,12 @@ fn test_builtin_import_decl_accepts_keyword_name_in_std_module_member() {
             assert_eq!(name, "Global::Bootstrap");
             assert!(matches!(
                 &body[0],
-                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _, _)
+                Ast::BuiltinDecl(_, builtin_name, _, params, Some(AstTy::Named(_, ret)), _, _)
                     if builtin_name == "import" && params.is_empty() && ret == "Unit"
             ));
             assert!(matches!(
                 &body[1],
-                Ast::BuiltinDecl(_, builtin_name, params, Some(AstTy::Named(_, ret)), _, _)
+                Ast::BuiltinDecl(_, builtin_name, _, params, Some(AstTy::Named(_, ret)), _, _)
                     if builtin_name == "include" && params.len() == 1 && ret == "Unit"
             ));
         }
@@ -5918,7 +5921,7 @@ defagent Counter {
                 Ast::Def(_, _, _, params, _, _, _, _) => {
                     assert!(matches!(
                         params.as_slice(),
-                        [FunParam { name, ty: AstTy::Named(_, ty_name), .. }]
+                        [ValueParameter { name, ty: AstTy::Named(_, ty_name), .. }]
                             if name == "_field" && ty_name == "String"
                     ));
                 }
@@ -5934,7 +5937,7 @@ defagent Counter {
                     assert_eq!(ty_name, "Result");
                     assert!(matches!(
                         params.as_slice(),
-                        [FunParam { name, ty: AstTy::Named(_, ty_name), .. }]
+                        [ValueParameter { name, ty: AstTy::Named(_, ty_name), .. }]
                             if name == "next" && ty_name == "Int"
                     ));
                 }
@@ -6433,7 +6436,7 @@ fn test_defgenserver_worker_init_route_uses_user_defined_name() {
                 Ast::Def(_, _, _, params, _, _, _, _) => {
                     assert!(matches!(
                         params.as_slice(),
-                        [FunParam { name, ty: AstTy::Generic(_, ty_name, ty_args), .. }]
+                        [ValueParameter { name, ty: AstTy::Generic(_, ty_name, ty_args), .. }]
                             if name == "pid"
                                 && ty_name == "PID"
                                 && matches!(ty_args.as_slice(), [AstTy::Named(_, process_name)] if process_name == "Global::QueueServer")
@@ -6749,17 +6752,46 @@ fn = &TryFrom::try_from::<Int>"#,
         &ast[0],
         Ast::Bind(_, _, rhs)
             if matches!(rhs.as_ref(), Ast::App(_, callee, _)
-                if matches!(callee.as_ref(), Ast::TypeApply(_, target, args)
+                if matches!(callee.as_ref(), Ast::ReturnTypeArgumentApply(_, target, args)
                     if matches!(target.as_ref(), Ast::Path(_, _))
-                        && matches!(args.as_slice(), [AstTy::Named(_, name)] if name == "Int")))
+                        && matches!(args.as_slice(), [argument] if matches!(argument.ty, AstTy::Named(_, ref name) if name == "Int"))))
     ));
     assert!(matches!(
         &ast[1],
         Ast::Bind(_, _, rhs)
             if matches!(rhs.as_ref(), Ast::Capture(_, target, args)
                 if args.is_empty()
-                    && matches!(target.as_ref(), Ast::TypeApply(_, _, type_args)
+                    && matches!(target.as_ref(), Ast::ReturnTypeArgumentApply(_, _, type_args)
                         if type_args.len() == 1))
+    ));
+}
+
+#[test]
+fn canonical_return_type_arguments_and_value_parameters_are_preserved() {
+    let parsed = parse(
+        r#"def identity::<$A>(value: $A) -> $A { value }
+call = identity::<Int>(1)"#,
+    )
+    .expect("canonical signature roles should parse");
+
+    match parsed.as_slice() {
+        [Ast::Def(_, _, return_type_arguments, value_parameters, ..), ..] => {
+            assert_eq!(return_type_arguments.len(), 1);
+            assert_eq!(value_parameters.len(), 1);
+        }
+        other => panic!("expected definition with canonical parameter roles: {other:?}"),
+    }
+
+    let call = match &parsed[1] {
+        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
+            Ast::App(_, callee, _) => callee.as_ref(),
+            other => panic!("expected call expression, got {other:?}"),
+        },
+        other => panic!("expected call binding, got {other:?}"),
+    };
+    assert!(matches!(
+        call,
+        Ast::ReturnTypeArgumentApply(_, _, ref args) if args.len() == 1
     ));
 }
 

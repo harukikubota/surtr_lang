@@ -127,7 +127,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 collect_record_arg_usage(arg, usage);
             }
         }
-        Resolved::TypeApply(_, target, _) => collect_node_usage(target, usage),
+        Resolved::ReturnTypeArgumentApply(_, target, _) => collect_node_usage(target, usage),
         Resolved::Block(_, nodes)
         | Resolved::ListLiteral(_, nodes)
         | Resolved::TupleLiteral(_, nodes)
@@ -252,7 +252,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         Resolved::TraitDef(_, _, _, _, methods, _) => {
             for method in methods {
                 if let Some(body) = method.body.as_deref() {
-                    for param in &method.params {
+                    for param in &method.value_parameters {
                         usage.bind_id(&param.id);
                     }
                     collect_node_usage(body, usage);
@@ -261,7 +261,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         }
         Resolved::TraitImplDef(_, _, _, _, _, methods) => {
             for method in methods {
-                for param in &method.params {
+                for param in &method.value_parameters {
                     usage.bind_id(&param.id);
                 }
                 collect_node_usage(&method.body, usage);

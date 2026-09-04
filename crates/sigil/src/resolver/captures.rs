@@ -34,7 +34,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 }
             }
         }
-        Resolved::TypeApply(_, target, _) => collect_captures_inner(target, bound, free),
+        Resolved::ReturnTypeArgumentApply(_, target, _) => {
+            collect_captures_inner(target, bound, free)
+        }
         Resolved::Block(_, stmts) => {
             let mut local_bound = bound.clone();
             for stmt in stmts {
@@ -56,7 +58,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                         local_bound.insert(id.unique_id);
                         local_bound.insert(param.id.unique_id);
                     }
-                    Resolved::BuiltinDecl(_, id, params, _, _, _) => {
+                    Resolved::BuiltinDecl(_, id, _, params, _, _, _) => {
                         local_bound.insert(id.unique_id);
                         for param in params {
                             local_bound.insert(param.id.unique_id);

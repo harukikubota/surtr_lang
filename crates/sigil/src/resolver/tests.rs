@@ -2447,8 +2447,8 @@ value = Convert::convert::<String>(1)"#,
         &resolved[2],
         Resolved::Bind(_, _, rhs)
             if matches!(rhs.as_ref(), Resolved::App(_, callee, _)
-                if matches!(callee.as_ref(), Resolved::TypeApply(_, _, args)
-                    if matches!(args.as_slice(), [AstTy::Named(_, name)] if name == "String")))
+                if matches!(callee.as_ref(), Resolved::ReturnTypeArgumentApply(_, _, args)
+                    if matches!(args.as_slice(), [argument] if matches!(argument.ty, AstTy::Named(_, ref name) if name == "String"))))
     ));
 }
 
@@ -2612,7 +2612,7 @@ fn test_builtin_decl_resolution() {
         .resolve_program(ast)
         .expect("builtin declaration should resolve");
     match &resolved[0] {
-        Resolved::BuiltinDecl(_, id, params, ret_ty, _, attrs) => {
+        Resolved::BuiltinDecl(_, id, _, params, ret_ty, _, attrs) => {
             assert_eq!(id.name, "print");
             assert_eq!(id.unique_id, 2); // 0=Ok, 1=Err, 2=print
             assert_eq!(params.len(), 1);
@@ -2645,7 +2645,7 @@ fn test_hidden_builtin_decl_resolution_preserves_hidden_attr() {
         .resolve_program(ast)
         .expect("hidden builtin declaration should resolve");
     match &resolved[0] {
-        Resolved::BuiltinDecl(_, id, _, _, _, attrs) => {
+        Resolved::BuiltinDecl(_, id, _, _, _, _, attrs) => {
             assert_eq!(id.name, "__process_sleep");
             assert!(attrs.hidden);
         }
@@ -7079,7 +7079,7 @@ fn test_pipeline_partial_special_form_does_not_trigger_for_shadowed_parameter() 
 }
 
 #[test]
-fn explicit_type_apply_resolves_callable_identity_and_type_arguments() {
+fn explicit_return_type_argument_apply_resolves_callable_identity_and_type_arguments() {
     let resolved = parse_and_resolve(
         r#"def identity(value: $A) -> $A { value }
 value = identity::<Int>(1)
@@ -7102,9 +7102,38 @@ fn = &identity::<Int>"#,
         };
         assert!(matches!(
             applied,
-            Resolved::TypeApply(_, target, args)
+            Resolved::ReturnTypeArgumentApply(_, target, args)
                 if matches!(target.as_ref(), Resolved::Var(_, id) if id.unique_id == def_id)
-                    && matches!(args.as_slice(), [AstTy::Named(_, name)] if name == "Int")
+                    && matches!(args.as_slice(), [argument] if matches!(argument.ty, AstTy::Named(_, ref name) if name == "Int"))
         ));
     }
+}
+
+#[test]
+fn canonical_return_type_arguments_and_value_parameters_resolve() {
+    let resolved = parse_and_resolve(
+        r#"def identity::<$A>(value: $A) -> $A { value }
+call = identity::<Int>(1)"#,
+    )
+    .expect("canonical signature roles should resolve");
+
+    match resolved.as_slice() {
+        [Resolved::Def(_, _, return_type_arguments, value_parameters, ..), ..] => {
+            assert_eq!(return_type_arguments.len(), 1);
+            assert_eq!(value_parameters.len(), 1);
+        }
+        other => panic!("expected resolved definition with canonical parameter roles: {other:?}"),
+    }
+
+    let call = match &resolved[1] {
+        Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+            Resolved::App(_, callee, _) => callee.as_ref(),
+            other => panic!("expected resolved call expression, got {other:?}"),
+        },
+        other => panic!("expected resolved call binding, got {other:?}"),
+    };
+    assert!(matches!(
+        call,
+        Resolved::ReturnTypeArgumentApply(_, _, ref args) if args.len() == 1
+    ));
 }

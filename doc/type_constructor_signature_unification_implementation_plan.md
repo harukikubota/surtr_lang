@@ -105,7 +105,7 @@
 - Consumes: existing `AstTy`, `Span`, definition and call-site `::<...>` tokens.
 - Invariant: no compatibility aliases or duplicate old/new fields; an AST node always records the syntactic role of its type list.
 
-- [ ] **Step 1: Add failing parser and resolver tests for canonical roles**
+- [x] **Step 1: Add failing parser and resolver tests for canonical roles**
 
 ```rust
 match parsed.as_slice() {
@@ -122,7 +122,7 @@ assert!(matches!(
 ));
 ```
 
-- [ ] **Step 2: Run the focused tests and record the expected failure**
+- [x] **Step 2: Run the focused tests and record the expected failure**
 
 Run:
 
@@ -133,7 +133,7 @@ cargo nextest run -p sigil
 
 Expected: compilation or assertions fail because the canonical types, fields, and variant do not exist.
 
-- [ ] **Step 3: Replace AST and resolved vocabulary atomically**
+- [x] **Step 3: Replace AST and resolved vocabulary atomically**
 
 Use these exact role-bearing fields as the target and update every constructor/pattern match atomically without retaining aliases:
 
@@ -192,11 +192,11 @@ pub struct TypedValueParameter {
 
 `TraitMethodSig` receives `return_type_arguments: Vec<ReturnTypeArgument>` and `value_parameters: Vec<ValueParameter>`. `Resolved::Def` / `BuiltinDecl` and `TypedInner::Def` carry the resolved/typed structures above in the same two positions. Rename the Trait method / impl metadata equivalents at the same time. `DeclAttrs.fun_params`, `ResolvedTraitMethodSig.fun_params`, `ResolvedTraitImplMethod.fun_params`, `TraitMethodInfo.fun_params`, and `TraitImplMethodInfo.fun_params` become `return_type_arguments`; only function/method/builtin parameter fields whose syntax is declaration `(...)` become `value_parameters`. Do not rename closure, extractor, process, or unrelated domain-specific `params` fields.
 
-- [ ] **Step 4: Update parser helpers and all exhaustive consumers**
+- [x] **Step 4: Update parser helpers and all exhaustive consumers**
 
 `parse_trait_fun_params*` becomes a shared definition-side ReturnTypeArgument parser usable by ordinary defs, Trait declarations, impl methods, inherent methods, and builtin surface declarations. `parse_fun_param` and shift / rebase helpers become ValueParameter helpers. Call-site parsing replaces `Ast::TypeApply` / `Resolved::TypeApply` with`ReturnTypeArgumentApply` without changing ordinary nominal type application inside`AstTy`.
 
-- [ ] **Step 5: Remove old vocabulary from code and current canonical docs**
+- [x] **Step 5: Remove old vocabulary from code and current canonical docs**
 
 Run:
 
@@ -207,7 +207,7 @@ rg -n 'FunParams|fun_params|fun_param|FunParam' \
 
 Expected: no matches. Do not scan the four historical implementation-input specs with a replacement script; update them deliberately only if a canonical term is wrong.
 
-- [ ] **Step 6: Run phase tests**
+- [x] **Step 6: Run phase tests**
 
 ```bash
 cargo nextest run -p spire
@@ -217,7 +217,7 @@ cargo nextest run -p scar
 
 Expected: all pass with only canonical vocabulary.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/spire crates/sigil crates/scar crates/forge crates/xldr crates/surtr-analysis docs/dev docs/site doc/要件定義v9.md

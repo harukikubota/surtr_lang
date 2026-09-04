@@ -3,7 +3,7 @@ use super::*;
 struct SpecialFormBuiltinContract {
     expected_qname: &'static str,
     expected_signature: &'static str,
-    shape_ok: fn(&[ResolvedFunParam], &Option<AstTy>) -> bool,
+    shape_ok: fn(&[ResolvedValueParameter], &Option<AstTy>) -> bool,
 }
 
 #[cfg(test)]
@@ -64,7 +64,7 @@ mod contextual_capability_tests {
     }
 }
 
-fn special_form_shape_if(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+fn special_form_shape_if(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 3
         && Checker::is_named_type(&params[0].ty, "Boolean")
         && Checker::is_lazy_of_named(&params[1].ty, "$A")
@@ -74,14 +74,14 @@ fn special_form_shape_if(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) ->
             .is_some_and(|ty| Checker::is_named_type(ty, "$A"))
 }
 
-fn special_form_shape_if_then(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+fn special_form_shape_if_then(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 2
         && Checker::is_named_type(&params[0].ty, "Boolean")
         && Checker::is_lazy_of_unit(&params[1].ty)
         && ret_ty.as_ref().is_some_and(Checker::is_unit_type)
 }
 
-fn special_form_shape_if_let(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+fn special_form_shape_if_let(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 4
         && Checker::is_named_type(&params[0].ty, "$A")
         && Checker::is_named_type(&params[1].ty, "$Pattern")
@@ -92,7 +92,10 @@ fn special_form_shape_if_let(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>
             .is_some_and(|ty| Checker::is_named_type(ty, "$B"))
 }
 
-fn special_form_shape_if_let_then(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+fn special_form_shape_if_let_then(
+    params: &[ResolvedValueParameter],
+    ret_ty: &Option<AstTy>,
+) -> bool {
     params.len() == 3
         && Checker::is_named_type(&params[0].ty, "$A")
         && Checker::is_named_type(&params[1].ty, "$Pattern")
@@ -100,7 +103,7 @@ fn special_form_shape_if_let_then(params: &[ResolvedFunParam], ret_ty: &Option<A
         && ret_ty.as_ref().is_some_and(Checker::is_unit_type)
 }
 
-fn special_form_shape_is_match(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+fn special_form_shape_is_match(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 2
         && Checker::is_named_type(&params[0].ty, "$A")
         && Checker::is_named_type(&params[1].ty, "$Pattern")
@@ -109,7 +112,7 @@ fn special_form_shape_is_match(params: &[ResolvedFunParam], ret_ty: &Option<AstT
             .is_some_and(|ty| Checker::is_named_type(ty, "Boolean"))
 }
 
-fn special_form_shape_assert(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+fn special_form_shape_assert(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 2
         && Checker::is_named_type(&params[0].ty, "Boolean")
         && Checker::is_lazy_of_named(&params[1].ty, "Error")
@@ -118,7 +121,7 @@ fn special_form_shape_assert(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>
             .is_some_and(|ty| Checker::is_result_of_named(ty, "Unit"))
 }
 
-fn special_form_shape_ensure(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+fn special_form_shape_ensure(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 3
         && Checker::is_named_type(&params[0].ty, "$A")
         && Checker::is_unary_func_from_named_to_named(&params[1].ty, "$A", "Boolean")
@@ -129,7 +132,7 @@ fn special_form_shape_ensure(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>
 }
 
 fn special_form_shape_map_err_or_cause(
-    params: &[ResolvedFunParam],
+    params: &[ResolvedValueParameter],
     ret_ty: &Option<AstTy>,
 ) -> bool {
     params.len() == 2
@@ -140,7 +143,10 @@ fn special_form_shape_map_err_or_cause(
             .is_some_and(|ty| Checker::is_result_of_named(ty, "$T"))
 }
 
-fn special_form_shape_recover_kind(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+fn special_form_shape_recover_kind(
+    params: &[ResolvedValueParameter],
+    ret_ty: &Option<AstTy>,
+) -> bool {
     params.len() == 3
         && Checker::is_result_of_named(&params[0].ty, "$A")
         && Checker::is_lazy_of_named(&params[1].ty, "Error")
@@ -150,7 +156,7 @@ fn special_form_shape_recover_kind(params: &[ResolvedFunParam], ret_ty: &Option<
             .is_some_and(|ty| Checker::is_result_of_named(ty, "$A"))
 }
 
-fn special_form_shape_and_or(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>) -> bool {
+fn special_form_shape_and_or(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 2
         && Checker::is_named_type(&params[0].ty, "Boolean")
         && Checker::is_lazy_of_named(&params[1].ty, "Boolean")
@@ -160,7 +166,7 @@ fn special_form_shape_and_or(params: &[ResolvedFunParam], ret_ty: &Option<AstTy>
 }
 
 fn special_form_shape_pair_constructor(
-    params: &[ResolvedFunParam],
+    params: &[ResolvedValueParameter],
     ret_ty: &Option<AstTy>,
 ) -> bool {
     params.len() == 2
@@ -203,7 +209,7 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
-        params: &[ResolvedFunParam],
+        params: &[ResolvedValueParameter],
         ret_ty: &Option<AstTy>,
         where_clause: Option<&ResolvedWhereClause>,
     ) -> Result<TypedNode, TypeError> {
@@ -286,7 +292,7 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
-        params: &[ResolvedFunParam],
+        params: &[ResolvedValueParameter],
         ret_ty: &Option<AstTy>,
     ) -> Result<TypedNode, TypeError> {
         let contract = Self::special_form_builtin_contract(id.name.as_str());
@@ -1201,7 +1207,7 @@ impl Checker {
                 })
                 .is_some_and(|method| {
                     !method
-                        .params
+                        .value_parameters
                         .iter()
                         .any(|param| Self::ast_ty_mentions_self(&param.ty))
                 }),
@@ -1226,8 +1232,8 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
-        type_params: &[ResolvedTypeParam],
-        params: &[ResolvedFunParam],
+        return_type_arguments: &[ResolvedReturnTypeArgument],
+        params: &[ResolvedValueParameter],
         ret_ty: &Option<AstTy>,
         where_clause: Option<&ResolvedWhereClause>,
         body: &Resolved,
@@ -1237,7 +1243,21 @@ impl Checker {
         let mut local_bindings = Vec::new();
         let mut local_capabilities = Vec::new();
         let mut tyvars = HashMap::new();
-        self.seed_signature_type_params(type_params, &mut tyvars);
+        let typed_return_type_arguments = return_type_arguments
+            .iter()
+            .map(|argument| {
+                Ok(TypedReturnTypeArgument {
+                    ordinal: argument.ordinal,
+                    ty: self.resolve_def_signature_ast_ty_in_context(
+                        id,
+                        &argument.ty,
+                        TypeSyntaxContext::General,
+                        &mut tyvars,
+                    )?,
+                    span: argument.span.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>, TypeError>>()?;
 
         for param in params {
             let param_ty = self.resolve_def_signature_ast_ty_in_context(
@@ -1276,9 +1296,11 @@ impl Checker {
             if let Some(capability) = self.constructor_trait_key_for_ast_ty(&param.ty) {
                 local_capabilities.push((param.id.unique_id, capability));
             }
-            typed_params.push(TypedFunParam {
+            typed_params.push(TypedValueParameter {
                 id: param.id.clone(),
+                mode: param.mode,
                 ty: param_ty.clone(),
+                span: param.span.clone(),
             });
         }
 
@@ -1465,10 +1487,8 @@ impl Checker {
             .map(|param| param.ty.clone())
             .collect::<Vec<_>>();
         let mut checked_type_params = Vec::new();
-        for param in type_params {
-            if let Some(ty) = tyvars.get(&param.name) {
-                Self::collect_ty_vars(ty, &mut checked_type_params);
-            }
+        for argument in &typed_return_type_arguments {
+            Self::collect_ty_vars(&argument.ty, &mut checked_type_params);
         }
         for param in &checked_params {
             Self::collect_ty_vars(param, &mut checked_type_params);
@@ -1483,24 +1503,13 @@ impl Checker {
                 ret: Box::new(expected_ret.clone()),
             },
         );
-        let typed_type_params = type_params
-            .iter()
-            .filter_map(|param| match tyvars.get(&param.name) {
-                Some(Ty::Var(var)) => Some(TypedTypeParam {
-                    name: param.name.clone(),
-                    ty_var: *var,
-                    bound: param.bound.clone(),
-                }),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
             node: TypedInner::Def(
                 fun_idx,
                 id.clone(),
-                typed_type_params,
+                typed_return_type_arguments,
                 typed_params,
                 expected_ret,
                 where_clause.map(TypedWhereClause::from),
@@ -1542,9 +1551,11 @@ impl Checker {
             });
         }
         let local_bindings = vec![(param.id.unique_id, param_ty.clone())];
-        let typed_param = TypedFunParam {
+        let typed_param = TypedValueParameter {
             id: param.id.clone(),
+            mode: spire::ast::ValueParameterMode::PositionalOrNamed,
             ty: param_ty,
+            span: param.id.span.clone(),
         };
 
         let expected_ret = self.resolve_signature_ast_ty_in_context(
@@ -1638,9 +1649,11 @@ impl Checker {
                         _ => None,
                     })
                     .collect(),
-                TypedFunParam {
+                TypedValueParameter {
                     id: typed_param.id,
+                    mode: typed_param.mode,
                     ty: self.resolve_ty(&typed_param.ty),
+                    span: typed_param.span,
                 },
                 self.resolve_ty(&expected_ret),
                 Box::new(typed_body),
@@ -1733,7 +1746,7 @@ impl Checker {
                         span: method.span.clone(),
                         hint: None,
                     })?;
-            let (param_tys, mut expected_ret, type_params, _) = self
+            let (param_tys, mut expected_ret, type_params, return_type_argument_tys) = self
                 .resolve_trait_impl_method_signature(
                     &trait_info,
                     trait_args,
@@ -1746,16 +1759,18 @@ impl Checker {
             let mut typed_params = Vec::new();
             let mut local_bindings = Vec::new();
             let mut method_tyvars = impl_tyvars.clone();
-            for (param, param_ty) in method.params.iter().zip(param_tys.iter()) {
+            for (param, param_ty) in method.value_parameters.iter().zip(param_tys.iter()) {
                 local_bindings.push((param.id.unique_id, param_ty.clone()));
                 let binding_source = match &param.ty {
                     AstTy::Named(_, name) if name == "Self" => target_ast_ty,
                     _ => &param.ty,
                 };
                 self.collect_signature_ty_bindings(binding_source, param_ty, &mut method_tyvars);
-                typed_params.push(TypedFunParam {
+                typed_params.push(TypedValueParameter {
                     id: param.id.clone(),
+                    mode: param.mode,
                     ty: param_ty.clone(),
+                    span: param.span.clone(),
                 });
             }
 
@@ -1889,14 +1904,14 @@ impl Checker {
                     });
                 }
             };
-            let typed_type_params = method
-                .type_params
+            let typed_return_type_arguments = method
+                .return_type_arguments
                 .iter()
-                .zip(type_params.iter())
-                .map(|(param, ty_var)| TypedTypeParam {
-                    name: param.name.clone(),
-                    ty_var: *ty_var,
-                    bound: param.bound.clone(),
+                .zip(return_type_argument_tys.iter())
+                .map(|(argument, ty)| TypedReturnTypeArgument {
+                    ordinal: argument.ordinal,
+                    ty: ty.clone(),
+                    span: argument.span.clone(),
                 })
                 .collect::<Vec<_>>();
             typed_nodes.push(TypedNode {
@@ -1905,7 +1920,7 @@ impl Checker {
                 node: TypedInner::Def(
                     fun_idx,
                     method.function_id.clone(),
-                    typed_type_params,
+                    typed_return_type_arguments,
                     typed_params,
                     expected_ret,
                     method.where_clause.clone(),
@@ -3134,13 +3149,15 @@ impl Checker {
             })?;
 
         let mut show_env = self.env.clone();
-        let typed_params: Vec<TypedFunParam> = ty_fields
+        let typed_params: Vec<TypedValueParameter> = ty_fields
             .iter()
             .map(|(ty, resolved_id)| {
                 show_env.bind_var(resolved_id.unique_id, ty.clone());
-                TypedFunParam {
+                TypedValueParameter {
                     id: resolved_id.clone(),
+                    mode: spire::ast::ValueParameterMode::PositionalOrNamed,
                     ty: ty.clone(),
+                    span: resolved_id.span.clone(),
                 }
             })
             .collect();

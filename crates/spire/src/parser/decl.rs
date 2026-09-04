@@ -192,7 +192,7 @@ fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
         Ast::Def(_, _, _, _, _, _, _, attrs)
         | Ast::ConstDef(_, _, _, _, attrs)
         | Ast::ExtractorDef(_, _, _, _, _, _, attrs)
-        | Ast::BuiltinDecl(_, _, _, _, _, attrs)
+        | Ast::BuiltinDecl(_, _, _, _, _, _, attrs)
         | Ast::IntrinsicDecl(_, _, _, attrs)
         | Ast::BuiltinExtractorDecl(_, _, _, _, attrs)
         | Ast::BuiltinTypeDecl(_, _, attrs)
@@ -252,9 +252,10 @@ fn pid_ty(span: &Span, agent_name: &str) -> AstTy {
     )
 }
 
-fn process_self_param(span: &Span, agent_name: &str) -> FunParam {
-    FunParam {
+fn process_self_param(span: &Span, agent_name: &str) -> ValueParameter {
+    ValueParameter {
         name: "__process_self_pid".to_string(),
+        mode: ValueParameterMode::PositionalOrNamed,
         ty: pid_ty(span, agent_name),
         span: span.clone(),
     }
@@ -470,7 +471,7 @@ fn rename_agent_handler(
     }
 }
 
-fn def_params(def: &Ast) -> Result<&Vec<FunParam>, ParseError> {
+fn def_params(def: &Ast) -> Result<&Vec<ValueParameter>, ParseError> {
     match def {
         Ast::Def(_, _, _, params, _, _, _, _) => Ok(params),
         other => Err(ParseError::syntax(
@@ -500,9 +501,9 @@ fn def_name(def: &Ast) -> Result<String, ParseError> {
     }
 }
 
-fn def_type_params(def: &Ast) -> Result<Vec<TypeParam>, ParseError> {
+fn def_return_type_arguments(def: &Ast) -> Result<Vec<ReturnTypeArgument>, ParseError> {
     match def {
-        Ast::Def(_, _, type_params, _, _, _, _, _) => Ok(type_params.clone()),
+        Ast::Def(_, _, return_type_arguments, _, _, _, _, _) => Ok(return_type_arguments.clone()),
         other => Err(ParseError::syntax(
             "agent lowering expected a function definition",
             other.span().clone(),
@@ -632,7 +633,7 @@ fn process_route_attrs(user_importable: bool, user_callable: bool) -> DeclAttrs 
     }
 }
 
-fn param_vars(span: &Span, params: &[FunParam]) -> Vec<Ast> {
+fn param_vars(span: &Span, params: &[ValueParameter]) -> Vec<Ast> {
     params
         .iter()
         .map(|param| var(&param.span, &param.name))
@@ -704,7 +705,7 @@ fn build_worker_init_route_wrapper(
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
-        def_type_params(init_def)?,
+        def_return_type_arguments(init_def)?,
         params,
         Some(result_pid_ty(span, process_name)),
         None,
@@ -734,7 +735,7 @@ fn build_readonly_get_wrapper(
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
-        def_type_params(get_def)?,
+        def_return_type_arguments(get_def)?,
         surface_params,
         def_ret_ty(get_def)?,
         None,
@@ -743,9 +744,10 @@ fn build_readonly_get_wrapper(
     ))
 }
 
-fn pid_param(span: &Span, agent_name: &str) -> FunParam {
-    FunParam {
+fn pid_param(span: &Span, agent_name: &str) -> ValueParameter {
+    ValueParameter {
         name: "pid".to_string(),
+        mode: ValueParameterMode::PositionalOrNamed,
         ty: pid_ty(span, agent_name),
         span: span.clone(),
     }
@@ -793,8 +795,9 @@ fn build_supervisor_spawn_wrapper(span: &Span, supervisor_name: &str) -> Ast {
         span.clone(),
         "spawn".to_string(),
         Vec::new(),
-        vec![FunParam {
+        vec![ValueParameter {
             name: "worker_init".to_string(),
+            mode: ValueParameterMode::PositionalOrNamed,
             ty: AstTy::Func(
                 span.clone(),
                 Vec::new(),
@@ -825,8 +828,9 @@ fn build_supervisor_adopt_wrapper(span: &Span, supervisor_name: &str) -> Ast {
         span.clone(),
         "adopt".to_string(),
         Vec::new(),
-        vec![FunParam {
+        vec![ValueParameter {
             name: "pid".to_string(),
+            mode: ValueParameterMode::PositionalOrNamed,
             ty: pid_ty(span, "$Process"),
             span: span.clone(),
         }],
@@ -870,8 +874,9 @@ fn build_supervisor_workers_wrapper(span: &Span, supervisor_name: &str) -> Ast {
         "workers".to_string(),
         Vec::new(),
         vec![
-            FunParam {
+            ValueParameter {
                 name: "worker_init".to_string(),
+                mode: ValueParameterMode::PositionalOrNamed,
                 ty: AstTy::Func(
                     span.clone(),
                     Vec::new(),
@@ -883,8 +888,9 @@ fn build_supervisor_workers_wrapper(span: &Span, supervisor_name: &str) -> Ast {
                 ),
                 span: span.clone(),
             },
-            FunParam {
+            ValueParameter {
                 name: "strategy".to_string(),
+                mode: ValueParameterMode::PositionalOrNamed,
                 ty: AstTy::Named(span.clone(), "WorkerStrategy".to_string()),
                 span: span.clone(),
             },
@@ -990,7 +996,7 @@ fn build_state_get_wrapper(
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
-        def_type_params(get_def)?,
+        def_return_type_arguments(get_def)?,
         surface_params,
         def_ret_ty(get_def)?,
         None,
@@ -1040,7 +1046,7 @@ fn build_state_set_wrapper(
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
-        def_type_params(set_def)?,
+        def_return_type_arguments(set_def)?,
         surface_params,
         Some(result_unit_ty(span)),
         None,
@@ -1200,7 +1206,7 @@ fn build_genserver_call_wrapper(
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
-        def_type_params(call_def)?,
+        def_return_type_arguments(call_def)?,
         surface_params,
         result_reply_ty_from_call_ret(span, def_ret_ty(call_def)?),
         None,
@@ -1295,7 +1301,7 @@ fn build_genserver_cast_wrapper(
     Ok(Ast::Def(
         span.clone(),
         wrapper_name.to_string(),
-        def_type_params(cast_def)?,
+        def_return_type_arguments(cast_def)?,
         surface_params,
         Some(result_unit_ty(span)),
         None,
@@ -1806,14 +1812,8 @@ impl Parser<'_> {
             }
         };
         let (name, _) = self.expect_ident()?;
-        let fun_params = self.parse_trait_fun_params_for_context(Some(target.to_string()))?;
-        let type_params = self.parse_decl_type_params()?;
-        if !type_params.is_empty() {
-            return Err(ParseError::syntax(
-                "Regular function definitions must not declare explicit type parameters; introduce type slots from the signature instead",
-                type_params[0].span.clone(),
-            ));
-        }
+        let return_type_arguments =
+            self.parse_return_type_arguments_for_context(Some(target.to_string()))?;
         let mut params = Vec::new();
 
         if matches!(self.peek(), Token::Unit) {
@@ -1858,8 +1858,9 @@ impl Parser<'_> {
                         self.parse_direct_signature_parameter_type(Some(target.to_string()))?
                     };
 
-                    params.push(FunParam {
+                    params.push(ValueParameter {
                         name: param_name,
+                        mode: ValueParameterMode::PositionalOrNamed,
                         ty: param_ty,
                         span: param_span,
                     });
@@ -1916,7 +1917,7 @@ impl Parser<'_> {
                 end: end.end,
             },
             name,
-            type_params,
+            return_type_arguments,
             params,
             ret_ty,
             where_clause,
@@ -1933,7 +1934,7 @@ impl Parser<'_> {
                 visibility,
                 user_importable: attrs.user_importable,
                 user_callable: attrs.user_callable,
-                fun_params,
+                return_type_arguments: Vec::new(),
             },
         );
         let attrs = ast_decl_attrs(&ast).ok_or_else(|| {
@@ -1970,14 +1971,8 @@ impl Parser<'_> {
             }
         };
         let (name, _) = self.expect_builtin_decl_name()?;
-        attrs.fun_params = self.parse_trait_fun_params_for_context(Some(target.to_string()))?;
-        let type_params = self.parse_decl_type_params()?;
-        if !type_params.is_empty() {
-            return Err(ParseError::syntax(
-                "Impl methods must not declare explicit type parameters; introduce type slots from the signature instead",
-                type_params[0].span.clone(),
-            ));
-        }
+        let return_type_arguments =
+            self.parse_return_type_arguments_for_context(Some(target.to_string()))?;
 
         let mut params = Vec::new();
         if matches!(self.peek(), Token::Unit) {
@@ -2020,8 +2015,9 @@ impl Parser<'_> {
                         self.skip_newlines();
                         self.parse_direct_signature_parameter_type(Some(target.to_string()))?
                     };
-                    params.push(FunParam {
+                    params.push(ValueParameter {
                         name: param_name,
+                        mode: ValueParameterMode::PositionalOrNamed,
                         ty: param_ty,
                         span: param_span,
                     });
@@ -2076,6 +2072,7 @@ impl Parser<'_> {
         Ok(Ast::BuiltinDecl(
             Span { start, end },
             name,
+            return_type_arguments,
             params,
             ret_ty,
             None,
@@ -2521,7 +2518,7 @@ impl Parser<'_> {
             }
         };
         let (name, _) = self.expect_ident()?;
-        let fun_params = self.parse_trait_fun_params()?;
+        let return_type_arguments = self.parse_return_type_arguments()?;
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
             return Err(ParseError::syntax(
@@ -2636,9 +2633,9 @@ impl Parser<'_> {
         attrs.visibility = visibility;
         Ok(TraitMethodSig {
             name,
-            fun_params,
+            return_type_arguments,
             type_params,
-            params,
+            value_parameters: params,
             ret_ty,
             where_clause,
             body,
@@ -2650,14 +2647,14 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_trait_fun_params(&mut self) -> Result<Vec<AstTy>, ParseError> {
-        self.parse_trait_fun_params_for_context(Some("Self".into()))
+    fn parse_return_type_arguments(&mut self) -> Result<Vec<ReturnTypeArgument>, ParseError> {
+        self.parse_return_type_arguments_for_context(Some("Self".into()))
     }
 
-    fn parse_trait_fun_params_for_context(
+    fn parse_return_type_arguments_for_context(
         &mut self,
         self_context: Option<String>,
-    ) -> Result<Vec<AstTy>, ParseError> {
+    ) -> Result<Vec<ReturnTypeArgument>, ParseError> {
         if !matches!(self.peek(), Token::Colon)
             || !matches!(self.peek_n(1), Some(Token::Colon))
             || !matches!(self.peek_n(2), Some(Token::Lt))
@@ -2668,9 +2665,15 @@ impl Parser<'_> {
         self.advance();
         self.advance();
         self.skip_newlines();
-        let mut params = Vec::new();
+        let mut return_type_arguments = Vec::new();
         loop {
-            params.push(self.parse_type_in_impl_context(self_context.clone())?);
+            let ty = self.parse_type_in_impl_context(self_context.clone())?;
+            let span = ast_ty_span(&ty).clone();
+            return_type_arguments.push(ReturnTypeArgument {
+                ordinal: return_type_arguments.len() as u32,
+                ty,
+                span,
+            });
             self.skip_newlines();
             if matches!(self.peek(), Token::Comma) {
                 self.advance();
@@ -2680,14 +2683,14 @@ impl Parser<'_> {
             self.expect(&Token::Gt)?;
             break;
         }
-        Ok(params)
+        Ok(return_type_arguments)
     }
 
     pub(super) fn parse_trait_method_param(
         &mut self,
         is_first_param: bool,
         self_context: Option<String>,
-    ) -> Result<FunParam, ParseError> {
+    ) -> Result<ValueParameter, ParseError> {
         let (name, span) = self.expect_ident()?;
         if name == "self" {
             if !is_first_param {
@@ -2711,12 +2714,22 @@ impl Parser<'_> {
             } else {
                 AstTy::Named(span.clone(), "Self".to_string())
             };
-            return Ok(FunParam { name, ty, span });
+            return Ok(ValueParameter {
+                name,
+                mode: ValueParameterMode::PositionalOrNamed,
+                ty,
+                span,
+            });
         }
 
         self.expect(&Token::Colon)?;
         let ty = self.parse_direct_signature_parameter_type(self_context)?;
-        Ok(FunParam { name, ty, span })
+        Ok(ValueParameter {
+            name,
+            mode: ValueParameterMode::PositionalOrNamed,
+            ty,
+            span,
+        })
     }
 
     // ── Data definitions (step 7, 9) ──
@@ -3124,8 +3137,8 @@ impl Parser<'_> {
         (
             Span,
             Symbol,
-            Vec<TypeParam>,
-            Vec<FunParam>,
+            Vec<ReturnTypeArgument>,
+            Vec<ValueParameter>,
             Option<AstTy>,
             Option<WhereClause>,
             Visibility,
@@ -3142,8 +3155,8 @@ impl Parser<'_> {
         (
             Span,
             Symbol,
-            Vec<TypeParam>,
-            Vec<FunParam>,
+            Vec<ReturnTypeArgument>,
+            Vec<ValueParameter>,
             Option<AstTy>,
             Option<WhereClause>,
             Visibility,
@@ -3175,13 +3188,7 @@ impl Parser<'_> {
         if !allow_builtin_keyword_name {
             self.ensure_non_const_identifier(&name, name_span.clone(), "Function name")?;
         }
-        let type_params = self.parse_decl_type_params()?;
-        if !type_params.is_empty() {
-            return Err(ParseError::syntax(
-                "Regular function definitions must not declare explicit type parameters; introduce type slots from the signature instead",
-                type_params[0].span.clone(),
-            ));
-        }
+        let return_type_arguments = self.parse_return_type_arguments_for_context(None)?;
         let mut params = Vec::new();
         if matches!(self.peek(), Token::Unit) {
             self.advance();
@@ -3195,7 +3202,7 @@ impl Parser<'_> {
                         return Err(ParseError::incomplete(")", self.peek_span()));
                     }
                     self.skip_newlines();
-                    params.push(self.parse_fun_param()?);
+                    params.push(self.parse_value_parameter()?);
                     self.skip_newlines();
                     if matches!(self.peek(), Token::Comma) {
                         self.advance();
@@ -3231,7 +3238,7 @@ impl Parser<'_> {
         Ok((
             sp,
             name,
-            type_params,
+            return_type_arguments,
             params,
             ret_ty,
             where_clause,
@@ -5244,7 +5251,7 @@ impl Parser<'_> {
         start: usize,
         attrs: DeclAttrs,
     ) -> Result<Ast, ParseError> {
-        let (_def_span, name, _type_params, params, ret_ty, where_clause, _visibility) =
+        let (_def_span, name, return_type_arguments, params, ret_ty, where_clause, _visibility) =
             self.parse_def_signature_with_name_mode(true)?;
 
         let mut lookahead = self.pos;
@@ -5274,6 +5281,7 @@ impl Parser<'_> {
         Ok(Ast::BuiltinDecl(
             Span { start, end },
             name,
+            return_type_arguments,
             params,
             ret_ty,
             where_clause,
@@ -5561,7 +5569,7 @@ impl Parser<'_> {
             return self.parse_result_ctor_decl_with_attrs(attrs, annotator_start);
         }
 
-        let (sp, name, type_params, params, ret_ty, where_clause, visibility) =
+        let (sp, name, return_type_arguments, params, ret_ty, where_clause, visibility) =
             self.parse_def_signature()?;
         let mut attrs = attrs;
         attrs.visibility = visibility;
@@ -5597,7 +5605,7 @@ impl Parser<'_> {
                 end: end.end,
             },
             name,
-            type_params,
+            return_type_arguments,
             params,
             ret_ty,
             where_clause,
@@ -5714,7 +5722,7 @@ impl Parser<'_> {
         ))
     }
 
-    pub(super) fn parse_fun_param(&mut self) -> Result<FunParam, ParseError> {
+    pub(super) fn parse_value_parameter(&mut self) -> Result<ValueParameter, ParseError> {
         let (name, span) = self.expect_ident()?;
         if name == "self" {
             return Err(ParseError::syntax(
@@ -5725,6 +5733,11 @@ impl Parser<'_> {
         self.ensure_non_const_identifier(&name, span.clone(), "Function parameter")?;
         self.expect(&Token::Colon)?;
         let ty = self.parse_direct_signature_parameter_type(None)?;
-        Ok(FunParam { name, ty, span })
+        Ok(ValueParameter {
+            name,
+            mode: ValueParameterMode::PositionalOrNamed,
+            ty,
+            span,
+        })
     }
 }
