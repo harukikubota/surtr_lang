@@ -852,13 +852,13 @@ pub(crate) fn call_builtin(
 ) -> Result<Value, RuntimeError> {
     let meta = builtin_meta_by_id(builtin_id)
         .ok_or_else(|| RuntimeError::new(format!("Unknown builtin id: {}", builtin_id)))?;
-    let expected_arity = expected_builtin_arity(meta.name, meta.arity);
+    let expected_arity = expected_builtin_arity(meta.name, meta.runtime_arity());
     let arity_matches = if meta.name == "__supervisor_spawn" {
         matches!(args.len(), 2 | 3)
     } else if meta.name == "__supervisor_workers" {
         matches!(args.len(), 3 | 4)
     } else {
-        args.len() == usize::from(meta.arity)
+        args.len() == usize::from(meta.runtime_arity())
     };
     if !arity_matches {
         return Err(RuntimeError::new(format!(

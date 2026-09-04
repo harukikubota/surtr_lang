@@ -1364,8 +1364,23 @@ impl Checker {
                     methods,
                 )
             }
-            Resolved::BuiltinDecl(span, id, _, params, ret_ty, where_clause, _) => {
-                self.check_builtin_decl(span, id, params, ret_ty, where_clause.as_ref())
+            Resolved::BuiltinDecl(
+                span,
+                id,
+                return_type_arguments,
+                params,
+                ret_ty,
+                where_clause,
+                _,
+            ) => {
+                self.check_builtin_decl(
+                    span,
+                    id,
+                    return_type_arguments,
+                    params,
+                    ret_ty,
+                    where_clause.as_ref(),
+                )
             }
             Resolved::BuiltinExtractorDecl(span, id, param, ret_ty, _) => {
                 self.check_builtin_extractor_decl(span, id, param, ret_ty)

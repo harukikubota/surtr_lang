@@ -209,6 +209,7 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
+        return_type_arguments: &[ResolvedReturnTypeArgument],
         params: &[ResolvedValueParameter],
         ret_ty: &Option<AstTy>,
         where_clause: Option<&ResolvedWhereClause>,
@@ -233,13 +234,13 @@ impl Checker {
             span: span.clone(),
             hint: None,
         })?;
-        if params.len() != usize::from(meta.arity) {
+        if params.len() != usize::from(meta.runtime_arity()) {
             return Err(TypeError {
                 structured: None,
                 message: format!(
                     "Builtin {} arity mismatch: expected {}, got {}",
                     id.name,
-                    meta.arity,
+                    meta.runtime_arity(),
                     params.len()
                 ),
                 span: span.clone(),
@@ -247,7 +248,32 @@ impl Checker {
             });
         }
 
+        if !super::signatures::builtin_surface_matches(id, params, ret_ty.as_ref()) {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Builtin {} does not match its canonical surface signature",
+                    id.name
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "Update the @builtin declaration to match BUILTIN_METAS, including its owner and type shape."
+                        .into(),
+                ),
+            });
+        }
+
         let mut tyvars = HashMap::new();
+        let return_type_argument_tys = return_type_arguments
+            .iter()
+            .map(|argument| {
+                self.resolve_builtin_ast_ty_in_context(
+                    &argument.ty,
+                    TypeSyntaxContext::General,
+                    &mut tyvars,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let param_tys = params
             .iter()
             .map(|param| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
@@ -260,6 +286,20 @@ impl Checker {
             )?,
             None => Ty::Unit,
         };
+
+        self.callable_signatures.insert(
+            id.unique_id,
+            super::signatures::canonical_callable_signature(
+                id,
+                return_type_arguments,
+                params,
+                return_type_argument_tys.as_slice(),
+                param_tys.as_slice(),
+                ret.clone(),
+                sindr::signature::RuntimeTarget::Builtin(meta.builtin_id()),
+                sindr::signature::CallableDeclarationKind::Builtin,
+            ),
+        );
 
         if let Some(clause) = where_clause {
             self.builtin_contracts.insert(
@@ -1499,9 +1539,26 @@ impl Checker {
             Ty::UserFunc {
                 fun_idx,
                 type_params: checked_type_params,
-                params: checked_params,
+                params: checked_params.clone(),
                 ret: Box::new(expected_ret.clone()),
             },
+        );
+        self.callable_signatures.insert(
+            id.unique_id,
+            super::signatures::canonical_callable_signature(
+                id,
+                return_type_arguments,
+                params,
+                typed_return_type_arguments
+                    .iter()
+                    .map(|argument| argument.ty.clone())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                checked_params.as_slice(),
+                expected_ret.clone(),
+                sindr::signature::RuntimeTarget::UserFunction(fun_idx),
+                sindr::signature::CallableDeclarationKind::Function,
+            ),
         );
         Ok(TypedNode {
             ty: Ty::Unit,

@@ -1,4 +1,10 @@
 use crate::names::{builtin_type_name, surface_path_name, TypeIdentity, TypeName};
+pub use crate::signature::BuiltinId;
+use crate::signature::{
+    CallableDeclarationKind, CallableIdentity, CallableSignature, CanonicalConstraintSet,
+    CanonicalReturnTypeArgument, CanonicalTypeOccurrence, CanonicalValueParameter, RuntimeTarget,
+    SignatureOrigin, ValueParameterMode,
+};
 
 /// Built-in function metadata shared across Sigil / Scar / Forge / Eldr.
 ///
@@ -15,6 +21,210 @@ pub struct BuiltinMeta {
 /// Runtime builtin function metadata. `builtin_id` is still derived from
 /// definition order to preserve existing bytecode encoding.
 pub type BuiltinFunctionMeta = BuiltinMeta;
+
+/// A complete surface callable view of one runtime builtin.
+///
+/// One runtime entry may expose multiple values in the language surface. A
+/// surface variant owns its callable identity and signature; only the
+/// `runtime_target` is shared by those variants.
+pub type BuiltinSurfaceSignatureMeta = CallableSignature<String>;
+
+impl BuiltinMeta {
+    /// Arity at the VM boundary. Kept as a method so callers do not need to
+    /// infer it from a surface variant (variants may be qualified aliases).
+    pub const fn runtime_arity(&self) -> u8 {
+        self.arity
+    }
+
+    /// Runtime target shared by every surface variant of this entry.
+    pub fn runtime_target(&self) -> RuntimeTarget {
+        RuntimeTarget::Builtin(BuiltinId(self.runtime_id()))
+    }
+
+    /// Definition-order id as a typed internal identifier.
+    pub fn builtin_id(&self) -> BuiltinId {
+        BuiltinId(self.runtime_id())
+    }
+
+    /// Definition-order id used by the runtime implementation table.
+    pub fn runtime_id(&self) -> u16 {
+        BUILTIN_METAS
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, self))
+            .and_then(|index| u16::try_from(index).ok())
+            .unwrap_or_else(|| {
+                // This branch is only reachable for a caller that constructed
+                // a standalone BuiltinMeta. Metadata in BUILTIN_METAS always
+                // has a stable table identity.
+                builtin_id_by_name(self.name).unwrap_or(u16::MAX)
+            })
+    }
+
+    /// Build all callable identities exposed by this runtime entry.
+    ///
+    /// The returned values are owned because Scar enriches them with source
+    /// provenance when it validates a `@builtin def` declaration. This is
+    /// intentionally derived from this table rather than from declaration
+    /// order in `lib/*.srt`.
+    pub fn surface_variants(&self) -> Vec<BuiltinSurfaceSignatureMeta> {
+        let entries = match self.name {
+            // Int::safe_div and Float::safe_div are distinct callable
+            // identities but intentionally share one runtime implementation.
+            "safe_div" => vec![
+                (
+                    Some("Int"),
+                    "safe_div",
+                    "(Int, Int) -> Result<Int, ZeroDivisionError>",
+                ),
+                (
+                    Some("Float"),
+                    "safe_div",
+                    "(Float, Float) -> Result<Float, ZeroDivisionError>",
+                ),
+            ],
+            "safe_mod" => vec![(Some("Int"), "safe_mod", self.sig_str)],
+            _ => {
+                let (owner, name) = builtin_surface_owner_and_name(self.name);
+                vec![(owner, name, self.sig_str)]
+            }
+        };
+
+        entries
+            .into_iter()
+            .map(|(owner, name, signature)| self.surface_signature(owner, name, signature))
+            .collect()
+    }
+
+    /// Find a surface variant by canonical owner and surface name.
+    pub fn surface_variant(&self, owner: &str, name: &str) -> Option<BuiltinSurfaceSignatureMeta> {
+        self.surface_variants().into_iter().find(|variant| {
+            variant.identity.owner.as_deref().unwrap_or("") == owner
+                && variant.identity.name == name
+        })
+    }
+
+    /// Construct a qualified surface variant when the runtime alias is
+    /// intentionally owner-specific (for example `Workers::submit`).
+    /// Runtime metadata still supplies the complete type contract.
+    pub fn surface_variant_named(&self, owner: &str, name: &str) -> BuiltinSurfaceSignatureMeta {
+        self.surface_signature(Some(owner), name, self.sig_str)
+    }
+
+    fn surface_signature(
+        &self,
+        owner: Option<&str>,
+        name: &str,
+        signature: &str,
+    ) -> BuiltinSurfaceSignatureMeta {
+        let (parameters, return_type) = parse_surface_signature(signature)
+            .unwrap_or_else(|| (Vec::new(), signature.to_string()));
+        let value_parameters = parameters
+            .into_iter()
+            .enumerate()
+            .map(|(ordinal, ty)| CanonicalValueParameter {
+                ordinal: ordinal as u32,
+                name: builtin_parameter_name(name, ordinal),
+                mode: ValueParameterMode::PositionalOrNamed,
+                ty,
+                origin: SignatureOrigin::new(format!("builtin {} parameter {}", name, ordinal)),
+            })
+            .collect::<Vec<_>>();
+        let identity = CallableIdentity {
+            owner: owner.map(str::to_string),
+            name: name.to_string(),
+            declaration_kind: CallableDeclarationKind::Builtin,
+        };
+        CallableSignature {
+            identity,
+            return_type_arguments: Vec::<CanonicalReturnTypeArgument<String>>::new(),
+            value_parameters,
+            return_type: CanonicalTypeOccurrence {
+                ty: return_type,
+                origin: SignatureOrigin::new(format!("builtin {} return", name)),
+            },
+            where_constraints: CanonicalConstraintSet::default(),
+            runtime_target: self.runtime_target(),
+            declaration_origins: vec![SignatureOrigin::new(format!(
+                "builtin metadata {}",
+                self.name
+            ))],
+        }
+    }
+}
+
+fn builtin_parameter_name(name: &str, ordinal: usize) -> String {
+    match (name, ordinal) {
+        ("safe_div" | "safe_mod", 0) => "a".into(),
+        ("safe_div" | "safe_mod", 1) => "b".into(),
+        ("print" | "eprint" | "to_string" | "inspect", 0) => match name {
+            "print" => "value".into(),
+            "eprint" => "err".into(),
+            _ => "value".into(),
+        },
+        _ => format!("arg{ordinal}"),
+    }
+}
+
+fn builtin_surface_owner_and_name(runtime_name: &str) -> (Option<&'static str>, &str) {
+    match runtime_name {
+        "string_len" => (Some("String"), "len"),
+        "string_contains" => (Some("String"), "contains"),
+        "string_starts_with" => (Some("String"), "starts_with"),
+        "string_ends_with" => (Some("String"), "ends_with"),
+        "string_split" => (Some("String"), "split"),
+        "string_replace" => (Some("String"), "replace"),
+        "json_parse" => (Some("Json"), "parse"),
+        "json_stringify" => (Some("Json"), "stringify"),
+        _ => (None, runtime_name),
+    }
+}
+
+fn parse_surface_signature(signature: &str) -> Option<(Vec<String>, String)> {
+    let arrow = find_top_level_arrow(signature)?;
+    let (params, return_type) = signature.split_at(arrow);
+    let return_type = return_type.strip_prefix("->")?;
+    let params = params.trim().strip_prefix('(')?.strip_suffix(')')?;
+    let parameters = split_top_level(params, ',');
+    Some((parameters, return_type.trim().to_string()))
+}
+
+fn find_top_level_arrow(input: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut characters = input.char_indices().peekable();
+    while let Some((index, character)) = characters.next() {
+        match character {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth = depth.saturating_sub(1),
+            '-' if depth == 0 && characters.peek().is_some_and(|(_, next)| *next == '>') => {
+                return Some(index);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn split_top_level(input: &str, separator: char) -> Vec<String> {
+    if input.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut result = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    for (index, character) in input.char_indices() {
+        match character {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth = depth.saturating_sub(1),
+            _ if character == separator && depth == 0 => {
+                result.push(input[start..index].trim().to_string());
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    result.push(input[start..].trim().to_string());
+    result
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BuiltinTypeMeta {
@@ -1223,6 +1433,33 @@ pub fn builtin_meta_by_name(name: &str) -> Option<&'static BuiltinMeta> {
     builtin_function_meta_by_name(name)
 }
 
+/// Look up a runtime entry by its canonical runtime name.
+///
+/// This name is deliberately explicit at call sites: a surface callable
+/// identity is resolved through [`BuiltinMeta::surface_variant`], while this
+/// helper only selects the shared runtime entry.
+pub fn builtin_meta_by_runtime_name(name: &str) -> Option<&'static BuiltinMeta> {
+    builtin_meta_by_name(name)
+}
+
+/// Resolve the surface variant for a declaration such as `Int::safe_div`.
+/// The owner is taken from the qualified source identity and is not inferred
+/// from the order of declarations in the standard library.
+pub fn builtin_surface_variant_for_decl(
+    declared_name: &str,
+    qualified_name: Option<&str>,
+) -> Option<BuiltinSurfaceSignatureMeta> {
+    let runtime_name = builtin_runtime_name(declared_name, qualified_name);
+    let meta = builtin_meta_by_runtime_name(runtime_name)?;
+    let qualified_name = qualified_name.map(surface_path_name);
+    let owner = qualified_name
+        .and_then(|name| name.rsplit_once("::").map(|(owner, _)| owner))
+        .unwrap_or("");
+    meta.surface_variant(owner, declared_name)
+        .or_else(|| meta.surface_variant("", declared_name))
+        .or_else(|| (!owner.is_empty()).then(|| meta.surface_variant_named(owner, declared_name)))
+}
+
 pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&str>) -> &'a str {
     let qualified_name = qualified_name.map(surface_path_name);
     match qualified_name {
@@ -1348,7 +1585,8 @@ pub fn builtin_uid(builtin_id: u16) -> u32 {
 mod tests {
     use super::{
         builtin_function_metas, builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name,
-        builtin_meta_for_decl, builtin_runtime_name, builtin_type_head_metas, builtin_uid,
+        builtin_meta_by_runtime_name, builtin_meta_for_decl, builtin_runtime_name,
+        builtin_surface_variant_for_decl, builtin_type_head_metas, builtin_uid,
         standard_owner_identity_by_name, BUILTIN_FUNCTION_METAS, BUILTIN_METAS,
         BUILTIN_TYPE_HEAD_METAS, BUILTIN_TYPE_METAS,
     };
@@ -1393,6 +1631,71 @@ mod tests {
     fn builtin_lookup_returns_none_for_unknown_values() {
         assert!(builtin_meta_by_id(u16::MAX).is_none());
         assert!(builtin_meta_by_name("__missing__").is_none());
+    }
+
+    #[test]
+    fn surface_variants_keep_distinct_identities_and_shared_runtime_target() {
+        let meta = builtin_meta_by_runtime_name("safe_div").expect("safe_div metadata");
+        let int = meta
+            .surface_variant("Int", "safe_div")
+            .expect("Int::safe_div surface variant");
+        let float = meta
+            .surface_variant("Float", "safe_div")
+            .expect("Float::safe_div surface variant");
+
+        let int_names = int
+            .value_parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>();
+        let float_names = float
+            .value_parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(int_names, ["a", "b"]);
+        assert_eq!(float_names, ["a", "b"]);
+        assert_eq!(int.value_parameters.len(), meta.runtime_arity() as usize);
+        assert_eq!(float.value_parameters.len(), meta.runtime_arity() as usize);
+        assert_eq!(int.runtime_target, float.runtime_target);
+        assert_ne!(int.identity, float.identity);
+    }
+
+    #[test]
+    fn declaration_lookup_uses_canonical_owner_and_name() {
+        let variant = builtin_surface_variant_for_decl("safe_div", Some("Global::Int::safe_div"))
+            .expect("qualified builtin declaration should resolve");
+        assert_eq!(variant.identity.owner.as_deref(), Some("Int"));
+        assert_eq!(variant.identity.name, "safe_div");
+    }
+
+    #[test]
+    fn signature_parser_preserves_nested_type_commas() {
+        let meta = builtin_meta_by_name("gen_make").expect("gen_make metadata");
+        let variant = meta
+            .surface_variant("", "gen_make")
+            .expect("unqualified builtin variant");
+        assert_eq!(variant.value_parameters.len(), 2);
+        assert_eq!(variant.value_parameters[1].ty, "List<$Item>");
+        assert_eq!(variant.return_type.ty, "Generator<$State, $Item>");
+    }
+
+    #[test]
+    fn every_surface_variant_preserves_runtime_arity() {
+        for meta in BUILTIN_METAS {
+            for variant in meta.surface_variants() {
+                assert_eq!(
+                    variant.value_parameters.len(),
+                    usize::from(meta.runtime_arity()),
+                    "surface variant {:?} drifted from runtime arity",
+                    variant.identity
+                );
+                assert!(matches!(
+                    variant.runtime_target,
+                    crate::signature::RuntimeTarget::Builtin(_)
+                ));
+            }
+        }
     }
 
     #[test]

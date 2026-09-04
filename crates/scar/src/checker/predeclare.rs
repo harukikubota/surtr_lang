@@ -3661,9 +3661,32 @@ impl Checker {
 
         for stmt in stmts {
             match stmt {
-                Resolved::BuiltinDecl(_, id, _, params, ret_ty, where_clause, _) => {
+                Resolved::BuiltinDecl(
+                    _,
+                    id,
+                    return_type_arguments,
+                    params,
+                    ret_ty,
+                    where_clause,
+                    _,
+                ) => {
                     self.register_function_id(id);
+                    let runtime_name = sindr::builtin::builtin_runtime_name(
+                        &id.name,
+                        id.qualified_name.as_deref(),
+                    );
+                    let meta = sindr::builtin::builtin_meta_by_runtime_name(runtime_name);
                     let mut tyvars = HashMap::new();
+                    let return_type_argument_tys = return_type_arguments
+                        .iter()
+                        .map(|argument| {
+                            self.resolve_builtin_ast_ty_in_context(
+                                &argument.ty,
+                                TypeSyntaxContext::General,
+                                &mut tyvars,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                     let param_tys = params
                         .iter()
                         .map(|param| {
@@ -3682,6 +3705,21 @@ impl Checker {
                         )?,
                         None => Ty::Unit,
                     };
+                    if let Some(meta) = meta {
+                        self.callable_signatures.insert(
+                            id.unique_id,
+                            super::signatures::canonical_callable_signature(
+                                id,
+                                return_type_arguments,
+                                params,
+                                return_type_argument_tys.as_slice(),
+                                param_tys.as_slice(),
+                                ret.clone(),
+                                sindr::signature::RuntimeTarget::Builtin(meta.builtin_id()),
+                                sindr::signature::CallableDeclarationKind::Builtin,
+                            ),
+                        );
+                    }
                     if let Some(clause) = where_clause {
                         self.builtin_contracts.insert(
                             id.unique_id,
@@ -3946,14 +3984,15 @@ impl Checker {
                             span: method.span.clone(),
                             hint: None,
                         })?;
-                let (param_tys, ret, type_params, _) = self.resolve_trait_impl_method_signature(
-                    &trait_info,
-                    &trait_impl.trait_args,
-                    method,
-                    &trait_impl.target_ast_ty,
-                    &trait_method.ret_ty,
-                    trait_impl.where_clause.as_ref(),
-                )?;
+                let (param_tys, ret, type_params, return_type_argument_tys) = self
+                    .resolve_trait_impl_method_signature(
+                        &trait_info,
+                        &trait_impl.trait_args,
+                        method,
+                        &trait_impl.target_ast_ty,
+                        &trait_method.ret_ty,
+                        trait_impl.where_clause.as_ref(),
+                    )?;
                 let param_names = method
                     .value_parameters
                     .iter()
@@ -3964,12 +4003,27 @@ impl Checker {
                     Ty::UserFunc {
                         fun_idx,
                         type_params,
-                        params: param_tys,
-                        ret: Box::new(ret),
+                        params: param_tys.clone(),
+                        ret: Box::new(ret.clone()),
                     },
                 );
                 self.user_func_params
                     .insert(method.function_id.unique_id, param_names);
+                self.callable_signatures.insert(
+                    method.function_id.unique_id,
+                    super::signatures::canonical_callable_signature(
+                        &method.function_id,
+                        &method.return_type_arguments,
+                        &method.value_parameters,
+                        return_type_argument_tys.as_slice(),
+                        param_tys.as_slice(),
+                        ret.clone(),
+                        sindr::signature::RuntimeTarget::TraitDispatch(
+                            method.function_id.unique_id,
+                        ),
+                        sindr::signature::CallableDeclarationKind::TraitMethod,
+                    ),
+                );
                 if let Some(qualified_name) = method.function_id.qualified_name.as_ref() {
                     if Self::split_impl_method_name(qualified_name).is_some() {
                         self.impl_method_uids

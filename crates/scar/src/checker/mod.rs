@@ -26,6 +26,7 @@ mod expr;
 mod matching;
 mod patterns;
 mod predeclare;
+mod signatures;
 mod specialize;
 mod types;
 
@@ -1119,6 +1120,10 @@ struct PersistentCheckerState {
     facet_bindings: HashMap<u32, StoredFacetPath>,
     error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
+    /// Canonical signature registry shared by ordinary and builtin callables.
+    /// The legacy maps below are retained only for checkpoint compatibility
+    /// while their consumers migrate to this registry.
+    callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
     builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -1141,6 +1146,7 @@ impl PersistentCheckerState {
             facet_bindings: HashMap::new(),
             error_observer_bindings: HashSet::new(),
             user_func_params: HashMap::new(),
+            callable_signatures: HashMap::new(),
             builtin_contracts: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
@@ -1163,6 +1169,7 @@ impl PersistentCheckerState {
             facet_bindings: self.facet_bindings.clone(),
             error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
+            callable_signatures: self.callable_signatures.clone(),
             builtin_contracts: self.builtin_contracts.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
@@ -1188,6 +1195,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             facet_bindings: checkpoint.facet_bindings,
             error_observer_bindings: checkpoint.error_observer_bindings,
             user_func_params: checkpoint.user_func_params,
+            callable_signatures: checkpoint.callable_signatures,
             builtin_contracts: checkpoint.builtin_contracts,
             impl_method_uids: checkpoint.impl_method_uids,
             function_ids_by_name: checkpoint.function_ids_by_name,
@@ -1212,6 +1220,8 @@ pub struct ScarCheckpoint {
     #[serde(default)]
     error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
+    #[serde(default)]
+    callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
     #[serde(default)]
     builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
@@ -2203,6 +2213,7 @@ struct Checker {
     error_observer_bindings: HashSet<u32>,
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
+    callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
     builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
@@ -2303,6 +2314,7 @@ impl Checker {
             error_observer_bindings: state.error_observer_bindings,
             consts: state.consts,
             user_func_params: state.user_func_params,
+            callable_signatures: state.callable_signatures,
             builtin_contracts: state.builtin_contracts,
             impl_method_uids: state.impl_method_uids,
             function_ids_by_name: state.function_ids_by_name,
@@ -3461,6 +3473,7 @@ impl Checker {
             facet_bindings: self.facet_bindings.clone(),
             error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
+            callable_signatures: self.callable_signatures.clone(),
             builtin_contracts: self.builtin_contracts.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
@@ -3483,6 +3496,7 @@ impl Checker {
             facet_bindings: self.facet_bindings,
             error_observer_bindings: self.error_observer_bindings,
             user_func_params: self.user_func_params,
+            callable_signatures: self.callable_signatures,
             builtin_contracts: self.builtin_contracts,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,
