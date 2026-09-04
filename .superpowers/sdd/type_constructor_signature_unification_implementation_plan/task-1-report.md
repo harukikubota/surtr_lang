@@ -39,26 +39,35 @@ for parameterless traits, or against the trait arguments for parameterized
 traits.  This produces the required specialized function index and preserves
 the fixture without changing its expectations or adding a workaround.
 
+The incremental/cache path also now preserves the materialized bytecode
+function-index floor before Scar reconciles delayed specializations. This
+prevents a cached/generated function index from colliding with a later
+specialization; the invariant is covered by a Scar unit test and the cache
+integration path.
+
 ## Diff review
 
-Reviewed the complete Task 1 diff (33 pre-existing migration files plus the
-specialization correction).  The propagation is consistent through parser,
-resolver, type checker, code generator, REPL pattern matches, docs, and focused
-tests.  During review, migration-local identifiers and test names that still
-spelled the old role imprecisely were aligned with `ReturnTypeArgument` and
-`ValueParameter`; these are naming-only changes.
+Reviewed the complete Task 1 diff, including the canonical migration, trait
+specialization correction, and incremental/cache function-index floor fix.
+The propagation is consistent through parser, resolver, type checker, code
+generator, REPL pattern matches, docs, and focused tests. During review,
+migration-local identifiers and test names that still spelled the old role
+imprecisely were aligned with `ReturnTypeArgument` and `ValueParameter`; these
+are naming-only changes.
 
 ## Verification
 
 - `cargo fmt --check`
 - `cargo nextest run -p spire` — 403 passed
 - `cargo nextest run -p sigil` — 230 passed
-- `cargo nextest run -p scar` — 163 passed
+- `cargo nextest run -p scar` — 164 passed
 - `cargo nextest run -p forge` — 81 passed, including
   `format_function_signature_preserves_generic_surface_names`
+- `cargo nextest run -p xldr` — 201 passed
 - `cargo nextest run -p rune --test integration run_srt --no-capture` — 27
   passed (170 skipped by the test filter), including
   `callable_alias_and_partial_tuple_expected.srt`
+- `cargo nextest run --workspace` — 1734 passed, 202 skipped
 - `rg -n 'FunParams|fun_params|fun_param|FunParam' crates docs/dev docs/site
   doc/要件定義v9.md` — no matches
 - A broader case-insensitive scan for `funparams`, `fun_param`, and `funparam`

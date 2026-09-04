@@ -728,6 +728,13 @@ fn build_stdlib_snapshot(
             file_name: "<stdlib>".into(),
             message: e.message,
         })?;
+    let next_fun_idx = bytecode
+        .functions
+        .iter()
+        .map(|entry| entry.fun_idx.saturating_add(1))
+        .max()
+        .unwrap_or(0);
+    scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
     scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
         entry
             .qualified_name
@@ -736,12 +743,6 @@ fn build_stdlib_snapshot(
     }));
     bytecode.docs = docs.clone();
     bytecode.signatures = signatures.clone();
-    let next_fun_idx = bytecode
-        .functions
-        .iter()
-        .map(|entry| entry.fun_idx.saturating_add(1))
-        .max()
-        .unwrap_or(0);
     let resolve_state = sigil::ResolveResumeState {
         next_local_id: resume_state.next_local_id.max(next_fun_idx),
     };

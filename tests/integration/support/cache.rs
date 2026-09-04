@@ -368,6 +368,7 @@ fn cached_script_compile_prefix(
         .map_err(|e| format!("phase=codegen; message={}", e))?;
     let bytecode = forge::compose_bytecode_with_chunk(std_snapshot.bytecode().clone(), chunk)
         .map_err(|e| format!("phase=codegen; message={}", e))?;
+    scar_session.ensure_next_fun_idx_at_least(next_fun_idx(&bytecode));
     scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(|entry| {
         entry
             .qualified_name
@@ -467,6 +468,7 @@ pub(super) fn cached_compile_prefix(
                 .map_err(|e| format!("phase=typecheck; message={}", e))?;
             let bytecode = forge::codegen_typed_program(typed)
                 .map_err(|e| format!("phase=codegen; message={}", e))?;
+            scar_session.ensure_next_fun_idx_at_least(next_fun_idx(&bytecode));
             scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(
                 |entry| {
                     entry

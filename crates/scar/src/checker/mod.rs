@@ -1433,7 +1433,8 @@ impl ScarSession {
             .copied()
             .max()
             .map(|idx| idx + 1)
-            .unwrap_or(self.state.env.next_fun_idx);
+            .unwrap_or(0)
+            .max(self.state.env.next_fun_idx);
         let mut specializable_rekeys = Vec::new();
         let mut fun_idx_rewrites = HashMap::new();
         for (qualified_name, id) in function_id_entries {
@@ -2150,6 +2151,38 @@ mod specialization_state_tests {
             names_by_index.get(&453),
             Some(&"Global::b_compare".to_string())
         );
+    }
+
+    #[test]
+    fn reconcile_function_indices_preserves_materialized_function_floor() {
+        let mut session = ScarSession::new();
+        let helper_id = resolved_id("helper", "Global::helper", 10);
+        session
+            .state
+            .function_ids_by_name
+            .insert("Global::helper".to_string(), helper_id.clone());
+        session
+            .state
+            .env
+            .vars
+            .insert(helper_id.unique_id, user_func_ty(500));
+        session
+            .state
+            .specializable_defs
+            .insert(500, specializable_def(500, "helper", 10));
+
+        session.ensure_next_fun_idx_at_least(512);
+        session.reconcile_function_indices([("Global::other", 499)]);
+
+        let helper_fun_idx = session
+            .state
+            .specializable_defs
+            .iter()
+            .find_map(|(fun_idx, def)| {
+                (ScarSession::def_qualified_name(def).as_deref() == Some("Global::helper"))
+                    .then_some(*fun_idx)
+            });
+        assert_eq!(helper_fun_idx, Some(512));
     }
 }
 

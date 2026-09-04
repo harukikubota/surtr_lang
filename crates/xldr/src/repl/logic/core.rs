@@ -9244,11 +9244,6 @@ impl ReplEngine {
                 function_indices.insert(short_name.to_string(), entry.fun_idx);
             }
         }
-        self.scar_session.reconcile_function_indices(
-            function_indices
-                .iter()
-                .map(|(qualified_name, fun_idx)| (qualified_name.as_str(), *fun_idx)),
-        );
         let next_fun_idx = self
             .vm
             .bytecode()
@@ -9258,6 +9253,11 @@ impl ReplEngine {
             .max()
             .unwrap_or(0);
         self.scar_session.ensure_next_fun_idx_at_least(next_fun_idx);
+        self.scar_session.reconcile_function_indices(
+            function_indices
+                .iter()
+                .map(|(qualified_name, fun_idx)| (qualified_name.as_str(), *fun_idx)),
+        );
     }
 
     fn sync_repl_chunk_function_indices(
