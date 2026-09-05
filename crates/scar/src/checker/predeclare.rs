@@ -209,18 +209,38 @@ impl Checker {
                         &constructor_trait_ids,
                         &trait_names,
                     )?;
+                    let rewritten_return_type_arguments = return_type_arguments
+                        .iter()
+                        .map(|argument| sigil::resolved::ResolvedReturnTypeArgument {
+                            ordinal: argument.ordinal,
+                            ty: self.rewrite_inherent_signature_ast_ty(id, &argument.ty),
+                            span: argument.span.clone(),
+                        })
+                        .collect::<Vec<_>>();
+                    let rewritten_value_parameters = value_parameters
+                        .iter()
+                        .map(|parameter| sigil::resolved::ResolvedValueParameter {
+                            id: parameter.id.clone(),
+                            mode: parameter.mode,
+                            ty: self.rewrite_inherent_signature_ast_ty(id, &parameter.ty),
+                            span: parameter.span.clone(),
+                        })
+                        .collect::<Vec<_>>();
+                    let rewritten_return_type = return_type
+                        .as_ref()
+                        .map(|ty| self.rewrite_inherent_signature_ast_ty(id, ty));
                     super::signatures::validate_return_type_argument_definition(
                         id.qualified_name.as_deref().unwrap_or(&id.name),
-                        return_type_arguments,
-                        value_parameters,
-                        return_type.as_ref(),
+                        &rewritten_return_type_arguments,
+                        &rewritten_value_parameters,
+                        rewritten_return_type.as_ref(),
                         &constructor_trait_names,
                     )?;
                     super::signatures::validate_constructor_variable_constraints(
                         &id.name,
-                        return_type_arguments,
-                        value_parameters,
-                        return_type.as_ref(),
+                        &rewritten_return_type_arguments,
+                        &rewritten_value_parameters,
+                        rewritten_return_type.as_ref(),
                         clause.as_ref(),
                         &constructor_trait_ids,
                     )?;
@@ -1203,6 +1223,21 @@ impl Checker {
         }
     }
 
+    fn rewrite_inherent_signature_ast_ty(&self, id: &ResolvedId, ast_ty: &AstTy) -> AstTy {
+        let Some((target, _)) = Self::split_impl_method_id(id) else {
+            return ast_ty.clone();
+        };
+        let target_surface = Self::surface_name(&target).to_string();
+        if !target.starts_with("Global::")
+            && self.env.lookup_type_def(&target).is_none()
+            && self.env.lookup_type_def(&target_surface).is_none()
+            && !builtin_type_supports_inherent_impl(&target_surface)
+        {
+            return ast_ty.clone();
+        }
+        Self::rewrite_inherent_self_apps(ast_ty, &target_surface)
+    }
+
     pub(super) fn resolve_def_signature_ast_ty_in_context(
         &mut self,
         id: &ResolvedId,
@@ -1213,12 +1248,15 @@ impl Checker {
         let Some((target, _)) = Self::split_impl_method_id(id) else {
             return self.resolve_signature_ast_ty_in_context(ast_ty, context, tyvars);
         };
-        if self.env.lookup_type_def(&target).is_none()
-            && !builtin_type_supports_inherent_impl(Self::surface_name(&target))
+        let target_surface = Self::surface_name(&target).to_string();
+        if !target.starts_with("Global::")
+            && self.env.lookup_type_def(&target).is_none()
+            && self.env.lookup_type_def(&target_surface).is_none()
+            && !builtin_type_supports_inherent_impl(&target_surface)
         {
             return self.resolve_signature_ast_ty_in_context(ast_ty, context, tyvars);
         }
-        let rewritten = Self::rewrite_inherent_self_apps(ast_ty, &target);
+        let rewritten = Self::rewrite_inherent_self_apps(ast_ty, &target_surface);
         self.resolve_signature_ast_ty_in_context(&rewritten, context, tyvars)
     }
 
@@ -2874,28 +2912,38 @@ impl Checker {
 
         tyvars.extend(trait_head_bindings.clone());
         self.seed_signature_type_params(&method.type_params, &mut tyvars);
+        let mut direct_constructor_inputs = super::signatures::DirectConstructorInputs::default();
+        let mut return_type_arguments = Vec::new();
+        for argument in &method.return_type_arguments {
+            let ty = self.resolve_trait_signature_ast_ty_in_context(
+                &argument.ty,
+                TypeSyntaxContext::General,
+                &self_ty,
+                &mut tyvars,
+            )?;
+            super::signatures::remember_direct_constructor_input(
+                self,
+                &argument.ty,
+                &ty,
+                &mut direct_constructor_inputs,
+            );
+            return_type_arguments.push(ty);
+        }
         let params = method
             .value_parameters
             .iter()
             .map(|param| {
-                self.resolve_trait_signature_ast_ty_in_context(
+                let ty = self.resolve_trait_signature_ast_ty_in_context(
                     &param.ty,
                     TypeSyntaxContext::General,
                     &self_ty,
                     &mut tyvars,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let return_type_arguments = method
-            .return_type_arguments
-            .iter()
-            .map(|argument| {
-                self.resolve_trait_signature_ast_ty_in_context(
-                    &argument.ty,
-                    TypeSyntaxContext::General,
-                    &self_ty,
-                    &mut tyvars,
-                )
+                )?;
+                Ok(super::signatures::coalesce_direct_constructor_inputs(
+                    self,
+                    ty,
+                    &direct_constructor_inputs,
+                ))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret_source = method.ret_ty.as_ref().unwrap_or(fallback_ret_ty);
@@ -2905,6 +2953,11 @@ impl Checker {
             &self_ty,
             &mut tyvars,
         )?;
+        let ret = super::signatures::coalesce_direct_constructor_inputs(
+            self,
+            ret,
+            &direct_constructor_inputs,
+        );
         self.apply_typed_where_trait_bounds(method.where_clause.as_ref(), &tyvars, Some(&self_ty))?;
         self.apply_typed_where_trait_bounds(impl_where_clause, &tyvars, Some(&self_ty))?;
         let mut type_params = Vec::new();

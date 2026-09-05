@@ -9847,6 +9847,14 @@ impl Checker {
         if Self::surface_name(process_name) == "Supervisor" {
             return None;
         }
+        // DynamicSupervisor is the compiler-managed root supervisor surface.
+        // It is supplied by the standard library, but it is not necessarily
+        // present in the current suffix's process-spec list. Keep its calls
+        // on the intrinsic lowering path so a generic return-only wrapper is
+        // never left as an unmaterialized user-function index.
+        if Self::surface_name(process_name) == "DynamicSupervisor" {
+            return Some(process_name.to_string());
+        }
         self.supervisor_spec_by_name(process_name)
             .map(|spec| spec.process_name.clone())
     }

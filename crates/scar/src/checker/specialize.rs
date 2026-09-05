@@ -30,7 +30,29 @@ impl Checker {
 
         for stmt in stmts {
             if let Some(fun_idx) = Self::def_fun_idx(&stmt) {
-                if needs_specialization.contains(&fun_idx) {
+                // A valid return-only input may remain polymorphic when an
+                // omitted call-site argument has no expected-result witness.
+                // Keep that ordinary body available to Forge; definitions
+                // whose declared input is also value-introduced still take
+                // the normal specialization path.
+                let retain_generic_fallback = matches!(
+                    &stmt.node,
+                    TypedInner::Def(_, _, return_type_arguments, params, ..)
+                        if !return_type_arguments.is_empty() && {
+                            let mut return_vars = Vec::new();
+                            for argument in return_type_arguments {
+                                Self::collect_ty_vars(&argument.ty, &mut return_vars);
+                            }
+                            let mut value_vars = Vec::new();
+                            for param in params {
+                                Self::collect_ty_vars(&param.ty, &mut value_vars);
+                            }
+                            return_vars
+                                .into_iter()
+                                .all(|var| !value_vars.contains(&var))
+                        }
+                ) && !Self::typed_node_has_pending_trait_call(&stmt);
+                if needs_specialization.contains(&fun_idx) && !retain_generic_fallback {
                     self.specializable_defs.insert(fun_idx, stmt);
                     continue;
                 }

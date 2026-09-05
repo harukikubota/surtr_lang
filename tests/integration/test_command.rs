@@ -216,7 +216,11 @@ defstruct Box<$A> {
 
 impl Box {
   def new(value: $A) -> Box<$A> where $A: Compare {
-    Box { value }
+    match Compare::compare(value, value) {
+      Ordering::Less => Box { value },
+      Ordering::Equal => Box { value },
+      Ordering::Greater => Box { value },
+    }
   }
 }
 

@@ -121,7 +121,7 @@ where
 }}
 
 def accept(value: Functor<Int>) -> Int {{ 1 }}
-def make() -> Functor<Int> {{ Pair::Pair("left", 1) }}
+def make::<Functor>() -> Functor<Int> {{ Pair::Pair("left", 1) }}
 
 pair = Pair::Pair("left", 1)
 from_parameter: Int = accept(pair)

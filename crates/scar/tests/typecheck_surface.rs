@@ -1360,12 +1360,12 @@ fn process_stdlib_declares_agent_lower_surface_with_regular_surface_docs() {
     let agent_module = &PROCESS_MODULE_SOURCE[agent_start..process_start];
 
     for surface in [
-        "def pid(",
-        "def spawn(",
-        "def state(",
+        "def pid::<",
+        "def spawn::<",
+        "def state::<",
         "def store(",
-        "def self()",
-        "def context_handler(",
+        "def self::<",
+        "def context_handler::<",
     ] {
         assert!(
             agent_module.contains(surface),
@@ -4550,7 +4550,7 @@ where
   $T: Context.$A
 {}
 
-def make(flag: Boolean) -> Context<Int> {
+def make::<Context>(flag: Boolean) -> Context<Int> {
   if(flag, Left::Left(1), Right::Right(1))
 }"#,
     )
@@ -4666,7 +4666,7 @@ defenum Other<$T> {
 }
 
 deftrait Maker {
-  def make(value: Int) -> Context<Int> { Other::Other(value) }
+  def make::<Context>(value: Int) -> Context<Int> { Other::Other(value) }
 }"#,
     )
     .expect_err("a default body cannot return a constructor outside Context");
@@ -4691,11 +4691,11 @@ defenum Other<$T> {
 }
 
 deftrait Maker {
-  def make(value: Int) -> Context<Int>
+  def make::<Context>(value: Int) -> Context<Int>
 }
 
 impl Maker for Int {
-  def make(value: Int) { Other::Other(value) }
+  def make::<Context>(value: Int) { Other::Other(value) }
 }"#,
     )
     .expect_err("an impl body cannot return a constructor outside Context");
@@ -4725,11 +4725,11 @@ where
 {}
 
 deftrait Maker {
-  def make(value: Int) -> Context<Int>
+  def make::<Context>(value: Int) -> Context<Int>
 }
 
 impl Maker for Int {
-  def make(value: Int) { Boxed::Boxed(value) }
+  def make::<Context>(value: Int) { Boxed::Boxed(value) }
 }"#,
     )
     .expect("an impl body may resolve its contextual result to a Context constructor");
@@ -5185,7 +5185,9 @@ fn return_only_signature_slots_are_rejected() {
         RuntimeSourcePolicy::script(),
     )
     .expect_err("a return-only signature slot must be rejected");
-    assert!(err.message.contains("appears only in the return type"));
+    assert!(err
+        .message
+        .contains("return-only type input `$A` is not declared"));
 
     typecheck_with_builtin_prelude(r#"def id(value: $A) -> $A { value }"#);
 }
@@ -5198,7 +5200,9 @@ fn signature_slots_are_checked_before_definition_bodies() {
         RuntimeSourcePolicy::script(),
     )
     .expect_err("a return-only signature slot must be rejected before body checking");
-    assert!(err.message.contains("appears only in the return type"));
+    assert!(err
+        .message
+        .contains("return-only type input `$B` is not declared"));
 
     let err = typecheck_with_rules(
         r#"def identity(value: $A) -> $A { value }
@@ -5207,7 +5211,9 @@ def gen_nil() -> List<$A> { [] }"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("a return-only signature slot must be rejected");
-    assert!(err.message.contains("appears only in the return type"));
+    assert!(err
+        .message
+        .contains("return-only type input `$A` is not declared"));
 }
 
 fn named_args_user_function_calls_typecheck_inside_script_module_scope() {
@@ -9166,7 +9172,7 @@ fn trait_method_type_slots_have_one_input_channel_and_return_type_arguments_flow
     let err = typecheck(duplicated).expect_err("a slot cannot use both input channels");
     assert!(
         err.message
-            .contains("introduces $A through both ReturnTypeArguments and value arguments"),
+            .contains("type input `$A` is introduced more than once"),
         "{err:?}"
     );
 
@@ -9179,7 +9185,7 @@ fn trait_method_type_slots_have_one_input_channel_and_return_type_arguments_flow
         .expect_err("a ReturnTypeArguments slot must be represented by the return type");
     assert!(
         err.message
-            .contains("declares $A in ReturnTypeArguments but does not use it in its return type"),
+            .contains("return type argument `$A` does not appear in the return type"),
         "{err:?}"
     );
 
@@ -9190,7 +9196,8 @@ fn trait_method_type_slots_have_one_input_channel_and_return_type_arguments_flow
     );
     let err = typecheck(return_only).expect_err("a return-only slot has no input introduction");
     assert!(
-        err.message.contains("has $A only in its return type"),
+        err.message
+            .contains("return-only type input `$A` is not declared"),
         "{err:?}"
     );
 }
