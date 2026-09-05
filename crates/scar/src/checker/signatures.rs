@@ -5,6 +5,10 @@
 
 use super::Checker;
 use crate::types::Ty;
+use diagnostics::{
+    ConstraintSubjectData, DiagnosticData, DiagnosticOrigin, Remediation, ReturnTypeArgumentData,
+    SourceFact, SourceId, SourceRole, StructuredDiagnostic, TypeDiagnosticReason,
+};
 use sigil::resolved::{
     ResolvedReturnTypeArgument, ResolvedValueParameter, ResolvedWhereClause,
     ResolvedWhereConstraintRhs,
@@ -17,7 +21,472 @@ use sindr::signature::{
     ValueParameterMode as CanonicalValueParameterMode,
 };
 use spire::ast::ValueParameterMode;
-use std::collections::HashMap;
+use spire::ast::{AstTy, Span};
+use std::collections::{BTreeMap, HashMap, HashSet};
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct TypeInputId(String);
+
+#[derive(Debug, Clone)]
+pub(super) struct SourceOrigin {
+    pub(super) span: Span,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct SignatureOccurrences {
+    pub(super) argument_inputs: BTreeMap<TypeInputId, Vec<SourceOrigin>>,
+    pub(super) return_inputs: BTreeMap<TypeInputId, Vec<SourceOrigin>>,
+    pub(super) declared_return_type_arguments: BTreeMap<TypeInputId, SourceOrigin>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct DirectConstructorInputs {
+    witnesses: HashMap<String, Ty>,
+}
+
+fn type_input_id(name: &str, constructor_trait_names: &HashSet<String>) -> Option<TypeInputId> {
+    (name == "Self" || name.starts_with('$') || constructor_trait_names.contains(name))
+        .then(|| TypeInputId(name.to_string()))
+}
+
+fn collect_type_inputs(
+    ty: &AstTy,
+    constructor_trait_names: &HashSet<String>,
+    inputs: &mut BTreeMap<TypeInputId, Vec<SourceOrigin>>,
+) {
+    match ty {
+        AstTy::Named(span, name) => {
+            if let Some(id) = type_input_id(name, constructor_trait_names) {
+                inputs
+                    .entry(id)
+                    .or_default()
+                    .push(SourceOrigin { span: span.clone() });
+            }
+        }
+        AstTy::Generic(span, name, arguments) => {
+            if let Some(id) = type_input_id(name, constructor_trait_names) {
+                inputs
+                    .entry(id)
+                    .or_default()
+                    .push(SourceOrigin { span: span.clone() });
+            }
+            for argument in arguments {
+                collect_type_inputs(argument, constructor_trait_names, inputs);
+            }
+        }
+        AstTy::Tuple(_, items) => {
+            for item in items {
+                collect_type_inputs(item, constructor_trait_names, inputs);
+            }
+        }
+        AstTy::Func(_, parameters, return_type) => {
+            for parameter in parameters {
+                collect_type_inputs(parameter, constructor_trait_names, inputs);
+            }
+            collect_type_inputs(return_type, constructor_trait_names, inputs);
+        }
+        AstTy::ImplTrait(_, _) => {}
+    }
+}
+
+pub(super) fn signature_occurrences(
+    return_type_arguments: &[ResolvedReturnTypeArgument],
+    value_parameters: &[ResolvedValueParameter],
+    return_type: Option<&AstTy>,
+    constructor_trait_names: &HashSet<String>,
+) -> SignatureOccurrences {
+    let mut occurrences = SignatureOccurrences::default();
+    for parameter in value_parameters {
+        collect_type_inputs(
+            &parameter.ty,
+            constructor_trait_names,
+            &mut occurrences.argument_inputs,
+        );
+    }
+    if let Some(return_type) = return_type {
+        collect_type_inputs(
+            return_type,
+            constructor_trait_names,
+            &mut occurrences.return_inputs,
+        );
+    }
+    for argument in return_type_arguments {
+        let id = match &argument.ty {
+            AstTy::Named(_, name) => type_input_id(name, constructor_trait_names),
+            _ => None,
+        };
+        if let Some(id) = id {
+            occurrences.declared_return_type_arguments.insert(
+                id,
+                SourceOrigin {
+                    span: argument.span.clone(),
+                },
+            );
+        }
+    }
+    occurrences
+}
+
+fn source_fact(role: SourceRole, span: Span, ty: &str) -> SourceFact {
+    SourceFact::typed(role, SourceId(0), span, ty)
+}
+
+fn occurrence_error(
+    reason: TypeDiagnosticReason,
+    callable: &str,
+    input: &str,
+    ordinal: u32,
+    primary: SourceFact,
+    related: Vec<SourceFact>,
+    message: String,
+    help: &str,
+) -> crate::error::TypeError {
+    let span = primary.span.clone();
+    crate::error::TypeError {
+        message,
+        span,
+        hint: Some(help.into()),
+        structured: Some(StructuredDiagnostic {
+            reason,
+            origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
+            data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+                callable: callable.into(),
+                ordinal,
+                expected_type: input.into(),
+                actual_type: input.into(),
+            }),
+            primary,
+            related,
+            remediation: Some(Remediation::Help { text: help.into() }),
+        }),
+    }
+}
+
+pub(super) fn validate_return_type_argument_definition(
+    callable: &str,
+    return_type_arguments: &[ResolvedReturnTypeArgument],
+    value_parameters: &[ResolvedValueParameter],
+    return_type: Option<&AstTy>,
+    constructor_trait_names: &HashSet<String>,
+) -> Result<(), crate::error::TypeError> {
+    let occurrences = signature_occurrences(
+        return_type_arguments,
+        value_parameters,
+        return_type,
+        constructor_trait_names,
+    );
+
+    for (ordinal, argument) in return_type_arguments.iter().enumerate() {
+        let Some(input) = (match &argument.ty {
+            AstTy::Named(_, name) => type_input_id(name, constructor_trait_names),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let TypeInputId(name) = &input;
+        if let Some(argument_origins) = occurrences.argument_inputs.get(&input) {
+            let related = argument_origins
+                .first()
+                .map(|origin| source_fact(SourceRole::Value, origin.span.clone(), name))
+                .into_iter()
+                .collect();
+            return Err(occurrence_error(
+                TypeDiagnosticReason::DuplicateReturnTypeArgumentInput,
+                callable,
+                name,
+                ordinal as u32,
+                source_fact(SourceRole::ReturnTypeArgument, argument.span.clone(), name),
+                related,
+                format!("type input `{name}` is introduced more than once"),
+                &format!("remove `{name}` from the return type arguments"),
+            ));
+        }
+        if !occurrences.return_inputs.contains_key(&input) {
+            return Err(occurrence_error(
+                TypeDiagnosticReason::UnusedReturnTypeArgument,
+                callable,
+                name,
+                ordinal as u32,
+                source_fact(SourceRole::ReturnTypeArgument, argument.span.clone(), name),
+                Vec::new(),
+                format!("return type argument `{name}` does not appear in the return type"),
+                "remove the unused return type argument or use it in the return type",
+            ));
+        }
+    }
+
+    for (input, origins) in &occurrences.return_inputs {
+        if occurrences.argument_inputs.contains_key(input)
+            || occurrences
+                .declared_return_type_arguments
+                .contains_key(input)
+        {
+            continue;
+        }
+        let TypeInputId(name) = input;
+        let origin = origins
+            .first()
+            .expect("a collected type input always has an origin");
+        return Err(occurrence_error(
+            TypeDiagnosticReason::MissingReturnTypeArgument,
+            callable,
+            name,
+            0,
+            source_fact(SourceRole::Expected, origin.span.clone(), name),
+            Vec::new(),
+            format!("return-only type input `{name}` is not declared"),
+            &format!("declare it as `def {callable}::<{name}>(...)`"),
+        ));
+    }
+    Ok(())
+}
+
+fn collect_constructor_variable_applications(ty: &AstTy, out: &mut Vec<(String, Span)>) {
+    match ty {
+        AstTy::Generic(span, name, arguments) => {
+            if name.starts_with('$') {
+                out.push((name.clone(), span.clone()));
+            }
+            for argument in arguments {
+                collect_constructor_variable_applications(argument, out);
+            }
+        }
+        AstTy::Tuple(_, items) => {
+            for item in items {
+                collect_constructor_variable_applications(item, out);
+            }
+        }
+        AstTy::Func(_, parameters, return_type) => {
+            for parameter in parameters {
+                collect_constructor_variable_applications(parameter, out);
+            }
+            collect_constructor_variable_applications(return_type, out);
+        }
+        AstTy::Named(_, _) | AstTy::ImplTrait(_, _) => {}
+    }
+}
+
+pub(super) fn validate_constructor_variable_constraints(
+    _callable: &str,
+    return_type_arguments: &[ResolvedReturnTypeArgument],
+    value_parameters: &[ResolvedValueParameter],
+    return_type: Option<&AstTy>,
+    where_clause: Option<&ResolvedWhereClause>,
+    constructor_trait_ids: &HashSet<u32>,
+) -> Result<(), crate::error::TypeError> {
+    let constrained = where_clause
+        .into_iter()
+        .flat_map(|clause| clause.constraints.iter())
+        .filter_map(|constraint| match &constraint.subject {
+            AstTy::Named(_, name)
+                if name.starts_with('$')
+                    && constraint.bounds.iter().any(|bound| {
+                        matches!(bound, ResolvedWhereConstraintRhs::Trait { trait_id }
+                            if constructor_trait_ids.contains(&trait_id.unique_id))
+                    }) =>
+            {
+                Some(name.clone())
+            }
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let mut applications = Vec::new();
+    for argument in return_type_arguments {
+        collect_constructor_variable_applications(&argument.ty, &mut applications);
+    }
+    for parameter in value_parameters {
+        collect_constructor_variable_applications(&parameter.ty, &mut applications);
+    }
+    if let Some(return_type) = return_type {
+        collect_constructor_variable_applications(return_type, &mut applications);
+    }
+    let Some((name, span)) = applications
+        .into_iter()
+        .find(|(name, _)| !constrained.contains(name))
+    else {
+        return Ok(());
+    };
+    let message = format!("type constructor variable `{name}` requires a TypeCtorTrait constraint");
+    let help = format!("add a TypeCtorTrait constraint such as `where {name}: Functor`");
+    Err(crate::error::TypeError {
+        message,
+        span: span.clone(),
+        hint: Some(help.clone()),
+        structured: Some(StructuredDiagnostic {
+            reason: TypeDiagnosticReason::MissingTypeConstructorConstraint,
+            origin: DiagnosticOrigin::Declaration,
+            data: DiagnosticData::ConstraintSubject(ConstraintSubjectData {
+                subject: name.clone(),
+                constraint: "TypeCtorTrait".into(),
+            }),
+            primary: source_fact(SourceRole::Declaration, span, &name),
+            related: Vec::new(),
+            remediation: Some(Remediation::Help { text: help }),
+        }),
+    })
+}
+
+pub(super) fn invalid_trait_constraint_subject_error(
+    subject: &str,
+    span: Span,
+) -> crate::error::TypeError {
+    let message = format!("trait `{subject}` cannot be used as a constraint subject");
+    let help = format!("introduce a type variable and write `where $F: {subject} + RequiredTrait`");
+    crate::error::TypeError {
+        message,
+        span: span.clone(),
+        hint: Some(help.clone()),
+        structured: Some(StructuredDiagnostic {
+            reason: TypeDiagnosticReason::InvalidTraitConstraintSubject,
+            origin: DiagnosticOrigin::Declaration,
+            data: DiagnosticData::ConstraintSubject(ConstraintSubjectData {
+                subject: subject.into(),
+                constraint: "trait constraint subject".into(),
+            }),
+            primary: source_fact(SourceRole::Trait, span, subject),
+            related: Vec::new(),
+            remediation: Some(Remediation::Help { text: help }),
+        }),
+    }
+}
+
+pub(super) fn remember_direct_constructor_input(
+    checker: &Checker,
+    ast_ty: &AstTy,
+    resolved: &Ty,
+    inputs: &mut DirectConstructorInputs,
+) {
+    let Some(trait_key) = checker.constructor_trait_key_for_ast_ty(ast_ty) else {
+        return;
+    };
+    let Ty::SelfApp(items) = resolved else {
+        return;
+    };
+    let Some((witness, _)) = Checker::constructor_application_parts(items) else {
+        return;
+    };
+    inputs.witnesses.insert(trait_key, witness.clone());
+}
+
+pub(super) fn coalesce_direct_constructor_inputs(
+    checker: &Checker,
+    ty: Ty,
+    inputs: &DirectConstructorInputs,
+) -> Ty {
+    match ty {
+        Ty::SelfApp(mut items) => {
+            if let Some((Ty::Var(var), _)) = Checker::constructor_application_parts(&items) {
+                if let Some(trait_key) = checker.constructor_witness_traits.get(var) {
+                    if let Some(shared) = inputs.witnesses.get(trait_key) {
+                        items[1] = shared.clone();
+                    }
+                }
+            }
+            Ty::SelfApp(
+                items
+                    .into_iter()
+                    .map(|item| coalesce_direct_constructor_inputs(checker, item, inputs))
+                    .collect(),
+            )
+        }
+        Ty::List(inner) => Ty::List(Box::new(coalesce_direct_constructor_inputs(
+            checker, *inner, inputs,
+        ))),
+        Ty::Tuple(items) => Ty::Tuple(
+            items
+                .into_iter()
+                .map(|item| coalesce_direct_constructor_inputs(checker, item, inputs))
+                .collect(),
+        ),
+        Ty::Func(parameters, return_type) => Ty::Func(
+            parameters
+                .into_iter()
+                .map(|parameter| coalesce_direct_constructor_inputs(checker, parameter, inputs))
+                .collect(),
+            Box::new(coalesce_direct_constructor_inputs(
+                checker,
+                *return_type,
+                inputs,
+            )),
+        ),
+        Ty::Lazy(inner) => Ty::Lazy(Box::new(coalesce_direct_constructor_inputs(
+            checker, *inner, inputs,
+        ))),
+        Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+            kind,
+            Box::new(coalesce_direct_constructor_inputs(checker, *source, inputs)),
+            Box::new(coalesce_direct_constructor_inputs(checker, *focus, inputs)),
+            Box::new(coalesce_direct_constructor_inputs(
+                checker,
+                *update_source,
+                inputs,
+            )),
+            Box::new(coalesce_direct_constructor_inputs(
+                checker,
+                *update_focus,
+                inputs,
+            )),
+        ),
+        Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
+            name,
+            params: params
+                .into_iter()
+                .map(|parameter| coalesce_direct_constructor_inputs(checker, parameter, inputs))
+                .collect(),
+            ret: Box::new(coalesce_direct_constructor_inputs(checker, *ret, inputs)),
+        },
+        Ty::UserFunc {
+            fun_idx,
+            type_params,
+            params,
+            ret,
+        } => Ty::UserFunc {
+            fun_idx,
+            type_params,
+            params: params
+                .into_iter()
+                .map(|parameter| coalesce_direct_constructor_inputs(checker, parameter, inputs))
+                .collect(),
+            ret: Box::new(coalesce_direct_constructor_inputs(checker, *ret, inputs)),
+        },
+        Ty::Struct(name, fields) => Ty::Struct(
+            name,
+            fields
+                .into_iter()
+                .map(|(name, ty)| {
+                    (
+                        name,
+                        coalesce_direct_constructor_inputs(checker, ty, inputs),
+                    )
+                })
+                .collect(),
+        ),
+        Ty::Record(name, fields) => Ty::Record(
+            name,
+            fields
+                .into_iter()
+                .map(|(name, ty)| {
+                    (
+                        name,
+                        coalesce_direct_constructor_inputs(checker, ty, inputs),
+                    )
+                })
+                .collect(),
+        ),
+        Ty::Enum(name, arguments) => Ty::Enum(
+            name,
+            arguments
+                .into_iter()
+                .map(|argument| coalesce_direct_constructor_inputs(checker, argument, inputs))
+                .collect(),
+        ),
+        Ty::Result(ok, error) => Ty::Result(
+            Box::new(coalesce_direct_constructor_inputs(checker, *ok, inputs)),
+            Box::new(coalesce_direct_constructor_inputs(checker, *error, inputs)),
+        ),
+        other => other,
+    }
+}
 
 pub(super) fn canonical_callable_signature(
     id: &sigil::resolved::ResolvedId,

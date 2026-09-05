@@ -221,7 +221,7 @@ defmod Tuple {
   xldr(2)> show_first((10, "ok"))
   ("10", "ok")
   """
-  def first(f: ($A -> $C)) -> (($A, $B) -> ($C, $B)) {
+  def first::<$B>(f: ($A -> $C)) -> (($A, $B) -> ($C, $B)) {
     {|pair: ($A, $B)|
       (left, right) = pair
       (f(left), right)
@@ -236,7 +236,7 @@ defmod Tuple {
   xldr(2)> len_second((10, "four"))
   (10, 4)
   """
-  def second(f: ($B -> $C)) -> (($A, $B) -> ($A, $C)) {
+  def second::<$A>(f: ($B -> $C)) -> (($A, $B) -> ($A, $C)) {
     {|pair: ($A, $B)|
       (left, right) = pair
       (left, f(right))

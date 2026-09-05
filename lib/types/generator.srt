@@ -24,7 +24,7 @@ deferror InvalidCharRange(message: String) {
 }
 
 impl Generator {
-  @builtin defp gen_make(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
+  @builtin defp gen_make::<$State>(idx: Int, items: List<$Item>) -> Generator<$State, $Item>
 
   @builtin defp gen_idx(gen: Generator<$State, $Item>) -> Int
 

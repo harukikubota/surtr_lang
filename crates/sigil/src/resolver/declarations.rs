@@ -117,6 +117,68 @@ fn type_declaration_kind(stmt: &Ast) -> Option<DeclarationKind> {
     }
 }
 
+fn validate_abstract_return_type_arguments(
+    owner_registry: &OwnerRegistry,
+    return_type_arguments: &[ReturnTypeArgument],
+) -> Result<(), ResolveError> {
+    for argument in return_type_arguments {
+        let AstTy::Named(span, name) = &argument.ty else {
+            // Spire rejects composite items for abstract declarations. Keep
+            // this guard for synthesized ASTs entering Sigil directly.
+            return Err(ResolveError {
+                message: "return type arguments must declare abstract type inputs".to_string(),
+                span: argument.span.clone(),
+                related_labels: Vec::new(),
+            });
+        };
+        if name.starts_with('$') || name == "Self" {
+            continue;
+        }
+
+        let is_direct_constructor_trait = owner_registry.get(name).is_some_and(|entry| {
+            entry.kind == OwnerKind::Trait && entry.identity == TypeIdentity::TypeConstructor
+        });
+        if !is_direct_constructor_trait {
+            return Err(ResolveError {
+                message: "return type arguments must declare abstract type inputs".to_string(),
+                span: span.clone(),
+                related_labels: Vec::new(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_definition_return_type_arguments(
+    owner_registry: &OwnerRegistry,
+    statement: &Ast,
+) -> Result<(), ResolveError> {
+    match statement {
+        Ast::Def(_, _, arguments, ..) | Ast::BuiltinDecl(_, _, arguments, ..) => {
+            validate_abstract_return_type_arguments(owner_registry, arguments)
+        }
+        Ast::TraitDef(_, _, _, _, methods, _) => {
+            for method in methods {
+                validate_abstract_return_type_arguments(
+                    owner_registry,
+                    &method.return_type_arguments,
+                )?;
+            }
+            Ok(())
+        }
+        Ast::ImplDef(_, _, methods, _) => {
+            for method in methods {
+                validate_definition_return_type_arguments(owner_registry, method)?;
+            }
+            Ok(())
+        }
+        // Trait impl RTA entries are contract substitutions and may be
+        // concrete or partially concrete. Task 6 compares them structurally.
+        Ast::TraitImplDef(..) => Ok(()),
+        _ => Ok(()),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StagedModuleAst {
     /// Stage-local source order. Modules lowered from the same source share this index.
@@ -2601,6 +2663,10 @@ impl Resolver {
     }
 
     pub(super) fn lower_impl_defs(&self, stmts: Vec<Ast>) -> Result<Vec<Ast>, ResolveError> {
+        for statement in &stmts {
+            validate_definition_return_type_arguments(&self.owner_registry, statement)?;
+        }
+
         let local_impl_targets;
         let impl_targets = if let Some(stage_targets) = self.current_stage_impl_targets.as_ref() {
             stage_targets

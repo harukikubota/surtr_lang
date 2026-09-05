@@ -509,7 +509,7 @@ git commit -m "refactor(types): unify callable and builtin signatures"
 - Consumes: canonical callable signature from Task 3.
 - Invariant: value-parameter inputs and return-only inputs are disjoint introduction channels;`where`never introduces an unknown type input.
 
-- [ ] **Step 1: Write failing definition tests**
+- [x] **Step 1: Write failing definition tests**
 
 Cover these exact cases:
 
@@ -526,7 +526,7 @@ def invalid_subject::<$F>() -> $F<Unit> where Applicative: Add { panic("test") }
 
 Assert distinct structured reasons: `MissingReturnTypeArgument`, `DuplicateReturnTypeArgumentInput`, `UnusedReturnTypeArgument`, `ConcreteReturnTypeArgumentInDefinition`, `MissingTypeConstructorConstraint`, `InlineReturnTypeArgumentConstraint`, and `InvalidTraitConstraintSubject`. Spire owns empty/duplicate/concrete/inline-list shape failures; Scar owns occurrence and constraint-subject failures after resolution.
 
-- [ ] **Step 2: Run the focused test**
+- [x] **Step 2: Run the focused test**
 
 ```bash
 cargo nextest run -p scar --test return_type_arguments
@@ -534,7 +534,7 @@ cargo nextest run -p scar --test return_type_arguments
 
 Expected: failures show ordinary defs cannot yet retain RTA and current code rejects return-only slots generically.
 
-- [ ] **Step 3: Implement recursive occurrence collection**
+- [x] **Step 3: Implement recursive occurrence collection**
 
 ```rust
 pub struct SignatureOccurrences {
@@ -546,15 +546,15 @@ pub struct SignatureOccurrences {
 
 Walk tuples, functions, named applications, direct TypeCtorTrait applications, and nested constructor variables. Preserve both origins for duplicate-input diagnostics.
 
-- [ ] **Step 4: Implement context-sensitive definition validation**
+- [x] **Step 4: Implement context-sensitive definition validation**
 
 Ordinary / abstract method definitions accept only abstract RTA inputs. Trait impl methods may contain the contract-substituted concrete structure and defer equality to the role-list task. Parse inline constraints into a rejected RTA item so `InlineReturnTypeArgumentConstraint` can point at the bound, rather than falling through to a generic token error. Reject invalid Trait-name subjects at their subject spans.
 
-- [ ] **Step 5: Normalize direct TypeCtorTrait syntax**
+- [x] **Step 5: Normalize direct TypeCtorTrait syntax**
 
 `def guard::<Alternative>(...) -> Alternative<Unit>`becomes one fresh constructor variable plus`where $F: Alternative`. `$F<$A>`is legal only when the same function`where`contains a TypeCtorTrait bound. Keep position-local capability views and same-family carrier identity separate.
 
-- [ ] **Step 6: Run focused and fixture tests**
+- [x] **Step 6: Run focused and fixture tests**
 
 ```bash
 cargo nextest run -p spire
@@ -563,7 +563,7 @@ cargo nextest run -p scar --test return_type_arguments
 cargo nextest run -p rune --test integration run_srt
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/spire crates/sigil crates/scar tests/fixtures

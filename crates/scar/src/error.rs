@@ -1,4 +1,4 @@
-use diagnostics::StructuredDiagnostic;
+use diagnostics::{StructuredDiagnostic, TypeDiagnosticReason};
 use spire::ast::Span;
 
 #[derive(Debug, Clone)]
@@ -12,6 +12,10 @@ pub struct TypeError {
 }
 
 impl TypeError {
+    pub fn reason(&self) -> Option<TypeDiagnosticReason> {
+        self.structured.as_ref().map(|diagnostic| diagnostic.reason)
+    }
+
     pub fn new(message: impl Into<String>, span: Span) -> Self {
         Self {
             message: message.into(),

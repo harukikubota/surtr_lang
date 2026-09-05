@@ -1,0 +1,2 @@
+phase: typecheck
+contains: type input `$F` is introduced more than once

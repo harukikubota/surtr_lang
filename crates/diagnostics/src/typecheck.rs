@@ -155,6 +155,49 @@ pub fn type_error_spec_from_structured(input: &StructuredDiagnostic) -> Diagnost
 }
 
 fn structured_headline(input: &StructuredDiagnostic) -> String {
+    match input.reason {
+        TypeDiagnosticReason::DuplicateReturnTypeArgumentInput => {
+            if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
+                return format!(
+                    "type input `{}` is introduced more than once",
+                    value.expected_type
+                );
+            }
+        }
+        TypeDiagnosticReason::MissingReturnTypeArgument => {
+            if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
+                return format!(
+                    "return-only type input `{}` is not declared",
+                    value.expected_type
+                );
+            }
+        }
+        TypeDiagnosticReason::UnusedReturnTypeArgument => {
+            if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
+                return format!(
+                    "return type argument `{}` does not appear in the return type",
+                    value.expected_type
+                );
+            }
+        }
+        TypeDiagnosticReason::InvalidTraitConstraintSubject => {
+            if let DiagnosticData::ConstraintSubject(value) = &input.data {
+                return format!(
+                    "trait `{}` cannot be used as a constraint subject",
+                    value.subject
+                );
+            }
+        }
+        TypeDiagnosticReason::MissingTypeConstructorConstraint => {
+            if let DiagnosticData::ConstraintSubject(value) = &input.data {
+                return format!(
+                    "type constructor variable `{}` requires a TypeCtorTrait constraint",
+                    value.subject
+                );
+            }
+        }
+        _ => {}
+    }
     match &input.data {
         DiagnosticData::ReturnTypeArgument(value) => format!(
             "Return type argument {} for `{}` does not match the callable signature",

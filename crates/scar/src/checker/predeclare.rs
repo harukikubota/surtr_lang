@@ -12,12 +12,26 @@ impl Checker {
         trait_definition: bool,
         enclosing_impl_trait: Option<&ResolvedId>,
         constructor_trait_ids: &HashSet<u32>,
+        trait_names: &HashSet<String>,
     ) -> Result<(), TypeError> {
         let Some(clause) = clause else {
             return Ok(());
         };
         let mut shape_seen = false;
         for constraint in &clause.constraints {
+            if let AstTy::Named(span, subject) = &constraint.subject {
+                if trait_names.contains(Self::surface_name(subject))
+                    && constraint
+                        .bounds
+                        .iter()
+                        .any(|bound| matches!(bound, ResolvedWhereConstraintRhs::Trait { .. }))
+                {
+                    return Err(super::signatures::invalid_trait_constraint_subject_error(
+                        Self::surface_name(subject),
+                        span.clone(),
+                    ));
+                }
+            }
             for bound in &constraint.bounds {
                 if let ResolvedWhereConstraintRhs::TraitSlot { trait_id, span, .. } = bound {
                     let Some(enclosing_trait) = enclosing_impl_trait else {
@@ -137,14 +151,77 @@ impl Checker {
                 break;
             }
         }
+        let mut trait_names = self
+            .traits
+            .values()
+            .flat_map(|info| {
+                [
+                    Self::surface_name(&info.id.name).to_string(),
+                    self.trait_key(&info.id),
+                ]
+            })
+            .collect::<HashSet<_>>();
+        trait_names.extend(stmts.iter().filter_map(|stmt| {
+            let Resolved::TraitDef(_, id, ..) = stmt else {
+                return None;
+            };
+            Some(Self::surface_name(&id.name).to_string())
+        }));
+        let constructor_trait_names = self
+            .traits
+            .values()
+            .filter(|info| constructor_trait_ids.contains(&info.id.unique_id))
+            .map(|info| Self::surface_name(&info.id.name).to_string())
+            .chain(stmts.iter().filter_map(|stmt| {
+                let Resolved::TraitDef(_, id, ..) = stmt else {
+                    return None;
+                };
+                constructor_trait_ids
+                    .contains(&id.unique_id)
+                    .then(|| Self::surface_name(&id.name).to_string())
+            }))
+            .collect::<HashSet<_>>();
         for stmt in stmts {
             match stmt {
-                Resolved::Def(_, _, _, _, _, clause, _, _)
-                | Resolved::BuiltinDecl(_, _, _, _, _, clause, _) => {
+                Resolved::Def(
+                    _,
+                    id,
+                    return_type_arguments,
+                    value_parameters,
+                    return_type,
+                    clause,
+                    _,
+                    _,
+                )
+                | Resolved::BuiltinDecl(
+                    _,
+                    id,
+                    return_type_arguments,
+                    value_parameters,
+                    return_type,
+                    clause,
+                    _,
+                ) => {
                     Self::validate_type_shape_clause(
                         clause.as_ref(),
                         false,
                         None,
+                        &constructor_trait_ids,
+                        &trait_names,
+                    )?;
+                    super::signatures::validate_return_type_argument_definition(
+                        id.qualified_name.as_deref().unwrap_or(&id.name),
+                        return_type_arguments,
+                        value_parameters,
+                        return_type.as_ref(),
+                        &constructor_trait_names,
+                    )?;
+                    super::signatures::validate_constructor_variable_constraints(
+                        &id.name,
+                        return_type_arguments,
+                        value_parameters,
+                        return_type.as_ref(),
+                        clause.as_ref(),
                         &constructor_trait_ids,
                     )?;
                 }
@@ -154,12 +231,33 @@ impl Checker {
                         true,
                         None,
                         &constructor_trait_ids,
+                        &trait_names,
                     )?;
                     for method in methods {
                         Self::validate_type_shape_clause(
                             method.where_clause.as_ref(),
                             false,
                             None,
+                            &constructor_trait_ids,
+                            &trait_names,
+                        )?;
+                        super::signatures::validate_return_type_argument_definition(
+                            method
+                                .id
+                                .qualified_name
+                                .as_deref()
+                                .unwrap_or(&method.id.name),
+                            &method.return_type_arguments,
+                            &method.value_parameters,
+                            Some(&method.ret_ty),
+                            &constructor_trait_names,
+                        )?;
+                        super::signatures::validate_constructor_variable_constraints(
+                            &method.id.name,
+                            &method.return_type_arguments,
+                            &method.value_parameters,
+                            Some(&method.ret_ty),
+                            method.where_clause.as_ref(),
                             &constructor_trait_ids,
                         )?;
                     }
@@ -170,6 +268,7 @@ impl Checker {
                         false,
                         Some(trait_id),
                         &constructor_trait_ids,
+                        &trait_names,
                     )?;
                     for method in methods {
                         Self::validate_type_shape_clause(
@@ -177,6 +276,7 @@ impl Checker {
                             false,
                             None,
                             &constructor_trait_ids,
+                            &trait_names,
                         )?;
                     }
                 }
@@ -284,15 +384,22 @@ impl Checker {
         trait_id: &ResolvedId,
     ) -> Result<(), TypeError> {
         let trait_key = self.trait_key(trait_id);
-        self.traits.get(&trait_key).ok_or_else(|| TypeError {
-            structured: None,
-            message: format!("Unknown trait: {}", trait_id.name),
-            span: trait_id.span.clone(),
-            hint: None,
-        })?;
+        let constructor_trait = self
+            .traits
+            .get(&trait_key)
+            .map(|info| !info.constructor_slots.is_empty())
+            .ok_or_else(|| TypeError {
+                structured: None,
+                message: format!("Unknown trait: {}", trait_id.name),
+                span: trait_id.span.clone(),
+                hint: None,
+            })?;
         match self.resolve_ty(subject) {
             Ty::Var(var) => {
                 self.register_tyvar_bound(var, &trait_key);
+                if constructor_trait {
+                    self.constructor_witness_traits.insert(var, trait_key);
+                }
                 Ok(())
             }
             // A concrete `Self` is already guarded by trait dispatch/impl
@@ -2489,42 +2596,57 @@ impl Checker {
         }
         let mut tyvars = trait_head_bindings.clone();
         self.seed_signature_type_params(&method.type_params, &mut tyvars);
+        let mut direct_constructor_inputs = super::signatures::DirectConstructorInputs::default();
+        let mut return_type_arguments = Vec::new();
+        for argument in &method.return_type_arguments {
+            let ty = self.resolve_trait_signature_ast_ty_in_context(
+                &argument.ty,
+                TypeSyntaxContext::General,
+                self_ty,
+                &mut tyvars,
+            )?;
+            super::signatures::remember_direct_constructor_input(
+                self,
+                &argument.ty,
+                &ty,
+                &mut direct_constructor_inputs,
+            );
+            return_type_arguments.push(ty);
+        }
         let params = method
             .value_parameters
             .iter()
             .map(|param| {
-                self.resolve_trait_signature_ast_ty_in_context(
+                let ty = self.resolve_trait_signature_ast_ty_in_context(
                     &param.ty,
                     TypeSyntaxContext::General,
                     self_ty,
                     &mut tyvars,
-                )
+                )?;
+                Ok(super::signatures::coalesce_direct_constructor_inputs(
+                    self,
+                    ty,
+                    &direct_constructor_inputs,
+                ))
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, TypeError>>()?;
         let ret = self.resolve_trait_signature_ast_ty_in_context(
             &method.ret_ty,
             TypeSyntaxContext::FunctionReturn,
             self_ty,
             &mut tyvars,
         )?;
+        let ret = super::signatures::coalesce_direct_constructor_inputs(
+            self,
+            ret,
+            &direct_constructor_inputs,
+        );
         self.apply_typed_where_trait_bounds(method.where_clause.as_ref(), &tyvars, Some(self_ty))?;
         let trait_args = trait_info
             .type_params
             .iter()
             .filter_map(|param| trait_head_bindings.get(&param.name).cloned())
             .collect::<Vec<_>>();
-        let return_type_arguments = method
-            .return_type_arguments
-            .iter()
-            .map(|argument| {
-                self.resolve_trait_signature_ast_ty_in_context(
-                    &argument.ty,
-                    TypeSyntaxContext::General,
-                    self_ty,
-                    &mut tyvars,
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
         Ok((params, ret, trait_args, return_type_arguments))
     }
 
@@ -3794,33 +3916,28 @@ impl Checker {
                     ret_ty,
                     where_clause,
                     _,
-                    attrs,
+                    _attrs,
                 ) => {
                     self.register_function_id(id);
-                    if !attrs.builtin
-                        && Self::split_impl_method_name(
-                            id.qualified_name.as_deref().unwrap_or(&id.name),
-                        )
-                        .is_none()
-                    {
-                        Self::reject_return_only_signature_slots(
-                            params,
-                            ret_ty.as_ref(),
-                            &id.span,
-                        )?;
-                    }
                     let mut tyvars = HashMap::new();
-                    let return_type_argument_tys = return_type_arguments
-                        .iter()
-                        .map(|argument| {
-                            self.resolve_def_signature_ast_ty_in_context(
-                                id,
-                                &argument.ty,
-                                TypeSyntaxContext::General,
-                                &mut tyvars,
-                            )
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut direct_constructor_inputs =
+                        super::signatures::DirectConstructorInputs::default();
+                    let mut return_type_argument_tys = Vec::new();
+                    for argument in return_type_arguments {
+                        let ty = self.resolve_def_signature_ast_ty_in_context(
+                            id,
+                            &argument.ty,
+                            TypeSyntaxContext::General,
+                            &mut tyvars,
+                        )?;
+                        super::signatures::remember_direct_constructor_input(
+                            self,
+                            &argument.ty,
+                            &ty,
+                            &mut direct_constructor_inputs,
+                        );
+                        return_type_argument_tys.push(ty);
+                    }
                     let param_tys = params
                         .iter()
                         .map(|param| {
@@ -3830,6 +3947,11 @@ impl Checker {
                                 TypeSyntaxContext::General,
                                 &mut tyvars,
                             )?;
+                            let param_ty = super::signatures::coalesce_direct_constructor_inputs(
+                                self,
+                                param_ty,
+                                &direct_constructor_inputs,
+                            );
                             if !self.allow_error_function_params
                                 && !Self::allows_std_error_function_param_exception(id)
                                 && Self::ty_exposes_error_value(&param_ty)
@@ -3854,6 +3976,11 @@ impl Checker {
                         )?,
                         None => Ty::Unit,
                     };
+                    let ret = super::signatures::coalesce_direct_constructor_inputs(
+                        self,
+                        ret,
+                        &direct_constructor_inputs,
+                    );
                     self.apply_resolved_where_trait_bounds(where_clause.as_ref(), &tyvars, None)?;
                     let canonical_where_constraints =
                         super::signatures::canonical_where_constraints(

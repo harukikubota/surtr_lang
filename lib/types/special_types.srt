@@ -79,10 +79,10 @@ It is not an ordinary public API or data transport type.
 @builtin type StandbyInit<$T>
 
 @hidden
-@builtin def Pending() -> StandbyInit<$T>
+@builtin def Pending::<$T>() -> StandbyInit<$T>
 
 @hidden
-@builtin def PendingAfter(duration: Duration) -> StandbyInit<$T>
+@builtin def PendingAfter::<$T>(duration: Duration) -> StandbyInit<$T>
 
 @hidden
 @builtin def Ready(value: $T) -> StandbyInit<$T>

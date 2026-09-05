@@ -275,7 +275,7 @@ defmod Kernel {
   xldr(1)> inspect(todo())
   "Err(NotImplemented(\"not implemented\"))"
   """
-  def todo() -> Result<$T> {
+  def todo::<$T>() -> Result<$T> {
     Err(NotImplemented)
   }
 

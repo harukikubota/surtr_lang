@@ -19,7 +19,7 @@ impl Either {
     Boolean::not(Either::is_left(value))
   }
 
-  def wrap(value: $R) -> Either<$L, $R> { Either::Right(value) }
+  def wrap::<$L>(value: $R) -> Either<$L, $R> { Either::Right(value) }
 
   def swap(value: Either<$L, $R>) -> Either<$R, $L> {
     match value {

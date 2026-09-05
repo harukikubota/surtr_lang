@@ -1,0 +1,2 @@
+phase: typecheck
+contains: return type argument `$A` does not appear in the return type

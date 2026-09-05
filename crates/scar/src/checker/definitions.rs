@@ -1275,21 +1275,27 @@ impl Checker {
         let mut local_bindings = Vec::new();
         let mut local_capabilities = Vec::new();
         let mut tyvars = HashMap::new();
-        let typed_return_type_arguments = return_type_arguments
-            .iter()
-            .map(|argument| {
-                Ok(TypedReturnTypeArgument {
-                    ordinal: argument.ordinal,
-                    ty: self.resolve_def_signature_ast_ty_in_context(
-                        id,
-                        &argument.ty,
-                        TypeSyntaxContext::General,
-                        &mut tyvars,
-                    )?,
-                    span: argument.span.clone(),
-                })
-            })
-            .collect::<Result<Vec<_>, TypeError>>()?;
+        let mut direct_constructor_inputs = super::signatures::DirectConstructorInputs::default();
+        let mut typed_return_type_arguments = Vec::new();
+        for argument in return_type_arguments {
+            let ty = self.resolve_def_signature_ast_ty_in_context(
+                id,
+                &argument.ty,
+                TypeSyntaxContext::General,
+                &mut tyvars,
+            )?;
+            super::signatures::remember_direct_constructor_input(
+                self,
+                &argument.ty,
+                &ty,
+                &mut direct_constructor_inputs,
+            );
+            typed_return_type_arguments.push(TypedReturnTypeArgument {
+                ordinal: argument.ordinal,
+                ty,
+                span: argument.span.clone(),
+            });
+        }
 
         for param in params {
             let param_ty = self.resolve_def_signature_ast_ty_in_context(
@@ -1298,6 +1304,11 @@ impl Checker {
                 TypeSyntaxContext::General,
                 &mut tyvars,
             )?;
+            let param_ty = super::signatures::coalesce_direct_constructor_inputs(
+                self,
+                param_ty,
+                &direct_constructor_inputs,
+            );
             if self.ty_contains_process_init(&param_ty) {
                 return Err(TypeError {
                     structured: None,
@@ -1345,6 +1356,11 @@ impl Checker {
             )?,
             None => Ty::Unit,
         };
+        expected_ret = super::signatures::coalesce_direct_constructor_inputs(
+            self,
+            expected_ret,
+            &direct_constructor_inputs,
+        );
         self.apply_resolved_where_trait_bounds(where_clause, &tyvars, None)?;
         let declaration_capabilities = self.resolved_capability_uses(where_clause, &tyvars)?;
         if self.ty_contains_facet(&expected_ret) {

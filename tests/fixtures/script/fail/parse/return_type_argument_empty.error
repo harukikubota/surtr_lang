@@ -1,0 +1,2 @@
+phase: parse
+contains: return type argument list must not be empty

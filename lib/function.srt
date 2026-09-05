@@ -107,7 +107,7 @@ defmod Function {
   xldr(4)> add_two(5)
   7
   """
-  @builtin def curry(fun: $Fun) -> $Curried
+  @builtin def curry::<$Curried>(fun: $Fun) -> $Curried
 
   @doc """
   Convert a curried callable into a binary callable.

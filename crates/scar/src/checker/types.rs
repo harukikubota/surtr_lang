@@ -1349,6 +1349,29 @@ impl Checker {
                 span: Self::ast_ty_span(ast_ty).clone(),
                 hint: Some("Use a named `$T` type slot and add `$T: Trait` to the `where` clause.".into()),
             }),
+            AstTy::Generic(_, name, args) if name.starts_with('$') => {
+                let witness = if let Some(existing) = tyvars.get(name) {
+                    existing.clone()
+                } else {
+                    let fresh = self.env.fresh_tyvar();
+                    tyvars.insert(name.clone(), fresh.clone());
+                    fresh
+                };
+                let mut application = vec![Ty::Hole, witness];
+                application.extend(
+                    args.iter()
+                        .map(|argument| {
+                            self.resolve_signature_like_ast_ty_in_context(
+                                argument,
+                                TypeSyntaxContext::General,
+                                tyvars,
+                                mode,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+                Ok(Ty::SelfApp(application))
+            }
             AstTy::Generic(_, name, args) if name == "Self" && mode.self_ty().is_some() => {
                 let args = args
                     .iter()

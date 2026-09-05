@@ -1,0 +1,2 @@
+phase: parse
+contains: inline constraints are not allowed in return type arguments

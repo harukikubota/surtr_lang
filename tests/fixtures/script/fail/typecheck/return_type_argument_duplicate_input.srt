@@ -1,0 +1,6 @@
+def duplicate::<$F>(value: $F<$A>) -> $F<$A>
+where
+  $F: Functor
+{
+  value
+}

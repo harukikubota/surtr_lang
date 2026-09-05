@@ -1,0 +1,2 @@
+phase: typecheck
+contains: return-only type input `$B` is not declared

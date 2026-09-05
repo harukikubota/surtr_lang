@@ -44,7 +44,7 @@ impl HashMap {
   xldr(1)> HashMap::empty_map()
   hash![]
   """
-  @builtin def empty_map() -> HashMap<$V>
+  @builtin def empty_map::<$V>() -> HashMap<$V>
 
   @doc """
   Return the empty map.
@@ -53,7 +53,7 @@ impl HashMap {
   xldr(1)> HashMap::empty()
   hash![]
   """
-  def empty() -> HashMap<$V> {
+  def empty::<$V>() -> HashMap<$V> {
     empty_map()
   }
 

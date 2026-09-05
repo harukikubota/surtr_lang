@@ -1,0 +1,2 @@
+phase: typecheck
+contains: trait `Applicative` cannot be used as a constraint subject

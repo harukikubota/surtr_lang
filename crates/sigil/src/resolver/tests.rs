@@ -7137,3 +7137,60 @@ call = identity::<Int>(1)"#,
         Resolved::ReturnTypeArgumentApply(_, _, ref args) if args.len() == 1
     ));
 }
+
+#[test]
+fn ordinary_definition_rejects_a_concrete_named_return_type_argument() {
+    let error = parse_and_resolve(r#"def bad::<Int>() -> Int { 0 }"#)
+        .expect_err("a concrete named type must not introduce a return type argument");
+
+    assert!(
+        error
+            .message
+            .contains("return type arguments must declare abstract type inputs"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn direct_type_constructor_trait_return_type_argument_preserves_source_shape_and_origin() {
+    let resolved = parse_and_resolve(
+        r#"deftrait Alternative
+where
+  Self: Type<$A>
+{}
+
+def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> {
+  ()
+}"#,
+    )
+    .expect("a direct TypeConstructor trait RTA should resolve");
+
+    let definition = resolved
+        .iter()
+        .find(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "guard"))
+        .expect("guard definition");
+    let Resolved::Def(
+        _,
+        _,
+        return_type_arguments,
+        _,
+        Some(AstTy::Generic(_, return_head, _)),
+        None,
+        _,
+        _,
+    ) = definition
+    else {
+        panic!("expected resolved guard signature, got {definition:?}");
+    };
+    let [return_type_argument] = return_type_arguments.as_slice() else {
+        panic!("expected one return type argument");
+    };
+    let AstTy::Named(type_span, direct_trait_name) = &return_type_argument.ty else {
+        panic!("expected a direct constructor trait name");
+    };
+    assert_eq!(direct_trait_name, "Alternative");
+    assert_eq!(return_head, "Alternative");
+    assert_eq!(return_type_argument.ordinal, 0);
+    assert_eq!(return_type_argument.span, *type_span);
+}

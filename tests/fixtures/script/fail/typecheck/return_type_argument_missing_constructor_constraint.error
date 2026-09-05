@@ -1,0 +1,2 @@
+phase: typecheck
+contains: type constructor variable `$F` requires a TypeCtorTrait constraint

@@ -1,0 +1,4 @@
+def invalid_subject::<$F>() -> $F<Unit>
+where
+  Applicative: Add
+{ 0 }

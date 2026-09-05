@@ -6796,6 +6796,104 @@ call = identity::<Int>(1)"#,
 }
 
 #[test]
+fn definition_return_type_arguments_reject_empty_lists() {
+    let error = parse(r#"def make::<>() -> Int { 0 }"#)
+        .expect_err("empty definition return type argument lists should fail");
+
+    assert!(error
+        .message()
+        .contains("return type argument list must not be empty"));
+}
+
+#[test]
+fn definition_return_type_arguments_reject_duplicate_abstract_inputs() {
+    let error = parse(r#"def make::<$A, $A>() -> $A { panic("test") }"#)
+        .expect_err("duplicate definition return type arguments should fail");
+
+    assert!(
+        error
+            .message()
+            .contains("return type argument `$A` is duplicated"),
+        "{}",
+        error.message()
+    );
+}
+
+#[test]
+fn definition_return_type_arguments_reject_concrete_or_composite_items() {
+    let error = parse(r#"def zeros::<List<$T>>() -> List<$T> { [] }"#)
+        .expect_err("composite definition return type arguments should fail");
+
+    assert!(error
+        .message()
+        .contains("return type arguments must declare abstract type inputs"));
+}
+
+#[test]
+fn definition_return_type_arguments_reject_inline_constraints_at_the_bound() {
+    let source = r#"def stop::<$F: Monad>() -> $F<Unit> { panic("test") }"#;
+    let error =
+        parse(source).expect_err("inline definition return type argument constraints should fail");
+
+    assert!(
+        error
+            .message()
+            .contains("inline constraints are not allowed in return type arguments"),
+        "{}",
+        error.message()
+    );
+    assert_eq!(&source[error.span().start..error.span().end], "Monad");
+}
+
+#[test]
+fn trait_impl_return_type_arguments_accept_concrete_substitutions() {
+    parse(
+        r#"deftrait Factory {
+  def make::<$A>() -> $A
+}
+impl Factory for Int {
+  def make::<List<Int>>() -> List<Int> { [] }
+}"#,
+    )
+    .expect("trait impl methods may spell contract-substituted concrete RTA structure");
+}
+
+#[test]
+fn callable_signatures_accept_type_constructor_variable_applications() {
+    let parsed = parse(
+        r#"def valid(value: $F<$A>, mapper: ($A -> $B)) -> $F<$B>
+where
+  $F: Functor
+{
+  value
+}"#,
+    )
+    .expect("constructor variables should apply recursively in callable signatures");
+
+    assert!(matches!(
+        parsed.as_slice(),
+        [Ast::Def(_, _, _, parameters, Some(AstTy::Generic(_, return_head, _)), ..)]
+            if matches!(&parameters[0].ty, AstTy::Generic(_, parameter_head, _) if parameter_head == "$F")
+                && return_head == "$F"
+    ));
+}
+
+#[test]
+fn type_constructor_variable_applications_remain_rejected_outside_callable_signatures() {
+    for source in ["value: $F<$A> = []", "defstruct Invalid { value: $F<$A> }"] {
+        let error =
+            parse(source).expect_err("constructor variable applications are signature-only syntax");
+        assert!(
+            error.message().contains(
+                "type constructor variables may only be applied in callable signature types"
+            ),
+            "{source}: {}",
+            error.message()
+        );
+    }
+}
+
+#[test]
 fn test_explicit_type_arguments_reject_empty_self_constructor_and_repetition() {
     for source in [
         "id::<>()",

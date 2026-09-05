@@ -1,0 +1,1 @@
+def unused::<$A>() -> Int { 0 }

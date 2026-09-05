@@ -1,0 +1,1 @@
+def missing(value: Int) -> $B { 0 }

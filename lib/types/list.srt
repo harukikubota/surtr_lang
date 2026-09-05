@@ -102,7 +102,7 @@ impl List {
     }
   }
 
-  defp _index_out_of_bounds(index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
+  defp _index_out_of_bounds::<$A>(index: Int, len: Int) -> Result<$A, IndexOutOfBounds> {
     Err(IndexOutOfBounds("index #{index} out of bounds for len #{len}"))
   }
 

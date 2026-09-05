@@ -1,0 +1,1 @@
+def stop::<$F: Monad>() -> $F<Unit> { panic("test") }

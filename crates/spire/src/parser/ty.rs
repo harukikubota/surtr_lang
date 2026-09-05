@@ -60,6 +60,13 @@ impl TypeParseContext {
             TypePosition::DirectSignatureParameter | TypePosition::DirectSignatureReturn
         )
     }
+
+    fn permits_constructor_variable_application(&self) -> bool {
+        matches!(
+            self.position,
+            TypePosition::DirectSignatureParameter | TypePosition::DirectSignatureReturn
+        )
+    }
 }
 
 impl Parser<'_> {
@@ -198,6 +205,35 @@ impl Parser<'_> {
             let name = format!("${}", name);
             if name == "$Self" {
                 return Err(ParseError::syntax("Invalid type variable name: $Self", sp));
+            }
+            if matches!(self.peek(), Token::Lt) {
+                if !context.permits_constructor_variable_application() {
+                    return Err(ParseError::syntax(
+                        "type constructor variables may only be applied in callable signature types",
+                        sp,
+                    ));
+                }
+                return self.with_parse_nesting(sp.clone(), |parser| {
+                    parser.advance();
+                    parser.skip_newlines();
+                    let mut args = vec![parser.parse_type_in_context(nested_context.clone())?];
+                    parser.skip_newlines();
+                    while matches!(parser.peek(), Token::Comma) {
+                        parser.advance();
+                        parser.skip_newlines();
+                        args.push(parser.parse_type_in_context(nested_context.clone())?);
+                        parser.skip_newlines();
+                    }
+                    let end = parser.expect_type_gt()?;
+                    Ok(parser.parse_optional_type_suffix(AstTy::Generic(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        name,
+                        args,
+                    )))
+                });
             }
             return Ok(self.parse_optional_type_suffix(AstTy::Named(
                 Span {

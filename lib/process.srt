@@ -317,7 +317,7 @@ defmod Supervisor {
   Ok(<pid>)
   """
   @hidden
-  @builtin def spawn(supervisor: $Supervisor, worker_init: (-> Result<$State>)) -> Result<PID<$Process>>
+  @builtin def spawn::<$Process>(supervisor: $Supervisor, worker_init: (-> Result<$State>)) -> Result<PID<$Process>>
 
   @doc """
   Compiler-managed lower target for adopting a worker PID under a supervisor.
@@ -366,7 +366,7 @@ defmod Supervisor {
   }
   """
   @hidden
-  @builtin def workers(
+  @builtin def workers::<$Process>(
     supervisor: $Supervisor,
     worker_init: (-> Result<$State>),
     strategy: WorkerStrategy,
@@ -388,7 +388,7 @@ defmod GenServer {
   <pid>
   """
   @hidden
-  @builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+  @builtin def pid::<$Process>(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
 
   @doc """
   Compiler-managed lower target for GenServer worker spawn.
@@ -401,7 +401,7 @@ defmod GenServer {
   Ok(<pid>)
   """
   @hidden
-  @builtin def spawn(owner: $Owner, init: (-> Result<$State>)) -> Result<PID<$Process>>
+  @builtin def spawn::<$Process>(owner: $Owner, init: (-> Result<$State>)) -> Result<PID<$Process>>
 
   @doc """
   Compiler-managed lower target for reading GenServer state.
@@ -414,7 +414,7 @@ defmod GenServer {
   Ok(0)
   """
   @hidden
-  @builtin def state(pid: PID<$Process>) -> Result<$State>
+  @builtin def state::<$State>(pid: PID<$Process>) -> Result<$State>
 
   @doc """
   Compiler-managed lower target for storing GenServer state.
@@ -439,7 +439,7 @@ defmod GenServer {
   <pid>
   """
   @hidden
-  @builtin def self() -> PID<$Process>
+  @builtin def self::<$Process>() -> PID<$Process>
 
   @doc """
   Compiler-managed lower target for resolving a GenServer handler dependency.
@@ -451,7 +451,7 @@ defmod GenServer {
   _ =? ctx.out.write("hello")
   """
   @hidden
-  @builtin def context_handler(owner: $Owner, slot: String) -> PID<$Handler>
+  @builtin def context_handler::<$Handler>(owner: $Owner, slot: String) -> PID<$Handler>
 }
 
 @doc """
@@ -474,7 +474,7 @@ defmod Agent {
   <pid>
   """
   @hidden
-  @builtin def pid(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
+  @builtin def pid::<$Process>(owner: $Owner, init: (-> Result<$State>)) -> PID<$Process>
 
   @doc """
   Compiler-managed lower target for Agent worker spawn.
@@ -487,7 +487,7 @@ defmod Agent {
   Ok(<pid>)
   """
   @hidden
-  @builtin def spawn(owner: $Owner, init: (-> Result<$State>)) -> Result<PID<$Process>>
+  @builtin def spawn::<$Process>(owner: $Owner, init: (-> Result<$State>)) -> Result<PID<$Process>>
 
   @doc """
   Compiler-managed lower target for reading Agent state.
@@ -500,7 +500,7 @@ defmod Agent {
   Ok(0)
   """
   @hidden
-  @builtin def state(pid: PID<$Process>) -> Result<$State>
+  @builtin def state::<$State>(pid: PID<$Process>) -> Result<$State>
 
   @doc """
   Compiler-managed lower target for storing Agent state.
@@ -525,7 +525,7 @@ defmod Agent {
   <pid>
   """
   @hidden
-  @builtin def self() -> PID<$Process>
+  @builtin def self::<$Process>() -> PID<$Process>
 
   @doc """
   Compiler-managed lower target for resolving an Agent handler dependency.
@@ -537,7 +537,7 @@ defmod Agent {
   _ =? ctx.out.write("hello")
   """
   @hidden
-  @builtin def context_handler(owner: $Owner, slot: String) -> PID<$Handler>
+  @builtin def context_handler::<$Handler>(owner: $Owner, slot: String) -> PID<$Handler>
 }
 
 defmod Process {
@@ -548,7 +548,7 @@ defmod Process {
   xldr(1)> Process::self()
   <pid>
   """
-  @builtin def self() -> PID<$Process>
+  @builtin def self::<$Process>() -> PID<$Process>
 
   @doc """
   Sleep the current execution for the given duration.

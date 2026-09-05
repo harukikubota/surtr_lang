@@ -794,7 +794,11 @@ fn build_supervisor_spawn_wrapper(span: &Span, supervisor_name: &str) -> Ast {
     Ast::Def(
         span.clone(),
         "spawn".to_string(),
-        Vec::new(),
+        vec![ReturnTypeArgument {
+            ordinal: 0,
+            ty: AstTy::Named(span.clone(), "$Process".to_string()),
+            span: span.clone(),
+        }],
         vec![ValueParameter {
             name: "worker_init".to_string(),
             mode: ValueParameterMode::PositionalOrNamed,
@@ -872,7 +876,11 @@ fn build_supervisor_workers_wrapper(span: &Span, supervisor_name: &str) -> Ast {
     Ast::Def(
         span.clone(),
         "workers".to_string(),
-        Vec::new(),
+        vec![ReturnTypeArgument {
+            ordinal: 0,
+            ty: AstTy::Named(span.clone(), "$Process".to_string()),
+            span: span.clone(),
+        }],
         vec![
             ValueParameter {
                 name: "worker_init".to_string(),
@@ -1686,7 +1694,7 @@ impl Parser<'_> {
                 let method = if matches!(self.peek(), Token::Annotator(_)) {
                     self.parse_annotated_impl_method(&self_target, true)?
                 } else {
-                    self.parse_impl_method(&self_target)?
+                    self.parse_trait_impl_method(&self_target)?
                 };
                 self.ensure_stmt_boundary(&method, true)?;
                 methods.push(method);
@@ -1782,13 +1790,18 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_impl_method(&mut self, target: &str) -> Result<Ast, ParseError> {
-        self.parse_impl_method_with_attrs(target, DeclAttrs::default())
+        self.parse_impl_method_with_attrs(target, DeclAttrs::default(), false)
+    }
+
+    fn parse_trait_impl_method(&mut self, target: &str) -> Result<Ast, ParseError> {
+        self.parse_impl_method_with_attrs(target, DeclAttrs::default(), true)
     }
 
     pub(super) fn parse_impl_method_with_attrs(
         &mut self,
         target: &str,
         attrs: DeclAttrs,
+        trait_impl_substitution: bool,
     ) -> Result<Ast, ParseError> {
         if matches!(self.peek(), Token::Defextractor) {
             return self.parse_impl_extractor_method_with_attrs(target, attrs);
@@ -1812,8 +1825,10 @@ impl Parser<'_> {
             }
         };
         let (name, _) = self.expect_ident()?;
-        let return_type_arguments =
-            self.parse_return_type_arguments_for_context(Some(target.to_string()))?;
+        let return_type_arguments = self.parse_return_type_arguments_for_context(
+            Some(target.to_string()),
+            trait_impl_substitution,
+        )?;
         let mut params = Vec::new();
 
         if matches!(self.peek(), Token::Unit) {
@@ -1952,6 +1967,7 @@ impl Parser<'_> {
         target: &str,
         start: usize,
         mut attrs: DeclAttrs,
+        trait_impl_substitution: bool,
     ) -> Result<Ast, ParseError> {
         attrs.builtin = true;
         attrs.visibility = match self.peek() {
@@ -1971,8 +1987,10 @@ impl Parser<'_> {
             }
         };
         let (name, _) = self.expect_builtin_decl_name()?;
-        let return_type_arguments =
-            self.parse_return_type_arguments_for_context(Some(target.to_string()))?;
+        let return_type_arguments = self.parse_return_type_arguments_for_context(
+            Some(target.to_string()),
+            trait_impl_substitution,
+        )?;
 
         let mut params = Vec::new();
         if matches!(self.peek(), Token::Unit) {
@@ -2240,11 +2258,11 @@ impl Parser<'_> {
             }
             return match self.peek() {
                 Token::Def if trait_impl_only => {
-                    self.parse_builtin_impl_method_decl(target, start, attrs)
+                    self.parse_builtin_impl_method_decl(target, start, attrs, true)
                 }
                 Token::Def => self.parse_builtin_decl(start, attrs),
                 Token::Defp if !trait_impl_only => {
-                    self.parse_builtin_impl_method_decl(target, start, attrs)
+                    self.parse_builtin_impl_method_decl(target, start, attrs, false)
                 }
                 Token::Defextractor if !trait_impl_only => {
                     self.parse_builtin_extractor_decl(start, attrs)
@@ -2296,7 +2314,7 @@ impl Parser<'_> {
             ));
         }
 
-        self.parse_impl_method_with_attrs(target, attrs)
+        self.parse_impl_method_with_attrs(target, attrs, trait_impl_only)
     }
 
     pub(super) fn trait_impl_self_target_name(&self, ty: &AstTy) -> Result<String, ParseError> {
@@ -2648,12 +2666,13 @@ impl Parser<'_> {
     }
 
     fn parse_return_type_arguments(&mut self) -> Result<Vec<ReturnTypeArgument>, ParseError> {
-        self.parse_return_type_arguments_for_context(Some("Self".into()))
+        self.parse_return_type_arguments_for_context(Some("Self".into()), false)
     }
 
     fn parse_return_type_arguments_for_context(
         &mut self,
         self_context: Option<String>,
+        trait_impl_substitution: bool,
     ) -> Result<Vec<ReturnTypeArgument>, ParseError> {
         if !matches!(self.peek(), Token::Colon)
             || !matches!(self.peek_n(1), Some(Token::Colon))
@@ -2665,10 +2684,44 @@ impl Parser<'_> {
         self.advance();
         self.advance();
         self.skip_newlines();
-        let mut return_type_arguments = Vec::new();
+        if matches!(self.peek(), Token::Gt) {
+            return Err(ParseError::syntax(
+                "return type argument list must not be empty",
+                self.peek_span(),
+            ));
+        }
+        let mut return_type_arguments: Vec<ReturnTypeArgument> = Vec::new();
         loop {
-            let ty = self.parse_type_in_impl_context(self_context.clone())?;
+            let ty = self.parse_direct_signature_return_type(self_context.clone())?;
             let span = ast_ty_span(&ty).clone();
+            if matches!(self.peek(), Token::Colon) {
+                self.advance();
+                self.skip_newlines();
+                let (_, bound_span) = self.expect_qualified_ident(2, "trait bound")?;
+                return Err(ParseError::syntax(
+                    "inline constraints are not allowed in return type arguments; move the bound to a `where` clause",
+                    bound_span,
+                ));
+            }
+            if !trait_impl_substitution && !matches!(ty, AstTy::Named(..)) {
+                return Err(ParseError::syntax(
+                    "return type arguments must declare abstract type inputs",
+                    span,
+                ));
+            }
+            if !trait_impl_substitution {
+                let AstTy::Named(_, name) = &ty else {
+                    unreachable!("abstract return type argument shape was checked above")
+                };
+                if return_type_arguments.iter().any(|argument| {
+                    matches!(&argument.ty, AstTy::Named(_, previous) if previous == name)
+                }) {
+                    return Err(ParseError::syntax(
+                        format!("return type argument `{name}` is duplicated"),
+                        span,
+                    ));
+                }
+            }
             return_type_arguments.push(ReturnTypeArgument {
                 ordinal: return_type_arguments.len() as u32,
                 ty,
@@ -3188,7 +3241,7 @@ impl Parser<'_> {
         if !allow_builtin_keyword_name {
             self.ensure_non_const_identifier(&name, name_span.clone(), "Function name")?;
         }
-        let return_type_arguments = self.parse_return_type_arguments_for_context(None)?;
+        let return_type_arguments = self.parse_return_type_arguments_for_context(None, false)?;
         let mut params = Vec::new();
         if matches!(self.peek(), Token::Unit) {
             self.advance();
