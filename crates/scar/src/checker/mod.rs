@@ -493,13 +493,6 @@ struct CapabilityUse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct BuiltinContract {
-    where_clause: TypedWhereClause,
-    type_vars: HashMap<String, Ty>,
-    param_tys: Vec<Ty>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 struct SignatureAliasInfo {
     params: Vec<ResolvedTypeParam>,
     rhs: AstTy,
@@ -1121,10 +1114,7 @@ struct PersistentCheckerState {
     error_observer_bindings: HashSet<u32>,
     user_func_params: HashMap<u32, Vec<String>>,
     /// Canonical signature registry shared by ordinary and builtin callables.
-    /// The legacy maps below are retained only for checkpoint compatibility
-    /// while their consumers migrate to this registry.
     callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
-    builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
@@ -1147,7 +1137,6 @@ impl PersistentCheckerState {
             error_observer_bindings: HashSet::new(),
             user_func_params: HashMap::new(),
             callable_signatures: HashMap::new(),
-            builtin_contracts: HashMap::new(),
             impl_method_uids: HashMap::new(),
             function_ids_by_name: HashMap::new(),
             specializable_defs: HashMap::new(),
@@ -1170,7 +1159,6 @@ impl PersistentCheckerState {
             error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
-            builtin_contracts: self.builtin_contracts.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
@@ -1196,7 +1184,6 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             error_observer_bindings: checkpoint.error_observer_bindings,
             user_func_params: checkpoint.user_func_params,
             callable_signatures: checkpoint.callable_signatures,
-            builtin_contracts: checkpoint.builtin_contracts,
             impl_method_uids: checkpoint.impl_method_uids,
             function_ids_by_name: checkpoint.function_ids_by_name,
             specializable_defs: checkpoint.specializable_defs,
@@ -1222,8 +1209,6 @@ pub struct ScarCheckpoint {
     user_func_params: HashMap<u32, Vec<String>>,
     #[serde(default)]
     callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
-    #[serde(default)]
-    builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
@@ -2214,7 +2199,6 @@ struct Checker {
     consts: HashMap<u32, ConstMeta>,
     user_func_params: HashMap<u32, Vec<String>>,
     callable_signatures: HashMap<u32, sindr::signature::CallableSignature<Ty>>,
-    builtin_contracts: HashMap<u32, BuiltinContract>,
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
@@ -2315,7 +2299,6 @@ impl Checker {
             consts: state.consts,
             user_func_params: state.user_func_params,
             callable_signatures: state.callable_signatures,
-            builtin_contracts: state.builtin_contracts,
             impl_method_uids: state.impl_method_uids,
             function_ids_by_name: state.function_ids_by_name,
             specializable_defs: state.specializable_defs,
@@ -3474,7 +3457,6 @@ impl Checker {
             error_observer_bindings: self.error_observer_bindings.clone(),
             user_func_params: self.user_func_params.clone(),
             callable_signatures: self.callable_signatures.clone(),
-            builtin_contracts: self.builtin_contracts.clone(),
             impl_method_uids: self.impl_method_uids.clone(),
             function_ids_by_name: self.function_ids_by_name.clone(),
             specializable_defs: self.specializable_defs.clone(),
@@ -3497,7 +3479,6 @@ impl Checker {
             error_observer_bindings: self.error_observer_bindings,
             user_func_params: self.user_func_params,
             callable_signatures: self.callable_signatures,
-            builtin_contracts: self.builtin_contracts,
             impl_method_uids: self.impl_method_uids,
             function_ids_by_name: self.function_ids_by_name,
             specializable_defs: self.specializable_defs,

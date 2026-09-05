@@ -6577,6 +6577,7 @@ impl Checker {
         &mut self,
         span: &Span,
         callee_uid: u32,
+        callee_label: &str,
         params: &[Ty],
         args: &[ResolvedRecordLitArg],
         callable_hint: Option<&str>,
@@ -6597,7 +6598,17 @@ impl Checker {
             });
         }
 
-        let param_names = self.user_func_params.get(&callee_uid).cloned();
+        let param_names = self
+            .callable_signatures
+            .get(&callee_uid)
+            .map(|signature| {
+                signature
+                    .value_parameters
+                    .iter()
+                    .map(|parameter| parameter.name.clone())
+                    .collect::<Vec<_>>()
+            })
+            .or_else(|| self.user_func_params.get(&callee_uid).cloned());
         let mut typed_args = Vec::with_capacity(params.len());
 
         if has_named {
@@ -6612,7 +6623,8 @@ impl Checker {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
-                        "function expects {} argument(s), got {}",
+                        "{} expects {} argument(s), got {}",
+                        callee_label,
                         params.len(),
                         args.len()
                     ),
@@ -6683,7 +6695,8 @@ impl Checker {
             return Err(TypeError {
                 structured: None,
                 message: format!(
-                    "function expects {} argument(s), got {}",
+                    "{} expects {} argument(s), got {}",
+                    callee_label,
                     params.len(),
                     args.len()
                 ),
@@ -8840,7 +8853,7 @@ impl Checker {
             }
         }
 
-        let typed_func = self.check_node(func)?;
+        let mut typed_func = self.check_node(func)?;
         let func_ty = self.resolve_ty(&typed_func.ty);
 
         // A closure parameter may only reveal that it is callable when it is
@@ -8870,31 +8883,43 @@ impl Checker {
                 } else {
                     Some(self.call_target_signature_hint(name, params, ret.as_ref(), None))
                 };
-                let unconstrained_arg_params = builtin_uid
-                    .filter(|uid| self.builtin_contracts.contains_key(uid))
-                    .map(|_| vec![Ty::Hole; params.len()]);
-                let typed_args = self.typecheck_positional_call_args(
-                    span,
-                    name,
-                    unconstrained_arg_params.as_deref().unwrap_or(params),
-                    args,
-                    callable_hint.clone(),
-                    format!("{} does not accept named arguments", name),
-                )?;
+                let application_signature = builtin_uid
+                    .and_then(|uid| self.callable_signatures.get(&uid).cloned())
+                    .map(|signature| {
+                        super::signatures::instantiate_callable_signature(self, &signature)
+                    });
+                let typed_args = if let (Some(uid), Some(signature)) =
+                    (builtin_uid, application_signature.as_ref())
+                {
+                    typed_func.ty = Ty::BuiltinFunc {
+                        name: name.clone(),
+                        params: signature
+                            .value_parameters
+                            .iter()
+                            .map(|parameter| parameter.ty.clone())
+                            .collect(),
+                        ret: Box::new(signature.return_type.ty.clone()),
+                    };
+                    self.check_callable_application(
+                        uid,
+                        name,
+                        signature,
+                        args,
+                        span,
+                        callable_hint.as_deref(),
+                        false,
+                    )?
+                } else {
+                    self.typecheck_positional_call_args(
+                        span,
+                        name,
+                        params,
+                        args,
+                        callable_hint.clone(),
+                        format!("{} does not accept named arguments", name),
+                    )?
+                };
                 self.ensure_no_runtime_facet_args(&typed_args, span, name)?;
-                if let Some(uid) = builtin_uid {
-                    for (param, arg) in params.iter().zip(&typed_args) {
-                        if !self.types_compatible(param, &arg.ty) {
-                            return Err(TypeError {
-                                structured: None,
-                                message: self.argument_type_mismatch_message(param, &arg.ty),
-                                span: arg.span.clone(),
-                                hint: callable_hint.clone(),
-                            });
-                        }
-                    }
-                    self.check_builtin_contract(uid, name, &typed_args, span)?;
-                }
 
                 if name == "__process_self" {
                     let Some(process_name) = self.current_process_name() else {
@@ -8969,7 +8994,10 @@ impl Checker {
                 }
 
                 Ok(TypedNode {
-                    ty: self.resolve_ty(ret),
+                    ty: application_signature
+                        .as_ref()
+                        .map(|signature| self.resolve_ty(&signature.return_type.ty))
+                        .unwrap_or_else(|| self.resolve_ty(ret)),
                     span: span.clone(),
                     node: TypedInner::App(Box::new(typed_func), typed_args),
                 })
@@ -8992,14 +9020,53 @@ impl Checker {
                 };
                 let callable_hint =
                     self.callable_definition_signature_hint(&typed_func, params, ret.as_ref());
-                let typed_args = self.typecheck_user_function_args(
-                    span,
-                    callee_uid,
-                    params,
-                    args,
-                    callable_hint.as_deref(),
-                    self.typed_callee_allows_error_observer_arg(&typed_func),
-                )?;
+                let application_signature =
+                    self.callable_signatures
+                        .get(&callee_uid)
+                        .cloned()
+                        .map(|signature| {
+                            super::signatures::instantiate_callable_signature(self, &signature)
+                        });
+                let allow_error_observer_args =
+                    self.typed_callee_allows_error_observer_arg(&typed_func);
+                let typed_args = if let Some(signature) = application_signature.as_ref() {
+                    if let Ty::UserFunc {
+                        fun_idx,
+                        type_params,
+                        ..
+                    } = &typed_func.ty
+                    {
+                        typed_func.ty = Ty::UserFunc {
+                            fun_idx: *fun_idx,
+                            type_params: type_params.clone(),
+                            params: signature
+                                .value_parameters
+                                .iter()
+                                .map(|parameter| parameter.ty.clone())
+                                .collect(),
+                            ret: Box::new(signature.return_type.ty.clone()),
+                        };
+                    }
+                    self.check_callable_application(
+                        callee_uid,
+                        "function",
+                        signature,
+                        args,
+                        span,
+                        callable_hint.as_deref(),
+                        allow_error_observer_args,
+                    )?
+                } else {
+                    self.typecheck_user_function_args(
+                        span,
+                        callee_uid,
+                        "function",
+                        params,
+                        args,
+                        callable_hint.as_deref(),
+                        allow_error_observer_args,
+                    )?
+                };
                 let typed_args = typed_args
                     .into_iter()
                     .map(|arg| self.concretize_pending_trait_calls(arg))
@@ -9007,7 +9074,10 @@ impl Checker {
                 self.ensure_no_runtime_facet_args(&typed_args, span, "Function call")?;
 
                 Ok(TypedNode {
-                    ty: self.resolve_ty(ret),
+                    ty: application_signature
+                        .as_ref()
+                        .map(|signature| self.resolve_ty(&signature.return_type.ty))
+                        .unwrap_or_else(|| self.resolve_ty(ret)),
                     span: span.clone(),
                     node: TypedInner::App(Box::new(typed_func), typed_args),
                 })
@@ -9040,61 +9110,79 @@ impl Checker {
         }
     }
 
-    fn check_builtin_contract(
+    fn check_callable_application(
         &mut self,
         uid: u32,
-        builtin_name: &str,
-        args: &[TypedNode],
+        callable_name: &str,
+        signature: &sindr::signature::CallableSignature<Ty>,
+        args: &[ResolvedRecordLitArg],
         span: &Span,
-    ) -> Result<(), TypeError> {
-        let Some(contract) = self.builtin_contracts.get(&uid).cloned() else {
-            return Ok(());
-        };
-        let mut type_vars = contract.type_vars;
-        for (expected, actual) in contract
-            .param_tys
+        callable_hint: Option<&str>,
+        allow_error_observer_args: bool,
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        let params = signature
+            .value_parameters
             .iter()
-            .zip(args.iter().map(|arg| &arg.ty))
+            .map(|parameter| parameter.ty.clone())
+            .collect::<Vec<_>>();
+        let typed_args = self.typecheck_user_function_args(
+            span,
+            uid,
+            callable_name,
+            &params,
+            args,
+            callable_hint,
+            allow_error_observer_args,
+        )?;
+
+        // Ordinary functions already carry their resolved bounds on the
+        // instantiated type variables (including parameterized trait heads).
+        // Runtime builtins have no body/scheme path, so their canonical
+        // signature obligations are discharged here after argument unification.
+        let check_explicit_constraints = matches!(
+            signature.runtime_target,
+            sindr::signature::RuntimeTarget::Builtin(_)
+        );
+        for constraint in signature
+            .where_constraints
+            .constraints
+            .iter()
+            .filter(|_| check_explicit_constraints)
         {
-            let _ = self.types_compatible(expected, actual);
-        }
-        for constraint in contract.where_clause.constraints {
-            let subject = self.resolve_builtin_ast_ty_in_context(
-                &constraint.subject,
-                TypeSyntaxContext::General,
-                &mut type_vars,
-            )?;
-            for bound in constraint.bounds {
-                let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
-                    continue;
+            let subject = self.resolve_ty(&constraint.subject);
+            let trait_key = &constraint.trait_name;
+            let satisfied = self.trait_impl_exists_for_args(trait_key, &[], &subject);
+            if !satisfied {
+                let callable_label = match signature.identity.declaration_kind {
+                    sindr::signature::CallableDeclarationKind::Builtin => {
+                        format!("Builtin {callable_name}")
+                    }
+                    _ => callable_name.to_string(),
                 };
-                let trait_key = self.trait_key(&trait_id);
-                let subject = self.resolve_ty(&subject);
-                let satisfied = self.trait_impl_exists_for_args(&trait_key, &[], &subject);
-                if !satisfied {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Builtin {} requires {} for {}, got {}",
-                            builtin_name,
-                            self.trait_display_name(&trait_key),
-                            self.ty_name(&subject),
-                            self.ty_name(&subject),
-                        ),
-                        span: span.clone(),
-                        hint: Some(format!(
-                            "Add a {} implementation for {} or use a type that already implements it.",
-                            self.trait_display_name(&trait_key),
-                            self.ty_name(&subject),
-                        )),
-                    });
-                }
-                if let Ty::Var(var) = subject {
-                    let _ = self.tyvar_has_bound(var, &trait_key);
-                }
+                return Err(TypeError {
+                    structured: None,
+                    message: format!(
+                        "{} requires {} for {}, got {}",
+                        callable_label,
+                        self.trait_display_name(trait_key),
+                        self.ty_name(&subject),
+                        self.ty_name(&subject),
+                    ),
+                    span: span.clone(),
+                    hint: Some(format!(
+                        "Add a {} implementation for {} or use a type that already implements it.",
+                        self.trait_display_name(trait_key),
+                        self.ty_name(&subject),
+                    )),
+                });
+            }
+            if let Ty::Var(var) = subject {
+                // Looking up the declared capability also records that the
+                // callable's bound was consumed by this application.
+                let _ = self.tyvar_has_bound(var, trait_key);
             }
         }
-        Ok(())
+        Ok(typed_args)
     }
 
     fn typecheck_positional_call_args(

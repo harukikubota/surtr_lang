@@ -1,6 +1,6 @@
 use super::*;
 
-struct SpecialFormBuiltinContract {
+struct SpecialFormContract {
     expected_qname: &'static str,
     expected_signature: &'static str,
     shape_ok: fn(&[ResolvedValueParameter], &Option<AstTy>) -> bool,
@@ -287,6 +287,8 @@ impl Checker {
             None => Ty::Unit,
         };
 
+        let canonical_where_constraints =
+            super::signatures::canonical_where_constraints(self, where_clause, &mut tyvars)?;
         self.callable_signatures.insert(
             id.unique_id,
             super::signatures::canonical_callable_signature(
@@ -296,21 +298,11 @@ impl Checker {
                 return_type_argument_tys.as_slice(),
                 param_tys.as_slice(),
                 ret.clone(),
+                canonical_where_constraints,
                 sindr::signature::RuntimeTarget::Builtin(meta.builtin_id()),
                 sindr::signature::CallableDeclarationKind::Builtin,
             ),
         );
-
-        if let Some(clause) = where_clause {
-            self.builtin_contracts.insert(
-                id.unique_id,
-                BuiltinContract {
-                    where_clause: TypedWhereClause::from(clause),
-                    type_vars: tyvars.clone(),
-                    param_tys: param_tys.clone(),
-                },
-            );
-        }
 
         self.env.bind_var(
             id.unique_id,
@@ -335,7 +327,7 @@ impl Checker {
         params: &[ResolvedValueParameter],
         ret_ty: &Option<AstTy>,
     ) -> Result<TypedNode, TypeError> {
-        let contract = Self::special_form_builtin_contract(id.name.as_str());
+        let contract = Self::special_form_contract(id.name.as_str());
 
         if Self::surface_qualified_name(id.qualified_name.as_deref())
             != Some(contract.expected_qname)
@@ -702,81 +694,81 @@ impl Checker {
         )
     }
 
-    fn special_form_builtin_contract(name: &str) -> SpecialFormBuiltinContract {
+    fn special_form_contract(name: &str) -> SpecialFormContract {
         match name {
-            "if" => SpecialFormBuiltinContract {
+            "if" => SpecialFormContract {
                 expected_qname: "Kernel::if",
                 expected_signature:
                     "@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
                 shape_ok: special_form_shape_if,
             },
-            "if_then" => SpecialFormBuiltinContract {
+            "if_then" => SpecialFormContract {
                 expected_qname: "Kernel::if_then",
                 expected_signature:
                     "@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
                 shape_ok: special_form_shape_if_then,
             },
-            "if_let" => SpecialFormBuiltinContract {
+            "if_let" => SpecialFormContract {
                 expected_qname: "Kernel::if_let",
                 expected_signature:
                     "@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B",
                 shape_ok: special_form_shape_if_let,
             },
-            "if_let_then" => SpecialFormBuiltinContract {
+            "if_let_then" => SpecialFormContract {
                 expected_qname: "Kernel::if_let_then",
                 expected_signature:
                     "@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
                 shape_ok: special_form_shape_if_let_then,
             },
-            "is_match" => SpecialFormBuiltinContract {
+            "is_match" => SpecialFormContract {
                 expected_qname: "Kernel::is_match",
                 expected_signature:
                     "@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
                 shape_ok: special_form_shape_is_match,
             },
-            "assert" => SpecialFormBuiltinContract {
+            "assert" => SpecialFormContract {
                 expected_qname: "Kernel::assert",
                 expected_signature:
                     "@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
                 shape_ok: special_form_shape_assert,
             },
-            "ensure" => SpecialFormBuiltinContract {
+            "ensure" => SpecialFormContract {
                 expected_qname: "Kernel::ensure",
                 expected_signature:
                     "@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
                 shape_ok: special_form_shape_ensure,
             },
-            "map_err" => SpecialFormBuiltinContract {
+            "map_err" => SpecialFormContract {
                 expected_qname: "Result::map_err",
                 expected_signature:
                     "@builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
                 shape_ok: special_form_shape_map_err_or_cause,
             },
-            "cause" => SpecialFormBuiltinContract {
+            "cause" => SpecialFormContract {
                 expected_qname: "Result::cause",
                 expected_signature:
                     "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
                 shape_ok: special_form_shape_map_err_or_cause,
             },
-            "recover_kind" => SpecialFormBuiltinContract {
+            "recover_kind" => SpecialFormContract {
                 expected_qname: "Result::recover_kind",
                 expected_signature:
                     "@builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>",
                 shape_ok: special_form_shape_recover_kind,
             },
-            "and" => SpecialFormBuiltinContract {
+            "and" => SpecialFormContract {
                 expected_qname: "Kernel::and",
                 expected_signature:
                     "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
                 shape_ok: special_form_shape_and_or,
             },
-            "or" => SpecialFormBuiltinContract {
+            "or" => SpecialFormContract {
                 expected_qname: "Kernel::or",
                 expected_signature:
                     "@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
                 shape_ok: special_form_shape_and_or,
             },
-            "(,)" => SpecialFormBuiltinContract {
+            "(,)" => SpecialFormContract {
                 expected_qname: "Bootstrap::(,)",
                 expected_signature: "@builtin def (,)(lhs: $A, rhs: $B) -> ($A, $B)",
                 shape_ok: special_form_shape_pair_constructor,
@@ -1543,6 +1535,8 @@ impl Checker {
                 ret: Box::new(expected_ret.clone()),
             },
         );
+        let canonical_where_constraints =
+            super::signatures::canonical_where_constraints(self, where_clause, &mut tyvars)?;
         self.callable_signatures.insert(
             id.unique_id,
             super::signatures::canonical_callable_signature(
@@ -1556,6 +1550,7 @@ impl Checker {
                     .as_slice(),
                 checked_params.as_slice(),
                 expected_ret.clone(),
+                canonical_where_constraints,
                 sindr::signature::RuntimeTarget::UserFunction(fun_idx),
                 sindr::signature::CallableDeclarationKind::Function,
             ),
@@ -2808,6 +2803,7 @@ impl Checker {
                     let typed_args = self.typecheck_user_function_args(
                         span,
                         id.unique_id,
+                        "function",
                         params,
                         args,
                         Some(callable_hint.as_str()),
@@ -2965,8 +2961,9 @@ impl Checker {
                 }
             };
 
-            let typed_args =
-                self.typecheck_user_function_args(span, new_uid, &params, args, None, false)?;
+            let typed_args = self.typecheck_user_function_args(
+                span, new_uid, "function", &params, args, None, false,
+            )?;
             let expected_self_ty = Ty::Struct(id.name.clone(), def.fields.clone());
             let returns_self = self.types_compatible(&expected_self_ty, &ret_ty);
             let returns_result_self = match self.resolve_ty(&ret_ty) {

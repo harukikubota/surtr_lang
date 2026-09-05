@@ -155,7 +155,7 @@ result = Use::use(value)"#,
 }
 
 #[test]
-fn builtin_contract_forwarding_consumes_the_callers_bare_capability() {
+fn canonical_builtin_signature_forwards_the_callers_bare_capability() {
     typecheck_std_surface_without_prelude(
         r#"deftrait Equal {
   def equal(self: Self, rhs: Self) -> Int
@@ -176,7 +176,7 @@ where
 }
 
 #[test]
-fn builtin_contract_forwarding_still_rejects_a_missing_capability() {
+fn canonical_builtin_signature_still_rejects_a_missing_capability() {
     let err = typecheck_std_surface_without_prelude(
         r#"deftrait Equal {
   def equal(self: Self, rhs: Self) -> Int
@@ -194,6 +194,29 @@ where
 
     assert!(
         err.message.contains("Builtin group_count requires Equal"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn canonical_builtin_signature_preserves_parameter_names_for_named_calls() {
+    typecheck_std_surface_without_prelude(
+        r#"@builtin def print(a: String) -> Unit"#,
+        r#"def emit() -> Unit {
+  print(a: "ok")
+}"#,
+    )
+    .expect("builtin calls must use the same canonical named-argument route as user functions");
+}
+
+#[test]
+fn canonical_builtin_signature_rejects_parameter_name_drift() {
+    let err =
+        typecheck_std_surface_without_prelude(r#"@builtin def print(value: String) -> Unit"#, "")
+            .expect_err("builtin declaration parameter names are part of the canonical signature");
+    assert!(
+        err.message
+            .contains("does not match its canonical surface signature"),
         "{err:?}"
     );
 }

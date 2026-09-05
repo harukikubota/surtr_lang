@@ -1,9 +1,9 @@
 use crate::names::{builtin_type_name, surface_path_name, TypeIdentity, TypeName};
 pub use crate::signature::BuiltinId;
 use crate::signature::{
-    CallableDeclarationKind, CallableIdentity, CallableSignature, CanonicalConstraintSet,
-    CanonicalReturnTypeArgument, CanonicalTypeOccurrence, CanonicalValueParameter, RuntimeTarget,
-    SignatureOrigin, ValueParameterMode,
+    CallableDeclarationKind, CallableIdentity, CallableSignature, CanonicalConstraint,
+    CanonicalConstraintSet, CanonicalReturnTypeArgument, CanonicalTypeOccurrence,
+    CanonicalValueParameter, RuntimeTarget, SignatureOrigin, ValueParameterMode,
 };
 
 /// Built-in function metadata shared across Sigil / Scar / Forge / Eldr.
@@ -83,6 +83,10 @@ impl BuiltinMeta {
                 ),
             ],
             "safe_mod" => vec![(Some("Int"), "safe_mod", self.sig_str)],
+            "group_count" => vec![
+                (Some("List"), "group_count", self.sig_str),
+                (None, "group_count", self.sig_str),
+            ],
             _ => {
                 let (owner, name) = builtin_surface_owner_and_name(self.name);
                 vec![(owner, name, self.sig_str)]
@@ -134,6 +138,16 @@ impl BuiltinMeta {
             name: name.to_string(),
             declaration_kind: CallableDeclarationKind::Builtin,
         };
+        let where_constraints = match self.name {
+            "group_count" => CanonicalConstraintSet {
+                constraints: vec![CanonicalConstraint {
+                    subject: "$A".into(),
+                    trait_name: "Eq".into(),
+                    origin: SignatureOrigin::new("builtin group_count where constraint"),
+                }],
+            },
+            _ => CanonicalConstraintSet::default(),
+        };
         CallableSignature {
             identity,
             return_type_arguments: Vec::<CanonicalReturnTypeArgument<String>>::new(),
@@ -142,7 +156,7 @@ impl BuiltinMeta {
                 ty: return_type,
                 origin: SignatureOrigin::new(format!("builtin {} return", name)),
             },
-            where_constraints: CanonicalConstraintSet::default(),
+            where_constraints,
             runtime_target: self.runtime_target(),
             declaration_origins: vec![SignatureOrigin::new(format!(
                 "builtin metadata {}",
@@ -156,8 +170,9 @@ fn builtin_parameter_name(name: &str, ordinal: usize) -> String {
     match (name, ordinal) {
         ("safe_div" | "safe_mod", 0) => "a".into(),
         ("safe_div" | "safe_mod", 1) => "b".into(),
+        ("group_count", 0) => "values".into(),
         ("print" | "eprint" | "to_string" | "inspect", 0) => match name {
-            "print" => "value".into(),
+            "print" | "inspect" => "a".into(),
             "eprint" => "err".into(),
             _ => "value".into(),
         },
@@ -175,6 +190,7 @@ fn builtin_surface_owner_and_name(runtime_name: &str) -> (Option<&'static str>, 
         "string_replace" => (Some("String"), "replace"),
         "json_parse" => (Some("Json"), "parse"),
         "json_stringify" => (Some("Json"), "stringify"),
+        "group_count" => (Some("List"), "group_count"),
         _ => (None, runtime_name),
     }
 }
@@ -1455,9 +1471,12 @@ pub fn builtin_surface_variant_for_decl(
     let owner = qualified_name
         .and_then(|name| name.rsplit_once("::").map(|(owner, _)| owner))
         .unwrap_or("");
-    meta.surface_variant(owner, declared_name)
-        .or_else(|| meta.surface_variant("", declared_name))
-        .or_else(|| (!owner.is_empty()).then(|| meta.surface_variant_named(owner, declared_name)))
+    if owner.is_empty() {
+        meta.surface_variant("", declared_name)
+    } else {
+        meta.surface_variant(owner, declared_name)
+            .or_else(|| Some(meta.surface_variant_named(owner, declared_name)))
+    }
 }
 
 pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&str>) -> &'a str {
@@ -1696,6 +1715,20 @@ mod tests {
                 ));
             }
         }
+    }
+
+    #[test]
+    fn surface_variant_preserves_parameter_and_where_metadata() {
+        let meta = builtin_meta_by_runtime_name("group_count").expect("group_count metadata");
+        let variant = meta
+            .surface_variant("List", "group_count")
+            .expect("List::group_count surface variant");
+        assert_eq!(variant.value_parameters[0].ordinal, 0);
+        assert_eq!(variant.value_parameters[0].name, "values");
+        assert_eq!(variant.value_parameters[0].ty, "List<$A>");
+        assert_eq!(variant.where_constraints.constraints.len(), 1);
+        assert_eq!(variant.where_constraints.constraints[0].subject, "$A");
+        assert_eq!(variant.where_constraints.constraints[0].trait_name, "Eq");
     }
 
     #[test]

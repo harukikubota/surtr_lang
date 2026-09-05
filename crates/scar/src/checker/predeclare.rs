@@ -2907,18 +2907,39 @@ impl Checker {
                     },
                 );
             }
-            self.traits.insert(
-                trait_key.clone(),
-                TraitInfo {
-                    id: id.clone(),
-                    type_params: type_params.clone(),
-                    where_clause: where_clause.as_ref().map(TypedWhereClause::from),
-                    constructor_root: (!constructor_slots.is_empty()).then_some(trait_key),
-                    constructor_slots,
-                    parents,
-                    methods: method_map,
-                },
-            );
+            let trait_info = TraitInfo {
+                id: id.clone(),
+                type_params: type_params.clone(),
+                where_clause: where_clause.as_ref().map(TypedWhereClause::from),
+                constructor_root: (!constructor_slots.is_empty()).then_some(trait_key.clone()),
+                constructor_slots,
+                parents,
+                methods: method_map,
+            };
+            self.traits.insert(trait_key.clone(), trait_info.clone());
+
+            // Trait helpers participate in the same canonical callable
+            // registry as user functions and non-intrinsic builtins. Dispatch
+            // remains trait-owned, but signature roles and provenance do not.
+            for method in trait_info.methods.values() {
+                let self_ty = self.env.fresh_tyvar();
+                let (param_tys, ret, _, return_type_argument_tys) =
+                    self.resolve_trait_method_signature(&trait_info, method, &self_ty)?;
+                self.callable_signatures.insert(
+                    method.id.unique_id,
+                    super::signatures::canonical_callable_signature(
+                        &method.id,
+                        &method.return_type_arguments,
+                        &method.value_parameters,
+                        return_type_argument_tys.as_slice(),
+                        param_tys.as_slice(),
+                        ret,
+                        sindr::signature::CanonicalConstraintSet::default(),
+                        sindr::signature::RuntimeTarget::TraitDispatch(method.id.unique_id),
+                        sindr::signature::CallableDeclarationKind::TraitMethod,
+                    ),
+                );
+            }
             let _ = span;
         }
 
@@ -3705,6 +3726,12 @@ impl Checker {
                         )?,
                         None => Ty::Unit,
                     };
+                    let canonical_where_constraints =
+                        super::signatures::canonical_where_constraints(
+                            self,
+                            where_clause.as_ref(),
+                            &mut tyvars,
+                        )?;
                     if let Some(meta) = meta {
                         self.callable_signatures.insert(
                             id.unique_id,
@@ -3715,19 +3742,10 @@ impl Checker {
                                 return_type_argument_tys.as_slice(),
                                 param_tys.as_slice(),
                                 ret.clone(),
+                                canonical_where_constraints,
                                 sindr::signature::RuntimeTarget::Builtin(meta.builtin_id()),
                                 sindr::signature::CallableDeclarationKind::Builtin,
                             ),
-                        );
-                    }
-                    if let Some(clause) = where_clause {
-                        self.builtin_contracts.insert(
-                            id.unique_id,
-                            BuiltinContract {
-                                where_clause: TypedWhereClause::from(clause),
-                                type_vars: tyvars.clone(),
-                                param_tys: param_tys.clone(),
-                            },
                         );
                     }
                     self.env.bind_var(
@@ -3792,14 +3810,17 @@ impl Checker {
                         )?;
                     }
                     let mut tyvars = HashMap::new();
-                    for argument in return_type_arguments {
-                        self.resolve_def_signature_ast_ty_in_context(
-                            id,
-                            &argument.ty,
-                            TypeSyntaxContext::General,
-                            &mut tyvars,
-                        )?;
-                    }
+                    let return_type_argument_tys = return_type_arguments
+                        .iter()
+                        .map(|argument| {
+                            self.resolve_def_signature_ast_ty_in_context(
+                                id,
+                                &argument.ty,
+                                TypeSyntaxContext::General,
+                                &mut tyvars,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                     let param_tys = params
                         .iter()
                         .map(|param| {
@@ -3834,6 +3855,12 @@ impl Checker {
                         None => Ty::Unit,
                     };
                     self.apply_resolved_where_trait_bounds(where_clause.as_ref(), &tyvars, None)?;
+                    let canonical_where_constraints =
+                        super::signatures::canonical_where_constraints(
+                            self,
+                            where_clause.as_ref(),
+                            &mut tyvars,
+                        )?;
                     let function_symbol = id.qualified_name.as_deref().unwrap_or(&id.name);
                     if self.ty_contains_process_init(&ret)
                         && !self.is_lazy_init_function_symbol(function_symbol)
@@ -3857,9 +3884,23 @@ impl Checker {
                         Ty::UserFunc {
                             fun_idx,
                             type_params,
-                            params: param_tys,
-                            ret: Box::new(ret),
+                            params: param_tys.clone(),
+                            ret: Box::new(ret.clone()),
                         },
+                    );
+                    self.callable_signatures.insert(
+                        id.unique_id,
+                        super::signatures::canonical_callable_signature(
+                            id,
+                            return_type_arguments,
+                            params,
+                            return_type_argument_tys.as_slice(),
+                            param_tys.as_slice(),
+                            ret,
+                            canonical_where_constraints,
+                            sindr::signature::RuntimeTarget::UserFunction(fun_idx),
+                            sindr::signature::CallableDeclarationKind::Function,
+                        ),
                     );
                     self.user_func_params.insert(id.unique_id, param_names);
                     if let Some(qualified_name) = id.qualified_name.as_ref() {
@@ -4018,6 +4059,7 @@ impl Checker {
                         return_type_argument_tys.as_slice(),
                         param_tys.as_slice(),
                         ret.clone(),
+                        sindr::signature::CanonicalConstraintSet::default(),
                         sindr::signature::RuntimeTarget::TraitDispatch(
                             method.function_id.unique_id,
                         ),

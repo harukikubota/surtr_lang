@@ -1,18 +1,20 @@
 //! Canonical callable-signature adapters.
 //!
-//! The checker still has legacy storage for a few declaration-only contracts
-//! while the remaining phases migrate.  All new callable metadata enters
-//! through this module, so user functions, trait helpers, and builtin surface
-//! declarations share the same role-bearing shape.
+//! User functions, trait helpers, and builtin surface declarations all enter
+//! the checker through this role-bearing shape.
 
 use super::Checker;
 use crate::types::Ty;
-use sigil::resolved::{ResolvedReturnTypeArgument, ResolvedValueParameter};
+use sigil::resolved::{
+    ResolvedReturnTypeArgument, ResolvedValueParameter, ResolvedWhereClause,
+    ResolvedWhereConstraintRhs,
+};
 use sindr::builtin::{builtin_surface_variant_for_decl, BuiltinSurfaceSignatureMeta};
 use sindr::signature::{
-    CallableDeclarationKind, CallableIdentity, CallableSignature, CanonicalConstraintSet,
-    CanonicalReturnTypeArgument, CanonicalTypeOccurrence, CanonicalValueParameter, RuntimeTarget,
-    SignatureOrigin, ValueParameterMode as CanonicalValueParameterMode,
+    CallableDeclarationKind, CallableIdentity, CallableSignature, CanonicalConstraint,
+    CanonicalConstraintSet, CanonicalReturnTypeArgument, CanonicalTypeOccurrence,
+    CanonicalValueParameter, RuntimeTarget, SignatureOrigin,
+    ValueParameterMode as CanonicalValueParameterMode,
 };
 use spire::ast::ValueParameterMode;
 use std::collections::HashMap;
@@ -24,6 +26,7 @@ pub(super) fn canonical_callable_signature(
     return_type_arguments_tys: &[Ty],
     value_parameter_tys: &[Ty],
     return_ty: Ty,
+    where_constraints: CanonicalConstraintSet<Ty>,
     runtime_target: RuntimeTarget,
     declaration_kind: CallableDeclarationKind,
 ) -> CallableSignature<Ty> {
@@ -73,9 +76,97 @@ pub(super) fn canonical_callable_signature(
                 id.span.start, id.span.end
             )),
         },
-        where_constraints: CanonicalConstraintSet::default(),
+        where_constraints,
         runtime_target,
         declaration_origins: vec![SignatureOrigin::new(format!("declaration {}", id.name))],
+    }
+}
+
+pub(super) fn canonical_where_constraints(
+    checker: &mut Checker,
+    where_clause: Option<&ResolvedWhereClause>,
+    tyvars: &mut HashMap<String, Ty>,
+) -> Result<CanonicalConstraintSet<Ty>, crate::error::TypeError> {
+    let mut constraints = Vec::new();
+    let Some(where_clause) = where_clause else {
+        return Ok(CanonicalConstraintSet { constraints });
+    };
+
+    for constraint in &where_clause.constraints {
+        let subject = checker.resolve_builtin_ast_ty_in_context(
+            &constraint.subject,
+            super::TypeSyntaxContext::General,
+            tyvars,
+        )?;
+        for bound in &constraint.bounds {
+            let ResolvedWhereConstraintRhs::Trait { trait_id } = bound else {
+                // Constructor-slot constraints are consumed by the trait
+                // declaration/selection machinery. They are not ordinary
+                // callable obligations.
+                continue;
+            };
+            constraints.push(CanonicalConstraint {
+                subject: subject.clone(),
+                trait_name: checker.trait_key(trait_id),
+                origin: SignatureOrigin::new(format!(
+                    "where constraint at {}..{}",
+                    constraint.span.start, constraint.span.end
+                )),
+            });
+        }
+    }
+
+    Ok(CanonicalConstraintSet { constraints })
+}
+
+/// Instantiate every type occurrence in a callable with one shared fresh map.
+/// This preserves repeated-variable relationships across RTA, value, return,
+/// and where positions.
+pub(super) fn instantiate_callable_signature(
+    checker: &mut Checker,
+    signature: &CallableSignature<Ty>,
+) -> CallableSignature<Ty> {
+    let mut fresh = HashMap::new();
+    CallableSignature {
+        identity: signature.identity.clone(),
+        return_type_arguments: signature
+            .return_type_arguments
+            .iter()
+            .map(|argument| CanonicalReturnTypeArgument {
+                ordinal: argument.ordinal,
+                ty: checker.instantiate_ty_with_fresh(&argument.ty, &mut fresh),
+                origin: argument.origin.clone(),
+            })
+            .collect(),
+        value_parameters: signature
+            .value_parameters
+            .iter()
+            .map(|parameter| CanonicalValueParameter {
+                ordinal: parameter.ordinal,
+                name: parameter.name.clone(),
+                mode: parameter.mode,
+                ty: checker.instantiate_ty_with_fresh(&parameter.ty, &mut fresh),
+                origin: parameter.origin.clone(),
+            })
+            .collect(),
+        return_type: CanonicalTypeOccurrence {
+            ty: checker.instantiate_ty_with_fresh(&signature.return_type.ty, &mut fresh),
+            origin: signature.return_type.origin.clone(),
+        },
+        where_constraints: CanonicalConstraintSet {
+            constraints: signature
+                .where_constraints
+                .constraints
+                .iter()
+                .map(|constraint| CanonicalConstraint {
+                    subject: checker.instantiate_ty_with_fresh(&constraint.subject, &mut fresh),
+                    trait_name: constraint.trait_name.clone(),
+                    origin: constraint.origin.clone(),
+                })
+                .collect(),
+        },
+        runtime_target: signature.runtime_target.clone(),
+        declaration_origins: signature.declaration_origins.clone(),
     }
 }
 
@@ -92,43 +183,34 @@ pub(super) fn builtin_surface_signature(
     builtin_surface_variant_for_decl(&id.name, id.qualified_name.as_deref())
 }
 
-/// Validate the source declaration's type shape against metadata. Parameter
-/// names and modes remain part of the canonical metadata; this adapter checks
-/// the source type contract here and leaves name/mode policy to the parser and
-/// named-argument checker until those routes consume the shared signature.
+/// Validate the source declaration's callable shape against metadata. Explicit
+/// metadata parameter names and modes are part of the contract; generated
+/// `argN` names denote runtime-only entries whose surface name is supplied by
+/// the declaration.
 pub(super) fn builtin_surface_matches(
     id: &sigil::resolved::ResolvedId,
     params: &[ResolvedValueParameter],
     ret_ty: Option<&spire::ast::AstTy>,
 ) -> bool {
-    // The current runtime table contains a number of implementation-only
-    // entries whose source declaration is an owner method (for example
-    // `Workers::submit`). Their complete owner-specific surface contracts are
-    // migrated incrementally; they still use the shared runtime target, but
-    // must not be compared with an unqualified fallback variant.
-    let qualified_owner = id
-        .qualified_name
-        .as_deref()
-        .and_then(|name| {
-            name.strip_prefix("Global::")
-                .unwrap_or(name)
-                .rsplit_once("::")
-        })
-        .map(|(owner, _)| owner);
     let runtime_name = sindr::builtin::builtin_runtime_name(&id.name, id.qualified_name.as_deref());
     if runtime_name.starts_with("__") {
         return true;
     }
     let Some(variant) = builtin_surface_signature(id) else {
-        // Runtime-only entries without a migrated source surface variant are
-        // validated by the existing declaration contract for now. They must
-        // not be treated as a mismatched canonical surface.
-        return true;
+        return false;
     };
-    if qualified_owner.is_some() && variant.identity.owner.is_none() {
-        return true;
-    }
     if variant.value_parameters.len() != params.len() {
+        return false;
+    }
+    if variant
+        .value_parameters
+        .iter()
+        .zip(params)
+        .any(|(expected, actual)| {
+            (!expected.name.starts_with("arg") && expected.name != actual.id.name)
+                || expected.mode != canonical_parameter_mode(actual.mode)
+        })
+    {
         return false;
     }
     let actual_return = ret_ty
