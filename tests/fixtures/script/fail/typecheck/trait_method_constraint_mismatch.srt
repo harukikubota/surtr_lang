@@ -1,0 +1,3 @@
+deftrait Marker {}
+deftrait Identity { def identity(self: Self, value: $A) -> $A where $A: Marker }
+impl Identity for Int { def identity(self: Self, value: $Z) -> $Z { value } }

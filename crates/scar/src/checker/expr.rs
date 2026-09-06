@@ -1318,7 +1318,7 @@ impl Checker {
                             hint: None,
                         }
                     })?;
-                    let (params, mut ret_ty, _, _) = self.resolve_trait_method_signature(
+                    let (params, mut ret_ty, _, _, _) = self.resolve_trait_method_signature(
                         &trait_info,
                         method_info,
                         &deferred_self,
@@ -4666,7 +4666,7 @@ impl Checker {
         // this signature-driven rather than growing another trait-name list.
         if positional_args.is_empty() {
             let probe_self = self.env.fresh_tyvar();
-            let (_, probe_ret, _, _) =
+            let (_, probe_ret, _, _, _) =
                 self.resolve_trait_method_signature(&trait_info, &method, &probe_self)?;
             if matches!(probe_ret, Ty::SelfApp(_))
                 || (self.trait_matches_short_name(trait_name, "Default")
@@ -4857,11 +4857,8 @@ impl Checker {
                     if let Some((witness, slots)) = Self::constructor_application_parts(items) {
                         if slots.len() == trait_info.constructor_slots.len() {
                             let self_ty = self.env.fresh_tyvar();
-                            let (param_tys, ret_ty, _, _) = self.resolve_trait_method_signature(
-                                &trait_info,
-                                &method,
-                                &self_ty,
-                            )?;
+                            let (param_tys, ret_ty, _, _, _) = self
+                                .resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
                             let apply_witness = |ty: Ty| match ty {
                                 Ty::SelfApp(args)
                                     if Self::constructor_application_parts(&args).is_none() =>
@@ -4925,7 +4922,7 @@ impl Checker {
         }
 
         let self_ty = self.env.fresh_tyvar();
-        let (param_tys, ret_ty, trait_arg_tys, explicit_slots) =
+        let (param_tys, ret_ty, trait_arg_tys, explicit_slots, _) =
             self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
 
         if let Some(explicit_args) = explicit_type_args {

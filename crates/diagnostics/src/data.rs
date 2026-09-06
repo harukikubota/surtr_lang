@@ -203,6 +203,47 @@ pub struct ReturnTypeArgumentData {
     pub actual_type: String,
 }
 
+/// Stable signature-list roles shared by the checker and diagnostic consumers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum TypeListRole {
+    TraitArgument,
+    ImplTarget,
+    ReturnTypeArgument,
+    ValueParameter,
+    ReturnType,
+}
+
+impl TypeListRole {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TraitArgument => "TraitArgument",
+            Self::ImplTarget => "ImplTarget",
+            Self::ReturnTypeArgument => "ReturnTypeArgument",
+            Self::ValueParameter => "ValueParameter",
+            Self::ReturnType => "ReturnType",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TraitMethodTypeListData {
+    pub method_name: String,
+    pub role: TypeListRole,
+    pub ordinal: u32,
+    pub nested_path: Vec<u32>,
+    pub expected_type: String,
+    pub actual_type: String,
+    pub expected_count: Option<u32>,
+    pub actual_count: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TraitMethodConstraintData {
+    pub method_name: String,
+    pub expected_constraints: Vec<String>,
+    pub actual_constraints: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CallableSignatureData {
     pub callable: String,
@@ -281,6 +322,8 @@ pub enum DiagnosticData {
     ArgumentRelation(ArgumentRelationData),
     ReturnTypeArgument(ReturnTypeArgumentData),
     CallableSignature(CallableSignatureData),
+    TraitMethodTypeList(TraitMethodTypeListData),
+    TraitMethodConstraint(TraitMethodConstraintData),
     ConstraintSubject(ConstraintSubjectData),
     TraitObligation(TraitObligationData),
     TraitDispatch(TraitDispatchData),
@@ -301,6 +344,12 @@ impl DiagnosticData {
             Self::ArgumentRelation(value) => ("ArgumentRelation", serde_json::to_value(value)),
             Self::ReturnTypeArgument(value) => ("ReturnTypeArgument", serde_json::to_value(value)),
             Self::CallableSignature(value) => ("CallableSignature", serde_json::to_value(value)),
+            Self::TraitMethodTypeList(value) => {
+                ("TraitMethodTypeList", serde_json::to_value(value))
+            }
+            Self::TraitMethodConstraint(value) => {
+                ("TraitMethodConstraint", serde_json::to_value(value))
+            }
             Self::ConstraintSubject(value) => ("ConstraintSubject", serde_json::to_value(value)),
             Self::TraitObligation(value) => ("TraitObligation", serde_json::to_value(value)),
             Self::TraitDispatch(value) => ("TraitDispatch", serde_json::to_value(value)),

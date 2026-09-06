@@ -9269,7 +9269,11 @@ impl Convert<Int> for String {
     );
     let err =
         typecheck(omitted).expect_err("an impl cannot omit a required ReturnTypeArguments slot");
-    assert!(err.message.contains("incompatible signature"), "{err:?}");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::TraitMethodTypeListArityMismatch),
+        "{err:?}"
+    );
 }
 
 #[test]

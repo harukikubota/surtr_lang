@@ -1956,7 +1956,7 @@ impl Checker {
                         span: method.span.clone(),
                         hint: None,
                     })?;
-            let (param_tys, mut expected_ret, type_params, return_type_argument_tys) = self
+            let (param_tys, mut expected_ret, type_params, return_type_argument_tys, _) = self
                 .resolve_trait_impl_method_signature(
                     &trait_info,
                     trait_args,

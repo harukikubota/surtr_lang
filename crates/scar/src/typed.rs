@@ -686,3 +686,78 @@ pub struct TypedEnumVariantDef {
     pub constructor_name: String,
     pub field_names: Vec<String>,
 }
+
+pub use diagnostics::TypeListRole;
+
+/// A structural declaration type. Nominal applications retain all type
+/// arguments, including phantom parameters absent from runtime field storage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CanonicalTypeHead {
+    Builtin(sindr::names::TypeName),
+    Nominal(u32),
+    Variable(u32),
+    Tuple,
+    Function,
+    SelfApplication,
+    Facet(crate::types::FacetKind),
+    Pid(String),
+    Hole,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CanonicalTy {
+    pub head: CanonicalTypeHead,
+    pub arguments: Vec<CanonicalTy>,
+}
+
+/// Source location of one complete type entry; nested types remain recursive.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypeOrigin {
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypeListEntry {
+    pub role: TypeListRole,
+    pub ordinal: u32,
+    /// Canonical identity and recursive arguments in declaration order.
+    pub ty: CanonicalTy,
+    pub origin: TypeOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImplHeadTypeList {
+    pub entries: Vec<TypeListEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum CanonicalMethodBound {
+    Trait(u32),
+    TypeConstructor(Vec<CanonicalTy>),
+    TraitSlot { trait_id: u32, ordinal: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CanonicalMethodConstraint {
+    pub subject: CanonicalTy,
+    pub bound: CanonicalMethodBound,
+    pub origin: TypeOrigin,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CanonicalConstraintSet {
+    pub constraints: Vec<CanonicalMethodConstraint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MethodSignatureTypeList {
+    pub entries: Vec<TypeListEntry>,
+    pub where_constraints: CanonicalConstraintSet,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StructuralTypePath {
+    pub role: TypeListRole,
+    pub ordinal: u32,
+    pub nested_arguments: Vec<u32>,
+}

@@ -704,7 +704,7 @@ git commit -m "feat(types): solve return type arguments at call sites"
 - Consumes: canonical types and RTA/value-parameter roles from Tasks 1--5.
 - Invariant: Trait arguments, impl target, RTA, value parameters, and return type retain role and ordinal; nested types stay recursive rather than becoming extra list entries.
 
-- [ ] **Step 1: Add failing contract-equivalence tests**
+- [x] **Step 1: Add failing contract-equivalence tests**
 
 Cover alpha-renamed generics, repeated-variable preservation, nested nominal/tuple/function types, `Self` and `Self<$A>`, RTA arity, value-parameter arity, and canonical `where` set equality. Include a mismatch whose only difference is the return type and assert:
 
@@ -717,7 +717,7 @@ assert_eq!(error.data().expected_type(), "Box<Int>");
 assert_eq!(error.data().actual_type(), "Box<String>");
 ```
 
-- [ ] **Step 2: Run the focused test and preserve the failing output**
+- [x] **Step 2: Run the focused test and preserve the failing output**
 
 ```bash
 cargo nextest run -p scar --test trait_method_type_lists
@@ -725,7 +725,7 @@ cargo nextest run -p scar --test trait_method_type_lists
 
 Expected: current contract comparison either loses role information or compares source generic names / partial shapes.
 
-- [ ] **Step 3: Add role-preserving type-list structures**
+- [x] **Step 3: Add role-preserving type-list structures**
 
 ```rust
 pub enum TypeListRole {
@@ -757,15 +757,15 @@ pub struct StructuralTypePath {
 
 Build one list in the stable order `ReturnTypeArgument`, `ValueParameter`, `ReturnType`; build impl-head lists separately from `TraitArgument` followed by `ImplTarget`.
 
-- [ ] **Step 4: Validate contract and impl in one fresh environment**
+- [x] **Step 4: Validate contract and impl in one fresh environment**
 
 Freshen all contract variables together, substitute Trait arguments and `Self`, then compare the impl method list in a second fresh namespace. Preserve repeated-variable relationships and perform an occurs check. Canonicalize method `where` constraints in that same environment and compare them as order-independent sets.
 
-- [ ] **Step 5: Replace old method-shape comparisons**
+- [x] **Step 5: Replace old method-shape comparisons**
 
 Remove comparisons based on rendered type strings, source generic identifiers, independently freshened parameter/return fragments, or value-parameter-only zips. Emit `TraitMethodTypeListArityMismatch`, `TraitMethodTypeListMismatch`, or `TraitMethodConstraintMismatch` with contract and impl origins.
 
-- [ ] **Step 6: Run focused and phase tests**
+- [x] **Step 6: Run focused and phase tests**
 
 ```bash
 cargo nextest run -p scar --test trait_method_type_lists
@@ -773,7 +773,7 @@ cargo nextest run -p scar
 cargo nextest run -p rune --test integration run_srt
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add crates/scar tests/fixtures

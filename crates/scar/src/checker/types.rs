@@ -2823,7 +2823,7 @@ impl Checker {
         instantiated
     }
 
-    fn diagnostic_tyvar_name(index: usize) -> String {
+    pub(super) fn diagnostic_tyvar_name(index: usize) -> String {
         let mut value = index;
         let mut name = String::new();
         loop {

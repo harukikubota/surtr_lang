@@ -223,6 +223,43 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
         _ => {}
     }
     match &input.data {
+        DiagnosticData::TraitMethodConstraint(value) => format!(
+            "Trait impl method `{}` has incompatible trait constraints",
+            value.method_name
+        ),
+        DiagnosticData::TraitMethodTypeList(value) => match input.reason {
+            TypeDiagnosticReason::TraitMethodTypeListArityMismatch => format!(
+                "Trait impl method `{}` has incompatible {} arity: expected {}, got {}",
+                value.method_name,
+                value.role.as_str(),
+                value
+                    .expected_count
+                    .expect("arity diagnostic carries expected count"),
+                value
+                    .actual_count
+                    .expect("arity diagnostic carries actual count")
+            ),
+            _ => {
+                let mut message = format!(
+                    "Trait impl method `{}` has an incompatible signature at {} {}",
+                    value.method_name,
+                    value.role.as_str(),
+                    value.ordinal
+                );
+                if !value.nested_path.is_empty() {
+                    message.push_str(&format!(
+                        " (type argument path: {})",
+                        value
+                            .nested_path
+                            .iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" → ")
+                    ));
+                }
+                message
+            }
+        },
         DiagnosticData::ReturnTypeArgument(value) => format!(
             "Return type argument {} for `{}` does not match the callable signature",
             value.ordinal, value.callable

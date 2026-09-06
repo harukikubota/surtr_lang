@@ -2647,7 +2647,7 @@ impl Checker {
         trait_info: &TraitInfo,
         method: &TraitMethodInfo,
         self_ty: &Ty,
-    ) -> Result<(Vec<Ty>, Ty, Vec<Ty>, Vec<Ty>), TypeError> {
+    ) -> Result<(Vec<Ty>, Ty, Vec<Ty>, Vec<Ty>, MethodTypeEnvironment), TypeError> {
         let mut trait_head_bindings = HashMap::new();
         for param in &trait_info.type_params {
             let fresh = self.env.fresh_tyvar();
@@ -2723,10 +2723,21 @@ impl Checker {
             .iter()
             .filter_map(|param| trait_head_bindings.get(&param.name).cloned())
             .collect::<Vec<_>>();
-        Ok((params, ret, trait_args, return_type_arguments))
+        Ok((
+            params,
+            ret,
+            trait_args,
+            return_type_arguments,
+            MethodTypeEnvironment {
+                head_bindings: trait_head_bindings,
+                bindings: tyvars,
+                self_ty: self_ty.clone(),
+                direct_inputs: direct_constructor_inputs,
+            },
+        ))
     }
 
-    fn expand_trait_self_apps(
+    pub(super) fn expand_trait_self_apps(
         &self,
         ty: Ty,
         target_ty: &Ty,
@@ -2876,38 +2887,6 @@ impl Checker {
         })
     }
 
-    fn alpha_normalized_signature(
-        &self,
-        return_type_arguments: &[Ty],
-        params: &[Ty],
-        ret: &Ty,
-    ) -> (Vec<Ty>, Vec<Ty>, Ty) {
-        let mut vars = Vec::new();
-        for return_type_argument in return_type_arguments {
-            Self::collect_ty_vars(return_type_argument, &mut vars);
-        }
-        for param in params {
-            Self::collect_ty_vars(param, &mut vars);
-        }
-        Self::collect_ty_vars(ret, &mut vars);
-        let mapping = vars
-            .into_iter()
-            .enumerate()
-            .map(|(ordinal, var)| (var, Ty::Var(ordinal as u32)))
-            .collect::<HashMap<_, _>>();
-        (
-            return_type_arguments
-                .iter()
-                .map(|param| self.substitute_ty_with_mapping(param, &mapping))
-                .collect(),
-            params
-                .iter()
-                .map(|param| self.substitute_ty_with_mapping(param, &mapping))
-                .collect(),
-            self.substitute_ty_with_mapping(ret, &mapping),
-        )
-    }
-
     pub(super) fn resolve_trait_impl_method_signature(
         &mut self,
         trait_info: &TraitInfo,
@@ -2916,7 +2895,7 @@ impl Checker {
         target_ast_ty: &AstTy,
         fallback_ret_ty: &AstTy,
         impl_where_clause: Option<&TypedWhereClause>,
-    ) -> Result<(Vec<Ty>, Ty, Vec<u32>, Vec<Ty>), TypeError> {
+    ) -> Result<(Vec<Ty>, Ty, Vec<u32>, Vec<Ty>, MethodTypeEnvironment), TypeError> {
         if trait_info.type_params.len() != trait_args.len() {
             return Err(TypeError {
                 structured: None,
@@ -2950,7 +2929,12 @@ impl Checker {
             trait_head_bindings.insert(param.name.clone(), resolved);
         }
 
-        tyvars.extend(trait_head_bindings.clone());
+        let head_bindings = tyvars.clone();
+        // User impl source has its own namespace. Only synthesized default
+        // bodies still originate in the contract's source namespace.
+        if method.display_name_override.is_some() {
+            tyvars.extend(trait_head_bindings.clone());
+        }
         self.seed_signature_type_params(&method.type_params, &mut tyvars);
         let mut direct_constructor_inputs = super::signatures::DirectConstructorInputs::default();
         let mut return_type_arguments = Vec::new();
@@ -2993,11 +2977,15 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret_source = method.ret_ty.as_ref().unwrap_or(fallback_ret_ty);
+        let mut return_bindings = tyvars.clone();
+        if method.ret_ty.is_none() {
+            return_bindings.extend(trait_head_bindings.clone());
+        }
         let ret = self.resolve_trait_signature_ast_ty_in_context(
             ret_source,
             TypeSyntaxContext::FunctionReturn,
             &self_ty,
-            &mut tyvars,
+            &mut return_bindings,
         )?;
         super::signatures::remember_direct_constructor_input(
             self,
@@ -3028,7 +3016,18 @@ impl Checker {
                 type_params.push(var);
             }
         }
-        Ok((params, ret, type_params, return_type_arguments))
+        Ok((
+            params,
+            ret,
+            type_params,
+            return_type_arguments,
+            MethodTypeEnvironment {
+                bindings: tyvars,
+                head_bindings,
+                self_ty,
+                direct_inputs: direct_constructor_inputs,
+            },
+        ))
     }
 
     pub(super) fn predeclare_traits(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
@@ -3150,7 +3149,7 @@ impl Checker {
             // remains trait-owned, but signature roles and provenance do not.
             for method in trait_info.methods.values() {
                 let self_ty = self.env.fresh_tyvar();
-                let (param_tys, ret, _, return_type_argument_tys) =
+                let (param_tys, ret, _, return_type_argument_tys, _) =
                     self.resolve_trait_method_signature(&trait_info, method, &self_ty)?;
                 self.callable_signatures.insert(
                     method.id.unique_id,
@@ -3320,6 +3319,21 @@ impl Checker {
                 }
             }
 
+            let head_environment = MethodTypeEnvironment {
+                head_bindings: target_param_vars
+                    .iter()
+                    .map(|(name, var)| (name.clone(), Ty::Var(*var)))
+                    .collect(),
+                bindings: target_param_vars
+                    .iter()
+                    .map(|(name, var)| (name.clone(), Ty::Var(*var)))
+                    .collect(),
+                self_ty: target_ty.clone(),
+                direct_inputs: super::signatures::DirectConstructorInputs::default(),
+            };
+            let (head_type_list, _) =
+                self.canonical_impl_head(trait_args, target_ast_ty, &head_environment, span)?;
+            let mut method_signature_lists = HashMap::new();
             for (method_name, impl_method) in &method_map {
                 let trait_method =
                     trait_info
@@ -3334,18 +3348,6 @@ impl Checker {
                             span: impl_method.span.clone(),
                             hint: None,
                         })?;
-                if trait_method.type_params.len() != impl_method.type_params.len() {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Trait impl method {}::{} has incompatible type parameter arity",
-                            trait_id.name, method_name
-                        ),
-                        span: impl_method.span.clone(),
-                        hint: None,
-                    });
-                }
-
                 if trait_method.attrs.visibility != impl_method.attrs.visibility {
                     return Err(TypeError {
                         structured: None,
@@ -3358,8 +3360,13 @@ impl Checker {
                     });
                 }
 
-                let (trait_params, trait_ret, trait_head_vars, trait_return_type_arguments) =
-                    self.resolve_trait_method_signature(&trait_info, trait_method, &target_ty)?;
+                let (
+                    trait_params,
+                    trait_ret,
+                    trait_head_vars,
+                    trait_return_type_arguments,
+                    mut contract_env,
+                ) = self.resolve_trait_method_signature(&trait_info, trait_method, &target_ty)?;
                 let trait_head_mapping = trait_head_vars
                     .into_iter()
                     .zip(trait_arg_tys.iter().cloned())
@@ -3385,7 +3392,7 @@ impl Checker {
                         self.expand_trait_self_apps(param, &target_ty, &constructor_slot_vars)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                let (impl_params, impl_ret, _, impl_return_type_arguments) = self
+                let (impl_params, impl_ret, _, impl_return_type_arguments, impl_env) = self
                     .resolve_trait_impl_method_signature(
                         &trait_info,
                         trait_args,
@@ -3395,81 +3402,90 @@ impl Checker {
                         where_clause.as_ref().map(TypedWhereClause::from).as_ref(),
                     )?;
 
-                if trait_params.len() != impl_params.len() {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Trait impl method {}::{} has incompatible arity",
-                            trait_id.name, method_name
-                        ),
-                        span: impl_method.span.clone(),
-                        hint: None,
-                    });
+                for ty in contract_env.bindings.values_mut() {
+                    *ty = self.substitute_ty_with_mapping(ty, &trait_head_mapping);
+                    *ty = self.expand_trait_self_apps(
+                        ty.clone(),
+                        &target_ty,
+                        &constructor_slot_vars,
+                    )?;
                 }
-
-                let expected_signature = self.alpha_normalized_signature(
+                let expected_env = self.canonical_contract_environment(
+                    &contract_env,
+                    &trait_info,
+                    &head_type_list,
+                    &constructor_slot_positions,
+                )?;
+                let expected = self.canonical_method_list(
                     &trait_return_type_arguments,
                     &trait_params,
                     &trait_ret,
-                );
-                let impl_signature = self.alpha_normalized_signature(
+                    &trait_method.return_type_arguments,
+                    &trait_method.value_parameters,
+                    &trait_method.ret_ty,
+                    trait_method.where_clause.as_ref(),
+                    &contract_env,
+                    &expected_env,
+                    None,
+                )?;
+                let (actual_head, mut actual_env) =
+                    self.canonical_impl_head(trait_args, target_ast_ty, &impl_env, span)?;
+                actual_env.slot_positions = constructor_slot_positions.clone();
+                if impl_method.display_name_override.is_some() {
+                    actual_env = self.canonical_contract_environment(
+                        &impl_env,
+                        &trait_info,
+                        &actual_head,
+                        &constructor_slot_positions,
+                    )?;
+                }
+                let return_env = if impl_method.ret_ty.is_none() {
+                    Some(self.canonical_contract_environment(
+                        &impl_env,
+                        &trait_info,
+                        &actual_head,
+                        &constructor_slot_positions,
+                    )?)
+                } else {
+                    None
+                };
+                let mut actual = self.canonical_method_list(
                     &impl_return_type_arguments,
                     &impl_params,
                     &impl_ret,
-                );
-                if expected_signature != impl_signature {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Trait impl method {}::{} has an incompatible signature",
-                            trait_id.name, method_name
-                        ),
-                        span: impl_method.span.clone(),
-                        hint: Some(format!(
-                            "Expected ({}) -> {}, got ({}) -> {}",
-                            trait_params
-                                .iter()
-                                .map(|ty| self.ty_name(ty))
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                            self.ty_name(&trait_ret),
-                            impl_params
-                                .iter()
-                                .map(|ty| self.ty_name(ty))
-                                .collect::<Vec<_>>()
-                                .join(", "),
-                            self.ty_name(&impl_ret)
-                        )),
-                    });
-                }
-
-                if self.canonical_where_clause_key(
-                    trait_method.where_clause.as_ref(),
-                    &Self::method_constraint_vars(
-                        &trait_method.value_parameters,
-                        &trait_method.ret_ty,
-                        &trait_method.return_type_arguments,
-                        &trait_method.type_params,
-                    ),
-                ) != self.canonical_where_clause_key(
+                    &impl_method.return_type_arguments,
+                    &impl_method.value_parameters,
+                    impl_method.ret_ty.as_ref().unwrap_or(&trait_method.ret_ty),
                     impl_method.where_clause.as_ref(),
-                    &Self::method_constraint_vars(
-                        &impl_method.value_parameters,
-                        impl_method.ret_ty.as_ref().unwrap_or(&trait_method.ret_ty),
-                        &impl_method.return_type_arguments,
-                        &impl_method.type_params,
-                    ),
-                ) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Trait impl method {}::{} has incompatible trait constraints",
-                            trait_id.name, method_name
-                        ),
-                        span: impl_method.span.clone(),
-                        hint: Some("The impl method must use the same where constraints as the trait method".into()),
-                    });
+                    &impl_env,
+                    &actual_env,
+                    return_env.as_ref(),
+                )?;
+                let mapping = self.validate_trait_method_contract(
+                    &head_type_list,
+                    &actual_head,
+                    &expected,
+                    &actual,
+                    method_name,
+                    &trait_method.span,
+                    &impl_method.span,
+                    trait_method.where_clause.as_ref(),
+                    impl_method.where_clause.as_ref(),
+                )?;
+                // Store method variables in the same namespace as the impl
+                // head; do not rebuild a receiver-only mapping at a later use.
+                for entry in &mut actual.entries {
+                    entry.ty = entry.ty.substitute(&mapping);
                 }
+                for constraint in &mut actual.where_constraints.constraints {
+                    constraint.subject = constraint.subject.substitute(&mapping);
+                    if let CanonicalMethodBound::TypeConstructor(slots) = &mut constraint.bound {
+                        for slot in slots {
+                            *slot = slot.substitute(&mapping);
+                        }
+                    }
+                }
+                method_signature_lists.insert(method_name.clone(), actual);
             }
 
             let existing_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
@@ -3548,6 +3564,8 @@ impl Checker {
             self.trait_impls.insert(
                 impl_key.clone(),
                 TraitImplInfo {
+                    head_type_list,
+                    method_signature_lists,
                     trait_id: trait_id.clone(),
                     trait_args: trait_args.clone(),
                     trait_arg_tys,
@@ -3571,142 +3589,6 @@ impl Checker {
         }
 
         Ok(())
-    }
-
-    /// Constraint equality for trait methods is alpha-equivalence, not a
-    /// comparison of source generic spellings or declaration order.
-    fn canonical_where_clause_key(
-        &self,
-        clause: Option<&TypedWhereClause>,
-        vars: &HashMap<String, usize>,
-    ) -> Option<String> {
-        let canonical_ty = |ty: &AstTy| Self::canonical_constraint_ty_key(ty, &vars);
-        clause.map(|clause| {
-            let mut constraints = clause
-                .constraints
-                .iter()
-                .map(|constraint| {
-                    let mut bounds = constraint
-                        .bounds
-                        .iter()
-                        .map(|bound| match bound {
-                            TypedWhereConstraintRhs::Trait { trait_id: id, .. } => format!(
-                                "trait:{}",
-                                id.qualified_name.as_deref().unwrap_or(&id.name)
-                            ),
-                            TypedWhereConstraintRhs::TypeConstructor { slots, .. } => format!(
-                                "type:{}",
-                                slots
-                                    .iter()
-                                    .map(&canonical_ty)
-                                    .collect::<Vec<_>>()
-                                    .join(",")
-                            ),
-                            TypedWhereConstraintRhs::TraitSlot {
-                                trait_id,
-                                slot_name,
-                                slot_ordinal,
-                                ..
-                            } => format!(
-                                "slot:{}:{}:{}",
-                                trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name),
-                                slot_name,
-                                slot_ordinal
-                            ),
-                        })
-                        .collect::<Vec<_>>();
-                    bounds.sort();
-                    bounds.dedup();
-                    format!("{}:{}", canonical_ty(&constraint.subject), bounds.join("+"))
-                })
-                .collect::<Vec<_>>();
-            constraints.sort();
-            constraints.dedup();
-            constraints.join(";")
-        })
-    }
-
-    fn method_constraint_vars(
-        params: &[ResolvedValueParameter],
-        ret: &AstTy,
-        return_type_arguments: &[ResolvedReturnTypeArgument],
-        type_params: &[ResolvedTypeParam],
-    ) -> HashMap<String, usize> {
-        let mut names = type_params
-            .iter()
-            .map(|param| param.name.clone())
-            .collect::<Vec<_>>();
-        for ty in params
-            .iter()
-            .map(|param| &param.ty)
-            .chain(std::iter::once(ret))
-            .chain(return_type_arguments.iter().map(|argument| &argument.ty))
-        {
-            Self::collect_constraint_var_names(ty, &mut names);
-        }
-        names
-            .into_iter()
-            .filter(|name| name.starts_with('$'))
-            .enumerate()
-            .map(|(ordinal, name)| (name, ordinal))
-            .collect()
-    }
-
-    fn collect_constraint_var_names(ty: &AstTy, names: &mut Vec<String>) {
-        match ty {
-            AstTy::Named(_, name) => {
-                if name.starts_with('$') && !names.iter().any(|known| known == name) {
-                    names.push(name.clone());
-                }
-            }
-            AstTy::Generic(_, _, args) | AstTy::Tuple(_, args) => {
-                for arg in args {
-                    Self::collect_constraint_var_names(arg, names);
-                }
-            }
-            AstTy::Func(_, params, ret) => {
-                for param in params {
-                    Self::collect_constraint_var_names(param, names);
-                }
-                Self::collect_constraint_var_names(ret, names);
-            }
-            AstTy::ImplTrait(..) => {}
-        }
-    }
-
-    fn canonical_constraint_ty_key(ty: &AstTy, vars: &HashMap<String, usize>) -> String {
-        match ty {
-            AstTy::Named(_, name) => vars
-                .get(name)
-                .map(|ordinal| format!("Var({ordinal})"))
-                .unwrap_or_else(|| format!("Named({})", Self::surface_name(name))),
-            AstTy::ImplTrait(_, name) => format!("Impl({})", Self::surface_name(name)),
-            AstTy::Generic(_, name, args) => format!(
-                "Generic({};{})",
-                Self::surface_name(name),
-                args.iter()
-                    .map(|arg| Self::canonical_constraint_ty_key(arg, vars))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ),
-            AstTy::Tuple(_, items) => format!(
-                "Tuple({})",
-                items
-                    .iter()
-                    .map(|item| Self::canonical_constraint_ty_key(item, vars))
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ),
-            AstTy::Func(_, params, ret) => format!(
-                "Func({}->{})",
-                params
-                    .iter()
-                    .map(|param| Self::canonical_constraint_ty_key(param, vars))
-                    .collect::<Vec<_>>()
-                    .join(","),
-                Self::canonical_constraint_ty_key(ret, vars)
-            ),
-        }
     }
 
     fn validate_parent_impl_chain(
@@ -4297,7 +4179,7 @@ impl Checker {
                             span: method.span.clone(),
                             hint: None,
                         })?;
-                let (param_tys, ret, type_params, return_type_argument_tys) = self
+                let (param_tys, ret, type_params, return_type_argument_tys, _) = self
                     .resolve_trait_impl_method_signature(
                         &trait_info,
                         &trait_impl.trait_args,

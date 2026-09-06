@@ -294,3 +294,102 @@ fn surtr_assert_eq_template_renders_terms_through_ariadne() {
     assert!(rendered.contains("RHS term: \"bad\""));
     assert!(rendered.contains("assert_eq failed: expected \"tes\", got \"bad\""));
 }
+
+#[test]
+fn trait_method_type_list_preserves_path_and_both_origins() {
+    use crate::{TraitMethodTypeListData, TypeListRole};
+    let input = StructuredDiagnostic {
+        reason: TypeDiagnosticReason::TraitMethodTypeListMismatch,
+        origin: DiagnosticOrigin::Declaration,
+        data: DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
+            method_name: "Build::build".into(),
+            role: TypeListRole::ReturnType,
+            ordinal: 0,
+            nested_path: vec![0],
+            expected_type: "Box<Int>".into(),
+            actual_type: "Box<String>".into(),
+            expected_count: None,
+            actual_count: None,
+        }),
+        primary: SourceFact::typed(
+            SourceRole::Impl,
+            SourceId(1),
+            Span { start: 10, end: 20 },
+            "Box<String>",
+        ),
+        related: vec![SourceFact::typed(
+            SourceRole::Contract,
+            SourceId(0),
+            Span { start: 3, end: 9 },
+            "Box<Int>",
+        )],
+        remediation: None,
+    };
+    let spec = structured_type_error_spec(&input);
+    assert!(spec.message.contains("Build::build"));
+    assert!(spec.message.contains("ReturnType"));
+    assert!(spec.message.contains("type argument path: 0"));
+    assert_eq!(spec.labels[0].source_id, Some(SourceId(1)));
+    assert_eq!(spec.labels[0].message, "Impl: Box<String>");
+    assert_eq!(spec.labels[1].source_id, Some(SourceId(0)));
+    assert_eq!(spec.labels[1].message, "Contract: Box<Int>");
+    let data = input.data.to_json_value();
+    assert_eq!(data["kind"], "TraitMethodTypeList");
+    assert_eq!(data["role"], "ReturnType");
+    assert_eq!(data["ordinal"], 0);
+    assert_eq!(data["nested_path"], serde_json::json!([0]));
+    assert_eq!(data["expected_type"], "Box<Int>");
+    assert_eq!(data["actual_type"], "Box<String>");
+}
+
+#[test]
+fn trait_method_constraints_preserve_expected_and_actual_sets() {
+    use crate::TraitMethodConstraintData;
+    let input = StructuredDiagnostic {
+        reason: TypeDiagnosticReason::TraitMethodConstraintMismatch,
+        origin: DiagnosticOrigin::Declaration,
+        data: DiagnosticData::TraitMethodConstraint(TraitMethodConstraintData {
+            method_name: "Display::show".into(),
+            expected_constraints: vec!["$0: Eq".into()],
+            actual_constraints: vec!["$0: Compare".into()],
+        }),
+        primary: SourceFact::untyped(SourceRole::Impl, SourceId(0), Span { start: 0, end: 1 }),
+        related: vec![],
+        remediation: None,
+    };
+    let spec = structured_type_error_spec(&input);
+    assert!(spec.message.contains("Display::show"));
+    assert!(spec.message.contains("incompatible trait constraints"));
+    let data = input.data.to_json_value();
+    assert_eq!(data["kind"], "TraitMethodConstraint");
+    assert_eq!(data["expected_constraints"], serde_json::json!(["$0: Eq"]));
+    assert_eq!(
+        data["actual_constraints"],
+        serde_json::json!(["$0: Compare"])
+    );
+}
+
+#[test]
+fn trait_method_arity_displays_expected_and_actual_counts() {
+    use crate::{TraitMethodTypeListData, TypeListRole};
+    let input = StructuredDiagnostic {
+        reason: TypeDiagnosticReason::TraitMethodTypeListArityMismatch,
+        origin: DiagnosticOrigin::Declaration,
+        data: DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
+            method_name: "Make::make".into(),
+            role: TypeListRole::ReturnTypeArgument,
+            ordinal: 0,
+            nested_path: vec![],
+            expected_type: String::new(),
+            actual_type: String::new(),
+            expected_count: Some(1),
+            actual_count: Some(0),
+        }),
+        primary: SourceFact::untyped(SourceRole::Impl, SourceId(0), Span { start: 0, end: 1 }),
+        related: vec![],
+        remediation: None,
+    };
+    let spec = structured_type_error_spec(&input);
+    assert!(spec.message.contains("ReturnTypeArgument"));
+    assert!(spec.message.contains("expected 1, got 0"));
+}

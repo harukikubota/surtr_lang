@@ -1,0 +1,2 @@
+deftrait Copy { def copy(self: Self, value: Int) -> Int }
+impl Copy for Int { def copy(self: Self) -> Int { 0 } }

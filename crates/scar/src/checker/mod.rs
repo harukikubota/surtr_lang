@@ -28,7 +28,9 @@ mod patterns;
 mod predeclare;
 mod signatures;
 mod specialize;
+mod trait_selection;
 mod types;
+use trait_selection::MethodTypeEnvironment;
 
 #[derive(Debug, Clone, Copy)]
 enum ProfileEvent {
@@ -459,6 +461,8 @@ struct TraitImplMethodInfo {
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitImplInfo {
+    head_type_list: ImplHeadTypeList,
+    method_signature_lists: HashMap<String, MethodSignatureTypeList>,
     trait_id: ResolvedId,
     trait_args: Vec<AstTy>,
     trait_arg_tys: Vec<Ty>,

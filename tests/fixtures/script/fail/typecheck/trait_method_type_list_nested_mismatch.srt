@@ -1,0 +1,4 @@
+defstruct Box<$T> { val: $T }
+impl Box { def new(val: $T) -> Box<$T> { Box { val: val } } }
+deftrait Make { def make(self: Self) -> Box<Int> }
+impl Make for Int { def make(self: Self) -> Box<String> { Box::new("x") } }
