@@ -1,2 +1,2 @@
 phase: typecheck
-contains: return type arguments for `make` cannot be inferred
+contains: return type arguments for `guard` cannot be inferred

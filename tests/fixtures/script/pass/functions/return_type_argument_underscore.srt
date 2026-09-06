@@ -1,0 +1,2 @@
+value: Option<Unit> = guard::<_>(True)
+print(inspect(value))

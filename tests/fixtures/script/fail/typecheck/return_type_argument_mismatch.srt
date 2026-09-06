@@ -1,0 +1,2 @@
+def make::<$A>() -> List<$A> { [] }
+value: List<String> = make::<Int>()

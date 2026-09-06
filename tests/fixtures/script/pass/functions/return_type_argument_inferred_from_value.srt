@@ -1,0 +1,2 @@
+value = try_from::<Int>("42")
+print(inspect(value))

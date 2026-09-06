@@ -4435,8 +4435,8 @@ where
 }
 
 #[test]
-fn constructor_application_parameter_witnesses_are_scoped_by_signature_position() {
-    typecheck_without_std_prelude(
+fn same_family_constructor_parameters_share_one_witness() {
+    let err = typecheck_without_std_prelude(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -4464,12 +4464,17 @@ def accept(left: Context<Int>, right: Context<String>) -> Unit { () }
 
 accept(Left::Left(1), Right::Right("ok"))"#,
     )
-    .expect("each direct parameter position must own an independent constructor witness");
+    .expect_err("same-family direct parameters must share one constructor witness");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::TypeConstructorFamilyMismatch),
+        "{err:?}"
+    );
 }
 
 #[test]
-fn constructor_application_result_witness_is_fresh_and_resolves_from_the_body() {
-    let typed = typecheck_without_std_prelude(
+fn constructor_application_result_shares_the_input_witness() {
+    let err = typecheck_without_std_prelude(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -4499,24 +4504,17 @@ def replace(value: Context<Int>) -> Context<String> {
 
 result: Right<String> = replace(Left::Left(1))"#,
     )
-    .expect("a contextual result must resolve independently from its input witness");
-
-    let replace = typed
-        .iter()
-        .find_map(|node| match &node.node {
-            TypedInner::Def(_, id, _, _, ret_ty, _, _, _) if id.name == "replace" => Some(ret_ty),
-            _ => None,
-        })
-        .expect("replace definition must be present");
+    .expect_err("a direct result must share the same-family input witness");
     assert!(
-        matches!(replace, Ty::Enum(name, args) if name.ends_with("Right") && args == &[Ty::Str]),
-        "contextual result witness must be erased to its concrete constructor, got {replace:?}"
+        err.message
+            .contains("Argument type mismatch: expected Right<Int>, got Left<Int>"),
+        "{err:?}"
     );
 }
 
 #[test]
-fn constructor_application_result_rejects_an_unresolved_input_witness() {
-    let err = typecheck_without_std_prelude(
+fn constructor_application_result_accepts_the_shared_abstract_input_witness() {
+    typecheck_without_std_prelude(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -4524,12 +4522,7 @@ where
 
 def preserve(value: Context<Int>) -> Context<Int> { value }"#,
     )
-    .expect_err("a fresh result witness cannot be inferred from an abstract input witness");
-
-    assert!(
-        err.message.contains("UnresolvedConstructorResult"),
-        "{err:?}"
-    );
+    .expect("the direct result reuses the abstract input witness");
 }
 
 #[test]
@@ -6081,7 +6074,11 @@ fn constructor_context_bind_preserves_candidate_failures() {
 fn constructor_context_bind_rolls_back_rejected_candidates() {
     let typed =
         typecheck_with_builtin_prelude(r#"bound = Monad::return(1) |>= {|value| [value + 1]}"#);
-    let bind = typed.last().expect("binding should exist");
+    let bind = typed
+        .iter()
+        .rev()
+        .find(|node| matches!(node.node, TypedInner::Bind(..)))
+        .expect("binding should exist");
     let TypedInner::Bind(_, rhs) = &bind.node else {
         panic!("expected binding, got {:?}", bind.node);
     };
@@ -8233,8 +8230,9 @@ fn singleton_agent_pid_surface_returns_concrete_pid() {
     let typed = scar::typecheck_staged_program(resolved).expect("typecheck should succeed");
     let rhs = typed
         .nodes
-        .last()
-        .and_then(|node| match &node.node {
+        .iter()
+        .rev()
+        .find_map(|node| match &node.node {
             TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
             _ => None,
         })
@@ -8279,8 +8277,9 @@ fn singleton_genserver_pid_surface_returns_concrete_pid() {
     let typed = scar::typecheck_staged_program(resolved).expect("typecheck should succeed");
     let rhs = typed
         .nodes
-        .last()
-        .and_then(|node| match &node.node {
+        .iter()
+        .rev()
+        .find_map(|node| match &node.node {
             TypedInner::Bind(_, rhs) => Some(rhs.as_ref()),
             _ => None,
         })
@@ -9015,14 +9014,16 @@ again: Int = convert_fn("")"#,
 }
 
 #[test]
-fn explicit_type_arguments_are_rejected_for_regular_callables() {
+fn regular_callable_rejects_undeclared_return_type_arguments() {
     let resolved = resolve_with_builtin_prelude(
         r#"def identity(value: $A) -> $A { value }
 bad: Int = identity::<Int>(1)"#,
     );
-    let err = typecheck(resolved).expect_err("regular callables must reject explicit arguments");
-    assert!(
-        err.message.contains("only allowed for trait helpers"),
+    let err = typecheck(resolved)
+        .expect_err("a regular callable without RTA declarations must reject explicit RTA");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ReturnTypeArgumentArityMismatch),
         "{err:?}"
     );
 }

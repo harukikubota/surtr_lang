@@ -1,0 +1,15 @@
+def make::<$A>() -> List<$A> { [] }
+def outer::<$A>() -> (-> List<$A>) { &make }
+
+factory: (-> List<Int>) = &make::<Int>
+print(inspect(factory()))
+
+guard_option: (Boolean -> Option<Unit>) = &guard::<Option>
+print(inspect(guard_option(True)))
+
+forwarded: (-> List<Int>) = outer::<Int>()
+print(inspect(forwarded()))
+
+closure_factory: (-> (-> List<Int>)) = {|| &make}
+nested = closure_factory()
+print(inspect(nested()))

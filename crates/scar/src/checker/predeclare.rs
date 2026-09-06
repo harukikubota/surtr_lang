@@ -1811,10 +1811,10 @@ impl Checker {
             key: &str,
             traits: &HashMap<String, TraitInfo>,
             visiting: &mut Vec<String>,
-            resolved: &mut HashMap<String, Vec<String>>,
-        ) -> Result<Vec<String>, TypeError> {
-            if let Some(slots) = resolved.get(key) {
-                return Ok(slots.clone());
+            resolved: &mut HashMap<String, (Vec<String>, Option<String>)>,
+        ) -> Result<(Vec<String>, Option<String>), TypeError> {
+            if let Some(result) = resolved.get(key) {
+                return Ok(result.clone());
             }
             if let Some(start) = visiting.iter().position(|item| item == key) {
                 let mut cycle = visiting[start..].to_vec();
@@ -1835,13 +1835,14 @@ impl Checker {
             })?;
             visiting.push(key.to_string());
             let mut slots = info.constructor_slots.clone();
+            let mut inherited_root: Option<String> = None;
             for parent in &info.parents {
                 let parent_key = parent
                     .trait_id
                     .qualified_name
                     .clone()
                     .unwrap_or_else(|| parent.trait_id.name.clone());
-                let parent_slots = visit(&parent_key, traits, visiting, resolved)?;
+                let (parent_slots, parent_root) = visit(&parent_key, traits, visiting, resolved)?;
                 if slots.is_empty() {
                     slots = parent_slots;
                 } else if !parent_slots.is_empty() && slots.len() != parent_slots.len() {
@@ -1858,10 +1859,29 @@ impl Checker {
                         hint: None,
                     });
                 }
+                if let Some(parent_root) = parent_root {
+                    if inherited_root
+                        .as_ref()
+                        .is_some_and(|root| root != &parent_root)
+                    {
+                        return Err(TypeError {
+                            structured: None,
+                            message: format!(
+                                "Trait {} inherits incompatible type-constructor families",
+                                info.id.name
+                            ),
+                            span: info.id.span.clone(),
+                            hint: None,
+                        });
+                    }
+                    inherited_root = Some(parent_root);
+                }
             }
             visiting.pop();
-            resolved.insert(key.to_string(), slots.clone());
-            Ok(slots)
+            let root = inherited_root.or_else(|| (!slots.is_empty()).then(|| key.to_string()));
+            let result = (slots, root);
+            resolved.insert(key.to_string(), result.clone());
+            Ok(result)
         }
 
         let keys = self.traits.keys().cloned().collect::<Vec<_>>();
@@ -1870,9 +1890,10 @@ impl Checker {
         for key in &keys {
             visit(key, &snapshot, &mut Vec::new(), &mut resolved)?;
         }
-        for (key, slots) in resolved {
+        for (key, (slots, root)) in resolved {
             if let Some(info) = self.traits.get_mut(&key) {
                 info.constructor_slots = slots;
+                info.constructor_root = root;
             }
         }
         for info in self.traits.values() {
@@ -2666,6 +2687,12 @@ impl Checker {
                     self_ty,
                     &mut tyvars,
                 )?;
+                super::signatures::remember_direct_constructor_input(
+                    self,
+                    &param.ty,
+                    &ty,
+                    &mut direct_constructor_inputs,
+                );
                 Ok(super::signatures::coalesce_direct_constructor_inputs(
                     self,
                     ty,
@@ -2679,6 +2706,12 @@ impl Checker {
             self_ty,
             &mut tyvars,
         )?;
+        super::signatures::remember_direct_constructor_input(
+            self,
+            &method.ret_ty,
+            &ret,
+            &mut direct_constructor_inputs,
+        );
         let ret = super::signatures::coalesce_direct_constructor_inputs(
             self,
             ret,
@@ -2786,11 +2819,13 @@ impl Checker {
             Ty::UserFunc {
                 fun_idx,
                 type_params,
+                call_substitution,
                 params,
                 ret,
             } => Ty::UserFunc {
                 fun_idx,
                 type_params,
+                call_substitution,
                 params: params
                     .into_iter()
                     .map(|param| {
@@ -2944,6 +2979,12 @@ impl Checker {
                     &self_ty,
                     &mut tyvars,
                 )?;
+                super::signatures::remember_direct_constructor_input(
+                    self,
+                    &param.ty,
+                    &ty,
+                    &mut direct_constructor_inputs,
+                );
                 Ok(super::signatures::coalesce_direct_constructor_inputs(
                     self,
                     ty,
@@ -2958,6 +2999,12 @@ impl Checker {
             &self_ty,
             &mut tyvars,
         )?;
+        super::signatures::remember_direct_constructor_input(
+            self,
+            ret_source,
+            &ret,
+            &mut direct_constructor_inputs,
+        );
         let ret = super::signatures::coalesce_direct_constructor_inputs(
             self,
             ret,
@@ -4028,6 +4075,12 @@ impl Checker {
                                 TypeSyntaxContext::General,
                                 &mut tyvars,
                             )?;
+                            super::signatures::remember_direct_constructor_input(
+                                self,
+                                &param.ty,
+                                &param_ty,
+                                &mut direct_constructor_inputs,
+                            );
                             let param_ty = super::signatures::coalesce_direct_constructor_inputs(
                                 self,
                                 param_ty,
@@ -4057,6 +4110,14 @@ impl Checker {
                         )?,
                         None => Ty::Unit,
                     };
+                    if let Some(ret_ty) = ret_ty {
+                        super::signatures::remember_direct_constructor_input(
+                            self,
+                            ret_ty,
+                            &ret,
+                            &mut direct_constructor_inputs,
+                        );
+                    }
                     let ret = super::signatures::coalesce_direct_constructor_inputs(
                         self,
                         ret,
@@ -4092,6 +4153,7 @@ impl Checker {
                         Ty::UserFunc {
                             fun_idx,
                             type_params,
+                            call_substitution: Vec::new(),
                             params: param_tys.clone(),
                             ret: Box::new(ret.clone()),
                         },
@@ -4147,6 +4209,7 @@ impl Checker {
                         Ty::UserFunc {
                             fun_idx,
                             type_params,
+                            call_substitution: Vec::new(),
                             params: vec![param_ty],
                             ret: Box::new(ret),
                         },
@@ -4167,6 +4230,7 @@ impl Checker {
                         Ty::UserFunc {
                             fun_idx,
                             type_params: Vec::new(),
+                            call_substitution: Vec::new(),
                             params: param_tys,
                             ret: Box::new(Ty::Error),
                         },
@@ -4252,6 +4316,7 @@ impl Checker {
                     Ty::UserFunc {
                         fun_idx,
                         type_params,
+                        call_substitution: Vec::new(),
                         params: param_tys.clone(),
                         ret: Box::new(ret.clone()),
                     },

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: expects 1 return type argument(s), got 2

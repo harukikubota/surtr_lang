@@ -1,0 +1,9 @@
+def make::<$A>() -> (Int -> $A) { make() }
+
+def prepare() -> Unit {
+  callable = make()
+  value = callable(1)
+  ()
+}
+
+print("ok")

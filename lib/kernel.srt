@@ -16,6 +16,17 @@ xldr(2)> ("alice", 42)
 @autoimport
 defmod Kernel {
   @doc """
+  Construct `Unit` in an `Alternative` context when `condition` is true,
+  otherwise return that context's empty value.
+
+  The context can be selected explicitly (`guard::<Option>(True)`) or inferred
+  from the expected result type (`value: Option<Unit> = guard(True)`).
+  """
+  def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> {
+    if(condition, Applicative::pure(()), Alternative::empty())
+  }
+
+  @doc """
   Conditional execution for side-effect-oriented code paths.
 
   The declared type is:

@@ -455,6 +455,7 @@ mod tests {
             ty: Ty::UserFunc {
                 fun_idx,
                 type_params: Vec::new(),
+                call_substitution: Vec::new(),
                 params,
                 ret: Box::new(ret),
             },

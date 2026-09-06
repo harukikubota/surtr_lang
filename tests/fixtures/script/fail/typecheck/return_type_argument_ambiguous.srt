@@ -1,2 +1,1 @@
-def make::<$A>() -> List<$A> { [] }
-make()
+value = guard(True)

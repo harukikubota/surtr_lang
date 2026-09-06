@@ -34,6 +34,13 @@ impl Checker {
         self.unique_constructor_trait_key(name)
     }
 
+    pub(super) fn constructor_family_key(&self, trait_key: &str) -> String {
+        self.traits
+            .get(trait_key)
+            .and_then(|info| info.constructor_root.clone())
+            .unwrap_or_else(|| trait_key.to_string())
+    }
+
     fn unique_constructor_trait_key(&self, name: &str) -> Option<String> {
         let mut candidates = self
             .traits
@@ -121,7 +128,7 @@ impl Checker {
         None
     }
 
-    fn apply_constructor_application(
+    pub(super) fn apply_constructor_application(
         &self,
         witness_source: &Ty,
         witness: &Ty,
@@ -1107,6 +1114,141 @@ impl Checker {
         }
     }
 
+    /// Resolve a call-site ReturnTypeArgument according to its declared slot.
+    /// Ordinary type slots use the normal complete-type grammar. A direct
+    /// TypeCtorTrait slot accepts a bare constructor head and gives its
+    /// implementation-controlled slots fresh placeholders.
+    pub(super) fn resolve_call_site_return_type_argument(
+        &mut self,
+        slot_ty: &Ty,
+        ast_ty: &AstTy,
+    ) -> Result<Ty, TypeError> {
+        let is_constructor_slot = matches!(
+            slot_ty,
+            Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some()
+        );
+        if !is_constructor_slot {
+            return self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General);
+        }
+
+        let AstTy::Named(span, name) = ast_ty else {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Return type argument expects a bare type constructor head, got {}",
+                    Self::surface_ast_ty(ast_ty)
+                ),
+                span: Self::ast_ty_span(ast_ty).clone(),
+                hint: Some("Remove the constructor's payload arguments at this call site.".into()),
+            });
+        };
+        if Self::surface_name(name) == "_" {
+            return Ok(self.env.fresh_tyvar());
+        }
+
+        let trait_key = match slot_ty {
+            Ty::SelfApp(items) => {
+                Self::constructor_application_parts(items).and_then(|(witness, _)| match witness {
+                    Ty::Var(var) => self.constructor_witness_traits.get(var).cloned(),
+                    _ => None,
+                })
+            }
+            _ => None,
+        };
+        if let Some(trait_key) = trait_key {
+            let requested = Self::surface_name(name);
+            let mut candidates = self
+                .trait_impl_candidate_keys(&trait_key)
+                .into_iter()
+                .filter_map(|key| self.trait_impls.get(&key))
+                .filter(|info| Self::surface_name(&info.target_name) == requested)
+                .cloned()
+                .collect::<Vec<_>>();
+            if candidates.len() > 1 {
+                return Err(TypeError {
+                    structured: None,
+                    message: format!(
+                        "Type constructor {} has multiple {} implementations",
+                        name,
+                        self.trait_display_name(&trait_key)
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+            if let Some(info) = candidates.pop() {
+                let mapping = info
+                    .type_param_vars
+                    .iter()
+                    .map(|var| {
+                        let replacement = if info.constructor_slot_vars.contains(var) {
+                            Ty::Hole
+                        } else {
+                            self.env.fresh_tyvar()
+                        };
+                        (*var, replacement)
+                    })
+                    .collect::<HashMap<_, _>>();
+                return Ok(self.substitute_ty_with_mapping(&info.target_ty, &mapping));
+            }
+        }
+
+        let Some(def) = self.env.lookup_type_def(name).cloned() else {
+            let mut fresh = || self.env.fresh_tyvar();
+            let builtin_head = match builtin_type_name(Self::surface_name(name)) {
+                Some(TypeName::List) => Some(Ty::List(Box::new(fresh()))),
+                Some(TypeName::HashMap) => Some(Ty::Enum("HashMap".into(), vec![fresh()])),
+                Some(TypeName::Generator) => {
+                    Some(Ty::Enum("Generator".into(), vec![fresh(), fresh()]))
+                }
+                Some(TypeName::Result) => Some(Ty::Result(Box::new(fresh()), Box::new(Ty::Error))),
+                Some(TypeName::StandbyInit) => Some(Ty::Enum("StandbyInit".into(), vec![fresh()])),
+                Some(TypeName::Lazy) => Some(Ty::Lazy(Box::new(fresh()))),
+                Some(TypeName::TaskHandle) => Some(Ty::Enum("TaskHandle".into(), vec![fresh()])),
+                _ => None,
+            };
+            return builtin_head.ok_or_else(|| TypeError {
+                structured: None,
+                message: format!("Unknown type constructor: {}", name),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        if def.type_params.is_empty() {
+            return Err(TypeError {
+                structured: None,
+                message: format!("Type {} is not a type constructor", name),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let args = (0..def.type_params.len())
+            .map(|_| self.env.fresh_tyvar())
+            .collect::<Vec<_>>();
+        let ty = match def.kind {
+            crate::env::TypeKind::Struct => Ty::Struct(
+                def.name.clone(),
+                self.instantiate_type_def_fields(&def, &args),
+            ),
+            crate::env::TypeKind::Record => Ty::Record(
+                def.name.clone(),
+                self.instantiate_type_def_fields(&def, &args),
+            ),
+            crate::env::TypeKind::Enum => Self::builtin_special_enum_ty(&def.name, &args)
+                .unwrap_or_else(|| Ty::Enum(def.name.clone(), args)),
+            crate::env::TypeKind::ConcreteError => {
+                return Err(TypeError {
+                    structured: None,
+                    message: format!("Error type {} is not a type constructor", name),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+        };
+        Ok(ty)
+    }
+
     pub(super) fn resolve_builtin_ast_ty(
         &mut self,
         ast_ty: &AstTy,
@@ -1975,12 +2117,14 @@ impl Checker {
                         type_params: left_type_params,
                         params: left_params,
                         ret: left_ret,
+                        ..
                     },
                     Ty::UserFunc {
                         fun_idx: right_idx,
                         type_params: right_type_params,
                         params: right_params,
                         ret: right_ret,
+                        ..
                     },
                 ) => {
                     left_idx == right_idx
@@ -2367,11 +2511,16 @@ impl Checker {
             Ty::UserFunc {
                 fun_idx,
                 type_params,
+                call_substitution,
                 params,
                 ret,
             } => Ty::UserFunc {
                 fun_idx: *fun_idx,
                 type_params: type_params.clone(),
+                call_substitution: call_substitution
+                    .iter()
+                    .map(|(var, ty)| (*var, self.resolve_ty(ty)))
+                    .collect(),
                 params: params.iter().map(|param| self.resolve_ty(param)).collect(),
                 ret: Box::new(self.resolve_ty(ret)),
             },
@@ -2465,11 +2614,16 @@ impl Checker {
             Ty::UserFunc {
                 fun_idx,
                 type_params,
+                call_substitution,
                 params,
                 ret,
             } => Ty::UserFunc {
                 fun_idx: *fun_idx,
                 type_params: type_params.clone(),
+                call_substitution: call_substitution
+                    .iter()
+                    .map(|(var, ty)| (*var, self.instantiate_ty_with_fresh(ty, fresh)))
+                    .collect(),
                 params: params
                     .iter()
                     .map(|param| self.instantiate_ty_with_fresh(param, fresh))
@@ -2569,11 +2723,16 @@ impl Checker {
             Ty::UserFunc {
                 fun_idx,
                 type_params,
+                call_substitution,
                 params,
                 ret,
             } => Ty::UserFunc {
                 fun_idx: *fun_idx,
                 type_params: type_params.clone(),
+                call_substitution: call_substitution
+                    .iter()
+                    .map(|(var, ty)| (*var, self.substitute_type_def_ty(ty, bindings)))
+                    .collect(),
                 params: params
                     .iter()
                     .map(|param| self.substitute_type_def_ty(param, bindings))

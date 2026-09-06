@@ -34,29 +34,7 @@ impl Checker {
 
         for stmt in stmts {
             if let Some(fun_idx) = Self::def_fun_idx(&stmt) {
-                // A valid return-only input may remain polymorphic when an
-                // omitted call-site argument has no expected-result witness.
-                // Keep that ordinary body available to Forge; definitions
-                // whose declared input is also value-introduced still take
-                // the normal specialization path.
-                let retain_generic_fallback = matches!(
-                    &stmt.node,
-                    TypedInner::Def(_, _, return_type_arguments, params, ..)
-                        if !return_type_arguments.is_empty() && {
-                            let mut return_vars = Vec::new();
-                            for argument in return_type_arguments {
-                                Self::collect_ty_vars(&argument.ty, &mut return_vars);
-                            }
-                            let mut value_vars = Vec::new();
-                            for param in params {
-                                Self::collect_ty_vars(&param.ty, &mut value_vars);
-                            }
-                            return_vars
-                                .into_iter()
-                                .all(|var| !value_vars.contains(&var))
-                        }
-                ) && !Self::typed_node_has_pending_trait_call(&stmt);
-                if needs_specialization.contains(&fun_idx) && !retain_generic_fallback {
+                if needs_specialization.contains(&fun_idx) {
                     self.specializable_defs.insert(fun_idx, stmt);
                     continue;
                 }
@@ -134,10 +112,40 @@ impl Checker {
                 // path rather than by source-level return-type inference.
                 if !id.compiler_generated {
                     if let Some(signature) = self.callable_signatures.get(&id.unique_id) {
-                        if let Some(argument) = signature.return_type_arguments.first() {
+                        if !signature.return_type_arguments.is_empty() {
                             let resolved = self.resolve_ty(&node.ty);
                             let mut unresolved = Vec::new();
                             Self::collect_ty_vars(&resolved, &mut unresolved);
+                            let call_substitution = match &func.ty {
+                                Ty::UserFunc {
+                                    call_substitution, ..
+                                } => call_substitution.as_slice(),
+                                _ => &[],
+                            };
+                            let argument = signature
+                                .return_type_arguments
+                                .iter()
+                                .find(|argument| {
+                                    let mut declared = Vec::new();
+                                    Self::collect_ty_vars(&argument.ty, &mut declared);
+                                    declared.into_iter().any(|declared_var| {
+                                        call_substitution
+                                            .iter()
+                                            .find(|(original, _)| *original == declared_var)
+                                            .is_some_and(|(_, instantiated)| {
+                                                let mut instantiated_vars = Vec::new();
+                                                Self::collect_ty_vars(
+                                                    &self.resolve_ty(instantiated),
+                                                    &mut instantiated_vars,
+                                                );
+                                                instantiated_vars.iter().any(|var| {
+                                                    unresolved.contains(var)
+                                                        && !allowed_vars.contains(var)
+                                                })
+                                            })
+                                    })
+                                })
+                                .unwrap_or(&signature.return_type_arguments[0]);
                             let result_can_receive_a_later_call_witness = matches!(
                                 &resolved,
                                 Ty::Func(..) | Ty::BuiltinFunc { .. } | Ty::UserFunc { .. }
@@ -380,16 +388,28 @@ impl Checker {
                             .get(fun_idx)
                             .cloned()
                             .unwrap_or_default();
-                        let mapping =
-                            self.infer_specialization_mapping(original_def, &args, &bound_tyvars)?;
-                        if mapping.len() == bound_tyvars.len()
+                        let mapping = self.infer_specialization_mapping(
+                            original_def,
+                            &args,
+                            Some(&func.ty),
+                            false,
+                            &bound_tyvars,
+                        )?;
+                        let fully_concrete = mapping.len() == bound_tyvars.len()
                             && bound_tyvars.iter().all(|var| {
                                 mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_)))
-                            })
+                            });
+                        // Type variables are erased at runtime. A definition
+                        // without pending trait dispatch can therefore be
+                        // materialized safely even while a callable result is
+                        // still waiting for a later type witness. This keeps a
+                        // valid function-table entry instead of leaking the
+                        // pre-normalization generic index into Forge.
+                        if fully_concrete || !Self::typed_node_has_pending_trait_call(original_def)
                         {
                             let concrete_tys = bound_tyvars
                                 .iter()
-                                .filter_map(|var| mapping.get(var).cloned())
+                                .map(|var| mapping.get(var).cloned().unwrap_or(Ty::Var(*var)))
                                 .collect::<Vec<_>>();
                             let specialized_fun_idx = self.ensure_specialized_def(
                                 *fun_idx,
@@ -404,12 +424,18 @@ impl Checker {
                             let specialized_func_ty = match func.ty.clone() {
                                 Ty::UserFunc {
                                     type_params,
+                                    call_substitution,
                                     params,
                                     ret,
                                     ..
                                 } => Ty::UserFunc {
                                     fun_idx: specialized_fun_idx,
                                     type_params,
+                                    call_substitution: if fully_concrete {
+                                        Vec::new()
+                                    } else {
+                                        call_substitution
+                                    },
                                     params,
                                     ret,
                                 },
@@ -500,16 +526,36 @@ impl Checker {
                             .get(&fun_idx)
                             .cloned()
                             .unwrap_or_default();
-                        let mut mapping =
-                            self.infer_specialization_mapping(original_def, &args, &bound_tyvars)?;
+                        let mut mapping = self.infer_specialization_mapping(
+                            original_def,
+                            &args,
+                            None,
+                            false,
+                            &bound_tyvars,
+                        )?;
                         let return_type_argument_sources: &[Ty] =
                             if obligation.trait_args.is_empty() {
                                 std::slice::from_ref(&obligation.receiver)
                             } else {
                                 &obligation.trait_args
                             };
-                        if let TypedInner::Def(_, _, return_type_arguments, ..) = &original_def.node
+                        if let TypedInner::Def(
+                            _,
+                            _,
+                            return_type_arguments,
+                            _,
+                            declared_return,
+                            _,
+                            _,
+                            _,
+                        ) = &original_def.node
                         {
+                            self.match_specialization_ty(
+                                declared_return,
+                                &obligation.receiver,
+                                &bound_tyvars,
+                                &mut mapping,
+                            );
                             for (argument, source) in return_type_arguments
                                 .iter()
                                 .zip(return_type_argument_sources.iter())
@@ -1166,16 +1212,17 @@ impl Checker {
                     generated_defs,
                 )?),
             ),
-            TypedInner::Capture(target, args) => TypedInner::Capture(
-                Box::new(self.rewrite_specializations_in_node(
+            TypedInner::Capture(target, args) => {
+                let mut target = self.rewrite_specializations_in_node(
                     *target,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                args.into_iter()
+                )?;
+                let args = args
+                    .into_iter()
                     .map(|arg| {
                         self.rewrite_specializations_in_node(
                             arg,
@@ -1186,8 +1233,76 @@ impl Checker {
                             generated_defs,
                         )
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
+                    .collect::<Result<Vec<_>, _>>()?;
+                if args.is_empty() {
+                    if let Ty::UserFunc {
+                        fun_idx,
+                        type_params,
+                        call_substitution,
+                        params,
+                        ret,
+                    } = target.ty.clone()
+                    {
+                        if needs_specialization.contains(&fun_idx) {
+                            let original_def =
+                                defs_by_fun_idx.get(&fun_idx).ok_or_else(|| TypeError {
+                                    structured: None,
+                                    message: format!(
+                                        "Missing generic definition for fun_idx {}",
+                                        fun_idx
+                                    ),
+                                    span: span.clone(),
+                                    hint: None,
+                                })?;
+                            let bound_tyvars = bound_tyvars_by_fun_idx
+                                .get(&fun_idx)
+                                .cloned()
+                                .unwrap_or_default();
+                            let mapping = self.infer_specialization_mapping(
+                                original_def,
+                                &[],
+                                Some(&target.ty),
+                                true,
+                                &bound_tyvars,
+                            )?;
+                            let fully_concrete = mapping.len() == bound_tyvars.len()
+                                && bound_tyvars.iter().all(|var| {
+                                    mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_)))
+                                });
+                            if fully_concrete
+                                || !Self::typed_node_has_pending_trait_call(original_def)
+                            {
+                                let concrete_tys = bound_tyvars
+                                    .iter()
+                                    .map(|var| mapping.get(var).cloned().unwrap_or(Ty::Var(*var)))
+                                    .collect::<Vec<_>>();
+                                let specialized_fun_idx = self.ensure_specialized_def(
+                                    fun_idx,
+                                    &concrete_tys,
+                                    &mapping,
+                                    defs_by_fun_idx,
+                                    bound_tyvars_by_fun_idx,
+                                    needs_specialization,
+                                    specialization_fun_idxs,
+                                    generated_defs,
+                                )?;
+                                target.ty = Ty::UserFunc {
+                                    fun_idx: specialized_fun_idx,
+                                    type_params,
+                                    call_substitution: if fully_concrete {
+                                        Vec::new()
+                                    } else {
+                                        call_substitution
+                                    },
+                                    params,
+                                    ret,
+                                };
+                            }
+                        }
+                    }
+                }
+                TypedInner::Capture(Box::new(target), args)
+            }
             TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root) => {
                 TypedInner::StructDef(tag, name, field_names, field_policies, readonly_root)
             }
@@ -1259,6 +1374,12 @@ impl Checker {
 
         let substituted_def =
             self.substitute_specialized_def(original_def.clone(), specialized_fun_idx, mapping)?;
+        // Reserve the definition before rewriting its body. A specialization
+        // can refer to itself while its body is being rewritten; without the
+        // reservation that recursive lookup mistakes the fresh cache entry
+        // for a stale persistent-session entry and allocates a second index.
+        let generated_index = generated_defs.len();
+        generated_defs.push(substituted_def.clone());
         let rewritten_def = self.rewrite_specializations_in_node(
             substituted_def,
             defs_by_fun_idx,
@@ -1269,7 +1390,7 @@ impl Checker {
         )?;
         self.specializable_defs
             .insert(specialized_fun_idx, rewritten_def.clone());
-        generated_defs.push(rewritten_def);
+        generated_defs[generated_index] = rewritten_def;
         Ok(specialized_fun_idx)
     }
 
@@ -1467,9 +1588,23 @@ impl Checker {
         &mut self,
         def: &TypedNode,
         args: &[TypedNode],
+        instantiated_callable: Option<&Ty>,
+        allow_omitted_args: bool,
         bound_tyvars: &[u32],
     ) -> Result<HashMap<u32, Ty>, TypeError> {
         let mut mapping = HashMap::new();
+        if let Some(Ty::UserFunc {
+            call_substitution, ..
+        }) = instantiated_callable
+        {
+            if !call_substitution.is_empty() {
+                for (var, ty) in call_substitution {
+                    if bound_tyvars.contains(var) {
+                        mapping.insert(*var, self.resolve_ty(ty));
+                    }
+                }
+            }
+        }
         let param_tys = match &def.node {
             TypedInner::Def(_, _, _, params, _, _, _, _) => params
                 .iter()
@@ -1486,7 +1621,7 @@ impl Checker {
             }
         };
 
-        if param_tys.len() != args.len() {
+        if param_tys.len() != args.len() && !(allow_omitted_args && args.is_empty()) {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -1499,6 +1634,20 @@ impl Checker {
             });
         }
 
+        if matches!(instantiated_callable, Some(Ty::UserFunc { .. })) {
+            if bound_tyvars.iter().any(|var| !mapping.contains_key(var)) {
+                return Err(TypeError {
+                    structured: None,
+                    message: "Missing call substitution for ordinary specialization".into(),
+                    span: def.span.clone(),
+                    hint: None,
+                });
+            }
+            return Ok(mapping);
+        }
+
+        // Trait-method dispatch still supplies value/receiver evidence until
+        // Task 7 introduces its canonical instantiation substitution.
         for (expected, arg) in param_tys.iter().zip(args.iter()) {
             self.match_specialization_ty(expected, &arg.ty, bound_tyvars, &mut mapping);
         }
@@ -1515,7 +1664,21 @@ impl Checker {
     ) {
         match (expected, actual) {
             (Ty::Var(var), ty) if bound_tyvars.contains(var) => {
-                mapping.entry(*var).or_insert_with(|| self.resolve_ty(ty));
+                let candidate = self.resolve_ty(ty);
+                match mapping.entry(*var) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(candidate);
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut entry) => {
+                        let mut existing_vars = Vec::new();
+                        Self::collect_ty_vars(entry.get(), &mut existing_vars);
+                        let mut candidate_vars = Vec::new();
+                        Self::collect_ty_vars(&candidate, &mut candidate_vars);
+                        if candidate_vars.len() < existing_vars.len() {
+                            entry.insert(candidate);
+                        }
+                    }
+                }
             }
             (Ty::SelfApp(items), actual)
                 if Self::constructor_application_parts(items).is_some() =>
@@ -2686,12 +2849,22 @@ impl Checker {
                     .map(|item| self.substitute_ty_with_mapping(item, mapping))
                     .collect(),
             ),
-            Ty::SelfApp(items) => Ty::SelfApp(
-                items
+            Ty::SelfApp(items) => {
+                let source_witness =
+                    Self::constructor_application_parts(items).map(|(witness, _)| witness.clone());
+                let substituted = items
                     .iter()
                     .map(|item| self.substitute_ty_with_mapping(item, mapping))
-                    .collect(),
-            ),
+                    .collect::<Vec<_>>();
+                if let Some((witness, slots)) = Self::constructor_application_parts(&substituted) {
+                    if let Some(applied) = source_witness.as_ref().and_then(|source| {
+                        self.apply_constructor_application(source, witness, slots)
+                    }) {
+                        return applied;
+                    }
+                }
+                Ty::SelfApp(substituted)
+            }
             Ty::Func(params, ret) => Ty::Func(
                 params
                     .iter()
@@ -2710,11 +2883,16 @@ impl Checker {
             Ty::UserFunc {
                 fun_idx,
                 type_params,
+                call_substitution,
                 params,
                 ret,
             } => Ty::UserFunc {
                 fun_idx: *fun_idx,
                 type_params: type_params.clone(),
+                call_substitution: call_substitution
+                    .iter()
+                    .map(|(var, ty)| (*var, self.substitute_ty_with_mapping(ty, mapping)))
+                    .collect(),
                 params: params
                     .iter()
                     .map(|param| self.substitute_ty_with_mapping(param, mapping))
@@ -3120,6 +3298,7 @@ mod tests {
         Ty::UserFunc {
             fun_idx,
             type_params: vec![ty_var],
+            call_substitution: Vec::new(),
             params: vec![Ty::Var(ty_var)],
             ret: Box::new(Ty::Var(ty_var)),
         }
@@ -3170,12 +3349,19 @@ mod tests {
 
     fn call_generic(id: ResolvedId, fun_idx: u32, ty_var: u32, arg: TypedNode) -> TypedNode {
         let ret_ty = arg.ty.clone();
+        let mut callable_ty = generic_identity_ty(fun_idx, ty_var);
+        if let Ty::UserFunc {
+            call_substitution, ..
+        } = &mut callable_ty
+        {
+            *call_substitution = vec![(ty_var, ret_ty.clone())];
+        }
         TypedNode {
             ty: ret_ty,
             span: test_span(),
             node: TypedInner::App(
                 Box::new(TypedNode {
-                    ty: generic_identity_ty(fun_idx, ty_var),
+                    ty: callable_ty,
                     span: test_span(),
                     node: TypedInner::Var(id),
                 }),
@@ -3253,6 +3439,28 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_specialization_rejects_missing_call_substitution() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let def = generic_identity_def(
+            20,
+            resolved_id("id", Some("Global::id"), 10),
+            resolved_id("x", None, 11),
+            1,
+        );
+        let callable = generic_identity_ty(20, 1);
+        let error = checker
+            .infer_specialization_mapping(
+                &def,
+                &[typed_arg(12, Ty::Int)],
+                Some(&callable),
+                false,
+                &[1],
+            )
+            .expect_err("ordinary calls must retain the solver substitution");
+        assert!(error.message.contains("Missing call substitution"));
+    }
+
+    #[test]
     fn specialization_mapping_rejects_argument_count_mismatch_before_zip() {
         let mut checker = Checker::new(TypecheckContext::default());
         let def = generic_identity_def(
@@ -3263,7 +3471,7 @@ mod tests {
         );
 
         let err = checker
-            .infer_specialization_mapping(&def, &[], &[1])
+            .infer_specialization_mapping(&def, &[], None, false, &[1])
             .expect_err("specialization must not infer from a partial argument zip");
 
         assert_eq!(

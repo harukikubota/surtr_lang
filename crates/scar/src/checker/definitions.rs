@@ -1065,6 +1065,19 @@ impl Checker {
         let Some((witness, expected_slots)) = expected_parts else {
             unreachable!("constructor result annotation must lower to a contextual application")
         };
+        if let Ty::SelfApp(actual_items) = &actual {
+            if let Some((actual_witness, _)) = Self::constructor_application_parts(actual_items) {
+                let same_witness = self.resolve_ty(witness) == self.resolve_ty(actual_witness);
+                if same_witness
+                    && self.types_compatible_with_rigid(expected_ret, &actual, rigid_tyvars)
+                {
+                    // A definition generic over a direct constructor input
+                    // keeps its body abstract. Pending trait calls are
+                    // concretized when the ordinary function is specialized.
+                    return Ok(None);
+                }
+            }
+        }
         if matches!(actual, Ty::Var(_) | Ty::SelfApp(_)) || !has_concrete_constructor_shape {
             return Err(TypeError {
                 structured: None,
@@ -1172,7 +1185,14 @@ impl Checker {
         // definition. Check the body now, but defer subtree normalization to the
         // single resolve_typed_node pass in check_program.
         let profile = self.profiler.start();
-        let result = if self.body_tail_is_receiverless_trait_call(body) {
+        let contextual_constructor_body = matches!(
+            &function_return_ty,
+            Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some()
+        ) && self.constructor_body_needs_expected(body);
+        let result = if contextual_constructor_body
+            || self.body_tail_is_receiverless_trait_call(body)
+            || self.body_tail_is_return_type_argument_call(body)
+        {
             self.check_node_with_expected(body, Some(&function_return_ty))
         } else {
             self.check_node(body)
@@ -1247,6 +1267,49 @@ impl Checker {
         }
     }
 
+    pub(super) fn body_tail_is_return_type_argument_call(&self, body: &Resolved) -> bool {
+        match body {
+            Resolved::Block(_, statements) => statements
+                .last()
+                .is_some_and(|tail| self.body_tail_is_return_type_argument_call(tail)),
+            Resolved::Grouped(_, inner) => self.body_tail_is_return_type_argument_call(inner),
+            Resolved::If(_, _, then_branch, else_branch) => {
+                self.body_tail_is_return_type_argument_call(then_branch)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|branch| self.body_tail_is_return_type_argument_call(branch))
+            }
+            Resolved::Match(_, _, arms) => arms
+                .iter()
+                .any(|arm| self.body_tail_is_return_type_argument_call(&arm.body)),
+            Resolved::App(_, function, _) | Resolved::Capture(_, function, _) => {
+                let target = match function.as_ref() {
+                    Resolved::ReturnTypeArgumentApply(_, target, _) => target.as_ref(),
+                    target => target,
+                };
+                matches!(target, Resolved::Var(_, id)
+                    if self.callable_signatures
+                        .get(&id.unique_id)
+                        .is_some_and(|signature| !signature.return_type_arguments.is_empty()))
+            }
+            _ => false,
+        }
+    }
+
+    fn constructor_body_needs_expected(&self, body: &Resolved) -> bool {
+        match body {
+            Resolved::Block(_, statements) => statements
+                .last()
+                .is_some_and(|tail| self.constructor_body_needs_expected(tail)),
+            Resolved::Grouped(_, inner) => self.constructor_body_needs_expected(inner),
+            Resolved::If(_, _, then_branch, Some(else_branch)) => {
+                self.body_tail_is_receiverless_trait_call(then_branch)
+                    && self.body_tail_is_receiverless_trait_call(else_branch)
+            }
+            _ => self.body_tail_is_receiverless_trait_call(body),
+        }
+    }
+
     fn ast_ty_mentions_self(ty: &AstTy) -> bool {
         match ty {
             AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name == "Self",
@@ -1304,6 +1367,12 @@ impl Checker {
                 TypeSyntaxContext::General,
                 &mut tyvars,
             )?;
+            super::signatures::remember_direct_constructor_input(
+                self,
+                &param.ty,
+                &param_ty,
+                &mut direct_constructor_inputs,
+            );
             let param_ty = super::signatures::coalesce_direct_constructor_inputs(
                 self,
                 param_ty,
@@ -1356,11 +1425,77 @@ impl Checker {
             )?,
             None => Ty::Unit,
         };
+        if let Some(ret_ty) = ret_ty {
+            super::signatures::remember_direct_constructor_input(
+                self,
+                ret_ty,
+                &expected_ret,
+                &mut direct_constructor_inputs,
+            );
+        }
         expected_ret = super::signatures::coalesce_direct_constructor_inputs(
             self,
             expected_ret,
             &direct_constructor_inputs,
         );
+        // Reuse the predeclared input identities before checking the body.
+        // Recursive and forward calls already carry substitutions keyed by
+        // these identities; checking a definition must not replace them.
+        if let Some(predeclared) = self.callable_signatures.get(&id.unique_id) {
+            let checked_types = typed_return_type_arguments
+                .iter()
+                .map(|slot| slot.ty.clone())
+                .chain(typed_params.iter().map(|param| param.ty.clone()))
+                .chain(std::iter::once(expected_ret.clone()))
+                .collect::<Vec<_>>();
+            let declared_types = predeclared
+                .return_type_arguments
+                .iter()
+                .map(|slot| slot.ty.clone())
+                .chain(
+                    predeclared
+                        .value_parameters
+                        .iter()
+                        .map(|param| param.ty.clone()),
+                )
+                .chain(std::iter::once(predeclared.return_type.ty.clone()))
+                .collect::<Vec<_>>();
+            let mut checked_vars = Vec::new();
+            let mut declared_vars = Vec::new();
+            Self::collect_ty_vars(&Ty::Tuple(checked_types.clone()), &mut checked_vars);
+            Self::collect_ty_vars(&Ty::Tuple(declared_types.clone()), &mut declared_vars);
+            if checked_vars.len() != declared_vars.len() {
+                return Err(super::signatures::missing_canonical_callable_signature(
+                    id, span,
+                ));
+            }
+            let mapping = checked_vars
+                .into_iter()
+                .zip(declared_vars.into_iter().map(Ty::Var))
+                .collect::<HashMap<_, _>>();
+            if checked_types
+                .iter()
+                .map(|ty| self.substitute_ty_with_mapping(ty, &mapping))
+                .ne(declared_types.iter().cloned())
+            {
+                return Err(super::signatures::missing_canonical_callable_signature(
+                    id, span,
+                ));
+            }
+            for ty in tyvars.values_mut() {
+                *ty = self.substitute_ty_with_mapping(ty, &mapping);
+            }
+            for (_, ty) in &mut local_bindings {
+                *ty = self.substitute_ty_with_mapping(ty, &mapping);
+            }
+            for parameter in &mut typed_params {
+                parameter.ty = self.substitute_ty_with_mapping(&parameter.ty, &mapping);
+            }
+            for argument in &mut typed_return_type_arguments {
+                argument.ty = self.substitute_ty_with_mapping(&argument.ty, &mapping);
+            }
+            expected_ret = self.substitute_ty_with_mapping(&expected_ret, &mapping);
+        }
         self.apply_resolved_where_trait_bounds(where_clause, &tyvars, None)?;
         let declaration_capabilities = self.resolved_capability_uses(where_clause, &tyvars)?;
         if self.ty_contains_facet(&expected_ret) {
@@ -1456,6 +1591,12 @@ impl Checker {
                 expected_ret = concrete;
             }
         }
+        for parameter in &mut typed_params {
+            parameter.ty = self.resolve_ty(&parameter.ty);
+        }
+        for argument in &mut typed_return_type_arguments {
+            argument.ty = self.resolve_ty(&argument.ty);
+        }
 
         let actual_ret = self.resolve_ty(&typed_body.ty);
         if let Some(err) = self.bare_return_typevar_result_mismatch(
@@ -1532,7 +1673,7 @@ impl Checker {
         };
         let checked_params = typed_params
             .iter()
-            .map(|param| param.ty.clone())
+            .map(|param| self.resolve_ty(&param.ty))
             .collect::<Vec<_>>();
         let mut checked_type_params = Vec::new();
         for argument in &typed_return_type_arguments {
@@ -1547,6 +1688,7 @@ impl Checker {
             Ty::UserFunc {
                 fun_idx,
                 type_params: checked_type_params,
+                call_substitution: Vec::new(),
                 params: checked_params.clone(),
                 ret: Box::new(expected_ret.clone()),
             },
@@ -2824,6 +2966,7 @@ impl Checker {
                         args,
                         Some(callable_hint.as_str()),
                         false,
+                        false,
                     )?;
                     return Ok(TypedNode {
                         ty: ret.as_ref().clone(),
@@ -2978,7 +3121,7 @@ impl Checker {
             };
 
             let typed_args = self.typecheck_user_function_args(
-                span, new_uid, "function", &params, args, None, false,
+                span, new_uid, "function", &params, args, None, false, false,
             )?;
             let expected_self_ty = Ty::Struct(id.name.clone(), def.fields.clone());
             let returns_self = self.types_compatible(&expected_self_ty, &ret_ty);
@@ -3248,6 +3391,7 @@ impl Checker {
             Ty::UserFunc {
                 fun_idx,
                 type_params: Vec::new(),
+                call_substitution: Vec::new(),
                 params: typed_params.iter().map(|p| p.ty.clone()).collect(),
                 ret: Box::new(Ty::Error),
             },

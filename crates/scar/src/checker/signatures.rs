@@ -46,6 +46,154 @@ pub(super) struct DirectConstructorInputs {
     witnesses: HashMap<String, Ty>,
 }
 
+#[derive(Debug, Clone)]
+pub(super) enum TypeConstraint {
+    Infer { span: Span },
+    Explicit { ty: Ty, span: Span },
+}
+
+impl TypeConstraint {
+    pub(super) fn span(&self) -> &Span {
+        match self {
+            Self::Infer { span } | Self::Explicit { span, .. } => span,
+        }
+    }
+
+    pub(super) fn explicit_ty(&self) -> Option<&Ty> {
+        match self {
+            Self::Explicit { ty, .. } => Some(ty),
+            Self::Infer { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ValueArgumentConstraint {
+    pub(super) ordinal: u32,
+    pub(super) expected: Ty,
+    pub(super) actual: Ty,
+    pub(super) span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum ConstraintOrigin {
+    ReturnTypeArgument(Span),
+    ValueArgument(Span),
+    ExpectedReturn(Span),
+    Obligation(SignatureOrigin),
+}
+
+impl ConstraintOrigin {
+    pub(super) fn span(&self) -> Option<&Span> {
+        match self {
+            Self::ReturnTypeArgument(span)
+            | Self::ValueArgument(span)
+            | Self::ExpectedReturn(span) => Some(span),
+            Self::Obligation(_) => None,
+        }
+    }
+
+    pub(super) fn signature_origin(&self) -> Option<&SignatureOrigin> {
+        match self {
+            Self::Obligation(origin) => Some(origin),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CallConstraintSet {
+    pub(super) signature: CallableSignature<Ty>,
+    pub(super) substitution: Vec<(u32, Ty)>,
+    pub(super) return_type_arguments: Vec<TypeConstraint>,
+    pub(super) value_arguments: Vec<ValueArgumentConstraint>,
+    pub(super) expected_return: Option<TypeConstraint>,
+    pub(super) obligations: Vec<CanonicalConstraint<Ty>>,
+    pub(super) origins: Vec<ConstraintOrigin>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PendingConstraints {
+    pub(super) unresolved_return_type_arguments: Vec<(u32, Ty)>,
+    pub(super) substitution: Vec<(u32, Ty)>,
+}
+
+#[derive(Debug)]
+pub(super) enum SolveState<T> {
+    Solved(T),
+    Deferred(PendingConstraints),
+    Failed(TypeError),
+}
+
+pub(super) fn return_type_argument_arity_error(
+    callable: &str,
+    expected: usize,
+    actual: usize,
+    span: &Span,
+) -> TypeError {
+    TypeError {
+        message: format!("{callable} expects {expected} return type argument(s), got {actual}"),
+        span: span.clone(),
+        hint: None,
+        structured: Some(StructuredDiagnostic {
+            reason: TypeDiagnosticReason::ReturnTypeArgumentArityMismatch,
+            origin: DiagnosticOrigin::Call,
+            data: DiagnosticData::CallableSignature(CallableSignatureData {
+                callable: callable.into(),
+                role: "return type argument".into(),
+                expected_count: Some(expected as u32),
+                actual_count: Some(actual as u32),
+                detail: "call-site ReturnTypeArgument arity must match exactly".into(),
+            }),
+            primary: SourceFact::untyped(SourceRole::CallTarget, SourceId(0), span.clone()),
+            related: Vec::new(),
+            remediation: None,
+        }),
+    }
+}
+
+pub(super) fn return_type_argument_mismatch_error(
+    callable: &str,
+    ordinal: u32,
+    expected: &str,
+    actual: &str,
+    explicit_span: &Span,
+    related_role: SourceRole,
+    related_span: &Span,
+) -> TypeError {
+    TypeError {
+        message: format!(
+            "return type argument {} for `{}` does not match: expected {}, got {}",
+            ordinal, callable, expected, actual
+        ),
+        span: explicit_span.clone(),
+        hint: None,
+        structured: Some(StructuredDiagnostic {
+            reason: TypeDiagnosticReason::ReturnTypeArgumentMismatch,
+            origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
+            data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+                callable: callable.into(),
+                ordinal,
+                expected_type: expected.into(),
+                actual_type: actual.into(),
+            }),
+            primary: SourceFact::typed(
+                SourceRole::ReturnTypeArgument,
+                SourceId(0),
+                explicit_span.clone(),
+                actual,
+            ),
+            related: vec![SourceFact::typed(
+                related_role,
+                SourceId(0),
+                related_span.clone(),
+                expected,
+            )],
+            remediation: None,
+        }),
+    }
+}
+
 fn type_input_id(name: &str, constructor_trait_names: &HashSet<String>) -> Option<TypeInputId> {
     (name == "Self" || name.starts_with('$') || constructor_trait_names.contains(name))
         .then(|| TypeInputId(name.to_string()))
@@ -367,7 +515,10 @@ pub(super) fn remember_direct_constructor_input(
     let Some((witness, _)) = Checker::constructor_application_parts(items) else {
         return;
     };
-    inputs.witnesses.insert(trait_key, witness.clone());
+    inputs
+        .witnesses
+        .entry(checker.constructor_family_key(&trait_key))
+        .or_insert_with(|| witness.clone());
 }
 
 pub(super) fn coalesce_direct_constructor_inputs(
@@ -379,7 +530,8 @@ pub(super) fn coalesce_direct_constructor_inputs(
         Ty::SelfApp(mut items) => {
             if let Some((Ty::Var(var), _)) = Checker::constructor_application_parts(&items) {
                 if let Some(trait_key) = checker.constructor_witness_traits.get(var) {
-                    if let Some(shared) = inputs.witnesses.get(trait_key) {
+                    let family_key = checker.constructor_family_key(trait_key);
+                    if let Some(shared) = inputs.witnesses.get(&family_key) {
                         items[1] = shared.clone();
                     }
                 }
@@ -440,11 +592,16 @@ pub(super) fn coalesce_direct_constructor_inputs(
         Ty::UserFunc {
             fun_idx,
             type_params,
+            call_substitution,
             params,
             ret,
         } => Ty::UserFunc {
             fun_idx,
             type_params,
+            call_substitution: call_substitution
+                .into_iter()
+                .map(|(var, ty)| (var, coalesce_direct_constructor_inputs(checker, ty, inputs)))
+                .collect(),
             params: params
                 .into_iter()
                 .map(|parameter| coalesce_direct_constructor_inputs(checker, parameter, inputs))
@@ -716,9 +873,9 @@ pub(super) fn canonical_where_constraints(
 pub(super) fn instantiate_callable_signature(
     checker: &mut Checker,
     signature: &CallableSignature<Ty>,
-) -> CallableSignature<Ty> {
+) -> (CallableSignature<Ty>, Vec<(u32, Ty)>) {
     let mut fresh = HashMap::new();
-    CallableSignature {
+    let instantiated = CallableSignature {
         identity: signature.identity.clone(),
         return_type_arguments: signature
             .return_type_arguments
@@ -758,7 +915,10 @@ pub(super) fn instantiate_callable_signature(
         },
         runtime_target: signature.runtime_target.clone(),
         declaration_origins: signature.declaration_origins.clone(),
-    }
+    };
+    let mut substitution = fresh.into_iter().collect::<Vec<_>>();
+    substitution.sort_by_key(|(var, _)| *var);
+    (instantiated, substitution)
 }
 
 fn canonical_parameter_mode(mode: ValueParameterMode) -> CanonicalValueParameterMode {

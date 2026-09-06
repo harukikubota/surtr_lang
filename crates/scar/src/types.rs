@@ -115,6 +115,11 @@ pub enum Ty {
     UserFunc {
         fun_idx: u32,
         type_params: Vec<u32>,
+        /// Call-site instantiation of declaration type variables. This is
+        /// populated from the canonical callable signature and consumed by
+        /// specialization instead of being reconstructed from result shapes.
+        #[serde(default)]
+        call_substitution: Vec<(u32, Ty)>,
         params: Vec<Ty>,
         ret: Box<Ty>,
     },

@@ -2006,6 +2006,7 @@ mod specialization_state_tests {
         Ty::UserFunc {
             fun_idx,
             type_params: Vec::new(),
+            call_substitution: Vec::new(),
             params: vec![Ty::Int],
             ret: Box::new(Ty::Int),
         }

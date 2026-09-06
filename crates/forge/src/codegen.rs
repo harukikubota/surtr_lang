@@ -2718,6 +2718,7 @@ mod tests {
                             ty: Ty::UserFunc {
                                 fun_idx: 3,
                                 type_params: vec![],
+                                call_substitution: vec![],
                                 params: vec![Ty::Int],
                                 ret: Box::new(Ty::Bool),
                             },
@@ -2791,6 +2792,7 @@ mod tests {
                             ty: Ty::UserFunc {
                                 fun_idx: 3,
                                 type_params: vec![],
+                                call_substitution: vec![],
                                 params: vec![Ty::Int],
                                 ret: Box::new(Ty::Bool),
                             },
@@ -2987,6 +2989,7 @@ mod tests {
                     extractor_ty: Ty::UserFunc {
                         fun_idx: 12,
                         type_params: vec![],
+                        call_substitution: vec![],
                         params: vec![Ty::Int],
                         ret: Box::new(Ty::Int),
                     },
@@ -3425,6 +3428,7 @@ mod tests {
                     ty: Ty::UserFunc {
                         fun_idx: 7,
                         type_params: vec![],
+                        call_substitution: vec![],
                         params: vec![Ty::Error],
                         ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
                     },
@@ -3491,6 +3495,7 @@ mod tests {
                     ty: Ty::UserFunc {
                         fun_idx: 7,
                         type_params: vec![],
+                        call_substitution: vec![],
                         params: vec![Ty::Int, Ty::Int],
                         ret: Box::new(Ty::Int),
                     },
@@ -3539,6 +3544,7 @@ mod tests {
                             ty: Ty::UserFunc {
                                 fun_idx: 11,
                                 type_params: vec![],
+                                call_substitution: vec![],
                                 params: vec![Ty::Str],
                                 ret: Box::new(Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error))),
                             },
@@ -3559,6 +3565,7 @@ mod tests {
                             ty: Ty::UserFunc {
                                 fun_idx: 12,
                                 type_params: vec![],
+                                call_substitution: vec![],
                                 params: vec![Ty::Int],
                                 ret: Box::new(Ty::Result(Box::new(Ty::Str), Box::new(Ty::Error))),
                             },
@@ -11256,6 +11263,7 @@ mod process_runtime_v2_tests {
                     ty: Ty::UserFunc {
                         fun_idx: 2,
                         type_params: Vec::new(),
+                        call_substitution: Vec::new(),
                         params: vec![Ty::Str],
                         ret: Box::new(Ty::Result(Box::new(Ty::Unit), Box::new(Ty::Error))),
                     },
@@ -11298,6 +11306,7 @@ mod process_runtime_v2_tests {
             ty: Ty::UserFunc {
                 fun_idx: 7,
                 type_params: Vec::new(),
+                call_substitution: Vec::new(),
                 params: Vec::new(),
                 ret: Box::new(ret_ty.clone()),
             },

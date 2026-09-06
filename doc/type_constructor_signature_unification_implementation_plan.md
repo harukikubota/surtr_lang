@@ -574,6 +574,24 @@ git commit -m "feat(types): validate return type argument declarations"
 
 ### Task 5: ReturnTypeArgument Call-Site Constraint Solving
 
+**Completion repair plan (2026-09-06):**
+
+- [x] Reproduce the bare `Convert` and nested `Marker` capability failures. In `expr.rs`, discharge canonical obligations with `ty_satisfies_bounds(&subject, std::slice::from_ref(trait_key))`; remove the duplicate `tyvar_has_bound` call. Bare families and full dispatch keys keep their existing distinct semantics.
+- [x] Extend `forwards_return_only_where_obligation_through_outer_generic_bound` in `return_type_arguments.rs` to direct, `if`, and `match` tails. Propagate declared expected results through the relevant branch tails in `definitions.rs`.
+- [x] Audit ordinary specialization to consume `call_substitution` without reconstructing value-pair mappings; retain trait-method inference until Task 7. Preserve predeclared input identities before checking ordinary definitions so recursive and forward calls retain valid substitution keys; reject missing keys instead of reconstructing them.
+- [x] Cover generic capture forwarding (omitted, explicit, underscore), true ambiguity, and known closure return shapes in `return_type_argument_capture_forwarding.rs`. Propagate expected types to capture tails and closure bodies; accept enclosing rigid inputs as witnesses. Extend the capture script fixture to execute both returned callable paths.
+- [x] Run Scar, Forge, Rune script/module fixtures and `language_features_bucket_0`, formatting and diff checks; run the CI workspace gate for the multi-phase Task 5 diff before committing.
+- [x] Record results and commit the scoped Task 5 changes, including the existing implementation and fixtures.
+
+**Completion verification (2026-09-06):**
+
+- Reproduced both bare-capability failures before the fix; `cargo test -p scar --test typecheck_surface` then passed all 104 tests.
+- `cargo test -p scar` passed. Added RED-to-GREEN coverage for branch proof forwarding, missing ordinary call substitution, generic capture forwarding, and known closure return shape.
+- `cargo test -p rune --test integration run_srt`: 28 passed. `cargo test -p rune --test integration module_import_fixtures`: 10 passed.
+- Final tree: `rtk cargo nextest run --profile ci --workspace --test-threads 4`: **2,004 passed**, 32 binaries, 477.537 seconds, no failures/timeouts. This includes Scar, Forge, all updated script fixtures, modules, and `language_features::language_features_bucket_0`, plus cold CLI and REPL coverage.
+- `cargo fmt --all -- --check` and `git diff --cached --check`: passed. Independent review completed with its capture findings fixed and verified.
+- Sigil's existing capture traversal already preserves `ReturnTypeArgumentApply`; no additional resolver edit was needed. Forge changes only update typed test data for `call_substitution`.
+
 **Files:**
 
 - Modify: `crates/scar/src/checker/signatures.rs`
@@ -581,7 +599,7 @@ git commit -m "feat(types): validate return type argument declarations"
 - Modify: `crates/scar/src/checker/types.rs`
 - Modify: `crates/scar/src/checker/specialize.rs`
 - Modify: `crates/sigil/src/resolver/captures.rs`
-- Modify: `lib/bootstrap.srt`
+- Modify: `lib/kernel.srt`
 - Modify tests: `crates/scar/tests/return_type_arguments.rs`, `crates/scar/tests/typecheck_surface.rs`
 - Add pass fixtures: `tests/fixtures/script/pass/functions/return_type_argument_{explicit,inferred_from_value,inferred_from_expected,underscore,capture}.{srt,expected}`
 - Add fail fixtures: `tests/fixtures/script/fail/typecheck/return_type_argument_{arity,mismatch,ambiguous,captured_argument_ambiguous}.{srt,error}`
@@ -592,7 +610,7 @@ git commit -m "feat(types): validate return type argument declarations"
 - Consumes: Task 3 callable signatures and Task 4 definition validation.
 - Invariant: omission equals an all-underscore list; an explicit list has exact arity; a failed probe rolls back all bindings.
 
-- [ ] **Step 1: Add failing inference tests**
+- [x] **Step 1: Add failing inference tests**
 
 ```surtr
 number = try_from::<Int>("42")
@@ -604,7 +622,7 @@ ambiguous = guard(True)
 
 Test every pair among explicit RTA, value argument, and expected return for agreement and conflict. Test callable capture, omitted list versus all`_`, arity underflow / overflow, constructor head with unresolved captured argument, and impl-order reversal.
 
-- [ ] **Step 2: Run focused tests**
+- [x] **Step 2: Run focused tests**
 
 ```bash
 cargo nextest run -p scar --test return_type_arguments
@@ -612,7 +630,7 @@ cargo nextest run -p scar --test return_type_arguments
 
 Expected: ordinary callable application is rejected or resolved through old special routes.
 
-- [ ] **Step 3: Build a single call constraint object**
+- [x] **Step 3: Build a single call constraint object**
 
 ```rust
 pub(super) struct CallConstraintSet {
@@ -631,29 +649,25 @@ pub(super) enum SolveState<T> {
 }
 ```
 
-- [ ] **Step 4: Replace`check_explicit_type_apply`special cases**
+- [x] **Step 4: Replace`check_explicit_type_apply`special cases**
 
 `ReturnTypeArgumentApply`wraps any non-intrinsic callable. Build the same constraints for explicit, underscore, and omitted forms. Do not partially zip an arity mismatch. Re-home every unresolved variable and pending obligation when another variable solves.
 
-- [ ] **Step 5: Feed the completed substitution into specialization**
+- [x] **Step 5: Feed the completed substitution into specialization**
 
 Replace the ordinary-call portion of `infer_specialization_mapping` that reconstructs mappings from value argument pairs. The specialization input is the solved call substitution, including return-only inputs and expected return. Audit body-free variables at the callable-instantiation boundary. Keep the Trait-method portion until Task 7 supplies `TraitMethodInstantiation.substitution`, then delete it there.
 
-Add the standard ordinary function to `Bootstrap`; its direct Trait RTA is normalized by Task 4 and all internal/user calls use this task's common solver:
+Add the standard ordinary function to `Kernel`; `Bootstrap` is an earlier loader stage and cannot depend on `Alternative` / `Applicative`. Its direct Trait RTA is normalized by Task 4 and all internal/user calls use this task's common solver:
 
 ```surtr
 def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> {
-  if condition {
-    Applicative::pure(())
-  } else {
-    Alternative::empty::<Unit>()
-  }
+  if(condition, Applicative::pure(()), Alternative::empty())
 }
 ```
 
 Add its final `@doc` in the same edit. Do not register `guard` as an intrinsic/builtin and do not branch on its name in Scar or the later do checker.
 
-- [ ] **Step 6: Verify inference and regression fixtures**
+- [x] **Step 6: Verify inference and regression fixtures**
 
 ```bash
 cargo nextest run -p scar --test return_type_arguments
@@ -662,10 +676,10 @@ cargo nextest run -p rune --test integration run_srt
 cargo nextest run -p rune --test integration module_import_fixtures
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
-git add crates/scar crates/sigil lib/bootstrap.srt tests/fixtures
+git add crates/scar crates/forge lib/kernel.srt tests/fixtures doc/type_constructor_signature_unification_implementation_plan.md
 git commit -m "feat(types): solve return type arguments at call sites"
 ```
 
