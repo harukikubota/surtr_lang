@@ -3111,6 +3111,16 @@ impl Resolver {
                 methods,
                 attrs,
             ) => {
+                let impl_declaration_name = trait_impl_declaration_qualified_name(
+                    self.current_module_path.as_deref(),
+                    &trait_name,
+                    &trait_args,
+                    &target_ty,
+                    span.start,
+                );
+                let impl_declaration_id = self
+                    .take_predeclared_id(&impl_declaration_name)
+                    .unwrap_or_else(|| self.reserve_declaration_uid(&impl_declaration_name));
                 validate_unique_callable_names(
                     &format!(
                         "impl `{}` for `{}`",
@@ -3311,6 +3321,7 @@ impl Resolver {
 
                 Ok(Resolved::TraitImplDef(
                     span,
+                    impl_declaration_id,
                     trait_id,
                     trait_args
                         .into_iter()
@@ -4025,7 +4036,7 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
 ) -> Result<(), ResolveError> {
     let mut seen_pairs: HashMap<String, (Span, bool)> = HashMap::new();
     for node in resolved {
-        let Resolved::TraitImplDef(span, trait_id, trait_args, target_ty, _, _) = node else {
+        let Resolved::TraitImplDef(span, _, trait_id, trait_args, target_ty, _, _) = node else {
             continue;
         };
         let trait_name = trait_instance_key(

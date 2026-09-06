@@ -1,0 +1,26 @@
+defstruct Box<$T> {
+  value: $T
+}
+
+impl Box {
+  def new(value: $T) -> Box<$T> { Box { value: value } }
+}
+
+deftrait Marker {
+  def mark(self: Self) -> String
+}
+
+deftrait Read<$Value> {
+  def read(self: Self, fallback: $Value) -> String
+}
+
+impl Read<$T> for Box<$T>
+where
+  $T: Marker
+{
+  def read(self: Self, fallback: $T) -> String {
+    Marker::mark(self.value)
+  }
+}
+
+print(Read::read(Box::new(1), 2))

@@ -151,7 +151,12 @@ result = Use::use(value)"#,
     )
     .expect_err("a bare capability must not prove a missing Marker<Int> body obligation");
 
-    assert!(err.message.contains("Marker<Int>"), "{err:?}");
+    assert!(
+        err.message
+            .contains("Use::use requires a receiver type implementing Use"),
+        "{err:?}"
+    );
+    assert!(err.message.contains("Box<Int>"), "{err:?}");
 }
 
 #[test]
@@ -431,9 +436,10 @@ result = Use::use(value)"#,
 
     assert!(
         err.message
-            .contains("Equal::equal could not be specialized to a concrete dispatch target"),
+            .contains("Use::use requires a receiver type implementing Use"),
         "{err:?}"
     );
+    assert!(err.message.contains("Box<List<(Int -> Int)>>"), "{err:?}");
 }
 
 #[test]

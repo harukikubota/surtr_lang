@@ -43,7 +43,8 @@ pub use self::session::{SigilCheckpoint, SigilSession};
 
 use self::declarations::{
     assign_declaration_uids, collect_stage_impl_target_resolutions, declaration_uid_kind_map,
-    trait_impl_method_qualified_name, trait_method_qualified_name, validate_unique_callable_names,
+    trait_impl_declaration_qualified_name, trait_impl_method_qualified_name,
+    trait_method_qualified_name, validate_unique_callable_names,
 };
 use self::expr::validate_trait_impl_pairs_in_nodes;
 use self::imports::{build_global_scope, build_module_scope, build_module_scope_with_imports};
@@ -805,7 +806,10 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 }
             }
         }
-        Resolved::TraitImplDef(_, id, _, _, where_clause, methods) => {
+        Resolved::TraitImplDef(_, declaration_id, id, _, _, where_clause, methods) => {
+            if *declaration_id >= base {
+                *declaration_id = declaration_id.saturating_add(offset);
+            }
             rebase_resolved_id(id, base, offset);
             if let Some(clause) = where_clause {
                 rebase_where_clause(clause, base, offset);

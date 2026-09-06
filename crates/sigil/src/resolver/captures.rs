@@ -214,7 +214,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         | Resolved::EnumDef(_, _, _, _, _)
         | Resolved::ConstDef(_, _, _, _, _)
         | Resolved::TraitDef(_, _, _, _, _, _)
-        | Resolved::TraitImplDef(_, _, _, _, _, _)
+        | Resolved::TraitImplDef(_, _, _, _, _, _, _)
         | Resolved::BuiltinDecl(..)
         | Resolved::BuiltinExtractorDecl(_, _, _, _, _)
         | Resolved::BuiltinTypeDecl(_, _, _, _)

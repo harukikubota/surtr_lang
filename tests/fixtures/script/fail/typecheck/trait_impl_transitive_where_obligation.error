@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Eq::eq could not be specialized to a concrete dispatch target
+contains: Use::use requires a receiver type implementing Use, got ObligationBox

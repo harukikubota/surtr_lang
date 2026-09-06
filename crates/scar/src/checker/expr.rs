@@ -50,7 +50,7 @@ struct ExpectedCallableContract {
 }
 
 #[derive(Clone)]
-struct CandidateProbeCheckpoint {
+pub(super) struct CandidateProbeCheckpoint {
     env: TypeEnv,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
@@ -58,12 +58,11 @@ struct CandidateProbeCheckpoint {
     active_capabilities: Vec<CapabilityUse>,
     constructor_capabilities: HashMap<u32, String>,
     constructor_witness_traits: HashMap<u32, String>,
-    trait_obligation_cycle: Option<String>,
     warnings: WarningBuffer,
 }
 
 impl Checker {
-    fn candidate_probe_checkpoint(&self) -> CandidateProbeCheckpoint {
+    pub(super) fn candidate_probe_checkpoint(&self) -> CandidateProbeCheckpoint {
         CandidateProbeCheckpoint {
             env: self.env.clone(),
             substitutions: self.substitutions.clone(),
@@ -72,12 +71,11 @@ impl Checker {
             active_capabilities: self.active_capabilities.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
-            trait_obligation_cycle: self.trait_obligation_cycle.clone(),
             warnings: self.warnings.clone(),
         }
     }
 
-    fn rollback_candidate_probe(&mut self, checkpoint: CandidateProbeCheckpoint) {
+    pub(super) fn rollback_candidate_probe(&mut self, checkpoint: CandidateProbeCheckpoint) {
         self.env = checkpoint.env;
         self.substitutions = checkpoint.substitutions;
         self.tyvar_bounds = checkpoint.tyvar_bounds;
@@ -85,7 +83,6 @@ impl Checker {
         self.active_capabilities = checkpoint.active_capabilities;
         self.constructor_capabilities = checkpoint.constructor_capabilities;
         self.constructor_witness_traits = checkpoint.constructor_witness_traits;
-        self.trait_obligation_cycle = checkpoint.trait_obligation_cycle;
         self.warnings = checkpoint.warnings;
     }
 
@@ -147,6 +144,45 @@ impl Checker {
             return None;
         }
         suffix.parse::<usize>().ok()
+    }
+
+    pub(super) fn trait_obligations_depend_on(&self, node: &TypedNode, inputs: &[Ty]) -> bool {
+        let mut permitted = Vec::new();
+        for input in inputs {
+            Self::collect_ty_vars(&self.resolve_ty(input), &mut permitted);
+        }
+        let mut waiting = Vec::new();
+        for obligation in Self::full_trait_obligations(node) {
+            for ty in obligation
+                .trait_args
+                .iter()
+                .chain(std::iter::once(&obligation.receiver))
+            {
+                Self::collect_ty_vars(&self.resolve_ty(ty), &mut waiting);
+            }
+        }
+        !waiting.is_empty() && waiting.iter().all(|var| permitted.contains(var))
+    }
+
+    fn local_callable_obligations_depend_on(&self, node: &TypedNode, inputs: &[Ty]) -> bool {
+        Self::full_trait_obligations(node)
+            .iter()
+            .all(|obligation| !matches!(self.resolve_ty(&obligation.receiver), Ty::Var(_)))
+            && self.trait_obligations_depend_on(node, inputs)
+    }
+
+    pub(super) fn validate_pending_body_dependencies(
+        &self,
+        body: &TypedNode,
+        inputs: &[Ty],
+    ) -> Result<(), TypeError> {
+        if self.trait_obligations_depend_on(body, inputs) {
+            return Ok(());
+        }
+        if let Some((method, span)) = self.first_pending_trait_helper(body) {
+            return Err(self.pending_trait_helper_error(method, span));
+        }
+        Ok(())
     }
 
     pub(super) fn pending_trait_helper_error(&self, method_name: &str, span: &Span) -> TypeError {
@@ -532,7 +568,10 @@ impl Checker {
         obligations
     }
 
-    fn concretize_pending_trait_calls(&mut self, node: TypedNode) -> Result<TypedNode, TypeError> {
+    pub(super) fn concretize_pending_trait_calls(
+        &mut self,
+        node: TypedNode,
+    ) -> Result<TypedNode, TypeError> {
         let span = node.span.clone();
         let ty = self.resolve_ty(&node.ty);
         let node = match node.node {
@@ -563,15 +602,26 @@ impl Checker {
                     crate::typed::TraitDispatch::Pending
                         if !matches!(obligation.receiver, Ty::Var(_)) =>
                     {
-                        self.trait_dispatch_target_for_args(
+                        let argument_tys = args
+                            .iter()
+                            .map(|arg| self.resolve_ty(&arg.ty))
+                            .collect::<Vec<_>>();
+                        match self.select_trait_method_instantiation(
                             &obligation.trait_id,
                             &method_name,
                             &obligation.receiver,
                             &obligation.trait_args,
-                        )
-                        .ok_or_else(|| {
-                            self.pending_trait_helper_error(method_name.as_str(), &span)
-                        })?
+                            &argument_tys,
+                            &ty,
+                        )? {
+                            CandidateApplicability::Applicable(instantiation) => {
+                                TraitDispatch::Static(instantiation.dispatch)
+                            }
+                            CandidateApplicability::Deferred(_) => TraitDispatch::Pending,
+                            CandidateApplicability::Rejected(_) => {
+                                return Err(self.pending_trait_helper_error(&method_name, &span))
+                            }
+                        }
                     }
                     other => other,
                 };
@@ -1124,10 +1174,16 @@ impl Checker {
                     self.check_node(rhs)?
                 };
                 let typed_rhs = self.concretize_pending_trait_calls(typed_rhs)?;
-                if let Some((method_name, pending_span)) =
-                    self.first_pending_trait_helper(&typed_rhs)
-                {
-                    return Err(self.pending_trait_helper_error(method_name, pending_span));
+                if self.current_function_symbol.is_none() {
+                    let can_instantiate = match self.resolve_ty(&typed_rhs.ty) {
+                        Ty::Func(inputs, _) => self.local_callable_obligations_depend_on(&typed_rhs, &inputs),
+                        _ => false,
+                    };
+                    if !can_instantiate {
+                    if let Some((method_name, pending_span)) = self.first_pending_trait_helper(&typed_rhs) {
+                        return Err(self.pending_trait_helper_error(method_name, pending_span));
+                    }
+                    }
                 }
                 let facet_path = if matches!(typed_rhs.ty, Ty::Facet(..)) {
                     Some(self.stored_facet_path_from_node(typed_rhs.clone(), span)?)
@@ -1308,6 +1364,7 @@ impl Checker {
                     hint: None,
                 })?;
                 let deferred_self = self.env.fresh_tyvar();
+                if let Ty::Var(var) = deferred_self { self.register_tyvar_bound(var, &trait_key); }
                 let mut typed_methods = Vec::with_capacity(methods.len());
                 for method in methods {
                     let method_info = trait_info.methods.get(&method.id.name).ok_or_else(|| {
@@ -1324,7 +1381,7 @@ impl Checker {
                         &deferred_self,
                     )?;
                     if let Some(body) = &method.body {
-                        let mut tyvars = HashMap::new();
+                        let mut tyvars = HashMap::from([("Self".into(),deferred_self.clone())]);
                         for (param, resolved) in method.value_parameters.iter().zip(params.iter()) {
                             self.collect_signature_ty_bindings(
                                 &param.ty,
@@ -1393,6 +1450,7 @@ impl Checker {
             }
             Resolved::TraitImplDef(
                 span,
+                _,
                 trait_id,
                 trait_args,
                 target_ty,
@@ -3407,7 +3465,7 @@ impl Checker {
             | Resolved::TypeAlias(span, _, _, _, _)
             | Resolved::ResultCtorDecl(span, _, _, _, _)
             | Resolved::TraitDef(span, _, _, _, _, _)
-            | Resolved::TraitImplDef(span, _, _, _, _, _)
+            | Resolved::TraitImplDef(span, _, _, _, _, _, _)
             | Resolved::Closure(span, _, _, _)
             | Resolved::Capture(span, _, _)
             | Resolved::Semi(span, _) => span,
@@ -3661,276 +3719,39 @@ impl Checker {
         }
     }
 
-    pub(super) fn trait_dispatch_target(
-        &mut self,
-        trait_name: &str,
-        method_name: &str,
-        receiver_ty: &Ty,
-    ) -> Option<TraitDispatch> {
-        self.trait_dispatch_target_for_args(trait_name, method_name, receiver_ty, &[])
-    }
-
     pub(super) fn trait_dispatch_target_for_args(
         &mut self,
         trait_name: &str,
-        method_name: &str,
+        _method_name: &str,
         receiver_ty: &Ty,
         requested_trait_args: &[Ty],
-    ) -> Option<TraitDispatch> {
-        let profile = self.profiler.start();
+    ) -> Result<Option<TraitDispatch>, TypeError> {
         let receiver_ty = self.resolve_ty(receiver_ty);
-        let forwarded_capability = self.consume_matching_capability(&receiver_ty, trait_name);
-        let result = match receiver_ty {
-            Ty::Var(var) => {
-                if !self.rigid_tyvars.contains(&var)
-                    || self.tyvar_has_bound(var, trait_name)
-                    || self.tyvar_satisfies_compiler_trait(var, trait_name)
-                {
+        Ok(
+            match self.probe_trait_head(trait_name, requested_trait_args, &receiver_ty)? {
+                ApplicabilityProof::Satisfied(evidence) => {
+                    for index in evidence {
+                        self.active_capabilities[index].consumed = true;
+                    }
                     Some(TraitDispatch::Pending)
-                } else {
-                    None
                 }
-            }
-            concrete => {
-                if !self.trait_impl_exists_for_args(trait_name, requested_trait_args, &concrete) {
-                    return forwarded_capability.then_some(TraitDispatch::Pending);
-                }
-                if let Some(target_name) = self.trait_target_name(&concrete) {
-                    if let Some(impl_info) = self
-                        .trait_impls
-                        .get(&(trait_name.into(), target_name.clone()))
-                        .cloned()
-                    {
-                        let mut fresh = HashMap::new();
-                        let impl_target =
-                            self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-                        let before = self.substitutions.clone();
-                        let applicable = self.types_compatible(&impl_target, &concrete)
-                            && self.impl_where_obligations_satisfied(&impl_info, &fresh);
-                        if !applicable {
-                            self.substitutions = before;
-                        } else {
-                            let method = impl_info.methods.get(method_name)?;
-
-                            if let Some(dispatch_override) = &method.dispatch_override {
-                                return Some(TraitDispatch::Static(dispatch_override.clone()));
-                            }
-                            let function_key = method
-                                .function_id
-                                .qualified_name
-                                .as_ref()
-                                .unwrap_or(&method.function_id.name);
-                            let fun_idx = self
-                                .specializable_fun_idx_for_function_key(function_key)
-                                .or_else(|| {
-                                    let function_id =
-                                        self.function_ids_by_name.get(function_key)?;
-                                    let function_ty = self.env.lookup_var(function_id.unique_id)?;
-                                    let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                                        return None;
-                                    };
-                                    Some(*fun_idx)
-                                })?;
-                            let display_name = method
-                                .display_name_override
-                                .clone()
-                                .or_else(|| {
-                                    method.function_id.qualified_name.as_deref().map(
-                                        |qualified_name| {
-                                            callable_definition_display_name(
-                                                qualified_name,
-                                                &method.function_id.name,
-                                            )
-                                        },
-                                    )
-                                })
-                                .unwrap_or_else(|| {
-                                    Checker::surface_name(&method.function_id.name).into()
-                                });
-                            return Some(TraitDispatch::Static(
-                                TraitDispatchTarget::UserFunction {
-                                    name: display_name,
-                                    fun_idx,
-                                },
-                            ));
+                ApplicabilityProof::Deferred(waiting_on) => {
+                    for var in waiting_on {
+                        let pending = self.pending_trait_obligations.entry(var).or_default();
+                        let obligation = PendingTraitObligation {
+                            trait_id: trait_name.into(),
+                            args: requested_trait_args.to_vec(),
+                            receiver: receiver_ty.clone(),
+                        };
+                        if !pending.contains(&obligation) {
+                            pending.push(obligation);
                         }
                     }
+                    Some(TraitDispatch::Pending)
                 }
-                if let Some(dispatch) = self.generic_trait_dispatch_target(
-                    trait_name,
-                    method_name,
-                    &concrete,
-                    requested_trait_args,
-                ) {
-                    return Some(dispatch);
-                }
-                self.compiler_trait_dispatch_target(trait_name, method_name, &concrete)
-                    .map(TraitDispatch::Static)
-            }
-        };
-        self.profiler
-            .finish(ProfileEvent::TraitDispatchLookup, profile);
-        result
-    }
-
-    fn generic_trait_dispatch_target(
-        &mut self,
-        trait_name: &str,
-        method_name: &str,
-        receiver_ty: &Ty,
-        requested_trait_args: &[Ty],
-    ) -> Option<TraitDispatch> {
-        let profile = self.profiler.start();
-        let result = (|| {
-            let candidate_keys = self.trait_impl_candidate_keys(trait_name);
-            let instance_matches = requested_trait_args.is_empty() && trait_name.contains('<');
-            for impl_key in candidate_keys {
-                let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
-                    continue;
-                };
-                let Some(method) = impl_info.methods.get(method_name) else {
-                    continue;
-                };
-                if !instance_matches && impl_info.trait_arg_tys.len() != requested_trait_args.len()
-                {
-                    continue;
-                }
-                let mut fresh = HashMap::new();
-                let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-                let impl_trait_args = impl_info
-                    .trait_arg_tys
-                    .iter()
-                    .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
-                    .collect::<Vec<_>>();
-                let before = self.substitutions.clone();
-                let target_matches = self.types_compatible(&impl_target, receiver_ty);
-                // A pending trait call is revisited after specialization with
-                // its fully-rendered instance name (for example
-                // `Encode<JsonValue>`), but its parsed argument types are no
-                // longer present in `TypedInner::TraitCall`.  Keep that exact
-                // instance constraint instead of treating it as the arity-0
-                // `Encode` trait.
-                let args_match = if instance_matches {
-                    target_matches
-                        && self.trait_display_name(
-                            &self.trait_instance_key(&impl_info.trait_id, &impl_info.trait_args),
-                        ) == self.trait_display_name(trait_name)
-                } else {
-                    target_matches
-                        && impl_trait_args.len() == requested_trait_args.len()
-                        && impl_trait_args
-                            .iter()
-                            .zip(requested_trait_args.iter())
-                            .all(|(expected, actual)| self.types_compatible(expected, actual))
-                };
-                if !args_match {
-                    self.substitutions = before;
-                    continue;
-                }
-                if !self.impl_where_obligations_satisfied(&impl_info, &fresh) {
-                    self.substitutions = before;
-                    continue;
-                }
-
-                if let Some(dispatch_override) = &method.dispatch_override {
-                    return Some(TraitDispatch::Static(dispatch_override.clone()));
-                }
-                let function_key = method
-                    .function_id
-                    .qualified_name
-                    .as_ref()
-                    .unwrap_or(&method.function_id.name);
-                let fun_idx = self
-                    .specializable_fun_idx_for_function_key(function_key)
-                    .or_else(|| {
-                        let function_id = self.function_ids_by_name.get(function_key)?;
-                        let function_ty = self.env.lookup_var(function_id.unique_id)?;
-                        let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                            return None;
-                        };
-                        Some(*fun_idx)
-                    })?;
-                let display_name = method
-                    .display_name_override
-                    .clone()
-                    .or_else(|| {
-                        method
-                            .function_id
-                            .qualified_name
-                            .as_deref()
-                            .map(|qualified_name| {
-                                callable_definition_display_name(
-                                    qualified_name,
-                                    &method.function_id.name,
-                                )
-                            })
-                    })
-                    .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
-                return Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                    name: display_name,
-                    fun_idx,
-                }));
-            }
-            None
-        })();
-        self.profiler
-            .finish(ProfileEvent::GenericTraitCandidateScan, profile);
-        result
-    }
-
-    pub(super) fn impl_where_obligations_satisfied(
-        &mut self,
-        impl_info: &TraitImplInfo,
-        fresh: &HashMap<u32, Ty>,
-    ) -> bool {
-        let Some(where_clause) = &impl_info.where_clause else {
-            return true;
-        };
-        for constraint in &where_clause.constraints {
-            let mapped_rigid = match &constraint.subject {
-                AstTy::Named(_, subject) if subject == "Self" => None,
-                AstTy::Named(_, subject) => {
-                    let Some(original_var) = impl_info.type_param_vars_by_name.get(subject) else {
-                        return false;
-                    };
-                    let Some(mapped) = fresh.get(original_var) else {
-                        return false;
-                    };
-                    match self.resolve_ty(mapped) {
-                        Ty::Var(var) if self.rigid_tyvars.contains(&var) => Some(var),
-                        _ => None,
-                    }
-                }
-                _ => return false,
-            };
-            if let Some(var) = mapped_rigid {
-                for bound in &constraint.bounds {
-                    let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
-                        continue;
-                    };
-                    if !self.tyvar_has_bound(var, &self.trait_key(trait_id)) {
-                        return false;
-                    }
-                }
-            }
-        }
-        // Bare impl bounds are capabilities, not standalone arity-zero proofs.
-        // Candidate selection only establishes the impl-head substitution; the
-        // full trait-call obligations emitted by the method body are checked
-        // when that body is specialized with `fresh`.
-        true
-    }
-
-    fn specializable_fun_idx_for_function_key(&self, function_key: &str) -> Option<u32> {
-        self.specializable_defs.iter().find_map(|(fun_idx, def)| {
-            let name = match &def.node {
-                TypedInner::Def(_, id, ..) | TypedInner::ExtractorDef(_, id, ..) => {
-                    id.qualified_name.as_ref().unwrap_or(&id.name)
-                }
-                _ => return None,
-            };
-            (name == function_key).then_some(*fun_idx)
-        })
+                ApplicabilityProof::Unsatisfied => None,
+            },
+        )
     }
 
     fn operator_trait_dispatch_for_args(
@@ -3939,110 +3760,28 @@ impl Checker {
         method_name: &str,
         receiver_ty: &Ty,
         requested_trait_args: &[Ty],
-    ) -> Option<(TraitDispatch, Vec<Ty>)> {
+        argument_tys: &[Ty],
+        result_ty: &Ty,
+    ) -> Result<Option<(TraitDispatch, Vec<Ty>)>, TypeError> {
         let profile = self.profiler.start();
-        let result = (|| {
-            for impl_key in self.trait_impl_candidate_keys(trait_name) {
-                let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
-                    continue;
-                };
-                let Some(method) = impl_info.methods.get(method_name) else {
-                    continue;
-                };
-                if impl_info.trait_arg_tys.len() != requested_trait_args.len() {
-                    continue;
-                }
-
-                let mut fresh = HashMap::new();
-                let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-                let impl_trait_args = impl_info
-                    .trait_arg_tys
-                    .iter()
-                    .map(|ty| self.instantiate_ty_with_fresh(ty, &mut fresh))
-                    .collect::<Vec<_>>();
-
-                let before = self.substitutions.clone();
-                let target_matches = self.types_compatible(&impl_target, receiver_ty);
-                let args_match = target_matches
-                    && impl_trait_args.iter().zip(requested_trait_args.iter()).all(
-                        |(expected, actual)| self.operator_trait_arg_compatible(expected, actual),
-                    );
-                if !args_match {
-                    self.substitutions = before;
-                    continue;
-                }
-                let resolved_trait_args = requested_trait_args
-                    .iter()
-                    .map(|ty| self.resolve_ty(ty))
-                    .collect::<Vec<_>>();
-
-                if let Some(dispatch_override) = &method.dispatch_override {
-                    return Some((
-                        TraitDispatch::Static(dispatch_override.clone()),
-                        resolved_trait_args,
-                    ));
-                }
-                let function_key = method
-                    .function_id
-                    .qualified_name
-                    .as_ref()
-                    .unwrap_or(&method.function_id.name);
-                let function_id = self.function_ids_by_name.get(function_key)?;
-                let function_ty = self.env.lookup_var(function_id.unique_id)?;
-                let Ty::UserFunc { fun_idx, .. } = function_ty else {
-                    self.substitutions = before;
-                    continue;
-                };
-                let display_name = method
-                    .function_id
-                    .qualified_name
-                    .as_deref()
-                    .map(|qualified_name| {
-                        callable_definition_display_name(qualified_name, &method.function_id.name)
-                    })
-                    .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
-                return Some((
-                    TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                        name: display_name,
-                        fun_idx: *fun_idx,
-                    }),
-                    resolved_trait_args,
-                ));
-            }
-            None
-        })();
+        let dispatch = self.select_method_dispatch(
+            trait_name,
+            method_name,
+            receiver_ty,
+            requested_trait_args,
+            argument_tys,
+            result_ty,
+        );
         self.profiler
             .finish(ProfileEvent::OperatorTraitCandidateScan, profile);
-        result
-    }
-
-    fn constructor_trait_method_dispatch(
-        &self,
-        method: &TraitImplMethodInfo,
-    ) -> Option<TraitDispatch> {
-        if let Some(dispatch_override) = &method.dispatch_override {
-            return Some(TraitDispatch::Static(dispatch_override.clone()));
-        }
-        let function_key = method
-            .function_id
-            .qualified_name
-            .as_ref()
-            .unwrap_or(&method.function_id.name);
-        let function_id = self.function_ids_by_name.get(function_key)?;
-        let Ty::UserFunc { fun_idx, .. } = self.env.lookup_var(function_id.unique_id)? else {
-            return None;
-        };
-        let display_name = method
-            .function_id
-            .qualified_name
-            .as_deref()
-            .map(|qualified_name| {
-                callable_definition_display_name(qualified_name, &method.function_id.name)
-            })
-            .unwrap_or_else(|| Checker::surface_name(&method.function_id.name).into());
-        Some(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-            name: display_name,
-            fun_idx: *fun_idx,
+        Ok(dispatch?.map(|dispatch| {
+            (
+                dispatch,
+                requested_trait_args
+                    .iter()
+                    .map(|ty| self.resolve_ty(ty))
+                    .collect(),
+            )
         }))
     }
 
@@ -4053,50 +3792,28 @@ impl Checker {
         receiver_ty: &Ty,
         input_ty: &Ty,
         output_ty: &Ty,
-    ) -> Option<(TraitDispatch, Ty)> {
-        for impl_key in self.trait_impl_candidate_keys(trait_name) {
-            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
-            let method = impl_info.methods.get(method_name)?;
-            if impl_info.constructor_slot_vars.len() != 1 {
-                continue;
-            }
-            let mut fresh = HashMap::new();
-            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-            let before = self.substitutions.clone();
-            if !self.types_compatible(&target, receiver_ty) {
-                self.substitutions = before;
-                continue;
-            }
-            let slot = impl_info.constructor_slot_vars[0];
-            let Some(fresh_slot) = fresh.get(&slot).cloned() else {
-                self.substitutions = before;
-                continue;
-            };
-            if !self.operator_trait_arg_compatible(&fresh_slot, input_ty) {
-                self.substitutions = before;
-                continue;
-            }
-            let mapping = impl_info
-                .type_param_vars
-                .iter()
-                .copied()
-                .map(|var| {
-                    let replacement = if var == slot {
-                        output_ty.clone()
-                    } else {
-                        fresh
-                            .get(&var)
-                            .map(|ty| self.resolve_ty(ty))
-                            .unwrap_or(Ty::Var(var))
-                    };
-                    (var, replacement)
-                })
-                .collect::<HashMap<_, _>>();
-            let result_ty = self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping);
-            let dispatch = self.constructor_trait_method_dispatch(method)?;
-            return Some((dispatch, self.resolve_ty(&result_ty)));
+    ) -> Result<Option<(TraitDispatch, Ty)>, TypeError> {
+        let Some((info, mut mapping)) = self.constructor_projection(trait_name, receiver_ty) else {
+            return Ok(None);
+        };
+        let [slot] = info.constructor_slot_vars.as_slice() else {
+            return Ok(None);
+        };
+        let Some(actual_slot) = mapping.get(slot) else {
+            return Ok(None);
+        };
+        if !self.operator_trait_arg_compatible(actual_slot, input_ty) {
+            return Ok(None);
         }
-        None
+        mapping.insert(*slot, output_ty.clone());
+        let result = self.resolve_ty(&self.substitute_ty_with_mapping(&info.target_ty, &mapping));
+        let args = [
+            receiver_ty.clone(),
+            Ty::Func(vec![input_ty.clone()], Box::new(output_ty.clone())),
+        ];
+        Ok(self
+            .select_method_dispatch(trait_name, method_name, receiver_ty, &[], &args, &result)?
+            .map(|dispatch| (dispatch, result)))
     }
 
     fn constructor_pure_dispatch(
@@ -4104,103 +3821,47 @@ impl Checker {
         trait_name: &str,
         expected_ty: &Ty,
         value_ty: &Ty,
-    ) -> Option<TraitDispatch> {
-        let expected_ty = self.resolve_ty(expected_ty);
-        if let Ty::SelfApp(items) = &expected_ty {
-            if let Some((witness, slots)) = Self::constructor_application_parts(items) {
-                let witness_supports_trait =
-                    self.constructor_witness_supports_trait(witness, trait_name);
-                if slots.len() != 1
-                    || !self.types_compatible(&slots[0], value_ty)
-                    || !witness_supports_trait
-                {
-                    return None;
-                }
-                return Some(TraitDispatch::Pending);
-            }
-        }
-        for impl_key in self.trait_impl_candidate_keys(trait_name) {
-            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
-            let method = impl_info.methods.get("pure")?;
-            if impl_info.constructor_slot_vars.len() != 1 {
-                continue;
-            }
-            let mut fresh = HashMap::new();
-            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-            let before = self.substitutions.clone();
-            if !self.types_compatible(&target, &expected_ty) {
-                self.substitutions = before;
-                continue;
-            }
-            let slot = impl_info.constructor_slot_vars[0];
-            let Some(fresh_slot) = fresh.get(&slot).cloned() else {
-                self.substitutions = before;
-                continue;
-            };
-            if !self.types_compatible(&fresh_slot, value_ty) {
-                self.substitutions = before;
-                continue;
-            }
-            return self.constructor_trait_method_dispatch(method);
-        }
-        None
+    ) -> Result<Option<TraitDispatch>, TypeError> {
+        self.constructor_slot_value_dispatch(trait_name, "pure", expected_ty, value_ty)
     }
 
-    /// Resolve a constructor-style trait method whose receiver (`Self`) only
-    /// appears in the result type.  The method-specific checks are performed
-    /// by the caller; this common part selects the concrete impl target and
-    /// its static dispatch target from the expected result type.
     fn constructor_target_dispatch(
         &mut self,
         trait_name: &str,
         method_name: &str,
         expected_ty: &Ty,
-    ) -> Option<TraitDispatch> {
+    ) -> Result<Option<TraitDispatch>, TypeError> {
         if let Ty::Var(var) = self.resolve_ty(expected_ty) {
-            return if !self.rigid_tyvars.contains(&var)
-                || self.tyvar_has_bound(var, trait_name)
-                || self.tyvar_satisfies_compiler_trait(var, trait_name)
-            {
-                Some(TraitDispatch::Pending)
-            } else {
-                None
-            };
+            return Ok(
+                if !self.rigid_tyvars.contains(&var)
+                    || self.tyvar_has_bound(var, trait_name)
+                    || self.tyvar_satisfies_compiler_trait(var, trait_name)
+                {
+                    Some(TraitDispatch::Pending)
+                } else {
+                    None
+                },
+            );
         }
         let expected_ty = self.resolve_ty(expected_ty);
         if let Ty::SelfApp(items) = &expected_ty {
             if let Some((witness, _)) = Self::constructor_application_parts(items) {
-                return match self.resolve_ty(witness) {
+                return Ok(match self.resolve_ty(witness) {
                     Ty::Var(_) if self.constructor_witness_supports_trait(witness, trait_name) => {
                         Some(TraitDispatch::Pending)
                     }
                     _ => None,
-                };
+                });
             }
         }
-        self.consume_matching_capability(&expected_ty, trait_name);
-        if !self.trait_impl_exists_for_args(trait_name, &[], &expected_ty) {
-            return None;
-        }
-        for impl_key in self.trait_impl_candidate_keys(trait_name) {
-            let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
-                continue;
-            };
-            let Some(method) = impl_info.methods.get(method_name) else {
-                continue;
-            };
-            let mut fresh = HashMap::new();
-            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-            let before = self.substitutions.clone();
-            if self.types_compatible(&target, &expected_ty)
-                && self.impl_where_obligations_satisfied(&impl_info, &fresh)
-            {
-                if let Some(dispatch) = self.constructor_trait_method_dispatch(method) {
-                    return Some(dispatch);
-                }
-            }
-            self.substitutions = before;
-        }
-        None
+        self.select_method_dispatch(
+            trait_name,
+            method_name,
+            &expected_ty,
+            &[],
+            &[],
+            &expected_ty,
+        )
     }
 
     fn constructor_slot_value_dispatch(
@@ -4209,50 +3870,25 @@ impl Checker {
         method_name: &str,
         expected_ty: &Ty,
         value_ty: &Ty,
-    ) -> Option<TraitDispatch> {
+    ) -> Result<Option<TraitDispatch>, TypeError> {
         let expected_ty = self.resolve_ty(expected_ty);
         if let Ty::SelfApp(items) = &expected_ty {
             if let Some((witness, slots)) = Self::constructor_application_parts(items) {
-                let witness_supports_trait =
-                    self.constructor_witness_supports_trait(witness, trait_name);
-                if slots.len() != 1
-                    || !self.types_compatible(&slots[0], value_ty)
-                    || !witness_supports_trait
-                {
-                    return None;
+                let supported = self.constructor_witness_supports_trait(witness, trait_name);
+                if slots.len() != 1 || !self.types_compatible(&slots[0], value_ty) || !supported {
+                    return Ok(None);
                 }
-                return Some(TraitDispatch::Pending);
+                return Ok(Some(TraitDispatch::Pending));
             }
         }
-        for impl_key in self.trait_impl_candidate_keys(trait_name) {
-            let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
-                continue;
-            };
-            let Some(method) = impl_info.methods.get(method_name) else {
-                continue;
-            };
-            if impl_info.constructor_slot_vars.len() != 1 {
-                continue;
-            }
-            let mut fresh = HashMap::new();
-            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-            let before = self.substitutions.clone();
-            if !self.types_compatible(&target, &expected_ty) {
-                self.substitutions = before;
-                continue;
-            }
-            let slot = impl_info.constructor_slot_vars[0];
-            let Some(slot_ty) = fresh.get(&slot).cloned() else {
-                self.substitutions = before;
-                continue;
-            };
-            if !self.types_compatible(&slot_ty, value_ty) {
-                self.substitutions = before;
-                continue;
-            }
-            return self.constructor_trait_method_dispatch(method);
-        }
-        None
+        self.select_method_dispatch(
+            trait_name,
+            method_name,
+            &expected_ty,
+            &[],
+            &[value_ty.clone()],
+            &expected_ty,
+        )
     }
 
     fn constructor_witness_supports_trait(&mut self, witness: &Ty, trait_name: &str) -> bool {
@@ -4271,27 +3907,11 @@ impl Checker {
     }
 
     fn constructor_slot_type_for(&mut self, trait_name: &str, container_ty: &Ty) -> Option<Ty> {
-        for impl_key in self.trait_impl_candidate_keys(trait_name) {
-            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
-            if impl_info.constructor_slot_vars.len() != 1 {
-                continue;
-            }
-            let mut fresh = HashMap::new();
-            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-            let before = self.substitutions.clone();
-            if !self.types_compatible(&target, container_ty) {
-                self.substitutions = before;
-                continue;
-            }
-            let slot = impl_info.constructor_slot_vars[0];
-            let slot_ty = fresh.get(&slot).map(|ty| self.resolve_ty(ty));
-            if slot_ty.is_some() {
-                self.substitutions = before;
-                return slot_ty;
-            }
-            self.substitutions = before;
-        }
-        None
+        let (info, mapping) = self.constructor_projection(trait_name, container_ty)?;
+        let [slot] = info.constructor_slot_vars.as_slice() else {
+            return None;
+        };
+        mapping.get(slot).cloned()
     }
 
     fn constructor_context_type_for(
@@ -4300,43 +3920,12 @@ impl Checker {
         container_ty: &Ty,
         slot_ty: &Ty,
     ) -> Option<Ty> {
-        for impl_key in self.trait_impl_candidate_keys(trait_name) {
-            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
-            if impl_info.constructor_slot_vars.len() != 1 {
-                continue;
-            }
-
-            let mut fresh = HashMap::new();
-            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-            let before = self.substitutions.clone();
-            if !self.types_compatible(&target, container_ty) {
-                self.substitutions = before;
-                continue;
-            }
-
-            let slot = impl_info.constructor_slot_vars[0];
-            let mapping = impl_info
-                .type_param_vars
-                .iter()
-                .copied()
-                .map(|var| {
-                    let replacement = if var == slot {
-                        slot_ty.clone()
-                    } else {
-                        fresh
-                            .get(&var)
-                            .map(|ty| self.resolve_ty(ty))
-                            .unwrap_or(Ty::Var(var))
-                    };
-                    (var, replacement)
-                })
-                .collect::<HashMap<_, _>>();
-            let context_ty =
-                self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping));
-            self.substitutions = before;
-            return Some(context_ty);
-        }
-        None
+        let (info, mut mapping) = self.constructor_projection(trait_name, container_ty)?;
+        let [slot] = info.constructor_slot_vars.as_slice() else {
+            return None;
+        };
+        mapping.insert(*slot, slot_ty.clone());
+        Some(self.resolve_ty(&self.substitute_ty_with_mapping(&info.target_ty, &mapping)))
     }
 
     /// Enumerate the concrete constructor contexts which can carry `slot_ty`.
@@ -4383,55 +3972,41 @@ impl Checker {
         receiver_ty: &Ty,
         input_ty: &Ty,
         contextual_output_ty: &Ty,
-    ) -> Option<(TraitDispatch, Ty)> {
-        for impl_key in self.trait_impl_candidate_keys(trait_name) {
-            let impl_info = self.trait_impls.get(&impl_key).cloned()?;
-            let method = impl_info.methods.get("bind")?;
-            if impl_info.constructor_slot_vars.len() != 1 {
-                continue;
-            }
-            let mut fresh = HashMap::new();
-            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-            let before = self.substitutions.clone();
-            if !self.types_compatible(&target, receiver_ty) {
-                self.substitutions = before;
-                continue;
-            }
-            let slot = impl_info.constructor_slot_vars[0];
-            let Some(fresh_slot) = fresh.get(&slot).cloned() else {
-                self.substitutions = before;
-                continue;
-            };
-            if !self.operator_trait_arg_compatible(&fresh_slot, input_ty) {
-                self.substitutions = before;
-                continue;
-            }
-            let output_slot = self.env.fresh_tyvar();
-            let mapping = impl_info
-                .type_param_vars
-                .iter()
-                .copied()
-                .map(|var| {
-                    let replacement = if var == slot {
-                        output_slot.clone()
-                    } else {
-                        fresh
-                            .get(&var)
-                            .map(|ty| self.resolve_ty(ty))
-                            .unwrap_or(Ty::Var(var))
-                    };
-                    (var, replacement)
-                })
-                .collect::<HashMap<_, _>>();
-            let expected_output = self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping);
-            if !self.types_compatible(&expected_output, contextual_output_ty) {
-                self.substitutions = before;
-                continue;
-            }
-            let dispatch = self.constructor_trait_method_dispatch(method)?;
-            return Some((dispatch, self.resolve_ty(contextual_output_ty)));
+    ) -> Result<Option<(TraitDispatch, Ty)>, TypeError> {
+        let Some((info, mut mapping)) = self.constructor_projection(trait_name, receiver_ty) else {
+            return Ok(None);
+        };
+        let [slot] = info.constructor_slot_vars.as_slice() else {
+            return Ok(None);
+        };
+        let Some(actual_slot) = mapping.get(slot) else {
+            return Ok(None);
+        };
+        if !self.operator_trait_arg_compatible(actual_slot, input_ty) {
+            return Ok(None);
         }
-        None
+        mapping.insert(*slot, self.env.fresh_tyvar());
+        let expected = self.substitute_ty_with_mapping(&info.target_ty, &mapping);
+        if !self.types_compatible(&expected, contextual_output_ty) {
+            return Ok(None);
+        }
+        let args = [
+            receiver_ty.clone(),
+            Ty::Func(
+                vec![input_ty.clone()],
+                Box::new(contextual_output_ty.clone()),
+            ),
+        ];
+        Ok(self
+            .select_method_dispatch(
+                trait_name,
+                "bind",
+                receiver_ty,
+                &[],
+                &args,
+                contextual_output_ty,
+            )?
+            .map(|dispatch| (dispatch, self.resolve_ty(contextual_output_ty))))
     }
 
     fn opposite_conversion_hint(
@@ -4594,7 +4169,7 @@ impl Checker {
             })?;
             let typed_value = self.check_node(positional_args[0])?;
             let dispatch = self
-                .constructor_pure_dispatch(trait_name, expected, &typed_value.ty)
+                .constructor_pure_dispatch(trait_name, expected, &typed_value.ty)?
                 .ok_or_else(|| TypeError {
                     structured: None,
                     message: format!(
@@ -4636,7 +4211,7 @@ impl Checker {
             })?;
             let typed_value = self.check_node(positional_args[0])?;
             let dispatch = self
-                .constructor_slot_value_dispatch(trait_name, "return", expected, &typed_value.ty)
+                .constructor_slot_value_dispatch(trait_name, "return", expected, &typed_value.ty)?
                 .ok_or_else(|| TypeError {
                     structured: None,
                     message: format!("Monad::return cannot construct {}", self.ty_name(expected)),
@@ -4714,17 +4289,15 @@ impl Checker {
                         )),
                     })?;
                 let dispatch = self
-                    .constructor_target_dispatch(trait_name, method_name, expected)
+                    .constructor_target_dispatch(trait_name, method_name, expected)?
                     .ok_or_else(|| TypeError {
                         structured: None,
-                        message: self.trait_obligation_cycle.clone().unwrap_or_else(|| {
-                            format!(
-                                "{}::{} cannot construct {}",
-                                trait_name,
-                                method_name,
-                                self.ty_name(expected)
-                            )
-                        }),
+                        message: format!(
+                            "{}::{} cannot construct {}",
+                            trait_name,
+                            method_name,
+                            self.ty_name(expected)
+                        ),
                         span: span.clone(),
                         hint: Some(self.trait_implementation_summary(trait_name)),
                     })?;
@@ -4798,13 +4371,9 @@ impl Checker {
                 self.check_node_with_expected(positional_args[1], Some(&expected_value_ty))?;
             self.check_constructor_capability(trait_name, method_name, &typed_value)?;
             let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
-            let Some((dispatch, expected_mapper)) = self.constructor_functor_dispatch(
-                trait_name,
-                "ap",
-                &typed_value.ty,
-                &input,
-                &callable_ty,
-            ) else {
+            let Some(expected_mapper) =
+                self.constructor_context_type_for(trait_name, &typed_value.ty, &callable_ty)
+            else {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
@@ -4823,9 +4392,26 @@ impl Checker {
                     hint: None,
                 });
             }
-            let (_, result_ty) = self
-                .constructor_functor_dispatch(trait_name, "ap", &typed_value.ty, &input, &output)
-                .expect("the same Applicative impl already matched");
+            let result_ty = self
+                .constructor_context_type_for(trait_name, &typed_value.ty, &output)
+                .ok_or_else(|| {
+                    TypeError::new(
+                        "Applicative::ap has no declared result context",
+                        span.clone(),
+                    )
+                })?;
+            let dispatch = self
+                .select_method_dispatch(
+                    trait_name,
+                    "ap",
+                    &typed_value.ty,
+                    &[],
+                    &[typed_mapper.ty.clone(), typed_value.ty.clone()],
+                    &result_ty,
+                )?
+                .ok_or_else(|| {
+                    TypeError::new("Applicative::ap has no applicable method", span.clone())
+                })?;
             return Ok(TypedNode {
                 ty: result_ty,
                 span: span.clone(),
@@ -4921,7 +4507,19 @@ impl Checker {
             }
         }
 
-        let self_ty = self.env.fresh_tyvar();
+        let self_ty = if method.attrs.visibility == spire::ast::Visibility::Private {
+            self.local_annotation_tyvars
+                .get("Self")
+                .cloned()
+                .ok_or_else(|| {
+                    TypeError::new(
+                        "Internal error: private trait helper has no lexical Self owner",
+                        span.clone(),
+                    )
+                })?
+        } else {
+            self.env.fresh_tyvar()
+        };
         let (param_tys, ret_ty, trait_arg_tys, explicit_slots, _) =
             self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
 
@@ -5144,8 +4742,8 @@ impl Checker {
         let receiver_ty = self.resolve_ty(&self_ty);
         if let Ty::Var(var) = receiver_ty {
             if self.rigid_tyvars.contains(&var)
-                && !self.tyvar_has_bound(var, &trait_call_name)
-                && !self.tyvar_satisfies_compiler_trait(var, &trait_call_name)
+                && !self.tyvar_has_bound(var, trait_name)
+                && !self.tyvar_satisfies_compiler_trait(var, trait_name)
             {
                 return Err(TypeError {
                     structured: None,
@@ -5183,7 +4781,7 @@ impl Checker {
             .unwrap_or_else(|| span.clone());
 
         if let Some(err) = self.opposite_conversion_hint(
-            &trait_call_name,
+            trait_name,
             method_name,
             &receiver_ty,
             &trait_arg_tys,
@@ -5191,11 +4789,11 @@ impl Checker {
         ) {
             if self
                 .trait_dispatch_target_for_args(
-                    &trait_call_name,
+                    trait_name,
                     method_name,
                     &receiver_ty,
                     &trait_arg_tys,
-                )
+                )?
                 .is_none()
             {
                 return Err(err);
@@ -5203,30 +4801,51 @@ impl Checker {
         }
 
         let receiver_ty = self.resolve_ty(&self_ty);
-        let dispatch = self
-            .trait_dispatch_target_for_args(
-                &trait_call_name,
+        self.consume_matching_capability(&receiver_ty, trait_name);
+        let argument_tys = typed_args
+            .iter()
+            .map(|arg| self.resolve_ty(&arg.ty))
+            .collect::<Vec<_>>();
+        let mut rejection_note = None;
+        let dispatch = match self.select_trait_method_instantiation(
+            trait_name,
+            method_name,
+            &receiver_ty,
+            &trait_arg_tys,
+            &argument_tys,
+            &ret_ty,
+        )? {
+            CandidateApplicability::Applicable(instantiation) => {
+                Some(TraitDispatch::Static(instantiation.dispatch))
+            }
+            CandidateApplicability::Deferred(_) => self.trait_dispatch_target_for_args(
+                trait_name,
                 method_name,
                 &receiver_ty,
                 &trait_arg_tys,
-            )
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: self.trait_obligation_cycle.clone().unwrap_or_else(|| {
-                    format!(
-                        "{}::{} requires a receiver type implementing {}, got {}",
-                        trait_call_display_name,
-                        method_name,
-                        trait_call_display_name,
-                        self.ty_name(&receiver_ty)
-                    )
-                }),
-                span: receiver_span,
-                hint: combine_hint_parts(&[
-                    Some(trait_signature_hint(self)),
-                    Some(trait_call_summary),
-                ]),
-            })?;
+            )?,
+            CandidateApplicability::Rejected(rejection) => {
+                rejection_note = self.candidate_rejection_note(&rejection);
+                self.consume_matching_capability(&receiver_ty, trait_name)
+                    .then_some(TraitDispatch::Pending)
+            }
+        }
+        .ok_or_else(|| TypeError {
+            structured: None,
+            message: format!(
+                "{}::{} requires a receiver type implementing {}, got {}",
+                trait_call_display_name,
+                method_name,
+                trait_call_display_name,
+                self.ty_name(&receiver_ty)
+            ),
+            span: receiver_span,
+            hint: combine_hint_parts(&[
+                Some(trait_signature_hint(self)),
+                Some(trait_call_summary),
+                rejection_note,
+            ]),
+        })?;
 
         Ok(TypedNode {
             ty: self.resolve_ty(&ret_ty),
@@ -5237,7 +4856,7 @@ impl Checker {
                 receiver_ty: receiver_ty.clone(),
                 obligation: TraitObligation {
                     trait_id: trait_name.to_string(),
-                    trait_args: trait_arg_tys,
+                    trait_args: trait_arg_tys.iter().map(|ty| self.resolve_ty(ty)).collect(),
                     receiver: receiver_ty,
                 },
                 dispatch,
@@ -5471,7 +5090,13 @@ impl Checker {
             method_name,
             receiver_ty,
             &requested_trait_args,
-        ) else {
+            &args
+                .iter()
+                .map(|arg| self.resolve_ty(&arg.ty))
+                .collect::<Vec<_>>(),
+            &result_ty,
+        )?
+        else {
             let summary = self.trait_implementation_summary(trait_short_name);
             return Err(TypeError {
                 structured: None,
@@ -5684,13 +5309,9 @@ impl Checker {
             });
         }
         let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
-        let Some((dispatch, expected_mapper)) = self.constructor_functor_dispatch(
-            "Applicative",
-            "ap",
-            &typed_value.ty,
-            &input,
-            &callable_ty,
-        ) else {
+        let Some(expected_mapper) =
+            self.constructor_context_type_for("Applicative", &typed_value.ty, &callable_ty)
+        else {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -5709,9 +5330,21 @@ impl Checker {
                 hint: None,
             });
         }
-        let (_, result_ty) = self
-            .constructor_functor_dispatch("Applicative", "ap", &typed_value.ty, &input, &output)
-            .expect("the same Applicative impl already matched");
+        let result_ty = self
+            .constructor_context_type_for("Applicative", &typed_value.ty, &output)
+            .ok_or_else(|| TypeError::new("`|*|` has no declared result context", span.clone()))?;
+        let dispatch = self
+            .select_method_dispatch(
+                "Applicative",
+                "ap",
+                &typed_value.ty,
+                &[],
+                &[typed_mapper.ty.clone(), typed_value.ty.clone()],
+                &result_ty,
+            )?
+            .ok_or_else(|| {
+                TypeError::new("`|*|` has no applicable Applicative method", span.clone())
+            })?;
         let applicative_trait = self
             .trait_key_by_short_name("Applicative")
             .unwrap_or_else(|| "Applicative".into());
@@ -5921,7 +5554,8 @@ impl Checker {
             &receiver_ty,
             &rhs_in,
             &rhs_out,
-        ) else {
+        )?
+        else {
             let functor_summary = self.trait_implementation_summary("Functor");
             return Err(TypeError {
                 structured: None,
@@ -6142,7 +5776,7 @@ impl Checker {
                 }
             };
             let Some((dispatch, result_ty)) =
-                self.constructor_monad_dispatch(&monad_trait, &context, &rhs_in, &rhs_ret)
+                self.constructor_monad_dispatch(&monad_trait, &context, &rhs_in, &rhs_ret)?
             else {
                 self.rollback_candidate_probe(checkpoint);
                 failures.push(CandidateFailureData {
@@ -6493,7 +6127,7 @@ impl Checker {
                 hint: None,
             })?;
         let Some((dispatch, result_ty)) =
-            self.constructor_monad_dispatch(&monad_trait, &receiver_ty, &rhs_in, &rhs_ret)
+            self.constructor_monad_dispatch(&monad_trait, &receiver_ty, &rhs_in, &rhs_ret)?
         else {
             let monad_summary = self.trait_implementation_summary("Monad");
             return Err(TypeError {
@@ -6826,7 +6460,15 @@ impl Checker {
                 )
             }
             _ => {
-                let mapped_ty = self.env.fresh_tyvar();
+                let mapped_ty = match self.trait_key_by_short_name("Functor") {
+                    Some(functor) => {
+                        match self.constructor_context_type_for(&functor, &left_out, &right_out) {
+                            Some(mapped) => mapped,
+                            None => self.env.fresh_tyvar(),
+                        }
+                    }
+                    None => self.env.fresh_tyvar(),
+                };
                 let result_ty =
                     Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(mapped_ty.clone()));
                 let receiver_ty = self.resolve_ty(&typed_left.ty);
@@ -11067,7 +10709,10 @@ impl Checker {
             };
             self.profiler.finish(ProfileEvent::ClosureBody, profile);
             let typed_body = self.concretize_pending_trait_calls(typed_body)?;
-            if expected.is_none() {
+            if expected.is_none()
+                && self.current_function_symbol.is_none()
+                && !self.local_callable_obligations_depend_on(&typed_body, &param_tys)
+            {
                 if let Some((method_name, pending_span)) =
                     self.first_pending_trait_helper(&typed_body)
                 {
@@ -11606,7 +11251,14 @@ impl Checker {
                             hint: None,
                         })?;
                 let dispatch = self
-                    .trait_dispatch_target(&operator_trait, method_name, &receiver_ty)
+                    .select_method_dispatch(
+                        &operator_trait,
+                        method_name,
+                        &receiver_ty,
+                        &[],
+                        &[lt.clone(), rt.clone()],
+                        &receiver_ty,
+                    )?
                     .ok_or_else(|| TypeError {
                         structured: None,
                         message: format!(
@@ -11653,7 +11305,14 @@ impl Checker {
                             hint: None,
                         })?;
                 let dispatch = self
-                    .trait_dispatch_target(&alternative_trait, "choose", &receiver_ty)
+                    .select_method_dispatch(
+                        &alternative_trait,
+                        "choose",
+                        &receiver_ty,
+                        &[],
+                        &[lt.clone(), rt.clone()],
+                        &receiver_ty,
+                    )?
                     .ok_or_else(|| TypeError {
                         structured: None,
                         message: format!("`<|>` is not defined for {}", self.ty_name(&receiver_ty)),
@@ -11710,7 +11369,14 @@ impl Checker {
                         hint: None,
                     })?;
                 let dispatch = self
-                    .trait_dispatch_target(&eq_trait, method_name, &receiver_ty)
+                    .select_method_dispatch(
+                        &eq_trait,
+                        method_name,
+                        &receiver_ty,
+                        &[],
+                        &[lt.clone(), rt.clone()],
+                        &Ty::Bool,
+                    )?
                     .ok_or_else(|| TypeError {
                         structured: None,
                         message: format!(
@@ -11777,7 +11443,14 @@ impl Checker {
                             hint: None,
                         })?;
                 let dispatch = self
-                    .trait_dispatch_target(&compare_trait, method_name, &receiver_ty)
+                    .select_method_dispatch(
+                        &compare_trait,
+                        method_name,
+                        &receiver_ty,
+                        &[],
+                        &[lt.clone(), rt.clone()],
+                        &Ty::Bool,
+                    )?
                     .ok_or_else(|| TypeError {
                         structured: None,
                         message: format!(
@@ -11827,7 +11500,14 @@ impl Checker {
                             hint: None,
                         })?;
                 let dispatch = self
-                    .trait_dispatch_target(&concat_trait, "concat", &receiver_ty)
+                    .select_method_dispatch(
+                        &concat_trait,
+                        "concat",
+                        &receiver_ty,
+                        &[],
+                        &[lt.clone(), rt.clone()],
+                        &receiver_ty,
+                    )?
                     .ok_or_else(|| TypeError {
                         structured: None,
                         message: format!("`++` is not defined for {}", self.ty_name(&receiver_ty)),
@@ -11889,8 +11569,11 @@ impl Checker {
             &compose_trait,
             "compose",
             &receiver_ty,
-            &[rhs_ty.clone(), result_ty],
-        ) else {
+            &[rhs_ty.clone(), result_ty.clone()],
+            &[receiver_ty.clone(), rhs_ty.clone()],
+            &result_ty,
+        )?
+        else {
             let hint = if matches!(receiver_ty, Ty::Int | Ty::Float)
                 || matches!(rhs_ty, Ty::Int | Ty::Float)
             {
@@ -11922,7 +11605,7 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::TraitCall {
                 trait_name,
-                method_name: "chain".into(),
+                method_name: "compose".into(),
                 receiver_ty: receiver_ty.clone(),
                 obligation: TraitObligation {
                     trait_id: compose_trait,
@@ -13714,7 +13397,7 @@ fn trait_impl_signature_display(
     ))
 }
 
-fn callable_definition_display_name(qualified_name: &str, local_name: &str) -> String {
+pub(super) fn callable_definition_display_name(qualified_name: &str, local_name: &str) -> String {
     let local_tail = local_name.rsplit("::").next().unwrap_or(local_name);
     if let Some((_prefix, rest)) = qualified_name.split_once("::__traitimpl__::") {
         let mut parts = rest.rsplitn(4, "::").collect::<Vec<_>>();

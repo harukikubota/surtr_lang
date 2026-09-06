@@ -1,0 +1,18 @@
+defstruct Box<$T> {
+  value: $T
+}
+
+impl Box {
+  def new(value: $T) -> Box<$T> { Box { value: value } }
+}
+
+deftrait Read<$Value> {
+  def read::<$Value>(self: Self) -> $Value
+}
+
+impl Read<$T> for Box<$T> {
+  def read::<$T>(self: Self) -> $T { self.value }
+}
+
+value: String = Read::read::<String>(Box::new("generic box"))
+print(value)

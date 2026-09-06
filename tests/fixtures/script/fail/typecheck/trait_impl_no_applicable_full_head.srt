@@ -1,0 +1,21 @@
+defstruct Box<$T> {
+  value: $T
+}
+
+impl Box {
+  def new(value: $T) -> Box<$T> { Box { value: value } }
+}
+
+deftrait Pick<$Value> {
+  def pick(self: Self, fallback: $Value) -> String
+}
+
+impl Pick<Int> for Box<String> {
+  def pick(self: Self, fallback: Int) -> String { self.value }
+}
+
+impl Pick<String> for Box<Int> {
+  def pick(self: Self, fallback: String) -> String { fallback }
+}
+
+print(Pick::pick(Box::new(1), 2))

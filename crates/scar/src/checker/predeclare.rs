@@ -2,9 +2,8 @@ use super::*;
 use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
 use sindr::names::builtin_type_usage_policy;
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
-static SYNTHETIC_DEFAULT_METHOD_UID: AtomicU32 = AtomicU32::new(0x6000_0000);
+const SYNTHETIC_DEFAULT_METHOD_UID_BASE: u32 = 0x6000_0000;
 
 impl Checker {
     fn validate_type_shape_clause(
@@ -282,7 +281,7 @@ impl Checker {
                         )?;
                     }
                 }
-                Resolved::TraitImplDef(_, trait_id, _, _, clause, methods) => {
+                Resolved::TraitImplDef(_, _, trait_id, _, _, clause, methods) => {
                     Self::validate_type_shape_clause(
                         clause.as_ref(),
                         false,
@@ -479,28 +478,37 @@ impl Checker {
         Ok(())
     }
 
-    fn next_synthetic_default_method_uid() -> u32 {
-        SYNTHETIC_DEFAULT_METHOD_UID.fetch_add(1, AtomicOrdering::Relaxed)
+    fn synthetic_default_method_symbol(impl_declaration_id: u32, trait_method_uid: u32) -> String {
+        format!("__default_impl_{impl_declaration_id}_trait_method_{trait_method_uid}")
     }
 
-    fn synthetic_default_method_symbol(
-        trait_instance_key: &str,
-        target_name: &str,
-        method_name: &str,
-    ) -> String {
-        fn sanitize(segment: &str) -> String {
-            segment
-                .chars()
-                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-                .collect()
+    fn synthetic_default_method_uid(
+        &self,
+        qualified_name: &str,
+        locally_reserved: &HashSet<u32>,
+    ) -> u32 {
+        if let Some(existing) = self.function_ids_by_name.get(qualified_name) {
+            return existing.unique_id;
         }
-
-        format!(
-            "__default__{}__{}__{}",
-            sanitize(trait_instance_key),
-            sanitize(target_name),
-            sanitize(method_name)
-        )
+        let mut occupied = self
+            .function_ids_by_name
+            .values()
+            .map(|id| id.unique_id)
+            .chain(self.trait_impls.values().flat_map(|implementation| {
+                implementation
+                    .methods
+                    .values()
+                    .map(|method| method.function_id.unique_id)
+            }))
+            .chain(locally_reserved.iter().copied())
+            .collect::<HashSet<_>>();
+        let mut candidate = SYNTHETIC_DEFAULT_METHOD_UID_BASE;
+        while !occupied.insert(candidate) {
+            candidate = candidate
+                .checked_add(1)
+                .expect("synthetic default method UID namespace exhausted");
+        }
+        candidate
     }
 
     fn trait_method_display_name(trait_id: &ResolvedId, method_name: &str) -> String {
@@ -509,19 +517,19 @@ impl Checker {
 
     fn synthesized_default_method_id(
         &self,
-        trait_instance_key: &str,
-        _trait_id: &ResolvedId,
-        target_name: &str,
-        method_name: &str,
+        impl_declaration_id: u32,
+        trait_method: &ResolvedId,
         span: &Span,
+        locally_reserved: &HashSet<u32>,
     ) -> ResolvedId {
         let qualified_name =
-            Self::synthetic_default_method_symbol(trait_instance_key, target_name, method_name);
+            Self::synthetic_default_method_symbol(impl_declaration_id, trait_method.unique_id);
+        let unique_id = self.synthetic_default_method_uid(&qualified_name, locally_reserved);
         ResolvedId {
-            name: method_name.to_string(),
+            name: trait_method.name.clone(),
             qualified_name: Some(qualified_name),
             symbol_info: None,
-            unique_id: Self::next_synthetic_default_method_uid(),
+            unique_id,
             compiler_generated: true,
             span: span.clone(),
         }
@@ -1522,63 +1530,11 @@ impl Checker {
         }
     }
 
-    /// Storage identity retains the complete impl head.  The base trait stays
-    /// in the first key slot so candidate lookup remains inexpensive, while
-    /// concrete specializations such as `List<Int>` and `List<String>` no
-    /// longer overwrite each other merely because they share a nominal head.
-    fn trait_impl_storage_key(
-        &self,
-        trait_id: &ResolvedId,
-        trait_args: &[AstTy],
-        target_ast_ty: &AstTy,
-    ) -> TraitImplKey {
-        (
-            self.trait_key(trait_id),
-            format!(
-                "{} for {}",
-                trait_args
-                    .iter()
-                    .map(Self::ast_ty_key)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                Self::ast_ty_key(target_ast_ty)
-            ),
-        )
-    }
-
-    /// Coherence is deliberately independent of dispatch ordering.  Impl
-    /// head variables are allocated independently when their heads are
-    /// resolved, so unifying both argument lists and targets in one temporary
-    /// substitution environment is an alpha-renaming-safe overlap test.
-    fn trait_impl_patterns_overlap(
-        &mut self,
-        left_args: &[Ty],
-        left_target: &Ty,
-        right_args: &[Ty],
-        right_target: &Ty,
-    ) -> bool {
-        if left_args.len() != right_args.len() {
-            return false;
-        }
-        let before = self.substitutions.clone();
-        self.substitutions.clear();
-        let overlap = left_args
-            .iter()
-            .zip(right_args)
-            .all(|(left, right)| self.types_compatible(left, right))
-            && self.types_compatible(left_target, right_target);
-        self.substitutions = before;
-        overlap
-    }
-
-    pub(super) fn trait_impl_for_head(
-        &self,
-        trait_id: &ResolvedId,
-        trait_args: &[AstTy],
-        target_ast_ty: &AstTy,
-    ) -> Option<TraitImplInfo> {
-        let storage_key = self.trait_impl_storage_key(trait_id, trait_args, target_ast_ty);
-        self.trait_impls.get(&storage_key).cloned()
+    pub(super) fn trait_impl_for_declaration(&self, declaration_id: u32) -> Option<TraitImplInfo> {
+        self.trait_impls
+            .values()
+            .find(|info| info.declaration_key.declaration_id == declaration_id)
+            .cloned()
     }
 
     pub(super) fn trait_display_name(&self, trait_name: &str) -> String {
@@ -1610,13 +1566,9 @@ impl Checker {
     }
 
     pub(super) fn trait_matches_short_name(&self, trait_name: &str, short_name: &str) -> bool {
-        let base = trait_name
-            .split_once('<')
-            .map(|(base, _)| base)
-            .unwrap_or(trait_name);
         self.trait_key_by_short_name(short_name)
             .as_deref()
-            .is_some_and(|key| key == base)
+            .is_some_and(|key| key == trait_name)
     }
 
     pub(super) fn trait_instance_key_from_tys(
@@ -2329,105 +2281,24 @@ impl Checker {
         self.trait_obligation_satisfied_with_args(trait_name, trait_args, ty, &mut HashSet::new())
     }
 
-    /// Solver identity is the resolved trait base plus its argument vector;
-    /// formatted instance names are diagnostics only.
     fn trait_obligation_satisfied_with_args(
         &mut self,
         trait_name: &str,
         trait_args: &[Ty],
         ty: &Ty,
-        visiting: &mut HashSet<ObligationKey>,
+        _visiting: &mut HashSet<ObligationKey>,
     ) -> bool {
-        let receiver_ty = self.resolve_ty(ty);
-        if let Ty::Var(var) = receiver_ty {
-            let requested = self.trait_instance_key_from_tys(trait_name, trait_args);
-            if self.rigid_tyvars.contains(&var) {
-                return self.rigid_tyvar_entails_trait(var, &requested, &mut HashSet::new());
-            }
-            // An unbound inference variable is deliberately deferred.  This
-            // must not manufacture a new bound; a later binding will run the
-            // same solver against its concrete type.
-            let pending = self.pending_trait_obligations.entry(var).or_default();
-            let obligation = PendingTraitObligation {
-                trait_id: trait_name.to_string(),
-                args: trait_args.to_vec(),
-                receiver: Ty::Var(var),
-            };
-            if !pending.contains(&obligation) {
-                pending.push(obligation);
-            }
-            return true;
-        }
-
-        let key = ObligationKey {
-            trait_name: trait_name.to_string(),
-            trait_args: trait_args
-                .iter()
-                .map(|arg| self.canonical_ty_key(arg))
-                .collect(),
-            target: self.canonical_ty_key(&receiver_ty),
-        };
-        if !visiting.insert(key.clone()) {
-            self.trait_obligation_cycle = Some(format!(
-                "CyclicTraitObligation: {} for {}",
-                self.trait_display_name(&self.trait_instance_key_from_tys(trait_name, trait_args)),
-                self.ty_name(&receiver_ty)
-            ));
-            return false;
-        }
-        let result = (|| {
-            for impl_key in self.trait_impl_candidate_keys(trait_name) {
-                let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
-                    continue;
-                };
-                let mut fresh = HashMap::new();
-                let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-                let impl_trait_args = impl_info
-                    .trait_arg_tys
-                    .iter()
-                    .map(|arg| self.instantiate_ty_with_fresh(arg, &mut fresh))
-                    .collect::<Vec<_>>();
-                // Older signature-bound storage still carries a rendered
-                // instance key. Keep this as a boundary adapter only; all
-                // new solver callers pass the base trait plus `trait_args`.
-                let legacy_instance_key = trait_args.is_empty() && trait_name.contains('<');
-                let args_match = if legacy_instance_key {
-                    self.trait_display_name(&self.trait_instance_key_from_tys(
-                        &self.trait_key(&impl_info.trait_id),
-                        &impl_trait_args,
-                    )) == self.trait_display_name(trait_name)
-                } else {
-                    impl_trait_args.len() == trait_args.len()
-                        && impl_trait_args
-                            .iter()
-                            .zip(trait_args)
-                            .all(|(candidate, requested)| {
-                                self.types_compatible(candidate, requested)
-                            })
-                };
-                if !args_match {
-                    continue;
-                }
-                let before = self.substitutions.clone();
-                let target_matches = self.types_compatible(&impl_target, &receiver_ty);
-                let applicable =
-                    target_matches && self.impl_body_obligations_hold(&impl_info, &fresh, visiting);
-                self.substitutions = before;
-                if applicable {
-                    return true;
-                }
-            }
-            self.compiler_trait_impl_exists(trait_name, &receiver_ty)
-        })();
-        visiting.remove(&key);
-        result
+        matches!(
+            self.probe_trait_head(trait_name, trait_args, ty),
+            Ok(ApplicabilityProof::Satisfied(_))
+        )
     }
 
     /// Check declared bounds (including trait inheritance) without adding a
     /// constraint to the signature variable. This is also used by parent
     /// coverage, where the child impl's where clause is temporarily supplied
     /// as a proof environment.
-    fn rigid_tyvar_entails_trait(
+    pub(super) fn rigid_tyvar_entails_trait(
         &self,
         var: u32,
         requested: &str,
@@ -2457,81 +2328,6 @@ impl Checker {
         });
         visiting.remove(bound);
         entails
-    }
-
-    fn impl_body_obligations_hold(
-        &mut self,
-        impl_info: &TraitImplInfo,
-        fresh: &HashMap<u32, Ty>,
-        visiting: &mut HashSet<ObligationKey>,
-    ) -> bool {
-        for method in impl_info.methods.values() {
-            for obligation in &method.body_obligations {
-                let consumes_capability = impl_info.where_clause.as_ref().is_some_and(|clause| {
-                    clause.constraints.iter().any(|constraint| {
-                        let subject = match &constraint.subject {
-                            AstTy::Named(_, name) if name == "Self" => self.resolve_ty(
-                                &self.substitute_ty_with_mapping(&impl_info.target_ty, fresh),
-                            ),
-                            AstTy::Named(_, name) => impl_info
-                                .type_param_vars_by_name
-                                .get(name)
-                                .and_then(|var| fresh.get(var))
-                                .map(|ty| self.resolve_ty(ty))
-                                .unwrap_or(Ty::Hole),
-                            _ => Ty::Hole,
-                        };
-                        let obligation_receiver = self.resolve_ty(
-                            &self.substitute_ty_with_mapping(&obligation.receiver, fresh),
-                        );
-                        let subject_matches = constraint.bounds.iter().any(|bound| {
-                            let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
-                                return false;
-                            };
-                            self.capability_receiver_matches(
-                                &self.trait_key(trait_id),
-                                &subject,
-                                &obligation_receiver,
-                            )
-                        });
-                        subject_matches
-                            && constraint.bounds.iter().any(|bound| {
-                                let TypedWhereConstraintRhs::Trait { trait_id } = bound else {
-                                    return false;
-                                };
-                                let capability = self.trait_key(trait_id);
-                                let requested = Self::base_trait_key(&obligation.trait_id);
-                                let capability = Self::base_trait_key(&capability);
-                                capability == requested
-                                    || self.trait_bound_entails(
-                                        capability,
-                                        requested,
-                                        &mut HashSet::new(),
-                                    )
-                            })
-                    })
-                });
-                if !consumes_capability {
-                    continue;
-                }
-                let receiver =
-                    self.resolve_ty(&self.substitute_ty_with_mapping(&obligation.receiver, fresh));
-                let args = obligation
-                    .trait_args
-                    .iter()
-                    .map(|arg| self.resolve_ty(&self.substitute_ty_with_mapping(arg, fresh)))
-                    .collect::<Vec<_>>();
-                if !self.trait_obligation_satisfied_with_args(
-                    &obligation.trait_id,
-                    &args,
-                    &receiver,
-                    visiting,
-                ) {
-                    return false;
-                }
-            }
-        }
-        true
     }
 
     pub(super) fn trait_dispatch_override(
@@ -2603,7 +2399,7 @@ impl Checker {
         None
     }
 
-    fn compiler_trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
+    pub(super) fn compiler_trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
         let ty = self.resolve_ty(ty);
         if self.trait_matches_short_name(trait_name, "Show") {
             return !matches!(
@@ -3174,6 +2970,7 @@ impl Checker {
         for stmt in stmts {
             let Resolved::TraitImplDef(
                 span,
+                declaration_id,
                 trait_id,
                 trait_args,
                 target_ast_ty,
@@ -3249,11 +3046,15 @@ impl Checker {
                         ),
                         is_builtin: method.is_builtin,
                         body_obligations: Vec::new(),
+                        instantiation_contract: None,
                     },
                 );
             }
 
-            for (required_method, trait_method) in &trait_info.methods {
+            let mut required_methods = trait_info.methods.iter().collect::<Vec<_>>();
+            required_methods.sort_by_key(|(_, method)| method.id.unique_id);
+            let mut locally_reserved_default_uids = HashSet::new();
+            for (required_method, trait_method) in required_methods {
                 if method_map.contains_key(required_method) {
                     continue;
                 }
@@ -3276,11 +3077,10 @@ impl Checker {
                     TraitImplMethodInfo {
                         method_name: required_method.clone(),
                         function_id: self.synthesized_default_method_id(
-                            &trait_instance_key,
-                            &trait_info.id,
-                            &target_name,
-                            required_method,
+                            *declaration_id,
+                            &trait_method.id,
                             &trait_method.span,
+                            &locally_reserved_default_uids,
                         ),
                         return_type_arguments: trait_method.return_type_arguments.clone(),
                         type_params: trait_method.type_params.clone(),
@@ -3301,8 +3101,11 @@ impl Checker {
                         ),
                         is_builtin: false,
                         body_obligations: Vec::new(),
+                        instantiation_contract: None,
                     },
                 );
+                locally_reserved_default_uids
+                    .insert(method_map[required_method].function_id.unique_id);
             }
 
             for method_name in method_map.keys() {
@@ -3331,9 +3134,25 @@ impl Checker {
                 self_ty: target_ty.clone(),
                 direct_inputs: super::signatures::DirectConstructorInputs::default(),
             };
-            let (head_type_list, _) =
+            let (head_type_list, canonical_environment) =
                 self.canonical_impl_head(trait_args, target_ast_ty, &head_environment, span)?;
+            let typed_impl_clause = where_clause.as_ref().map(TypedWhereClause::from);
+            let impl_constraints = self
+                .canonical_method_list(
+                    &[],
+                    &[],
+                    &Ty::Unit,
+                    &[],
+                    &[],
+                    &AstTy::Named(span.clone(), "Unit".into()),
+                    typed_impl_clause.as_ref(),
+                    &head_environment,
+                    &canonical_environment,
+                    None,
+                )?
+                .where_constraints;
             let mut method_signature_lists = HashMap::new();
+            let mut instantiation_contracts = HashMap::new();
             for (method_name, impl_method) in &method_map {
                 let trait_method =
                     trait_info
@@ -3461,6 +3280,28 @@ impl Checker {
                     &actual_env,
                     return_env.as_ref(),
                 )?;
+                let instantiated_impl_constraints = self
+                    .canonical_method_list(
+                        &[],
+                        &[],
+                        &Ty::Unit,
+                        &[],
+                        &[],
+                        &AstTy::Named(span.clone(), "Unit".into()),
+                        typed_impl_clause.as_ref(),
+                        &impl_env,
+                        &actual_env,
+                        None,
+                    )?
+                    .where_constraints;
+                instantiation_contracts.insert(
+                    method_name.clone(),
+                    ImplMethodInstantiationContract {
+                        head: actual_head.clone(),
+                        signature: actual.clone(),
+                        impl_constraints: instantiated_impl_constraints,
+                    },
+                );
                 let mapping = self.validate_trait_method_contract(
                     &head_type_list,
                     &actual_head,
@@ -3488,17 +3329,20 @@ impl Checker {
                 method_signature_lists.insert(method_name.clone(), actual);
             }
 
+            for (name, contract) in instantiation_contracts {
+                method_map
+                    .get_mut(&name)
+                    .expect("declared method")
+                    .instantiation_contract = Some(contract);
+            }
+            let impl_key =
+                CanonicalTraitImplPatternKey::from_head(trait_id.unique_id, &head_type_list);
             let existing_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
             for existing in existing_impls {
                 if self.trait_key(&existing.trait_id) != trait_key {
                     continue;
                 }
-                if self.trait_impl_patterns_overlap(
-                    &trait_arg_tys,
-                    &target_ty,
-                    &existing.trait_arg_tys,
-                    &existing.target_ty,
-                ) {
+                if Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern) {
                     return Err(TypeError {
                         structured: None,
                         message: format!(
@@ -3528,12 +3372,7 @@ impl Checker {
                     .cloned()
                     .collect::<Vec<_>>();
                 let peer = peers.into_iter().find(|existing| {
-                    self.trait_impl_patterns_overlap(
-                        &trait_arg_tys,
-                        &target_ty,
-                        &existing.trait_arg_tys,
-                        &existing.target_ty,
-                    )
+                    Self::canonical_patterns_overlap(&impl_key, &existing.declaration_key.pattern)
                 });
                 if let Some(existing) = peer {
                     return Err(TypeError {
@@ -3560,11 +3399,15 @@ impl Checker {
                 }
             }
 
-            let impl_key = self.trait_impl_storage_key(trait_id, trait_args, target_ast_ty);
             self.trait_impls.insert(
                 impl_key.clone(),
                 TraitImplInfo {
+                    declaration_key: TraitImplDeclarationKey {
+                        pattern: impl_key.clone(),
+                        declaration_id: *declaration_id,
+                    },
                     head_type_list,
+                    impl_constraints,
                     method_signature_lists,
                     trait_id: trait_id.clone(),
                     trait_args: trait_args.clone(),
@@ -3766,7 +3609,9 @@ impl Checker {
         let mut trait_impl_keys_in_stmts = HashSet::new();
 
         for stmt in stmts {
-            let Resolved::TraitImplDef(_, trait_id, trait_args, target_ast_ty, _, _) = stmt else {
+            let Resolved::TraitImplDef(_, declaration_id, _, trait_args, target_ast_ty, _, _) =
+                stmt
+            else {
                 continue;
             };
             let (_, target_ty, _, _) =
@@ -3782,11 +3627,7 @@ impl Checker {
                 hint: None,
             }
                 })?;
-            trait_impl_keys_in_stmts.insert(self.trait_impl_storage_key(
-                trait_id,
-                trait_args,
-                target_ast_ty,
-            ));
+            trait_impl_keys_in_stmts.insert(*declaration_id);
         }
 
         for stmt in stmts {
@@ -4127,24 +3968,10 @@ impl Checker {
         }
 
         let mut trait_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
-        trait_impls.sort_by(|left, right| {
-            let left_key =
-                self.trait_impl_storage_key(&left.trait_id, &left.trait_args, &left.target_ast_ty);
-            let right_key = self.trait_impl_storage_key(
-                &right.trait_id,
-                &right.trait_args,
-                &right.target_ast_ty,
-            );
-            left_key.cmp(&right_key)
-        });
+        trait_impls.sort_by_key(|info| info.declaration_key.declaration_id);
 
         for trait_impl in trait_impls {
-            let impl_key = self.trait_impl_storage_key(
-                &trait_impl.trait_id,
-                &trait_impl.trait_args,
-                &trait_impl.target_ast_ty,
-            );
-            if !trait_impl_keys_in_stmts.contains(&impl_key) {
+            if !trait_impl_keys_in_stmts.contains(&trait_impl.declaration_key.declaration_id) {
                 continue;
             }
             let trait_key = self.trait_key(&trait_impl.trait_id);

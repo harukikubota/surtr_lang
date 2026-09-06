@@ -3689,9 +3689,10 @@ result = Use::use(values)"#,
     let err = typecheck(resolved).expect_err("unsatisfied impl bound must reject dispatch");
     assert!(
         err.message
-            .contains("Marker::mark could not be specialized to a concrete dispatch target"),
+            .contains("Use::use requires a receiver type implementing Use"),
         "{err:?}"
     );
+    assert!(err.message.contains("List<Int>"), "{err:?}");
 }
 
 #[test]
@@ -3713,8 +3714,7 @@ def hidden(value: $A) -> String {
 
 #[test]
 fn deferred_trait_obligation_is_checked_when_closure_argument_is_bound() {
-    let resolved = resolve_with_builtin_prelude(
-        r#"deftrait Marker {
+    let source = r#"deftrait Marker {
   def mark(self: Self) -> String
 }
 
@@ -3740,16 +3740,25 @@ where
 }
 
 call = {|value| Use::use(ObligationBox(value))}
-result = call(1)"#,
-    );
+result = call(1)"#;
+    let argument_start = source.rfind("call(1)").expect("call site") + "call(".len();
+    let resolved = resolve_with_builtin_prelude(source);
 
     let err = typecheck(resolved)
         .expect_err("binding the deferred receiver to Int must re-check its Marker obligation");
+    assert_eq!(err.span.start, argument_start, "{err:?}");
+    assert_eq!(err.span.end, argument_start + 1, "{err:?}");
     assert!(
-        err.message
-            .contains("Marker::mark could not be specialized to a concrete dispatch target"),
+        err.message.contains("Argument type mismatch") && err.message.contains("got Int"),
         "unexpected phase-boundary diagnostic: {err:?}"
     );
+
+    let satisfied = source.replace(
+        "call = {|value|",
+        "impl Marker for Int { def mark(self: Int) -> String { \"marked\" } }\n\ncall = {|value|",
+    );
+    typecheck(resolve_with_builtin_prelude(&satisfied))
+        .expect("the same deferred obligation must succeed when Int implements Marker");
 }
 
 #[test]
@@ -4229,7 +4238,7 @@ where
     let constraint = trait_impl
         .iter_mut()
         .find_map(|node| match node {
-            Resolved::TraitImplDef(_, id, _, _, Some(clause), _) if id.name == "Marker" => {
+            Resolved::TraitImplDef(_, _, id, _, _, Some(clause), _) if id.name == "Marker" => {
                 clause.constraints.first_mut()
             }
             _ => None,
@@ -9144,9 +9153,10 @@ result = Use::use(value)"#;
         .expect_err("a same-name trait with different arguments must not prove an obligation");
     assert!(
         err.message
-            .contains("Marker<Int>::mark could not be specialized"),
+            .contains("Use::use requires a receiver type implementing Use"),
         "{err:?}"
     );
+    assert!(err.message.contains("Box<Int>"), "{err:?}");
 
     let generic = r#"deftrait Marker<$Tag> {
   def mark::<$Tag>(self: Self) -> $Tag

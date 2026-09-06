@@ -267,6 +267,7 @@ pub enum Resolved {
     /// Trait impl definition
     TraitImplDef(
         Span,
+        u32,
         ResolvedId,
         Vec<AstTy>,
         AstTy,

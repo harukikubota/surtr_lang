@@ -691,7 +691,7 @@ pub use diagnostics::TypeListRole;
 
 /// A structural declaration type. Nominal applications retain all type
 /// arguments, including phantom parameters absent from runtime field storage.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CanonicalTypeHead {
     Builtin(sindr::names::TypeName),
     Nominal(u32),
@@ -704,10 +704,28 @@ pub enum CanonicalTypeHead {
     Hole,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CanonicalTy {
     pub head: CanonicalTypeHead,
     pub arguments: Vec<CanonicalTy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CanonicalTraitRef {
+    pub trait_id: u32,
+    pub arguments: Vec<CanonicalTy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CanonicalTraitImplPatternKey {
+    pub trait_ref: CanonicalTraitRef,
+    pub target: CanonicalTy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TraitImplDeclarationKey {
+    pub pattern: CanonicalTraitImplPatternKey,
+    pub declaration_id: u32,
 }
 
 /// Source location of one complete type entry; nested types remain recursive.
@@ -727,6 +745,11 @@ pub struct TypeListEntry {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ImplHeadTypeList {
+    pub entries: Vec<TypeListEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RequestedHeadTypeList {
     pub entries: Vec<TypeListEntry>,
 }
 

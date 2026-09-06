@@ -259,7 +259,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 }
             }
         }
-        Resolved::TraitImplDef(_, _, _, _, _, methods) => {
+        Resolved::TraitImplDef(_, _, _, _, _, _, methods) => {
             for method in methods {
                 for param in &method.value_parameters {
                     usage.bind_id(&param.id);

@@ -1270,6 +1270,26 @@ pub(super) fn trait_impl_method_qualified_name(
     )
 }
 
+pub(super) fn trait_impl_declaration_qualified_name(
+    module_path: Option<&str>,
+    trait_name: &str,
+    trait_args: &[AstTy],
+    target: &AstTy,
+    span_start: usize,
+) -> String {
+    let private_module = match module_path {
+        Some(module_path) if !module_path.is_empty() => format!("{}::__traitimpl__", module_path),
+        _ => "__traitimpl__".to_string(),
+    };
+    format!(
+        "{}::{}::{}::{}",
+        private_module,
+        trait_instance_key(trait_name, trait_args),
+        ast_ty_key(target),
+        span_start
+    )
+}
+
 pub(super) fn collect_stage_impl_target_resolutions(
     stage: &[StagedModuleAst],
 ) -> HashMap<String, ImplTargetResolution> {
@@ -2629,7 +2649,7 @@ impl Resolver {
         Ok(())
     }
 
-    fn reserve_declaration_uid(&mut self, qualified_name: &str) -> u32 {
+    pub(super) fn reserve_declaration_uid(&mut self, qualified_name: &str) -> u32 {
         self.declaration_uids
             .get(qualified_name)
             .copied()
@@ -3177,7 +3197,20 @@ impl Resolver {
                         }
                     }
                 }
-                Ast::TraitImplDef(..) => {}
+                Ast::TraitImplDef(span, trait_name, trait_args, target, ..) => {
+                    let qualified_name = trait_impl_declaration_qualified_name(
+                        self.current_module_path.as_deref(),
+                        trait_name,
+                        trait_args,
+                        target,
+                        span.start,
+                    );
+                    let uid = self.reserve_declaration_uid(&qualified_name);
+                    self.predeclared_ids
+                        .entry(qualified_name)
+                        .or_default()
+                        .push_back(uid);
+                }
                 _ => {}
             }
         }

@@ -84,34 +84,11 @@ impl Checker {
         trait_key: &str,
         concrete_ty: &Ty,
     ) -> Option<Vec<Ty>> {
-        let concrete_ty = self.resolve_ty(concrete_ty);
-        for impl_key in self.trait_impl_candidate_keys(trait_key) {
-            let impl_info = self.trait_impls.get(&impl_key)?.clone();
-            if impl_info.constructor_slot_vars.len() != impl_info.constructor_slot_positions.len() {
-                continue;
-            }
-            let mut fresh = HashMap::new();
-            let impl_target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-            let before = self.substitutions.clone();
-            if !self.types_compatible(&impl_target, &concrete_ty) {
-                self.substitutions = before;
-                continue;
-            }
-            let slots = impl_info
-                .constructor_slot_positions
-                .iter()
-                .zip(impl_info.constructor_slot_vars.iter())
-                .map(|(_position, var)| {
-                    fresh
-                        .get(var)
-                        .map(|ty| self.resolve_ty(ty))
-                        .unwrap_or(Ty::Var(*var))
-                })
-                .collect::<Vec<_>>();
-            self.substitutions = before;
-            return Some(slots);
-        }
-        None
+        let (info, mapping) = self.constructor_projection(trait_key, concrete_ty)?;
+        info.constructor_slot_vars
+            .iter()
+            .map(|var| mapping.get(var).cloned())
+            .collect()
     }
 
     pub(super) fn constructor_application_slots_for_witness(
@@ -139,14 +116,8 @@ impl Checker {
                 .constructor_witness_traits
                 .get(var)
                 .and_then(|trait_key| {
-                    let target_name = self.trait_target_name(witness)?;
-                    self.trait_impl_candidate_keys(trait_key)
-                        .into_iter()
-                        .find_map(|key| {
-                            let impl_info = self.trait_impls.get(&key)?;
-                            (impl_info.target_name == target_name)
-                                .then_some(impl_info.constructor_slot_positions.clone())
-                        })
+                    self.constructor_projection(trait_key, witness)
+                        .map(|(info, _)| info.constructor_slot_positions)
                 }),
             _ => None,
         };
@@ -604,29 +575,26 @@ impl Checker {
     }
 
     pub(super) fn tyvar_has_bound(&mut self, var: u32, trait_name: &str) -> bool {
-        let requested_family = Self::base_trait_key(trait_name);
+        let requested_family = trait_name;
         let matching_bounds = self
             .tyvar_bounds
             .get(&var)
             .into_iter()
             .flatten()
             .filter(|bound| {
-                let bound_family = Self::base_trait_key(bound);
+                let bound_family = bound.as_str();
                 bound_family == requested_family
-                    || Self::surface_name(bound_family) == Self::surface_name(requested_family)
                     || self.trait_bound_entails(bound_family, requested_family, &mut HashSet::new())
             })
             .cloned()
             .collect::<Vec<_>>();
         if !matching_bounds.is_empty() {
             for capability in &mut self.active_capabilities {
-                let capability_family = Self::base_trait_key(&capability.trait_id);
+                let capability_family = &capability.trait_id;
                 if matches!(&capability.subject_ty, Ty::Var(subject_var) if *subject_var == var)
                     && matching_bounds.iter().any(|bound| {
-                        let bound_family = Self::base_trait_key(bound);
+                        let bound_family = bound.as_str();
                         capability_family == bound_family
-                            || Self::surface_name(capability_family)
-                                == Self::surface_name(bound_family)
                     })
                 {
                     capability.consumed = true;
@@ -638,17 +606,15 @@ impl Checker {
 
     pub(super) fn consume_matching_capability(&mut self, receiver: &Ty, trait_name: &str) -> bool {
         let receiver = self.resolve_ty(receiver);
-        let requested_family = Self::base_trait_key(trait_name);
+        let requested_family = trait_name;
         let matches = self
             .active_capabilities
             .iter()
             .enumerate()
             .filter_map(|(index, capability)| {
                 let subject = self.resolve_ty(&capability.subject_ty);
-                let capability_family = Self::base_trait_key(&capability.trait_id);
+                let capability_family = &capability.trait_id;
                 let family_matches = capability_family == requested_family
-                    || Self::surface_name(capability_family)
-                        == Self::surface_name(requested_family)
                     || self.trait_bound_entails(
                         capability_family,
                         requested_family,
@@ -1156,12 +1122,19 @@ impl Checker {
             _ => None,
         };
         if let Some(trait_key) = trait_key {
-            let requested = Self::surface_name(name);
+            let requested_head = match self.env.lookup_type_def(name) {
+                Some(def) => self.canonical_nominal_head(&def.name)?,
+                None => builtin_type_name(name)
+                    .map(CanonicalTypeHead::Builtin)
+                    .ok_or_else(|| {
+                        TypeError::new(format!("Unknown type constructor: {}", name), span.clone())
+                    })?,
+            };
             let mut candidates = self
                 .trait_impl_candidate_keys(&trait_key)
                 .into_iter()
                 .filter_map(|key| self.trait_impls.get(&key))
-                .filter(|info| Self::surface_name(&info.target_name) == requested)
+                .filter(|info| info.declaration_key.pattern.target.head == requested_head)
                 .cloned()
                 .collect::<Vec<_>>();
             if candidates.len() > 1 {
@@ -2039,185 +2012,6 @@ impl Checker {
         result
     }
 
-    /// Compare two receiver types without inference.  Capability proofs must
-    /// retain every nominal argument, but the independently allocated type
-    /// variables in an impl head and its checked method body are
-    /// alpha-equivalent rather than pointer-identical.
-    pub(super) fn types_alpha_equivalent(&self, left: &Ty, right: &Ty) -> bool {
-        fn equivalent(
-            checker: &Checker,
-            left: &Ty,
-            right: &Ty,
-            left_to_right: &mut HashMap<u32, u32>,
-            right_to_left: &mut HashMap<u32, u32>,
-        ) -> bool {
-            let left = checker.resolve_ty(left);
-            let right = checker.resolve_ty(right);
-            match (&left, &right) {
-                (Ty::Var(left), Ty::Var(right)) => {
-                    match (left_to_right.get(left), right_to_left.get(right)) {
-                        (Some(mapped), _) => mapped == right,
-                        (_, Some(mapped)) => mapped == left,
-                        (None, None) => {
-                            left_to_right.insert(*left, *right);
-                            right_to_left.insert(*right, *left);
-                            true
-                        }
-                    }
-                }
-                (Ty::Int, Ty::Int)
-                | (Ty::Float, Ty::Float)
-                | (Ty::Str, Ty::Str)
-                | (Ty::Bool, Ty::Bool)
-                | (Ty::Unit, Ty::Unit)
-                | (Ty::Hole, Ty::Hole)
-                | (Ty::Error, Ty::Error) => true,
-                (Ty::List(left), Ty::List(right)) | (Ty::Lazy(left), Ty::Lazy(right)) => {
-                    equivalent(checker, left, right, left_to_right, right_to_left)
-                }
-                (Ty::Pid(left), Ty::Pid(right)) => {
-                    Checker::canonical_user_type_name(left)
-                        == Checker::canonical_user_type_name(right)
-                }
-                (Ty::Tuple(left), Ty::Tuple(right)) | (Ty::SelfApp(left), Ty::SelfApp(right)) => {
-                    left.len() == right.len()
-                        && left.iter().zip(right).all(|(left, right)| {
-                            equivalent(checker, left, right, left_to_right, right_to_left)
-                        })
-                }
-                (Ty::Func(left_params, left_ret), Ty::Func(right_params, right_ret)) => {
-                    left_params.len() == right_params.len()
-                        && left_params.iter().zip(right_params).all(|(left, right)| {
-                            equivalent(checker, left, right, left_to_right, right_to_left)
-                        })
-                        && equivalent(checker, left_ret, right_ret, left_to_right, right_to_left)
-                }
-                (
-                    Ty::BuiltinFunc {
-                        name: left_name,
-                        params: left_params,
-                        ret: left_ret,
-                    },
-                    Ty::BuiltinFunc {
-                        name: right_name,
-                        params: right_params,
-                        ret: right_ret,
-                    },
-                ) => {
-                    left_name == right_name
-                        && left_params.len() == right_params.len()
-                        && left_params.iter().zip(right_params).all(|(left, right)| {
-                            equivalent(checker, left, right, left_to_right, right_to_left)
-                        })
-                        && equivalent(checker, left_ret, right_ret, left_to_right, right_to_left)
-                }
-                (
-                    Ty::UserFunc {
-                        fun_idx: left_idx,
-                        type_params: left_type_params,
-                        params: left_params,
-                        ret: left_ret,
-                        ..
-                    },
-                    Ty::UserFunc {
-                        fun_idx: right_idx,
-                        type_params: right_type_params,
-                        params: right_params,
-                        ret: right_ret,
-                        ..
-                    },
-                ) => {
-                    left_idx == right_idx
-                        && left_type_params == right_type_params
-                        && left_params.len() == right_params.len()
-                        && left_params.iter().zip(right_params).all(|(left, right)| {
-                            equivalent(checker, left, right, left_to_right, right_to_left)
-                        })
-                        && equivalent(checker, left_ret, right_ret, left_to_right, right_to_left)
-                }
-                (
-                    Ty::Facet(
-                        left_kind,
-                        left_source,
-                        left_focus,
-                        left_update_source,
-                        left_update_focus,
-                    ),
-                    Ty::Facet(
-                        right_kind,
-                        right_source,
-                        right_focus,
-                        right_update_source,
-                        right_update_focus,
-                    ),
-                ) => {
-                    left_kind == right_kind
-                        && equivalent(
-                            checker,
-                            left_source,
-                            right_source,
-                            left_to_right,
-                            right_to_left,
-                        )
-                        && equivalent(
-                            checker,
-                            left_focus,
-                            right_focus,
-                            left_to_right,
-                            right_to_left,
-                        )
-                        && equivalent(
-                            checker,
-                            left_update_source,
-                            right_update_source,
-                            left_to_right,
-                            right_to_left,
-                        )
-                        && equivalent(
-                            checker,
-                            left_update_focus,
-                            right_update_focus,
-                            left_to_right,
-                            right_to_left,
-                        )
-                }
-                (Ty::Struct(left_name, left_fields), Ty::Struct(right_name, right_fields))
-                | (Ty::Record(left_name, left_fields), Ty::Record(right_name, right_fields)) => {
-                    Checker::canonical_user_type_name(left_name)
-                        == Checker::canonical_user_type_name(right_name)
-                        && left_fields.len() == right_fields.len()
-                        && left_fields.iter().zip(right_fields).all(
-                            |((left_name, left_ty), (right_name, right_ty))| {
-                                left_name == right_name
-                                    && equivalent(
-                                        checker,
-                                        left_ty,
-                                        right_ty,
-                                        left_to_right,
-                                        right_to_left,
-                                    )
-                            },
-                        )
-                }
-                (Ty::Enum(left_name, left_args), Ty::Enum(right_name, right_args)) => {
-                    Checker::canonical_user_type_name(left_name)
-                        == Checker::canonical_user_type_name(right_name)
-                        && left_args.len() == right_args.len()
-                        && left_args.iter().zip(right_args).all(|(left, right)| {
-                            equivalent(checker, left, right, left_to_right, right_to_left)
-                        })
-                }
-                (Ty::Result(left_ok, left_err), Ty::Result(right_ok, right_err)) => {
-                    equivalent(checker, left_ok, right_ok, left_to_right, right_to_left)
-                        && equivalent(checker, left_err, right_err, left_to_right, right_to_left)
-                }
-                _ => false,
-            }
-        }
-
-        equivalent(self, left, right, &mut HashMap::new(), &mut HashMap::new())
-    }
-
     /// A contextual trait capability applies to every value in its declared
     /// constructor slot(s), while captured nominal arguments must still agree.
     /// This is stricter than nominal-head comparison but permits a Factory
@@ -2229,59 +2023,30 @@ impl Checker {
         subject: &Ty,
         receiver: &Ty,
     ) -> bool {
-        if self.types_alpha_equivalent(subject, receiver) {
+        if self.resolve_ty(subject) == self.resolve_ty(receiver) {
             return true;
         }
-        let subject = self.resolve_ty(subject);
-        let receiver = self.resolve_ty(receiver);
-        let Some(subject_name) = self.trait_target_name(&subject) else {
+        let Ok(canonical_subject) = self.canonical_request(subject) else {
             return false;
         };
-        let Some(receiver_name) = self.trait_target_name(&receiver) else {
+        let Ok(canonical_receiver) = self.canonical_request(receiver) else {
             return false;
         };
-        if Self::surface_name(&subject_name) != Self::surface_name(&receiver_name) {
+        if canonical_subject.head != canonical_receiver.head
+            || canonical_subject.arguments.len() != canonical_receiver.arguments.len()
+        {
             return false;
         }
-        self.trait_impl_candidate_keys(capability_trait)
-            .into_iter()
-            .filter_map(|key| self.trait_impls.get(&key))
-            .filter(|impl_info| {
-                !impl_info.constructor_slot_positions.is_empty()
-                    && Self::surface_name(&impl_info.target_name)
-                        == Self::surface_name(&subject_name)
-            })
-            .any(|impl_info| {
-                let args_for = |ty: &Ty| match ty {
-                    Ty::Enum(_, args) => Some(args.clone()),
-                    Ty::Struct(name, _) | Ty::Record(name, _) => {
-                        self.resolved_named_type_args(name, ty)
-                    }
-                    Ty::List(inner) => Some(vec![inner.as_ref().clone()]),
-                    Ty::Result(ok, err) => Some(vec![ok.as_ref().clone(), err.as_ref().clone()]),
-                    _ => None,
-                };
-                let Some(subject_args) = args_for(&subject) else {
-                    return false;
-                };
-                let Some(receiver_args) = args_for(&receiver) else {
-                    return false;
-                };
-                if subject_args.len() != receiver_args.len() {
-                    return false;
-                }
-                let mapped = impl_info
-                    .constructor_slot_positions
-                    .iter()
-                    .copied()
-                    .collect::<HashSet<_>>();
-                subject_args
-                    .iter()
-                    .zip(receiver_args.iter())
-                    .enumerate()
-                    .filter(|(index, _)| !mapped.contains(index))
-                    .all(|(_, (subject, receiver))| self.types_alpha_equivalent(subject, receiver))
-            })
+        let Some((info, _)) = self.constructor_projection(capability_trait, subject) else {
+            return false;
+        };
+        canonical_subject
+            .arguments
+            .iter()
+            .zip(&canonical_receiver.arguments)
+            .enumerate()
+            .filter(|(index, _)| !info.constructor_slot_positions.contains(index))
+            .all(|(_, (subject, receiver))| subject == receiver)
     }
 
     pub(super) fn signature_tyvar_ids(tyvars: &HashMap<String, Ty>) -> HashSet<u32> {
@@ -2354,9 +2119,20 @@ impl Checker {
                     combined.sort();
                     self.tyvar_bounds.insert(var, combined.clone());
                     self.tyvar_bounds.insert(*other, combined);
-                    let pending = self.pending_trait_obligations.entry(*other).or_default();
+                    let binding = HashMap::from([(var, Ty::Var(*other))]);
                     for mut obligation in pending_obligations {
-                        obligation.receiver = Ty::Var(*other);
+                        obligation.receiver = self.substitute_ty_with_mapping(
+                            &self.resolve_ty(&obligation.receiver),
+                            &binding,
+                        );
+                        obligation.args = obligation
+                            .args
+                            .iter()
+                            .map(|arg| {
+                                self.substitute_ty_with_mapping(&self.resolve_ty(arg), &binding)
+                            })
+                            .collect();
+                        let pending = self.pending_trait_obligations.entry(*other).or_default();
                         if !pending.contains(&obligation) {
                             pending.push(obligation);
                         }
@@ -2368,15 +2144,19 @@ impl Checker {
                         return false;
                     }
                     if !pending_obligations.iter().all(|obligation| {
-                        let receiver = match self.resolve_ty(&obligation.receiver) {
-                            Ty::Var(pending_var) if pending_var == var => ty.clone(),
-                            other => other,
-                        };
-                        self.trait_impl_exists_for_args(
-                            &obligation.trait_id,
-                            &obligation.args,
-                            &receiver,
-                        )
+                        let binding = HashMap::from([(var, ty.clone())]);
+                        let receiver = self.substitute_ty_with_mapping(
+                            &self.resolve_ty(&obligation.receiver),
+                            &binding,
+                        );
+                        let arguments = obligation
+                            .args
+                            .iter()
+                            .map(|arg| {
+                                self.substitute_ty_with_mapping(&self.resolve_ty(arg), &binding)
+                            })
+                            .collect::<Vec<_>>();
+                        self.trait_impl_exists_for_args(&obligation.trait_id, &arguments, &receiver)
                     }) {
                         self.profiler.finish(ProfileEvent::BindTyVar, profile);
                         return false;
@@ -2399,31 +2179,12 @@ impl Checker {
         match self.resolve_ty(ty) {
             Ty::Var(var) => bounds.iter().all(|bound| self.tyvar_has_bound(var, bound)),
             concrete => bounds.iter().all(|bound| {
-                if bound.contains('<') {
-                    self.trait_impl_exists(bound, &concrete)
-                } else {
-                    self.trait_family_impl_exists(bound, &concrete)
-                }
+                matches!(
+                    self.prove_trait_capability(bound, &concrete),
+                    Ok(ApplicabilityProof::Satisfied(_))
+                )
             }),
         }
-    }
-
-    fn trait_family_impl_exists(&mut self, trait_name: &str, concrete: &Ty) -> bool {
-        for impl_key in self.trait_impl_candidate_keys(trait_name) {
-            let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
-                continue;
-            };
-            let checkpoint = self.substitutions.clone();
-            let mut fresh = HashMap::new();
-            let target = self.instantiate_ty_with_fresh(&impl_info.target_ty, &mut fresh);
-            let matches = self.types_compatible(&target, concrete)
-                && self.impl_where_obligations_satisfied(&impl_info, &fresh);
-            self.substitutions = checkpoint;
-            if matches {
-                return true;
-            }
-        }
-        false
     }
 
     pub(super) fn ty_contains_var(&self, ty: &Ty, needle: u32) -> bool {

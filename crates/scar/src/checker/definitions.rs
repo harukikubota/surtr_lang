@@ -1092,7 +1092,7 @@ impl Checker {
                 ),
             });
         }
-        if !self.trait_impl_exists(&trait_key, &actual) {
+        if self.constructor_projection(&trait_key, &actual).is_none() {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -1132,6 +1132,19 @@ impl Checker {
                 span: self.return_mismatch_span(typed_body),
                 hint: None,
             });
+        }
+        if self
+            .trait_dispatch_target_for_args(&trait_key, "", &self.resolve_ty(&actual), &[])?
+            .is_none()
+        {
+            return Err(TypeError::new(
+                format!(
+                    "{} does not implement constructor trait {}",
+                    self.ty_name(&actual),
+                    self.trait_display_name(&trait_key)
+                ),
+                self.return_mismatch_span(typed_body),
+            ));
         }
         Ok(Some(actual))
     }
@@ -1660,6 +1673,14 @@ impl Checker {
             });
         }
 
+        let typed_body = self.concretize_pending_trait_calls(typed_body)?;
+        let signature_inputs = local_bindings
+            .iter()
+            .map(|(_, ty)| ty.clone())
+            .chain(std::iter::once(expected_ret.clone()))
+            .collect::<Vec<_>>();
+        self.validate_pending_body_dependencies(&typed_body, &signature_inputs)?;
+
         let fun_idx = match self.env.lookup_var(id.unique_id) {
             Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
             _ => {
@@ -1830,6 +1851,14 @@ impl Checker {
             });
         }
 
+        let typed_body = self.concretize_pending_trait_calls(typed_body)?;
+        let signature_inputs = local_bindings
+            .iter()
+            .map(|(_, ty)| ty.clone())
+            .chain(std::iter::once(expected_ret.clone()))
+            .collect::<Vec<_>>();
+        self.validate_pending_body_dependencies(&typed_body, &signature_inputs)?;
+
         let fun_idx = match self.env.lookup_var(id.unique_id) {
             Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
             _ => {
@@ -1875,6 +1904,7 @@ impl Checker {
     pub(super) fn check_trait_impl_items(
         &mut self,
         span: &Span,
+        declaration_id: u32,
         trait_id: &ResolvedId,
         trait_args: &[AstTy],
         target_ast_ty: &AstTy,
@@ -1904,7 +1934,7 @@ impl Checker {
                 hint: None,
             })?;
         let impl_info = self
-            .trait_impl_for_head(trait_id, trait_args, target_ast_ty)
+            .trait_impl_for_declaration(declaration_id)
             .ok_or_else(|| TypeError {
                 structured: None,
                 message: format!("Unknown trait impl {} for {}", trait_id.name, target_name),
@@ -1956,19 +1986,48 @@ impl Checker {
                         span: method.span.clone(),
                         hint: None,
                     })?;
-            let (param_tys, mut expected_ret, type_params, return_type_argument_tys, _) = self
-                .resolve_trait_impl_method_signature(
-                    &trait_info,
-                    trait_args,
-                    &method,
-                    target_ast_ty,
-                    &trait_method.ret_ty,
-                    impl_info.where_clause.as_ref(),
-                )?;
+            let (
+                param_tys,
+                mut expected_ret,
+                type_params,
+                return_type_argument_tys,
+                raw_environment,
+            ) = self.resolve_trait_impl_method_signature(
+                &trait_info,
+                trait_args,
+                &method,
+                target_ast_ty,
+                &trait_method.ret_ty,
+                impl_info.where_clause.as_ref(),
+            )?;
+
+            let contract = self.impl_method_instantiation_contract(
+                &impl_info.declaration_key.pattern,
+                &trait_info,
+                trait_args,
+                target_ast_ty,
+                &method,
+                &trait_method.ret_ty,
+                &param_tys,
+                &expected_ret,
+                &return_type_argument_tys,
+                &raw_environment,
+                impl_info.where_clause.as_ref(),
+                &impl_info.constructor_slot_positions,
+            )?;
+            self.trait_impls
+                .get_mut(&impl_info.declaration_key.pattern)
+                .expect("registered impl")
+                .methods
+                .get_mut(&method.method_name)
+                .expect("registered method")
+                .instantiation_contract = Some(contract);
 
             let mut typed_params = Vec::new();
             let mut local_bindings = Vec::new();
-            let mut method_tyvars = impl_tyvars.clone();
+            let mut method_tyvars = raw_environment.head_bindings.clone();
+            method_tyvars.extend(raw_environment.bindings.clone());
+            method_tyvars.insert("Self".into(), raw_environment.self_ty.clone());
             for (param, param_ty) in method.value_parameters.iter().zip(param_tys.iter()) {
                 local_bindings.push((param.id.unique_id, param_ty.clone()));
                 let binding_source = match &param.ty {
@@ -2006,8 +2065,7 @@ impl Checker {
                 capability.consumed = block_capabilities.iter().any(|existing| {
                     existing.consumed
                         && existing.subject_name == capability.subject_name
-                        && Self::base_trait_key(&existing.trait_id)
-                            == Self::base_trait_key(&capability.trait_id)
+                        && &existing.trait_id == &capability.trait_id
                 });
             }
 
@@ -2029,23 +2087,11 @@ impl Checker {
                 false,
                 &method.body,
             )?;
-            let body_obligations = Self::full_trait_obligations(&typed_body);
-            for registered_impl in self.trait_impls.values_mut() {
-                if let Some(registered_method) =
-                    registered_impl.methods.get_mut(&method.method_name)
-                {
-                    if registered_method.function_id.unique_id == method.function_id.unique_id {
-                        registered_method.body_obligations = body_obligations.clone();
-                        break;
-                    }
-                }
-            }
             for checked in method_block_capabilities {
                 if checked.consumed {
                     if let Some(existing) = block_capabilities.iter_mut().find(|existing| {
                         existing.subject_name == checked.subject_name
-                            && Self::base_trait_key(&existing.trait_id)
-                                == Self::base_trait_key(&checked.trait_id)
+                            && &existing.trait_id == &checked.trait_id
                     }) {
                         existing.consumed = true;
                     }
@@ -2103,6 +2149,36 @@ impl Checker {
                 });
             }
 
+            let typed_body = self.concretize_pending_trait_calls(typed_body)?;
+            let signature_inputs = local_bindings
+                .iter()
+                .map(|(_, ty)| ty.clone())
+                .chain(std::iter::once(expected_ret.clone()))
+                .collect::<Vec<_>>();
+            self.validate_pending_body_dependencies(&typed_body, &signature_inputs)?;
+
+            let body_obligations = Self::full_trait_obligations(&typed_body)
+                .into_iter()
+                .map(|obligation| TraitObligation {
+                    trait_id: obligation.trait_id,
+                    trait_args: obligation
+                        .trait_args
+                        .iter()
+                        .map(|ty| self.resolve_ty(ty))
+                        .collect(),
+                    receiver: self.resolve_ty(&obligation.receiver),
+                })
+                .collect::<Vec<_>>();
+            for registered_impl in self.trait_impls.values_mut() {
+                if let Some(registered_method) =
+                    registered_impl.methods.get_mut(&method.method_name)
+                {
+                    if registered_method.function_id.unique_id == method.function_id.unique_id {
+                        registered_method.body_obligations = body_obligations.clone();
+                        break;
+                    }
+                }
+            }
             let fun_idx = match self.env.lookup_var(method.function_id.unique_id) {
                 Some(Ty::UserFunc { fun_idx, .. }) => *fun_idx,
                 _ => {

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: requires a receiver type implementing Pick<Int>

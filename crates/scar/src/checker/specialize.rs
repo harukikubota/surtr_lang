@@ -4,6 +4,14 @@ use diagnostics::{
     SourceRole, StructuredDiagnostic, TypeDiagnosticReason,
 };
 
+struct SpecializationContext<'a> {
+    defs_by_fun_idx: &'a HashMap<u32, TypedNode>,
+    bound_tyvars_by_fun_idx: &'a HashMap<u32, Vec<u32>>,
+    needs_specialization: &'a HashSet<u32>,
+    specialization_fun_idxs: &'a mut HashMap<SpecializationKey, u32>,
+    generated_defs: &'a mut Vec<TypedNode>,
+}
+
 impl Checker {
     pub(super) fn specialize_program(
         &mut self,
@@ -489,116 +497,69 @@ impl Checker {
                         .collect(),
                     receiver: self.resolve_ty(&obligation.receiver),
                 };
-                let dispatch = match dispatch {
-                    TraitDispatch::Pending => self
-                        .trait_dispatch_target_for_args(
+                let instantiation = if matches!(dispatch, TraitDispatch::Pending)
+                    || matches!(&dispatch,
+                        TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. })
+                            if needs_specialization.contains(fun_idx))
+                {
+                    let argument_tys = args
+                        .iter()
+                        .map(|arg| self.resolve_ty(&arg.ty))
+                        .collect::<Vec<_>>();
+                    Some(
+                        match self.select_trait_method_instantiation(
                             &obligation.trait_id,
                             &method_name,
                             &obligation.receiver,
                             &obligation.trait_args,
-                        )
-                        .ok_or_else(|| TypeError {
-                            structured: None,
-                            message: format!(
-                                "{}::{} could not be specialized to a concrete dispatch target",
-                                trait_name, method_name
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        })?,
-                    other => other,
-                };
-                let dispatch = match dispatch {
-                    TraitDispatch::Static(TraitDispatchTarget::UserFunction { name, fun_idx })
-                        if needs_specialization.contains(&fun_idx) =>
-                    {
-                        let original_def =
-                            defs_by_fun_idx.get(&fun_idx).ok_or_else(|| TypeError {
-                                structured: None,
-                                message: format!(
-                                    "Missing generic definition for fun_idx {}",
-                                    fun_idx
-                                ),
-                                span: span.clone(),
-                                hint: None,
-                            })?;
-                        let bound_tyvars = bound_tyvars_by_fun_idx
-                            .get(&fun_idx)
-                            .cloned()
-                            .unwrap_or_default();
-                        let mut mapping = self.infer_specialization_mapping(
-                            original_def,
-                            &args,
-                            None,
-                            false,
-                            &bound_tyvars,
-                        )?;
-                        let return_type_argument_sources: &[Ty] =
-                            if obligation.trait_args.is_empty() {
-                                std::slice::from_ref(&obligation.receiver)
-                            } else {
-                                &obligation.trait_args
-                            };
-                        if let TypedInner::Def(
-                            _,
-                            _,
-                            return_type_arguments,
-                            _,
-                            declared_return,
-                            _,
-                            _,
-                            _,
-                        ) = &original_def.node
-                        {
-                            self.match_specialization_ty(
-                                declared_return,
-                                &obligation.receiver,
-                                &bound_tyvars,
-                                &mut mapping,
-                            );
-                            for (argument, source) in return_type_arguments
-                                .iter()
-                                .zip(return_type_argument_sources.iter())
-                            {
-                                self.match_specialization_ty(
-                                    &argument.ty,
-                                    source,
-                                    &bound_tyvars,
-                                    &mut mapping,
-                                );
+                            &argument_tys,
+                            &self.resolve_ty(&ty),
+                        )? {
+                            CandidateApplicability::Applicable(instantiation) => instantiation,
+                            CandidateApplicability::Deferred(pending) => {
+                                return Err(TypeError {
+                                    structured: None,
+                                    message: format!(
+                                        "AmbiguousReturnTypeArgument: {}::{} remains unresolved at specialization (waiting on {:?}; {} candidates)",
+                                        trait_name,
+                                        method_name,
+                                        pending.waiting_on,
+                                        pending.candidates.len()
+                                    ),
+                                    span: span.clone(),
+                                    hint: None,
+                                });
                             }
-                        }
-                        if mapping.len() == bound_tyvars.len()
-                            && bound_tyvars.iter().all(|var| {
-                                mapping.get(var).is_some_and(|ty| !matches!(ty, Ty::Var(_)))
-                            })
-                        {
-                            let concrete_tys = bound_tyvars
-                                .iter()
-                                .filter_map(|var| mapping.get(var).cloned())
-                                .collect::<Vec<_>>();
-                            let specialized_fun_idx = self.ensure_specialized_def(
-                                fun_idx,
-                                &concrete_tys,
-                                &mapping,
-                                defs_by_fun_idx,
-                                bound_tyvars_by_fun_idx,
-                                needs_specialization,
-                                specialization_fun_idxs,
-                                generated_defs,
-                            )?;
-                            TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                                name,
-                                fun_idx: specialized_fun_idx,
-                            })
-                        } else {
-                            TraitDispatch::Static(TraitDispatchTarget::UserFunction {
-                                name,
-                                fun_idx,
-                            })
-                        }
-                    }
-                    other => other,
+                            CandidateApplicability::Rejected(_) => {
+                                return Err(TypeError {
+                                    structured: None,
+                                    message: format!(
+                                        "{}::{} has no applicable implementation at specialization",
+                                        trait_name, method_name
+                                    ),
+                                    span: span.clone(),
+                                    hint: None,
+                                });
+                            }
+                        },
+                    )
+                } else {
+                    None
+                };
+                let dispatch = if let Some(instantiation) = instantiation {
+                    self.materialize_trait_method_instantiation(
+                        instantiation,
+                        &span,
+                        &mut SpecializationContext {
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        },
+                    )?
+                } else {
+                    dispatch
                 };
                 TypedInner::TraitCall {
                     trait_name,
@@ -648,7 +609,17 @@ impl Checker {
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedInner::Bind(pattern, rhs) => TypedInner::Bind(
-                self.concretize_specialized_typed_pattern(pattern, &span)?,
+                self.concretize_specialized_typed_pattern(
+                    pattern,
+                    &span,
+                    &mut SpecializationContext {
+                        defs_by_fun_idx,
+                        bound_tyvars_by_fun_idx,
+                        needs_specialization,
+                        specialization_fun_idxs,
+                        generated_defs,
+                    },
+                )?,
                 Box::new(self.rewrite_specializations_in_node(
                     *rhs,
                     defs_by_fun_idx,
@@ -659,7 +630,17 @@ impl Checker {
                 )?),
             ),
             TypedInner::SafeBind(pattern, rhs) => TypedInner::SafeBind(
-                self.concretize_specialized_typed_pattern(pattern, &span)?,
+                self.concretize_specialized_typed_pattern(
+                    pattern,
+                    &span,
+                    &mut SpecializationContext {
+                        defs_by_fun_idx,
+                        bound_tyvars_by_fun_idx,
+                        needs_specialization,
+                        specialization_fun_idxs,
+                        generated_defs,
+                    },
+                )?,
                 Box::new(self.rewrite_specializations_in_node(
                     *rhs,
                     defs_by_fun_idx,
@@ -994,8 +975,17 @@ impl Checker {
                 arms.into_iter()
                     .map(|arm| {
                         Ok(TypedMatchArm {
-                            pattern: self
-                                .concretize_specialized_match_pattern(arm.pattern, &span)?,
+                            pattern: self.concretize_specialized_match_pattern(
+                                arm.pattern,
+                                &span,
+                                &mut SpecializationContext {
+                                    defs_by_fun_idx,
+                                    bound_tyvars_by_fun_idx,
+                                    needs_specialization,
+                                    specialization_fun_idxs,
+                                    generated_defs,
+                                },
+                            )?,
                             guard: arm
                                 .guard
                                 .map(|guard| {
@@ -1634,165 +1624,47 @@ impl Checker {
             });
         }
 
-        if matches!(instantiated_callable, Some(Ty::UserFunc { .. })) {
-            if bound_tyvars.iter().any(|var| !mapping.contains_key(var)) {
-                return Err(TypeError {
-                    structured: None,
-                    message: "Missing call substitution for ordinary specialization".into(),
-                    span: def.span.clone(),
-                    hint: None,
-                });
-            }
-            return Ok(mapping);
+        if !matches!(instantiated_callable, Some(Ty::UserFunc { .. }))
+            || bound_tyvars.iter().any(|var| !mapping.contains_key(var))
+        {
+            return Err(TypeError {
+                structured: None,
+                message: "Missing call substitution for ordinary specialization".into(),
+                span: def.span.clone(),
+                hint: None,
+            });
         }
-
-        // Trait-method dispatch still supplies value/receiver evidence until
-        // Task 7 introduces its canonical instantiation substitution.
-        for (expected, arg) in param_tys.iter().zip(args.iter()) {
-            self.match_specialization_ty(expected, &arg.ty, bound_tyvars, &mut mapping);
-        }
-
         Ok(mapping)
     }
 
-    fn match_specialization_ty(
-        &mut self,
-        expected: &Ty,
-        actual: &Ty,
+    fn trait_specialization_arguments(
+        &self,
+        def: &TypedNode,
         bound_tyvars: &[u32],
-        mapping: &mut HashMap<u32, Ty>,
-    ) {
-        match (expected, actual) {
-            (Ty::Var(var), ty) if bound_tyvars.contains(var) => {
-                let candidate = self.resolve_ty(ty);
-                match mapping.entry(*var) {
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(candidate);
-                    }
-                    std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        let mut existing_vars = Vec::new();
-                        Self::collect_ty_vars(entry.get(), &mut existing_vars);
-                        let mut candidate_vars = Vec::new();
-                        Self::collect_ty_vars(&candidate, &mut candidate_vars);
-                        if candidate_vars.len() < existing_vars.len() {
-                            entry.insert(candidate);
-                        }
+        mapping: &HashMap<u32, Ty>,
+    ) -> Result<Vec<Ty>, TypeError> {
+        bound_tyvars
+            .iter()
+            .map(|var| {
+                let concrete = mapping.get(var).map(|ty| self.resolve_ty(ty));
+                if let Some(ty) = concrete {
+                    let mut unresolved = Vec::new();
+                    Self::collect_ty_vars(&ty, &mut unresolved);
+                    if unresolved.is_empty() {
+                        return Ok(ty);
                     }
                 }
-            }
-            (Ty::SelfApp(items), actual)
-                if Self::constructor_application_parts(items).is_some() =>
-            {
-                let (witness, expected_slots) =
-                    Self::constructor_application_parts(items).expect("checked above");
-                if let Some(actual_slots) = self.constructor_application_slots_for_witness(
-                    witness,
-                    expected_slots.len(),
-                    actual,
-                ) {
-                    self.match_specialization_ty(witness, actual, bound_tyvars, mapping);
-                    for (expected_slot, actual_slot) in
-                        expected_slots.iter().zip(actual_slots.iter())
-                    {
-                        self.match_specialization_ty(
-                            expected_slot,
-                            actual_slot,
-                            bound_tyvars,
-                            mapping,
-                        );
-                    }
-                }
-            }
-            (Ty::List(left), Ty::List(right)) => {
-                self.match_specialization_ty(left, right, bound_tyvars, mapping)
-            }
-            (Ty::Lazy(left), Ty::Lazy(right)) => {
-                self.match_specialization_ty(left, right, bound_tyvars, mapping)
-            }
-            (
-                Ty::Facet(_, left_source, left_focus, left_update_source, left_update_focus),
-                Ty::Facet(_, right_source, right_focus, right_update_source, right_update_focus),
-            ) => {
-                self.match_specialization_ty(left_source, right_source, bound_tyvars, mapping);
-                self.match_specialization_ty(left_focus, right_focus, bound_tyvars, mapping);
-                self.match_specialization_ty(
-                    left_update_source,
-                    right_update_source,
-                    bound_tyvars,
-                    mapping,
-                );
-                self.match_specialization_ty(
-                    left_update_focus,
-                    right_update_focus,
-                    bound_tyvars,
-                    mapping,
-                );
-            }
-            (Ty::Tuple(left), Ty::Tuple(right)) => {
-                for (left, right) in left.iter().zip(right.iter()) {
-                    self.match_specialization_ty(left, right, bound_tyvars, mapping);
-                }
-            }
-            (Ty::SelfApp(left), Ty::SelfApp(right)) => {
-                for (left, right) in left.iter().zip(right.iter()) {
-                    self.match_specialization_ty(left, right, bound_tyvars, mapping);
-                }
-            }
-            (Ty::Func(left_params, left_ret), Ty::Func(right_params, right_ret)) => {
-                for (left, right) in left_params.iter().zip(right_params.iter()) {
-                    self.match_specialization_ty(left, right, bound_tyvars, mapping);
-                }
-                self.match_specialization_ty(left_ret, right_ret, bound_tyvars, mapping);
-            }
-            (Ty::Result(left_ok, left_err), Ty::Result(right_ok, right_err)) => {
-                self.match_specialization_ty(left_ok, right_ok, bound_tyvars, mapping);
-                self.match_specialization_ty(left_err, right_err, bound_tyvars, mapping);
-            }
-            (Ty::Pid(left_name), Ty::Pid(right_name))
-                if left_name == right_name
-                    || left_name.starts_with('$')
-                    || right_name.starts_with('$') => {}
-            (Ty::Enum(left_name, left_args), Ty::Enum(right_name, right_args))
-                if left_name == right_name =>
-            {
-                for (left, right) in left_args.iter().zip(right_args.iter()) {
-                    self.match_specialization_ty(left, right, bound_tyvars, mapping);
-                }
-            }
-            (Ty::Struct(left_name, left_fields), Ty::Struct(right_name, right_fields))
-                if left_name == right_name =>
-            {
-                for ((left_field_name, left_field_ty), (right_field_name, right_field_ty)) in
-                    left_fields.iter().zip(right_fields.iter())
-                {
-                    if left_field_name == right_field_name {
-                        self.match_specialization_ty(
-                            left_field_ty,
-                            right_field_ty,
-                            bound_tyvars,
-                            mapping,
-                        );
-                    }
-                }
-            }
-            (Ty::Record(left_name, left_fields), Ty::Record(right_name, right_fields))
-                if left_name == right_name =>
-            {
-                for ((left_field_name, left_field_ty), (right_field_name, right_field_ty)) in
-                    left_fields.iter().zip(right_fields.iter())
-                {
-                    if left_field_name == right_field_name {
-                        self.match_specialization_ty(
-                            left_field_ty,
-                            right_field_ty,
-                            bound_tyvars,
-                            mapping,
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
+                Err(TypeError {
+                    structured: None,
+                    message: format!(
+                        "Incomplete trait method substitution for specialization variable {}",
+                        var
+                    ),
+                    span: def.span.clone(),
+                    hint: None,
+                })
+            })
+            .collect()
     }
 
     fn collect_bound_tyvars_for_def(&self, def: &TypedNode) -> Vec<u32> {
@@ -2957,41 +2829,145 @@ impl Checker {
         }
     }
 
+    fn materialize_trait_method_instantiation(
+        &mut self,
+        instantiation: MethodInstantiation,
+        span: &Span,
+        context: &mut SpecializationContext<'_>,
+    ) -> Result<TraitDispatch, TypeError> {
+        match instantiation.dispatch {
+            TraitDispatchTarget::UserFunction { name, fun_idx }
+                if context.needs_specialization.contains(&fun_idx) =>
+            {
+                let original_def = context.defs_by_fun_idx.get(&fun_idx).ok_or_else(|| {
+                    TypeError::new(
+                        format!("Missing generic definition for fun_idx {}", fun_idx),
+                        span.clone(),
+                    )
+                })?;
+                let bound_tyvars =
+                    context
+                        .bound_tyvars_by_fun_idx
+                        .get(&fun_idx)
+                        .ok_or_else(|| {
+                            TypeError::new(
+                                format!("Missing specialization binders for fun_idx {}", fun_idx),
+                                span.clone(),
+                            )
+                        })?;
+                let concrete_tys = self.trait_specialization_arguments(
+                    original_def,
+                    bound_tyvars,
+                    &instantiation.substitution,
+                )?;
+                let fun_idx = self.ensure_specialized_def(
+                    fun_idx,
+                    &concrete_tys,
+                    &instantiation.substitution,
+                    context.defs_by_fun_idx,
+                    context.bound_tyvars_by_fun_idx,
+                    context.needs_specialization,
+                    context.specialization_fun_idxs,
+                    context.generated_defs,
+                )?;
+                Ok(TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                    name,
+                    fun_idx,
+                }))
+            }
+            target => Ok(TraitDispatch::Static(target)),
+        }
+    }
+
+    fn specialize_pattern_pin_dispatch(
+        &mut self,
+        ty: &Ty,
+        dispatch: TraitDispatch,
+        span: &Span,
+        context: &mut SpecializationContext<'_>,
+    ) -> Result<TraitDispatch, TypeError> {
+        if !matches!(dispatch, TraitDispatch::Pending)
+            && !matches!(&dispatch, TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. })
+                if context.needs_specialization.contains(fun_idx))
+        {
+            return Ok(dispatch);
+        }
+        let receiver = self.resolve_ty(ty);
+        let eq_trait = self
+            .trait_key_by_short_name("Eq")
+            .ok_or_else(|| TypeError::new("Unknown trait: Eq", span.clone()))?;
+        let trait_info = self
+            .traits
+            .get(&eq_trait)
+            .cloned()
+            .ok_or_else(|| TypeError::new("Missing Eq trait contract", span.clone()))?;
+        let method = trait_info
+            .methods
+            .get("eq")
+            .ok_or_else(|| TypeError::new("Missing Eq::eq method contract", span.clone()))?;
+        let (_, result_ty, trait_args, _, _) =
+            self.resolve_trait_method_signature(&trait_info, method, &receiver)?;
+        match self.select_trait_method_instantiation(
+            &eq_trait,
+            "eq",
+            &receiver,
+            &trait_args,
+            &[receiver.clone(), receiver.clone()],
+            &result_ty,
+        )? {
+            CandidateApplicability::Applicable(instantiation) => {
+                self.materialize_trait_method_instantiation(instantiation, span, context)
+            }
+            CandidateApplicability::Deferred(pending) => Err(TypeError::new(
+                format!(
+                    "AmbiguousReturnTypeArgument: Eq::eq remains unresolved at pattern specialization (waiting on {:?}; {} candidates)",
+                    pending.waiting_on,
+                    pending.candidates.len()
+                ),
+                span.clone(),
+            )),
+            CandidateApplicability::Rejected(_) => Err(TypeError::new(
+                format!(
+                    "Eq::eq has no applicable implementation for pin pattern {}",
+                    self.ty_name(&receiver)
+                ),
+                span.clone(),
+            )),
+        }
+    }
+
     fn concretize_specialized_typed_pattern(
         &mut self,
         pattern: TypedPattern,
         span: &Span,
+        context: &mut SpecializationContext<'_>,
     ) -> Result<TypedPattern, TypeError> {
         Ok(match pattern {
             TypedPattern::Pin(ty, id, dispatch) => {
                 let dispatch =
-                    if matches!(dispatch, TraitDispatch::Pending) && !matches!(ty, Ty::Var(_)) {
-                        self.eq_dispatch_for_pattern_pin(&ty, span)?
-                    } else {
-                        dispatch
-                    };
+                    self.specialize_pattern_pin_dispatch(&ty, dispatch, span, context)?;
                 TypedPattern::Pin(ty, id, dispatch)
             }
             TypedPattern::As(ty, inner, id) => TypedPattern::As(
                 ty,
-                Box::new(self.concretize_specialized_typed_pattern(*inner, span)?),
+                Box::new(self.concretize_specialized_typed_pattern(*inner, span, context)?),
                 id,
             ),
             TypedPattern::ListCons(ty, head, tail) => TypedPattern::ListCons(
                 ty,
-                Box::new(self.concretize_specialized_typed_pattern(*head, span)?),
-                Box::new(self.concretize_specialized_typed_pattern(*tail, span)?),
+                Box::new(self.concretize_specialized_typed_pattern(*head, span, context)?),
+                Box::new(self.concretize_specialized_typed_pattern(*tail, span, context)?),
             ),
             TypedPattern::Tuple(ty, items) => TypedPattern::Tuple(
                 ty,
                 items
                     .into_iter()
-                    .map(|item| self.concretize_specialized_typed_pattern(item, span))
+                    .map(|item| self.concretize_specialized_typed_pattern(item, span, context))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedPattern::ResultOk(ty, inner) => TypedPattern::ResultOk(
                 ty,
-                Box::new(self.concretize_specialized_typed_pattern(*inner, span)?),
+                Box::new(self.concretize_specialized_typed_pattern(*inner, span, context)?),
             ),
             TypedPattern::Extractor {
                 input_ty,
@@ -3012,7 +2988,7 @@ impl Checker {
                 seq_tys,
                 items: items
                     .into_iter()
-                    .map(|item| self.concretize_specialized_typed_pattern(item, span))
+                    .map(|item| self.concretize_specialized_typed_pattern(item, span, context))
                     .collect::<Result<Vec<_>, _>>()?,
             },
             other => other,
@@ -3023,34 +2999,28 @@ impl Checker {
         &mut self,
         pattern: TypedMatchPattern,
         span: &Span,
+        context: &mut SpecializationContext<'_>,
     ) -> Result<TypedMatchPattern, TypeError> {
         Ok(match pattern {
             TypedMatchPattern::Pin { id, ty, dispatch } => {
-                let dispatch = if matches!(dispatch, TraitDispatch::Pending) {
-                    if matches!(ty, Ty::Var(_)) {
-                        dispatch
-                    } else {
-                        self.eq_dispatch_for_pattern_pin(&ty, span)?
-                    }
-                } else {
-                    dispatch
-                };
+                let dispatch =
+                    self.specialize_pattern_pin_dispatch(&ty, dispatch, span, context)?;
                 TypedMatchPattern::Pin { id, ty, dispatch }
             }
             TypedMatchPattern::As(inner, id) => TypedMatchPattern::As(
-                Box::new(self.concretize_specialized_match_pattern(*inner, span)?),
+                Box::new(self.concretize_specialized_match_pattern(*inner, span, context)?),
                 id,
             ),
             TypedMatchPattern::Or(items) => TypedMatchPattern::Or(
                 items
                     .into_iter()
-                    .map(|item| self.concretize_specialized_match_pattern(item, span))
+                    .map(|item| self.concretize_specialized_match_pattern(item, span, context))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedMatchPattern::Tuple(items) => TypedMatchPattern::Tuple(
                 items
                     .into_iter()
-                    .map(|item| self.concretize_specialized_match_pattern(item, span))
+                    .map(|item| self.concretize_specialized_match_pattern(item, span, context))
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedMatchPattern::Constructor {
@@ -3061,13 +3031,13 @@ impl Checker {
                 tag,
                 fields: fields
                     .into_iter()
-                    .map(|item| self.concretize_specialized_match_pattern(item, span))
+                    .map(|item| self.concretize_specialized_match_pattern(item, span, context))
                     .collect::<Result<Vec<_>, _>>()?,
                 field_offset,
             },
             TypedMatchPattern::ListCons(head, tail) => TypedMatchPattern::ListCons(
-                Box::new(self.concretize_specialized_match_pattern(*head, span)?),
-                Box::new(self.concretize_specialized_match_pattern(*tail, span)?),
+                Box::new(self.concretize_specialized_match_pattern(*head, span, context)?),
+                Box::new(self.concretize_specialized_match_pattern(*tail, span, context)?),
             ),
             TypedMatchPattern::Extractor {
                 input_ty,
@@ -3088,7 +3058,7 @@ impl Checker {
                 seq_tys,
                 items: items
                     .into_iter()
-                    .map(|item| self.concretize_specialized_match_pattern(item, span))
+                    .map(|item| self.concretize_specialized_match_pattern(item, span, context))
                     .collect::<Result<Vec<_>, _>>()?,
             },
             other => other,
@@ -3477,6 +3447,36 @@ mod tests {
         assert_eq!(
             err.message,
             "Cannot specialize call: expected 1 argument(s), got 0"
+        );
+    }
+
+    #[test]
+    fn trait_specialization_requires_complete_concrete_solver_substitution() {
+        let checker = Checker::new(TypecheckContext::default());
+        let def = generic_identity_def(
+            20,
+            resolved_id("id", Some("Global::id"), 10),
+            resolved_id("x", None, 11),
+            1,
+        );
+        for mapping in [
+            HashMap::new(),
+            HashMap::from([(1, Ty::List(Box::new(Ty::Var(2))))]),
+        ] {
+            let error = checker
+                .trait_specialization_arguments(&def, &[1], &mapping)
+                .expect_err("missing or nested unresolved solver substitutions must fail");
+            assert!(error
+                .message
+                .contains("Incomplete trait method substitution"));
+        }
+        let mapping = HashMap::from([(1, Ty::List(Box::new(Ty::Int))), (2, Ty::Bool)]);
+        assert_eq!(
+            checker
+                .trait_specialization_arguments(&def, &[1], &mapping)
+                .unwrap(),
+            vec![Ty::List(Box::new(Ty::Int))],
+            "impl head variables outside the body binders must not invalidate the substitution",
         );
     }
 

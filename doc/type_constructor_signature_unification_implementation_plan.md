@@ -803,7 +803,7 @@ git commit -m "refactor(types): validate trait methods with role type lists"
 - Consumes: canonical Trait identity, resolved impl head, role type lists, and proof obligations.
 - Invariant: `TraitId` index narrows candidates only; it never decides applicability, priority, or a default implementation.
 
-- [ ] **Step 1: Add failing applicability tests**
+- [x] **Step 1: Add failing applicability tests**
 
 Cover nested impl heads, Trait arguments plus impl target, impl `where` success/failure/deferred, reversed declaration order, generic overlap rejection, and a single visible impl with an unknown subject. Assert that the unknown case stays deferred:
 
@@ -816,7 +816,7 @@ assert!(matches!(
 
 Add a rollback regression where the first candidate binds two variables and then fails its `where`; the second candidate must observe neither binding.
 
-- [ ] **Step 2: Run the focused test**
+- [x] **Step 2: Run the focused test**
 
 ```bash
 cargo nextest run -p scar --test trait_impl_applicability
@@ -824,7 +824,7 @@ cargo nextest run -p scar --test trait_impl_applicability
 
 Expected: name/string keys, registration order, or leaked candidate bindings produce wrong selection.
 
-- [ ] **Step 3: Store canonical impl identity**
+- [x] **Step 3: Store canonical impl identity**
 
 ```rust
 pub struct CanonicalTraitImplPatternKey {
@@ -833,8 +833,8 @@ pub struct CanonicalTraitImplPatternKey {
 }
 
 pub struct TraitImplDeclarationKey {
-    pub module: ModuleId,
-    pub declaration: DeclarationId,
+    pub pattern: CanonicalTraitImplPatternKey,
+    pub declaration_id: DeclarationId,
 }
 
 pub enum CandidateApplicability {
@@ -846,15 +846,15 @@ pub enum CandidateApplicability {
 
 Keep declaration identity for provenance and body lookup, not as a substitute for structural identity. Store canonical impl heads as the source of truth and use a `TraitId` secondary index only for discovery.
 
-- [ ] **Step 4: Probe the complete candidate in one checkpoint**
+- [x] **Step 4: Probe the complete candidate in one checkpoint**
 
 In order, unify the impl head with the requested head, apply that substitution to impl `where`, unify the method signature list with the invocation list, then prove all obligations. Commit the checkpoint only for a fully applicable candidate; retain explicit waiting variables for deferred candidates; roll back every pattern, inference, carrier, and proof binding for rejected candidates.
 
-- [ ] **Step 5: Remove implicit selection routes**
+- [x] **Step 5: Remove implicit selection routes**
 
 Delete storage/lookups keyed by `(trait_name, rendered_target)`, parsing of rendered `Trait<...>` strings, exact-name dispatch shortcuts, single-candidate defaulting, and registration-order tie breaking. A concrete input with multiple applicable candidates is an internal coherence invariant; an unresolved input with candidates is deferred until its boundary.
 
-- [ ] **Step 6: Verify storage, selection, and modules**
+- [x] **Step 6: Verify storage, selection, and modules**
 
 ```bash
 cargo nextest run -p scar --test trait_impl_applicability
@@ -862,12 +862,20 @@ cargo nextest run -p scar
 cargo nextest run -p rune --test integration module_import_fixtures
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
-git add crates/scar crates/sigil tests/fixtures
+git add crates/scar crates/sigil crates/xldr/src/lib.rs tests/fixtures doc/type_constructor_signature_unification_implementation_plan.md
 git commit -m "refactor(types): select trait implementations structurally"
 ```
+
+**Completion verification (2026-09-06):**
+
+- Applicability, rejected-candidate isolation, rigid caller capability/impl boundaries, exact method substitution, and original declaration dispatch regressions passed. Independent review completed after fixing its rigid-variable findings.
+- Final source tree with a warmed fresh stdlib cache: `rtk cargo nextest run --workspace --test-threads 4` ran **1,853 tests: 1,852 passed, 1 timed out, 202 skipped** in 304.396 seconds. There were no functional test failures; this workspace invocation did not exit successfully because of the timeout.
+- The only timeout, `xldr::repl_core::core_reload_and_clear_commands_preserve_only_requested_state`, passed unchanged in an exact isolated rerun: **1 passed, 133 skipped**, 9.356 seconds, exit 0. Together these runs verified every selected test. The default profile excludes cold tests; those 202 skipped tests were not covered by this final gate.
+- Fresh-cache Rune bucket 4 passed before the workspace run. `cargo fmt --all` and `git diff --check` passed after the final source change.
+- Task 8's full invocation/carrier propagation and Task 9's complete diagnostic rendering remain separate follow-up tasks.
 
 ---
 

@@ -15,13 +15,40 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
-        self.trait_dispatch_target(&eq_trait, "eq", &receiver_ty)
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: format!("`==` is not defined for {}", self.ty_name(&receiver_ty)),
-                span: span.clone(),
-                hint: Some(self.trait_implementation_summary("Eq")),
-            })
+        let trait_info = self
+            .traits
+            .get(&eq_trait)
+            .cloned()
+            .ok_or_else(|| TypeError::new("Missing Eq trait contract", span.clone()))?;
+        let method = trait_info
+            .methods
+            .get("eq")
+            .ok_or_else(|| TypeError::new("Missing Eq::eq method contract", span.clone()))?;
+        let (_, result_ty, trait_args, _, _) =
+            self.resolve_trait_method_signature(&trait_info, method, &receiver_ty)?;
+        self.consume_matching_capability(&receiver_ty, &eq_trait);
+        let dispatch = match self.select_trait_method_instantiation(
+            &eq_trait,
+            "eq",
+            &receiver_ty,
+            &trait_args,
+            &[receiver_ty.clone(), receiver_ty.clone()],
+            &result_ty,
+        )? {
+            CandidateApplicability::Applicable(instantiation) => {
+                Some(TraitDispatch::Static(instantiation.dispatch))
+            }
+            CandidateApplicability::Deferred(_) => {
+                self.trait_dispatch_target_for_args(&eq_trait, "eq", &receiver_ty, &trait_args)?
+            }
+            CandidateApplicability::Rejected(_) => None,
+        };
+        dispatch.ok_or_else(|| TypeError {
+            structured: None,
+            message: format!("`==` is not defined for {}", self.ty_name(&receiver_ty)),
+            span: span.clone(),
+            hint: Some(self.trait_implementation_summary("Eq")),
+        })
     }
 
     pub(super) fn is_total_bind_pattern(pat: &ResolvedPattern) -> bool {

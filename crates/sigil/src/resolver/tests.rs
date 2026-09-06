@@ -1862,7 +1862,7 @@ impl Add for Int {
     ));
     assert!(matches!(
         &resolved[1],
-        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), _, methods)
+        Resolved::TraitImplDef(_, _, id, _, AstTy::Named(_, target), _, methods)
             if id.name == "Add" && target == "Global::Int" && methods.len() == 1
     ));
 }
@@ -1981,7 +1981,7 @@ impl Functor for Boxed<$T> {
     let method_id = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::TraitImplDef(_, _, _, AstTy::Generic(_, target, _), _, methods)
+            Resolved::TraitImplDef(_, _, _, _, AstTy::Generic(_, target, _), _, methods)
                 if target == "Global::Boxed" =>
             {
                 methods.first().map(|method| &method.function_id)
@@ -1996,6 +1996,68 @@ impl Functor for Boxed<$T> {
         Some(TypeIdentity::Struct),
         "the generic application must resolve through the canonical Boxed owner"
     );
+}
+
+#[test]
+fn test_trait_impl_declaration_ids_are_unique_and_rebased_across_modules() {
+    let module_stages = vec![vec![
+        staged_module(
+            "Alpha",
+            parse_module_ast(
+                r#"deftrait ShowAlpha {
+  def show(self: Self) -> String
+}
+defstruct AlphaValue { value: Int }
+impl ShowAlpha for AlphaValue {
+  def show(self: Self) -> String { "alpha" }
+}"#,
+                "Alpha",
+            ),
+        ),
+        staged_module(
+            "Beta",
+            parse_module_ast(
+                r#"deftrait ShowBeta {
+  def show(self: Self) -> String
+}
+defstruct BetaValue { value: Int }
+impl ShowBeta for BetaValue {
+  def show(self: Self) -> String { "beta" }
+}"#,
+                "Beta",
+            ),
+        ),
+    ]];
+    let declaration_index =
+        precollect_declaration_index(&module_stages).expect("declarations should precollect");
+
+    let resolve_ids = || {
+        resolve_staged_program(&module_stages, Vec::new(), &declaration_index, None)
+            .expect("trait impl modules should resolve")
+            .into_iter()
+            .filter_map(|node| match node {
+                Resolved::TraitImplDef(_, declaration_id, trait_id, _, _, _, methods) => Some((
+                    trait_id.name,
+                    declaration_id,
+                    trait_id.unique_id,
+                    methods[0].function_id.unique_id,
+                )),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let first = resolve_ids();
+    assert_eq!(first.len(), 2);
+    assert_ne!(
+        first[0].1, first[1].1,
+        "module-local impl IDs must be rebased"
+    );
+    for (_, declaration_id, trait_id, method_id) in &first {
+        assert_ne!(declaration_id, trait_id);
+        assert_ne!(declaration_id, method_id);
+    }
+    assert_eq!(first, resolve_ids(), "impl declaration IDs must be stable");
 }
 
 #[test]
@@ -2109,7 +2171,7 @@ impl Show for Box {
     let (trait_impl_id, trait_impl_member) = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), _, methods)
+            Resolved::TraitImplDef(_, _, id, _, AstTy::Named(_, target), _, methods)
                 if id.name == "Show" && target == "Global::Box" =>
             {
                 Some((id, &methods[0].function_id))
@@ -2231,7 +2293,7 @@ where
     let impl_clause = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::TraitImplDef(_, id, _, _, where_clause, _)
+            Resolved::TraitImplDef(_, _, id, _, _, where_clause, _)
                 if id.unique_id == functor_id.unique_id =>
             {
                 where_clause.as_ref()
@@ -2252,7 +2314,7 @@ where
     let impl_method_clause = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::TraitImplDef(_, id, _, _, _, methods)
+            Resolved::TraitImplDef(_, _, id, _, _, _, methods)
                 if id.unique_id == functor_id.unique_id =>
             {
                 methods[0].where_clause.as_ref()
@@ -2378,7 +2440,7 @@ where
     let slot_map = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::TraitImplDef(_, id, _, _, Some(clause), _) if id.name == "Child" => {
+            Resolved::TraitImplDef(_, _, id, _, _, Some(clause), _) if id.name == "Child" => {
                 Some(clause)
             }
             _ => None,
@@ -2439,7 +2501,7 @@ value = Convert::convert::<String>(1)"#,
     ));
     assert!(matches!(
         &resolved[1],
-        Resolved::TraitImplDef(_, id, trait_args, _, _, _)
+        Resolved::TraitImplDef(_, _, id, trait_args, _, _, _)
             if id.name == "Convert"
                 && matches!(trait_args.as_slice(), [AstTy::Named(_, name)] if name == "String")
     ));
@@ -2511,7 +2573,7 @@ impl Add for Int {
     let resolved = resolve(ast).expect("trait impl builtin method should resolve");
     assert!(matches!(
         &resolved[1],
-        Resolved::TraitImplDef(_, id, _, AstTy::Named(_, target), _, methods)
+        Resolved::TraitImplDef(_, _, id, _, AstTy::Named(_, target), _, methods)
             if id.name == "Add"
                 && target == "Global::Int"
                 && methods.len() == 1
@@ -3419,7 +3481,7 @@ defstruct User { name: String }
     assert!(matches!(resolved[2], Resolved::StructDef(..)));
     assert!(matches!(
         resolved[3],
-        Resolved::TraitImplDef(_, ref trait_id, _, _, _, _)
+        Resolved::TraitImplDef(_, _, ref trait_id, _, _, _, _)
             if trait_id.name == "Eq"
     ));
 }
@@ -5158,6 +5220,51 @@ fn test_sigil_session_scope_persists_across_calls() {
     assert!(
         matches!(&resolved[0], Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "y")
     );
+}
+
+#[test]
+fn test_sigil_session_assigns_fresh_ids_to_empty_impls_across_chunks() {
+    let mut session = SigilSession::new();
+    let first = spire::parse(
+        r#"deftrait Marker {}
+defstruct FirstMarker {}
+defstruct SecondMarker {}
+impl Marker for FirstMarker {}"#,
+    )
+    .expect("first marker chunk should parse");
+    let first = session
+        .resolve(first)
+        .expect("first marker chunk should resolve");
+    let (first_impl_id, trait_id) = first
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, declaration_id, trait_id, _, _, _, methods) => {
+                assert!(methods.is_empty());
+                Some((*declaration_id, trait_id.unique_id))
+            }
+            _ => None,
+        })
+        .expect("first empty impl should be retained");
+
+    let second =
+        spire::parse("impl Marker for SecondMarker {}").expect("second marker chunk should parse");
+    let second = session
+        .resolve(second)
+        .expect("second marker chunk should resolve");
+    let second_impl_id = second
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, declaration_id, _, _, _, _, methods) => {
+                assert!(methods.is_empty());
+                Some(*declaration_id)
+            }
+            _ => None,
+        })
+        .expect("second empty impl should be retained");
+
+    assert_ne!(first_impl_id, trait_id);
+    assert_ne!(first_impl_id, second_impl_id);
+    assert!(second_impl_id > first_impl_id);
 }
 
 #[test]
@@ -7226,7 +7333,7 @@ impl Convert<Int> for String {
     let Resolved::TraitDef(_, _, _, _, contract, _) = &resolved[0] else {
         panic!("trait")
     };
-    let Resolved::TraitImplDef(_, _, _, _, _, methods) = &resolved[1] else {
+    let Resolved::TraitImplDef(_, _, _, _, _, _, methods) = &resolved[1] else {
         panic!("impl")
     };
     let callee = trait_impl_self_call_id(&methods[0].body);
@@ -7246,7 +7353,7 @@ impl Apply for String {
 "#,
     )
     .expect("local parameter shadows method alias");
-    let Resolved::TraitImplDef(_, _, _, _, _, methods) = &resolved[1] else {
+    let Resolved::TraitImplDef(_, _, _, _, _, _, methods) = &resolved[1] else {
         panic!("impl")
     };
     let callee = trait_impl_self_call_id(&methods[0].body);
@@ -7274,7 +7381,7 @@ impl Hidden for Int {
     let Resolved::TraitDef(_, _, _, _, contract, _) = &resolved[0] else {
         panic!("trait")
     };
-    let Resolved::TraitImplDef(_, _, _, _, _, methods) = &resolved[1] else {
+    let Resolved::TraitImplDef(_, _, _, _, _, _, methods) = &resolved[1] else {
         panic!("impl")
     };
     let callee = trait_impl_self_call_id(&methods[0].body);
@@ -7337,7 +7444,7 @@ impl Convert for String { def convert(self: Self) -> Int { convert(1) } }
     let method = resolved
         .iter()
         .find_map(|node| match node {
-            Resolved::TraitImplDef(_, id, _, _, _, methods) if id.name.ends_with("Convert") => {
+            Resolved::TraitImplDef(_, _, id, _, _, _, methods) if id.name.ends_with("Convert") => {
                 Some(&methods[0])
             }
             _ => None,
@@ -7382,7 +7489,7 @@ impl Apply for String {
 "#,
     )
     .expect("local callable shadows method alias");
-    let Resolved::TraitImplDef(_, _, _, _, _, methods) = &resolved[1] else {
+    let Resolved::TraitImplDef(_, _, _, _, _, _, methods) = &resolved[1] else {
         panic!("impl")
     };
     let Resolved::Block(_, expressions) = methods[0].body.as_ref() else {

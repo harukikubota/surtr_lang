@@ -35,7 +35,7 @@ where
 }}"#
     ));
     let moved = resolved.iter_mut().any(|node| {
-        let Resolved::TraitImplDef(_, _, _, _, where_clause, methods) = node else {
+        let Resolved::TraitImplDef(_, _, _, _, _, where_clause, methods) = node else {
             return false;
         };
         methods[0].where_clause = where_clause.clone();
@@ -417,7 +417,7 @@ where
 {{}}"#
     ));
     let mutated = resolved.iter_mut().any(|node| {
-        let Resolved::TraitImplDef(_, impl_trait_id, _, _, Some(clause), _) = node else {
+        let Resolved::TraitImplDef(_, _, impl_trait_id, _, _, Some(clause), _) = node else {
             return false;
         };
         let Some(ResolvedWhereConstraintRhs::TraitSlot { trait_id, .. }) =
@@ -433,4 +433,77 @@ where
     let err = scar::typecheck(resolved)
         .expect_err("a non-constructor enclosing trait cannot own slot mappings");
     assert!(err.message.contains("TypeConstructor trait"), "{err:?}");
+}
+
+#[test]
+fn generic_eq_pin_instantiates_the_selected_method_body() {
+    use scar::typed::{TraitDispatch, TraitDispatchTarget, TypedInner, TypedMatchPattern};
+    use scar::types::Ty;
+
+    fn tail(node: &TypedNode) -> &TypedNode {
+        match &node.node {
+            TypedInner::Block(nodes) => tail(nodes.last().expect("nonempty body")),
+            _ => node,
+        }
+    }
+
+    let typed = typecheck_without_std_prelude(
+        r#"
+deftrait Eq { def eq(self: Self, rhs: Self) -> Boolean }
+impl Eq for Int { def eq(self: Self, rhs: Self) -> Boolean { True } }
+defstruct Box<$T> { val: $T }
+impl Box { def new(val: $T) -> Box<$T> { Box { val: val } } }
+impl Eq for Box<$T>
+where $T: Eq
+{ def eq(self: Self, rhs: Self) -> Boolean { Eq::eq(self.val, rhs.val) } }
+def pinned_equal(value: $A, pinned: $A) -> Int
+where $A: Eq
+{ match value { ^pinned => 1, _ => 0 } }
+result: Int = pinned_equal(Box::new(1), Box::new(1))
+"#,
+    )
+    .expect("generic Eq pin should typecheck");
+    let pinned_body = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Def(_, id, _, _, _, _, body, _) if id.name == "pinned_equal" => {
+                Some(body.as_ref())
+            }
+            _ => None,
+        })
+        .expect("specialized pinned_equal definition");
+    let TypedInner::Match(_, arms) = &tail(pinned_body).node else {
+        panic!("pin match")
+    };
+    let TypedMatchPattern::Pin {
+        dispatch: TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }),
+        ..
+    } = &arms[0].pattern
+    else {
+        panic!("static user Eq method")
+    };
+    let eq_body = typed
+        .iter()
+        .find_map(|node| match &node.node {
+            TypedInner::Def(index, _, _, _, _, _, body, _) if index == fun_idx => {
+                Some(body.as_ref())
+            }
+            _ => None,
+        })
+        .expect("the pin dispatch target must have an emitted specialized definition");
+    let TypedInner::TraitCall {
+        receiver_ty,
+        dispatch,
+        args,
+        ..
+    } = &tail(eq_body).node
+    else {
+        panic!("Eq field comparison")
+    };
+    assert_eq!(receiver_ty, &Ty::Int);
+    assert!(matches!(dispatch, TraitDispatch::Static(_)));
+    assert!(
+        args.iter().all(|arg| arg.ty == Ty::Int),
+        "impl substitution must reach field reads"
+    );
 }

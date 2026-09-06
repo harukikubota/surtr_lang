@@ -30,7 +30,7 @@ mod signatures;
 mod specialize;
 mod trait_selection;
 mod types;
-use trait_selection::MethodTypeEnvironment;
+use trait_selection::{ApplicabilityProof, MethodTypeEnvironment};
 
 #[derive(Debug, Clone, Copy)]
 enum ProfileEvent {
@@ -456,12 +456,15 @@ struct TraitImplMethodInfo {
     is_builtin: bool,
     #[serde(default)]
     body_obligations: Vec<TraitObligation>,
+    instantiation_contract: Option<ImplMethodInstantiationContract>,
 }
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TraitImplInfo {
+    declaration_key: TraitImplDeclarationKey,
     head_type_list: ImplHeadTypeList,
+    impl_constraints: CanonicalConstraintSet,
     method_signature_lists: HashMap<String, MethodSignatureTypeList>,
     trait_id: ResolvedId,
     trait_args: Vec<AstTy>,
@@ -475,6 +478,45 @@ struct TraitImplInfo {
     constructor_slot_vars: Vec<u32>,
     constructor_slot_positions: Vec<usize>,
     methods: HashMap<String, TraitImplMethodInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ImplMethodInstantiationContract {
+    head: ImplHeadTypeList,
+    signature: MethodSignatureTypeList,
+    impl_constraints: CanonicalConstraintSet,
+}
+
+pub(super) struct MethodInstantiation {
+    pub dispatch: TraitDispatchTarget,
+    pub substitution: HashMap<u32, Ty>,
+    pub caller_substitution: HashMap<u32, Ty>,
+    pub proof_evidence: Vec<usize>,
+}
+pub(super) struct PendingTraitCandidate {
+    pub waiting_on: Vec<u32>,
+    pub candidates: Vec<TraitImplDeclarationKey>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CandidateFailureKind {
+    TraitImplHeadMismatch,
+    TraitImplWhereUnsatisfied,
+    TraitMethodInvocationMismatch,
+}
+#[derive(Debug, Clone)]
+pub(super) struct CandidateFailure {
+    pub declaration: TraitImplDeclarationKey,
+    pub kind: CandidateFailureKind,
+    pub span: Span,
+}
+#[derive(Debug, Clone)]
+pub(super) struct CandidateRejection {
+    pub failures: Vec<CandidateFailure>,
+}
+pub(super) enum CandidateApplicability {
+    Applicable(MethodInstantiation),
+    Deferred(PendingTraitCandidate),
+    Rejected(CandidateRejection),
 }
 
 /// A trait requirement kept in inference state.  Keep the trait identity and
@@ -1037,8 +1079,8 @@ fn format_builtin_type_param_suffix(params: &[&str]) -> String {
     }
 }
 
-type TraitImplKey = (String, String);
-type TraitImplIndex = HashMap<String, Vec<TraitImplKey>>;
+type TraitImplKey = CanonicalTraitImplPatternKey;
+type TraitImplIndex = HashMap<u32, Vec<TraitImplKey>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 struct SpecializationKey {
@@ -1124,7 +1166,7 @@ struct PersistentCheckerState {
     specializable_defs: HashMap<u32, TypedNode>,
     specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_impls: HashMap<TraitImplKey, TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
@@ -1219,7 +1261,7 @@ pub struct ScarCheckpoint {
     #[serde(default)]
     specialization_fun_idxs: HashMap<SpecializationKey, u32>,
     traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_impls: HashMap<TraitImplKey, TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
@@ -2234,10 +2276,9 @@ struct Checker {
     seen_builtin_type_decls: HashMap<String, (Vec<String>, Span)>,
     facet_path_kind_decls: HashMap<String, Vec<String>>,
     traits: HashMap<String, TraitInfo>,
-    trait_impls: HashMap<(String, String), TraitImplInfo>,
+    trait_impls: HashMap<TraitImplKey, TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
-    trait_obligation_cycle: Option<String>,
     profiler: TypecheckProfiler,
     process_handler_dependencies: HashMap<String, HashMap<String, String>>,
     process_specs: Vec<TypedProcessSpec>,
@@ -2327,7 +2368,6 @@ impl Checker {
             trait_impls: state.trait_impls,
             trait_impl_index_by_base_trait: state.trait_impl_index_by_base_trait,
             trait_methods_by_qualified_name: state.trait_methods_by_qualified_name,
-            trait_obligation_cycle: None,
             profiler: TypecheckProfiler::new_from_env(),
             process_handler_dependencies: HashMap::new(),
             process_specs: Vec::new(),
@@ -2361,7 +2401,6 @@ impl Checker {
         checker.substitutions = self.substitutions.clone();
         checker.pending_trait_obligations = self.pending_trait_obligations.clone();
         checker.active_capabilities = self.active_capabilities.clone();
-        checker.trait_obligation_cycle = self.trait_obligation_cycle.clone();
         checker.constructor_capabilities = self.constructor_capabilities.clone();
         checker.constructor_witness_traits = self.constructor_witness_traits.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
@@ -2519,7 +2558,7 @@ impl Checker {
                     }
                     self.warn_unused_type_params(type_params, &trait_used, &id.name);
                 }
-                Resolved::TraitImplDef(_, _, _, _, _, methods) => {
+                Resolved::TraitImplDef(_, _, _, _, _, _, methods) => {
                     for method in methods {
                         let used = Self::signature_type_param_uses(
                             &method.value_parameters,
@@ -3369,10 +3408,8 @@ impl Checker {
         if self.traits.len() != child.traits.len() {
             self.traits = child.traits.clone();
         }
-        if self.trait_impls.len() != child.trait_impls.len() {
-            self.trait_impls = child.trait_impls.clone();
-            self.trait_impl_index_by_base_trait = child.trait_impl_index_by_base_trait.clone();
-        }
+        self.trait_impls = child.trait_impls.clone();
+        self.trait_impl_index_by_base_trait = child.trait_impl_index_by_base_trait.clone();
         if self.trait_methods_by_qualified_name.len() != child.trait_methods_by_qualified_name.len()
         {
             self.trait_methods_by_qualified_name = child.trait_methods_by_qualified_name.clone();
@@ -3469,34 +3506,24 @@ impl Checker {
         }
     }
 
-    pub(super) fn base_trait_key(trait_name: &str) -> &str {
-        trait_name
-            .split_once('<')
-            .map_or(trait_name, |(base, _)| base)
-    }
-
     pub(super) fn index_trait_impl(&mut self, trait_impl_key: TraitImplKey) {
-        let base_trait_name = Self::base_trait_key(&trait_impl_key.0).to_string();
         let entries = self
             .trait_impl_index_by_base_trait
-            .entry(base_trait_name)
+            .entry(trait_impl_key.trait_ref.trait_id)
             .or_default();
-        if !entries.iter().any(|existing| existing == &trait_impl_key) {
+        if !entries.contains(&trait_impl_key) {
             entries.push(trait_impl_key);
         }
     }
 
     pub(super) fn trait_impl_candidate_keys(&self, trait_name: &str) -> Vec<TraitImplKey> {
-        let base = Self::base_trait_key(trait_name);
-        if let Some(keys) = self.trait_impl_index_by_base_trait.get(base) {
-            return keys.clone();
-        }
-        let surface_base = Self::surface_name(base);
+        let Some(info) = self.traits.get(trait_name) else {
+            return Vec::new();
+        };
         self.trait_impl_index_by_base_trait
-            .iter()
-            .filter(|(key, _)| Self::surface_name(key) == surface_base)
-            .flat_map(|(_, keys)| keys.iter().cloned())
-            .collect()
+            .get(&info.id.unique_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn contextual_constructor_trait_names(&self, stmts: &[Resolved]) -> HashSet<String> {
@@ -3970,7 +3997,7 @@ impl Checker {
                         }
                     }
                 }
-                Resolved::TraitImplDef(_, _, _, _, _, methods) => {
+                Resolved::TraitImplDef(_, _, _, _, _, _, methods) => {
                     for method in methods {
                         for param in &method.value_parameters {
                             self.validate_constructor_ast_ty(&param.ty, true, &constructor_traits)?;
@@ -4080,6 +4107,7 @@ impl Checker {
                 }
                 if let Resolved::TraitImplDef(
                     span,
+                    declaration_id,
                     trait_id,
                     trait_args,
                     target_ty,
@@ -4089,6 +4117,7 @@ impl Checker {
                 {
                     let nodes = self.check_trait_impl_items(
                         span,
+                        *declaration_id,
                         trait_id,
                         trait_args,
                         target_ty,
@@ -4207,7 +4236,7 @@ impl Checker {
             Resolved::ExtractorDef(_, id, ..) => format!("ExtractorDef {}", id.name),
             Resolved::ConstDef(_, id, ..) => format!("ConstDef {}", id.name),
             Resolved::TraitDef(_, id, ..) => format!("TraitDef {}", id.name),
-            Resolved::TraitImplDef(_, id, ..) => format!("TraitImplDef {}", id.name),
+            Resolved::TraitImplDef(_, _, id, ..) => format!("TraitImplDef {}", id.name),
             Resolved::BuiltinDecl(_, id, ..) => format!("BuiltinDecl {}", id.name),
             Resolved::BuiltinExtractorDecl(_, id, ..) => {
                 format!("BuiltinExtractorDecl {}", id.name)

@@ -424,8 +424,8 @@ impl CompilationPrefixSnapshot {
     }
 }
 
-const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 10;
-const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 5;
+const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 11;
+const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CachedStdlibSemanticEnvelope {
