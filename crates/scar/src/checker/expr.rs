@@ -63,6 +63,9 @@ pub(super) struct CandidateProbeCheckpoint {
 
 impl Checker {
     pub(super) fn candidate_probe_checkpoint(&self) -> CandidateProbeCheckpoint {
+        #[cfg(test)]
+        self.candidate_probe_checkpoint_count
+            .set(self.candidate_probe_checkpoint_count.get() + 1);
         CandidateProbeCheckpoint {
             env: self.env.clone(),
             substitutions: self.substitutions.clone(),
@@ -1521,23 +1524,13 @@ impl Checker {
                 ),
             });
         }
-        let checkpoint = self.candidate_probe_checkpoint();
-        let result = (|| {
-            let (mut typed, signature, return_type_arguments) =
-                self.instantiate_named_callable_signature(span, target, Some(args))?;
-            let constraints =
-                self.call_constraint_set(signature, return_type_arguments, None, span, &typed.ty);
-            self.apply_return_type_argument_constraints(&constraints)?;
-            typed.ty = self.callable_ty_from_signature(&typed.ty, &constraints.signature);
-            Ok(typed)
-        })();
-        match result {
-            Ok(typed) => Ok(typed),
-            Err(error) => {
-                self.rollback_candidate_probe(checkpoint);
-                Err(error)
-            }
-        }
+        let (mut typed, signature, return_type_arguments) =
+            self.instantiate_named_callable_signature(span, target, Some(args))?;
+        let constraints =
+            self.call_constraint_set(signature, return_type_arguments, None, span, &typed.ty);
+        self.apply_return_type_argument_constraints(&constraints)?;
+        typed.ty = self.callable_ty_from_signature(&typed.ty, &constraints.signature);
+        Ok(typed)
     }
 
     fn instantiate_named_callable_signature(
@@ -5427,8 +5420,14 @@ impl Checker {
                     ExpectedCallableSlot::Plain,
                 );
                 let expected_callable = self.expected_callable_ty(&contract);
-                self.check_node_with_expected(right, Some(&expected_callable))
-                    .or_else(|_| self.check_apply_callable(right, "`|*>`"))?
+                let checkpoint = self.candidate_probe_checkpoint();
+                match self.check_node_with_expected(right, Some(&expected_callable)) {
+                    Ok(typed) => typed,
+                    Err(_) => {
+                        self.rollback_candidate_probe(checkpoint);
+                        self.check_apply_callable(right, "`|*>`")?
+                    }
+                }
             }
         } else {
             self.check_apply_callable(right, "`|*>`")?
@@ -5690,9 +5689,11 @@ impl Checker {
                         Ok(Some(typed)) => Ok(typed),
                         Ok(None) => {
                             let expected_callable = self.expected_callable_ty(&contract);
+                            let checkpoint = self.candidate_probe_checkpoint();
                             match self.check_node_with_expected(right, Some(&expected_callable)) {
                                 Ok(typed) => Ok(typed),
                                 Err(expected_error) => {
+                                    self.rollback_candidate_probe(checkpoint);
                                     match self.check_apply_callable(right, "`|>=`") {
                                         Ok(typed) => Ok(typed),
                                         Err(_) => Err(expected_error),
@@ -5905,8 +5906,14 @@ impl Checker {
                     typed
                 } else {
                     let expected_callable = self.expected_callable_ty(&contract);
-                    self.check_node_with_expected(right, Some(&expected_callable))
-                        .or_else(|_| self.check_apply_callable(right, "`|>=`"))?
+                    let checkpoint = self.candidate_probe_checkpoint();
+                    match self.check_node_with_expected(right, Some(&expected_callable)) {
+                        Ok(typed) => typed,
+                        Err(_) => {
+                            self.rollback_candidate_probe(checkpoint);
+                            self.check_apply_callable(right, "`|>=`")?
+                        }
+                    }
                 }
             }
             (Resolved::ReturnTypeArgumentApply(call_span, _, _), Some(contract)) => self
@@ -9277,7 +9284,6 @@ impl Checker {
             }
         }
 
-        let call_checkpoint = self.candidate_probe_checkpoint();
         let result = (|| {
             let explicit_type_arguments = Self::explicit_type_args(func);
             let call_target = match func {
@@ -9365,7 +9371,6 @@ impl Checker {
                             }
                         }
                     }
-                    let checkpoint = self.candidate_probe_checkpoint();
                     let result = (|| {
                         let application_constraints = application_constraints;
                         if let Some(constraints) = application_constraints.as_ref() {
@@ -9523,9 +9528,6 @@ impl Checker {
                             node: TypedInner::App(Box::new(typed_func), typed_args),
                         })
                     })();
-                    if result.is_err() {
-                        self.rollback_candidate_probe(checkpoint);
-                    }
                     result
                 }
                 Ty::UserFunc { params, ret, .. } => {
@@ -9583,7 +9585,6 @@ impl Checker {
                             }
                         }
                     }
-                    let checkpoint = self.candidate_probe_checkpoint();
                     let result = (|| {
                         let application_constraints = application_constraints;
                         if let Some(constraints) = application_constraints.as_ref() {
@@ -9684,9 +9685,6 @@ impl Checker {
                             node: TypedInner::App(Box::new(typed_func), typed_args),
                         })
                     })();
-                    if result.is_err() {
-                        self.rollback_candidate_probe(checkpoint);
-                    }
                     result
                 }
                 Ty::Func(params, ret) => {
@@ -9716,9 +9714,6 @@ impl Checker {
                 }),
             }
         })();
-        if result.is_err() {
-            self.rollback_candidate_probe(call_checkpoint);
-        }
         result
     }
 
@@ -10920,49 +10915,36 @@ impl Checker {
             _ => false,
         };
         let (typed_target, capture_signature) = if has_callable_signature {
-            let checkpoint = self.candidate_probe_checkpoint();
-            match self.instantiate_named_callable_signature(
+            let (mut typed, signature, return_type_arguments) = self
+                .instantiate_named_callable_signature(
+                    span,
+                    named_target,
+                    explicit_return_type_arguments.as_deref(),
+                )?;
+            let expected_return = explicit_return_type_arguments
+                .as_ref()
+                .and_then(|_| expected)
+                .and_then(|expected| match self.resolve_ty(expected) {
+                    Ty::Func(_, ret) | Ty::BuiltinFunc { ret, .. } | Ty::UserFunc { ret, .. } => {
+                        Some(*ret)
+                    }
+                    _ => None,
+                });
+            let constraints = self.call_constraint_set(
+                signature,
+                return_type_arguments,
+                expected_return.as_ref(),
                 span,
-                named_target,
+                &typed.ty,
+            );
+            self.apply_return_type_argument_constraints(&constraints)?;
+            self.apply_expected_call_constraint(
+                &constraints,
+                span,
                 explicit_return_type_arguments.as_deref(),
-            ) {
-                Ok((mut typed, signature, return_type_arguments)) => {
-                    let expected_return = explicit_return_type_arguments
-                        .as_ref()
-                        .and_then(|_| expected)
-                        .and_then(|expected| match self.resolve_ty(expected) {
-                            Ty::Func(_, ret)
-                            | Ty::BuiltinFunc { ret, .. }
-                            | Ty::UserFunc { ret, .. } => Some(*ret),
-                            _ => None,
-                        });
-                    let constraints = self.call_constraint_set(
-                        signature,
-                        return_type_arguments,
-                        expected_return.as_ref(),
-                        span,
-                        &typed.ty,
-                    );
-                    if let Err(error) = self.apply_return_type_argument_constraints(&constraints) {
-                        self.rollback_candidate_probe(checkpoint);
-                        return Err(error);
-                    }
-                    if let Err(error) = self.apply_expected_call_constraint(
-                        &constraints,
-                        span,
-                        explicit_return_type_arguments.as_deref(),
-                    ) {
-                        self.rollback_candidate_probe(checkpoint);
-                        return Err(error);
-                    }
-                    typed.ty = self.callable_ty_from_signature(&typed.ty, &constraints.signature);
-                    (typed, Some(constraints.signature))
-                }
-                Err(error) => {
-                    self.rollback_candidate_probe(checkpoint);
-                    return Err(error);
-                }
-            }
+            )?;
+            typed.ty = self.callable_ty_from_signature(&typed.ty, &constraints.signature);
+            (typed, Some(constraints.signature))
         } else {
             (self.check_node(target)?, None)
         };
@@ -11030,9 +11012,14 @@ impl Checker {
                 Box::new(body),
             );
             let expected = Ty::Func(vec![self.resolve_ty(source_ty.as_ref())], Box::new(ret_ty));
-            return self
-                .check_node_with_expected(&synthetic, Some(&expected))
-                .or_else(|_| self.check_node(&synthetic));
+            let checkpoint = self.candidate_probe_checkpoint();
+            return match self.check_node_with_expected(&synthetic, Some(&expected)) {
+                Ok(typed) => Ok(typed),
+                Err(_) => {
+                    self.rollback_candidate_probe(checkpoint);
+                    self.check_node(&synthetic)
+                }
+            };
         }
         let (params, ret) = match &target_ty {
             Ty::BuiltinFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
@@ -11167,17 +11154,23 @@ impl Checker {
         if matches!(self.resolve_ty(&typed_left.ty), Ty::SelfApp(_))
             && !matches!(self.resolve_ty(&typed_right.ty), Ty::SelfApp(_))
         {
-            if let Ok(candidate) = self.check_node_with_expected(right, Some(&typed_left.ty)) {
-                typed_right = candidate;
+            let checkpoint = self.candidate_probe_checkpoint();
+            match self.check_node_with_expected(right, Some(&typed_left.ty)) {
+                Ok(candidate) => typed_right = candidate,
+                Err(_) => self.rollback_candidate_probe(checkpoint),
             }
-            if let Ok(candidate) = self.check_node_with_expected(left, Some(&typed_right.ty)) {
-                typed_left = candidate;
+            let checkpoint = self.candidate_probe_checkpoint();
+            match self.check_node_with_expected(left, Some(&typed_right.ty)) {
+                Ok(candidate) => typed_left = candidate,
+                Err(_) => self.rollback_candidate_probe(checkpoint),
             }
         } else if matches!(self.resolve_ty(&typed_right.ty), Ty::SelfApp(_))
             && !matches!(self.resolve_ty(&typed_left.ty), Ty::SelfApp(_))
         {
-            if let Ok(candidate) = self.check_node_with_expected(right, Some(&typed_left.ty)) {
-                typed_right = candidate;
+            let checkpoint = self.candidate_probe_checkpoint();
+            match self.check_node_with_expected(right, Some(&typed_left.ty)) {
+                Ok(candidate) => typed_right = candidate,
+                Err(_) => self.rollback_candidate_probe(checkpoint),
             }
         }
         let lt = self.resolve_ty(&typed_left.ty);
@@ -13533,6 +13526,50 @@ mod tests {
             error.reason(),
             Some(TypeDiagnosticReason::CallableSignatureMetadataMismatch)
         );
+    }
+
+    #[test]
+    fn ordinary_successful_applications_do_not_create_candidate_probe_checkpoints() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let plain = registered_callable_id("plain", 91_101);
+        let builtin = registered_callable_id("builtin", 91_102);
+        let user = registered_callable_id("user", 91_103);
+        checker
+            .env
+            .bind_var(plain.unique_id, Ty::Func(vec![Ty::Int], Box::new(Ty::Int)));
+        checker.env.bind_var(
+            builtin.unique_id,
+            Ty::BuiltinFunc {
+                name: "builtin".into(),
+                params: vec![Ty::Int],
+                ret: Box::new(Ty::Int),
+            },
+        );
+        checker.env.bind_var(
+            user.unique_id,
+            Ty::UserFunc {
+                fun_idx: 0,
+                type_params: Vec::new(),
+                call_substitution: Vec::new(),
+                params: vec![Ty::Int],
+                ret: Box::new(Ty::Int),
+            },
+        );
+
+        for callee in [plain, builtin, user] {
+            checker
+                .check_app(
+                    &test_span(),
+                    &Resolved::Var(test_span(), callee),
+                    &[ResolvedRecordLitArg::Positional(Resolved::Lit(
+                        test_span(),
+                        Lit::Int(int(1)),
+                    ))],
+                )
+                .expect("ordinary function application should succeed");
+        }
+
+        assert_eq!(checker.candidate_probe_checkpoint_count.get(), 0);
     }
 
     fn setup_type(

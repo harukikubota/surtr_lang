@@ -36,12 +36,18 @@ Coverage runner:
 - `tests/integration/*.rs`
   - CLI contract and pipeline integration tests
   - `language_features.rs` is organized into topic modules under `tests/integration/language_features/`
+- `crates/xldr/tests/repl_core.rs`
+  - 137 REPL core semantic cases registered once in a stable source-order table
+  - Runner: 64 round-robin bucket tests (`index % 64`) plus one duplicate-name/function inventory test
 - `tests/unit/{spire,sigil,scar,forge,eldr}/`
   - Unit-test viewpoints and crate-local notes
+- `tests/profile/stdlib_prewarm.srt`
+  - Minimal manual-profile input used by the `ci` nextest setup to prepare the default stdlib semantic snapshot
 
 ## Partial Commands
 
 - Full gate: `cargo nextest run --workspace`
+- CI/full gate: `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace`
 - Hot crate check: `cargo nextest run -p scar`
 - Warm script fixtures: `cargo nextest run -p rune --test integration run_srt`
 - One script bucket: `cargo nextest run -p rune --test integration run_srt::spec_fixtures_bucket_0`
@@ -49,6 +55,7 @@ Coverage runner:
 - Warm module fixtures: `cargo nextest run -p rune --test integration module_import_fixtures`
 - Cold run/build/dump boundary: `cargo nextest run -p rune --test integration run_eldr build_roundtrip`
 - Cold REPL boundary: `cargo nextest run -p rune --test integration repl`
+- Xldr REPL core: `rtk cargo nextest run --profile ci -p xldr --test repl_core`
 - `surtr test` command boundary: `cargo nextest run -p rune --test integration test_command`
 
 ## Timing And Cache
@@ -60,6 +67,12 @@ Useful env vars:
 - `SURTR_TEST_CACHE=1`
   - Opt in to the integration final `.eldr` fixture cache under `target/test-fixture-cache/eldr`
   - Does not gate the shared semantic prefix cache
+
+The `ci` profile builds and lists test binaries, then runs `scripts/ci-stdlib-prewarm.sh` once from the workspace root before starting test processes. The script checks `tests/profile/stdlib_prewarm.srt` and prepares only the default-variant `std.semantic`; it does not prepare the test-enabled `std.test.semantic` or enable the final `.eldr` cache. Keep `SURTR_TEST_CACHE=1` explicit on the CI/full-gate command when that final cache is wanted.
+
+The stdlib semantic cache is content-addressed from the stdlib sources and semantic schema/metadata. A missing, stale, or corrupt entry is ignored and rebuilt through the normal stdlib compile path, so a cache hit is an optimization rather than a correctness condition.
+
+With a schema-12 `std.semantic` true hit, the Xldr REPL core layout was measured under `profile ci` as 137 semantic cases across 64 buckets plus one inventory test: 65/65 tests passed and the slowest bucket took 11.725s. The smaller measured layouts were rejected under the unchanged 15s timeout: all 16 semantic buckets timed out, and 32 left 11 timeouts; 48 passed once but its 13.164s maximum did not leave the selected margin.
 
 Cold run:
 

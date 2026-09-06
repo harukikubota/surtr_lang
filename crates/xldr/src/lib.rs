@@ -424,7 +424,7 @@ impl CompilationPrefixSnapshot {
     }
 }
 
-const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 11;
+const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 12;
 const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1039,6 +1039,24 @@ defmod B {
             .declaration_index()
             .values()
             .any(|entry| entry.fq_name.starts_with("Global::Test::")));
+    }
+
+    #[test]
+    fn resolved_id_without_symbol_info_roundtrips_through_bincode() {
+        let value = sigil::resolved::ResolvedId {
+            name: "value".into(),
+            qualified_name: None,
+            unique_id: 7,
+            compiler_generated: false,
+            symbol_info: None,
+            span: spire::ast::Span { start: 1, end: 2 },
+        };
+
+        let encoded = bincode::serialize(&value).expect("ResolvedId should serialize");
+        let decoded: sigil::resolved::ResolvedId =
+            bincode::deserialize(&encoded).expect("ResolvedId should deserialize");
+
+        assert_eq!(decoded, value);
     }
 
     #[test]

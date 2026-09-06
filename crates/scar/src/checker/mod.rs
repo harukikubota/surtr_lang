@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -2284,6 +2286,8 @@ struct Checker {
     process_specs: Vec<TypedProcessSpec>,
     boot_plan: spire::ast::SupervisorInitSpec,
     warnings: WarningBuffer,
+    #[cfg(test)]
+    candidate_probe_checkpoint_count: Cell<usize>,
 }
 
 impl Checker {
@@ -2373,6 +2377,8 @@ impl Checker {
             process_specs: Vec::new(),
             boot_plan: spire::ast::SupervisorInitSpec::default(),
             warnings: WarningBuffer::default(),
+            #[cfg(test)]
+            candidate_probe_checkpoint_count: Cell::new(0),
         }
     }
 

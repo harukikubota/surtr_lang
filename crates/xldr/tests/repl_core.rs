@@ -1,3 +1,6 @@
+#![deny(dead_code)]
+
+use std::collections::HashSet;
 use std::fs;
 use std::time::Duration;
 
@@ -167,7 +170,263 @@ fn signature_text(result: &ReplResult) -> String {
     }
 }
 
+macro_rules! repl_core_case {
+    ($case:ident) => {
+        (stringify!($case), $case as fn())
+    };
+}
+
+const REPL_CORE_CASES: &[(&str, fn())] = &[
+    repl_core_case!(core_completion_returns_global_candidates_with_details),
+    repl_core_case!(range_literal_used_as_operator_shows_bracket_help),
+    repl_core_case!(core_completion_keeps_all_matching_candidates),
+    repl_core_case!(
+        core_operator_completion_shows_inferred_rhs_signature_without_operator_candidates
+    ),
+    repl_core_case!(core_operator_completion_shows_string_concat_rhs_signature),
+    repl_core_case!(core_operator_completion_stages_function_operator_types),
+    repl_core_case!(core_operator_completion_stages_specialized_function_operators),
+    repl_core_case!(core_operator_completion_keeps_unknown_lhs_as_placeholder),
+    repl_core_case!(core_exposes_shared_semantic_index_for_repl_and_lsp_lookup),
+    repl_core_case!(core_exposes_symbol_semantic_infos_before_completion_projection),
+    repl_core_case!(core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation),
+    repl_core_case!(core_command_completion_uses_command_use_sites),
+    repl_core_case!(core_command_argument_completion_uses_command_policies),
+    repl_core_case!(core_command_outputs_use_repl_scope_before_callable_families),
+    repl_core_case!(core_completion_returns_type_constructors_and_type_paths),
+    repl_core_case!(core_completion_shows_bare_result_constructors_and_bool_variants),
+    repl_core_case!(core_completion_accepts_lowercase_bool_aliases),
+    repl_core_case!(core_completion_hides_lowercase_bool_alias_when_shadowed_by_value_binding),
+    repl_core_case!(core_completion_hides_lowercase_bool_alias_when_shadowed_by_import),
+    repl_core_case!(core_completion_hides_lowercase_bool_alias_when_shadowed_by_live_top_level_def),
+    repl_core_case!(core_completion_only_shows_unqualified_importable_functions_after_import),
+    repl_core_case!(core_completion_and_sig_prefer_authored_signatures_for_imported_helpers),
+    repl_core_case!(core_completion_is_enabled_inside_string_interpolation_only),
+    repl_core_case!(core_completion_shows_builtin_owner_surfaces_and_hides_special_types),
+    repl_core_case!(core_completion_keeps_type_owners_ahead_of_members_for_pascal_case_prefix),
+    repl_core_case!(core_completion_shows_user_defined_module_owners),
+    repl_core_case!(core_completion_shows_script_preload_owner_and_members_without_docs),
+    repl_core_case!(core_script_top_level_defs_are_signature_and_completion_surfaces_without_docs),
+    repl_core_case!(core_typed_sig_query_uses_impl_signatures_without_docs),
+    repl_core_case!(core_live_repl_top_level_defs_are_signature_and_completion_surfaces),
+    repl_core_case!(core_completion_hides_global_noise_for_empty_constructor_call_arguments),
+    repl_core_case!(core_completion_shows_script_preload_constructor_signature_without_docs),
+    repl_core_case!(core_completion_constructor_signature_follows_result_self_new_signature),
+    repl_core_case!(core_completion_hides_enum_variants_until_owner_path_is_confirmed),
+    repl_core_case!(core_completion_shows_tuple_variant_signature_help),
+    repl_core_case!(core_completion_ranks_constructor_arguments_by_expected_parameter_type),
+    repl_core_case!(core_completion_hides_trait_impl_members_from_qualified_type_paths),
+    repl_core_case!(core_completion_hides_trait_impl_roots_from_expression_candidates),
+    repl_core_case!(core_completion_shows_facet_path_candidates_for_type_root),
+    repl_core_case!(core_completion_shows_record_enum_and_tuple_facet_segments),
+    repl_core_case!(core_completion_treats_result_focus_as_ok_value_for_next_facet_segment),
+    repl_core_case!(core_completion_suggests_tuple_root_placeholder_only_until_index_is_finished),
+    repl_core_case!(
+        core_completion_suggests_list_and_hashmap_facet_patterns_and_nests_dynamic_segments
+    ),
+    repl_core_case!(core_completion_shows_facet_path_candidates_for_value_root),
+    repl_core_case!(core_completion_shows_facet_view_closure_candidates),
+    repl_core_case!(core_completion_shows_result_focus_api_help_for_facet_paths),
+    repl_core_case!(core_completion_shows_combined_list_tuple_result_help),
+    repl_core_case!(core_completion_suggests_facet_path_roots_for_facet_api_first_argument),
+    repl_core_case!(core_completion_suppresses_facet_api_roots_for_invalid_capture_path_argument),
+    repl_core_case!(core_completion_derives_facet_segments_from_facet_binding_focus),
+    repl_core_case!(core_completion_respects_shadowed_facet_api_names),
+    repl_core_case!(
+        core_completion_uses_argument_position_for_variable_candidates_and_signature_help
+    ),
+    repl_core_case!(core_completion_shows_nested_if_and_string_contains_signatures),
+    repl_core_case!(core_completion_keeps_path_candidates_while_typing_if_condition_call),
+    repl_core_case!(core_completion_keeps_type_candidates_while_typing_if_condition_prefix),
+    repl_core_case!(core_completion_prefers_trait_surface_for_neq_helper_details),
+    repl_core_case!(core_keeps_bindings_and_definitions_between_inputs),
+    repl_core_case!(core_rolls_back_failed_input_without_losing_previous_state),
+    repl_core_case!(core_rebinding_uses_latest_value_and_grows_snapshot_locals),
+    repl_core_case!(core_rejects_top_level_def_capturing_session_value_binding),
+    repl_core_case!(core_rejects_repl_forbidden_top_level_declarations),
+    repl_core_case!(core_routes_print_side_effects_into_repl_result_lines),
+    repl_core_case!(core_routes_eprint_side_effects_into_repl_stderr_lines),
+    repl_core_case!(core_routes_background_prints_into_pump_result_lines),
+    repl_core_case!(core_from_script_source_exposes_preloaded_docs_and_keeps_repl_policy),
+    repl_core_case!(core_from_script_file_resolves_include_and_executes_preload_before_repl),
+    repl_core_case!(core_from_module_source_exposes_preloaded_module_definitions),
+    repl_core_case!(core_imports_non_autoimport_trait_and_rejects_autoimport_trait),
+    repl_core_case!(core_script_preload_imports_non_autoimport_trait),
+    repl_core_case!(core_from_project_module_stages_exposes_compiled_project_definitions),
+    repl_core_case!(core_from_project_runner_source_exposes_selected_profile_definitions),
+    repl_core_case!(core_from_project_runner_source_exposes_const_only_file_by_stem_module),
+    repl_core_case!(core_from_module_source_rejects_include_directive),
+    repl_core_case!(core_commands_do_not_require_a_cli_process),
+    repl_core_case!(core_reuses_deferred_tuple_facet_bindings_between_inputs),
+    repl_core_case!(core_static_impl_methods_keep_runtime_arity_in_sync),
+    repl_core_case!(core_range_bindings_keep_constructor_and_compare_fun_indices_in_sync),
+    repl_core_case!(core_range_generic_helpers_survive_sig_doc_interleaving),
+    repl_core_case!(core_range_generic_helpers_survive_runtime_error_rollback),
+    repl_core_case!(core_renders_top_level_facet_chain_expressions_without_codegen_leak),
+    repl_core_case!(core_facet_command_reports_kind_apis_segments_and_stop_points),
+    repl_core_case!(core_facet_command_inspects_operations_and_kind_queries),
+    repl_core_case!(core_renders_negative_and_range_list_facets),
+    repl_core_case!(core_doc_reports_match_and_cond_from_bootstrap_surface),
+    repl_core_case!(core_type_command_looks_up_visible_bindings_only),
+    repl_core_case!(core_repl_surfaces_keep_generic_arguments_for_bindings),
+    repl_core_case!(core_help_and_error_commands_return_structured_command_output),
+    repl_core_case!(core_info_command_reports_queries_and_command_errors),
+    repl_core_case!(core_repl_command_and_query_errors_use_diagnostics),
+    repl_core_case!(core_sig_queries_reject_contextual_markers_as_concrete_types),
+    repl_core_case!(core_value_recall_uses_engine_history_and_prompt_index),
+    repl_core_case!(core_session_listing_commands_render_current_state),
+    repl_core_case!(core_clear_command_preserves_session_state),
+    repl_core_case!(core_reload_command_preserves_defs_and_discards_value_bindings),
+    repl_core_case!(core_reload_defs_command_discards_live_defs),
+    repl_core_case!(core_result_error_reports_diagnostic_without_exiting),
+    repl_core_case!(core_stacktrace_command_controls_result_error_trace_display),
+    repl_core_case!(core_stacktrace_display_is_independent_from_error_display_mode),
+    repl_core_case!(core_stacktrace_full_is_reserved_until_html_viewer_exists),
+    repl_core_case!(core_immediate_anonymous_callable_calls_show_binding_hint),
+    repl_core_case!(core_doc_and_sig_commands_resolve_aliases_and_typed_queries),
+    repl_core_case!(core_sig_monad_operator_lists_user_defined_identity_impl),
+    repl_core_case!(
+        core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing
+    ),
+    repl_core_case!(core_sig_type_owner_falls_back_to_constructor_signatures),
+    repl_core_case!(core_sig_record_owner_uses_record_constructor_surface),
+    repl_core_case!(
+        core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fallbacks
+    ),
+    repl_core_case!(core_sig_enum_rejects_extra_input_with_shared_message),
+    repl_core_case!(core_doc_command_resolves_closure_type_and_callable_bindings),
+    repl_core_case!(core_process_doc_and_sig_support_hidden_and_concrete_surfaces),
+    repl_core_case!(core_process_public_surface_respects_annotations),
+    repl_core_case!(core_process_sig_owner_summary_includes_init_pid_and_messages),
+    repl_core_case!(core_process_sig_worker_owner_summary_includes_init_and_messages),
+    repl_core_case!(core_process_sig_pid_binding_lists_available_messages),
+    repl_core_case!(core_process_type_and_info_support_singletons_and_worker_pids),
+    repl_core_case!(core_sig_expression_queries_support_operator_forms),
+    repl_core_case!(core_sig_expression_queries_reject_non_expressions),
+    repl_core_case!(
+        core_sig_operator_target_queries_accept_concrete_type_targets_and_reject_legacy_forms
+    ),
+    repl_core_case!(core_sig_typed_call_queries_specialize_polymorphic_returns),
+    repl_core_case!(core_sig_supports_closure_bindings_recapture_and_application),
+    repl_core_case!(core_completion_shows_signature_for_callable_binding_calls),
+    repl_core_case!(core_callable_refs_and_signature_errors_are_ui_independent),
+    repl_core_case!(
+        core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_appears
+    ),
+    repl_core_case!(core_duplicate_defs_and_runtime_result_errors_keep_the_session_alive),
+    repl_core_case!(core_pattern_bindings_are_displayed_in_preorder),
+    repl_core_case!(core_pattern_binding_order_defers_pattern_match_as_aliases),
+    repl_core_case!(core_pattern_binding_order_flattens_list_children_before_parent_alias),
+    repl_core_case!(core_duplicate_pattern_diagnostic_labels_are_limited_to_five),
+    repl_core_case!(core_save_writes_decodable_eldr_snapshot),
+    repl_core_case!(core_eldr_sig_queries_do_not_depend_on_docs_chunk),
+    repl_core_case!(core_eldr_restore_reports_partial_semantic_restore_notice),
+    repl_core_case!(core_quit_command_sets_exit_without_ui_work),
+    repl_core_case!(core_dbg_docs_and_signatures_resolve_from_bootstrap_source),
+    repl_core_case!(core_dbg_typed_call_queries_use_special_form_pseudo_application),
+    repl_core_case!(core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers),
+    repl_core_case!(core_doc_typed_call_supports_qualified_inherent_impl_methods),
+    repl_core_case!(core_sig_rejects_tuple_field_and_facet_expression_queries),
+    repl_core_case!(core_inspects_facet_roots_and_private_paths_without_exposing_them_to_source),
+];
+
+fn run_repl_core_bucket(bucket: usize) {
+    for (index, &(name, case)) in REPL_CORE_CASES.iter().enumerate() {
+        if index % 64 == bucket {
+            eprintln!("repl_core case: {name}");
+            case();
+        }
+    }
+}
+
 #[test]
+fn repl_core_case_inventory_has_unique_names_and_functions() {
+    let mut names = HashSet::new();
+    let mut functions = HashSet::new();
+
+    for &(name, case) in REPL_CORE_CASES {
+        assert!(names.insert(name), "duplicate REPL core case name: {name}");
+        assert!(
+            functions.insert(case as usize),
+            "duplicate REPL core case function: {name}"
+        );
+    }
+}
+
+macro_rules! repl_core_bucket {
+    ($name:ident, $bucket:expr) => {
+        #[test]
+        fn $name() {
+            run_repl_core_bucket($bucket);
+        }
+    };
+}
+
+repl_core_bucket!(repl_core_bucket_0, 0);
+repl_core_bucket!(repl_core_bucket_1, 1);
+repl_core_bucket!(repl_core_bucket_2, 2);
+repl_core_bucket!(repl_core_bucket_3, 3);
+repl_core_bucket!(repl_core_bucket_4, 4);
+repl_core_bucket!(repl_core_bucket_5, 5);
+repl_core_bucket!(repl_core_bucket_6, 6);
+repl_core_bucket!(repl_core_bucket_7, 7);
+repl_core_bucket!(repl_core_bucket_8, 8);
+repl_core_bucket!(repl_core_bucket_9, 9);
+repl_core_bucket!(repl_core_bucket_10, 10);
+repl_core_bucket!(repl_core_bucket_11, 11);
+repl_core_bucket!(repl_core_bucket_12, 12);
+repl_core_bucket!(repl_core_bucket_13, 13);
+repl_core_bucket!(repl_core_bucket_14, 14);
+repl_core_bucket!(repl_core_bucket_15, 15);
+repl_core_bucket!(repl_core_bucket_16, 16);
+repl_core_bucket!(repl_core_bucket_17, 17);
+repl_core_bucket!(repl_core_bucket_18, 18);
+repl_core_bucket!(repl_core_bucket_19, 19);
+repl_core_bucket!(repl_core_bucket_20, 20);
+repl_core_bucket!(repl_core_bucket_21, 21);
+repl_core_bucket!(repl_core_bucket_22, 22);
+repl_core_bucket!(repl_core_bucket_23, 23);
+repl_core_bucket!(repl_core_bucket_24, 24);
+repl_core_bucket!(repl_core_bucket_25, 25);
+repl_core_bucket!(repl_core_bucket_26, 26);
+repl_core_bucket!(repl_core_bucket_27, 27);
+repl_core_bucket!(repl_core_bucket_28, 28);
+repl_core_bucket!(repl_core_bucket_29, 29);
+repl_core_bucket!(repl_core_bucket_30, 30);
+repl_core_bucket!(repl_core_bucket_31, 31);
+repl_core_bucket!(repl_core_bucket_32, 32);
+repl_core_bucket!(repl_core_bucket_33, 33);
+repl_core_bucket!(repl_core_bucket_34, 34);
+repl_core_bucket!(repl_core_bucket_35, 35);
+repl_core_bucket!(repl_core_bucket_36, 36);
+repl_core_bucket!(repl_core_bucket_37, 37);
+repl_core_bucket!(repl_core_bucket_38, 38);
+repl_core_bucket!(repl_core_bucket_39, 39);
+repl_core_bucket!(repl_core_bucket_40, 40);
+repl_core_bucket!(repl_core_bucket_41, 41);
+repl_core_bucket!(repl_core_bucket_42, 42);
+repl_core_bucket!(repl_core_bucket_43, 43);
+repl_core_bucket!(repl_core_bucket_44, 44);
+repl_core_bucket!(repl_core_bucket_45, 45);
+repl_core_bucket!(repl_core_bucket_46, 46);
+repl_core_bucket!(repl_core_bucket_47, 47);
+repl_core_bucket!(repl_core_bucket_48, 48);
+repl_core_bucket!(repl_core_bucket_49, 49);
+repl_core_bucket!(repl_core_bucket_50, 50);
+repl_core_bucket!(repl_core_bucket_51, 51);
+repl_core_bucket!(repl_core_bucket_52, 52);
+repl_core_bucket!(repl_core_bucket_53, 53);
+repl_core_bucket!(repl_core_bucket_54, 54);
+repl_core_bucket!(repl_core_bucket_55, 55);
+repl_core_bucket!(repl_core_bucket_56, 56);
+repl_core_bucket!(repl_core_bucket_57, 57);
+repl_core_bucket!(repl_core_bucket_58, 58);
+repl_core_bucket!(repl_core_bucket_59, 59);
+repl_core_bucket!(repl_core_bucket_60, 60);
+repl_core_bucket!(repl_core_bucket_61, 61);
+repl_core_bucket!(repl_core_bucket_62, 62);
+repl_core_bucket!(repl_core_bucket_63, 63);
+
 fn core_completion_returns_global_candidates_with_details() {
     let mut engine = engine();
     assert!(
@@ -215,14 +474,12 @@ fn core_completion_returns_global_candidates_with_details() {
     );
 }
 
-#[test]
 fn range_literal_used_as_operator_shows_bracket_help() {
     let result = engine().handle_line("2..8");
 
     assert!(rendered_text(&result).contains("Range literals must use bracket syntax"));
 }
 
-#[test]
 fn core_completion_keeps_all_matching_candidates() {
     let mut engine = engine();
     for idx in 0..6 {
@@ -242,7 +499,6 @@ fn core_completion_keeps_all_matching_candidates() {
     );
 }
 
-#[test]
 fn core_operator_completion_shows_inferred_rhs_signature_without_operator_candidates() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
@@ -302,7 +558,6 @@ fn core_operator_completion_shows_inferred_rhs_signature_without_operator_candid
     );
 }
 
-#[test]
 fn core_operator_completion_shows_string_concat_rhs_signature() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("name = \"surtr\"")).contains("name: String"));
@@ -315,7 +570,6 @@ fn core_operator_completion_shows_string_concat_rhs_signature() {
     assert_eq!(signature.lines.join("\n"), "String ++ [String]");
 }
 
-#[test]
 fn core_operator_completion_stages_function_operator_types() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("x = 1")).contains("x: Int"));
@@ -369,7 +623,6 @@ fn core_operator_completion_stages_function_operator_types() {
     );
 }
 
-#[test]
 fn core_operator_completion_stages_specialized_function_operators() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("xs = [1, 2]")).contains("xs: List<Int>"));
@@ -418,7 +671,6 @@ fn core_operator_completion_stages_specialized_function_operators() {
     );
 }
 
-#[test]
 fn core_operator_completion_keeps_unknown_lhs_as_placeholder() {
     let engine = engine();
     let completion = engine.completions("missing |> ", "missing |> ".len());
@@ -430,7 +682,6 @@ fn core_operator_completion_keeps_unknown_lhs_as_placeholder() {
     assert_eq!(signature.lines.join("\n"), "_ |> [(_ -> _)]");
 }
 
-#[test]
 fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
@@ -469,7 +720,6 @@ fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
     );
 }
 
-#[test]
 fn core_exposes_symbol_semantic_infos_before_completion_projection() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("answer = 42")).contains("answer: Int"));
@@ -510,7 +760,6 @@ fn core_exposes_symbol_semantic_infos_before_completion_projection() {
     );
 }
 
-#[test]
 fn core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation() {
     let engine = engine();
     let index = engine.semantic_index();
@@ -552,7 +801,6 @@ fn core_shared_repl_completion_helper_preserves_repl_visibility_and_presentation
     );
 }
 
-#[test]
 fn core_command_completion_uses_command_use_sites() {
     let mut engine = engine();
 
@@ -670,7 +918,6 @@ fn core_command_completion_uses_command_use_sites() {
     );
 }
 
-#[test]
 fn core_command_argument_completion_uses_command_policies() {
     let mut engine = engine();
     let bound = rendered_text(&engine.handle_line("print = \"shadowed\""));
@@ -806,7 +1053,6 @@ fn core_command_argument_completion_uses_command_policies() {
     );
 }
 
-#[test]
 fn core_command_outputs_use_repl_scope_before_callable_families() {
     let mut engine = engine();
 
@@ -835,7 +1081,6 @@ fn core_command_outputs_use_repl_scope_before_callable_families() {
     assert!(ty.contains("type: Result<Int, Error>"), "{ty}");
 }
 
-#[test]
 fn core_completion_returns_type_constructors_and_type_paths() {
     let engine = engine();
 
@@ -864,7 +1109,6 @@ fn core_completion_returns_type_constructors_and_type_paths() {
         .is_some_and(|detail| detail.contains("Int::min(")));
 }
 
-#[test]
 fn core_completion_shows_bare_result_constructors_and_bool_variants() {
     let engine = engine();
 
@@ -935,7 +1179,6 @@ fn core_completion_shows_bare_result_constructors_and_bool_variants() {
     );
 }
 
-#[test]
 fn core_completion_accepts_lowercase_bool_aliases() {
     let engine = engine();
 
@@ -964,7 +1207,6 @@ fn core_completion_accepts_lowercase_bool_aliases() {
     assert_eq!(false_variant.replacement, "False");
 }
 
-#[test]
 fn core_completion_hides_lowercase_bool_alias_when_shadowed_by_value_binding() {
     let mut engine = engine();
     let bound = rendered_text(&engine.handle_line("true = 1"));
@@ -989,8 +1231,7 @@ fn core_completion_hides_lowercase_bool_alias_when_shadowed_by_value_binding() {
     );
 }
 
-#[test]
-fn core_completion_hides_lowercase_bool_alias_when_shadowed_by_import_or_top_level_def() {
+fn core_completion_hides_lowercase_bool_alias_when_shadowed_by_import() {
     let mut imported_engine = ReplEngine::from_module_source(
         "hoge.srt",
         r#"
@@ -1021,7 +1262,9 @@ defmod Hoge {
             .any(|candidate| candidate.label == "true" && candidate.replacement == "true"),
         "imported lowercase symbol should stay visible as the actual completion: {imported_rendered:?}"
     );
+}
 
+fn core_completion_hides_lowercase_bool_alias_when_shadowed_by_live_top_level_def() {
     let mut live_engine = engine();
     let defined = live_engine.handle_line("def true() -> Int { 1 }");
     assert!(
@@ -1049,7 +1292,6 @@ defmod Hoge {
     );
 }
 
-#[test]
 fn core_completion_only_shows_unqualified_importable_functions_after_import() {
     let mut engine = engine();
 
@@ -1090,7 +1332,6 @@ fn core_completion_only_shows_unqualified_importable_functions_after_import() {
     );
 }
 
-#[test]
 fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
     let mut engine = engine();
 
@@ -1148,7 +1389,6 @@ fn core_completion_and_sig_prefer_authored_signatures_for_imported_helpers() {
     );
 }
 
-#[test]
 fn core_completion_is_enabled_inside_string_interpolation_only() {
     let engine = engine();
     let string_body = r#""plain Str"#;
@@ -1173,7 +1413,6 @@ fn core_completion_is_enabled_inside_string_interpolation_only() {
     );
 }
 
-#[test]
 fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
     let engine = engine();
     let completion_context = engine.completion_context();
@@ -1233,7 +1472,6 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
     }
 }
 
-#[test]
 fn core_completion_keeps_type_owners_ahead_of_members_for_pascal_case_prefix() {
     let engine = engine();
     let labels = engine
@@ -1257,7 +1495,6 @@ fn core_completion_keeps_type_owners_ahead_of_members_for_pascal_case_prefix() {
     );
 }
 
-#[test]
 fn core_completion_shows_user_defined_module_owners() {
     let engine = ReplEngine::from_module_source(
         "demo_module.srt",
@@ -1294,7 +1531,6 @@ defmod Demo {
     assert!(!sig.contains("Global::"), "{sig}");
 }
 
-#[test]
 fn core_completion_shows_script_preload_owner_and_members_without_docs() {
     let engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -1368,7 +1604,6 @@ impl User {
     );
 }
 
-#[test]
 fn core_script_top_level_defs_are_signature_and_completion_surfaces_without_docs() {
     let mut engine = ReplEngine::from_script_source(
         "tmp/top_level.srt",
@@ -1407,7 +1642,6 @@ def greet(name: String) -> String { name }
     );
 }
 
-#[test]
 fn core_typed_sig_query_uses_impl_signatures_without_docs() {
     let mut engine = ReplEngine::from_script_source(
         "tmp/no_doc_impl.srt",
@@ -1452,7 +1686,6 @@ impl Pairwise for Duo {
     );
 }
 
-#[test]
 fn core_live_repl_top_level_defs_are_signature_and_completion_surfaces() {
     let mut engine = engine();
     let def = engine.handle_line("def local(x: Int) -> Int { x + 1 }");
@@ -1484,7 +1717,6 @@ fn core_live_repl_top_level_defs_are_signature_and_completion_surfaces() {
     );
 }
 
-#[test]
 fn core_completion_hides_global_noise_for_empty_constructor_call_arguments() {
     let engine = engine();
     let completion = engine.completions("Duration(", "Duration(".len());
@@ -1511,7 +1743,6 @@ fn core_completion_hides_global_noise_for_empty_constructor_call_arguments() {
     );
 }
 
-#[test]
 fn core_completion_shows_script_preload_constructor_signature_without_docs() {
     let engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -1555,7 +1786,6 @@ impl User {
     );
 }
 
-#[test]
 fn core_completion_constructor_signature_follows_result_self_new_signature() {
     let engine = ReplEngine::from_script_source(
         "tmp/user_result.srt",
@@ -1589,7 +1819,6 @@ impl User {
     );
 }
 
-#[test]
 fn core_completion_hides_enum_variants_until_owner_path_is_confirmed() {
     let engine = engine();
 
@@ -1658,7 +1887,6 @@ fn core_completion_hides_enum_variants_until_owner_path_is_confirmed() {
     );
 }
 
-#[test]
 fn core_completion_shows_tuple_variant_signature_help() {
     let engine = engine();
     let completion = engine.completions("BitWidth::Any(", "BitWidth::Any(".len());
@@ -1675,7 +1903,6 @@ fn core_completion_shows_tuple_variant_signature_help() {
     );
 }
 
-#[test]
 fn core_completion_ranks_constructor_arguments_by_expected_parameter_type() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));
@@ -1703,7 +1930,6 @@ fn core_completion_ranks_constructor_arguments_by_expected_parameter_type() {
     );
 }
 
-#[test]
 fn core_completion_hides_trait_impl_members_from_qualified_type_paths() {
     let engine = engine();
     let labels = engine
@@ -1739,7 +1965,6 @@ fn core_completion_hides_trait_impl_members_from_qualified_type_paths() {
     }
 }
 
-#[test]
 fn core_completion_hides_trait_impl_roots_from_expression_candidates() {
     let engine = engine();
     let labels = engine
@@ -1755,7 +1980,6 @@ fn core_completion_hides_trait_impl_roots_from_expression_candidates() {
     );
 }
 
-#[test]
 fn core_completion_shows_facet_path_candidates_for_type_root() {
     let engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -1815,7 +2039,6 @@ impl User {
     );
 }
 
-#[test]
 fn core_completion_shows_record_enum_and_tuple_facet_segments() {
     let engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -1869,7 +2092,6 @@ defenum Slot { Taken(Profile), Empty }
     );
 }
 
-#[test]
 fn core_completion_treats_result_focus_as_ok_value_for_next_facet_segment() {
     let mut engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -1898,7 +2120,6 @@ defrecord User(profile: Result<Profile>)
     );
 }
 
-#[test]
 fn core_completion_suggests_tuple_root_placeholder_only_until_index_is_finished() {
     let engine = engine();
 
@@ -1922,7 +2143,6 @@ fn core_completion_suggests_tuple_root_placeholder_only_until_index_is_finished(
     );
 }
 
-#[test]
 fn core_completion_suggests_list_and_hashmap_facet_patterns_and_nests_dynamic_segments() {
     let mut engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -1990,7 +2210,6 @@ defrecord User(scores: List<Profile>, by_name: HashMap<Profile>)
     );
 }
 
-#[test]
 fn core_completion_shows_facet_path_candidates_for_value_root() {
     let mut engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -2028,7 +2247,6 @@ defrecord User(name: String, age: Int)
     );
 }
 
-#[test]
 fn core_completion_shows_facet_view_closure_candidates() {
     let engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -2063,7 +2281,6 @@ defrecord User(name: String, age: Int)
     );
 }
 
-#[test]
 fn core_completion_shows_result_focus_api_help_for_facet_paths() {
     let engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -2092,7 +2309,6 @@ defrecord User(score: Result<Int>)
     );
 }
 
-#[test]
 fn core_completion_shows_combined_list_tuple_result_help() {
     let engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -2119,7 +2335,6 @@ defrecord User(scores: List<(String, Result<Int>)>)
     );
 }
 
-#[test]
 fn core_completion_suggests_facet_path_roots_for_facet_api_first_argument() {
     let mut engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -2207,7 +2422,6 @@ defenum Slot { Some(String), None }
     }
 }
 
-#[test]
 fn core_completion_suppresses_facet_api_roots_for_invalid_capture_path_argument() {
     let engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -2227,7 +2441,6 @@ defrecord User(name: String, age: Int)
     }
 }
 
-#[test]
 fn core_completion_derives_facet_segments_from_facet_binding_focus() {
     let mut engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -2261,7 +2474,6 @@ defrecord User(profile: Profile, age: Int)
     );
 }
 
-#[test]
 fn core_completion_respects_shadowed_facet_api_names() {
     let mut engine = ReplEngine::from_script_source(
         "tmp/user.srt",
@@ -2292,7 +2504,6 @@ def view(value: Int) -> Int { value }
     );
 }
 
-#[test]
 fn core_completion_uses_argument_position_for_variable_candidates_and_signature_help() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line("n = 3")).contains("n: Int"));
@@ -2332,7 +2543,6 @@ fn core_completion_uses_argument_position_for_variable_candidates_and_signature_
     );
 }
 
-#[test]
 fn core_completion_shows_nested_if_and_string_contains_signatures() {
     let mut engine = engine();
     assert!(rendered_text(&engine.handle_line(r#"word = "Hello""#)).contains("word: String"));
@@ -2376,7 +2586,6 @@ fn core_completion_shows_nested_if_and_string_contains_signatures() {
     );
 }
 
-#[test]
 fn core_completion_keeps_path_candidates_while_typing_if_condition_call() {
     let engine = engine();
     let input = "if(String::c";
@@ -2404,7 +2613,6 @@ fn core_completion_keeps_path_candidates_while_typing_if_condition_call() {
     );
 }
 
-#[test]
 fn core_completion_keeps_type_candidates_while_typing_if_condition_prefix() {
     let engine = engine();
     let input = "if(S";
@@ -2432,7 +2640,6 @@ fn core_completion_keeps_type_candidates_while_typing_if_condition_prefix() {
     );
 }
 
-#[test]
 fn core_completion_prefers_trait_surface_for_neq_helper_details() {
     let engine = engine();
 
@@ -2528,7 +2735,6 @@ fn strip_ansi(input: &str) -> String {
     out
 }
 
-#[test]
 fn core_keeps_bindings_and_definitions_between_inputs() {
     let mut engine = engine();
 
@@ -2548,7 +2754,6 @@ fn core_keeps_bindings_and_definitions_between_inputs() {
     assert!(rendered_text(&value).contains("42"));
 }
 
-#[test]
 fn core_rolls_back_failed_input_without_losing_previous_state() {
     let mut engine = engine();
 
@@ -2565,7 +2770,6 @@ fn core_rolls_back_failed_input_without_losing_previous_state() {
     assert!(rendered_text(&value).contains("1"));
 }
 
-#[test]
 fn core_rebinding_uses_latest_value_and_grows_snapshot_locals() {
     let mut engine = engine();
     let dir = tempfile_dir("xldr-repl-core-rebind");
@@ -2608,7 +2812,6 @@ fn core_rebinding_uses_latest_value_and_grows_snapshot_locals() {
     );
 }
 
-#[test]
 fn core_rejects_top_level_def_capturing_session_value_binding() {
     let mut engine = engine();
 
@@ -2628,7 +2831,6 @@ fn core_rejects_top_level_def_capturing_session_value_binding() {
     );
 }
 
-#[test]
 fn core_rejects_repl_forbidden_top_level_declarations() {
     let mut engine = engine();
 
@@ -2638,7 +2840,6 @@ fn core_rejects_repl_forbidden_top_level_declarations() {
     assert!(rendered_text(&err).contains("This top-level declaration is not allowed in REPL"));
 }
 
-#[test]
 fn core_routes_print_side_effects_into_repl_result_lines() {
     let mut engine = engine();
 
@@ -2649,7 +2850,6 @@ fn core_routes_print_side_effects_into_repl_result_lines() {
     assert!(result.stderr.is_empty());
 }
 
-#[test]
 fn core_routes_eprint_side_effects_into_repl_stderr_lines() {
     let mut engine = engine();
 
@@ -2664,7 +2864,6 @@ fn core_routes_eprint_side_effects_into_repl_stderr_lines() {
     );
 }
 
-#[test]
 fn core_routes_background_prints_into_pump_result_lines() {
     let mut engine = engine();
 
@@ -2683,7 +2882,6 @@ fn core_routes_background_prints_into_pump_result_lines() {
     assert_eq!(visible_text(&background), "hello from background");
 }
 
-#[test]
 fn core_from_script_source_exposes_preloaded_docs_and_keeps_repl_policy() {
     let mut engine = ReplEngine::from_script_source(
         "preload.srt",
@@ -2711,7 +2909,6 @@ def greet() -> String { "hello" }
     );
 }
 
-#[test]
 fn core_from_script_file_resolves_include_and_executes_preload_before_repl() {
     let dir = tempfile_dir("xldr-repl-core-script-include");
     let module_path = dir.join("m.srt");
@@ -2748,7 +2945,6 @@ answer = one()
     );
 }
 
-#[test]
 fn core_from_module_source_exposes_preloaded_module_definitions() {
     let mut engine = ReplEngine::from_module_source(
         "math.srt",
@@ -2774,7 +2970,6 @@ defmod Math {
     assert!(rendered_text(&call).contains("3"));
 }
 
-#[test]
 fn core_imports_non_autoimport_trait_and_rejects_autoimport_trait() {
     let mut engine = engine();
 
@@ -2789,7 +2984,6 @@ fn core_imports_non_autoimport_trait_and_rejects_autoimport_trait() {
         .contains("Compare` is auto-imported and cannot be explicitly imported"));
 }
 
-#[test]
 fn core_script_preload_imports_non_autoimport_trait() {
     let mut engine =
         ReplEngine::from_script_source("trait-import.srt", "import Add\nvalue = add(1, 2)\n")
@@ -2799,7 +2993,6 @@ fn core_script_preload_imports_non_autoimport_trait() {
     assert!(rendered_text(&result).contains("3"));
 }
 
-#[test]
 fn core_from_project_module_stages_exposes_compiled_project_definitions() {
     let mut engine = ReplEngine::from_project_module_stages(&[vec![xldr::ModuleInput {
         file_name: "math.srt".into(),
@@ -2820,7 +3013,6 @@ defmod Math {
     assert!(rendered_text(&call).contains("42"));
 }
 
-#[test]
 fn core_from_project_runner_source_exposes_selected_profile_definitions() {
     let root = tempfile_dir("xldr-project-runner-repl");
     let src = root.join("src");
@@ -2865,7 +3057,6 @@ Project::config({|project|
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
 fn core_from_project_runner_source_exposes_const_only_file_by_stem_module() {
     let root = tempfile_dir("xldr-project-runner-repl-const-only");
     let src = root.join("src");
@@ -2903,7 +3094,6 @@ Project::config({|project|
     let _ = fs::remove_dir_all(root);
 }
 
-#[test]
 fn core_from_module_source_rejects_include_directive() {
     let result = ReplEngine::from_module_source(
         "math.srt",
@@ -2924,7 +3114,6 @@ include "./extra.srt"
     assert!(rendered.contains("include"), "{rendered}");
 }
 
-#[test]
 fn core_commands_do_not_require_a_cli_process() {
     let mut engine = engine();
 
@@ -2950,7 +3139,6 @@ fn core_commands_do_not_require_a_cli_process() {
     assert!(rendered_text(&unknown).contains("Unknown REPL command: :nope"));
 }
 
-#[test]
 fn core_reuses_deferred_tuple_facet_bindings_between_inputs() {
     let mut engine = engine();
 
@@ -2964,7 +3152,6 @@ fn core_reuses_deferred_tuple_facet_bindings_between_inputs() {
     assert!(rendered_text(&value).contains("2"));
 }
 
-#[test]
 fn core_static_impl_methods_keep_runtime_arity_in_sync() {
     let mut engine = engine();
 
@@ -2977,7 +3164,6 @@ fn core_static_impl_methods_keep_runtime_arity_in_sync() {
     assert!(rendered_text(&codepoints).contains("Ok([97])"));
 }
 
-#[test]
 fn core_range_bindings_keep_constructor_and_compare_fun_indices_in_sync() {
     let mut engine = engine();
 
@@ -3009,7 +3195,6 @@ fn core_range_bindings_keep_constructor_and_compare_fun_indices_in_sync() {
     assert!(!text.contains("Call arity mismatch"), "{text}");
 }
 
-#[test]
 fn core_range_generic_helpers_survive_sig_doc_interleaving() {
     let mut engine = engine();
 
@@ -3036,7 +3221,6 @@ fn core_range_generic_helpers_survive_sig_doc_interleaving() {
     assert!(!text.contains("Call arity mismatch"), "{text}");
 }
 
-#[test]
 fn core_range_generic_helpers_survive_runtime_error_rollback() {
     let mut engine = engine();
 
@@ -3060,7 +3244,6 @@ fn core_range_generic_helpers_survive_runtime_error_rollback() {
     assert!(!text.contains("Call arity mismatch"), "{text}");
 }
 
-#[test]
 fn core_renders_top_level_facet_chain_expressions_without_codegen_leak() {
     let mut engine = engine();
 
@@ -3087,7 +3270,6 @@ fn core_renders_top_level_facet_chain_expressions_without_codegen_leak() {
     );
 }
 
-#[test]
 fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
     let mut engine = engine();
 
@@ -3129,7 +3311,6 @@ fn core_facet_command_reports_kind_apis_segments_and_stop_points() {
     );
 }
 
-#[test]
 fn core_facet_command_inspects_operations_and_kind_queries() {
     let mut engine = engine();
 
@@ -3156,7 +3337,6 @@ fn core_facet_command_inspects_operations_and_kind_queries() {
     assert!(sig.contains("Use `:info ReadablePath`"), "{sig}");
 }
 
-#[test]
 fn core_renders_negative_and_range_list_facets() {
     let mut engine = engine();
 
@@ -3175,7 +3355,6 @@ fn core_renders_negative_and_range_list_facets() {
     assert!(info.contains("fallible: yes"), "{info}");
 }
 
-#[test]
 fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
     let mut engine = engine();
 
@@ -3218,7 +3397,6 @@ fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
     );
 }
 
-#[test]
 fn core_type_command_looks_up_visible_bindings_only() {
     let mut engine = engine();
 
@@ -3324,7 +3502,6 @@ fn core_type_command_looks_up_visible_bindings_only() {
     );
 }
 
-#[test]
 fn core_repl_surfaces_keep_generic_arguments_for_bindings() {
     let mut engine = engine();
 
@@ -3360,7 +3537,6 @@ fn core_repl_surfaces_keep_generic_arguments_for_bindings() {
     );
 }
 
-#[test]
 fn core_help_and_error_commands_return_structured_command_output() {
     let mut engine = engine();
 
@@ -3399,7 +3575,6 @@ fn core_help_and_error_commands_return_structured_command_output() {
     assert!(rendered_text(&error_full).contains("error display mode: full"));
 }
 
-#[test]
 fn core_info_command_reports_queries_and_command_errors() {
     let mut engine = engine();
 
@@ -3449,7 +3624,6 @@ fn core_info_command_reports_queries_and_command_errors() {
     );
 }
 
-#[test]
 fn core_repl_command_and_query_errors_use_diagnostics() {
     let mut engine = engine();
 
@@ -3475,7 +3649,6 @@ fn core_repl_command_and_query_errors_use_diagnostics() {
     );
 }
 
-#[test]
 fn core_sig_queries_reject_contextual_markers_as_concrete_types() {
     let mut engine = engine();
 
@@ -3490,7 +3663,6 @@ fn core_sig_queries_reject_contextual_markers_as_concrete_types() {
     }
 }
 
-#[test]
 fn core_value_recall_uses_engine_history_and_prompt_index() {
     let mut engine = engine();
     assert_eq!(engine.prompt(), "xldr(1)> ");
@@ -3504,7 +3676,6 @@ fn core_value_recall_uses_engine_history_and_prompt_index() {
     assert_eq!(engine.prompt(), "xldr(3)> ");
 }
 
-#[test]
 fn core_session_listing_commands_render_current_state() {
     let mut engine = ReplEngine::from_preload_sources(
         Some((
@@ -3553,12 +3724,10 @@ import Math::add2
     assert!(selected.contains("2:"), "{selected}");
 }
 
-#[test]
-fn core_reload_and_clear_commands_preserve_only_requested_state() {
+fn core_clear_command_preserves_session_state() {
     let mut engine = engine();
 
     let _ = engine.handle_line("seed = 41");
-    let _ = engine.handle_line("def keep() -> Int { 42 }");
 
     let cleared = rendered_text(&engine.handle_line(":clear"));
     assert!(
@@ -3567,6 +3736,14 @@ fn core_reload_and_clear_commands_preserve_only_requested_state() {
     );
     let after_clear = rendered_text(&engine.handle_line("seed"));
     assert!(after_clear.contains("41"), "{after_clear}");
+}
+
+fn core_reload_command_preserves_defs_and_discards_value_bindings() {
+    let mut engine = engine();
+
+    let _ = engine.handle_line("seed = 41");
+    let _ = engine.handle_line("def keep() -> Int { 42 }");
+    let _ = engine.handle_line(":clear");
 
     let reloaded = rendered_text(&engine.handle_line(":reload"));
     assert!(reloaded.contains("reload"), "{reloaded}");
@@ -3581,6 +3758,10 @@ fn core_reload_and_clear_commands_preserve_only_requested_state() {
             || seed_after_reload.contains("Undefined variable"),
         "{seed_after_reload}"
     );
+}
+
+fn core_reload_defs_command_discards_live_defs() {
+    let mut engine = engine();
 
     let _ = engine.handle_line("def drop_me() -> Int { 7 }");
     let reload_defs = rendered_text(&engine.handle_line(":reload defs"));
@@ -3596,7 +3777,6 @@ fn core_reload_and_clear_commands_preserve_only_requested_state() {
     );
 }
 
-#[test]
 fn core_result_error_reports_diagnostic_without_exiting() {
     let mut engine = engine();
 
@@ -3611,7 +3791,6 @@ fn core_result_error_reports_diagnostic_without_exiting() {
     assert!(rendered_text(&safe_mod).contains("division by zero"));
 }
 
-#[test]
 fn core_stacktrace_command_controls_result_error_trace_display() {
     let mut engine = engine();
 
@@ -3677,7 +3856,6 @@ fn core_stacktrace_command_controls_result_error_trace_display() {
     assert!(!rendered_text(&hidden_again).contains("Stack trace:"));
 }
 
-#[test]
 fn core_stacktrace_display_is_independent_from_error_display_mode() {
     let mut engine = engine();
 
@@ -3705,7 +3883,6 @@ fn core_stacktrace_display_is_independent_from_error_display_mode() {
     );
 }
 
-#[test]
 fn core_stacktrace_full_is_reserved_until_html_viewer_exists() {
     let mut engine = engine();
 
@@ -3718,7 +3895,6 @@ fn core_stacktrace_full_is_reserved_until_html_viewer_exists() {
     assert_eq!(rendered_text(&current), "stacktrace display mode: off");
 }
 
-#[test]
 fn core_immediate_anonymous_callable_calls_show_binding_hint() {
     let mut engine = engine();
 
@@ -3740,7 +3916,6 @@ fn core_immediate_anonymous_callable_calls_show_binding_hint() {
     }
 }
 
-#[test]
 fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let mut engine = engine();
 
@@ -4118,7 +4293,6 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     );
 }
 
-#[test]
 fn core_sig_monad_operator_lists_user_defined_identity_impl() {
     let mut engine = ReplEngine::from_script_source(
         "identity_operator_impls.srt",
@@ -4188,7 +4362,6 @@ impl KleisliComposable<$A, $B, Identity<$C>> for ($A -> Identity<$B>) {
     );
 }
 
-#[test]
 fn core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing() {
     let mut engine = ReplEngine::from_script_source(
         "compare_default.srt",
@@ -4234,7 +4407,6 @@ impl Compare for Ranked {
     assert!(!doc.contains("trait Compare {"), "{doc}");
 }
 
-#[test]
 fn core_sig_type_owner_falls_back_to_constructor_signatures() {
     let mut engine = engine();
 
@@ -4256,7 +4428,6 @@ fn core_sig_type_owner_falls_back_to_constructor_signatures() {
     assert!(style.contains("style: StyledDocStyle"), "{style}");
 }
 
-#[test]
 fn core_sig_record_owner_uses_record_constructor_surface() {
     let mut engine = ReplEngine::from_script_source(
         "record_sig.srt",
@@ -4273,7 +4444,6 @@ defrecord ScoreFixture(scores: List<Int>, score: HashMap<Int>)
     );
 }
 
-#[test]
 fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fallbacks() {
     let mut engine = engine();
 
@@ -4328,7 +4498,6 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
     assert_eq!(extractor_sig_no_args.trim(), extractor_sig.trim());
 }
 
-#[test]
 fn core_sig_enum_rejects_extra_input_with_shared_message() {
     let mut engine = engine();
 
@@ -4353,7 +4522,6 @@ fn core_sig_enum_rejects_extra_input_with_shared_message() {
     );
 }
 
-#[test]
 fn core_doc_command_resolves_closure_type_and_callable_bindings() {
     let mut engine = engine();
 
@@ -4413,7 +4581,6 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
     );
 }
 
-#[test]
 fn core_process_doc_and_sig_support_hidden_and_concrete_surfaces() {
     let mut engine = process_engine();
 
@@ -4484,7 +4651,6 @@ fn core_process_doc_and_sig_support_hidden_and_concrete_surfaces() {
     );
 }
 
-#[test]
 fn core_process_public_surface_respects_annotations() {
     let mut engine = process_engine();
 
@@ -4526,7 +4692,6 @@ fn core_process_public_surface_respects_annotations() {
     );
 }
 
-#[test]
 fn core_process_sig_owner_summary_includes_init_pid_and_messages() {
     let mut engine = process_engine();
 
@@ -4546,7 +4711,6 @@ fn core_process_sig_owner_summary_includes_init_pid_and_messages() {
     );
 }
 
-#[test]
 fn core_process_sig_worker_owner_summary_includes_init_and_messages() {
     let mut engine = process_engine();
 
@@ -4567,7 +4731,6 @@ fn core_process_sig_worker_owner_summary_includes_init_and_messages() {
     assert!(!owner_sig.contains("@pid"), "{owner_sig}");
 }
 
-#[test]
 fn core_process_sig_pid_binding_lists_available_messages() {
     let mut engine = process_engine();
 
@@ -4584,7 +4747,6 @@ fn core_process_sig_pid_binding_lists_available_messages() {
     assert!(!pid_sig.contains("@pid"), "{pid_sig}");
 }
 
-#[test]
 fn core_process_type_and_info_support_singletons_and_worker_pids() {
     let mut engine = process_engine();
 
@@ -4647,7 +4809,6 @@ fn core_process_type_and_info_support_singletons_and_worker_pids() {
     );
 }
 
-#[test]
 fn core_sig_expression_queries_support_operator_forms() {
     let mut engine = engine();
 
@@ -4685,7 +4846,6 @@ fn core_sig_expression_queries_support_operator_forms() {
     );
 }
 
-#[test]
 fn core_sig_expression_queries_reject_non_expressions() {
     let mut engine = engine();
 
@@ -4701,7 +4861,6 @@ fn core_sig_expression_queries_reject_non_expressions() {
     }
 }
 
-#[test]
 fn core_sig_operator_target_queries_accept_concrete_type_targets_and_reject_legacy_forms() {
     let mut engine = engine();
 
@@ -4729,7 +4888,6 @@ fn core_sig_operator_target_queries_accept_concrete_type_targets_and_reject_lega
     );
 }
 
-#[test]
 fn core_sig_typed_call_queries_specialize_polymorphic_returns() {
     let mut engine = engine();
 
@@ -4742,7 +4900,6 @@ fn core_sig_typed_call_queries_specialize_polymorphic_returns() {
     assert!(sig.contains("specialized:\n  id(Int) -> Int"), "{sig}");
 }
 
-#[test]
 fn core_sig_supports_closure_bindings_recapture_and_application() {
     let mut engine = engine();
 
@@ -4794,7 +4951,6 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
     );
 }
 
-#[test]
 fn core_completion_shows_signature_for_callable_binding_calls() {
     let mut engine = engine();
 
@@ -4814,7 +4970,6 @@ fn core_completion_shows_signature_for_callable_binding_calls() {
     assert_eq!(signature.lines.join("\n"), "formatter([Int]) -> String");
 }
 
-#[test]
 fn core_callable_refs_and_signature_errors_are_ui_independent() {
     let mut engine = engine();
 
@@ -4847,7 +5002,6 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
     assert!(add_text.contains("Add::add requires a receiver type implementing Add, got Boolean"));
 }
 
-#[test]
 fn core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_appears() {
     let mut engine = engine();
 
@@ -4887,7 +5041,6 @@ fn core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_a
     );
 }
 
-#[test]
 fn core_duplicate_defs_and_runtime_result_errors_keep_the_session_alive() {
     let mut engine = engine();
 
@@ -4909,7 +5062,6 @@ fn core_duplicate_defs_and_runtime_result_errors_keep_the_session_alive() {
     assert!(rendered_text(&still_alive).contains("1"));
 }
 
-#[test]
 fn core_pattern_bindings_are_displayed_in_preorder() {
     let mut engine = engine();
     let result = engine.handle_line("(i, s) @ w = (1, 2)");
@@ -4923,7 +5075,6 @@ fn core_pattern_bindings_are_displayed_in_preorder() {
     assert!(i < s && s < w, "unexpected binding order: {text}");
 }
 
-#[test]
 fn core_pattern_binding_order_defers_pattern_match_as_aliases() {
     let mut engine = engine();
     let result = engine.handle_line("(t1 @ t1a, (t2, t3) @ taila) @ r = (1, (2, 3))");
@@ -4945,7 +5096,6 @@ fn core_pattern_binding_order_defers_pattern_match_as_aliases() {
     );
 }
 
-#[test]
 fn core_pattern_binding_order_flattens_list_children_before_parent_alias() {
     let mut engine = engine();
     let result = engine.handle_line("[head, ..[middle, ..tail]] @ whole =? [1, 2, 3]");
@@ -4961,7 +5111,6 @@ fn core_pattern_binding_order_flattens_list_children_before_parent_alias() {
     );
 }
 
-#[test]
 fn core_duplicate_pattern_diagnostic_labels_are_limited_to_five() {
     let mut engine = engine();
     let result = engine.handle_line("(x, x, x, x, x, x) = (1, 2, 3, 4, 5, 6)");
@@ -4984,7 +5133,6 @@ fn core_duplicate_pattern_diagnostic_labels_are_limited_to_five() {
     );
 }
 
-#[test]
 fn core_save_writes_decodable_eldr_snapshot() {
     let mut engine = engine();
     let dir = tempfile_dir("xldr-repl-core-save");
@@ -5001,7 +5149,6 @@ fn core_save_writes_decodable_eldr_snapshot() {
     assert!(!bytecode.opcodes.is_empty());
 }
 
-#[test]
 fn core_eldr_sig_queries_do_not_depend_on_docs_chunk() {
     let mut engine = engine();
     let dir = tempfile_dir("xldr-repl-core-eldr-sig-without-docs");
@@ -5034,7 +5181,6 @@ fn core_eldr_sig_queries_do_not_depend_on_docs_chunk() {
     );
 }
 
-#[test]
 fn core_eldr_restore_reports_partial_semantic_restore_notice() {
     let mut engine = engine();
     let dir = tempfile_dir("xldr-repl-core-eldr-partial-restore");
@@ -5055,7 +5201,6 @@ fn core_eldr_restore_reports_partial_semantic_restore_notice() {
     );
 }
 
-#[test]
 fn core_quit_command_sets_exit_without_ui_work() {
     let mut engine = engine();
 
@@ -5064,7 +5209,6 @@ fn core_quit_command_sets_exit_without_ui_work() {
     assert_eq!(status_text(&result), "quit");
 }
 
-#[test]
 fn core_dbg_docs_and_signatures_resolve_from_bootstrap_source() {
     let mut engine = engine();
 
@@ -5081,7 +5225,6 @@ fn core_dbg_docs_and_signatures_resolve_from_bootstrap_source() {
     );
 }
 
-#[test]
 fn core_dbg_typed_call_queries_use_special_form_pseudo_application() {
     let mut engine = engine();
 
@@ -5095,7 +5238,6 @@ fn core_dbg_typed_call_queries_use_special_form_pseudo_application() {
     assert_eq!(sig.trim(), "@intrinsic def dbg!(values: *$A) -> Unit");
 }
 
-#[test]
 fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     let mut engine = engine();
 
@@ -5192,7 +5334,6 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     assert!(if_doc.contains("Kernel::if"), "{if_doc}");
 }
 
-#[test]
 fn core_doc_typed_call_supports_qualified_inherent_impl_methods() {
     let mut engine = engine();
 
@@ -5202,7 +5343,6 @@ fn core_doc_typed_call_supports_qualified_inherent_impl_methods() {
     assert!(doc.contains("logical negation"), "{doc}");
 }
 
-#[test]
 fn core_sig_rejects_tuple_field_and_facet_expression_queries() {
     let mut engine = engine();
 
@@ -5261,7 +5401,6 @@ fn core_sig_rejects_tuple_field_and_facet_expression_queries() {
     );
 }
 
-#[test]
 fn core_inspects_facet_roots_and_private_paths_without_exposing_them_to_source() {
     let mut engine = ReplEngine::from_script_source(
         "tmp/user.srt",

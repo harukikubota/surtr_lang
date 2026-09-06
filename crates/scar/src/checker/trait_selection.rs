@@ -1672,10 +1672,8 @@ impl Checker {
             .finish(ProfileEvent::GenericTraitCandidateScan, profile);
         if let Ok(CandidateApplicability::Applicable(instantiation)) = &result {
             if !instantiation.caller_substitution.is_empty() {
-                let checkpoint = self.candidate_probe_checkpoint();
                 for (var, ty) in &instantiation.caller_substitution {
                     if !self.types_compatible(&Ty::Var(*var), ty) {
-                        self.rollback_candidate_probe(checkpoint);
                         return Err(TypeError::new(
                             "SelectedTraitMethodInferenceConflict",
                             Span { start: 0, end: 0 },
