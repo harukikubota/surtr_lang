@@ -176,6 +176,87 @@ fn structured_type_diagnostic_projects_the_same_facts_to_json_and_rendering() {
 }
 
 #[test]
+fn ambiguous_return_type_argument_has_a_distinct_headline() {
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register("main.srt", "make()");
+    let input = StructuredDiagnostic {
+        reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument,
+        origin: DiagnosticOrigin::ReturnTypeArgument { ordinal: 0 },
+        data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+            callable: "make".into(),
+            ordinal: 0,
+            expected_type: "concrete return type argument".into(),
+            actual_type: "List<$A>".into(),
+        }),
+        primary: SourceFact::typed(
+            SourceRole::ReturnTypeArgument,
+            source_id,
+            Span { start: 0, end: 6 },
+            "List<$A>",
+        ),
+        related: Vec::new(),
+        remediation: Some(Remediation::Help {
+            text: "Provide an expected result type.".into(),
+        }),
+    };
+
+    let spec = structured_type_error_spec(&input);
+    assert_eq!(
+        spec.message,
+        "return type arguments for `make` cannot be inferred"
+    );
+    let report = serializable_report_by_id(&sources, source_id, "typecheck", &spec);
+    assert_eq!(
+        report.errors[0].reason.as_deref(),
+        Some("AmbiguousReturnTypeArgument")
+    );
+}
+
+#[test]
+fn rejected_trait_candidates_preserve_structured_failure_details() {
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register("main.srt", "Monad::return(1) |>= {|x| x + 1}");
+    let input = StructuredDiagnostic {
+        reason: TypeDiagnosticReason::NoApplicableTraitImplementation,
+        origin: DiagnosticOrigin::Operator,
+        data: DiagnosticData::CandidateSelection(CandidateSelectionData {
+            trait_name: "Monad".into(),
+            method: "bind".into(),
+            failures: vec![CandidateFailureData {
+                candidate_type: "Result<Int>".into(),
+                detail: "right-hand side returns Int".into(),
+            }],
+        }),
+        primary: SourceFact::typed(
+            SourceRole::LeftValue,
+            source_id,
+            Span { start: 0, end: 34 },
+            "Int",
+        ),
+        related: Vec::new(),
+        remediation: Some(Remediation::Candidates {
+            items: vec!["Result<Int>".into()],
+        }),
+    };
+
+    let spec = structured_type_error_spec(&input);
+    assert_eq!(
+        spec.message,
+        "no `Monad` candidate can satisfy `Monad::bind`"
+    );
+    let report = serializable_report_by_id(&sources, source_id, "typecheck", &spec);
+    assert_eq!(
+        report.errors[0].reason.as_deref(),
+        Some("NoApplicableTraitImplementation")
+    );
+    assert_eq!(report.errors[0].data["kind"], "CandidateSelection");
+    assert_eq!(
+        report.errors[0].data["failures"][0]["detail"],
+        "right-hand side returns Int"
+    );
+}
+
+#[test]
 fn char_span_to_byte_range_converts_only_at_render_boundary() {
     let range = char_span_to_byte_range("あx", &Span { start: 1, end: 2 });
     assert_eq!(range, "あ".len().."あx".len());

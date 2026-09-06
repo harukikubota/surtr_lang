@@ -301,7 +301,7 @@ impl Checker {
                 canonical_where_constraints,
                 sindr::signature::RuntimeTarget::Builtin(meta.builtin_id()),
                 sindr::signature::CallableDeclarationKind::Builtin,
-            ),
+            )?,
         );
 
         self.env.bind_var(
@@ -1569,7 +1569,7 @@ impl Checker {
                 canonical_where_constraints,
                 sindr::signature::RuntimeTarget::UserFunction(fun_idx),
                 sindr::signature::CallableDeclarationKind::Function,
-            ),
+            )?,
         );
         Ok(TypedNode {
             ty: Ty::Unit,

@@ -180,6 +180,30 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                 );
             }
         }
+        TypeDiagnosticReason::AmbiguousReturnTypeArgument => {
+            if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
+                return format!(
+                    "return type arguments for `{}` cannot be inferred",
+                    value.callable
+                );
+            }
+        }
+        TypeDiagnosticReason::CallableSignatureMetadataMismatch => {
+            if let DiagnosticData::CallableSignature(value) = &input.data {
+                return format!(
+                    "canonical callable signature for `{}` is inconsistent",
+                    value.callable
+                );
+            }
+        }
+        TypeDiagnosticReason::NoApplicableTraitImplementation => {
+            if let DiagnosticData::CandidateSelection(value) = &input.data {
+                return format!(
+                    "no `{}` candidate can satisfy `{}::{}`",
+                    value.trait_name, value.trait_name, value.method
+                );
+            }
+        }
         TypeDiagnosticReason::InvalidTraitConstraintSubject => {
             if let DiagnosticData::ConstraintSubject(value) = &input.data {
                 return format!(

@@ -1,5 +1,9 @@
 use super::*;
 use crate::env::TypeScheme;
+use diagnostics::{
+    CandidateFailureData, CandidateSelectionData, DiagnosticData, DiagnosticOrigin, Remediation,
+    SourceFact, SourceId, SourceRole, StructuredDiagnostic, TypeDiagnosticReason,
+};
 use sindr::names::FacetRootKind;
 use sindr::primitives::int;
 use spire::ast::Symbol;
@@ -44,7 +48,43 @@ struct ExpectedCallableContract {
     slot: ExpectedCallableSlot,
 }
 
+#[derive(Clone)]
+struct CandidateProbeCheckpoint {
+    env: TypeEnv,
+    substitutions: HashMap<u32, Ty>,
+    pending_trait_obligations: HashMap<u32, Vec<PendingTraitObligation>>,
+    active_capabilities: Vec<CapabilityUse>,
+    constructor_capabilities: HashMap<u32, String>,
+    constructor_witness_traits: HashMap<u32, String>,
+    trait_obligation_cycle: Option<String>,
+    warnings: WarningBuffer,
+}
+
 impl Checker {
+    fn candidate_probe_checkpoint(&self) -> CandidateProbeCheckpoint {
+        CandidateProbeCheckpoint {
+            env: self.env.clone(),
+            substitutions: self.substitutions.clone(),
+            pending_trait_obligations: self.pending_trait_obligations.clone(),
+            active_capabilities: self.active_capabilities.clone(),
+            constructor_capabilities: self.constructor_capabilities.clone(),
+            constructor_witness_traits: self.constructor_witness_traits.clone(),
+            trait_obligation_cycle: self.trait_obligation_cycle.clone(),
+            warnings: self.warnings.clone(),
+        }
+    }
+
+    fn rollback_candidate_probe(&mut self, checkpoint: CandidateProbeCheckpoint) {
+        self.env = checkpoint.env;
+        self.substitutions = checkpoint.substitutions;
+        self.pending_trait_obligations = checkpoint.pending_trait_obligations;
+        self.active_capabilities = checkpoint.active_capabilities;
+        self.constructor_capabilities = checkpoint.constructor_capabilities;
+        self.constructor_witness_traits = checkpoint.constructor_witness_traits;
+        self.trait_obligation_cycle = checkpoint.trait_obligation_cycle;
+        self.warnings = checkpoint.warnings;
+    }
+
     fn generalize_local_callable_binding(&mut self, pattern: &TypedPattern) {
         let (TypedPattern::Var(_, id) | TypedPattern::As(_, _, id)) = pattern else {
             return;
@@ -5351,16 +5391,27 @@ impl Checker {
             })?;
         let value_ty = self.resolve_ty(&typed_value.ty);
 
-        for context in self.constructor_context_candidates(&monad_trait, &value_ty) {
-            let checkpoint = self.substitutions.clone();
+        let candidates = self.constructor_context_candidates(&monad_trait, &value_ty);
+        let mut failures = Vec::new();
+        for context in candidates {
+            let candidate_type = self.ty_name(&context);
+            let checkpoint = self.candidate_probe_checkpoint();
             let Some(input_ty) = self.constructor_slot_type_for(&monad_trait, &context) else {
-                self.substitutions = checkpoint;
+                self.rollback_candidate_probe(checkpoint);
+                failures.push(CandidateFailureData {
+                    candidate_type,
+                    detail: "constructor slot mapping is unavailable".into(),
+                });
                 continue;
             };
             let next_ty = self.env.fresh_tyvar();
             let Some(ret_ty) = self.constructor_context_type_for(&monad_trait, &context, &next_ty)
             else {
-                self.substitutions = checkpoint;
+                self.rollback_candidate_probe(checkpoint);
+                failures.push(CandidateFailureData {
+                    candidate_type,
+                    detail: "contextual result type cannot be constructed".into(),
+                });
                 continue;
             };
             let contract = self.callable_contract(
@@ -5376,62 +5427,110 @@ impl Checker {
                     self.check_apply_callable_with_contract(right, &contract, "`|>=`")
                 }
                 Resolved::App(call_span, rhs_func, rhs_args) => {
-                    if let Some(typed) = self.check_trait_helper_pipe_callable(
+                    match self.check_trait_helper_pipe_callable(
                         call_span,
                         rhs_func,
                         rhs_args,
                         contract.input.clone(),
                         contract.ret.clone(),
                         "`|>=`",
-                    )? {
-                        Ok(typed)
-                    } else {
-                        let expected_callable = self.expected_callable_ty(&contract);
-                        self.check_node_with_expected(right, Some(&expected_callable))
-                            .or_else(|_| self.check_apply_callable(right, "`|>=`"))
+                    ) {
+                        Ok(Some(typed)) => Ok(typed),
+                        Ok(None) => {
+                            let expected_callable = self.expected_callable_ty(&contract);
+                            match self.check_node_with_expected(right, Some(&expected_callable)) {
+                                Ok(typed) => Ok(typed),
+                                Err(expected_error) => {
+                                    match self.check_apply_callable(right, "`|>=`") {
+                                        Ok(typed) => Ok(typed),
+                                        Err(_) => Err(expected_error),
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => Err(error),
                     }
                 }
-                Resolved::ReturnTypeArgumentApply(call_span, _, _) => self
-                    .check_trait_helper_pipe_callable(
+                Resolved::ReturnTypeArgumentApply(call_span, _, _) => {
+                    match self.check_trait_helper_pipe_callable(
                         call_span,
                         right,
                         &[],
                         contract.input.clone(),
                         contract.ret.clone(),
                         "`|>=`",
-                    )?
-                    .ok_or_else(|| TypeError {
-                        structured: None,
-                        message: "`|>=` requires a specialized trait helper on the right".into(),
-                        span: call_span.clone(),
-                        hint: None,
-                    }),
+                    ) {
+                        Ok(Some(typed)) => Ok(typed),
+                        Ok(None) => Err(TypeError {
+                            structured: None,
+                            message: "`|>=` requires a specialized trait helper on the right"
+                                .into(),
+                            span: call_span.clone(),
+                            hint: None,
+                        }),
+                        Err(error) => Err(error),
+                    }
+                }
                 _ => self.check_apply_callable(right, "`|>=`"),
             };
-            let Ok(typed_right) = typed_right else {
-                self.substitutions = checkpoint;
-                continue;
+            let typed_right = match typed_right {
+                Ok(typed) => typed,
+                Err(error) => {
+                    self.rollback_candidate_probe(checkpoint);
+                    failures.push(CandidateFailureData {
+                        candidate_type,
+                        detail: error.message,
+                    });
+                    continue;
+                }
             };
-            let Ok((rhs_in, rhs_ret)) =
-                self.unary_function_parts(&typed_right.ty, "`|>=`", &typed_right.span)
-            else {
-                self.substitutions = checkpoint;
-                continue;
-            };
+            let (rhs_in, rhs_ret) =
+                match self.unary_function_parts(&typed_right.ty, "`|>=`", &typed_right.span) {
+                    Ok(parts) => parts,
+                    Err(error) => {
+                        self.rollback_candidate_probe(checkpoint);
+                        failures.push(CandidateFailureData {
+                            candidate_type,
+                            detail: error.message,
+                        });
+                        continue;
+                    }
+                };
             if !self.callable_accepts_input(&rhs_in, &input_ty)
                 || !self.types_compatible(&rhs_ret, &ret_ty)
             {
-                self.substitutions = checkpoint;
+                let detail = format!(
+                    "right-hand side {} does not satisfy expected ({} -> {})",
+                    self.ty_name(&typed_right.ty),
+                    self.ty_name(&input_ty),
+                    self.ty_name(&ret_ty)
+                );
+                self.rollback_candidate_probe(checkpoint);
+                failures.push(CandidateFailureData {
+                    candidate_type,
+                    detail,
+                });
                 continue;
             }
-            let Ok(typed_left) = self.check_node_with_expected(left, Some(&context)) else {
-                self.substitutions = checkpoint;
-                continue;
+            let typed_left = match self.check_node_with_expected(left, Some(&context)) {
+                Ok(typed) => typed,
+                Err(error) => {
+                    self.rollback_candidate_probe(checkpoint);
+                    failures.push(CandidateFailureData {
+                        candidate_type,
+                        detail: error.message,
+                    });
+                    continue;
+                }
             };
             let Some((dispatch, result_ty)) =
                 self.constructor_monad_dispatch(&monad_trait, &context, &rhs_in, &rhs_ret)
             else {
-                self.substitutions = checkpoint;
+                self.rollback_candidate_probe(checkpoint);
+                failures.push(CandidateFailureData {
+                    candidate_type,
+                    detail: "Monad::bind dispatch could not be selected".into(),
+                });
                 continue;
             };
             return Ok(Some(TypedNode {
@@ -5456,7 +5555,42 @@ impl Checker {
                 },
             }));
         }
-        Ok(None)
+        if failures.is_empty() {
+            return Ok(None);
+        }
+        let candidate_names = failures
+            .iter()
+            .map(|failure| failure.candidate_type.clone())
+            .collect::<Vec<_>>();
+        let detail = failures
+            .iter()
+            .map(|failure| format!("{}: {}", failure.candidate_type, failure.detail))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Err(TypeError {
+            structured: Some(StructuredDiagnostic {
+                reason: TypeDiagnosticReason::NoApplicableTraitImplementation,
+                origin: DiagnosticOrigin::Operator,
+                data: DiagnosticData::CandidateSelection(CandidateSelectionData {
+                    trait_name: self.trait_display_name(&monad_trait),
+                    method: "bind".into(),
+                    failures,
+                }),
+                primary: SourceFact::typed(
+                    SourceRole::LeftValue,
+                    SourceId(0),
+                    span.clone(),
+                    self.ty_name(&value_ty),
+                ),
+                related: Vec::new(),
+                remediation: Some(Remediation::Candidates {
+                    items: candidate_names,
+                }),
+            }),
+            message: "No Monad constructor candidate satisfies `|>=`".into(),
+            span: span.clone(),
+            hint: Some(detail),
+        })
     }
 
     fn check_context_bind_with_expected(
@@ -8888,6 +9022,15 @@ impl Checker {
                     .map(|signature| {
                         super::signatures::instantiate_callable_signature(self, &signature)
                     });
+                if application_signature.is_none() {
+                    if let TypedInner::Var(id) = &typed_func.node {
+                        if self.is_registered_callable_declaration(id.unique_id) {
+                            return Err(super::signatures::missing_canonical_callable_signature(
+                                id, span,
+                            ));
+                        }
+                    }
+                }
                 let typed_args = if let (Some(uid), Some(signature)) =
                     (builtin_uid, application_signature.as_ref())
                 {
@@ -9027,6 +9170,15 @@ impl Checker {
                         .map(|signature| {
                             super::signatures::instantiate_callable_signature(self, &signature)
                         });
+                if application_signature.is_none() {
+                    if let TypedInner::Var(id) = &typed_func.node {
+                        if self.is_registered_callable_declaration(id.unique_id) {
+                            return Err(super::signatures::missing_canonical_callable_signature(
+                                id, span,
+                            ));
+                        }
+                    }
+                }
                 let allow_error_observer_args =
                     self.typed_callee_allows_error_observer_arg(&typed_func);
                 let typed_args = if let Some(signature) = application_signature.as_ref() {
@@ -9108,6 +9260,12 @@ impl Checker {
                 hint: None,
             }),
         }
+    }
+
+    fn is_registered_callable_declaration(&self, unique_id: u32) -> bool {
+        self.function_ids_by_name
+            .values()
+            .any(|registered| registered.unique_id == unique_id)
     }
 
     fn check_callable_application(
@@ -12710,12 +12868,86 @@ fn trim_script_qualified_display_name(qualified_name: &str) -> String {
 mod tests {
     use std::collections::HashSet;
 
+    use diagnostics::TypeDiagnosticReason;
+
     use super::*;
     use crate::env::TypeKind;
     use crate::typed::{TypedFacetPath, TypedFacetPathKind, TypedFacetSegment};
 
     fn test_span() -> Span {
         Span { start: 0, end: 0 }
+    }
+
+    fn registered_callable_id(name: &str, unique_id: u32) -> ResolvedId {
+        ResolvedId {
+            name: name.into(),
+            qualified_name: Some(format!("Global::{name}")),
+            unique_id,
+            compiler_generated: false,
+            symbol_info: None,
+            span: test_span(),
+        }
+    }
+
+    #[test]
+    fn registered_user_callable_without_canonical_signature_fails_closed() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let id = registered_callable_id("target", 91_001);
+        checker.register_function_id(&id);
+        checker.env.bind_var(
+            id.unique_id,
+            Ty::UserFunc {
+                fun_idx: 0,
+                type_params: Vec::new(),
+                params: vec![Ty::Int],
+                ret: Box::new(Ty::Int),
+            },
+        );
+
+        let error = checker
+            .check_app(
+                &test_span(),
+                &Resolved::Var(test_span(), id),
+                &[ResolvedRecordLitArg::Positional(Resolved::Lit(
+                    test_span(),
+                    Lit::Int(int(1)),
+                ))],
+            )
+            .expect_err("a registered declaration must not use the legacy positional checker");
+        assert_eq!(
+            error.reason(),
+            Some(TypeDiagnosticReason::CallableSignatureMetadataMismatch)
+        );
+    }
+
+    #[test]
+    fn registered_builtin_without_canonical_signature_fails_closed() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let id = registered_callable_id("runtime_target", 91_002);
+        checker.register_function_id(&id);
+        checker.env.bind_var(
+            id.unique_id,
+            Ty::BuiltinFunc {
+                name: "runtime_target".into(),
+                params: vec![Ty::Int],
+                ret: Box::new(Ty::Int),
+            },
+        );
+
+        let error = checker
+            .check_app(
+                &test_span(),
+                &Resolved::Var(test_span(), id),
+                &[ResolvedRecordLitArg::Positional(Resolved::Lit(
+                    test_span(),
+                    Lit::Int(int(1)),
+                ))],
+            )
+            .expect_err("a registered builtin must not use the legacy positional checker");
+        assert_eq!(
+            error.reason(),
+            Some(TypeDiagnosticReason::CallableSignatureMetadataMismatch)
+        );
     }
 
     fn setup_type(

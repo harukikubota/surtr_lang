@@ -1598,10 +1598,15 @@ impl Checker {
     }
 
     pub(super) fn trait_key_by_short_name(&self, short_name: &str) -> Option<String> {
-        self.traits
+        let mut candidates = self
+            .traits
             .values()
-            .find(|info| info.id.name == short_name)
+            .filter(|info| info.id.name == short_name)
             .map(|info| self.trait_key(&info.id))
+            .collect::<Vec<_>>();
+        candidates.sort();
+        candidates.dedup();
+        (candidates.len() == 1).then(|| candidates.remove(0))
     }
 
     pub(super) fn trait_matches_short_name(&self, trait_name: &str, short_name: &str) -> bool {
@@ -3112,7 +3117,7 @@ impl Checker {
                         sindr::signature::CanonicalConstraintSet::default(),
                         sindr::signature::RuntimeTarget::TraitDispatch(method.id.unique_id),
                         sindr::signature::CallableDeclarationKind::TraitMethod,
-                    ),
+                    )?,
                 );
             }
             let _ = span;
@@ -3866,12 +3871,35 @@ impl Checker {
                     where_clause,
                     _,
                 ) => {
-                    self.register_function_id(id);
                     let runtime_name = sindr::builtin::builtin_runtime_name(
                         &id.name,
                         id.qualified_name.as_deref(),
                     );
                     let meta = sindr::builtin::builtin_meta_by_runtime_name(runtime_name);
+                    let is_kernel_is_match = id.name == "is_match"
+                        && Self::surface_qualified_name(id.qualified_name.as_deref())
+                            == Some("Kernel::is_match");
+                    let is_special_form = if id.name == "is_match" {
+                        is_kernel_is_match
+                    } else {
+                        Self::is_special_form_builtin_decl_name(&id.name)
+                    };
+                    if !is_special_form
+                        && (meta.is_none()
+                            || (!runtime_name.starts_with("__")
+                                && super::signatures::builtin_surface_signature(id).is_none()))
+                    {
+                        return Err(TypeError {
+                            structured: None,
+                            message: format!("Unknown builtin declaration: {}", id.name),
+                            span: id.span.clone(),
+                            hint: Some(
+                                "Declare the builtin owner and runtime mapping in BUILTIN_METAS before using @builtin."
+                                    .into(),
+                            ),
+                        });
+                    }
+                    self.register_function_id(id);
                     let mut tyvars = HashMap::new();
                     let return_type_argument_tys = return_type_arguments
                         .iter()
@@ -3920,7 +3948,7 @@ impl Checker {
                                 canonical_where_constraints,
                                 sindr::signature::RuntimeTarget::Builtin(meta.builtin_id()),
                                 sindr::signature::CallableDeclarationKind::Builtin,
-                            ),
+                            )?,
                         );
                     }
                     self.env.bind_var(
@@ -4080,7 +4108,7 @@ impl Checker {
                             canonical_where_constraints,
                             sindr::signature::RuntimeTarget::UserFunction(fun_idx),
                             sindr::signature::CallableDeclarationKind::Function,
-                        ),
+                        )?,
                     );
                     self.user_func_params.insert(id.unique_id, param_names);
                     if let Some(qualified_name) = id.qualified_name.as_ref() {
@@ -4244,7 +4272,7 @@ impl Checker {
                             method.function_id.unique_id,
                         ),
                         sindr::signature::CallableDeclarationKind::TraitMethod,
-                    ),
+                    )?,
                 );
                 if let Some(qualified_name) = method.function_id.qualified_name.as_ref() {
                     if Self::split_impl_method_name(qualified_name).is_some() {

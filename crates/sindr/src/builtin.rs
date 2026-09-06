@@ -120,8 +120,12 @@ impl BuiltinMeta {
         name: &str,
         signature: &str,
     ) -> BuiltinSurfaceSignatureMeta {
-        let (parameters, return_type) = parse_surface_signature(signature)
-            .unwrap_or_else(|| (Vec::new(), signature.to_string()));
+        let (parameters, return_type) = parse_surface_signature(signature).unwrap_or_else(|| {
+            panic!(
+                "malformed BUILTIN_METAS signature for {}: {signature}",
+                self.name
+            )
+        });
         let value_parameters = parameters
             .into_iter()
             .enumerate()
@@ -1465,95 +1469,176 @@ pub fn builtin_surface_variant_for_decl(
     declared_name: &str,
     qualified_name: Option<&str>,
 ) -> Option<BuiltinSurfaceSignatureMeta> {
-    let runtime_name = builtin_runtime_name(declared_name, qualified_name);
-    let meta = builtin_meta_by_runtime_name(runtime_name)?;
     let qualified_name = qualified_name.map(surface_path_name);
+    let explicit_runtime_name = qualified_name.and_then(builtin_runtime_name_for_qualified);
+    let runtime_name = explicit_runtime_name.unwrap_or(declared_name);
+    let meta = builtin_meta_by_runtime_name(runtime_name)?;
     let owner = qualified_name
         .and_then(|name| name.rsplit_once("::").map(|(owner, _)| owner))
         .unwrap_or("");
     if owner.is_empty() {
         meta.surface_variant("", declared_name)
     } else {
-        meta.surface_variant(owner, declared_name)
-            .or_else(|| Some(meta.surface_variant_named(owner, declared_name)))
+        meta.surface_variant(owner, declared_name).or_else(|| {
+            explicit_runtime_name.map(|_| meta.surface_variant_named(owner, declared_name))
+        })
     }
 }
 
 pub fn builtin_runtime_name<'a>(declared_name: &'a str, qualified_name: Option<&str>) -> &'a str {
     let qualified_name = qualified_name.map(surface_path_name);
-    match qualified_name {
-        Some("IO::get") => "io_get",
-        Some("IO::get_line") => "io_get_line",
-        Some("File::read") => "file_read",
-        Some("File::write") => "file_write",
-        Some("File::append") => "file_append",
-        Some("File::exists") => "file_exists",
-        Some("File::delete") => "file_delete",
-        Some("File::with_open") => "file_with_open",
-        Some("File::read_chunk") => "file_read_chunk",
-        Some("File::write_chunk") => "file_write_chunk",
-        Some("File::flush") => "file_flush",
-        Some("FS::path") => "filesystem_path",
-        Some("FS::join") => "filesystem_join",
-        Some("FS::parent") => "filesystem_parent",
-        Some("FS::name") => "filesystem_name",
-        Some("FS::extension") => "filesystem_extension",
-        Some("FS::exists") => "filesystem_exists",
-        Some("FS::stat") => "filesystem_stat",
-        Some("FS::ls") => "filesystem_ls",
-        Some("FS::tree_depth") => "filesystem_tree_depth",
-        Some("FS::mkdir") => "filesystem_mkdir",
-        Some("FS::mkdir_all") => "filesystem_mkdir_all",
-        Some("FS::rm") => "filesystem_rm",
-        Some("FS::mv") => "filesystem_mv",
-        Some("FS::cp") => "filesystem_cp",
-        Some("Shell::pwd") => "shell_pwd",
-        Some("Shell::cd") => "shell_cd",
-        Some("Shell::exec") => "shell_exec",
-        Some("String::len") => "string_len",
-        Some("String::contains") => "string_contains",
-        Some("String::starts_with") => "string_starts_with",
-        Some("String::ends_with") => "string_ends_with",
-        Some("String::split") => "string_split",
-        Some("String::replace") => "string_replace",
-        Some("Json::parse") => "json_parse",
-        Some("Json::stringify") => "json_stringify",
-        Some("Facet::chain") => "__facet_chain",
-        Some("Facet::put") => "__facet_put",
-        Some("Process::self") => "__process_self",
-        Some("Process::sleep") => "__process_sleep",
-        Some("Agent::pid") => "__process_pid",
-        Some("Agent::spawn") => "__process_spawn",
-        Some("Agent::state") => "__process_state",
-        Some("Agent::store") => "__process_store",
-        Some("Agent::self") => "__process_self",
-        Some("Agent::context_handler") => "__process_context_handler",
-        Some("GenServer::pid") => "__process_pid",
-        Some("GenServer::spawn") => "__process_spawn",
-        Some("GenServer::state") => "__process_state",
-        Some("GenServer::store") => "__process_store",
-        Some("GenServer::self") => "__process_self",
-        Some("GenServer::context_handler") => "__process_context_handler",
-        Some("Supervisor::spawn") => "__supervisor_spawn",
-        Some("Supervisor::adopt") => "__supervisor_adopt",
-        Some("Supervisor::status") => "__supervisor_status",
-        Some("Supervisor::workers") => "__supervisor_workers",
-        Some("OutHandler::write") => "__out_handler_write",
-        Some("DynamicSupervisor::spawn") => "__dynamic_supervisor_spawn",
-        Some("DynamicSupervisor::adopt") => "__dynamic_supervisor_adopt",
-        Some("DynamicSupervisor::status") => "__dynamic_supervisor_status",
-        Some("Workers::submit") => "__workers_submit",
-        Some("Workers::broadcast") => "__workers_broadcast",
-        Some("Workers::reserve") => "__workers_reserve",
-        Some("Workers::size") => "__workers_size",
-        Some("Task::call") => "__task_call",
-        Some("Task::async") => "__task_async",
-        Some("Task::await") => "__task_await",
-        Some("Task::launch") => "__task_launch",
-        Some("Task::cast") => "__task_cast",
-        Some("Regex::replace") => "__regex_replace",
-        _ => declared_name,
-    }
+    qualified_name
+        .and_then(builtin_runtime_name_for_qualified)
+        .unwrap_or(declared_name)
+}
+
+/// Resolve only qualified builtin surfaces that are explicitly part of the
+/// standard-library contract. This allowlist prevents an arbitrary owner from
+/// inheriting a runtime builtin merely by reusing its unqualified name.
+fn builtin_runtime_name_for_qualified(qualified_name: &str) -> Option<&'static str> {
+    Some(match qualified_name {
+        "Error::format" => "format",
+        "Error::kind" => "kind",
+        "Error::message" => "message",
+        "Facet::case_over" => "case_over",
+        "Facet::case_set" => "case_set",
+        "Facet::over" => "over",
+        "Facet::over_result" => "over_result",
+        "Facet::preview" => "preview",
+        "Facet::set" => "set",
+        "Facet::view" => "view",
+        "Float::ceil" => "ceil",
+        "Float::e" => "e",
+        "Float::floor" => "floor",
+        "Float::pi" => "pi",
+        "Float::round" => "round",
+        "Float::trunc" => "trunc",
+        "Function::curry" => "curry",
+        "Generator::gen_idx" => "gen_idx",
+        "Generator::gen_items" => "gen_items",
+        "Generator::gen_make" => "gen_make",
+        "HashMap::empty_map" => "empty_map",
+        "HashMap::map_contains_key" => "map_contains_key",
+        "HashMap::map_from_entries" => "map_from_entries",
+        "HashMap::map_get" => "map_get",
+        "HashMap::map_insert" => "map_insert",
+        "HashMap::map_keys" => "map_keys",
+        "HashMap::map_len" => "map_len",
+        "HashMap::map_remove" => "map_remove",
+        "HashMap::map_values_list" => "map_values_list",
+        "Int::bit_and" => "bit_and",
+        "Int::bit_not" => "bit_not",
+        "Int::bit_or" => "bit_or",
+        "Int::bit_xor" => "bit_xor",
+        "Int::clear_bit" => "clear_bit",
+        "Int::set_bit" => "set_bit",
+        "Int::shl" => "shl",
+        "Int::shr" => "shr",
+        "Int::test_bit" => "test_bit",
+        "Int::toggle_bit" => "toggle_bit",
+        "Kernel::eprint" => "eprint",
+        "Kernel::inspect" => "inspect",
+        "Kernel::print" => "print",
+        "Kernel::project_args" => "project_args",
+        "Kernel::set_exit_code" => "set_exit_code",
+        "List::len" => "len",
+        "List::zip" => "zip",
+        "Random::int_range" => "int_range",
+        "Random::int_until" => "int_until",
+        "Random::next_int_range" => "next_int_range",
+        "Random::next_int_until" => "next_int_until",
+        "Random::seed" => "seed",
+        "Regex::captures" => "captures",
+        "Regex::compile" => "compile",
+        "Regex::escape" => "escape",
+        "Regex::find" => "find",
+        "Regex::find_all" => "find_all",
+        "Regex::group_names" => "group_names",
+        "Regex::is_match" => "is_match",
+        "Regex::replace_all" => "replace_all",
+        "Regex::split" => "split",
+        "RegexCaptures::capture_count" => "capture_count",
+        "RegexCaptures::get" => "get",
+        "RegexCaptures::get_name" => "get_name",
+        "RegexCaptures::whole" => "whole",
+        "RegexMatch::end" => "end",
+        "RegexMatch::start" => "start",
+        "RegexMatch::text" => "text",
+        "Result::chain" => "chain",
+        "String::codepoints" => "codepoints",
+        "String::from_codepoints" => "from_codepoints",
+        "IO::get" => "io_get",
+        "IO::get_line" => "io_get_line",
+        "File::read" => "file_read",
+        "File::write" => "file_write",
+        "File::append" => "file_append",
+        "File::exists" => "file_exists",
+        "File::delete" => "file_delete",
+        "File::with_open" => "file_with_open",
+        "File::read_chunk" => "file_read_chunk",
+        "File::write_chunk" => "file_write_chunk",
+        "File::flush" => "file_flush",
+        "FS::path" => "filesystem_path",
+        "FS::join" => "filesystem_join",
+        "FS::parent" => "filesystem_parent",
+        "FS::name" => "filesystem_name",
+        "FS::extension" => "filesystem_extension",
+        "FS::exists" => "filesystem_exists",
+        "FS::stat" => "filesystem_stat",
+        "FS::ls" => "filesystem_ls",
+        "FS::tree_depth" => "filesystem_tree_depth",
+        "FS::mkdir" => "filesystem_mkdir",
+        "FS::mkdir_all" => "filesystem_mkdir_all",
+        "FS::rm" => "filesystem_rm",
+        "FS::mv" => "filesystem_mv",
+        "FS::cp" => "filesystem_cp",
+        "Shell::pwd" => "shell_pwd",
+        "Shell::cd" => "shell_cd",
+        "Shell::exec" => "shell_exec",
+        "String::len" => "string_len",
+        "String::contains" => "string_contains",
+        "String::starts_with" => "string_starts_with",
+        "String::ends_with" => "string_ends_with",
+        "String::split" => "string_split",
+        "String::replace" => "string_replace",
+        "Json::parse" => "json_parse",
+        "Json::stringify" => "json_stringify",
+        "Facet::chain" => "__facet_chain",
+        "Facet::put" => "__facet_put",
+        "Process::self" => "__process_self",
+        "Process::sleep" => "__process_sleep",
+        "Agent::pid" => "__process_pid",
+        "Agent::spawn" => "__process_spawn",
+        "Agent::state" => "__process_state",
+        "Agent::store" => "__process_store",
+        "Agent::self" => "__process_self",
+        "Agent::context_handler" => "__process_context_handler",
+        "GenServer::pid" => "__process_pid",
+        "GenServer::spawn" => "__process_spawn",
+        "GenServer::state" => "__process_state",
+        "GenServer::store" => "__process_store",
+        "GenServer::self" => "__process_self",
+        "GenServer::context_handler" => "__process_context_handler",
+        "Supervisor::spawn" => "__supervisor_spawn",
+        "Supervisor::adopt" => "__supervisor_adopt",
+        "Supervisor::status" => "__supervisor_status",
+        "Supervisor::workers" => "__supervisor_workers",
+        "OutHandler::write" => "__out_handler_write",
+        "DynamicSupervisor::spawn" => "__dynamic_supervisor_spawn",
+        "DynamicSupervisor::adopt" => "__dynamic_supervisor_adopt",
+        "DynamicSupervisor::status" => "__dynamic_supervisor_status",
+        "Workers::submit" => "__workers_submit",
+        "Workers::broadcast" => "__workers_broadcast",
+        "Workers::reserve" => "__workers_reserve",
+        "Workers::size" => "__workers_size",
+        "Task::call" => "__task_call",
+        "Task::async" => "__task_async",
+        "Task::await" => "__task_await",
+        "Task::launch" => "__task_launch",
+        "Task::cast" => "__task_cast",
+        "Regex::replace" => "__regex_replace",
+        _ => return None,
+    })
 }
 
 pub fn builtin_meta_for_decl(
@@ -1606,8 +1691,8 @@ mod tests {
         builtin_function_metas, builtin_id_by_name, builtin_meta_by_id, builtin_meta_by_name,
         builtin_meta_by_runtime_name, builtin_meta_for_decl, builtin_runtime_name,
         builtin_surface_variant_for_decl, builtin_type_head_metas, builtin_uid,
-        standard_owner_identity_by_name, BUILTIN_FUNCTION_METAS, BUILTIN_METAS,
-        BUILTIN_TYPE_HEAD_METAS, BUILTIN_TYPE_METAS,
+        parse_surface_signature, standard_owner_identity_by_name, BUILTIN_FUNCTION_METAS,
+        BUILTIN_METAS, BUILTIN_TYPE_HEAD_METAS, BUILTIN_TYPE_METAS,
     };
     use crate::names::TypeIdentity;
 
@@ -1686,6 +1771,40 @@ mod tests {
             .expect("qualified builtin declaration should resolve");
         assert_eq!(variant.identity.owner.as_deref(), Some("Int"));
         assert_eq!(variant.identity.name, "safe_div");
+    }
+
+    #[test]
+    fn declaration_lookup_rejects_an_unregistered_owner_alias() {
+        assert!(
+            builtin_surface_variant_for_decl("print", Some("Global::Unknown::print")).is_none()
+        );
+        assert_eq!(
+            builtin_runtime_name("print", Some("Global::Unknown::print")),
+            "print"
+        );
+    }
+
+    #[test]
+    fn declaration_lookup_accepts_explicit_owner_aliases() {
+        let variant = builtin_surface_variant_for_decl("print", Some("Global::Kernel::print"))
+            .expect("Kernel::print is an explicit standard-library surface");
+        assert_eq!(variant.identity.owner.as_deref(), Some("Kernel"));
+        assert_eq!(variant.identity.name, "print");
+    }
+
+    #[test]
+    fn every_builtin_signature_is_parseable_and_matches_runtime_arity() {
+        for meta in BUILTIN_METAS {
+            let (parameters, _) = parse_surface_signature(meta.sig_str)
+                .unwrap_or_else(|| panic!("malformed signature for {}", meta.name));
+            assert_eq!(
+                parameters.len(),
+                usize::from(meta.runtime_arity()),
+                "signature arity drift for {}",
+                meta.name
+            );
+        }
+        assert!(parse_surface_signature("Int").is_none());
     }
 
     #[test]

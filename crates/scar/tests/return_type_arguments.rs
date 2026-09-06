@@ -184,3 +184,53 @@ def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> {
     };
     assert_eq!(rta_witness, return_type);
 }
+
+#[test]
+fn rejects_omitted_return_only_input_without_a_witness() {
+    let error = assert_reason(
+        r#"def make::<$A>() -> List<$A> { [] }
+make()"#,
+        TypeDiagnosticReason::AmbiguousReturnTypeArgument,
+    );
+    assert_eq!(
+        error.message,
+        "return type arguments for `make` cannot be inferred"
+    );
+}
+
+#[test]
+fn accepts_return_only_input_inferred_from_expected_result() {
+    typecheck_without_std_prelude(
+        r#"def make::<$A>() -> List<$A> { [] }
+value: List<Int> = make()"#,
+    )
+    .expect("the expected result type should determine the return-only input");
+}
+
+#[test]
+fn rejects_ambiguous_return_only_input_inside_an_unannotated_binding() {
+    assert_reason(
+        r#"def make::<$A>() -> List<$A> { [] }
+value = make()"#,
+        TypeDiagnosticReason::AmbiguousReturnTypeArgument,
+    );
+}
+
+#[test]
+fn accepts_return_only_input_forwarded_by_an_outer_generic_result() {
+    typecheck_without_std_prelude(
+        r#"def make::<$A>() -> List<$A> { [] }
+def forward::<$A>() -> List<$A> { make() }"#,
+    )
+    .expect("an outer declared input should witness the nested return-only input");
+}
+
+#[test]
+fn accepts_return_only_input_deferred_into_a_callable_result() {
+    typecheck_without_std_prelude(
+        r#"def identity::<$A>() -> ($A -> $A) { {|value| value} }
+callable = identity()
+result: Int = callable(42)"#,
+    )
+    .expect("a returned callable should receive its witness from a later application");
+}

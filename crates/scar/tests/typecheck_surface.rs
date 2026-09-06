@@ -721,6 +721,14 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         context_bind_rejects_plain_rhs_return as fn(),
     ),
     (
+        "constructor_context_bind_preserves_candidate_failures",
+        constructor_context_bind_preserves_candidate_failures as fn(),
+    ),
+    (
+        "constructor_context_bind_rolls_back_rejected_candidates",
+        constructor_context_bind_rolls_back_rejected_candidates as fn(),
+    ),
+    (
         "context_bind_rhs_closure_receives_result_return_expectation",
         context_bind_rhs_closure_receives_result_return_expectation as fn(),
     ),
@@ -6044,6 +6052,40 @@ bad = parse(1) |>= &inc"#,
     assert!(hint.contains("`|>=` signature rule"));
     assert!(hint.contains("RHS: (Int -> Int)"));
     assert!(hint.contains("Use `|*>`"));
+}
+
+fn constructor_context_bind_preserves_candidate_failures() {
+    let resolved =
+        resolve_with_builtin_prelude(r#"bad = Monad::return(1) |>= {|value| value + 1}"#);
+    let err =
+        typecheck(resolved).expect_err("all rejected constructor candidates must fail closed");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation)
+    );
+    let structured = err
+        .structured
+        .expect("candidate failure must be structured");
+    let diagnostics::DiagnosticData::CandidateSelection(data) = structured.data else {
+        panic!("expected candidate selection data");
+    };
+    assert_eq!(data.trait_name, "Monad");
+    assert_eq!(data.method, "bind");
+    assert!(!data.failures.is_empty());
+    assert!(data
+        .failures
+        .iter()
+        .all(|failure| !failure.detail.is_empty()));
+}
+
+fn constructor_context_bind_rolls_back_rejected_candidates() {
+    let typed =
+        typecheck_with_builtin_prelude(r#"bound = Monad::return(1) |>= {|value| [value + 1]}"#);
+    let bind = typed.last().expect("binding should exist");
+    let TypedInner::Bind(_, rhs) = &bind.node else {
+        panic!("expected binding, got {:?}", bind.node);
+    };
+    assert_eq!(rhs.ty, Ty::List(Box::new(Ty::Int)));
 }
 
 fn context_bind_rhs_closure_receives_result_return_expectation() {

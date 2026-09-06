@@ -4,10 +4,12 @@
 //! the checker through this role-bearing shape.
 
 use super::Checker;
+use crate::error::TypeError;
 use crate::types::Ty;
 use diagnostics::{
-    ConstraintSubjectData, DiagnosticData, DiagnosticOrigin, Remediation, ReturnTypeArgumentData,
-    SourceFact, SourceId, SourceRole, StructuredDiagnostic, TypeDiagnosticReason,
+    CallableSignatureData, ConstraintSubjectData, DiagnosticData, DiagnosticOrigin, Remediation,
+    ReturnTypeArgumentData, SourceFact, SourceId, SourceRole, StructuredDiagnostic,
+    TypeDiagnosticReason,
 };
 use sigil::resolved::{
     ResolvedReturnTypeArgument, ResolvedValueParameter, ResolvedWhereClause,
@@ -498,7 +500,26 @@ pub(super) fn canonical_callable_signature(
     where_constraints: CanonicalConstraintSet<Ty>,
     runtime_target: RuntimeTarget,
     declaration_kind: CallableDeclarationKind,
-) -> CallableSignature<Ty> {
+) -> Result<CallableSignature<Ty>, TypeError> {
+    validate_canonical_role_list(
+        id,
+        "return type argument",
+        return_type_arguments.len(),
+        return_type_arguments_tys.len(),
+    )?;
+    validate_canonical_role_list(
+        id,
+        "value parameter",
+        value_parameters.len(),
+        value_parameter_tys.len(),
+    )?;
+    validate_return_type_argument_ordinals(
+        id,
+        return_type_arguments
+            .iter()
+            .map(|argument| argument.ordinal),
+    )?;
+
     let origin = |span: &spire::ast::Span, role: &str, ordinal: usize| {
         SignatureOrigin::new(format!("{role} {ordinal} at {}..{}", span.start, span.end))
     };
@@ -527,7 +548,7 @@ pub(super) fn canonical_callable_signature(
             origin: origin(&parameter.span, "value parameter", ordinal),
         })
         .collect();
-    CallableSignature {
+    Ok(CallableSignature {
         identity: CallableIdentity {
             owner: id
                 .qualified_name
@@ -548,6 +569,107 @@ pub(super) fn canonical_callable_signature(
         where_constraints,
         runtime_target,
         declaration_origins: vec![SignatureOrigin::new(format!("declaration {}", id.name))],
+    })
+}
+
+fn validate_return_type_argument_ordinals(
+    id: &sigil::resolved::ResolvedId,
+    ordinals: impl IntoIterator<Item = u32>,
+) -> Result<(), TypeError> {
+    for (expected, ordinal) in ordinals.into_iter().enumerate() {
+        if ordinal != expected as u32 {
+            return Err(canonical_signature_consistency_error(
+                id,
+                "return type argument",
+                None,
+                None,
+                format!(
+                    "return type argument ordinal {} appears at position {expected}",
+                    ordinal
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_role_list(
+    id: &sigil::resolved::ResolvedId,
+    role: &str,
+    source_len: usize,
+    resolved_len: usize,
+) -> Result<(), TypeError> {
+    if source_len == resolved_len {
+        return Ok(());
+    }
+    Err(canonical_signature_consistency_error(
+        id,
+        role,
+        u32::try_from(source_len).ok(),
+        u32::try_from(resolved_len).ok(),
+        format!("{role} count is {source_len} in source but {resolved_len} after resolution"),
+    ))
+}
+
+fn canonical_signature_consistency_error(
+    id: &sigil::resolved::ResolvedId,
+    role: &str,
+    expected_count: Option<u32>,
+    actual_count: Option<u32>,
+    detail: String,
+) -> TypeError {
+    let message = format!(
+        "canonical callable signature for `{}` is inconsistent: {detail}",
+        id.name
+    );
+    TypeError {
+        message: message.clone(),
+        span: id.span.clone(),
+        hint: None,
+        structured: Some(StructuredDiagnostic {
+            reason: TypeDiagnosticReason::CallableSignatureMetadataMismatch,
+            origin: DiagnosticOrigin::Declaration,
+            data: DiagnosticData::CallableSignature(CallableSignatureData {
+                callable: id.name.clone(),
+                role: role.into(),
+                expected_count,
+                actual_count,
+                detail,
+            }),
+            primary: SourceFact::untyped(SourceRole::Declaration, SourceId(0), id.span.clone()),
+            related: Vec::new(),
+            remediation: None,
+        }),
+    }
+}
+
+pub(super) fn missing_canonical_callable_signature(
+    id: &sigil::resolved::ResolvedId,
+    span: &Span,
+) -> TypeError {
+    let detail = "registered callable has no canonical signature".to_string();
+    let message = format!(
+        "canonical callable signature for `{}` is missing from the registry",
+        id.name
+    );
+    TypeError {
+        message,
+        span: span.clone(),
+        hint: None,
+        structured: Some(StructuredDiagnostic {
+            reason: TypeDiagnosticReason::CallableSignatureMetadataMismatch,
+            origin: DiagnosticOrigin::Call,
+            data: DiagnosticData::CallableSignature(CallableSignatureData {
+                callable: id.name.clone(),
+                role: "registry".into(),
+                expected_count: None,
+                actual_count: None,
+                detail,
+            }),
+            primary: SourceFact::untyped(SourceRole::CallTarget, SourceId(0), span.clone()),
+            related: Vec::new(),
+            remediation: None,
+        }),
     }
 }
 
@@ -741,4 +863,42 @@ fn normalize_surface_type(ty: &str, variables: &mut HashMap<String, String>) -> 
         normalized.push_str(canonical);
     }
     normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn resolved_id() -> sigil::resolved::ResolvedId {
+        sigil::resolved::ResolvedId {
+            name: "sample".into(),
+            qualified_name: None,
+            unique_id: 1,
+            compiler_generated: false,
+            symbol_info: None,
+            span: Span { start: 4, end: 10 },
+        }
+    }
+
+    #[test]
+    fn canonical_role_validation_rejects_truncated_resolved_lists() {
+        let error = validate_canonical_role_list(&resolved_id(), "value parameter", 2, 1)
+            .expect_err("role list length drift must fail closed");
+        assert_eq!(
+            error.reason(),
+            Some(TypeDiagnosticReason::CallableSignatureMetadataMismatch)
+        );
+        assert!(error.message.contains("2 in source but 1 after resolution"));
+    }
+
+    #[test]
+    fn canonical_role_validation_rejects_non_contiguous_ordinals() {
+        let error = validate_return_type_argument_ordinals(&resolved_id(), [0, 2])
+            .expect_err("ordinal drift must fail closed");
+        assert_eq!(
+            error.reason(),
+            Some(TypeDiagnosticReason::CallableSignatureMetadataMismatch)
+        );
+        assert!(error.message.contains("ordinal 2 appears at position 1"));
+    }
 }

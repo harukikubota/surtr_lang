@@ -1,4 +1,8 @@
 use super::*;
+use diagnostics::{
+    DiagnosticData, DiagnosticOrigin, Remediation, ReturnTypeArgumentData, SourceFact, SourceId,
+    SourceRole, StructuredDiagnostic, TypeDiagnosticReason,
+};
 
 impl Checker {
     pub(super) fn specialize_program(
@@ -84,8 +88,183 @@ impl Checker {
                 ),
             });
         }
+        if let Some((callable, ordinal, unresolved, span)) = rewritten
+            .iter()
+            .find_map(|node| self.first_ambiguous_return_type_argument_call(node, &HashSet::new()))
+        {
+            let message = format!("return type arguments for `{callable}` cannot be inferred");
+            let help = format!("Provide an expected result type for `{callable}`.");
+            return Err(TypeError {
+                message,
+                span: span.clone(),
+                hint: Some(help.clone()),
+                structured: Some(StructuredDiagnostic {
+                    reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument,
+                    origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
+                    data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+                        callable,
+                        ordinal,
+                        expected_type: "concrete return type argument".into(),
+                        actual_type: unresolved.clone(),
+                    }),
+                    primary: SourceFact::typed(
+                        SourceRole::ReturnTypeArgument,
+                        SourceId(0),
+                        span,
+                        unresolved,
+                    ),
+                    related: Vec::new(),
+                    remediation: Some(Remediation::Help { text: help }),
+                }),
+            });
+        }
         self.specialization_fun_idxs = specialization_fun_idxs;
         Ok(rewritten)
+    }
+
+    fn first_ambiguous_return_type_argument_call(
+        &self,
+        node: &TypedNode,
+        allowed_vars: &HashSet<u32>,
+    ) -> Option<(String, u32, String, Span)> {
+        if let TypedInner::App(func, _) = &node.node {
+            if let TypedInner::Var(id) = &func.node {
+                // Compiler-generated process helpers carry synthetic generic
+                // signatures whose variables are resolved by their lowering
+                // path rather than by source-level return-type inference.
+                if !id.compiler_generated {
+                    if let Some(signature) = self.callable_signatures.get(&id.unique_id) {
+                        if let Some(argument) = signature.return_type_arguments.first() {
+                            let resolved = self.resolve_ty(&node.ty);
+                            let mut unresolved = Vec::new();
+                            Self::collect_ty_vars(&resolved, &mut unresolved);
+                            let result_can_receive_a_later_call_witness = matches!(
+                                &resolved,
+                                Ty::Func(..) | Ty::BuiltinFunc { .. } | Ty::UserFunc { .. }
+                            );
+                            if !result_can_receive_a_later_call_witness
+                                && unresolved.iter().any(|var| !allowed_vars.contains(var))
+                            {
+                                return Some((
+                                    id.name.clone(),
+                                    argument.ordinal,
+                                    self.diagnostic_ty_name(&resolved),
+                                    node.span.clone(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let visit =
+            |child: &TypedNode| self.first_ambiguous_return_type_argument_call(child, allowed_vars);
+        match &node.node {
+            TypedInner::App(func, args)
+            | TypedInner::InjectCall(func, args)
+            | TypedInner::Capture(func, args) => {
+                visit(func).or_else(|| args.iter().find_map(visit))
+            }
+            TypedInner::TraitCall { args, .. }
+            | TypedInner::ListLiteral(args)
+            | TypedInner::TupleLiteral(args)
+            | TypedInner::StructLit(_, args)
+            | TypedInner::ConstructorCall(_, args) => args.iter().find_map(visit),
+            TypedInner::Block(stmts) => stmts.iter().find_map(visit),
+            TypedInner::Bind(_, rhs)
+            | TypedInner::SafeBind(_, rhs)
+            | TypedInner::Semi(rhs)
+            | TypedInner::EagerBoundary(rhs)
+            | TypedInner::FieldAccess(rhs, _) => visit(rhs),
+            TypedInner::BinOp(_, left, right)
+            | TypedInner::Pipe(left, right)
+            | TypedInner::Compose(_, left, right)
+            | TypedInner::ListCons(left, right)
+            | TypedInner::Assert(left, right)
+            | TypedInner::MapErr(left, right)
+            | TypedInner::Cause(left, right) => visit(left).or_else(|| visit(right)),
+            TypedInner::If(cond, then_branch, else_branch) => visit(cond)
+                .or_else(|| visit(then_branch))
+                .or_else(|| else_branch.as_deref().and_then(visit)),
+            TypedInner::Ensure(first, second, third)
+            | TypedInner::RecoverKind(first, second, third) => visit(first)
+                .or_else(|| visit(second))
+                .or_else(|| visit(third)),
+            TypedInner::Match(scrutinee, arms) => visit(scrutinee).or_else(|| {
+                arms.iter().find_map(|arm| {
+                    arm.guard
+                        .as_ref()
+                        .and_then(visit)
+                        .or_else(|| visit(&arm.body))
+                })
+            }),
+            TypedInner::InterpolatedStr(parts) => parts.iter().find_map(|part| match part {
+                TypedInterpolatedPart::Text(_) => None,
+                TypedInterpolatedPart::Expr(expr) => visit(expr),
+            }),
+            TypedInner::Dbg(args) => args.iter().find_map(|arg| visit(&arg.expr)),
+            TypedInner::HashMapLiteral(entries) => entries
+                .iter()
+                .find_map(|(key, value)| visit(key).or_else(|| visit(value))),
+            TypedInner::SupervisorSpawn { init, .. }
+            | TypedInner::FacetView { source: init, .. } => visit(init),
+            TypedInner::SupervisorAdopt { pid, .. } => visit(pid),
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
+                visit(init).or_else(|| visit(strategy))
+            }
+            TypedInner::FacetSet { source, value, .. } => visit(source).or_else(|| visit(value)),
+            TypedInner::FacetOver {
+                source, update_fun, ..
+            } => visit(source).or_else(|| visit(update_fun)),
+            TypedInner::Def(_, _, return_type_arguments, params, ret_ty, _, body, _) => {
+                let mut allowed = allowed_vars.clone();
+                for argument in return_type_arguments {
+                    self.extend_allowed_vars(&argument.ty, &mut allowed);
+                }
+                for param in params {
+                    self.extend_allowed_vars(&param.ty, &mut allowed);
+                }
+                self.extend_allowed_vars(ret_ty, &mut allowed);
+                self.first_ambiguous_return_type_argument_call(body, &allowed)
+            }
+            TypedInner::ExtractorDef(_, _, type_params, param, ret_ty, body, _) => {
+                let mut allowed = allowed_vars.clone();
+                for type_param in type_params {
+                    allowed.insert(type_param.ty_var);
+                }
+                self.extend_allowed_vars(&param.ty, &mut allowed);
+                self.extend_allowed_vars(ret_ty, &mut allowed);
+                self.first_ambiguous_return_type_argument_call(body, &allowed)
+            }
+            TypedInner::DeferrorDef(_, _, _, params, body) => {
+                let mut allowed = allowed_vars.clone();
+                for parameter in params {
+                    self.extend_allowed_vars(&parameter.ty, &mut allowed);
+                }
+                self.first_ambiguous_return_type_argument_call(body, &allowed)
+            }
+            TypedInner::Closure(_, _, body) => visit(body),
+            TypedInner::Lit(_)
+            | TypedInner::Var(_)
+            | TypedInner::ListNil
+            | TypedInner::ProcessContextHandler { .. }
+            | TypedInner::SupervisorStatus { .. }
+            | TypedInner::FacetPath(_)
+            | TypedInner::PendingFacetPath(_)
+            | TypedInner::EnumDef(..)
+            | TypedInner::TraitDef(..)
+            | TypedInner::TraitImplDef(..)
+            | TypedInner::BuiltinExtractorDecl(..)
+            | TypedInner::StructDef(..)
+            | TypedInner::RecordDef(..) => None,
+        }
+    }
+
+    fn extend_allowed_vars(&self, ty: &Ty, allowed: &mut HashSet<u32>) {
+        let mut vars = Vec::new();
+        Self::collect_ty_vars(&self.resolve_ty(ty), &mut vars);
+        allowed.extend(vars);
     }
 
     fn rewrite_specializations_in_node(
@@ -1306,6 +1485,19 @@ impl Checker {
                 });
             }
         };
+
+        if param_tys.len() != args.len() {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Cannot specialize call: expected {} argument(s), got {}",
+                    param_tys.len(),
+                    args.len()
+                ),
+                span: def.span.clone(),
+                hint: None,
+            });
+        }
 
         for (expected, arg) in param_tys.iter().zip(args.iter()) {
             self.match_specialization_ty(expected, &arg.ty, bound_tyvars, &mut mapping);
@@ -3058,6 +3250,26 @@ mod tests {
             "incremental reuse should not emit another specialization def"
         );
         assert_eq!(app_fun_idxs(&second), first_generated);
+    }
+
+    #[test]
+    fn specialization_mapping_rejects_argument_count_mismatch_before_zip() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let def = generic_identity_def(
+            20,
+            resolved_id("id", Some("Global::id"), 10),
+            resolved_id("x", None, 11),
+            1,
+        );
+
+        let err = checker
+            .infer_specialization_mapping(&def, &[], &[1])
+            .expect_err("specialization must not infer from a partial argument zip");
+
+        assert_eq!(
+            err.message,
+            "Cannot specialize call: expected 1 argument(s), got 0"
+        );
     }
 
     #[test]

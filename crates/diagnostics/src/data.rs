@@ -20,6 +20,7 @@ pub enum TypeDiagnosticReason {
     AnnotationTypeMismatch,
     NotCallable,
     CallableShapeMismatch,
+    CallableSignatureMetadataMismatch,
     ReturnTypeArgumentArityMismatch,
     ReturnTypeArgumentMismatch,
     AmbiguousReturnTypeArgument,
@@ -59,6 +60,7 @@ impl TypeDiagnosticReason {
             Self::AnnotationTypeMismatch => "AnnotationTypeMismatch",
             Self::NotCallable => "NotCallable",
             Self::CallableShapeMismatch => "CallableShapeMismatch",
+            Self::CallableSignatureMetadataMismatch => "CallableSignatureMetadataMismatch",
             Self::ReturnTypeArgumentArityMismatch => "ReturnTypeArgumentArityMismatch",
             Self::ReturnTypeArgumentMismatch => "ReturnTypeArgumentMismatch",
             Self::AmbiguousReturnTypeArgument => "AmbiguousReturnTypeArgument",
@@ -202,6 +204,15 @@ pub struct ReturnTypeArgumentData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CallableSignatureData {
+    pub callable: String,
+    pub role: String,
+    pub expected_count: Option<u32>,
+    pub actual_count: Option<u32>,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConstraintSubjectData {
     pub subject: String,
     pub constraint: String,
@@ -219,6 +230,19 @@ pub struct TraitDispatchData {
     pub trait_name: String,
     pub method: String,
     pub subject_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateFailureData {
+    pub candidate_type: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CandidateSelectionData {
+    pub trait_name: String,
+    pub method: String,
+    pub failures: Vec<CandidateFailureData>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -256,9 +280,11 @@ pub struct RuntimeData {
 pub enum DiagnosticData {
     ArgumentRelation(ArgumentRelationData),
     ReturnTypeArgument(ReturnTypeArgumentData),
+    CallableSignature(CallableSignatureData),
     ConstraintSubject(ConstraintSubjectData),
     TraitObligation(TraitObligationData),
     TraitDispatch(TraitDispatchData),
+    CandidateSelection(CandidateSelectionData),
     TypeConstructorCarrier(TypeConstructorCarrierData),
     BranchAssertion(BranchAssertionData),
     SafeBindRelation(SafeBindRelationData),
@@ -274,9 +300,11 @@ impl DiagnosticData {
         let (kind, payload) = match self {
             Self::ArgumentRelation(value) => ("ArgumentRelation", serde_json::to_value(value)),
             Self::ReturnTypeArgument(value) => ("ReturnTypeArgument", serde_json::to_value(value)),
+            Self::CallableSignature(value) => ("CallableSignature", serde_json::to_value(value)),
             Self::ConstraintSubject(value) => ("ConstraintSubject", serde_json::to_value(value)),
             Self::TraitObligation(value) => ("TraitObligation", serde_json::to_value(value)),
             Self::TraitDispatch(value) => ("TraitDispatch", serde_json::to_value(value)),
+            Self::CandidateSelection(value) => ("CandidateSelection", serde_json::to_value(value)),
             Self::TypeConstructorCarrier(value) => {
                 ("TypeConstructorCarrier", serde_json::to_value(value))
             }

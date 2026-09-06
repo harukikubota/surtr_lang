@@ -31,12 +31,23 @@ impl Checker {
             AstTy::Named(_, name) | AstTy::Generic(_, name, _) => Self::surface_name(name),
             _ => return None,
         };
-        self.traits
+        self.unique_constructor_trait_key(name)
+    }
+
+    fn unique_constructor_trait_key(&self, name: &str) -> Option<String> {
+        let mut candidates = self
+            .traits
             .iter()
-            .find(|(_, info)| {
-                !info.constructor_slots.is_empty() && Self::surface_name(&info.id.name) == name
+            .filter_map(|(key, info)| {
+                (!info.constructor_slots.is_empty()
+                    && (Self::surface_name(key) == name
+                        || Self::surface_name(&info.id.name) == name))
+                    .then_some(key.clone())
             })
-            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        candidates.sort();
+        candidates.dedup();
+        (candidates.len() == 1).then(|| candidates.remove(0))
     }
 
     // A constructor-trait application is encoded as `SelfApp(Hole, witness,
@@ -99,7 +110,7 @@ impl Checker {
     pub(super) fn constructor_application_slots_for_witness(
         &mut self,
         witness: &Ty,
-        expected_slot_count: usize,
+        _expected_slot_count: usize,
         concrete_ty: &Ty,
     ) -> Option<Vec<Ty>> {
         if let Ty::Var(var) = witness {
@@ -107,27 +118,7 @@ impl Checker {
                 return self.constructor_application_slots_for_trait(&trait_key, concrete_ty);
             }
         }
-
-        let mut trait_keys = self
-            .traits
-            .iter()
-            .filter_map(|(key, info)| {
-                (info.constructor_slots.len() == expected_slot_count).then_some(key.clone())
-            })
-            .collect::<Vec<_>>();
-        trait_keys.sort();
-        let mut selected: Option<Vec<Ty>> = None;
-        for trait_key in trait_keys {
-            let Some(slots) = self.constructor_application_slots_for_trait(&trait_key, concrete_ty)
-            else {
-                continue;
-            };
-            if selected.as_ref().is_some_and(|existing| existing != &slots) {
-                return None;
-            }
-            selected = Some(slots);
-        }
-        selected
+        None
     }
 
     fn apply_constructor_application(
@@ -158,9 +149,8 @@ impl Checker {
                 Some(Ty::Result(Box::new(slots[0].clone()), err.clone()))
             }
             Ty::Enum(name, args) => {
-                let positions = constructor_positions
-                    .filter(|positions| positions.len() == slots.len())
-                    .or_else(|| (args.len() == slots.len()).then(|| (0..args.len()).collect()))?;
+                let positions =
+                    constructor_positions.filter(|positions| positions.len() == slots.len())?;
                 let mut applied = args.clone();
                 for (position, slot) in positions.into_iter().zip(slots) {
                     *applied.get_mut(position)? = slot.clone();
@@ -1207,15 +1197,7 @@ impl Checker {
                 {
                     return Ok(alias);
                 }
-                if let Some(trait_key) = self
-                    .traits
-                    .iter()
-                    .find(|(key, info)| {
-                        !info.constructor_slots.is_empty()
-                            && (Self::surface_name(key) == Self::surface_name(name)
-                                || Self::surface_name(&info.id.name) == Self::surface_name(name))
-                    })
-                    .map(|(key, _)| key.clone())
+                if let Some(trait_key) = self.unique_constructor_trait_key(Self::surface_name(name))
                 {
                     if !matches!(
                         context,
@@ -1249,16 +1231,14 @@ impl Checker {
                 {
                     return Ok(alias);
                 }
-                if let Some((trait_key, constructor_slot_count)) = self
-                    .traits
-                    .iter()
-                    .find(|(key, info)| {
-                        !info.constructor_slots.is_empty()
-                            && (Self::surface_name(key) == Self::surface_name(name)
-                                || Self::surface_name(&info.id.name) == Self::surface_name(name))
-                    })
-                    .map(|(key, info)| (key.clone(), info.constructor_slots.len()))
+                if let Some(trait_key) = self.unique_constructor_trait_key(Self::surface_name(name))
                 {
+                    let constructor_slot_count = self
+                        .traits
+                        .get(&trait_key)
+                        .expect("selected constructor trait must remain registered")
+                        .constructor_slots
+                        .len();
                     if args.len() != constructor_slot_count {
                         return Err(TypeError {
                             structured: None,
@@ -3515,7 +3495,55 @@ impl Checker {
 
 #[cfg(test)]
 mod tests {
-    use super::Checker;
+    use super::*;
+
+    fn constructor_trait(name: &str, qualified_name: &str, unique_id: u32) -> TraitInfo {
+        TraitInfo {
+            id: ResolvedId {
+                name: name.into(),
+                qualified_name: Some(qualified_name.into()),
+                unique_id,
+                compiler_generated: false,
+                symbol_info: None,
+                span: Span { start: 0, end: 1 },
+            },
+            type_params: Vec::new(),
+            where_clause: None,
+            constructor_slots: vec!["$A".into()],
+            constructor_root: Some(qualified_name.into()),
+            parents: Vec::new(),
+            methods: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn duplicate_constructor_trait_short_names_are_not_selected_by_registration_order() {
+        for reversed in [false, true] {
+            let mut checker = Checker::new(TypecheckContext::default());
+            let entries = [
+                (
+                    "Left::Functor",
+                    constructor_trait("Functor", "Left::Functor", 71_001),
+                ),
+                (
+                    "Right::Functor",
+                    constructor_trait("Functor", "Right::Functor", 71_002),
+                ),
+            ];
+            let order: &[usize] = if reversed { &[1, 0] } else { &[0, 1] };
+            for index in order {
+                let (key, info) = &entries[*index];
+                checker.traits.insert((*key).into(), info.clone());
+            }
+
+            assert!(checker.unique_constructor_trait_key("Functor").is_none());
+            assert_eq!(
+                checker.unique_constructor_trait_key("Left::Functor"),
+                Some("Left::Functor".into())
+            );
+            assert!(checker.trait_key_by_short_name("Functor").is_none());
+        }
+    }
 
     #[test]
     fn clause_block_surface_type_query_uses_builtin_type_usage_policy() {

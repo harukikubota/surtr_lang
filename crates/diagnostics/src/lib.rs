@@ -17,10 +17,11 @@ mod typecheck;
 mod tests;
 
 pub use data::{
-    ArgumentRelationData, BranchAssertionData, ConstraintSubjectData, DeclarationIdentity,
-    DiagnosticData, DiagnosticOrigin, Remediation, ReturnTypeArgumentData, RuntimeData,
-    SafeBindRelationData, SourceFact, SourceRole, StructuredDiagnostic, TraitDispatchData,
-    TraitObligationData, TypeConstructorCarrierData, TypeDiagnosticReason,
+    ArgumentRelationData, BranchAssertionData, CallableSignatureData, CandidateFailureData,
+    CandidateSelectionData, ConstraintSubjectData, DeclarationIdentity, DiagnosticData,
+    DiagnosticOrigin, Remediation, ReturnTypeArgumentData, RuntimeData, SafeBindRelationData,
+    SourceFact, SourceRole, StructuredDiagnostic, TraitDispatchData, TraitObligationData,
+    TypeConstructorCarrierData, TypeDiagnosticReason,
 };
 pub use debug_render::{render_debug_report, DebugLabel};
 pub use parse::parse_error_spec;

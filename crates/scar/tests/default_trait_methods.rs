@@ -222,6 +222,25 @@ fn canonical_builtin_signature_rejects_parameter_name_drift() {
 }
 
 #[test]
+fn builtin_declaration_rejects_an_unregistered_owner_alias() {
+    let source = r#"@builtin type String
+impl String {
+  @builtin def print(a: String) -> Unit
+}"#;
+    let ast = spire::parse_with_context(
+        source,
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("standard surface should parse");
+    let err = sigil::resolve(ast)
+        .expect_err("a runtime builtin name must not authorize an arbitrary owner");
+    assert!(
+        err.message.contains("Unknown builtin declaration"),
+        "{err:?}"
+    );
+}
+
+#[test]
 fn checked_generic_constructor_signature_replaces_predeclared_type_variables() {
     let typed = typecheck_without_std_prelude(
         r#"defstruct Box<$A> { value: $A }

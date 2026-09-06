@@ -1,0 +1,2 @@
+phase: typecheck
+contains: return type arguments for `make` cannot be inferred
