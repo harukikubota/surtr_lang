@@ -536,6 +536,12 @@ Trait method の identity は `(trait_id, method_name)` であり、target inher
 default/inherited method table、Scar typed dispatch、Forge function index はこの qualified identity を保持する。
 diamond inheritance の同名 method は qualified call で区別し、bare alias の衝突は import 規則で処理する。
 
+Trait impl の method body で、その method 自身の非修飾名を参照した場合も、同じ `(trait_id, method_name)`
+を参照する。現在の impl function identity に固定せず、各呼び出しの receiver、Trait arguments、ReturnTypeArguments
+から通常の static dispatch を解決する。そのため、同じ impl への再帰と、別の receiver / 変換先への再ディスパッチを
+同じ経路で扱う。値引数の型不一致を契機に別経路へ再試行してはならない。通常の lexical shadowing と method visibility
+は維持し、この body 内の束縛によって private method を外部へ公開しない。
+
 diagnostic は source generic name と declaration span を保持する。内部 ID を `$6257` のように見せず、
 full obligation に必要な trait target を示す。位置規則は note、bare capability への書換えは help に置く。
 compile-fail contract は phase、error kind/message、primary/related span を安定させ、宣言・file・map iteration順に依存させない。

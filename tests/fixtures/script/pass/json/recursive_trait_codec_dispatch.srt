@@ -1,0 +1,44 @@
+defrecord Envelope(value: Int)
+defrecord Countdown(remaining: Int)
+defstruct Wrapped<$A> { value: $A }
+impl Wrapped { def new(value: $A) -> Wrapped<$A> { Wrapped { value: value } } }
+
+impl Encode<JsonValue> for Envelope {
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
+    encode::<JsonValue>(self.value)
+  }
+}
+impl Encode<String> for Envelope {
+  def encode::<String>(self: Self) -> Result<String, Error> {
+    json =? encode::<JsonValue>(self)
+    Json::encode(json)
+  }
+}
+impl Encode<JsonValue> for Wrapped<$A> where $A: Encode {
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
+    self.value |> encode::<JsonValue>
+  }
+}
+impl Encode<JsonValue> for Countdown {
+  def encode::<JsonValue>(self: Self) -> Result<JsonValue, Error> {
+    if(self.remaining == 0,
+      encode::<JsonValue>(0),
+      encode::<JsonValue>(Countdown(self.remaining - 1)))
+  }
+}
+impl Decode<Envelope> for JsonValue {
+  def decode::<Envelope>(self: Self) -> Result<Envelope, Error> {
+    value =? decode::<Int>(self)
+    Ok(Envelope(value))
+  }
+}
+text =? Encode::encode::<String>(Envelope(7))
+print(text)
+wrapped =? Encode::encode::<JsonValue>(Wrapped::new(Envelope(8)))
+wrapped_text =? Json::encode(wrapped)
+print(wrapped_text)
+recursive =? Encode::encode::<JsonValue>(Countdown(3))
+recursive_text =? Json::encode(recursive)
+print(recursive_text)
+decoded =? Decode::decode::<Envelope>(JsonValue::Int(9))
+print("#{decoded.value}")

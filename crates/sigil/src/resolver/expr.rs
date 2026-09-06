@@ -3236,7 +3236,18 @@ impl Resolver {
                         .copied()
                         .unwrap_or_else(|| self.scope.reserve_id());
                     let mut method_scope = self.scope.clone();
-                    method_scope.define_with_id(&method_name, method_uid);
+                    // A trait method's bare self-name denotes its contract,
+                    // just as in a default body. The call's types select the
+                    // implementation; binding the concrete method here would
+                    // prevent nested calls from selecting another receiver or
+                    // return type argument. Parameters/local bindings can still
+                    // shadow this lexical alias below.
+                    let contract_name =
+                        trait_method_qualified_name(&qualified_trait_name, &method_name);
+                    if let Some(contract_uid) = self.declaration_uids.get(&contract_name) {
+                        method_scope.define_with_id(&method_name, *contract_uid);
+                    }
+                    // Only declared trait members introduce a self-name alias.
                     let mut method_resolver = Resolver::with_scope(method_scope);
                     method_resolver.declaration_uids = self.declaration_uids.clone();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();

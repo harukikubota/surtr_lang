@@ -7194,3 +7194,205 @@ def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> {
     assert_eq!(return_type_argument.ordinal, 0);
     assert_eq!(return_type_argument.span, *type_span);
 }
+
+fn trait_impl_self_call_id(body: &Resolved) -> &ResolvedId {
+    let Resolved::Block(_, expressions) = body else {
+        panic!("method block")
+    };
+    let Resolved::App(_, target, _) = expressions.last().expect("call expression") else {
+        panic!("method call")
+    };
+    let target = match target.as_ref() {
+        Resolved::ReturnTypeArgumentApply(_, target, _) => target.as_ref(),
+        target => target,
+    };
+    let Resolved::Var(_, id) = target else {
+        panic!("named call")
+    };
+    id
+}
+
+#[test]
+fn trait_impl_self_call_resolves_contract_instead_of_concrete_method() {
+    let resolved = parse_and_resolve(
+        r#"
+deftrait Convert<$To> { def convert::<$To>(self: Self) -> $To }
+impl Convert<Int> for String {
+  def convert::<Int>(self: Self) -> Int { convert::<Int>(1) }
+}
+"#,
+    )
+    .expect("trait implementation resolves");
+    let Resolved::TraitDef(_, _, _, _, contract, _) = &resolved[0] else {
+        panic!("trait")
+    };
+    let Resolved::TraitImplDef(_, _, _, _, _, methods) = &resolved[1] else {
+        panic!("impl")
+    };
+    let callee = trait_impl_self_call_id(&methods[0].body);
+    assert_eq!(callee.unique_id, contract[0].id.unique_id);
+    assert_eq!(callee.qualified_name, contract[0].id.qualified_name);
+    assert_ne!(callee.unique_id, methods[0].function_id.unique_id);
+}
+
+#[test]
+fn trait_impl_self_call_respects_parameter_shadowing() {
+    let resolved = parse_and_resolve(
+        r#"
+deftrait Apply { def apply(self: Self, apply: (Int -> Int)) -> Int }
+impl Apply for String {
+  def apply(self: Self, apply: (Int -> Int)) -> Int { apply(1) }
+}
+"#,
+    )
+    .expect("local parameter shadows method alias");
+    let Resolved::TraitImplDef(_, _, _, _, _, methods) = &resolved[1] else {
+        panic!("impl")
+    };
+    let callee = trait_impl_self_call_id(&methods[0].body);
+    assert_eq!(
+        callee.unique_id,
+        methods[0].value_parameters[1].id.unique_id
+    );
+    assert!(callee.qualified_name.is_none());
+}
+
+#[test]
+fn trait_impl_self_call_keeps_private_contract_identity() {
+    let resolved = parse_and_resolve(
+        r#"
+deftrait Hidden {
+  def expose(self: Self) -> Int { hidden(self) }
+  defp hidden(self: Self) -> Int { hidden(self) }
+}
+impl Hidden for Int {
+  defp hidden(self: Self) -> Int { hidden(self) }
+}
+"#,
+    )
+    .expect("private helper stays available in its implementation");
+    let Resolved::TraitDef(_, _, _, _, contract, _) = &resolved[0] else {
+        panic!("trait")
+    };
+    let Resolved::TraitImplDef(_, _, _, _, _, methods) = &resolved[1] else {
+        panic!("impl")
+    };
+    let callee = trait_impl_self_call_id(&methods[0].body);
+    assert_eq!(contract[1].attrs.visibility, Visibility::Private);
+    assert_eq!(methods[0].attrs.visibility, Visibility::Private);
+    assert_eq!(callee.unique_id, contract[1].id.unique_id);
+}
+
+#[test]
+fn trait_impl_self_call_does_not_change_function_or_inherent_recursion() {
+    let resolved = parse_and_resolve(
+        r#"
+def repeat(value: Int) -> Int { repeat(value) }
+impl Int { def bounce(self: Self) -> Int { Int::bounce(self) } }
+"#,
+    )
+    .expect("ordinary and inherent recursion resolve");
+    let definitions = resolved
+        .iter()
+        .filter_map(|node| match node {
+            Resolved::Def(_, id, _, _, _, _, body, _) => Some((id, body)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(definitions.len(), 2);
+    for (id, body) in definitions {
+        assert_eq!(trait_impl_self_call_id(body).unique_id, id.unique_id);
+    }
+}
+
+#[test]
+fn trait_impl_self_call_overrides_unrelated_autoimport_alias() {
+    let modules = vec![vec![staged_module(
+        "Other",
+        parse_module_ast(
+            r#"
+@autoimport
+deftrait Other { def convert(self: Self) -> Int }
+"#,
+            "Other",
+        ),
+    )]];
+    let resolved = resolve_user_with_modules(
+        r#"
+deftrait Convert { def convert(self: Self) -> Int }
+impl Convert for String { def convert(self: Self) -> Int { convert(1) } }
+"#,
+        &modules,
+    )
+    .expect("own trait method wins over unrelated file alias");
+    let contract = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, _, _, methods, _) if id.name.ends_with("Convert") => {
+                Some(&methods[0].id)
+            }
+            _ => None,
+        })
+        .expect("own contract");
+    let method = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, id, _, _, _, methods) if id.name.ends_with("Convert") => {
+                Some(&methods[0])
+            }
+            _ => None,
+        })
+        .expect("own implementation");
+    assert_eq!(
+        trait_impl_self_call_id(&method.body).unique_id,
+        contract.unique_id
+    );
+}
+
+#[test]
+fn trait_impl_self_call_does_not_expose_private_contract_externally() {
+    let modules = vec![vec![staged_module(
+        "Secret",
+        parse_module_ast(
+            r#"
+deftrait Hidden {
+  def expose(self: Self) -> Int { hidden(self) }
+  defp hidden(self: Self) -> Int { 0 }
+}
+"#,
+            "Secret",
+        ),
+    )]];
+    let error = resolve_user_with_modules("Secret::Hidden::hidden(1)", &modules)
+        .expect_err("private trait helper cannot be called from outside");
+    assert!(error.message.contains("private"), "{error:?}");
+}
+
+#[test]
+fn trait_impl_self_call_respects_local_callable_shadowing() {
+    let resolved = parse_and_resolve(
+        r#"
+deftrait Apply { def apply(self: Self) -> Int }
+impl Apply for String {
+  def apply(self: Self) -> Int {
+    apply = {|value| value}
+    apply(1)
+  }
+}
+"#,
+    )
+    .expect("local callable shadows method alias");
+    let Resolved::TraitImplDef(_, _, _, _, _, methods) = &resolved[1] else {
+        panic!("impl")
+    };
+    let Resolved::Block(_, expressions) = methods[0].body.as_ref() else {
+        panic!("method block")
+    };
+    let Resolved::Bind(_, ResolvedPattern::Var(id), _) = &expressions[0] else {
+        panic!("local callable")
+    };
+    assert_eq!(
+        trait_impl_self_call_id(&methods[0].body).unique_id,
+        id.unique_id
+    );
+}
