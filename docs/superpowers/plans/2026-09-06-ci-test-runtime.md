@@ -104,3 +104,27 @@
 - [x] Run `rtk cargo nextest run -p scar` and `rtk cargo nextest run --profile ci -p xldr --test repl_core`.
 - [x] Clear only the task's test caches, then run `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace` once from the worktree.
 - [x] Report test totals, timeouts, wall-clock, targeted performance measurements, changed files, and any intentionally unmodified buckets.
+
+### Task 6: Reuse the default REPL bootstrap state
+
+**Files:**
+- Modify: `crates/eldr/src/interactive.rs`
+- Modify: `crates/eldr/src/vm.rs`
+- Modify: `crates/xldr/src/repl/logic/core.rs`
+- Modify: `crates/xldr/src/repl/logic/session.rs`
+- Modify: `crates/xldr/tests/repl_core.rs`
+- Modify: `docs/dev/テスト方針.md`
+- Modify: `tests/README.md`
+
+**Interfaces:**
+- Consumes: the existing default stdlib semantic snapshot and preload compiler.
+- Produces: one immutable default REPL bootstrap state per process and an isolated VM/session clone per engine.
+
+- [x] Add a RED test proving two `ReplEngine::new()` calls rebuild the default bootstrap state at most once; confirm the old path reports two builds.
+- [x] Cache only Send/Sync compiler state and bytecode globally; create each non-Send VM independently because runtime list values use `Rc`.
+- [x] Add an engine-isolation regression for live bindings.
+- [x] Remove the replaced source bootstrap and its empty-VM helper; move parse/resolve/typecheck rejection tests to the current module-preload boundary.
+- [x] Recreate eager runtime boot state independently for every VM restored from the shared bytecode.
+- [x] Make `.eldr` scope restoration reject stage-layout or compiled stdlib prefix mismatch without source fallback.
+- [x] Re-measure the 137 semantic cases and reduce the runner to 8 buckets plus one inventory test after 9/9 pass in 7.180s under the unchanged 15s timeout.
+- [x] Re-run the CI workspace gate: 1,936 passed in 63.570s nextest / 67.92s wall-clock.

@@ -3838,10 +3838,15 @@ impl VM {
             .and_then(|frame| frame.locals.get(slot as usize).cloned())
     }
 
+    /// Validate the loaded image and eagerly initialise its runtime boot plan.
+    pub(crate) fn boot_runtime(&mut self) -> Result<(), RuntimeError> {
+        self.verify_loaded_bytecode()?;
+        self.ensure_root_supervisor_booted()
+    }
+
     /// Execute the loaded bytecode (`run` mode expects `Halt`).
     pub fn run(&mut self) -> Result<(), RuntimeError> {
-        self.verify_loaded_bytecode()?;
-        self.ensure_root_supervisor_booted()?;
+        self.boot_runtime()?;
         self.last_result = None;
         self.test_scope.clear();
         self.test_events.clear();

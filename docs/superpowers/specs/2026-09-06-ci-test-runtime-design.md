@@ -66,6 +66,23 @@ Split the two timed-out multi-contract cases before bucketing:
 
 No assertion is removed and the overall timeout stays at 15 seconds.
 
+### Snapshot-backed REPL construction follow-up
+
+After the 64-bucket recovery landed, measurement showed that
+`ReplEngine::new()` still parsed, resolved, type-checked, generated, and
+executed the default stdlib for every semantic case. Build one immutable
+default REPL bootstrap state per process through the existing semantic
+snapshot/preload path instead. The shared state contains sources, Sigil scope,
+Scar checkpoint, bytecode, and metadata; each engine creates a fresh VM,
+executes its runtime boot plan, and clones its mutable session state.
+
+The replaced source-bootstrap path is removed. `.eldr` scope restoration uses
+the same bootstrap state and rejects a stdlib stage-layout or compiled
+function/type/callable/process prefix mismatch instead of falling back to
+reparsing sources. With that construction path, eight round-robin buckets plus
+the inventory test run all 137 cases in 7.180 seconds
+under `profile ci`, so the timeout remains 15 seconds.
+
 ### Clean CI preparation
 
 The `ci` nextest profile enables nextest's setup-script feature and runs one

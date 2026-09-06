@@ -38,7 +38,7 @@ Coverage runner:
   - `language_features.rs` is organized into topic modules under `tests/integration/language_features/`
 - `crates/xldr/tests/repl_core.rs`
   - 137 REPL core semantic cases registered once in a stable source-order table
-  - Runner: 64 round-robin bucket tests (`index % 64`) plus one duplicate-name/function inventory test
+  - Runner: 8 round-robin bucket tests (`index % 8`) plus one duplicate-name/function inventory test
 - `tests/unit/{spire,sigil,scar,forge,eldr}/`
   - Unit-test viewpoints and crate-local notes
 - `tests/profile/stdlib_prewarm.srt`
@@ -70,9 +70,9 @@ Useful env vars:
 
 The `ci` profile builds and lists test binaries, then runs `scripts/ci-stdlib-prewarm.sh` once from the workspace root before starting test processes. The script checks `tests/profile/stdlib_prewarm.srt` and prepares only the default-variant `std.semantic`; it does not prepare the test-enabled `std.test.semantic` or enable the final `.eldr` cache. Keep `SURTR_TEST_CACHE=1` explicit on the CI/full-gate command when that final cache is wanted.
 
-The stdlib semantic cache is content-addressed from the stdlib sources and semantic schema/metadata. A missing, stale, or corrupt entry is ignored and rebuilt through the normal stdlib compile path, so a cache hit is an optimization rather than a correctness condition.
+The stdlib semantic cache is content-addressed from the stdlib sources and semantic schema/metadata. A missing, stale, or corrupt entry is ignored and rebuilt through the normal stdlib compile path, so a cache hit is an optimization rather than a correctness condition. Within each Xldr process, the default REPL bootstrap state restores source/scope/checkpoint/bytecode metadata from that semantic snapshot once. Each `ReplEngine` receives a fresh VM, runs the runtime boot plan independently, and clones session state; mutable runtime state is not shared. `.eldr` restore also validates the compiled stdlib function/type/callable/process prefix before applying that compile-time state.
 
-With a schema-12 `std.semantic` true hit, the Xldr REPL core layout was measured under `profile ci` as 137 semantic cases across 64 buckets plus one inventory test: 65/65 tests passed and the slowest bucket took 11.725s. The smaller measured layouts were rejected under the unchanged 15s timeout: all 16 semantic buckets timed out, and 32 left 11 timeouts; 48 passed once but its 13.164s maximum did not leave the selected margin.
+Before snapshot-backed `ReplEngine` construction, the smallest stable Xldr layout used 64 buckets and took 55.888s for 65/65 tests in a current checkout. After the default bootstrap state became process-local and cloneable, the same 137 semantic cases use 8 buckets plus one inventory test: 9/9 tests passed in 7.180s under `profile ci`, below the unchanged 15s per-test timeout.
 
 Cold run:
 

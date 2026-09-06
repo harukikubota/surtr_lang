@@ -332,7 +332,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
 
 fn run_repl_core_bucket(bucket: usize) {
     for (index, &(name, case)) in REPL_CORE_CASES.iter().enumerate() {
-        if index % 64 == bucket {
+        if index % 8 == bucket {
             eprintln!("repl_core case: {name}");
             case();
         }
@@ -370,62 +370,6 @@ repl_core_bucket!(repl_core_bucket_4, 4);
 repl_core_bucket!(repl_core_bucket_5, 5);
 repl_core_bucket!(repl_core_bucket_6, 6);
 repl_core_bucket!(repl_core_bucket_7, 7);
-repl_core_bucket!(repl_core_bucket_8, 8);
-repl_core_bucket!(repl_core_bucket_9, 9);
-repl_core_bucket!(repl_core_bucket_10, 10);
-repl_core_bucket!(repl_core_bucket_11, 11);
-repl_core_bucket!(repl_core_bucket_12, 12);
-repl_core_bucket!(repl_core_bucket_13, 13);
-repl_core_bucket!(repl_core_bucket_14, 14);
-repl_core_bucket!(repl_core_bucket_15, 15);
-repl_core_bucket!(repl_core_bucket_16, 16);
-repl_core_bucket!(repl_core_bucket_17, 17);
-repl_core_bucket!(repl_core_bucket_18, 18);
-repl_core_bucket!(repl_core_bucket_19, 19);
-repl_core_bucket!(repl_core_bucket_20, 20);
-repl_core_bucket!(repl_core_bucket_21, 21);
-repl_core_bucket!(repl_core_bucket_22, 22);
-repl_core_bucket!(repl_core_bucket_23, 23);
-repl_core_bucket!(repl_core_bucket_24, 24);
-repl_core_bucket!(repl_core_bucket_25, 25);
-repl_core_bucket!(repl_core_bucket_26, 26);
-repl_core_bucket!(repl_core_bucket_27, 27);
-repl_core_bucket!(repl_core_bucket_28, 28);
-repl_core_bucket!(repl_core_bucket_29, 29);
-repl_core_bucket!(repl_core_bucket_30, 30);
-repl_core_bucket!(repl_core_bucket_31, 31);
-repl_core_bucket!(repl_core_bucket_32, 32);
-repl_core_bucket!(repl_core_bucket_33, 33);
-repl_core_bucket!(repl_core_bucket_34, 34);
-repl_core_bucket!(repl_core_bucket_35, 35);
-repl_core_bucket!(repl_core_bucket_36, 36);
-repl_core_bucket!(repl_core_bucket_37, 37);
-repl_core_bucket!(repl_core_bucket_38, 38);
-repl_core_bucket!(repl_core_bucket_39, 39);
-repl_core_bucket!(repl_core_bucket_40, 40);
-repl_core_bucket!(repl_core_bucket_41, 41);
-repl_core_bucket!(repl_core_bucket_42, 42);
-repl_core_bucket!(repl_core_bucket_43, 43);
-repl_core_bucket!(repl_core_bucket_44, 44);
-repl_core_bucket!(repl_core_bucket_45, 45);
-repl_core_bucket!(repl_core_bucket_46, 46);
-repl_core_bucket!(repl_core_bucket_47, 47);
-repl_core_bucket!(repl_core_bucket_48, 48);
-repl_core_bucket!(repl_core_bucket_49, 49);
-repl_core_bucket!(repl_core_bucket_50, 50);
-repl_core_bucket!(repl_core_bucket_51, 51);
-repl_core_bucket!(repl_core_bucket_52, 52);
-repl_core_bucket!(repl_core_bucket_53, 53);
-repl_core_bucket!(repl_core_bucket_54, 54);
-repl_core_bucket!(repl_core_bucket_55, 55);
-repl_core_bucket!(repl_core_bucket_56, 56);
-repl_core_bucket!(repl_core_bucket_57, 57);
-repl_core_bucket!(repl_core_bucket_58, 58);
-repl_core_bucket!(repl_core_bucket_59, 59);
-repl_core_bucket!(repl_core_bucket_60, 60);
-repl_core_bucket!(repl_core_bucket_61, 61);
-repl_core_bucket!(repl_core_bucket_62, 62);
-repl_core_bucket!(repl_core_bucket_63, 63);
 
 fn core_completion_returns_global_candidates_with_details() {
     let mut engine = engine();

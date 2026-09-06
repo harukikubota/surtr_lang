@@ -5,7 +5,11 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::panic;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
+
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use diagnostics::{DiagnosticSpec, SourceId, SourceRegistry};
 use eldr::builtin::inspect_value;
@@ -125,6 +129,19 @@ const REPL_UNRESOLVED_TYPE_HINT: &str =
     "Add a type annotation or use the value in a context that determines the success type.";
 const STAGE_PARSE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
+#[cfg(test)]
+static DEFAULT_REPL_BOOTSTRAP_BUILDS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+thread_local! {
+    static TEST_REPL_RUNTIME_BOOT_CALLS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn record_repl_runtime_boot_call() {
+    #[cfg(test)]
+    TEST_REPL_RUNTIME_BOOT_CALLS.with(|calls| calls.set(calls.get() + 1));
+}
+
 fn duration_to_nanos(elapsed: Duration) -> u64 {
     elapsed.as_nanos().min(u128::from(u64::MAX)) as u64
 }
@@ -196,7 +213,6 @@ struct PreparedScriptPreload {
 #[derive(Clone)]
 struct PreloadedChunkState {
     sources: SourceRegistry,
-    builtin_source_id: SourceId,
     repl_source_id: SourceId,
     repl_module_path: String,
     module_stages: Vec<Vec<StagedModule>>,
@@ -215,6 +231,183 @@ struct PreloadedChunkState {
     script_preload_signatures: Vec<SignatureEntry>,
     import_records: Vec<ReplImportRecord>,
     def_records: Vec<ReplDefRecord>,
+}
+
+#[derive(Clone)]
+struct DefaultReplBootstrapState {
+    sources: SourceRegistry,
+    repl_source_id: SourceId,
+    repl_module_path: String,
+    module_stages: Vec<Vec<StagedModule>>,
+    declaration_index: sigil::DeclarationIndex,
+    sigil_session: sigil::SigilSession,
+    scar_checkpoint: scar::ScarCheckpoint,
+    bytecode: forge::bytecode::Bytecode,
+    vm_source_context: Option<(String, String)>,
+    docs: Vec<DocEntry>,
+    signatures: Vec<SignatureEntry>,
+    process_metadata: BTreeMap<String, ReplProcessMetadata>,
+    symbols: BTreeSet<String>,
+    auto_import_modules: BTreeSet<String>,
+    auto_import_records: Vec<ReplImportRecord>,
+}
+
+impl DefaultReplBootstrapState {
+    fn from_preloaded(state: PreloadedChunkState) -> Self {
+        Self {
+            sources: state.sources,
+            repl_source_id: state.repl_source_id,
+            repl_module_path: state.repl_module_path,
+            module_stages: state.module_stages,
+            declaration_index: state.declaration_index,
+            sigil_session: state.sigil_session,
+            scar_checkpoint: state.scar_checkpoint,
+            bytecode: state.vm.snapshot_bytecode(),
+            vm_source_context: state
+                .vm
+                .source()
+                .zip(state.vm.source_file())
+                .map(|(source, file_name)| (source.to_string(), file_name.to_string())),
+            docs: state.docs,
+            signatures: state.signatures,
+            process_metadata: state.process_metadata,
+            symbols: state.symbols,
+            auto_import_modules: state.auto_import_modules,
+            auto_import_records: state.auto_import_records,
+        }
+    }
+
+    fn instantiate(&self) -> Result<PreloadedChunkState, ReplLoadError> {
+        let mut vm = match &self.vm_source_context {
+            Some((source, file_name)) => session::bytecode_interactive_vm(self.bytecode.clone())
+                .with_source(source.clone(), file_name.clone()),
+            None => session::bytecode_interactive_vm(self.bytecode.clone()),
+        };
+        record_repl_runtime_boot_call();
+        vm.boot_runtime().map_err(|error| ReplLoadError::Runtime {
+            file_name: self
+                .vm_source_context
+                .as_ref()
+                .map(|(_, file_name)| file_name.clone())
+                .unwrap_or_else(|| "<stdlib>".to_string()),
+            message: error.to_string(),
+        })?;
+        Ok(PreloadedChunkState {
+            sources: self.sources.clone(),
+            repl_source_id: self.repl_source_id,
+            repl_module_path: self.repl_module_path.clone(),
+            module_stages: self.module_stages.clone(),
+            declaration_index: self.declaration_index.clone(),
+            sigil_session: self.sigil_session.clone(),
+            scar_checkpoint: self.scar_checkpoint.clone(),
+            vm,
+            docs: self.docs.clone(),
+            signatures: self.signatures.clone(),
+            process_metadata: self.process_metadata.clone(),
+            symbols: self.symbols.clone(),
+            auto_import_modules: self.auto_import_modules.clone(),
+            auto_import_records: self.auto_import_records.clone(),
+            script_runtime_inputs: Vec::new(),
+            script_preload_docs: Vec::new(),
+            script_preload_signatures: Vec::new(),
+            import_records: Vec::new(),
+            def_records: Vec::new(),
+        })
+    }
+}
+
+/// Check the compiler-visible identities whose stable indices are restored
+/// from the default stdlib snapshot. Function PCs and implementation opcodes
+/// are intentionally excluded because a normal build and an interactive save
+/// lay out top-level code differently; calls from new chunks use the validated
+/// function/type/template/process indices instead.
+fn bytecode_has_compatible_stdlib_prefix(
+    actual: &forge::bytecode::Bytecode,
+    expected: &forge::bytecode::Bytecode,
+) -> bool {
+    let functions_match = actual.functions.len() >= expected.functions.len()
+        && actual
+            .functions
+            .iter()
+            .zip(&expected.functions)
+            .all(|(actual, expected)| {
+                actual.fun_idx == expected.fun_idx
+                    && actual.arity == expected.arity
+                    && actual.qualified_name == expected.qualified_name
+                    && actual.signature == expected.signature
+                    && actual.flags == expected.flags
+            });
+    let actual_boot = &actual.runtime_boot_plan;
+    let expected_boot = &expected.runtime_boot_plan;
+
+    functions_match
+        && actual.num_locals >= expected.num_locals
+        && actual
+            .type_registry
+            .entries()
+            .starts_with(expected.type_registry.entries())
+        && actual
+            .callable_templates
+            .starts_with(&expected.callable_templates)
+        && actual
+            .runtime_process_specs
+            .entries
+            .starts_with(&expected.runtime_process_specs.entries)
+        && actual_boot.root == expected_boot.root
+        && actual_boot.runtime_limits == expected_boot.runtime_limits
+        && actual_boot
+            .singletons
+            .starts_with(&expected_boot.singletons)
+        && actual_boot
+            .standard_overrides
+            .starts_with(&expected_boot.standard_overrides)
+        && actual_boot
+            .handler_overrides
+            .starts_with(&expected_boot.handler_overrides)
+        && actual_boot
+            .supervisor_overrides
+            .starts_with(&expected_boot.supervisor_overrides)
+}
+
+fn default_repl_bootstrap_state() -> Result<Arc<DefaultReplBootstrapState>, ReplLoadError> {
+    static STATE: OnceLock<Result<Arc<DefaultReplBootstrapState>, ReplLoadError>> = OnceLock::new();
+    STATE
+        .get_or_init(|| {
+            #[cfg(test)]
+            DEFAULT_REPL_BOOTSTRAP_BUILDS.fetch_add(1, Ordering::Relaxed);
+
+            compile_default_repl_bootstrap_chunk()
+                .map(DefaultReplBootstrapState::from_preloaded)
+                .map(Arc::new)
+        })
+        .clone()
+}
+
+fn repl_load_error_into_load_error(error: ReplLoadError) -> LoadError {
+    match error {
+        ReplLoadError::SourceReadFailed { file_name, message } => {
+            LoadError::SourceReadFailed { file_name, message }
+        }
+        ReplLoadError::Diagnostic {
+            phase,
+            sources,
+            source_id,
+            spec,
+        } => LoadError::BootstrapFailed {
+            phase,
+            file_name: sources
+                .file_name(source_id)
+                .unwrap_or("<stdlib>")
+                .to_string(),
+            message: spec.message,
+        },
+        ReplLoadError::Load(error) => error,
+        ReplLoadError::Runtime { file_name, message } => LoadError::BootstrapFailed {
+            phase: "runtime".to_string(),
+            file_name,
+            message,
+        },
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -251,7 +444,6 @@ impl ReplTypeDisplayCategory {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReplSessionPhase {
-    Bootstrap,
     Preload,
     Live,
 }
@@ -259,7 +451,7 @@ enum ReplSessionPhase {
 impl ReplSessionPhase {
     fn execution_policy(self) -> InteractiveChunkPolicy {
         match self {
-            Self::Bootstrap | Self::Preload => InteractiveChunkPolicy::Preload,
+            Self::Preload => InteractiveChunkPolicy::Preload,
             Self::Live => InteractiveChunkPolicy::ReplAppendOnly,
         }
     }
@@ -490,7 +682,6 @@ struct ReplCommandArgContext<'a> {
 
 pub struct ReplEngine {
     sources: SourceRegistry,
-    builtin_source_id: SourceId,
     module_stages: Vec<Vec<StagedModule>>,
     declaration_index: sigil::DeclarationIndex,
     repl_source_id: SourceId,
@@ -533,64 +724,20 @@ impl ReplEngine {
     }
 
     pub fn new() -> Result<Self, LoadError> {
-        let std_module_inputs = collect_additional_default_std_module_inputs()?;
-        let repl_sources = loader::collect_repl_sources_with_module_stages(&[std_module_inputs])?;
-        let forge_session = forge::ForgeSession::new();
-        let vm = session::empty_interactive_vm(forge_session.type_registry());
-        let mut engine = Self {
-            sources: repl_sources.sources,
-            builtin_source_id: repl_sources.builtin_source_id,
-            module_stages: repl_sources.module_stages,
-            declaration_index: Default::default(),
-            repl_source_id: repl_sources.repl_source_id,
-            repl_module_path: repl_sources.repl_module_path.clone(),
-            sigil_session: sigil::SigilSession::with_module_path(Some(
-                repl_sources.repl_module_path,
-            )),
-            scar_session: scar::ScarSession::new(),
-            forge_session,
-            vm,
-            pending: String::new(),
-            next_line: 1,
-            startup_results: Vec::new(),
-            results: Vec::new(),
-            result_metas: Vec::new(),
-            symbols: ["Ok", "Err"]
-                .into_iter()
-                .map(str::to_string)
-                .chain(
-                    builtin_function_metas()
-                        .iter()
-                        .map(|meta| meta.name.to_string()),
-                )
-                .collect(),
-            docs: Vec::new(),
-            signatures: Vec::new(),
-            process_metadata: BTreeMap::new(),
-            auto_import_modules: BTreeSet::new(),
-            auto_import_records: Vec::new(),
-            reload_seed: ReplReloadSeed::Empty,
-            replay_inputs: Vec::new(),
-            history_entries: Vec::new(),
-            binding_records: Vec::new(),
-            import_records: Vec::new(),
-            def_records: Vec::new(),
-            completion_context_cache: RefCell::new(None),
-            #[cfg(test)]
-            completion_context_builds: Cell::new(0),
-            error_display_mode: ErrorDisplayMode::Full,
-            stack_trace_display_mode: StackTraceDisplayMode::Off,
-        };
-        engine.bootstrap_std_modules()?;
-        Ok(engine)
+        let state = default_repl_bootstrap_state().map_err(repl_load_error_into_load_error)?;
+        let preloaded = state
+            .instantiate()
+            .map_err(repl_load_error_into_load_error)?;
+        Self::from_preloaded_state(preloaded).map_err(repl_load_error_into_load_error)
     }
 
     /// Initialise a REPL engine from an existing `.eldr` bytecode payload.
     ///
     /// The VM is seeded with the compiled bytecode from the file, so all
     /// function definitions in the image are already resident.  Standard-
-    /// library sigil / scar context is bootstrapped from source (no re-
-    /// execution needed) so that new REPL chunks can reference stdlib symbols.
+    /// library sigil / scar context is restored from the shared default
+    /// bootstrap state (no source recompilation or re-execution needed) so that
+    /// new REPL chunks can reference stdlib symbols.
     ///
     /// Limitation: user-defined functions in the `.eldr` that are beyond the
     /// standard library are present in the VM but are not visible to sigil name
@@ -639,7 +786,6 @@ impl ReplEngine {
 
         let mut engine = Self {
             sources: repl_sources.sources,
-            builtin_source_id: repl_sources.builtin_source_id,
             module_stages: repl_sources.module_stages,
             declaration_index: Default::default(),
             repl_source_id: repl_sources.repl_source_id,
@@ -675,7 +821,7 @@ impl ReplEngine {
         };
         // Set up sigil / scar scope for stdlib without re-executing bytecode.
         engine
-            .bootstrap_std_modules_scope_only()
+            .restore_stdlib_scope_from_bootstrap()
             .map_err(EldrLoadError::Load)?;
         Ok(engine)
     }
@@ -790,7 +936,6 @@ impl ReplEngine {
 
         Ok(Self {
             sources: state.sources,
-            builtin_source_id: state.builtin_source_id,
             module_stages: state.module_stages,
             declaration_index: state.declaration_index,
             repl_source_id: state.repl_source_id,
@@ -886,298 +1031,38 @@ impl ReplEngine {
         ])
     }
 
-    fn bootstrap_std_modules(&mut self) -> Result<(), LoadError> {
-        let module_stages = match parse_module_stages_from_sources(
-            &self.sources,
-            &self.module_stages,
-            CompileUnitKind::Repl,
-        ) {
-            Ok(stages) => stages,
-            Err(e) => return Err(load_error_from_parse_failure(&self.sources, e)),
-        };
-
-        if module_stages.iter().all(|stage| stage.is_empty()) {
-            return Ok(());
-        }
-
-        self.auto_import_modules = module_stages
-            .iter()
-            .flat_map(|stage| stage.iter())
-            .filter(|module| module.auto_import)
-            .map(|module| module.module_path.clone())
-            .collect();
-
-        let precollected = match sigil::precollect_declarations(&module_stages) {
-            Ok(precollected) => precollected,
-            Err(e) => {
-                return Err(load_error_from_span_failure(
-                    &self.sources,
-                    &self.module_stages,
-                    &e.span,
-                    self.builtin_source_id,
-                    "resolve",
-                    e.message,
-                ));
-            }
-        };
-        let declaration_index = precollected.declaration_index.clone();
-        self.declaration_index = declaration_index.clone();
-        self.auto_import_records =
-            Self::collect_auto_import_records(&module_stages, &declaration_index);
-
-        let resolved = match sigil::resolve_staged_program(
-            &module_stages,
-            Vec::new(),
-            &declaration_index,
-            None,
-        ) {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(load_error_from_span_failure(
-                    &self.sources,
-                    &self.module_stages,
-                    &e.span,
-                    self.builtin_source_id,
-                    "resolve",
-                    e.message,
-                ));
-            }
-        };
-
-        let typed = match self
-            .scar_session
-            .typecheck_with_context(resolved, Self::std_definition_typecheck_context())
-        {
-            Ok(t) => t,
-            Err(e) => {
-                return Err(load_error_from_span_failure(
-                    &self.sources,
-                    &self.module_stages,
-                    &e.span,
-                    self.builtin_source_id,
-                    "typecheck",
-                    e.message,
-                ));
-            }
-        };
-
-        let docs = crate::collect_doc_entries(&module_stages, &[], None);
-        let signatures = crate::collect_signature_entries(&module_stages, &[], None);
-        self.process_metadata = collect_process_metadata(&module_stages);
-        let (mut chunk, mut meta) = match self.forge_session.codegen_chunk(typed) {
-            Ok(c) => c,
-            Err(e) => {
-                return Err(load_error_from_span_failure(
-                    &self.sources,
-                    &self.module_stages,
-                    &e.span,
-                    self.builtin_source_id,
-                    "codegen",
-                    e.message,
-                ));
-            }
-        };
-        meta.docs = docs.clone();
-        chunk.docs = docs.clone();
-
-        for stage in &self.module_stages {
-            for module in stage {
-                if let Some(source) = self.sources.source(module.source_id) {
-                    populate_error_template_lines(&mut chunk.error_templates, source);
-                }
-            }
-        }
-        if let Some((source, file_name)) = self.sources.owned_context(self.builtin_source_id) {
-            self.vm.set_source(source, file_name);
-        }
-
-        if let Err(e) = self.execute_vm_chunk(chunk, ReplSessionPhase::Bootstrap) {
-            let file_name = self.vm.source_file().unwrap_or("<runtime>").to_string();
-            return Err(LoadError::BootstrapFailed {
-                phase: "runtime".into(),
-                file_name,
-                message: e.to_string(),
-            });
-        }
-        self.sync_scar_fun_index_with_vm();
-
-        let scope = match sigil::build_scope_for_module(
-            &module_stages,
-            Some(&self.repl_module_path),
-            module_stages.len(),
-        ) {
-            Ok(scope) => scope,
-            Err(e) => {
-                return Err(load_error_from_span_failure(
-                    &self.sources,
-                    &self.module_stages,
-                    &e.span,
-                    self.builtin_source_id,
-                    "resolve",
-                    e.message,
-                ));
-            }
-        };
-        self.sigil_session
-            .replace_scope_with_precollected_declarations(scope, &precollected);
-
-        for name in &meta.function_defs {
-            self.insert_surface_symbol(name);
-        }
-        self.append_docs(docs);
-        self.append_signatures(signatures);
-        Ok(())
-    }
-
     /// Bootstrap stdlib sigil / scar context WITHOUT re-executing bytecode.
     ///
     /// Used when loading a `.eldr` image: the VM already contains compiled
     /// stdlib code, so we only need the name-resolution and type-checking
     /// context that sigil and scar provide.  Forge codegen and vm.push_atomic
     /// are intentionally skipped.
-    fn bootstrap_std_modules_scope_only(&mut self) -> Result<(), LoadError> {
-        if let Ok(snapshot) = crate::default_stdlib_semantic_snapshot() {
-            if self.module_stages.len() == snapshot.default_stage_count {
-                self.auto_import_modules = snapshot.auto_import_modules.clone();
-                let precollected = sigil::precollect_declarations(&snapshot.module_stages)
-                    .map_err(|e| {
-                        load_error_from_span_failure(
-                            &self.sources,
-                            &self.module_stages,
-                            &e.span,
-                            self.builtin_source_id,
-                            "resolve",
-                            e.message,
-                        )
-                    })?;
-                self.declaration_index = precollected.declaration_index.clone();
-                self.auto_import_records = Self::collect_auto_import_records(
-                    &snapshot.module_stages,
-                    &self.declaration_index,
-                );
-                self.scar_session
-                    .rollback(snapshot.scar_checkpoint().clone());
-                self.sync_scar_fun_index_with_vm();
-                self.process_metadata = collect_process_metadata(&snapshot.module_stages);
-
-                let scope = match sigil::build_scope_for_module(
-                    &snapshot.module_stages,
-                    Some(&self.repl_module_path),
-                    snapshot.module_stages.len(),
-                ) {
-                    Ok(scope) => scope,
-                    Err(e) => {
-                        return Err(load_error_from_span_failure(
-                            &self.sources,
-                            &self.module_stages,
-                            &e.span,
-                            self.builtin_source_id,
-                            "resolve",
-                            e.message,
-                        ));
-                    }
-                };
-                self.sigil_session
-                    .replace_scope_with_precollected_declarations(scope, &precollected);
-                return Ok(());
-            }
-        }
-
-        let module_stages = match parse_module_stages_from_sources(
-            &self.sources,
-            &self.module_stages,
-            CompileUnitKind::Repl,
-        ) {
-            Ok(stages) => stages,
-            Err(e) => return Err(load_error_from_parse_failure(&self.sources, e)),
-        };
-
-        if module_stages.iter().all(|stage| stage.is_empty()) {
-            return Ok(());
-        }
-
-        self.auto_import_modules = module_stages
-            .iter()
-            .flat_map(|stage| stage.iter())
-            .filter(|module| module.auto_import)
-            .map(|module| module.module_path.clone())
-            .collect();
-
-        let precollected = match sigil::precollect_declarations(&module_stages) {
-            Ok(precollected) => precollected,
-            Err(e) => {
-                return Err(load_error_from_span_failure(
-                    &self.sources,
-                    &self.module_stages,
-                    &e.span,
-                    self.builtin_source_id,
-                    "resolve",
-                    e.message,
-                ));
-            }
-        };
-        let declaration_index = precollected.declaration_index.clone();
-        self.declaration_index = declaration_index.clone();
-        self.auto_import_records =
-            Self::collect_auto_import_records(&module_stages, &declaration_index);
-
-        let resolved = match sigil::resolve_staged_program(
-            &module_stages,
-            Vec::new(),
-            &declaration_index,
-            None,
-        ) {
-            Ok(r) => r,
-            Err(e) => {
-                return Err(load_error_from_span_failure(
-                    &self.sources,
-                    &self.module_stages,
-                    &e.span,
-                    self.builtin_source_id,
-                    "resolve",
-                    e.message,
-                ));
-            }
-        };
-
-        // Type-check to populate scar session; discard typed nodes (no codegen).
-        if let Err(e) = self
-            .scar_session
-            .typecheck_with_context(resolved, Self::std_definition_typecheck_context())
+    fn restore_stdlib_scope_from_bootstrap(&mut self) -> Result<(), LoadError> {
+        let state = default_repl_bootstrap_state().map_err(repl_load_error_into_load_error)?;
+        if self.module_stages != state.module_stages
+            || self.repl_module_path != state.repl_module_path
         {
-            return Err(load_error_from_span_failure(
-                &self.sources,
-                &self.module_stages,
-                &e.span,
-                self.builtin_source_id,
-                "typecheck",
-                e.message,
-            ));
+            return Err(LoadError::BootstrapFailed {
+                phase: "load".to_string(),
+                file_name: "<stdlib>".to_string(),
+                message: "default REPL stdlib stage layout mismatch".to_string(),
+            });
         }
-        self.sync_scar_fun_index_with_vm();
-        self.process_metadata = collect_process_metadata(&module_stages);
-        // `.eldr` sessions read docs/signatures from persisted chunks rather than
-        // recollecting them from source during scope-only bootstrap.
+        if !bytecode_has_compatible_stdlib_prefix(self.vm.bytecode(), &state.bytecode) {
+            return Err(LoadError::BootstrapFailed {
+                phase: "load".to_string(),
+                file_name: "<stdlib>".to_string(),
+                message: "default REPL stdlib bytecode prefix mismatch".to_string(),
+            });
+        }
 
-        let scope = match sigil::build_scope_for_module(
-            &module_stages,
-            Some(&self.repl_module_path),
-            module_stages.len(),
-        ) {
-            Ok(scope) => scope,
-            Err(e) => {
-                return Err(load_error_from_span_failure(
-                    &self.sources,
-                    &self.module_stages,
-                    &e.span,
-                    self.builtin_source_id,
-                    "resolve",
-                    e.message,
-                ));
-            }
-        };
-        self.sigil_session
-            .replace_scope_with_precollected_declarations(scope, &precollected);
+        self.auto_import_modules = state.auto_import_modules.clone();
+        self.declaration_index = state.declaration_index.clone();
+        self.auto_import_records = state.auto_import_records.clone();
+        self.sigil_session = state.sigil_session.clone();
+        self.scar_session.rollback(state.scar_checkpoint.clone());
+        self.sync_scar_fun_index_with_vm();
+        self.process_metadata = state.process_metadata.clone();
         Ok(())
     }
 
@@ -1639,13 +1524,6 @@ impl ReplEngine {
 
     fn typecheck_context_for_source(source_kind: SourceKind) -> scar::TypecheckContext {
         scar::TypecheckContext::from_source_policy(source_kind.policy(CompileUnitKind::Repl, None))
-    }
-
-    fn std_definition_typecheck_context() -> scar::TypecheckContext {
-        let mut context = Self::typecheck_context_for_source(SourceKind::StdDefinitionSource);
-        context.enforce_builtin_type_contracts = true;
-        context.allow_error_function_params = true;
-        context
     }
 
     fn compile_symbol_is_repl_completion_surface(
@@ -8256,9 +8134,27 @@ impl ReplEngine {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreloadRuntimeExecution {
+    Execute,
+    Defer,
+}
+
+fn compile_default_repl_bootstrap_chunk() -> Result<PreloadedChunkState, ReplLoadError> {
+    compile_preloaded_repl_chunk_with_runtime(None, None, PreloadRuntimeExecution::Defer)
+}
+
 fn compile_preloaded_repl_chunk(
     module: Option<(&str, &str)>,
     script: Option<(&str, &str)>,
+) -> Result<PreloadedChunkState, ReplLoadError> {
+    compile_preloaded_repl_chunk_with_runtime(module, script, PreloadRuntimeExecution::Execute)
+}
+
+fn compile_preloaded_repl_chunk_with_runtime(
+    module: Option<(&str, &str)>,
+    script: Option<(&str, &str)>,
+    runtime_execution: PreloadRuntimeExecution,
 ) -> Result<PreloadedChunkState, ReplLoadError> {
     let std_module_inputs =
         collect_additional_default_std_module_inputs().map_err(ReplLoadError::Load)?;
@@ -8280,6 +8176,7 @@ fn compile_preloaded_repl_chunk(
         module_input_stages,
         prepared_script,
         PreloadCompileMode::SCRIPT,
+        runtime_execution,
     )
 }
 
@@ -8290,13 +8187,19 @@ fn compile_project_repl_chunk(
         collect_additional_default_std_module_inputs().map_err(ReplLoadError::Load)?;
     let mut module_input_stages = vec![std_module_inputs];
     module_input_stages.extend(project_module_input_stages.iter().cloned());
-    compile_repl_preload_from_module_stages(module_input_stages, None, PreloadCompileMode::PROJECT)
+    compile_repl_preload_from_module_stages(
+        module_input_stages,
+        None,
+        PreloadCompileMode::PROJECT,
+        PreloadRuntimeExecution::Execute,
+    )
 }
 
 fn compile_repl_preload_from_module_stages(
     module_input_stages: Vec<Vec<crate::ModuleInput>>,
     prepared_script: Option<PreparedScriptPreload>,
     mode: PreloadCompileMode,
+    runtime_execution: PreloadRuntimeExecution,
 ) -> Result<PreloadedChunkState, ReplLoadError> {
     let mut repl_sources = loader::collect_repl_sources_with_module_stages(&module_input_stages)
         .map_err(ReplLoadError::Load)?;
@@ -8482,20 +8385,48 @@ fn compile_repl_preload_from_module_stages(
                 .sources
                 .owned_context(compile_sources.builtin_source_id)
         });
-    let mut vm = match source_context {
-        Some((source, file_name)) => session::bytecode_interactive_vm(snapshot.bytecode().clone())
-            .with_source(source, file_name),
-        None => session::bytecode_interactive_vm(snapshot.bytecode().clone()),
+    let vm = match runtime_execution {
+        PreloadRuntimeExecution::Execute => {
+            let mut vm = match source_context {
+                Some((source, file_name)) => {
+                    session::bytecode_interactive_vm(snapshot.bytecode().clone())
+                        .with_source(source, file_name)
+                }
+                None => session::bytecode_interactive_vm(snapshot.bytecode().clone()),
+            };
+            record_repl_runtime_boot_call();
+            vm.push_chunk(chunk, ReplSessionPhase::Preload.execution_policy())
+                .map_err(|e| ReplLoadError::Runtime {
+                    file_name: compile_sources
+                        .sources
+                        .file_name(user_source_id)
+                        .unwrap_or("<repl-preload>")
+                        .to_string(),
+                    message: e.to_string(),
+                })?;
+            vm
+        }
+        PreloadRuntimeExecution::Defer => {
+            let bytecode = forge::compose_bytecode_with_chunk(snapshot.bytecode().clone(), chunk)
+                .map_err(|e| ReplLoadError::Diagnostic {
+                phase: "codegen".to_string(),
+                sources: compile_sources.sources.clone(),
+                source_id: diagnostic_source_id(&compile_sources, &e.span),
+                spec: diagnostics::simple_error(
+                    "CodegenError",
+                    &e.message,
+                    local_diagnostic_span(&compile_sources, &e.span),
+                    None,
+                ),
+            })?;
+            match source_context {
+                Some((source, file_name)) => {
+                    session::bytecode_interactive_vm(bytecode).with_source(source, file_name)
+                }
+                None => session::bytecode_interactive_vm(bytecode),
+            }
+        }
     };
-    vm.push_chunk(chunk, ReplSessionPhase::Preload.execution_policy())
-        .map_err(|e| ReplLoadError::Runtime {
-            file_name: compile_sources
-                .sources
-                .file_name(user_source_id)
-                .unwrap_or("<repl-preload>")
-                .to_string(),
-            message: e.to_string(),
-        })?;
 
     let mut symbols: BTreeSet<String> = ["Ok", "Err"]
         .into_iter()
@@ -8542,7 +8473,6 @@ fn compile_repl_preload_from_module_stages(
 
     Ok(PreloadedChunkState {
         sources: repl_sources.sources,
-        builtin_source_id: repl_sources.builtin_source_id,
         repl_source_id: repl_sources.repl_source_id,
         repl_module_path: repl_sources.repl_module_path,
         module_stages: raw_module_stages,
@@ -9313,87 +9243,6 @@ impl ReplEngine {
     }
 }
 
-/// Find the source_id most likely to own `span`.
-///
-/// Strategy: among all staged modules whose source fully contains the span,
-/// prefer those where the character at `span.start` is not ASCII whitespace
-/// (i.e., the span points to actual code rather than incidental whitespace),
-/// then pick the shortest qualifying source.  This correctly handles cases
-/// where a short module (e.g. kernel.srt) has a coincidental span-in-range
-/// while the real owner is a slightly longer module (e.g. list.srt) whose
-/// code starts at that offset.
-fn find_source_id_for_span(
-    sources: &SourceRegistry,
-    module_stages: &[Vec<StagedModule>],
-    span: &Span,
-    fallback: SourceId,
-) -> SourceId {
-    let mut best_code: Option<(SourceId, usize)> = None;
-    let mut best_any: Option<(SourceId, usize)> = None;
-    for stage in module_stages {
-        for module in stage {
-            if let Some(source) = sources.source(module.source_id) {
-                let chars: Vec<char> = source.chars().collect();
-                let len = chars.len();
-                if len < span.end {
-                    continue;
-                }
-                let is_code = chars
-                    .get(span.start)
-                    .is_some_and(|ch| !ch.is_ascii_whitespace());
-                if is_code {
-                    match best_code {
-                        None => best_code = Some((module.source_id, len)),
-                        Some((_, bl)) if len < bl => best_code = Some((module.source_id, len)),
-                        _ => {}
-                    }
-                }
-                match best_any {
-                    None => best_any = Some((module.source_id, len)),
-                    Some((_, bl)) if len < bl => best_any = Some((module.source_id, len)),
-                    _ => {}
-                }
-            }
-        }
-    }
-    best_code.or(best_any).map(|(id, _)| id).unwrap_or(fallback)
-}
-
-fn load_error_from_parse_failure(
-    sources: &SourceRegistry,
-    error: ModuleStageParseError,
-) -> LoadError {
-    let file_name = sources
-        .file_name(error.source_id)
-        .unwrap_or("<unknown>")
-        .to_string();
-    LoadError::BootstrapFailed {
-        phase: "parse".into(),
-        file_name,
-        message: error.message().to_string(),
-    }
-}
-
-fn load_error_from_span_failure(
-    sources: &SourceRegistry,
-    module_stages: &[Vec<StagedModule>],
-    span: &Span,
-    fallback: SourceId,
-    phase: &str,
-    message: impl Into<String>,
-) -> LoadError {
-    let source_id = find_source_id_for_span(sources, module_stages, span, fallback);
-    let file_name = sources
-        .file_name(source_id)
-        .unwrap_or("<unknown>")
-        .to_string();
-    LoadError::BootstrapFailed {
-        phase: phase.to_string(),
-        file_name,
-        message: message.into(),
-    }
-}
-
 pub(crate) fn parse_module_stages_from_sources(
     sources: &SourceRegistry,
     module_stages: &[Vec<StagedModule>],
@@ -9789,95 +9638,196 @@ mod tests {
         }
     }
 
-    fn bootstrap_engine_with_module(source: &str, module_path: &str) -> ReplEngine {
-        let repl_sources =
-            loader::collect_repl_sources_with_module_stages(&[vec![crate::ModuleInput {
-                file_name: "lib/bad.srt".into(),
-                source: source.into(),
-                module_path: module_path.into(),
-            }]])
-            .expect("test module stage should load");
-        let forge_session = forge::ForgeSession::new();
-        let vm = session::empty_interactive_vm(forge_session.type_registry());
-
-        ReplEngine {
-            sources: repl_sources.sources,
-            builtin_source_id: repl_sources.builtin_source_id,
-            module_stages: repl_sources.module_stages,
-            declaration_index: Default::default(),
-            repl_source_id: repl_sources.repl_source_id,
-            repl_module_path: repl_sources.repl_module_path.clone(),
-            sigil_session: sigil::SigilSession::with_module_path(Some(
-                repl_sources.repl_module_path,
-            )),
-            scar_session: scar::ScarSession::new(),
-            forge_session,
-            vm,
-            pending: String::new(),
-            next_line: 1,
-            startup_results: Vec::new(),
-            results: Vec::new(),
-            result_metas: Vec::new(),
-            symbols: ["Ok", "Err"]
-                .into_iter()
-                .map(str::to_string)
-                .chain(
-                    builtin_function_metas()
-                        .iter()
-                        .map(|meta| meta.name.to_string()),
-                )
-                .collect(),
-            docs: Vec::new(),
-            signatures: Vec::new(),
-            process_metadata: BTreeMap::new(),
-            auto_import_modules: BTreeSet::new(),
-            auto_import_records: Vec::new(),
-            reload_seed: ReplReloadSeed::Empty,
-            replay_inputs: Vec::new(),
-            history_entries: Vec::new(),
-            binding_records: Vec::new(),
-            import_records: Vec::new(),
-            def_records: Vec::new(),
-            completion_context_cache: RefCell::new(None),
-            #[cfg(test)]
-            completion_context_builds: Cell::new(0),
-            error_display_mode: ErrorDisplayMode::Full,
-            stack_trace_display_mode: StackTraceDisplayMode::Off,
-        }
-    }
-
-    fn expect_bootstrap_failure(source: &str, phase: &str, message_fragment: &str) -> LoadError {
-        let mut engine = bootstrap_engine_with_module(source, "Broken");
-        let err = engine
-            .bootstrap_std_modules()
-            .expect_err("bootstrap should fail");
+    fn expect_module_preload_failure(
+        source: &str,
+        phase: &str,
+        message_fragment: &str,
+    ) -> ReplLoadError {
+        let err = match ReplEngine::from_module_source("lib/bad.srt", source) {
+            Ok(_) => panic!("module preload should fail"),
+            Err(error) => error,
+        };
         match &err {
-            LoadError::BootstrapFailed {
+            ReplLoadError::Diagnostic {
                 phase: actual_phase,
-                file_name,
-                message,
+                sources,
+                source_id,
+                spec,
             } => {
                 assert_eq!(actual_phase, phase);
+                assert_eq!(sources.file_name(*source_id), Some("lib/bad.srt"));
                 assert!(
-                    file_name == "lib/bad.srt" || file_name == "bootstrap.srt",
-                    "unexpected bootstrap failure file `{}`",
-                    file_name
-                );
-                assert!(
-                    message.contains(message_fragment),
+                    spec.message.contains(message_fragment),
                     "expected `{}` to contain `{}`",
-                    message,
+                    spec.message,
                     message_fragment
                 );
             }
-            other => panic!("expected bootstrap failure, got {:?}", other),
+            other => panic!("expected module preload diagnostic, got {other:?}"),
         }
         err
     }
 
     #[test]
-    fn bootstrap_std_modules_returns_parse_failure() {
-        expect_bootstrap_failure("defmod Broken { def nope( }", "parse", "Expected");
+    fn module_preload_returns_parse_failure() {
+        expect_module_preload_failure("defmod Broken { def nope( }", "parse", "Expected");
+    }
+
+    #[test]
+    fn repl_engine_new_builds_default_bootstrap_state_at_most_once() {
+        let before = DEFAULT_REPL_BOOTSTRAP_BUILDS.load(Ordering::Relaxed);
+
+        let _first = ReplEngine::new().expect("first engine should initialize");
+        let _second = ReplEngine::new().expect("second engine should initialize");
+
+        let builds = DEFAULT_REPL_BOOTSTRAP_BUILDS
+            .load(Ordering::Relaxed)
+            .saturating_sub(before);
+        assert!(
+            builds <= 1,
+            "default REPL bootstrap state was rebuilt {builds} times"
+        );
+    }
+
+    #[test]
+    fn first_repl_engine_executes_runtime_boot_once() {
+        TEST_REPL_RUNTIME_BOOT_CALLS.with(|calls| calls.set(0));
+
+        let _engine = ReplEngine::new().expect("engine should initialize");
+
+        let calls = TEST_REPL_RUNTIME_BOOT_CALLS.with(Cell::get);
+        assert_eq!(calls, 1, "runtime boot should run only for the owned VM");
+    }
+
+    #[test]
+    fn repl_engine_new_keeps_cloned_session_state_isolated() {
+        let mut first = ReplEngine::new().expect("first engine should initialize");
+        let mut second = ReplEngine::new().expect("second engine should initialize");
+
+        let first_binding = first.handle_line("isolated_value = 1");
+        let second_binding = second.handle_line("isolated_value = \"second\"");
+        let first_value = first.handle_line("isolated_value");
+        let second_value = second.handle_line("isolated_value");
+
+        assert!(matches!(
+            first_binding.output,
+            ReplOutput::EvalSuccess { .. }
+        ));
+        assert!(matches!(
+            second_binding.output,
+            ReplOutput::EvalSuccess { .. }
+        ));
+        let first_rendered = ReplEngine::repl_result_text(&first_value);
+        let second_rendered = ReplEngine::repl_result_text(&second_value);
+        assert!(first_rendered.contains("1"), "{first_rendered}");
+        assert!(second_rendered.contains("second"), "{second_rendered}");
+        assert!(!first_rendered.contains("second"), "{first_rendered}");
+    }
+
+    #[test]
+    fn deferred_bootstrap_instantiation_boots_each_owned_runtime_once() {
+        TEST_REPL_RUNTIME_BOOT_CALLS.with(|calls| calls.set(0));
+        let preloaded = compile_preloaded_repl_chunk_with_runtime(
+            Some((
+                "process_bootstrap.srt",
+                r#"
+defgenserver BootstrapProbe {
+  meta {
+    instance: Singleton
+    init_policy: Eager
+    state: Int
+  }
+
+  @init
+  def init() -> Result<Int> { Ok(7) }
+
+  @call
+  def read(state: Int) -> Result<CallResult<Int, Int>> {
+    Ok(CallResult::Reply(state, state))
+  }
+}
+
+supervisor_init {
+  BootstrapProbe {}
+}
+"#,
+            )),
+            None,
+            PreloadRuntimeExecution::Defer,
+        )
+        .expect("process preload should compile without booting");
+        assert_eq!(
+            TEST_REPL_RUNTIME_BOOT_CALLS.with(Cell::get),
+            0,
+            "shared bootstrap construction must not boot a transient VM"
+        );
+        let state = DefaultReplBootstrapState::from_preloaded(preloaded);
+        assert!(
+            !state.bytecode.runtime_boot_plan.singletons.is_empty(),
+            "boot plan: {:?}; specs: {:?}",
+            state.bytecode.runtime_boot_plan,
+            state.bytecode.runtime_process_specs
+        );
+
+        let first = state
+            .instantiate()
+            .expect("first runtime should boot from shared bytecode");
+        let second = state
+            .instantiate()
+            .expect("second runtime should boot from shared bytecode");
+        assert_eq!(
+            TEST_REPL_RUNTIME_BOOT_CALLS.with(Cell::get),
+            2,
+            "each owned VM should boot exactly once"
+        );
+
+        let first_runtime = first.vm.as_vm().process_runtime_snapshot();
+        let second_runtime = second.vm.as_vm().process_runtime_snapshot();
+        assert!(
+            first_runtime
+                .singleton_slots
+                .keys()
+                .any(|name| name.ends_with("BootstrapProbe")),
+            "{:?}",
+            first_runtime.singleton_slots
+        );
+        assert!(
+            second_runtime
+                .singleton_slots
+                .keys()
+                .any(|name| name.ends_with("BootstrapProbe")),
+            "{:?}",
+            second_runtime.singleton_slots
+        );
+    }
+
+    #[test]
+    fn eldr_scope_restore_rejects_modified_stdlib_bytecode_prefix() {
+        let engine = ReplEngine::new().expect("engine should initialize");
+        let mut bytecode = engine.vm.snapshot_bytecode();
+        let default_function = bytecode
+            .functions
+            .first_mut()
+            .expect("default bootstrap must contain a function");
+        default_function.qualified_name = Some("StaleStdlib::modified".to_string());
+        let bytes = bytecode.encode().expect("modified bytecode should encode");
+
+        let error = match ReplEngine::from_eldr(&bytes) {
+            Ok(_) => panic!("modified stdlib bytecode prefix must be rejected"),
+            Err(error) => error,
+        };
+
+        let EldrLoadError::Load(LoadError::BootstrapFailed {
+            phase,
+            file_name,
+            message,
+        }) = error
+        else {
+            panic!("expected stdlib compatibility failure");
+        };
+        assert_eq!(phase, "load");
+        assert_eq!(file_name, "<stdlib>");
+        assert!(message.contains("bytecode prefix mismatch"), "{message}");
     }
 
     #[test]
@@ -9907,8 +9857,8 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_std_modules_returns_resolve_failure() {
-        expect_bootstrap_failure(
+    fn module_preload_returns_resolve_failure() {
+        expect_module_preload_failure(
             "defmod Broken { def nope() -> Int { missing } }",
             "resolve",
             "Undefined variable",
@@ -9916,60 +9866,12 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_std_modules_returns_typecheck_failure() {
-        expect_bootstrap_failure(
+    fn module_preload_returns_typecheck_failure() {
+        expect_module_preload_failure(
             "defmod Broken { def nope() -> Int { \"bad\" } }",
             "typecheck",
             "expected Int",
         );
-    }
-
-    #[test]
-    fn bootstrap_std_modules_returns_runtime_failure() {
-        let mut engine =
-            bootstrap_engine_with_module("defmod Broken { def nope() -> Int { 1 } }", "Broken");
-        engine.vm = session::empty_interactive_vm(engine.forge_session.type_registry());
-        engine
-            .vm
-            .push_chunk(
-                sindr::ir::BytecodeChunk {
-                    opcodes: vec![sindr::ir::Opcode::Halt],
-                    source_map: None,
-                    const_base: 0,
-                    constants: vec![sindr::ir::Constant::Int(sindr::primitives::int(1))],
-                    new_locals: 0,
-                    type_registry_base: 0,
-                    type_entries: Vec::new(),
-                    dbg_template_base: 0,
-                    dbg_templates: Vec::new(),
-                    error_template_base: 0,
-                    error_templates: Vec::new(),
-                    callable_templates: Vec::new(),
-                    functions: Vec::new(),
-                    docs: Vec::new(),
-                    signatures: Vec::new(),
-                    runtime_process_specs: Vec::new(),
-                    runtime_boot_plan: Default::default(),
-                },
-                InteractiveChunkPolicy::ReplAppendOnly,
-            )
-            .expect("vm bootstrap corruption setup should succeed");
-
-        let err = engine
-            .bootstrap_std_modules()
-            .expect_err("bootstrap should fail at runtime");
-        match err {
-            LoadError::BootstrapFailed {
-                phase,
-                file_name,
-                message,
-            } => {
-                assert_eq!(phase, "runtime");
-                assert_eq!(file_name, "bootstrap.srt");
-                assert!(message.contains("Chunk constant base mismatch"));
-            }
-            other => panic!("expected runtime bootstrap failure, got {:?}", other),
-        }
     }
 
     #[test]
@@ -10393,10 +10295,6 @@ mod tests {
     #[test]
     fn repl_session_phase_maps_to_interactive_vm_policy() {
         assert_eq!(
-            ReplSessionPhase::Bootstrap.execution_policy(),
-            InteractiveChunkPolicy::Preload
-        );
-        assert_eq!(
             ReplSessionPhase::Preload.execution_policy(),
             InteractiveChunkPolicy::Preload
         );
@@ -10407,7 +10305,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_phase_allows_structural_vm_growth() {
+    fn preload_phase_allows_structural_vm_growth() {
         let mut engine = ReplEngine::new().expect("engine should initialize");
         let mut chunk = interactive_test_chunk();
         chunk.const_base = engine.vm.bytecode().constants.len() as u32;
@@ -10432,8 +10330,8 @@ mod tests {
         });
 
         let execution = engine
-            .execute_vm_chunk(chunk, ReplSessionPhase::Bootstrap)
-            .expect("bootstrap phase should allow preload-style chunk");
+            .execute_vm_chunk(chunk, ReplSessionPhase::Preload)
+            .expect("preload phase should allow structural chunk growth");
 
         assert_eq!(execution.value, Value::Int(sindr::primitives::int(1)));
     }

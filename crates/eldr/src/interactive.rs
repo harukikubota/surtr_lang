@@ -95,6 +95,11 @@ impl InteractiveVm {
         self.vm.snapshot_bytecode()
     }
 
+    /// Validate the loaded image and eagerly initialise its runtime boot plan.
+    pub fn boot_runtime(&mut self) -> Result<(), RuntimeError> {
+        self.vm.boot_runtime()
+    }
+
     pub fn push_chunk(
         &mut self,
         chunk: BytecodeChunk,
