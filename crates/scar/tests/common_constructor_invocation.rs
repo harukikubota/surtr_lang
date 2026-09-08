@@ -1,7 +1,58 @@
+#![deny(dead_code)]
+
 #[allow(dead_code)]
 mod support;
+use std::collections::HashSet;
+
+macro_rules! constructor_case {
+    ($case:ident) => {
+        (stringify!($case), $case as fn())
+    };
+}
+
+const CONSTRUCTOR_CASES: &[(&str, fn())] = &[
+    constructor_case!(constructor_invocations_propagate_expected_return),
+    constructor_case!(callable_result_context_is_shared_by_helpers_and_operators),
+    constructor_case!(slash_and_helper_use_the_expected_result_to_solve_trait_arguments),
+    constructor_case!(trait_result_conflict_preserves_expected_and_actual_direction),
+    constructor_case!(custom_functor_returns_follow_the_shared_plain_inference_policy),
+    constructor_case!(one_registered_carrier_is_not_constructor_inference_evidence),
+    constructor_case!(generic_receiverless_family_helpers_use_expected_return),
+];
 
 #[test]
+fn constructor_case_inventory_has_unique_names_and_functions() {
+    let direct_tests = include_str!("common_constructor_invocation.rs")
+        .lines()
+        .filter(|line| *line == "#[test]")
+        .count();
+    assert_eq!(
+        direct_tests, 2,
+        "constructor cases must be registered instead of using standalone #[test]"
+    );
+
+    let mut names = HashSet::new();
+    let mut functions = HashSet::new();
+    for &(name, case) in CONSTRUCTOR_CASES {
+        assert!(
+            names.insert(name),
+            "duplicate constructor case name: {name}"
+        );
+        assert!(
+            functions.insert(case as usize),
+            "duplicate constructor case function: {name}"
+        );
+    }
+}
+
+#[test]
+fn common_constructor_invocation_suite() {
+    for &(name, case) in CONSTRUCTOR_CASES {
+        eprintln!("common constructor invocation case: {name}");
+        case();
+    }
+}
+
 fn constructor_invocations_propagate_expected_return() {
     for expression in [
         "Functor::fmap([1], {|x: Int| []})",
@@ -15,7 +66,6 @@ fn constructor_invocations_propagate_expected_return() {
     }
 }
 
-#[test]
 fn callable_result_context_is_shared_by_helpers_and_operators() {
     for (expected, expression) in [
         (
@@ -48,7 +98,6 @@ fn callable_result_context_is_shared_by_helpers_and_operators() {
     }
 }
 
-#[test]
 fn slash_and_helper_use_the_expected_result_to_solve_trait_arguments() {
     for expression in ["Segment(1) / 2", "Compose::compose(Segment(1), 2)"] {
         let source = format!(
@@ -65,7 +114,6 @@ value: String = {expression}
     }
 }
 
-#[test]
 fn trait_result_conflict_preserves_expected_and_actual_direction() {
     let error = support::typecheck(support::resolve_with_builtin_prelude(
         "value: Int = Show::to_string(1)",
@@ -80,7 +128,6 @@ fn trait_result_conflict_preserves_expected_and_actual_direction() {
     assert_eq!(data["actual_type"], "String");
 }
 
-#[test]
 fn custom_functor_returns_follow_the_shared_plain_inference_policy() {
     let definitions = r#"
 defenum Boxed<$T> { Box($T) }
@@ -116,7 +163,6 @@ impl Functor for Boxed<$T> {
     }
 }
 
-#[test]
 fn one_registered_carrier_is_not_constructor_inference_evidence() {
     let definitions = r#"
 deftrait Functor where Self: Type<$A> {
@@ -167,7 +213,6 @@ impl Monad for Boxed<$T> {
         .expect("an explicit inner constructor head supplies source evidence");
 }
 
-#[test]
 fn generic_receiverless_family_helpers_use_expected_return() {
     let definitions = r#"
 deftrait Family where Self: Type<$A> {

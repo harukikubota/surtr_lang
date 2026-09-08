@@ -1,3 +1,5 @@
+#![deny(dead_code)]
+
 use scar::env::TypeKind;
 use scar::typed::{
     OperatorTraitOp, TraitCallOrigin, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode,
@@ -12,6 +14,7 @@ use sindr::names::TypeIdentity;
 use sindr::policy::{EntryPoint, ExitCodePolicy, RuntimeSourcePolicy};
 use sindr::primitives::int;
 use spire::ast::{AstTy, Lit, Span};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
@@ -22,7 +25,7 @@ use support::*;
 const PROCESS_MODULE_SOURCE: &str = include_str!("../../../lib/process.srt");
 
 const SURFACE_WORKER_COUNT: usize = 1;
-const SURFACE_BUCKET_COUNT: usize = 32;
+const SURFACE_BUCKET_COUNT: usize = 8;
 
 fn resolve_without_std_prelude(source: &str) -> Vec<Resolved> {
     let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
@@ -32,6 +35,12 @@ fn resolve_without_std_prelude(source: &str) -> Vec<Resolved> {
 
 fn typecheck_without_std_prelude(source: &str) -> Result<Vec<TypedNode>, scar::error::TypeError> {
     scar::typecheck(resolve_without_std_prelude(source))
+}
+
+macro_rules! surface_case {
+    ($case:ident) => {
+        (stringify!($case), $case as fn())
+    };
 }
 
 const SURFACE_CASES: &[(&str, fn())] = &[
@@ -1137,7 +1146,107 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         "type_kinds_map_to_compile_space_identities",
         type_kinds_map_to_compile_space_identities as fn(),
     ),
+    surface_case!(facet_preview_accepts_boolean_variant_root),
+    surface_case!(facet_root_dispatch_requires_symbol_capability_metadata_not_matching_names),
+    surface_case!(facet_root_capability_dispatch_preserves_standard_roots_and_string_diagnostic),
+    surface_case!(deferred_list_and_hashmap_facet_bindings_can_be_reused_by_facet_intrinsics),
+    surface_case!(overlapping_trait_impl_patterns_are_rejected_before_codegen),
+    surface_case!(disjoint_specializations_with_the_same_nominal_target_typecheck),
+    surface_case!(conversion_impl_exclusivity_ignores_generic_parameter_names),
+    surface_case!(local_callable_is_instantiated_at_each_call_site),
+    surface_case!(annotated_local_callable_remains_monomorphic),
+    surface_case!(unbound_generic_argument_synthesizes_closure_shape),
+    surface_case!(expected_type_flows_to_if_and_match_branches),
+    surface_case!(trait_dispatch_rejects_impl_with_unsatisfied_where_obligation),
+    surface_case!(direct_trait_call_on_rigid_generic_requires_declared_bound),
+    surface_case!(deferred_trait_obligation_is_checked_when_closure_argument_is_bound),
+    surface_case!(child_impl_where_assumptions_cover_parent_impl_requirements),
+    surface_case!(child_impl_self_where_assumption_covers_parent_requirement),
+    surface_case!(parameterized_parent_trait_bounds_cover_the_parent_family),
+    surface_case!(function_where_bounds_propagate_to_generic_call_sites),
+    surface_case!(where_clause_does_not_declare_a_new_type_variable),
+    surface_case!(functor_shaped_self_applications_survive_in_typed_metadata),
+    surface_case!(unary_type_constructor_slot_is_inferred_for_trait_impl),
+    surface_case!(multi_parameter_type_constructor_requires_explicit_slot_mapping),
+    surface_case!(type_constructor_constraint_rejects_concrete_and_duplicate_slot_targets),
+    surface_case!(malformed_resolved_type_shape_requires_self_lhs),
+    surface_case!(malformed_resolved_type_shape_is_rejected_outside_trait_definition_where),
+    surface_case!(type_constructor_shape_must_be_unique_in_a_trait_definition),
+    surface_case!(inherited_constructor_trait_rejects_trait_head_parameters_after_closure),
+    surface_case!(constructor_slot_maps_require_top_level_target_parameters_and_completeness),
+    surface_case!(plain_inherent_owner_expands_self_applications_to_its_target),
+    surface_case!(canonical_builtin_inherent_owners_expand_self_applications_to_their_targets),
+    surface_case!(trait_contract_self_substitution_preserves_captured_target_parameters),
+    surface_case!(same_family_constructor_parameters_share_one_witness),
+    surface_case!(constructor_application_result_shares_the_input_witness),
+    surface_case!(constructor_application_result_accepts_the_shared_abstract_input_witness),
+    surface_case!(constructor_application_result_rejects_mixed_concrete_constructors),
+    surface_case!(
+        identity_dependent_constructor_applications_are_rejected_outside_direct_signatures
+    ),
+    surface_case!(extractor_signatures_reject_identity_dependent_constructor_applications),
+    surface_case!(trait_default_contextual_result_requires_constructor_trait_membership),
+    surface_case!(trait_impl_contextual_result_requires_constructor_trait_membership),
+    surface_case!(trait_impl_contextual_result_accepts_an_implementing_constructor),
+    surface_case!(bare_capability_is_consumed_by_a_full_parameterized_trait_obligation),
+    surface_case!(unused_function_capability_is_rejected_at_its_bound),
+    surface_case!(unused_trait_method_capability_is_rejected_at_its_bound),
+    surface_case!(unused_trait_impl_method_capability_is_rejected_at_its_bound),
+    surface_case!(unused_trait_impl_block_capability_is_rejected_after_all_methods),
+    surface_case!(operator_obligation_consumes_a_bare_capability),
+    surface_case!(generic_call_forwards_and_consumes_a_bare_capability),
+    surface_case!(different_constructor_roots_keep_independent_parameter_witnesses),
+    surface_case!(parent_trait_constraints_require_matching_impls_and_inherit_slots),
+    surface_case!(concrete_constructor_implementation_can_be_passed_to_parent_or_child_trait),
+    surface_case!(abstract_applicative_cannot_use_monad_helper_but_concrete_option_can),
+    surface_case!(trait_default_methods_and_private_helpers_are_accepted),
+    surface_case!(parent_trait_cycles_and_slot_mapping_mismatches_are_rejected),
+    surface_case!(trait_impl_signature_validation_preserves_generic_relationships),
+    surface_case!(trait_impl_method_generics_are_rigid_while_checking_the_body),
+    surface_case!(empty_struct_default_derives_without_relaxing_new_contract),
+    surface_case!(empty_struct_without_new_is_rejected),
+    surface_case!(empty_struct_eq_and_neq_are_constant),
+    surface_case!(empty_struct_compare_is_equal),
+    surface_case!(compare_default_methods_dispatch_to_trait_source_when_impl_omits_override),
+    surface_case!(compare_trait_impl_still_requires_compare_method),
+    surface_case!(explicit_type_arguments_specialize_functions_trait_calls_and_captures),
+    surface_case!(regular_callable_rejects_undeclared_return_type_arguments),
+    surface_case!(bare_trait_capability_controls_full_parameterized_dispatch),
+    surface_case!(trait_heads_and_expression_obligations_retain_nested_arguments),
+    surface_case!(impl_bare_capabilities_emit_full_parameterized_obligations),
+    surface_case!(explicit_type_arguments_exclude_self_and_enforce_generic_arity),
+    surface_case!(
+        trait_method_type_slots_have_one_input_channel_and_return_type_arguments_flow_to_return
+    ),
+    surface_case!(trait_impl_return_type_arguments_must_match_the_trait_slots),
+    surface_case!(explicit_function_type_arguments_follow_signature_order),
 ];
+
+#[test]
+fn surface_case_inventory_has_unique_names_and_functions() {
+    let direct_tests = include_str!("typecheck_surface.rs")
+        .lines()
+        .filter(|line| *line == "#[test]")
+        .count();
+    assert_eq!(
+        direct_tests, 1,
+        "Scar surface cases must be registered instead of using standalone #[test]"
+    );
+
+    let mut names = HashSet::new();
+    let mut functions = HashSet::new();
+
+    for &(name, case) in SURFACE_CASES {
+        assert!(
+            names.insert(name),
+            "duplicate Scar surface case name: {name}"
+        );
+        assert!(
+            functions.insert(case as usize),
+            "duplicate Scar surface case function: {name}"
+        );
+    }
+}
 
 macro_rules! surface_bucket_test {
     ($name:ident, $bucket:expr) => {
@@ -1156,30 +1265,6 @@ surface_bucket_test!(typecheck_surface_bucket_4, 4);
 surface_bucket_test!(typecheck_surface_bucket_5, 5);
 surface_bucket_test!(typecheck_surface_bucket_6, 6);
 surface_bucket_test!(typecheck_surface_bucket_7, 7);
-surface_bucket_test!(typecheck_surface_bucket_8, 8);
-surface_bucket_test!(typecheck_surface_bucket_9, 9);
-surface_bucket_test!(typecheck_surface_bucket_10, 10);
-surface_bucket_test!(typecheck_surface_bucket_11, 11);
-surface_bucket_test!(typecheck_surface_bucket_12, 12);
-surface_bucket_test!(typecheck_surface_bucket_13, 13);
-surface_bucket_test!(typecheck_surface_bucket_14, 14);
-surface_bucket_test!(typecheck_surface_bucket_15, 15);
-surface_bucket_test!(typecheck_surface_bucket_16, 16);
-surface_bucket_test!(typecheck_surface_bucket_17, 17);
-surface_bucket_test!(typecheck_surface_bucket_18, 18);
-surface_bucket_test!(typecheck_surface_bucket_19, 19);
-surface_bucket_test!(typecheck_surface_bucket_20, 20);
-surface_bucket_test!(typecheck_surface_bucket_21, 21);
-surface_bucket_test!(typecheck_surface_bucket_22, 22);
-surface_bucket_test!(typecheck_surface_bucket_23, 23);
-surface_bucket_test!(typecheck_surface_bucket_24, 24);
-surface_bucket_test!(typecheck_surface_bucket_25, 25);
-surface_bucket_test!(typecheck_surface_bucket_26, 26);
-surface_bucket_test!(typecheck_surface_bucket_27, 27);
-surface_bucket_test!(typecheck_surface_bucket_28, 28);
-surface_bucket_test!(typecheck_surface_bucket_29, 29);
-surface_bucket_test!(typecheck_surface_bucket_30, 30);
-surface_bucket_test!(typecheck_surface_bucket_31, 31);
 
 fn run_surface_case_bucket(bucket: usize, bucket_count: usize) {
     assert!(bucket_count > 0, "bucket_count must be positive");
@@ -1838,7 +1923,6 @@ Facet::preview(Option.Some, value)"#,
     ));
 }
 
-#[test]
 fn facet_preview_accepts_boolean_variant_root() {
     let typed = typecheck_with_builtin_prelude(
         r#"flag = True
@@ -1933,7 +2017,6 @@ talk = get_talk(score_map)"#,
     }
 }
 
-#[test]
 fn facet_root_dispatch_requires_symbol_capability_metadata_not_matching_names() {
     let span = Span { start: 0, end: 0 };
     let tuple_id = resolved_test_id("Tuple", 900_001, &span);
@@ -2028,7 +2111,6 @@ fn facet_root_dispatch_requires_symbol_capability_metadata_not_matching_names() 
     }
 }
 
-#[test]
 fn facet_root_capability_dispatch_preserves_standard_roots_and_string_diagnostic() {
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord User(name: String)
@@ -2066,7 +2148,6 @@ map_score = Facet::view(HashMap.["talk"], score_map)"#,
     assert!(err.message.contains("String is not a Facet path root"));
 }
 
-#[test]
 fn deferred_list_and_hashmap_facet_bindings_can_be_reused_by_facet_intrinsics() {
     let typed = typecheck_with_builtin_prelude(
         r#"scores = [10, 20]
@@ -2523,7 +2604,6 @@ same: Option<Int> = boxed.value"#,
     assert!(!typed.is_empty());
 }
 
-#[test]
 fn optional_type_annotation_rejects_result_value() {
     let resolved = resolve_with_builtin_prelude(
         r#"defrecord Boxed(
@@ -3548,7 +3628,6 @@ impl PairTrait for (Int, String) {
     );
 }
 
-#[test]
 fn overlapping_trait_impl_patterns_are_rejected_before_codegen() {
     let resolved = resolve_with_builtin_prelude(
         r#"deftrait Mark<$T> {
@@ -3571,7 +3650,6 @@ impl Mark<List<$A>> for String {
     );
 }
 
-#[test]
 fn disjoint_specializations_with_the_same_nominal_target_typecheck() {
     let resolved = resolve_with_builtin_prelude(
         r#"deftrait Mark<$T> {
@@ -3597,7 +3675,6 @@ impl Mark<Int> for List<String> {
     );
 }
 
-#[test]
 fn conversion_impl_exclusivity_ignores_generic_parameter_names() {
     let resolved = resolve_with_builtin_prelude(
         r#"defstruct LocalBox<$A> { value: $A }
@@ -3618,7 +3695,6 @@ impl TryFrom<$T> for LocalBox<$T> {
     );
 }
 
-#[test]
 fn local_callable_is_instantiated_at_each_call_site() {
     let typed = typecheck_with_builtin_prelude(
         r#"id = {|x| x}
@@ -3632,7 +3708,6 @@ second: String = id("t")"#,
     assert!(matches!(typed_bind_rhs(&typed, "second").ty, Ty::Str));
 }
 
-#[test]
 fn annotated_local_callable_remains_monomorphic() {
     let resolved = resolve_with_builtin_prelude(
         r#"id: (Int -> Int) = {|x| x}
@@ -3645,7 +3720,6 @@ bad: String = id("not an int")"#,
     );
 }
 
-#[test]
 fn unbound_generic_argument_synthesizes_closure_shape() {
     let typed = typecheck_with_builtin_prelude(
         r#"def box(value: $A) -> $A { value }
@@ -3656,7 +3730,6 @@ result: Int = increment(1)"#,
     assert!(matches!(typed_bind_rhs(&typed, "result").ty, Ty::Int));
 }
 
-#[test]
 fn expected_type_flows_to_if_and_match_branches() {
     let typed = typecheck_with_builtin_prelude(
         r#"chooser: (Int -> Int) = if(True, {|n: Int| n + 1}, {|n: Int| n - 1})
@@ -3670,7 +3743,6 @@ result: Int = chooser(1) + matched(1)"#,
     assert!(matches!(typed_bind_rhs(&typed, "result").ty, Ty::Int));
 }
 
-#[test]
 fn trait_dispatch_rejects_impl_with_unsatisfied_where_obligation() {
     let resolved = resolve_with_builtin_prelude(
         r#"deftrait Marker {
@@ -3706,7 +3778,6 @@ result = Use::use(values)"#,
     assert!(err.message.contains("List<Int>"), "{err:?}");
 }
 
-#[test]
 fn direct_trait_call_on_rigid_generic_requires_declared_bound() {
     let resolved = resolve_with_builtin_prelude(
         r#"deftrait Marker {
@@ -3723,7 +3794,6 @@ def hidden(value: $A) -> String {
     assert!(err.message.contains("must implement Marker"), "{err:?}");
 }
 
-#[test]
 fn deferred_trait_obligation_is_checked_when_closure_argument_is_bound() {
     let source = r#"deftrait Marker {
   def mark(self: Self) -> String
@@ -3772,7 +3842,6 @@ result = call(1)"#;
         .expect("the same deferred obligation must succeed when Int implements Marker");
 }
 
-#[test]
 fn child_impl_where_assumptions_cover_parent_impl_requirements() {
     let resolved = resolve_with_builtin_prelude(
         r#"deftrait FixtureEq {
@@ -3826,7 +3895,6 @@ where
     typecheck(resolved).expect("a stronger child where clause must cover the parent impl");
 }
 
-#[test]
 fn child_impl_self_where_assumption_covers_parent_requirement() {
     let resolved = resolve_with_builtin_prelude(
         r#"deftrait Marker {
@@ -3862,7 +3930,6 @@ where
     typecheck(resolved).expect("a child Self assumption must cover the parent requirement");
 }
 
-#[test]
 fn parameterized_parent_trait_bounds_cover_the_parent_family() {
     typecheck_without_std_prelude(
         r#"deftrait Parent<$Tag> {
@@ -3946,7 +4013,6 @@ print(right)"#,
     );
 }
 
-#[test]
 fn where_constraint_kinds_survive_in_typed_metadata() {
     let typed = typecheck_without_std_prelude(
         r#"deftrait Marker
@@ -4011,7 +4077,6 @@ where
     ));
 }
 
-#[test]
 fn function_where_bounds_propagate_to_generic_call_sites() {
     let source = r#"def make(seed: $A) -> $A
 where
@@ -4038,7 +4103,6 @@ where
     );
 }
 
-#[test]
 fn where_clause_does_not_declare_a_new_type_variable() {
     let err = typecheck_with_rules(
         r#"def id(value: $A) -> $A
@@ -4060,7 +4124,6 @@ where
         .is_some_and(|hint| hint.contains("do not declare type variables")));
 }
 
-#[test]
 fn functor_shaped_self_applications_survive_in_typed_metadata() {
     let typed = typecheck_with_rules(
         r#"deftrait FunctorShape
@@ -4086,7 +4149,6 @@ where
     assert!(matches!(method.ret_ty, Ty::SelfApp(ref args) if args.len() == 1));
 }
 
-#[test]
 fn unary_type_constructor_slot_is_inferred_for_trait_impl() {
     typecheck_with_rules(
         r#"deftrait FunctorShape
@@ -4112,7 +4174,6 @@ impl FunctorShape for Identity<$T> {
     .expect("a unary impl target should map its only parameter to the trait slot");
 }
 
-#[test]
 fn multi_parameter_type_constructor_requires_explicit_slot_mapping() {
     let source = r#"deftrait FunctorShape
 where
@@ -4146,7 +4207,6 @@ impl FunctorShape for Pair<$L, $R> {
     .expect("an explicit slot mapping should preserve the left capture parameter");
 }
 
-#[test]
 fn type_constructor_constraint_rejects_concrete_and_duplicate_slot_targets() {
     let trait_source = r#"deftrait FunctorShape
 where
@@ -4180,7 +4240,6 @@ where
     assert!(err.message.contains("mapped more than once"), "{err:?}");
 }
 
-#[test]
 fn malformed_resolved_type_shape_requires_self_lhs() {
     let mut resolved = resolve_without_std_prelude(
         r#"deftrait Shape
@@ -4206,7 +4265,6 @@ where
     );
 }
 
-#[test]
 fn malformed_resolved_type_shape_is_rejected_outside_trait_definition_where() {
     let mut function = resolve_without_std_prelude(
         r#"deftrait Marker {}
@@ -4292,7 +4350,6 @@ deftrait HasMethod {
     assert!(err.message.contains("trait definition where"), "{err:?}");
 }
 
-#[test]
 fn type_constructor_shape_must_be_unique_in_a_trait_definition() {
     let err = typecheck_without_std_prelude(
         r#"deftrait InvalidShape
@@ -4304,7 +4361,6 @@ where
     assert!(err.message.contains("more than one"), "{err:?}");
 }
 
-#[test]
 fn inherited_constructor_trait_rejects_trait_head_parameters_after_closure() {
     let err = typecheck_without_std_prelude(
         r#"deftrait InvalidDirect<$Tag>
@@ -4338,7 +4394,6 @@ where
     );
 }
 
-#[test]
 fn constructor_slot_maps_require_top_level_target_parameters_and_completeness() {
     let declarations = r#"deftrait PairShape
 where
@@ -4385,7 +4440,6 @@ where
     );
 }
 
-#[test]
 fn plain_inherent_owner_expands_self_applications_to_its_target() {
     typecheck_without_std_prelude(
         r#"defstruct Box<$A> {
@@ -4412,7 +4466,6 @@ value: Int = Box::get(boxed)"#,
     .expect("Self<$A> in a plain inherent owner should mean Box<$A>");
 }
 
-#[test]
 fn canonical_builtin_inherent_owners_expand_self_applications_to_their_targets() {
     for owner in ["List", "HashMap", "Workers", "TaskHandle"] {
         let source = format!(
@@ -4426,7 +4479,6 @@ fn canonical_builtin_inherent_owners_expand_self_applications_to_their_targets()
     }
 }
 
-#[test]
 fn trait_contract_self_substitution_preserves_captured_target_parameters() {
     typecheck_without_std_prelude(
         r#"deftrait ReplaceRight
@@ -4454,7 +4506,6 @@ where
     .expect("trait contract expansion must preserve captured target parameters");
 }
 
-#[test]
 fn same_family_constructor_parameters_share_one_witness() {
     let err = typecheck_without_std_prelude(
         r#"deftrait Context
@@ -4492,7 +4543,6 @@ accept(Left::Left(1), Right::Right("ok"))"#,
     );
 }
 
-#[test]
 fn constructor_application_result_shares_the_input_witness() {
     let err = typecheck_without_std_prelude(
         r#"deftrait Context
@@ -4532,7 +4582,6 @@ result: Right<String> = replace(Left::Left(1))"#,
     );
 }
 
-#[test]
 fn constructor_application_result_accepts_the_shared_abstract_input_witness() {
     typecheck_without_std_prelude(
         r#"deftrait Context
@@ -4545,7 +4594,6 @@ def preserve(value: Context<Int>) -> Context<Int> { value }"#,
     .expect("the direct result reuses the abstract input witness");
 }
 
-#[test]
 fn constructor_application_result_rejects_mixed_concrete_constructors() {
     let err = typecheck_without_std_prelude(
         r#"deftrait Context
@@ -4584,7 +4632,6 @@ def make::<Context>(flag: Boolean) -> Context<Int> {
     );
 }
 
-#[test]
 fn identity_dependent_constructor_applications_are_rejected_outside_direct_signatures() {
     let declarations = r#"deftrait Context
 where
@@ -4631,7 +4678,6 @@ where
     }
 }
 
-#[test]
 fn extractor_signatures_reject_identity_dependent_constructor_applications() {
     let declarations = r#"deftrait Context
 where
@@ -4678,7 +4724,6 @@ impl Owner {
     }
 }
 
-#[test]
 fn trait_default_contextual_result_requires_constructor_trait_membership() {
     let err = typecheck_without_std_prelude(
         r#"deftrait Context
@@ -4703,7 +4748,6 @@ deftrait Maker {
     );
 }
 
-#[test]
 fn trait_impl_contextual_result_requires_constructor_trait_membership() {
     let err = typecheck_without_std_prelude(
         r#"deftrait Context
@@ -4732,7 +4776,6 @@ impl Maker for Int {
     );
 }
 
-#[test]
 fn trait_impl_contextual_result_accepts_an_implementing_constructor() {
     typecheck_without_std_prelude(
         r#"deftrait Context
@@ -4760,7 +4803,6 @@ impl Maker for Int {
     .expect("an impl body may resolve its contextual result to a Context constructor");
 }
 
-#[test]
 fn bare_capability_is_consumed_by_a_full_parameterized_trait_obligation() {
     let typed = typecheck_without_std_prelude(
         r#"deftrait Convert<$To> {
@@ -4809,7 +4851,6 @@ result: String = convert_to_string(1)"#,
     assert!(matches!(dispatch, scar::typed::TraitDispatch::Static(_)));
 }
 
-#[test]
 fn unused_function_capability_is_rejected_at_its_bound() {
     let source = r#"deftrait Marker {
   def mark(self: Self) -> Unit
@@ -4829,7 +4870,6 @@ where
     assert_eq!(err.span.start, marker_start);
 }
 
-#[test]
 fn unused_trait_method_capability_is_rejected_at_its_bound() {
     let err = typecheck_without_std_prelude(
         r#"deftrait Marker {
@@ -4849,7 +4889,6 @@ deftrait Consumer {
     assert!(err.message.contains("UnusedTraitConstraint"), "{err:?}");
 }
 
-#[test]
 fn unused_trait_impl_method_capability_is_rejected_at_its_bound() {
     let err = typecheck_without_std_prelude(
         r#"deftrait Marker {
@@ -4875,7 +4914,6 @@ impl Consumer for Int {
     assert!(err.message.contains("UnusedTraitConstraint"), "{err:?}");
 }
 
-#[test]
 fn unused_trait_impl_block_capability_is_rejected_after_all_methods() {
     let err = typecheck_without_std_prelude(
         r#"deftrait Marker {
@@ -4901,7 +4939,6 @@ where
     assert!(err.message.contains("UnusedTraitConstraint"), "{err:?}");
 }
 
-#[test]
 fn operator_obligation_consumes_a_bare_capability() {
     typecheck_without_std_prelude(
         r#"deftrait Add {
@@ -4924,7 +4961,6 @@ result: Int = duplicate(1)"#,
     .expect("operator lowering must consume the matching bare capability");
 }
 
-#[test]
 fn generic_call_forwards_and_consumes_a_bare_capability() {
     typecheck_without_std_prelude(
         r#"deftrait Marker {
@@ -4954,7 +4990,6 @@ forward(1)"#,
     .expect("a generic call must consume the proof it forwards to its callee");
 }
 
-#[test]
 fn different_constructor_roots_keep_independent_parameter_witnesses() {
     typecheck_without_std_prelude(
         r#"deftrait LeftContext
@@ -4988,7 +5023,6 @@ accept(Boxed::Boxed(1), Boxed::Boxed("ok"))"#,
     .expect("different constructor roots must never share a parameter witness");
 }
 
-#[test]
 fn parent_trait_constraints_require_matching_impls_and_inherit_slots() {
     let declarations = r#"deftrait Parent
 where
@@ -5034,7 +5068,6 @@ impl Parent for Identity<$T> {{
     .expect("the child should inherit the parent's unary constructor slot");
 }
 
-#[test]
 fn concrete_constructor_implementation_can_be_passed_to_parent_or_child_trait() {
     typecheck_with_rules(
         r#"
@@ -5049,7 +5082,6 @@ take_functor(Option::Some(1))
     .expect("a concrete Option value should satisfy either constructor trait");
 }
 
-#[test]
 fn abstract_applicative_cannot_use_monad_helper_but_concrete_option_can() {
     let err = typecheck_with_rules(
         r#"
@@ -5101,7 +5133,6 @@ preserve_applicative2(Option::Some(1))
     );
 }
 
-#[test]
 fn trait_default_methods_and_private_helpers_are_accepted() {
     let source = r#"
 deftrait DefaultValue {
@@ -5117,7 +5148,6 @@ impl DefaultValue for Int {
         .expect("default trait methods and impl-private helpers should typecheck");
 }
 
-#[test]
 fn parent_trait_cycles_and_slot_mapping_mismatches_are_rejected() {
     let cycle = r#"deftrait Left
 where
@@ -5175,7 +5205,6 @@ where
     );
 }
 
-#[test]
 fn trait_impl_signature_validation_preserves_generic_relationships() {
     let err = typecheck_with_rules(
         r#"deftrait Pick {
@@ -5191,7 +5220,6 @@ impl Pick for Int {
     assert!(err.message.contains("incompatible signature"), "{err:?}");
 }
 
-#[test]
 fn trait_impl_method_generics_are_rigid_while_checking_the_body() {
     let err = typecheck_with_rules(
         r#"deftrait Keep {
@@ -6902,7 +6930,6 @@ user = User("alice")"#,
     assert!(err.message.contains("must define `new` in its impl block"));
 }
 
-#[test]
 fn empty_struct_default_derives_without_relaxing_new_contract() {
     let resolved = resolve_with_builtin_prelude(
         r#"@derive Default
@@ -6919,7 +6946,6 @@ constructed = Empty()
     typecheck(resolved).expect("empty struct should derive Default and retain new constructor");
 }
 
-#[test]
 fn empty_struct_without_new_is_rejected() {
     let resolved = resolve_with_builtin_prelude(
         r#"@derive Default
@@ -6932,7 +6958,6 @@ value = Default::default::<Empty>()
     assert!(err.message.contains("must define `new` in its impl block"));
 }
 
-#[test]
 fn empty_struct_eq_and_neq_are_constant() {
     let resolved = resolve_with_builtin_prelude(
         r#"@derive Eq
@@ -6949,7 +6974,6 @@ different = Empty() != Empty()
     typecheck(resolved).expect("empty struct Eq derive should provide eq and neq");
 }
 
-#[test]
 fn empty_struct_compare_is_equal() {
     let resolved = resolve_with_builtin_prelude(
         r#"@derive Compare
@@ -7286,7 +7310,6 @@ less = 10ms < 20ms"#,
     );
 }
 
-#[test]
 fn compare_default_methods_dispatch_to_trait_source_when_impl_omits_override() {
     let typed = typecheck_with_builtin_prelude(
         r#"
@@ -7335,7 +7358,6 @@ less = lt(BoxedInt(1), BoxedInt(2))
     ));
 }
 
-#[test]
 fn compare_trait_impl_still_requires_compare_method() {
     let resolved = resolve_with_builtin_prelude(
         r#"
@@ -9075,7 +9097,6 @@ value = Result::tap_err(Err(NoneError), id(handler))"#,
     assert!(err.message.contains("Error observer closure cannot escape"));
 }
 
-#[test]
 fn explicit_type_arguments_specialize_functions_trait_calls_and_captures() {
     let typed = typecheck_with_builtin_prelude(
         r#"deftrait Convert<$To> {
@@ -9093,7 +9114,6 @@ again: Int = convert_fn("")"#,
     assert!(!typed.is_empty());
 }
 
-#[test]
 fn regular_callable_rejects_undeclared_return_type_arguments() {
     let resolved = resolve_with_builtin_prelude(
         r#"def identity(value: $A) -> $A { value }
@@ -9108,7 +9128,6 @@ bad: Int = identity::<Int>(1)"#,
     );
 }
 
-#[test]
 fn bare_trait_capability_controls_full_parameterized_dispatch() {
     let missing = r#"deftrait Convert<$To> {
   def convert::<$To>(self: Self) -> $To
@@ -9139,7 +9158,6 @@ where
         .expect("bare capability must permit a full parameterized dispatch");
 }
 
-#[test]
 fn trait_heads_and_expression_obligations_retain_nested_arguments() {
     let source = r#"deftrait Marker<$Tag> {
   def mark::<$Tag>(self: Self) -> $Tag
@@ -9161,7 +9179,6 @@ result: List<Int> = mark_list("ok")"#;
         .expect("trait-head and expression arguments must stay structural");
 }
 
-#[test]
 fn impl_bare_capabilities_emit_full_parameterized_obligations() {
     let satisfied = r#"deftrait Marker<$Tag> {
   def mark::<$Tag>(self: Self) -> $Tag
@@ -9266,7 +9283,6 @@ result = Use::use(value)"#;
         .expect("a generic trait argument must unify with the requested argument");
 }
 
-#[test]
 fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
     let resolved =
         resolve_with_builtin_prelude(r#"value = Concat::concat::<String>("left", "right")"#);
@@ -9286,7 +9302,6 @@ fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
     );
 }
 
-#[test]
 fn trait_method_type_slots_have_one_input_channel_and_return_type_arguments_flow_to_return() {
     let duplicated = resolve_with_builtin_prelude(
         r#"deftrait DuplicateInput {
@@ -9326,7 +9341,6 @@ fn trait_method_type_slots_have_one_input_channel_and_return_type_arguments_flow
     );
 }
 
-#[test]
 fn trait_impl_return_type_arguments_must_match_the_trait_slots() {
     let matching = resolve_with_builtin_prelude(
         r#"deftrait Convert<$To> {
@@ -9357,7 +9371,6 @@ impl Convert<Int> for String {
     );
 }
 
-#[test]
 fn explicit_function_type_arguments_follow_signature_order() {
     typecheck_with_rules(
         r#"def pair(left: $A, right: $B) -> ($A, $B) {

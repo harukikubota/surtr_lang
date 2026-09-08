@@ -1,10 +1,87 @@
+#![deny(dead_code)]
+
 #[allow(dead_code)]
 mod support;
 use diagnostics::{DiagnosticOrigin, TypeDiagnosticReason as Reason};
+use std::collections::HashSet;
+
 fn error(source: &str) -> scar::error::TypeError {
     support::typecheck(support::resolve_with_builtin_prelude(source)).expect_err(source)
 }
+
+macro_rules! diagnostic_case {
+    ($case:ident) => {
+        (stringify!($case), $case as fn())
+    };
+}
+
+const DIAGNOSTIC_CASES: &[(&str, fn())] = &[
+    diagnostic_case!(operator_and_trait_helper_share_typed_relation),
+    diagnostic_case!(branches_keep_reason_and_source_facts),
+    diagnostic_case!(ordinary_call_arguments_have_typed_reasons),
+    diagnostic_case!(argument_contract_reasons_are_distinct),
+    diagnostic_case!(return_and_annotation_reasons_remain_distinct),
+    diagnostic_case!(missing_trait_and_capability_reasons_are_structured),
+    diagnostic_case!(contextual_operator_relations_have_complete_facts),
+    diagnostic_case!(branch_context_contains_all_bodies_and_guards),
+    diagnostic_case!(callable_shape_reasons_are_structured),
+    diagnostic_case!(operator_origin_does_not_overwrite_nested_call_failures),
+    diagnostic_case!(operator_helpers_validate_explicit_return_type_arguments),
+    diagnostic_case!(bare_function_names_are_not_function_values),
+    diagnostic_case!(contextual_operator_helper_parity_covers_apply_bind_and_compose),
+    diagnostic_case!(constructor_arguments_use_common_call_contracts),
+    diagnostic_case!(callable_shape_failures_preserve_operator_and_helper_origins),
+    diagnostic_case!(nested_argument_relations_do_not_fall_back_to_prose),
+];
+
 #[test]
+fn diagnostic_case_inventory_has_unique_names_and_functions() {
+    let direct_tests = include_str!("structured_diagnostics.rs")
+        .lines()
+        .filter(|line| *line == "#[test]")
+        .count();
+    assert_eq!(
+        direct_tests, 1,
+        "structured diagnostic cases must be registered instead of using standalone #[test]"
+    );
+
+    let mut names = HashSet::new();
+    let mut functions = HashSet::new();
+    for &(name, case) in DIAGNOSTIC_CASES {
+        assert!(names.insert(name), "duplicate diagnostic case name: {name}");
+        assert!(
+            functions.insert(case as usize),
+            "duplicate diagnostic case function: {name}"
+        );
+    }
+}
+
+fn run_diagnostic_bucket(bucket: usize) {
+    let mut ran = 0usize;
+    for (index, &(name, case)) in DIAGNOSTIC_CASES.iter().enumerate() {
+        if index % 4 == bucket {
+            eprintln!("structured diagnostic case: {name}");
+            case();
+            ran += 1;
+        }
+    }
+    assert!(ran > 0, "no structured diagnostic cases in bucket {bucket}");
+}
+
+macro_rules! diagnostic_bucket {
+    ($name:ident, $bucket:expr) => {
+        #[test]
+        fn $name() {
+            run_diagnostic_bucket($bucket);
+        }
+    };
+}
+
+diagnostic_bucket!(structured_diagnostics_bucket_0, 0);
+diagnostic_bucket!(structured_diagnostics_bucket_1, 1);
+diagnostic_bucket!(structured_diagnostics_bucket_2, 2);
+diagnostic_bucket!(structured_diagnostics_bucket_3, 3);
+
 fn operator_and_trait_helper_share_typed_relation() {
     for (operator, helper) in [
         ("1 + \"x\"", "Add::add(1, \"x\")"),
@@ -30,7 +107,6 @@ fn operator_and_trait_helper_share_typed_relation() {
         assert!(!op.related.is_empty());
     }
 }
-#[test]
 fn branches_keep_reason_and_source_facts() {
     for (source, reason) in [
         ("if(True, 1, \"x\")", Reason::IfBranchTypeMismatch),
@@ -57,13 +133,11 @@ fn branches_keep_reason_and_source_facts() {
         );
     }
 }
-#[test]
 fn ordinary_call_arguments_have_typed_reasons() {
     let err = error("def take(value: Int) -> Int { value }\ntake(\"x\")");
     assert_eq!(err.reason(), Some(Reason::ArgumentTypeMismatch), "{err:?}");
 }
 
-#[test]
 fn argument_contract_reasons_are_distinct() {
     for (call, reason) in [
         ("take()", Reason::ArityMismatch),
@@ -77,7 +151,6 @@ fn argument_contract_reasons_are_distinct() {
     }
 }
 
-#[test]
 fn return_and_annotation_reasons_remain_distinct() {
     for (source, reason) in [
         ("def wrong() -> Int { \"x\" }", Reason::ReturnTypeMismatch),
@@ -88,7 +161,6 @@ fn return_and_annotation_reasons_remain_distinct() {
     }
 }
 
-#[test]
 fn missing_trait_and_capability_reasons_are_structured() {
     for (source, reason) in [
         (
@@ -105,7 +177,6 @@ fn missing_trait_and_capability_reasons_are_structured() {
     }
 }
 
-#[test]
 fn contextual_operator_relations_have_complete_facts() {
     for call in ["[1] |*> &wrong", "Functor::fmap([1], &wrong)"] {
         let source = format!("def wrong(value: String) -> String {{ value }}\n{call}");
@@ -131,7 +202,6 @@ fn contextual_operator_relations_have_complete_facts() {
     );
 }
 
-#[test]
 fn branch_context_contains_all_bodies_and_guards() {
     for source in [
         "cond { False => 1, False => \"x\", True => False }",
@@ -161,7 +231,6 @@ fn branch_context_contains_all_bodies_and_guards() {
     );
 }
 
-#[test]
 fn callable_shape_reasons_are_structured() {
     for (source, expected) in [
         ("value = 1\nvalue(2)", Reason::NotCallable),
@@ -175,14 +244,12 @@ fn callable_shape_reasons_are_structured() {
     }
 }
 
-#[test]
 fn operator_origin_does_not_overwrite_nested_call_failures() {
     let err = error("def take(value: Int) -> Int { value }\n1 + take(\"x\")");
     let diagnostic = err.structured.expect("structured nested argument failure");
     assert_eq!(diagnostic.origin, DiagnosticOrigin::Call, "{diagnostic:?}");
 }
 
-#[test]
 fn operator_helpers_validate_explicit_return_type_arguments() {
     for source in [
         "Functor::fmap::<Int, String, Boolean>([1], {|x: Int| x})",
@@ -198,13 +265,11 @@ fn operator_helpers_validate_explicit_return_type_arguments() {
     }
 }
 
-#[test]
 fn bare_function_names_are_not_function_values() {
     let err = error("def inc(x: Int) -> Int { x + 1 }\n1 |> inc");
     assert_eq!(err.reason(), Some(Reason::CallableShapeMismatch), "{err:?}");
 }
 
-#[test]
 fn contextual_operator_helper_parity_covers_apply_bind_and_compose() {
     for (prefix, operator, helper) in [
         (
@@ -244,7 +309,6 @@ fn contextual_operator_helper_parity_covers_apply_bind_and_compose() {
     }
 }
 
-#[test]
 fn constructor_arguments_use_common_call_contracts() {
     for (call, reason) in [
         ("Item()", Reason::ArityMismatch),
@@ -264,7 +328,6 @@ fn constructor_arguments_use_common_call_contracts() {
     }
 }
 
-#[test]
 fn callable_shape_failures_preserve_operator_and_helper_origins() {
     let operator = error("[1] |*> {|a: Int, b: Int| a}").structured.unwrap();
     let helper = error("Functor::fmap([1], {|a: Int, b: Int| a})")
@@ -278,7 +341,6 @@ fn callable_shape_failures_preserve_operator_and_helper_origins() {
     assert_eq!(helper.origin, DiagnosticOrigin::TraitCall);
 }
 
-#[test]
 fn nested_argument_relations_do_not_fall_back_to_prose() {
     for source in [
         "def take(value: List<Int>) -> Int { 1 }\ntake([\"x\"])",

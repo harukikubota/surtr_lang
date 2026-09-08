@@ -1,13 +1,64 @@
+#![deny(dead_code)]
+
 #[allow(dead_code)]
 mod support;
 use diagnostics::{SourceId, TypeDiagnosticReason as Reason};
+use std::collections::HashSet;
+
 fn error(source: &str) -> diagnostics::StructuredDiagnostic {
     support::typecheck(support::resolve_with_builtin_prelude(source))
         .expect_err(source)
         .structured
         .expect("structured diagnostic")
 }
+
+macro_rules! schema_case {
+    ($case:ident) => {
+        (stringify!($case), $case as fn())
+    };
+}
+
+const SCHEMA_CASES: &[(&str, fn())] = &[
+    schema_case!(source_diagnostic_data_is_independent_of_presentation_facts),
+    schema_case!(missing_return_input_has_no_fabricated_actual_type_and_surface_help),
+    schema_case!(trait_arity_uses_null_types_and_owned_impl_origin),
+    schema_case!(branch_schema_keeps_both_source_ordinals),
+    schema_case!(operator_obligation_origin_matches_its_source_operand),
+];
+
 #[test]
+fn schema_case_inventory_has_unique_names_and_functions() {
+    let direct_tests = include_str!("closed_diagnostic_schema.rs")
+        .lines()
+        .filter(|line| *line == "#[test]")
+        .count();
+    assert_eq!(
+        direct_tests, 2,
+        "diagnostic schema cases must be registered instead of using standalone #[test]"
+    );
+
+    let mut names = HashSet::new();
+    let mut functions = HashSet::new();
+    for &(name, case) in SCHEMA_CASES {
+        assert!(
+            names.insert(name),
+            "duplicate diagnostic schema case name: {name}"
+        );
+        assert!(
+            functions.insert(case as usize),
+            "duplicate diagnostic schema case function: {name}"
+        );
+    }
+}
+
+#[test]
+fn closed_diagnostic_schema_suite() {
+    for &(name, case) in SCHEMA_CASES {
+        eprintln!("closed diagnostic schema case: {name}");
+        case();
+    }
+}
+
 fn source_diagnostic_data_is_independent_of_presentation_facts() {
     for source in [
         "def take(x: Int) -> Int { x }\ntake(\"bad\")",
@@ -46,7 +97,6 @@ fn source_diagnostic_data_is_independent_of_presentation_facts() {
         );
     }
 }
-#[test]
 fn missing_return_input_has_no_fabricated_actual_type_and_surface_help() {
     let source = "def missing(mapper: ($A -> Int)) -> Option<$B> { 0 }";
     let diagnostic = error(source);
@@ -72,7 +122,6 @@ fn missing_return_input_has_no_fabricated_actual_type_and_surface_help() {
     spire::parse_with_context(&fixed, spire::ParserContext::project(0))
         .expect("suggested declaration syntax parses");
 }
-#[test]
 fn trait_arity_uses_null_types_and_owned_impl_origin() {
     let diagnostic = error("deftrait Copy { def copy(self: Self, value: Int) -> Int }\nimpl Copy for Int { def copy(self: Self) -> Int { 0 } }");
     assert_eq!(diagnostic.reason, Reason::TraitMethodTypeListArityMismatch);
@@ -83,7 +132,6 @@ fn trait_arity_uses_null_types_and_owned_impl_origin() {
     assert_eq!(data["impl_declaration"]["kind"], "impl");
 }
 
-#[test]
 fn branch_schema_keeps_both_source_ordinals() {
     for (source, form) in [
         ("if(True, 1, \"bad\")", "If"),
@@ -99,7 +147,6 @@ fn branch_schema_keeps_both_source_ordinals() {
     }
 }
 
-#[test]
 fn operator_obligation_origin_matches_its_source_operand() {
     let diagnostic = error("def broken(a: $A, b: $A) -> $A { a + b }");
     assert_eq!(diagnostic.reason, Reason::MissingGenericBound);
