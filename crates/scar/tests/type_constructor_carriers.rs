@@ -194,6 +194,131 @@ use(Box::Box(1))
 }
 
 #[test]
+fn multi_root_forwarding_rejects_unsupported_stronger_capability() {
+    let error = check(
+        r#"
+deftrait FirstRoot where Self: Type<$A> {}
+deftrait SecondRoot where Self: Type<$B> {}
+deftrait Left where Self: FirstRoot + SecondRoot {}
+deftrait Right where Self: FirstRoot + SecondRoot {}
+deftrait Stronger where Self: Left { def run(self: Self<Int>) -> Int }
+defenum Box<$T> { Box($T), }
+impl FirstRoot for Box<$T> {}
+impl SecondRoot for Box<$T> {}
+impl Left for Box<$T> {}
+impl Right for Box<$T> {}
+impl Stronger for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def choose(first: $T, second: $T) -> $T { first }
+def use(a: Left<Int>, b: Right<Int>) -> Int {
+  alias = choose(a, b)
+  Stronger::run(alias)
+}
+use(Box::Box(1), Box::Box(2))
+"#,
+    )
+    .expect_err("forwarding must retain every incomparable common capability");
+    assert!(
+        error.to_string().contains(
+            "Stronger::run is not available for a value constrained by FirstRoot + SecondRoot"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn multi_root_forwarding_keeps_all_common_parent_capabilities() {
+    check(
+        r#"
+deftrait FirstRoot where Self: Type<$A> { def first(self: Self<Int>) -> Int }
+deftrait SecondRoot where Self: Type<$B> { def second(self: Self<Int>) -> Int }
+deftrait Left where Self: FirstRoot + SecondRoot {}
+deftrait Right where Self: FirstRoot + SecondRoot {}
+defenum Box<$T> { Box($T), }
+impl FirstRoot for Box<$T> { def first(self: Self<Int>) -> Int { 1 } }
+impl SecondRoot for Box<$T> { def second(self: Self<Int>) -> Int { 2 } }
+impl Left for Box<$T> {}
+impl Right for Box<$T> {}
+def choose(first: $T, second: $T) -> $T { first }
+def use(a: Left<Int>, b: Right<Int>) -> Int {
+  alias = choose(a, b)
+  first = FirstRoot::first(alias)
+  SecondRoot::second(alias)
+}
+use(Box::Box(1), Box::Box(2))
+"#,
+    )
+    .expect("forwarding retains methods from every guaranteed common parent");
+}
+
+#[test]
+fn identical_forwarded_sources_keep_their_stronger_capability() {
+    check(
+        r#"
+deftrait Root where Self: Type<$A> {}
+deftrait Stronger where Self: Root { def run(self: Self<Int>) -> Int }
+defenum Box<$T> { Box($T), }
+impl Root for Box<$T> {}
+impl Stronger for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def choose(first: $T, second: $T) -> $T { first }
+def use(a: Stronger<Int>, b: Stronger<Int>) -> Int {
+  alias = choose(a, b)
+  Stronger::run(alias)
+}
+use(Box::Box(1), Box::Box(2))
+"#,
+    )
+    .expect("identical constrained sources retain their stronger capability");
+}
+
+#[test]
+fn empty_guarantee_intersection_remains_distinct_from_an_unrestricted_value() {
+    check(
+        r#"
+deftrait Root where Self: Type<$A> {}
+deftrait Stronger where Self: Root { def run(self: Self<Int>) -> Int }
+defenum Box<$T> { Box($T), }
+impl Root for Box<$T> {}
+impl Stronger for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def stronger(value: Stronger<Int>) -> Int { Stronger::run(value) }
+stronger(Box::Box(1))
+"#,
+    )
+    .expect("an ordinary concrete value has no provenance restriction");
+
+    let declarations = r#"
+deftrait FirstRoot where Self: Type<$A> {}
+deftrait SecondRoot where Self: Type<$B> {}
+deftrait Left where Self: FirstRoot {}
+deftrait Right where Self: SecondRoot {}
+deftrait Bridge where Self: Left + Right {}
+deftrait Stronger where Self: Left { def run(self: Self<Int>) -> Int }
+defenum Box<$T> { Box($T), }
+impl FirstRoot for Box<$T> {}
+impl SecondRoot for Box<$T> {}
+impl Left for Box<$T> {}
+impl Right for Box<$T> {}
+impl Stronger for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def choose(first: $T, second: $T) -> $T { first }
+def stronger(value: Stronger<Int>) -> Int { Stronger::run(value) }
+"#;
+    let error = check(&format!(
+        r#"{declarations}
+def use(a: Left<Int>, b: Right<Int>) -> Int {{
+  alias = choose(a, b)
+  stronger(alias)
+}}
+use(Box::Box(1), Box::Box(2))"#
+    ))
+    .expect_err("an empty guarantee intersection remains constrained");
+    assert!(
+        error
+            .to_string()
+            .contains("function requires a value constrained by Stronger, got a constrained value with no guaranteed constructor capability"),
+        "{error}"
+    );
+}
+
+#[test]
 fn ordinary_callable_argument_checks_constructor_capability() {
     let error = check(
         r#"

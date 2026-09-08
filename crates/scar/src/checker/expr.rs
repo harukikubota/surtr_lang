@@ -56,7 +56,7 @@ pub(super) struct CandidateProbeCheckpoint {
     tyvar_bounds: HashMap<u32, Vec<String>>,
     pending_trait_obligations: HashMap<u32, Vec<PendingTraitObligation>>,
     active_capabilities: Vec<CapabilityUse>,
-    constructor_capabilities: HashMap<u32, String>,
+    constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     constructor_witness_traits: HashMap<u32, String>,
     constructor_family_witnesses: HashMap<u32, u32>,
     warnings: WarningBuffer,
@@ -235,7 +235,8 @@ impl Checker {
         method_name: &str,
         arg: &TypedNode,
     ) -> Result<(), TypeError> {
-        let Some(actual_trait) = self.constructor_capability_for_node(arg) else {
+        let actual = self.constructor_capability_for_node(arg);
+        let ConstructorCapabilityProvenance::Constrained(capabilities) = &actual else {
             return Ok(());
         };
         let Some(required_info) = self.traits.get(required_trait) else {
@@ -244,17 +245,18 @@ impl Checker {
         if required_info.constructor_slots.is_empty() {
             return Ok(());
         }
-        let mut visiting = HashSet::new();
-        if self.constructor_capability_allows(&actual_trait, required_trait, &mut visiting) {
+        if capabilities.iter().any(|actual_trait| {
+            self.constructor_capability_allows(actual_trait, required_trait, &mut HashSet::new())
+        }) {
             return Ok(());
         }
         Err(TypeError {
             structured: None,
             message: format!(
-                "{}::{} is not available for a value constrained by {}",
+                "{}::{} is not available for {}",
                 Self::surface_name(required_trait),
                 method_name,
-                Self::surface_name(&actual_trait)
+                Self::constructor_provenance_description(&actual)
             ),
             span: arg.span.clone(),
             hint: Some(format!(
@@ -269,7 +271,7 @@ impl Checker {
         trait_key: &str,
         expected: &Ty,
         actual: &Ty,
-        source_capability: Option<&str>,
+        source_provenance: &ConstructorCapabilityProvenance,
     ) -> bool {
         let expected = self.resolve_ty(expected);
         let actual = self.resolve_ty(actual);
@@ -302,12 +304,17 @@ impl Checker {
         }
 
         let capability_ok = if abstract_is_actual {
-            let Some(source_capability) = source_capability else {
+            let ConstructorCapabilityProvenance::Constrained(capabilities) = source_provenance
+            else {
                 return false;
             };
-            let mut visiting = HashSet::new();
-            self.constructor_capability_allows(source_capability, trait_key, &mut visiting)
-                && self.trait_impl_exists(source_capability, concrete_ty)
+            capabilities.iter().any(|source_capability| {
+                self.constructor_capability_allows(
+                    source_capability,
+                    trait_key,
+                    &mut HashSet::new(),
+                ) && self.trait_impl_exists(source_capability, concrete_ty)
+            })
         } else {
             self.trait_impl_exists(trait_key, concrete_ty)
         };
@@ -324,26 +331,32 @@ impl Checker {
         slots_ok
     }
 
-    fn constructor_capability_for_node(&self, node: &TypedNode) -> Option<String> {
+    fn constructor_capability_for_node(&self, node: &TypedNode) -> ConstructorCapabilityProvenance {
         match &node.node {
-            TypedInner::Var(id) => self.constructor_capabilities.get(&id.unique_id).cloned(),
+            TypedInner::Var(id) => self
+                .constructor_capabilities
+                .get(&id.unique_id)
+                .cloned()
+                .unwrap_or(ConstructorCapabilityProvenance::Unrestricted),
             TypedInner::App(func, args) => {
                 let TypedInner::Var(id) = &func.node else {
-                    return None;
+                    return ConstructorCapabilityProvenance::Unrestricted;
                 };
-                let signature = self.callable_signatures.get(&id.unique_id)?;
+                let Some(signature) = self.callable_signatures.get(&id.unique_id) else {
+                    return ConstructorCapabilityProvenance::Unrestricted;
+                };
                 if let Some(capability) =
                     self.constructor_capability_for_type(&signature.return_type.ty)
                 {
-                    return Some(capability);
+                    return ConstructorCapabilityProvenance::constrained(capability);
                 }
                 if signature.identity.declaration_kind
                     != sindr::signature::CallableDeclarationKind::Function
                 {
-                    return None;
+                    return ConstructorCapabilityProvenance::Unrestricted;
                 }
                 let Ty::Var(return_var) = &signature.return_type.ty else {
-                    return None;
+                    return ConstructorCapabilityProvenance::Unrestricted;
                 };
                 let sources = signature
                     .value_parameters
@@ -354,17 +367,17 @@ impl Checker {
                     })
                     .collect::<Vec<_>>();
                 if sources.is_empty() {
-                    return None;
+                    return ConstructorCapabilityProvenance::Unrestricted;
                 }
-                let capabilities = sources
+                let provenances = sources
                     .into_iter()
                     .filter_map(|source| args.get(source))
-                    .filter_map(|arg| self.constructor_capability_for_node(arg))
+                    .map(|arg| self.constructor_capability_for_node(arg))
                     .collect::<Vec<_>>();
-                self.common_constructor_capability(&capabilities)
+                self.common_constructor_provenance(&provenances)
             }
             TypedInner::EagerBoundary(inner) => self.constructor_capability_for_node(inner),
-            _ => None,
+            _ => ConstructorCapabilityProvenance::Unrestricted,
         }
     }
 
@@ -379,34 +392,88 @@ impl Checker {
         self.constructor_witness_traits.get(var).cloned()
     }
 
-    fn common_constructor_capability(&self, capabilities: &[String]) -> Option<String> {
-        if capabilities.is_empty() {
-            return None;
+    fn common_constructor_provenance(
+        &self,
+        provenances: &[ConstructorCapabilityProvenance],
+    ) -> ConstructorCapabilityProvenance {
+        let constrained = provenances
+            .iter()
+            .filter_map(|provenance| match provenance {
+                ConstructorCapabilityProvenance::Unrestricted => None,
+                ConstructorCapabilityProvenance::Constrained(capabilities) => Some(capabilities),
+            })
+            .collect::<Vec<_>>();
+        if constrained.is_empty() {
+            return ConstructorCapabilityProvenance::Unrestricted;
         }
-        let mut candidates = self
+        let candidates = self
             .traits
             .iter()
             .filter_map(|(candidate, info)| {
                 if info.constructor_slots.is_empty() {
                     return None;
                 }
-                capabilities
+                constrained
                     .iter()
-                    .all(|actual| {
-                        self.constructor_capability_allows(actual, candidate, &mut HashSet::new())
+                    .all(|capabilities| {
+                        capabilities.iter().any(|actual| {
+                            self.constructor_capability_allows(
+                                actual,
+                                candidate,
+                                &mut HashSet::new(),
+                            )
+                        })
                     })
                     .then_some(candidate.clone())
             })
-            .collect::<Vec<_>>();
-        candidates.sort();
-        candidates.iter().find_map(|candidate| {
-            candidates
-                .iter()
-                .all(|other| {
-                    self.constructor_capability_allows(candidate, other, &mut HashSet::new())
+            .collect::<BTreeSet<_>>();
+        let maximal = candidates
+            .iter()
+            .filter(|candidate| {
+                !candidates.iter().any(|other| {
+                    candidate != &other
+                        && self.constructor_capability_allows(other, candidate, &mut HashSet::new())
                 })
-                .then(|| candidate.clone())
-        })
+            })
+            .cloned()
+            .collect();
+        ConstructorCapabilityProvenance::Constrained(maximal)
+    }
+
+    fn constructor_provenance_description(provenance: &ConstructorCapabilityProvenance) -> String {
+        match provenance {
+            ConstructorCapabilityProvenance::Unrestricted => {
+                "an unrestricted concrete value".into()
+            }
+            ConstructorCapabilityProvenance::Constrained(capabilities)
+                if capabilities.is_empty() =>
+            {
+                "a constrained value with no guaranteed constructor capability".into()
+            }
+            ConstructorCapabilityProvenance::Constrained(capabilities) => format!(
+                "a value constrained by {}",
+                capabilities
+                    .iter()
+                    .map(|capability| Self::surface_name(capability))
+                    .collect::<Vec<_>>()
+                    .join(" + ")
+            ),
+        }
+    }
+
+    fn constructor_provenance_allows(
+        &self,
+        provenance: &ConstructorCapabilityProvenance,
+        required: &str,
+    ) -> bool {
+        match provenance {
+            ConstructorCapabilityProvenance::Unrestricted => true,
+            ConstructorCapabilityProvenance::Constrained(capabilities) => {
+                capabilities.iter().any(|actual| {
+                    self.constructor_capability_allows(actual, required, &mut HashSet::new())
+                })
+            }
+        }
     }
 
     fn check_expected_constructor_capability(
@@ -418,20 +485,20 @@ impl Checker {
         let Some(required_trait) = self.constructor_capability_for_type(expected) else {
             return Ok(());
         };
-        let Some(actual_trait) = self.constructor_capability_for_node(arg) else {
+        let actual = self.constructor_capability_for_node(arg);
+        if matches!(actual, ConstructorCapabilityProvenance::Unrestricted) {
             return Ok(());
-        };
-        let mut visiting = HashSet::new();
-        if self.constructor_capability_allows(&actual_trait, &required_trait, &mut visiting) {
+        }
+        if self.constructor_provenance_allows(&actual, &required_trait) {
             return Ok(());
         }
         Err(TypeError {
             structured: None,
             message: format!(
-                "{} requires a value constrained by {}, got a value constrained by {}",
+                "{} requires a value constrained by {}, got {}",
                 callee_label,
                 Self::surface_name(&required_trait),
-                Self::surface_name(&actual_trait)
+                Self::constructor_provenance_description(&actual)
             ),
             span: arg.span.clone(),
             hint: Some(format!(
@@ -1279,18 +1346,29 @@ impl Checker {
                     let mut typed_rhs = self.check_node_with_expected(rhs, Some(&expected))?;
                     self.apply_facet_annotation(&mut typed_rhs, &expected, span)?;
                     if !self.types_compatible(&expected, &typed_rhs.ty) {
-                        let source_capability = self.constructor_capability_for_node(&typed_rhs);
-                        let constructor_coercion = self
-                            .constructor_trait_key_for_ast_ty(ast_ty)
-                            .or_else(|| source_capability.clone())
-                            .is_some_and(|trait_key| {
+                        let source_provenance = self.constructor_capability_for_node(&typed_rhs);
+                        let annotation_capability = self.constructor_trait_key_for_ast_ty(ast_ty);
+                        let constructor_coercion = if let Some(trait_key) = annotation_capability {
+                            self.constructor_annotation_compatible(
+                                &trait_key,
+                                &expected,
+                                &typed_rhs.ty,
+                                &source_provenance,
+                            )
+                        } else if let ConstructorCapabilityProvenance::Constrained(capabilities) =
+                            &source_provenance
+                        {
+                            capabilities.iter().any(|trait_key| {
                                 self.constructor_annotation_compatible(
-                                    &trait_key,
+                                    trait_key,
                                     &expected,
                                     &typed_rhs.ty,
-                                    source_capability.as_deref(),
+                                    &source_provenance,
                                 )
-                            });
+                            })
+                        } else {
+                            false
+                        };
                         if constructor_coercion {
                             typed_rhs.ty = expected.clone();
                         } else {
@@ -1335,23 +1413,26 @@ impl Checker {
                         hint: None,
                     });
                 }
-                let inherited_constructor_capability =
+                let inherited_constructor_provenance =
                     self.constructor_capability_for_node(&typed_rhs);
                 let (typed_pat, pat_ty) = self.check_pattern(pat, &typed_rhs.ty, span)?;
                 self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
-                let binding_constructor_capability = match pat {
-                    ResolvedPattern::Annotated(_, ast_ty) => {
-                        self.constructor_trait_key_for_ast_ty(ast_ty)
-                    }
-                    _ => inherited_constructor_capability,
+                let binding_constructor_provenance = match pat {
+                    ResolvedPattern::Annotated(_, ast_ty) => self
+                        .constructor_trait_key_for_ast_ty(ast_ty)
+                        .map(ConstructorCapabilityProvenance::constrained)
+                        .unwrap_or(ConstructorCapabilityProvenance::Unrestricted),
+                    _ => inherited_constructor_provenance,
                 };
-                if let Some(capability) = binding_constructor_capability {
+                if let ConstructorCapabilityProvenance::Constrained(_) =
+                    binding_constructor_provenance
+                {
                     match &typed_pat {
                         TypedPattern::Var(_, id) | TypedPattern::As(_, _, id) => {
                             self.constructor_capabilities
-                                .insert(id.unique_id, capability);
+                                .insert(id.unique_id, binding_constructor_provenance);
                         }
                         _ => {}
                     }

@@ -1190,8 +1190,10 @@ impl Checker {
             self.env.bind_var(*unique_id, ty.clone());
         }
         for (unique_id, capability) in local_capabilities {
-            self.constructor_capabilities
-                .insert(*unique_id, capability.clone());
+            self.constructor_capabilities.insert(
+                *unique_id,
+                ConstructorCapabilityProvenance::constrained(capability.clone()),
+            );
         }
 
         // Function and trait method bodies are embedded in a top-level typed
@@ -1628,7 +1630,7 @@ impl Checker {
                     &trait_key,
                     &expected_ret,
                     &typed_body.ty,
-                    None,
+                    &ConstructorCapabilityProvenance::Unrestricted,
                 )
             });
         if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars)

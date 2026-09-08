@@ -1,6 +1,6 @@
 #[cfg(test)]
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -2329,10 +2329,12 @@ struct Checker {
     /// only when checking an expression requests the matching full trait
     /// family obligation (or forwards that proof to a generic callee).
     active_capabilities: Vec<CapabilityUse>,
-    /// Static constructor-trait capabilities attached to abstract bindings.
+    /// Static constructor-trait provenance attached to abstract bindings.
     /// These are intentionally binding-local: constructor roots may share a
-    /// witness while different bindings expose different trait capabilities.
-    constructor_capabilities: HashMap<u32, String>,
+    /// witness while different bindings expose different guaranteed capability
+    /// sets. An empty set remains constrained and is not an ordinary concrete
+    /// value.
+    constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     /// Constructor-trait identity for each signature-position witness.
     constructor_witness_traits: HashMap<u32, String>,
     constructor_family_witnesses: HashMap<u32, u32>,
@@ -2356,6 +2358,18 @@ struct Checker {
     warnings: WarningBuffer,
     #[cfg(test)]
     candidate_probe_checkpoint_count: Cell<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConstructorCapabilityProvenance {
+    Unrestricted,
+    Constrained(BTreeSet<String>),
+}
+
+impl ConstructorCapabilityProvenance {
+    fn constrained(trait_key: String) -> Self {
+        Self::Constrained(BTreeSet::from([trait_key]))
+    }
 }
 
 impl Checker {
