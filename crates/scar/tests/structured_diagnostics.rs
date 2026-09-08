@@ -41,8 +41,8 @@ fn diagnostic_case_inventory_has_unique_names_and_functions() {
         .filter(|line| *line == "#[test]")
         .count();
     assert_eq!(
-        direct_tests, 1,
-        "structured diagnostic cases must be registered instead of using standalone #[test]"
+        direct_tests, 2,
+        "only the structured diagnostic suite and inventory may use standalone #[test]"
     );
 
     let mut names = HashSet::new();
@@ -56,31 +56,13 @@ fn diagnostic_case_inventory_has_unique_names_and_functions() {
     }
 }
 
-fn run_diagnostic_bucket(bucket: usize) {
-    let mut ran = 0usize;
-    for (index, &(name, case)) in DIAGNOSTIC_CASES.iter().enumerate() {
-        if index % 4 == bucket {
-            eprintln!("structured diagnostic case: {name}");
-            case();
-            ran += 1;
-        }
+#[test]
+fn structured_diagnostics_suite() {
+    for &(name, case) in DIAGNOSTIC_CASES {
+        eprintln!("structured diagnostic case: {name}");
+        case();
     }
-    assert!(ran > 0, "no structured diagnostic cases in bucket {bucket}");
 }
-
-macro_rules! diagnostic_bucket {
-    ($name:ident, $bucket:expr) => {
-        #[test]
-        fn $name() {
-            run_diagnostic_bucket($bucket);
-        }
-    };
-}
-
-diagnostic_bucket!(structured_diagnostics_bucket_0, 0);
-diagnostic_bucket!(structured_diagnostics_bucket_1, 1);
-diagnostic_bucket!(structured_diagnostics_bucket_2, 2);
-diagnostic_bucket!(structured_diagnostics_bucket_3, 3);
 
 fn operator_and_trait_helper_share_typed_relation() {
     for (operator, helper) in [
