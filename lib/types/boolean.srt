@@ -67,18 +67,6 @@ impl Show for Boolean {
   @builtin def to_string(self: Self) -> String
 }
 
-impl From<Boolean> for Boolean {
-  @doc """
-  Return the value unchanged when converting `Boolean` to `Boolean`.
-  ## REPL
-  xldr(1)> from::<Boolean>(True)
-  True
-  """
-  def from::<Boolean>(self: Self) -> Boolean {
-    self
-  }
-}
-
 impl From<String> for Boolean {
   @doc """
   Convert `Boolean` into its standard string representation.

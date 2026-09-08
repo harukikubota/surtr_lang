@@ -89,7 +89,7 @@ mod tests {
     const DECODE_MODULE_SOURCE: &str = include_str!("../../../lib/traits/decode.srt");
     const FUNCTOR_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/functor.srt");
     const BIFUNCTOR_MODULE_SOURCE: &str =
-        include_str!("../../../lib/traits/operator/bifunctor.srt");
+        include_str!("../../../lib/traits/bifunctor.srt");
     const APPLICATIVE_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/applicative.srt");
     const MONAD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/monad.srt");

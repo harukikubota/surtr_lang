@@ -183,9 +183,9 @@ const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
-        file_name: "traits/operator/bifunctor.srt",
+        file_name: "traits/bifunctor.srt",
         module_path: "Bifunctor",
-        source: include_str!("../../../lib/traits/operator/bifunctor.srt"),
+        source: include_str!("../../../lib/traits/bifunctor.srt"),
         stage: StdlibStage::Main,
         variant: StdlibVariant::Default,
     },

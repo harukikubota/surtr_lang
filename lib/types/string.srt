@@ -531,18 +531,6 @@ impl Show for String {
   @builtin def to_string(self: Self) -> String
 }
 
-impl From<String> for String {
-  @doc """
-  Return the value unchanged when converting `String` to `String`.
-  ## REPL
-  xldr(1)> from::<String>("abc")
-  "abc"
-  """
-  def from::<String>(self: Self) -> String {
-    self
-  }
-}
-
 impl TryFrom<Int> for String {
   @doc """
   Parse the string as an `Int`, returning an error result on invalid input.

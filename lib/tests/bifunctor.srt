@@ -12,7 +12,7 @@ where
   def eq(self: Pair<$L, $R>, other: Pair<$L, $R>) -> Boolean {
     match self {
       Pair::Pair(left, right) => match other {
-        Pair::Pair(other_left, other_right) => Boolean::and(
+        Pair::Pair(other_left, other_right) => and(
           Eq::eq(left, other_left),
           Eq::eq(right, other_right)
         ),

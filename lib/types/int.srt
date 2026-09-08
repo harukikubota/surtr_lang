@@ -847,18 +847,6 @@ impl Show for Int {
   @builtin def to_string(self: Self) -> String
 }
 
-impl From<Int> for Int {
-  @doc """
-  Return the value unchanged when converting `Int` to `Int`.
-  ## REPL
-  xldr(1)> from::<Int>(42)
-  42
-  """
-  def from::<Int>(self: Self) -> Int {
-    self
-  }
-}
-
 impl From<String> for Int {
   @doc """
   Convert `Int` into its standard string representation.

@@ -139,18 +139,6 @@ impl Show for Float {
   @builtin def to_string(self: Self) -> String
 }
 
-impl From<Float> for Float {
-  @doc """
-  Return the value unchanged when converting `Float` to `Float`.
-  ## REPL
-  xldr(1)> from::<Float>(1.5)
-  1.5
-  """
-  def from::<Float>(self: Self) -> Float {
-    self
-  }
-}
-
 impl From<String> for Float {
   @doc """
   Convert `Float` into its standard string representation.
