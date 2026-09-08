@@ -311,7 +311,7 @@ deferror IndexOutOfBounds(detail: String) { detail }
 
 @doc """
 Concrete bootstrap error for Facet HashMap key access when the key is missing.
-`HashMap::get` keeps returning `NoneError`; Facet paths use this error so a
+`HashMap::map_get` keeps returning `NoneError`; Facet paths use this error so a
 missing path segment is visible in diagnostics.
 """
 deferror KeyNotFound(key: String) { "key not found: #{key}" }

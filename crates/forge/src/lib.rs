@@ -1454,7 +1454,7 @@ user3 = Facet::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
     fn facet_container_segments_lower_without_public_facet_builtin_calls() {
         let bytecode = codegen_source(
             r#"defrecord User(scores: List<Int>, score: HashMap<Int>)
-user = User([10, 20], HashMap::from_entries([("talk", 80)]))
+user = User([10, 20], HashMap::map_from_entries([("talk", 80)]))
 value1 =? Facet::view(List.[1], user.scores)
 value2 =? Facet::view(HashMap.["talk"], user.score)
 value3 =? Facet::view(User.scores.[1], user)

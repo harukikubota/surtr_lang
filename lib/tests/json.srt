@@ -35,7 +35,7 @@ test("Json") {
 
   describe("stringify") {
     it("uses deterministic object key order") {
-      value = JsonValue::Object(HashMap::from_entries([
+      value = JsonValue::Object(HashMap::map_from_entries([
         ("b", JsonValue::Int(2)),
         ("a", JsonValue::Int(1)),
       ]))

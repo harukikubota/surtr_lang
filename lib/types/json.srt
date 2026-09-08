@@ -75,7 +75,7 @@ defmod Json {
   """
   def get(value: JsonValue, key: String) -> Result<JsonValue, JsonDecodeError> {
     match value {
-      JsonValue::Object(map) => Result::map_err(HashMap::get(map, key), JsonDecodeError("$." ++ key, "field", "missing")),
+      JsonValue::Object(map) => Result::map_err(HashMap::map_get(map, key), JsonDecodeError("$." ++ key, "field", "missing")),
       other => Err(JsonDecodeError("$." ++ key, "object", kind(other))),
     }
   }
