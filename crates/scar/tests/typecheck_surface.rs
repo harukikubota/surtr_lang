@@ -8293,7 +8293,7 @@ fn process_self_typechecks_inside_process_handler() {
     let resolved =
         sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
             .expect("resolve should succeed");
-    scar::typecheck_staged_program(resolved)
+    typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
         .expect("Process::self should typecheck inside process handler");
 }
 
@@ -8329,7 +8329,8 @@ fn singleton_agent_pid_surface_returns_concrete_pid() {
         Some("__Script::fixture".to_string()),
     )
     .expect("resolve should succeed");
-    let typed = scar::typecheck_staged_program(resolved).expect("typecheck should succeed");
+    let typed = typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
+        .expect("typecheck should succeed");
     let rhs = typed
         .nodes
         .iter()
@@ -8376,7 +8377,8 @@ fn singleton_genserver_pid_surface_returns_concrete_pid() {
         Some("__Script::fixture".to_string()),
     )
     .expect("resolve should succeed");
-    let typed = scar::typecheck_staged_program(resolved).expect("typecheck should succeed");
+    let typed = typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
+        .expect("typecheck should succeed");
     let rhs = typed
         .nodes
         .iter()
@@ -8428,7 +8430,7 @@ done =? Counter::set(pid, 1)"#,
         Some("__Script::fixture".to_string()),
     )
     .expect("resolve should succeed");
-    scar::typecheck_staged_program(resolved)
+    typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
         .expect("singleton explicit pid-first agent surface should typecheck");
 }
 
@@ -8479,7 +8481,7 @@ done = Logger::log("hello")"#,
         Some("__Script::fixture".to_string()),
     )
     .expect("resolve should succeed");
-    scar::typecheck_staged_program(resolved)
+    typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
         .expect("additional @call handler should have process context access");
 }
 
@@ -8512,7 +8514,7 @@ fn genserver_call_handler_accepts_call_result_contract() {
     let resolved =
         sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
             .expect("resolve should succeed");
-    scar::typecheck_staged_program(resolved)
+    typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
         .expect("CallResult/CastResult handlers should typecheck");
 }
 
@@ -8538,8 +8540,8 @@ fn process_meta_state_mismatch_is_rejected() {
     let resolved =
         sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
             .expect("resolve should succeed");
-    let err =
-        scar::typecheck_staged_program(resolved).expect_err("meta.state mismatch should fail");
+    let err = typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
+        .expect_err("meta.state mismatch should fail");
 
     assert!(err.message.contains(
         "@get handler `Counter::get` first parameter must match process state type `Int`"
@@ -8624,7 +8626,7 @@ defmod Helper {
         sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
             .expect("resolve should succeed");
 
-    scar::typecheck_staged_program(resolved)
+    typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
         .expect("user-defined process state should be allowed in public signatures");
 }
 
@@ -8677,8 +8679,8 @@ fn typecheck_staged_program_keeps_process_specs() {
     let resolved =
         sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
             .expect("resolve should succeed");
-    let typed: TypedProgram =
-        scar::typecheck_staged_program(resolved).expect("typecheck should succeed");
+    let typed: TypedProgram = typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
+        .expect("typecheck should succeed");
 
     assert_eq!(typed.process_specs.len(), 2);
     let spec = typed
@@ -8799,7 +8801,7 @@ fn typecheck_supervisor_spawn_fixture(
         Some("__Script::fixture".to_string()),
     )
     .expect("resolve should succeed");
-    scar::typecheck_staged_program(resolved)
+    typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
 }
 
 fn typecheck_supervisor_pool_fixture(
@@ -8855,7 +8857,7 @@ fn typecheck_supervisor_pool_fixture(
         Some("__Script::fixture".to_string()),
     )
     .expect("resolve should succeed");
-    scar::typecheck_staged_program(resolved)
+    typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
 }
 
 fn dynsup_spawn_accepts_worker_init_route_reference() {

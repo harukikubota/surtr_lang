@@ -730,14 +730,31 @@ pub(crate) fn typecheck_module_source_result(source: &str) -> Result<Vec<TypedNo
     module_stages.push(parse_user_module_stage(source));
     let declaration_index = sigil::precollect_declaration_index(&module_stages)
         .map_err(|err| format!("resolve precollect failed: {}", err.message))?;
-    let resolved = sigil::resolve_staged_program_with_state(
+    let resolved = sigil::resolve_staged_program_from_state(
         &module_stages,
         Vec::new(),
         &declaration_index,
         None,
+        prelude.module_stages.len(),
+        prelude.resolve_resume_state,
     )
     .map_err(|err| format!("resolve failed: {}", err.message))?;
-    let user_resolved = sigil::ResolvedStagedProgram {
+    let mut session = session_from_cached_std_prelude();
+    session
+        .typecheck_staged_program_in_place_with_context(resolved, TypecheckContext::default())
+        .map(|program| program.nodes)
+        .map_err(|err| err.message)
+}
+
+pub(crate) fn typecheck_resolved_program_suffix_with_builtin_prelude(
+    resolved: sigil::ResolvedStagedProgram,
+) -> Result<scar::typed::TypedProgram, scar::error::TypeError> {
+    let prelude = cached_std_prelude();
+    assert!(
+        resolved.resolved.len() >= prelude.resolved_len,
+        "resolved program is shorter than the cached std prefix"
+    );
+    let suffix = sigil::ResolvedStagedProgram {
         resolved: resolved
             .resolved
             .into_iter()
@@ -747,9 +764,8 @@ pub(crate) fn typecheck_module_source_result(source: &str) -> Result<Vec<TypedNo
         boot_plan: resolved.boot_plan,
         resume_state: resolved.resume_state,
     };
-    scar::typecheck_staged_program(user_resolved)
-        .map(|program| program.nodes)
-        .map_err(|err| err.message)
+    let mut session = session_from_cached_std_prelude();
+    session.typecheck_staged_program_in_place_with_context(suffix, TypecheckContext::default())
 }
 
 pub(crate) fn typecheck_std_modules_with_overrides(
