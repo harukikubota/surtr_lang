@@ -18,12 +18,12 @@ Spire -> Sigil -> Scar -> Forge -> Eldr
 
 ```bash
 surtr --version
-surtr check <file.srt> [--format json]
-surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always] [--vm-stats] [--vm-stats-json] [--trace-opcode] [--trace-call] [--trace-limit <n>] [--trace-filter <csv>] [--phase-times] [--error-context verbose] [-- <arg>...]
+surtr check <file.srt> [--format json] [--phase-times|--phase-times-json]
+surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always] [--vm-stats] [--vm-stats-json] [--trace-opcode] [--trace-call] [--trace-limit <n>] [--trace-filter <csv>] [--phase-times|--phase-times-json] [--error-context verbose] [-- <arg>...]
 surtr test [--quiet|-q] <lib-relative-name|--all>
 surtr repl [--quiet] [--banner] [--version] [--module <file.srt>] [--script <file.srt>]
-surtr build <file.srt> [output.eldr]
-surtr dump <file.eldr|entry.srt> [--format json|viewer-json] [--entry <name>] [--opcode-histogram] [--peephole-candidates]
+surtr build <file.srt> [output.eldr] [--phase-times|--phase-times-json]
+surtr dump <file.eldr|entry.srt> [--format json|viewer-json] [--entry <name>] [--opcode-histogram] [--peephole-candidates] [--phase-times|--phase-times-json]
 surtr tui [file.eldr]
 ```
 

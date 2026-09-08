@@ -37,6 +37,71 @@ fn build_uses_default_eldr_output_path() {
 }
 
 #[test]
+fn build_phase_times_json_is_compile_only() {
+    let temp = unique_temp_dir("surtr_build_phase_times_json");
+    let source_path = temp.join("sample.srt");
+    let output_path = temp.join("sample.eldr");
+    write_source(&source_path, "print(\"ok\")\n");
+
+    let output = surtr_command()
+        .args([
+            "build",
+            source_path.to_str().expect("source path must be utf-8"),
+            output_path.to_str().expect("output path must be utf-8"),
+            "--phase-times-json",
+        ])
+        .output()
+        .expect("failed to run build command");
+
+    assert!(output.status.success(), "build failed: {:?}", output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report: Value = serde_json::from_str(stderr.trim()).expect("timing report must be json");
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["phases"]["compile"]["status"], "executed");
+    assert_eq!(report["phases"]["execute"]["status"], "skipped");
+    assert!(report["phases"]["output_write"]["duration_us"]
+        .as_u64()
+        .is_some());
+    assert!(report["total_us"].as_u64().is_some());
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn check_and_source_dump_phase_times_json_use_compile_payload() {
+    let temp = unique_temp_dir("surtr_check_dump_phase_times_json");
+    let source_path = temp.join("sample.srt");
+    write_source(&source_path, "print(\"ok\")\n");
+
+    let check = surtr_command()
+        .args([
+            "check",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--phase-times-json",
+        ])
+        .output()
+        .expect("failed to run check command");
+    assert!(check.status.success(), "check failed: {:?}", check);
+    let check_report: Value = serde_json::from_slice(&check.stderr).expect("check report json");
+    assert_eq!(check_report["phases"]["typecheck"]["status"], "executed");
+
+    let dump = surtr_command()
+        .args([
+            "dump",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--phase-times-json",
+        ])
+        .output()
+        .expect("failed to run dump command");
+    assert!(dump.status.success(), "dump failed: {:?}", dump);
+    let dump_report: Value = serde_json::from_slice(&dump.stderr).expect("dump report json");
+    assert_eq!(dump_report["phases"]["codegen"]["status"], "executed");
+    assert_eq!(dump_report["phases"]["execute"]["status"], "skipped");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn build_produces_identical_bytecode_for_same_input() {
     let temp = unique_temp_dir("surtr_step1_deterministic_build");
     let source_path = temp.join("deterministic.srt");

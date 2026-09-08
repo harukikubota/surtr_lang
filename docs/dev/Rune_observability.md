@@ -170,21 +170,30 @@ trace 対象の kind 名を CSV で指定する。
 
 比較は kind 名ベースで行い、大文字小文字は区別しない。
 
-### 3.6 `--phase-times`
+### 3.6 `--phase-times` / `--phase-times-json`
 
-以下の elapsed time を ms 単位で出す。
+以下の elapsed time を stderr に出す。`--phase-times` は人間向け text、
+`--phase-times-json` は schema version 1 の 1 行 JSON とする。JSON は各 phase に
+`status` (`executed` / `skipped`) と `duration_us` を持ち、未実行 phase は `n/a` や
+0 ではなく `skipped` と報告する。
 
-- `parse`
+- `source_read`
+- `compile_plan`
+- `stdlib_load`
+- `parse_modules` / `parse_user` / `parse`
 - `resolve`
 - `typecheck`
 - `codegen`
+- `bytecode_encode` / `output_write`
 - `compile` (`.srt` 入力時)
 - `decode` (`.eldr` 入力時)
 - `execute`
 - `total`
 
-現在の Rune compile helper は parse / resolve / typecheck / codegen の内訳を外部に公開していないため、
-それらは `n/a` を許容する。`.srt` は `compile`、`.eldr` は `decode` を実測する。
+`.srt` の `build` は compile-only の基準入口であり、`run` は compile と execute を分離する。
+`check` と source 入力の `dump` も同じ compile timing payload を使う。
+JSON の `cache` には stdlib (`cold` / `process_hit` / `disk_hit`) と final artifact
+(`hit` / `miss` / `disabled`) の状態を含める。
 
 ### 3.7 `--error-context verbose`
 

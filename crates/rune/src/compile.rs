@@ -12,6 +12,7 @@ use spire::ast::{Ast, Span};
 use spire::error::ParseError;
 
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
+use crate::measurement::{elapsed, CompileMeasurement};
 
 type SharedScriptCompilePrefix = Arc<xldr::CompilationPrefixSnapshot>;
 
@@ -460,6 +461,7 @@ fn parse_program_with_module_sources<'a>(
     env: ExecutionEnv,
     compile_sources: &xldr::CompileSources,
     std_snapshot: &'a xldr::DefaultStdlibSnapshot,
+    mut measurement: Option<&mut CompileMeasurement>,
 ) -> RuneResult<(
     std::borrow::Cow<'a, [Vec<sigil::StagedModuleAst>]>,
     Vec<spire::ast::Ast>,
@@ -468,6 +470,7 @@ fn parse_program_with_module_sources<'a>(
     let source_kind = env.source_kind();
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
+    let parse_modules_start = std::time::Instant::now();
     let expanded =
         xldr::expand_snapshot_module_stages(compile_sources, std_snapshot, compile_unit_kind)
             .map_err(|e| {
@@ -483,8 +486,12 @@ fn parse_program_with_module_sources<'a>(
                     ),
                 )
             })?;
+    if let Some(measurement) = measurement.as_deref_mut() {
+        measurement.parse_modules = elapsed(parse_modules_start);
+    }
 
     let user_source = sources.source(user_source_id).unwrap_or("");
+    let parse_user_start = std::time::Instant::now();
     let user_ast = parse_script_ast_for_compile(user_source, user_source_id.0, source_kind)
         .map_err(|script_err: ParseError| {
             RuneError::diagnostic(
@@ -499,6 +506,9 @@ fn parse_program_with_module_sources<'a>(
                 ),
             )
         })?;
+    if let Some(measurement) = measurement.as_deref_mut() {
+        measurement.parse_user = elapsed(parse_user_start);
+    }
 
     Ok((expanded.module_stages, user_ast))
 }
@@ -508,15 +518,42 @@ pub(crate) fn compile_source(
     compile_sources: &xldr::CompileSources,
     compile_plan: &ScriptCompilePlan,
 ) -> RuneResult<forge::bytecode::Bytecode> {
+    compile_source_with_measurement(env, compile_sources, compile_plan, None)
+}
+
+pub(crate) fn compile_source_with_measurement(
+    env: ExecutionEnv,
+    compile_sources: &xldr::CompileSources,
+    compile_plan: &ScriptCompilePlan,
+    mut measurement: Option<&mut CompileMeasurement>,
+) -> RuneResult<forge::bytecode::Bytecode> {
     let compile_unit_kind = env.compile_unit_kind();
     let source_kind = env.source_kind();
     let sources = &compile_sources.sources;
     let user_source_id = compile_sources.user_source_id;
     let user_source = sources.source(user_source_id).unwrap_or("");
 
+    let stdlib_load_start = std::time::Instant::now();
     let std_snapshot = load_default_stdlib_snapshot(env, compile_sources)?;
-    let (mut module_stages, mut user_ast) =
-        parse_program_with_module_sources(env, compile_sources, &std_snapshot)?;
+    if let Some(measurement) = measurement.as_deref_mut() {
+        measurement.stdlib_load = elapsed(stdlib_load_start);
+        measurement.stdlib_cache =
+            xldr::stdlib_semantic_snapshot_cache_state(compile_sources.stdlib_variant)
+                .map(|state| match state {
+                    xldr::StdlibCacheState::Cold => crate::measurement::CacheState::Cold,
+                    xldr::StdlibCacheState::ProcessHit => {
+                        crate::measurement::CacheState::ProcessHit
+                    }
+                    xldr::StdlibCacheState::DiskHit => crate::measurement::CacheState::DiskHit,
+                })
+                .unwrap_or(crate::measurement::CacheState::Cold);
+    }
+    let (mut module_stages, mut user_ast) = parse_program_with_module_sources(
+        env,
+        compile_sources,
+        &std_snapshot,
+        measurement.as_deref_mut(),
+    )?;
     let (script_process_stage, script_user_ast) =
         xldr::extract_process_modules_from_user_ast(user_ast);
     let has_script_process_stage = !script_process_stage.is_empty();
@@ -570,6 +607,7 @@ pub(crate) fn compile_source(
         &rebuilt_declaration_index
     };
 
+    let resolve_start = std::time::Instant::now();
     let resume_state = cached_prefix
         .as_ref()
         .map(|prefix| prefix.resolve_state)
@@ -591,6 +629,9 @@ pub(crate) fn compile_source(
         let (source_id, spec) = resolve_spec_for_error(compile_sources, &e);
         RuneError::diagnostic(1, sources, source_id, "resolve", spec)
     })?;
+    if let Some(measurement) = measurement.as_deref_mut() {
+        measurement.resolve = elapsed(resolve_start);
+    }
 
     let prefix_bytecode = cached_prefix
         .as_ref()
@@ -600,6 +641,7 @@ pub(crate) fn compile_source(
         .as_ref()
         .map(|prefix| prefix.as_ref())
         .unwrap_or_else(|| std_snapshot.compile_prefix());
+    let typecheck_start = std::time::Instant::now();
     let mut scar_session = active_prefix.restored_scar_session();
     let typed = scar_session
         .typecheck_staged_program_in_place_with_context(
@@ -628,7 +670,11 @@ pub(crate) fn compile_source(
                 });
             RuneError::diagnostic(1, sources, source_id, "typecheck", spec)
         })?;
+    if let Some(measurement) = measurement.as_deref_mut() {
+        measurement.typecheck = elapsed(typecheck_start);
+    }
 
+    let codegen_start = std::time::Instant::now();
     let mut forge_session = active_prefix.forge_session();
     let (chunk, _) = forge_session
         .codegen_chunk_typed_program(typed)
@@ -652,6 +698,9 @@ pub(crate) fn compile_source(
             diagnostics::simple_error("CodegenError", &e.message, span, None),
         )
     })?;
+    if let Some(measurement) = measurement.as_deref_mut() {
+        measurement.codegen = elapsed(codegen_start);
+    }
 
     populate_error_template_lines(&mut bytecode.error_templates, user_source);
     bytecode.docs = docs;

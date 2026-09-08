@@ -6,32 +6,35 @@ use forge::bytecode::{stable_hash_hex, Bytecode};
 
 use crate::compile::ScriptCompilePlan;
 use crate::error::ExecutionEnv;
+use crate::measurement::{elapsed, CacheState, CompileMeasurement};
 
 const CACHE_VERSION: &str = "surtr-run-cache-v2";
 
-pub(crate) fn load(
+pub(crate) fn load_with_status(
     env: ExecutionEnv,
     compile_sources: &xldr::CompileSources,
     compile_plan: &ScriptCompilePlan,
-) -> Option<Bytecode> {
+) -> (Option<Bytecode>, CacheState) {
     if !enabled() {
-        return None;
+        return (None, CacheState::Disabled);
     }
 
-    let cache_path = cache_path(env, compile_sources, compile_plan)?;
+    let Some(cache_path) = cache_path(env, compile_sources, compile_plan) else {
+        return (None, CacheState::Miss);
+    };
     if !cache_path.exists() {
-        return None;
+        return (None, CacheState::Miss);
     }
 
     let bytes = match fs::read(&cache_path) {
         Ok(bytes) => bytes,
-        Err(_) => return None,
+        Err(_) => return (None, CacheState::Miss),
     };
     match Bytecode::decode(&bytes) {
-        Ok(bytecode) => Some(bytecode),
+        Ok(bytecode) => (Some(bytecode), CacheState::Hit),
         Err(_) => {
             let _ = fs::remove_file(cache_path);
-            None
+            (None, CacheState::Miss)
         }
     }
 }
@@ -41,36 +44,42 @@ pub(crate) fn store(
     compile_sources: &xldr::CompileSources,
     compile_plan: &ScriptCompilePlan,
     bytecode: &Bytecode,
-) {
+    mut measurement: Option<&mut CompileMeasurement>,
+) -> CacheState {
     if !enabled() {
-        return;
+        return CacheState::Disabled;
     }
 
     let Some(cache_path) = cache_path(env, compile_sources, compile_plan) else {
-        return;
+        return CacheState::StoreFailed;
     };
     let Some(parent) = cache_path.parent() else {
-        return;
+        return CacheState::StoreFailed;
     };
     if fs::create_dir_all(parent).is_err() {
-        return;
+        return CacheState::StoreFailed;
     }
 
+    let encode_start = std::time::Instant::now();
     let Ok(bytes) = bytecode.encode() else {
-        return;
+        return CacheState::StoreFailed;
     };
+    if let Some(measurement) = measurement.as_deref_mut() {
+        measurement.bytecode_encode = elapsed(encode_start);
+    }
     let temp_path = cache_path.with_extension(format!("{}.tmp", std::process::id()));
     if fs::write(&temp_path, bytes).is_err() {
         let _ = fs::remove_file(&temp_path);
-        return;
+        return CacheState::StoreFailed;
     }
     if fs::rename(&temp_path, &cache_path).is_err() {
         if fs::copy(&temp_path, &cache_path).is_err() {
             let _ = fs::remove_file(&temp_path);
-            return;
+            return CacheState::StoreFailed;
         }
         let _ = fs::remove_file(&temp_path);
     }
+    CacheState::Stored
 }
 
 fn enabled() -> bool {

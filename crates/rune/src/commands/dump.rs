@@ -1,16 +1,18 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use serde_json::{json, Value};
 use sindr::ir::{Bytecode, FunctionEntry, Opcode, OpcodeSource};
 use sindr::viewer::viewer_file_from_inspect;
 
 use crate::compile::{
-    collect_default_script_compile_sources, compile_source, prepare_script_compile_plan,
-    script_plan_error_as_rune_error,
+    collect_default_script_compile_sources, compile_source_with_measurement,
+    prepare_script_compile_plan, script_plan_error_as_rune_error,
 };
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
+use crate::measurement::{elapsed, CompileMeasurement, MeasurementOutput};
 use crate::util::surface_strip_global_prefixes;
 
 pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
@@ -19,6 +21,7 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
     let mut entry: Option<String> = None;
     let mut include_opcode_histogram = false;
     let mut include_peephole_candidates = false;
+    let mut phase_output = None;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -67,6 +70,24 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
                 }
                 include_peephole_candidates = true;
             }
+            "--phase-times" => {
+                if phase_output.is_some() {
+                    return Err(RuneError::message(
+                        1,
+                        "dump: phase timing output may only be specified once",
+                    ));
+                }
+                phase_output = Some(MeasurementOutput::Text);
+            }
+            "--phase-times-json" => {
+                if phase_output.is_some() {
+                    return Err(RuneError::message(
+                        1,
+                        "dump: phase timing output may only be specified once",
+                    ));
+                }
+                phase_output = Some(MeasurementOutput::Json);
+            }
             other => {
                 return Err(RuneError::message(
                     1,
@@ -102,6 +123,7 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
             entry.as_deref(),
             format,
             &options,
+            phase_output,
             ExecutionEnv::DumpSource,
         );
     }
@@ -114,8 +136,12 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
     }
 
     let env = ExecutionEnv::DumpBytecode;
+    let mut measurement = CompileMeasurement::new(file_path);
+    let read_start = Instant::now();
     let bytes = fs::read(file_path)
         .map_err(|e| RuneError::message(1, format!("Error reading {}: {}", file_path, e)))?;
+    measurement.source_read = elapsed(read_start);
+    let decode_start = Instant::now();
     let inspected = forge::bytecode::Bytecode::inspect(&bytes).map_err(|e| {
         RuneError::message(
             1,
@@ -127,6 +153,11 @@ pub(crate) fn dispatch(file_path: &str, args: &[String]) -> RuneResult<()> {
             ),
         )
     })?;
+    measurement.decode = elapsed(decode_start);
+    measurement.total = elapsed(read_start);
+    if let Some(output) = phase_output {
+        measurement.emit(output);
+    }
 
     let text = serialize_dump_output(file_path, format, &inspected, None, &options)?;
     println!("{}", text);
@@ -163,13 +194,20 @@ fn dump_entry_source(
     cli_entry: Option<&str>,
     format: &str,
     options: &DumpOptions,
+    phase_output: Option<MeasurementOutput>,
     env: ExecutionEnv,
 ) -> RuneResult<()> {
+    let mut measurement = CompileMeasurement::new(file_path);
+    let read_start = Instant::now();
     let source = fs::read_to_string(file_path)
         .map_err(|e| RuneError::message(1, format!("Error reading {}: {}", file_path, e)))?;
+    measurement.source_read = elapsed(read_start);
 
+    let compile_start = Instant::now();
+    let plan_start = Instant::now();
     let compile_plan = prepare_script_compile_plan(file_path, &source, cli_entry)
         .map_err(|e| script_plan_error_as_rune_error(file_path, &source, e))?;
+    measurement.compile_plan = elapsed(plan_start);
     let compile_sources = collect_default_script_compile_sources(
         env,
         file_path,
@@ -177,10 +215,19 @@ fn dump_entry_source(
         &compile_plan.include_modules,
         xldr::StdlibVariant::Default,
     )?;
-    let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
+    let bytecode = compile_source_with_measurement(
+        env,
+        &compile_sources,
+        &compile_plan,
+        phase_output.map(|_| &mut measurement),
+    )?;
+    let encode_start = Instant::now();
     let bytes = bytecode
         .encode()
         .map_err(|e| RuneError::message(1, format!("dump: failed to encode bytecode: {}", e)))?;
+    measurement.bytecode_encode = elapsed(encode_start);
+    measurement.compile_total = elapsed(compile_start);
+    measurement.total = elapsed(read_start);
     let inspected = forge::bytecode::Bytecode::inspect(&bytes).map_err(|e| {
         RuneError::message(
             1,
@@ -204,6 +251,9 @@ fn dump_entry_source(
         Some(entrypoint_trace),
         options,
     )?;
+    if let Some(output) = phase_output {
+        measurement.emit(output);
+    }
     println!("{}", text);
     Ok(())
 }

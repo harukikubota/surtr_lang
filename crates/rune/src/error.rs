@@ -9,11 +9,11 @@ pub(crate) const USAGE_TEXT: &str = "\
 Usage:\n\
   surtr --version\n\
   surtr check <file.srt> [--format json]\n\
-  surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always] [--vm-stats] [--vm-stats-json] [--trace-opcode] [--trace-call] [--trace-limit <n>] [--trace-filter <csv>] [--phase-times] [--error-context verbose] [-- <arg>...]\n\
+  surtr run <file.srt|file.eldr> [--entry <name>] [--vm-dump <path>] [--vm-dump-on error|always] [--vm-stats] [--vm-stats-json] [--trace-opcode] [--trace-call] [--trace-limit <n>] [--trace-filter <csv>] [--phase-times|--phase-times-json] [--error-context verbose] [-- <arg>...]\n\
   surtr test [--quiet|-q] <lib-relative-name|--all>\n\
   surtr repl [--quiet] [--banner] [--version] [--no-local-config] [--config <path>] [--module <file.srt>] [--script <file.srt>]\n\
-  surtr build <file.srt> [output.eldr]\n\
-  surtr dump <file.eldr|entry.srt> [--format json|viewer-json] [--entry <name>] [--opcode-histogram] [--peephole-candidates]\n\
+  surtr build <file.srt> [output.eldr] [--phase-times|--phase-times-json]\n\
+  surtr dump <file.eldr|entry.srt> [--format json|viewer-json] [--entry <name>] [--opcode-histogram] [--peephole-candidates] [--phase-times|--phase-times-json]\n\
   surtr tui [file.eldr]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

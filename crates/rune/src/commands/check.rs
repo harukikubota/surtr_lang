@@ -1,10 +1,12 @@
 use std::fs;
+use std::time::Instant;
 
 use crate::compile::{
-    collect_default_script_compile_sources, compile_source, prepare_script_compile_plan,
-    script_plan_error_as_rune_error,
+    collect_default_script_compile_sources, compile_source_with_measurement,
+    prepare_script_compile_plan, script_plan_error_as_rune_error,
 };
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
+use crate::measurement::{elapsed, CompileMeasurement, MeasurementOutput};
 
 pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
     if args.is_empty() {
@@ -20,6 +22,7 @@ pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
     }
     let mut format = "json";
     let mut format_seen = false;
+    let mut phase_output = None;
     let mut i = 1usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -36,6 +39,24 @@ pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
                 }
                 format_seen = true;
                 format = args[i].as_str();
+            }
+            "--phase-times" => {
+                if phase_output.is_some() {
+                    return Err(RuneError::message(
+                        1,
+                        "check: phase timing output may only be specified once",
+                    ));
+                }
+                phase_output = Some(MeasurementOutput::Text);
+            }
+            "--phase-times-json" => {
+                if phase_output.is_some() {
+                    return Err(RuneError::message(
+                        1,
+                        "check: phase timing output may only be specified once",
+                    ));
+                }
+                phase_output = Some(MeasurementOutput::Json);
             }
             other => {
                 return Err(RuneError::message(
@@ -54,14 +75,20 @@ pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
         ));
     }
 
-    check_command(file_path)
+    check_command(file_path, phase_output)
 }
 
-fn check_command(file_path: &str) -> RuneResult<()> {
+fn check_command(file_path: &str, phase_output: Option<MeasurementOutput>) -> RuneResult<()> {
+    let mut measurement = CompileMeasurement::new(file_path);
+    let source_read_start = Instant::now();
     let source = fs::read_to_string(file_path)
         .map_err(|e| RuneError::message(1, format!("Error reading {}: {}", file_path, e)))?;
+    measurement.source_read = elapsed(source_read_start);
+    let compile_start = Instant::now();
+    let plan_start = Instant::now();
     let compile_plan = prepare_script_compile_plan(file_path, &source, None)
         .map_err(|e| script_plan_error_as_rune_error(file_path, &source, e))?;
+    measurement.compile_plan = elapsed(plan_start);
     let compile_sources = collect_default_script_compile_sources(
         ExecutionEnv::Check,
         file_path,
@@ -70,8 +97,18 @@ fn check_command(file_path: &str) -> RuneResult<()> {
         xldr::StdlibVariant::Default,
     )?;
 
-    match compile_source(ExecutionEnv::Check, &compile_sources, &compile_plan) {
+    match compile_source_with_measurement(
+        ExecutionEnv::Check,
+        &compile_sources,
+        &compile_plan,
+        phase_output.map(|_| &mut measurement),
+    ) {
         Ok(_) => {
+            measurement.compile_total = elapsed(compile_start);
+            measurement.total = elapsed(source_read_start);
+            if let Some(output) = phase_output {
+                measurement.emit(output);
+            }
             println!(r#"{{"errors":[]}}"#);
             Ok(())
         }

@@ -1,6 +1,7 @@
 mod commands;
 mod compile;
 mod error;
+mod measurement;
 mod run_cache;
 mod util;
 

@@ -9,7 +9,10 @@ use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc, OnceLock,
+};
 
 pub use command_error::{CommandDiagnostic, CommandError, CommandResult};
 pub use error_display::ErrorDisplayMode;
@@ -27,6 +30,23 @@ pub use loader::{
     ScriptIncludeDirective, ScriptSourcePrepareError, SourceDescriptor, StagedModule,
     StdlibVariant,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdlibCacheState {
+    Cold,
+    ProcessHit,
+    DiskHit,
+}
+
+impl StdlibCacheState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cold => "cold",
+            Self::ProcessHit => "process_hit",
+            Self::DiskHit => "disk_hit",
+        }
+    }
+}
 pub use project_runner::{
     execute_project_runner_source, project_runner_module_input_stages, ProjectRunnerVmError,
 };
@@ -626,6 +646,9 @@ pub fn store_cached_test_semantic_prefix_snapshot(
 
 pub fn default_stdlib_semantic_snapshot() -> Result<Arc<DefaultStdlibSnapshot>, LoadError> {
     static SNAPSHOT: OnceLock<Result<Arc<DefaultStdlibSnapshot>, LoadError>> = OnceLock::new();
+    if SNAPSHOT.get().is_some() {
+        record_stdlib_cache_state(StdlibVariant::Default, StdlibCacheState::ProcessHit);
+    }
     SNAPSHOT
         .get_or_init(|| build_default_stdlib_snapshot().map(Arc::new))
         .clone()
@@ -633,9 +656,45 @@ pub fn default_stdlib_semantic_snapshot() -> Result<Arc<DefaultStdlibSnapshot>, 
 
 pub fn test_enabled_stdlib_semantic_snapshot() -> Result<Arc<DefaultStdlibSnapshot>, LoadError> {
     static SNAPSHOT: OnceLock<Result<Arc<DefaultStdlibSnapshot>, LoadError>> = OnceLock::new();
+    if SNAPSHOT.get().is_some() {
+        record_stdlib_cache_state(StdlibVariant::TestEnabled, StdlibCacheState::ProcessHit);
+    }
     SNAPSHOT
         .get_or_init(|| build_stdlib_snapshot(StdlibVariant::TestEnabled).map(Arc::new))
         .clone()
+}
+
+static DEFAULT_STDLIB_CACHE_STATE: AtomicU8 = AtomicU8::new(0);
+static TEST_STDLIB_CACHE_STATE: AtomicU8 = AtomicU8::new(0);
+
+pub fn stdlib_semantic_snapshot_cache_state(
+    stdlib_variant: StdlibVariant,
+) -> Option<StdlibCacheState> {
+    let value = match stdlib_variant {
+        StdlibVariant::Default => DEFAULT_STDLIB_CACHE_STATE.load(Ordering::Acquire),
+        StdlibVariant::TestEnabled => TEST_STDLIB_CACHE_STATE.load(Ordering::Acquire),
+    };
+    match value {
+        1 => Some(StdlibCacheState::Cold),
+        2 => Some(StdlibCacheState::ProcessHit),
+        3 => Some(StdlibCacheState::DiskHit),
+        _ => None,
+    }
+}
+
+fn record_stdlib_cache_state(stdlib_variant: StdlibVariant, state: StdlibCacheState) {
+    let target = match stdlib_variant {
+        StdlibVariant::Default => &DEFAULT_STDLIB_CACHE_STATE,
+        StdlibVariant::TestEnabled => &TEST_STDLIB_CACHE_STATE,
+    };
+    target.store(
+        match state {
+            StdlibCacheState::Cold => 1,
+            StdlibCacheState::ProcessHit => 2,
+            StdlibCacheState::DiskHit => 3,
+        },
+        Ordering::Release,
+    );
 }
 
 fn build_default_stdlib_snapshot() -> Result<DefaultStdlibSnapshot, LoadError> {
@@ -679,6 +738,7 @@ fn build_stdlib_snapshot(
         &cache_key,
     ) {
         if payload.default_stage_count == default_stage_count {
+            record_stdlib_cache_state(stdlib_variant, StdlibCacheState::DiskHit);
             return Ok(DefaultStdlibSnapshot {
                 module_stages,
                 compile_prefix: payload.compile_prefix,
@@ -689,6 +749,8 @@ fn build_stdlib_snapshot(
             });
         }
     }
+
+    record_stdlib_cache_state(stdlib_variant, StdlibCacheState::Cold);
 
     let declaration_index = sigil::precollect_declaration_index(&module_stages).map_err(|e| {
         LoadError::BootstrapFailed {

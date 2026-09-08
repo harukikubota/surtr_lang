@@ -526,6 +526,67 @@ fn run_phase_times_writes_timing_report_to_stderr() {
 }
 
 #[test]
+fn run_phase_times_json_reports_phase_status_and_microseconds() {
+    let temp = unique_temp_dir("surtr_phase_times_json");
+    let source_path = temp.join("sample.srt");
+    write_source(&source_path, "print(\"ok\")\n");
+
+    let output = surtr_command()
+        .args([
+            "run",
+            source_path.to_str().expect("source path must be utf-8"),
+            "--phase-times-json",
+        ])
+        .output()
+        .expect("failed to run source command");
+
+    assert!(output.status.success(), "run failed: {:?}", output);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let report: Value = serde_json::from_str(stderr.trim()).expect("timing report must be json");
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["phases"]["parse"]["status"], "executed");
+    assert!(report["phases"]["parse"]["duration_us"].as_u64().is_some());
+    assert_eq!(report["phases"]["execute"]["status"], "executed");
+    assert_eq!(report["phases"]["bytecode_encode"]["status"], "skipped");
+    assert!(report["total_us"].as_u64().is_some());
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn run_phase_times_json_reports_artifact_cache_transition() {
+    let temp = unique_temp_dir("surtr_phase_times_cache");
+    let source_path = temp.join("sample.srt");
+    let cache_path = temp.join("run-cache");
+    write_source(&source_path, "print(\"ok\")\n");
+
+    let run_once = || {
+        surtr_command()
+            .env("SURTR_RUN_CACHE", "1")
+            .env("SURTR_RUN_CACHE_DIR", &cache_path)
+            .args([
+                "run",
+                source_path.to_str().expect("source path must be utf-8"),
+                "--phase-times-json",
+            ])
+            .output()
+            .expect("failed to run source command")
+    };
+    let first = run_once();
+    let second = run_once();
+    assert!(first.status.success(), "first run failed: {:?}", first);
+    assert!(second.status.success(), "second run failed: {:?}", second);
+
+    let first_report: Value = serde_json::from_slice(&first.stderr).expect("first report json");
+    let second_report: Value = serde_json::from_slice(&second.stderr).expect("second report json");
+    assert_eq!(first_report["cache"]["artifact"], "miss");
+    assert_eq!(second_report["cache"]["artifact"], "hit");
+    assert_eq!(second_report["phases"]["parse"]["status"], "skipped");
+
+    let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
 fn run_vm_stats_json_remains_final_stderr_line_with_phase_times() {
     let temp = unique_temp_dir("surtr_vm_stats_json_phase_times");
     let source_path = temp.join("sample.srt");

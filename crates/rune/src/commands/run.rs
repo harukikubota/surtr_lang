@@ -8,10 +8,11 @@ use serde_json::{json, Value as JsonValue};
 use sindr::runtime::{RichError, RuntimeStackFrame};
 
 use crate::compile::{
-    collect_default_script_compile_sources, compile_source, prepare_script_compile_plan,
-    script_plan_error_as_rune_error,
+    collect_default_script_compile_sources, compile_source_with_measurement,
+    prepare_script_compile_plan, script_plan_error_as_rune_error,
 };
 use crate::error::{ExecutionEnv, RuneError, RuneResult};
+use crate::measurement::{elapsed, CompileMeasurement, MeasurementOutput};
 use crate::run_cache;
 use crate::util::surface_strip_global_prefixes;
 
@@ -66,20 +67,8 @@ pub(crate) struct RunOptions {
     pub(crate) cli_args: Vec<String>,
     vm_dump: Option<VmDumpOptions>,
     observation: RunObservationOptions,
-    phase_times: bool,
+    phase_times: Option<MeasurementOutput>,
     error_context: ErrorContextMode,
-}
-
-#[derive(Debug, Clone, Default)]
-struct PhaseTimes {
-    parse_ms: Option<u128>,
-    resolve_ms: Option<u128>,
-    typecheck_ms: Option<u128>,
-    codegen_ms: Option<u128>,
-    compile_ms: Option<u128>,
-    decode_ms: Option<u128>,
-    execute_ms: Option<u128>,
-    total_ms: u128,
 }
 
 pub(crate) fn dispatch(args: &[String]) -> RuneResult<()> {
@@ -107,7 +96,7 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
     let mut observation = RunObservationOptions::default();
     let mut trace_limit_seen = false;
     let mut trace_filter_seen = false;
-    let mut phase_times = false;
+    let mut phase_times = None;
     let mut error_context = ErrorContextMode::Normal;
     let mut error_context_seen = false;
     let mut i = 1usize;
@@ -254,13 +243,22 @@ pub(crate) fn parse_run_options(args: &[String]) -> RuneResult<RunOptions> {
                 }
             }
             "--phase-times" => {
-                if phase_times {
+                if phase_times.is_some() {
                     return Err(RuneError::message(
                         1,
                         "run: --phase-times may only be specified once",
                     ));
                 }
-                phase_times = true;
+                phase_times = Some(MeasurementOutput::Text);
+            }
+            "--phase-times-json" => {
+                if phase_times.is_some() {
+                    return Err(RuneError::message(
+                        1,
+                        "run: phase timing output may only be specified once",
+                    ));
+                }
+                phase_times = Some(MeasurementOutput::Json);
             }
             "--error-context" => {
                 i += 1;
@@ -353,16 +351,21 @@ fn run_source_file(
     env: ExecutionEnv,
     vm_dump: Option<&VmDumpOptions>,
     observation: &RunObservationOptions,
-    report_phase_times: bool,
+    phase_output: Option<MeasurementOutput>,
     error_context: ErrorContextMode,
 ) -> RuneResult<()> {
     let total_start = Instant::now();
+    let mut measurement = CompileMeasurement::new(file_path);
+    let source_read_start = Instant::now();
     let source = fs::read_to_string(file_path)
         .map_err(|e| RuneError::message(1, format!("Error reading {}: {}", file_path, e)))?;
+    measurement.source_read = elapsed(source_read_start);
 
     let compile_start = Instant::now();
+    let plan_start = Instant::now();
     let compile_plan = prepare_script_compile_plan(file_path, &source, cli_entry)
         .map_err(|e| script_plan_error_as_rune_error(file_path, &source, e))?;
+    measurement.compile_plan = elapsed(plan_start);
 
     let compile_sources = collect_default_script_compile_sources(
         env,
@@ -371,18 +374,29 @@ fn run_source_file(
         &compile_plan.include_modules,
         xldr::StdlibVariant::Default,
     )?;
-    let bytecode = match run_cache::load(env, &compile_sources, &compile_plan) {
+    let (cached_bytecode, cache_state) =
+        run_cache::load_with_status(env, &compile_sources, &compile_plan);
+    measurement.artifact_cache = cache_state;
+    let bytecode = match cached_bytecode {
         Some(bytecode) => bytecode,
         None => {
-            let bytecode = compile_source(env, &compile_sources, &compile_plan)?;
-            run_cache::store(env, &compile_sources, &compile_plan, &bytecode);
+            let bytecode = compile_source_with_measurement(
+                env,
+                &compile_sources,
+                &compile_plan,
+                phase_output.map(|_| &mut measurement),
+            )?;
+            measurement.artifact_store = run_cache::store(
+                env,
+                &compile_sources,
+                &compile_plan,
+                &bytecode,
+                phase_output.map(|_| &mut measurement),
+            );
             bytecode
         }
     };
-    let mut phase_times = PhaseTimes {
-        compile_ms: Some(compile_start.elapsed().as_millis()),
-        ..PhaseTimes::default()
-    };
+    measurement.compile_total = elapsed(compile_start);
     let runtime_sources = source_registry_from_bytecode(&bytecode);
     let source_context = runtime_sources
         .as_ref()
@@ -393,7 +407,6 @@ fn run_source_file(
                 .owned_context(compile_sources.user_source_id)
         });
     let execute_start = Instant::now();
-    let phase_times = report_phase_times.then_some(&mut phase_times);
     execute_bytecode(
         env,
         bytecode,
@@ -408,7 +421,8 @@ fn run_source_file(
         vm_dump,
         observation,
         error_context,
-        phase_times,
+        phase_output,
+        phase_output.map(|_| &mut measurement),
         &total_start,
         &execute_start,
     )
@@ -420,12 +434,15 @@ fn run_eldr_file(
     cli_args: &[String],
     vm_dump: Option<&VmDumpOptions>,
     observation: &RunObservationOptions,
-    report_phase_times: bool,
+    phase_output: Option<MeasurementOutput>,
     error_context: ErrorContextMode,
 ) -> RuneResult<()> {
     let total_start = Instant::now();
+    let mut measurement = CompileMeasurement::new(file_path);
+    let source_read_start = Instant::now();
     let bytes = fs::read(file_path)
         .map_err(|e| RuneError::message(1, format!("Error reading {}: {}", file_path, e)))?;
+    measurement.source_read = elapsed(source_read_start);
 
     let decode_start = Instant::now();
     let bytecode = forge::bytecode::Bytecode::decode(&bytes).map_err(|e| {
@@ -439,17 +456,13 @@ fn run_eldr_file(
             ),
         )
     })?;
-    let mut phase_times = PhaseTimes {
-        decode_ms: Some(decode_start.elapsed().as_millis()),
-        ..PhaseTimes::default()
-    };
+    measurement.decode = elapsed(decode_start);
 
     let runtime_sources = source_registry_from_bytecode(&bytecode);
     let source_context = runtime_sources
         .as_ref()
         .and_then(|(sources, source_id)| sources.owned_context(*source_id));
     let execute_start = Instant::now();
-    let phase_times = report_phase_times.then_some(&mut phase_times);
     execute_bytecode(
         env,
         bytecode,
@@ -459,7 +472,8 @@ fn run_eldr_file(
         vm_dump,
         observation,
         error_context,
-        phase_times,
+        phase_output,
+        phase_output.map(|_| &mut measurement),
         &total_start,
         &execute_start,
     )
@@ -513,7 +527,8 @@ fn execute_bytecode(
     vm_dump: Option<&VmDumpOptions>,
     observation_options: &RunObservationOptions,
     error_context: ErrorContextMode,
-    mut phase_times: Option<&mut PhaseTimes>,
+    phase_output: Option<MeasurementOutput>,
+    mut measurement: Option<&mut CompileMeasurement>,
     total_start: &Instant,
     execute_start: &Instant,
 ) -> RuneResult<()> {
@@ -552,7 +567,7 @@ fn execute_bytecode(
         if matches!(error_context, ErrorContextMode::Verbose) {
             emit_verbose_runtime_context(&vm, &e);
         }
-        emit_phase_times_if_requested(&mut phase_times, total_start, execute_start);
+        emit_phase_times_if_requested(&mut measurement, phase_output, total_start, execute_start);
         emit_observation_if_requested(&vm, observation_options);
         write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::RuntimeError { error: &e })?;
         return Err(RuneError::silent(1));
@@ -583,7 +598,7 @@ fn execute_bytecode(
         if matches!(error_context, ErrorContextMode::Verbose) {
             emit_verbose_runtime_context(&vm, &e);
         }
-        emit_phase_times_if_requested(&mut phase_times, total_start, execute_start);
+        emit_phase_times_if_requested(&mut measurement, phase_output, total_start, execute_start);
         emit_observation_if_requested(&vm, observation_options);
         write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::RuntimeError { error: &e })?;
         return Err(RuneError::silent(1));
@@ -593,7 +608,7 @@ fn execute_bytecode(
         if matches!(error_context, ErrorContextMode::Verbose) {
             emit_verbose_vm_context(&vm);
         }
-        emit_phase_times_if_requested(&mut phase_times, total_start, execute_start);
+        emit_phase_times_if_requested(&mut measurement, phase_output, total_start, execute_start);
         emit_observation_if_requested(&vm, observation_options);
         write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::ResultErr)?;
         return Err(RuneError::silent(1));
@@ -601,13 +616,23 @@ fn execute_bytecode(
 
     match vm.exit_code() {
         0 => {
-            emit_phase_times_if_requested(&mut phase_times, total_start, execute_start);
+            emit_phase_times_if_requested(
+                &mut measurement,
+                phase_output,
+                total_start,
+                execute_start,
+            );
             emit_observation_if_requested(&vm, observation_options);
             write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::Success)?;
             Ok(())
         }
         code => {
-            emit_phase_times_if_requested(&mut phase_times, total_start, execute_start);
+            emit_phase_times_if_requested(
+                &mut measurement,
+                phase_output,
+                total_start,
+                execute_start,
+            );
             emit_observation_if_requested(&vm, observation_options);
             write_vm_dump_if_needed(vm_dump, &vm, RuntimeOutcome::ExitCode)?;
             Err(RuneError::silent(code))
@@ -803,38 +828,19 @@ fn function_name_for_pc(bytecode: &forge::bytecode::Bytecode, pc: usize) -> Opti
 }
 
 fn emit_phase_times_if_requested(
-    phase_times: &mut Option<&mut PhaseTimes>,
+    measurement: &mut Option<&mut CompileMeasurement>,
+    output: Option<MeasurementOutput>,
     total_start: &Instant,
     execute_start: &Instant,
 ) {
-    let Some(times) = phase_times.as_mut() else {
+    let Some(measurement) = measurement.as_deref_mut() else {
         return;
     };
-    times.execute_ms = Some(execute_start.elapsed().as_millis());
-    times.total_ms = total_start.elapsed().as_millis();
-    emit_phase_times(times);
-}
-
-fn emit_phase_times(times: &PhaseTimes) {
-    eprintln!("Phase times:");
-    eprintln!("  parse: {}", format_optional_ms(times.parse_ms));
-    eprintln!("  resolve: {}", format_optional_ms(times.resolve_ms));
-    eprintln!("  typecheck: {}", format_optional_ms(times.typecheck_ms));
-    eprintln!("  codegen: {}", format_optional_ms(times.codegen_ms));
-    if times.compile_ms.is_some() {
-        eprintln!("  compile: {}", format_optional_ms(times.compile_ms));
+    measurement.execute = elapsed(*execute_start);
+    measurement.total = elapsed(*total_start);
+    if let Some(output) = output {
+        measurement.emit(output);
     }
-    if times.decode_ms.is_some() {
-        eprintln!("  decode: {}", format_optional_ms(times.decode_ms));
-    }
-    eprintln!("  execute: {}", format_optional_ms(times.execute_ms));
-    eprintln!("  total: {}ms", times.total_ms);
-}
-
-fn format_optional_ms(value: Option<u128>) -> String {
-    value
-        .map(|ms| format!("{ms}ms"))
-        .unwrap_or_else(|| "n/a".to_string())
 }
 
 enum RuntimeOutcome<'a> {
@@ -1162,7 +1168,7 @@ fn report_final_result_error_if_any(vm: &eldr::VM) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_run_options, source_registry_from_bytecode, VmDumpMode};
+    use super::{parse_run_options, source_registry_from_bytecode, MeasurementOutput, VmDumpMode};
     use forge::bytecode::{Bytecode, SourceFileEntry};
 
     #[test]
@@ -1379,6 +1385,30 @@ mod tests {
         assert_eq!(
             err.summary(),
             "run: --phase-times may only be specified once"
+        );
+    }
+
+    #[test]
+    fn run_options_accept_phase_times_json() {
+        let options =
+            parse_run_options(&["main.srt".to_string(), "--phase-times-json".to_string()])
+                .expect("json phase timing option should be accepted");
+
+        assert_eq!(options.phase_times, Some(MeasurementOutput::Json));
+    }
+
+    #[test]
+    fn run_options_reject_mixed_phase_time_outputs() {
+        let err = parse_run_options(&[
+            "main.srt".to_string(),
+            "--phase-times".to_string(),
+            "--phase-times-json".to_string(),
+        ])
+        .expect_err("multiple phase timing output formats must fail");
+
+        assert_eq!(
+            err.summary(),
+            "run: phase timing output may only be specified once"
         );
     }
 
