@@ -1960,7 +1960,19 @@ impl Checker {
                 } else {
                     self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
                 }
+                let mut signature_vars = Vec::new();
+                for argument in return_type_arguments {
+                    Self::collect_ty_vars(&argument.ty, &mut signature_vars);
+                }
+                for param in params {
+                    Self::collect_ty_vars(&param.ty, &mut signature_vars);
+                }
+                Self::collect_ty_vars(ret_ty, &mut signature_vars);
+                let signature_vars = signature_vars.into_iter().collect::<HashSet<_>>();
+                let already_bound = seen.clone();
                 self.collect_pending_trait_receiver_tyvars_in_node(_body, &mut ordered, &mut seen);
+                ordered.retain(|var| already_bound.contains(var) || signature_vars.contains(var));
+                seen.retain(|var| already_bound.contains(var) || signature_vars.contains(var));
                 // Function-local inference variables can carry trait bounds,
                 // but callers cannot infer them from a call site. Only the
                 // declared signature determines a valid specialization key.
@@ -1973,7 +1985,17 @@ impl Checker {
                 }
                 self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
+                let mut signature_vars = type_params
+                    .iter()
+                    .map(|type_param| type_param.ty_var)
+                    .collect::<Vec<_>>();
+                Self::collect_ty_vars(&param.ty, &mut signature_vars);
+                Self::collect_ty_vars(ret_ty, &mut signature_vars);
+                let signature_vars = signature_vars.into_iter().collect::<HashSet<_>>();
+                let already_bound = seen.clone();
                 self.collect_pending_trait_receiver_tyvars_in_node(_body, &mut ordered, &mut seen);
+                ordered.retain(|var| already_bound.contains(var) || signature_vars.contains(var));
+                seen.retain(|var| already_bound.contains(var) || signature_vars.contains(var));
                 // See `Def` above: exclude function-local inference variables.
             }
             _ => {}
@@ -1993,13 +2015,48 @@ impl Checker {
     ) {
         match &node.node {
             TypedInner::TraitCall {
-                dispatch: TraitDispatch::Pending,
+                dispatch,
                 receiver_ty,
                 args,
                 ..
             } => {
                 let mut vars = Vec::new();
-                Self::collect_ty_vars(receiver_ty, &mut vars);
+                match dispatch {
+                    TraitDispatch::Pending => Self::collect_ty_vars(receiver_ty, &mut vars),
+                    TraitDispatch::Selected(instantiation) => {
+                        Self::collect_ty_vars(receiver_ty, &mut vars);
+                        for ty in instantiation
+                            .substitution
+                            .values()
+                            .chain(instantiation.caller_substitution.values())
+                        {
+                            Self::collect_ty_vars(ty, &mut vars);
+                        }
+                        let signature = &instantiation.callable_signature;
+                        for ty in signature
+                            .return_type_arguments
+                            .iter()
+                            .map(|argument| &argument.ty)
+                            .chain(
+                                signature
+                                    .value_parameters
+                                    .iter()
+                                    .map(|parameter| &parameter.ty),
+                            )
+                            .chain(std::iter::once(&signature.return_type.ty))
+                            .chain(
+                                signature
+                                    .where_constraints
+                                    .constraints
+                                    .iter()
+                                    .map(|constraint| &constraint.subject),
+                            )
+                        {
+                            Self::collect_canonical_tyvars(ty, &mut vars);
+                        }
+                    }
+                    TraitDispatch::Static(_) => {}
+                }
                 for var in vars {
                     if seen.insert(var) {
                         ordered.push(var);
@@ -2009,9 +2066,7 @@ impl Checker {
                     self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
                 }
             }
-            TypedInner::TraitCall { args, .. }
-            | TypedInner::ListLiteral(args)
-            | TypedInner::TupleLiteral(args) => {
+            TypedInner::ListLiteral(args) | TypedInner::TupleLiteral(args) => {
                 for arg in args {
                     self.collect_pending_trait_receiver_tyvars_in_node(arg, ordered, seen);
                 }
@@ -2138,6 +2193,17 @@ impl Checker {
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::FacetPath(_)
             | TypedInner::PendingFacetPath(_) => {}
+        }
+    }
+
+    fn collect_canonical_tyvars(ty: &CanonicalTy, out: &mut Vec<u32>) {
+        if let CanonicalTypeHead::Variable(var) = ty.head {
+            if !out.contains(&var) {
+                out.push(var);
+            }
+        }
+        for argument in &ty.arguments {
+            Self::collect_canonical_tyvars(argument, out);
         }
     }
 
@@ -3585,6 +3651,8 @@ impl Checker {
                 ..
             } => {
                 matches!(dispatch, TraitDispatch::Pending)
+                    || matches!(dispatch, TraitDispatch::Selected(instantiation)
+                        if Self::selected_instantiation_has_pending_input(instantiation))
                     || matches!(receiver_ty, Ty::Var(_))
                     || args.iter().any(Self::typed_node_has_pending_trait_call)
             }
@@ -3719,6 +3787,38 @@ impl Checker {
             | TypedInner::TraitDef(..)
             | TypedInner::TraitImplDef(..) => false,
         }
+    }
+
+    fn selected_instantiation_has_pending_input(instantiation: &TraitMethodInstantiation) -> bool {
+        let signature = &instantiation.callable_signature;
+        signature
+            .return_type_arguments
+            .iter()
+            .map(|argument| &argument.ty)
+            .chain(
+                signature
+                    .value_parameters
+                    .iter()
+                    .map(|parameter| &parameter.ty),
+            )
+            .chain(std::iter::once(&signature.return_type.ty))
+            .chain(
+                signature
+                    .where_constraints
+                    .constraints
+                    .iter()
+                    .map(|constraint| &constraint.subject),
+            )
+            .any(CanonicalTy::has_pending_instantiation)
+            || instantiation
+                .substitution
+                .values()
+                .chain(instantiation.caller_substitution.values())
+                .any(|ty| {
+                    let mut variables = Vec::new();
+                    Self::collect_ty_vars(ty, &mut variables);
+                    !variables.is_empty()
+                })
     }
 
     fn def_fun_idx(node: &TypedNode) -> Option<u32> {

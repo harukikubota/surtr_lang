@@ -235,10 +235,7 @@ impl Checker {
         method_name: &str,
         arg: &TypedNode,
     ) -> Result<(), TypeError> {
-        let TypedInner::Var(id) = &arg.node else {
-            return Ok(());
-        };
-        let Some(actual_trait) = self.constructor_capabilities.get(&id.unique_id) else {
+        let Some(actual_trait) = self.constructor_capability_for_node(arg) else {
             return Ok(());
         };
         let Some(required_info) = self.traits.get(required_trait) else {
@@ -248,7 +245,7 @@ impl Checker {
             return Ok(());
         }
         let mut visiting = HashSet::new();
-        if self.constructor_capability_allows(actual_trait, required_trait, &mut visiting) {
+        if self.constructor_capability_allows(&actual_trait, required_trait, &mut visiting) {
             return Ok(());
         }
         Err(TypeError {
@@ -257,7 +254,7 @@ impl Checker {
                 "{}::{} is not available for a value constrained by {}",
                 Self::surface_name(required_trait),
                 method_name,
-                Self::surface_name(actual_trait)
+                Self::surface_name(&actual_trait)
             ),
             span: arg.span.clone(),
             hint: Some(format!(
@@ -328,10 +325,144 @@ impl Checker {
     }
 
     fn constructor_capability_for_node(&self, node: &TypedNode) -> Option<String> {
-        let TypedInner::Var(id) = &node.node else {
+        match &node.node {
+            TypedInner::Var(id) => self.constructor_capabilities.get(&id.unique_id).cloned(),
+            TypedInner::App(func, args) => {
+                let TypedInner::Var(id) = &func.node else {
+                    return None;
+                };
+                let signature = self.callable_signatures.get(&id.unique_id)?;
+                if let Some(capability) =
+                    self.constructor_capability_for_type(&signature.return_type.ty)
+                {
+                    return Some(capability);
+                }
+                if signature.identity.declaration_kind
+                    != sindr::signature::CallableDeclarationKind::Function
+                {
+                    return None;
+                }
+                let Ty::Var(return_var) = &signature.return_type.ty else {
+                    return None;
+                };
+                let sources = signature
+                    .value_parameters
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, parameter)| {
+                        matches!(&parameter.ty, Ty::Var(var) if var == return_var).then_some(index)
+                    })
+                    .collect::<Vec<_>>();
+                if sources.is_empty() {
+                    return None;
+                }
+                let capabilities = sources
+                    .into_iter()
+                    .filter_map(|source| args.get(source))
+                    .filter_map(|arg| self.constructor_capability_for_node(arg))
+                    .collect::<Vec<_>>();
+                self.common_constructor_capability(&capabilities)
+            }
+            TypedInner::EagerBoundary(inner) => self.constructor_capability_for_node(inner),
+            _ => None,
+        }
+    }
+
+    fn constructor_capability_for_type(&self, ty: &Ty) -> Option<String> {
+        let Ty::SelfApp(items) = ty else {
             return None;
         };
-        self.constructor_capabilities.get(&id.unique_id).cloned()
+        let (witness, _) = Self::constructor_application_parts(items)?;
+        let Ty::Var(var) = witness else {
+            return None;
+        };
+        self.constructor_witness_traits.get(var).cloned()
+    }
+
+    fn common_constructor_capability(&self, capabilities: &[String]) -> Option<String> {
+        if capabilities.is_empty() {
+            return None;
+        }
+        let mut candidates = self
+            .traits
+            .iter()
+            .filter_map(|(candidate, info)| {
+                if info.constructor_slots.is_empty() {
+                    return None;
+                }
+                capabilities
+                    .iter()
+                    .all(|actual| {
+                        self.constructor_capability_allows(actual, candidate, &mut HashSet::new())
+                    })
+                    .then_some(candidate.clone())
+            })
+            .collect::<Vec<_>>();
+        candidates.sort();
+        candidates.iter().find_map(|candidate| {
+            candidates
+                .iter()
+                .all(|other| {
+                    self.constructor_capability_allows(candidate, other, &mut HashSet::new())
+                })
+                .then(|| candidate.clone())
+        })
+    }
+
+    fn check_expected_constructor_capability(
+        &self,
+        expected: &Ty,
+        callee_label: &str,
+        arg: &TypedNode,
+    ) -> Result<(), TypeError> {
+        let Some(required_trait) = self.constructor_capability_for_type(expected) else {
+            return Ok(());
+        };
+        let Some(actual_trait) = self.constructor_capability_for_node(arg) else {
+            return Ok(());
+        };
+        let mut visiting = HashSet::new();
+        if self.constructor_capability_allows(&actual_trait, &required_trait, &mut visiting) {
+            return Ok(());
+        }
+        Err(TypeError {
+            structured: None,
+            message: format!(
+                "{} requires a value constrained by {}, got a value constrained by {}",
+                callee_label,
+                Self::surface_name(&required_trait),
+                Self::surface_name(&actual_trait)
+            ),
+            span: arg.span.clone(),
+            hint: Some(format!(
+                "Pass a concrete constructor type or a value constrained by {}.",
+                Self::surface_name(&required_trait)
+            )),
+        })
+    }
+
+    fn check_trait_method_constructor_capabilities(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+        param_tys: &[Ty],
+        args: &[TypedNode],
+    ) -> Result<(), TypeError> {
+        if let Some(receiver) = args.first() {
+            self.check_constructor_capability(trait_name, method_name, receiver)?;
+        }
+        for (expected, arg) in param_tys.iter().zip(args).skip(1) {
+            if !matches!(expected, Ty::SelfApp(items)
+                if Self::constructor_application_parts(items).is_some())
+            {
+                continue;
+            }
+            let required_trait = self
+                .constructor_capability_for_type(expected)
+                .unwrap_or_else(|| trait_name.to_string());
+            self.check_constructor_capability(&required_trait, method_name, arg)?;
+        }
+        Ok(())
     }
 
     pub(super) fn first_pending_trait_helper<'a>(
@@ -4493,13 +4624,12 @@ impl Checker {
                                     ),
                                 })
                                 .collect::<Result<Vec<_>, _>>()?;
-                            if let Some(receiver) = typed_args.first() {
-                                self.check_constructor_capability(
-                                    trait_name,
-                                    method_name,
-                                    receiver,
-                                )?;
-                            }
+                            self.check_trait_method_constructor_capabilities(
+                                trait_name,
+                                method_name,
+                                &param_tys,
+                                &typed_args,
+                            )?;
                             return Ok(TypedNode {
                                 ty: self.resolve_ty(&ret_ty),
                                 span: span.clone(),
@@ -4638,9 +4768,12 @@ impl Checker {
             .collect::<Result<Vec<_>, _>>()?;
         self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
 
-        if let Some(receiver) = typed_args.first() {
-            self.check_constructor_capability(trait_name, method_name, receiver)?;
-        }
+        self.check_trait_method_constructor_capabilities(
+            trait_name,
+            method_name,
+            &param_tys,
+            &typed_args,
+        )?;
 
         if let Some(owner_hint) = receiver_owner_hint {
             if let Some(receiver) = typed_args.first() {
@@ -7107,6 +7240,7 @@ impl Checker {
                     )?
                 };
                 self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
+                self.check_expected_constructor_capability(expected_ty, callee_label, &typed)?;
                 if !defer
                     && !matches!(self.resolve_ty(expected_ty), Ty::Hole)
                     && !self.types_compatible(expected_ty, &typed.ty)
@@ -7158,6 +7292,7 @@ impl Checker {
                 )?
             };
             self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
+            self.check_expected_constructor_capability(expected_ty, callee_label, &typed)?;
             if !defer
                 && !matches!(self.resolve_ty(expected_ty), Ty::Hole)
                 && !self.types_compatible(expected_ty, &typed.ty)

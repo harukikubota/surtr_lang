@@ -226,3 +226,20 @@ Echo::echo(Box::new(1))
     assert_eq!(*ret, params[0].ty);
     assert_eq!(body.ty, params[0].ty);
 }
+
+#[test]
+fn generic_caller_specializes_selected_trait_method_signature() {
+    let nodes = check(
+        r#"
+deftrait Echo { def echo(self: Self, value: $T) -> $T }
+impl Echo for Int { def echo(self: Self, value: $T) -> $T { value } }
+def wrap(value: $T) -> $T { Echo::echo(1, value) }
+wrap("left")
+"#,
+    );
+    let call = nodes
+        .iter()
+        .find(|node| matches!(&node.node, TypedInner::App(_, _) if node.ty == Ty::Str))
+        .expect("specialized wrapper call");
+    assert_eq!(call.ty, Ty::Str);
+}

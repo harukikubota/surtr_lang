@@ -168,6 +168,81 @@ use(Box::Box(1), Box::Box(2))
 }
 
 #[test]
+fn generic_identity_result_preserves_constructor_capability() {
+    let error = check(
+        r#"
+deftrait Functor where Self: Type<$A> {}
+deftrait Monad where Self: Functor { def run(self: Self<Int>) -> Int }
+defenum Box<$T> { Box($T), }
+impl Functor for Box<$T> {}
+impl Monad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def identity(value: $T) -> $T { value }
+def use(a: Functor<Int>) -> Int {
+  alias = identity(a)
+  Monad::run(alias)
+}
+use(Box::Box(1))
+"#,
+    )
+    .expect_err("generic value forwarding must not grant a stronger capability");
+    assert!(
+        error
+            .to_string()
+            .contains("Monad::run is not available for a value constrained by Functor"),
+        "{error}"
+    );
+}
+
+#[test]
+fn ordinary_callable_argument_checks_constructor_capability() {
+    let error = check(
+        r#"
+deftrait Functor where Self: Type<$A> {}
+deftrait Monad where Self: Functor { def run(self: Self<Int>) -> Int }
+defenum Box<$T> { Box($T), }
+impl Functor for Box<$T> {}
+impl Monad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def stronger(value: Monad<Int>) -> Int { Monad::run(value) }
+def use(a: Functor<Int>) -> Int { stronger(a) }
+use(Box::Box(1))
+"#,
+    )
+    .expect_err("ordinary calls must enforce the parameter's constructor capability");
+    assert!(
+        error.to_string().contains(
+            "function requires a value constrained by Monad, got a value constrained by Functor"
+        ),
+        "{error}"
+    );
+}
+
+#[test]
+fn every_trait_method_constructor_argument_checks_capability() {
+    let error = check(
+        r#"
+deftrait Functor where Self: Type<$A> {}
+deftrait Monad where Self: Functor {
+  def combine(left: Self<Int>, right: Self<Int>) -> Int
+}
+defenum Box<$T> { Box($T), }
+impl Functor for Box<$T> {}
+impl Monad for Box<$T> {
+  def combine(left: Self<Int>, right: Self<Int>) -> Int { 1 }
+}
+def use(a: Functor<Int>, b: Monad<Int>) -> Int { Monad::combine(b, a) }
+use(Box::Box(1), Box::Box(2))
+"#,
+    )
+    .expect_err("each Self argument must satisfy the method trait capability");
+    assert!(
+        error
+            .to_string()
+            .contains("Monad::combine is not available for a value constrained by Functor"),
+        "{error}"
+    );
+}
+
+#[test]
 fn bare_occurrences_keep_mapped_payloads_independent() {
     check(
         r#"
