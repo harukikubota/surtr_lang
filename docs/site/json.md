@@ -49,7 +49,7 @@ assert_eq(True, ok)
 `Err(JsonParseError(...))` として返します。
 
 ```surtr
-value = JsonValue::Object(HashMap::from_entries([
+value = JsonValue::Object(HashMap::map_from_entries([
   ("name", JsonValue::String("surtr")),
   ("ok", JsonValue::Bool(True)),
 ]))
@@ -98,7 +98,7 @@ impl Decode<JsonConfig> for JsonValue {
 
 impl Encode<JsonValue> for JsonConfig {
   def encode(self: Self) -> Result<JsonValue, Error> {
-    Ok(JsonValue::Object(HashMap::from_entries([
+    Ok(JsonValue::Object(HashMap::map_from_entries([
       ("name", JsonValue::String(self.name)),
       ("entrypoint", JsonValue::String(self.entrypoint)),
     ])))

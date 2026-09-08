@@ -95,7 +95,7 @@ test("Facet") {
 
   describe("list and map segments") {
     it("views and updates List index and HashMap key segments") {
-      map = HashMap::from_entries([("talk", 80), ("listen", 70)])
+      map = HashMap::map_from_entries([("talk", 80), ("listen", 70)])
       user = score_fixture([10, 20], map)
       assert_eq("Ok(20)", inspect(Facet::view(List.[1], user.scores)))
       assert_eq("Ok(80)", inspect(Facet::view(HashMap.["talk"], user.score)))
@@ -104,11 +104,11 @@ test("Facet") {
       changed_scores =? Facet::set(ScoreFixture.scores.[0], user, 99)
       changed_map =? Facet::over(ScoreFixture.score.["talk"], changed_scores, {|score| Ok(score + 1)})
       assert_eq("[99, 20]", inspect(changed_map.scores))
-      assert_eq("Ok(81)", inspect(HashMap::get(changed_map.score, "talk")))
+      assert_eq("Ok(81)", inspect(HashMap::map_get(changed_map.score, "talk")))
     }
 
     it("supports negative indexes and slice updates for List segments") {
-      map = HashMap::from_entries([("talk", 80), ("listen", 70)])
+      map = HashMap::map_from_entries([("talk", 80), ("listen", 70)])
       user = score_fixture([10, 20, 30, 40], map)
       assert_eq("Ok(40)", inspect(Facet::view(List.[-1], user.scores)))
       assert_eq("Ok([20, 30, 40])", inspect(Facet::view(ScoreFixture.scores.[1..-1], user)))
@@ -119,7 +119,7 @@ test("Facet") {
     }
 
     it("reports list and map path misses") {
-      map = HashMap::from_entries([("talk", 80)])
+      map = HashMap::map_from_entries([("talk", 80)])
       user = score_fixture([10], map)
       assert_err_contains("IndexOutOfBounds", Facet::view(ScoreFixture.scores.[2], user))
       assert_err_contains("KeyNotFound", Facet::view(ScoreFixture.score.["missing"], user))

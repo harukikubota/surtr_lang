@@ -1872,7 +1872,7 @@ Facet::preview(Boolean.Maybe, flag)"#,
 fn facet_list_and_map_segments_are_fallible_structural_paths() {
     let typed = typecheck_with_builtin_prelude(
         r#"scores = [10, 20, 30]
-score_map = HashMap::from_entries([("talk", 80)])
+score_map = HashMap::map_from_entries([("talk", 80)])
 list_root = Facet::view(List.[1], scores)
 map_root = Facet::view(HashMap.["talk"], score_map)
 list_value = scores.[1]
@@ -1912,7 +1912,7 @@ map_value = score_map.["talk"]"#,
 fn facet_explicit_container_root_captures_use_expected_function_context() {
     let typed = typecheck_with_builtin_prelude(
         r#"scores = [10, 20]
-score_map = HashMap::from_entries([("talk", 80)])
+score_map = HashMap::map_from_entries([("talk", 80)])
 get_first: (List<Int> -> Result<Int>) = &List.[0]
 get_talk: (HashMap<Int> -> Result<Int>) = &HashMap.["talk"]
 first = get_first(scores)
@@ -2035,7 +2035,7 @@ fn facet_root_capability_dispatch_preserves_standard_roots_and_string_diagnostic
 user = User("alice")
 pair = ("bob", 7)
 scores = [10, 20]
-score_map = HashMap::from_entries([("talk", 80)])
+score_map = HashMap::map_from_entries([("talk", 80)])
 user_name = Facet::view(User.name, user)
 tuple_name = Facet::view(Tuple._0, pair)
 list_score = Facet::view(List.[0], scores)
@@ -2070,7 +2070,7 @@ map_score = Facet::view(HashMap.["talk"], score_map)"#,
 fn deferred_list_and_hashmap_facet_bindings_can_be_reused_by_facet_intrinsics() {
     let typed = typecheck_with_builtin_prelude(
         r#"scores = [10, 20]
-score_map = HashMap::from_entries([("talk", 80)])
+score_map = HashMap::map_from_entries([("talk", 80)])
 list_path = List.[0]
 map_path = HashMap.["talk"]
 list_score = Facet::view(list_path, scores)
@@ -2098,7 +2098,7 @@ fn facet_dynamic_container_segments_accept_runtime_expressions() {
 def find_index(values: List<Int>) -> Int { 1 }
 def normalize_key(raw: String) -> String { String::trim(raw) }
 scores = [10, 20, 30]
-score_map = HashMap::from_entries([("talk", 80)])
+score_map = HashMap::map_from_entries([("talk", 80)])
 book = ScoreBook(scores, score_map)
 index = 0
 raw_name = " talk "
@@ -2142,7 +2142,7 @@ bad = Facet::view(List.[find_index(values)], values)"#,
     ));
 
     let map_err = typecheck_with_rules(
-        r#"map: HashMap<Int> = HashMap::from_entries([("taro", 18)])
+        r#"map: HashMap<Int> = HashMap::map_from_entries([("taro", 18)])
 bad = Facet::view(HashMap.[1], map)"#,
         RuntimeSourcePolicy::script(),
     )

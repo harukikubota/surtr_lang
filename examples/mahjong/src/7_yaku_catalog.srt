@@ -2,7 +2,7 @@ defrecord Yaku(yaku_id: String, name: String, han: Int)
 
 defmod MahjongYakuCatalog {
   def registry() -> HashMap<Yaku> {
-    HashMap::from_entries([
+    HashMap::map_from_entries([
       (
         "StandardShape",
         Yaku(
@@ -87,7 +87,7 @@ defmod MahjongYakuCatalog {
   }
 
   def by_id(yaku_id: String) -> Result<Yaku> {
-    HashMap::get(registry(), yaku_id)
+    HashMap::map_get(registry(), yaku_id)
     |> map_err(HandValidationError("unknown yaku id: " ++ yaku_id))
   }
 

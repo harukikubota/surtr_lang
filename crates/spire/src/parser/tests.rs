@@ -3818,7 +3818,7 @@ fn test_nested_generic_type_closes_without_confusing_compose() {
 
 #[test]
 fn test_generic_type_close_followed_by_bind_without_space_parses() {
-    let ast = parse("h: HashMap<Int>=HashMap::empty()")
+    let ast = parse("h: HashMap<Int>=HashMap::empty_map()")
         .expect("generic close followed by bind without space should parse");
     match &ast[0] {
         Ast::Bind(_, AstPattern::Annotated(_, _, AstTy::Generic(_, name, args)), rhs) => {

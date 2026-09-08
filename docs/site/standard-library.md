@@ -215,7 +215,7 @@ impl String {
 - `HashMap`
   - immutable な key-sorted map（key は常に `String`）
   - `hash![key => value, ...]` literal を持ち、key は `String` 型を得られる式
-  - `HashMap::empty` / `from_entries` / `insert` / `remove` / `get` / `keys` / `values` を持つ
+  - `HashMap::empty_map` / `map_from_entries` / `map_len` / `map_contains_key` / `map_get` / `map_insert` / `map_remove` / `map_keys` / `map_values_list` / `entries` / `map_values` を持つ
   - `inspect` / `to_string` は `hash!["key" => value, ...]` 形式
 - `Result`
   - `Ok` / `Err` を中心にした Either 指向の失敗表現
@@ -323,24 +323,26 @@ ret = List::reverse(acc)
 
 公開 surface は次で固定されています。
 
-- `HashMap::empty() -> HashMap<$V>`
-- `HashMap::from_entries(List<(String, $V)>) -> HashMap<$V>`
-- `HashMap::len(map) -> Int`
-- `HashMap::contains_key(map, key) -> Boolean`
-- `HashMap::get(map, key) -> Result<$V>`（miss は `Err(NoneError)`）
-- `HashMap::insert(map, key, value) -> HashMap<$V>`
-- `HashMap::remove(map, key) -> HashMap<$V>`
-- `HashMap::keys(map) -> List<String>`
-- `HashMap::values(map) -> List<$V>`
+- `HashMap::empty_map() -> HashMap<$V>`
+- `HashMap::map_from_entries(List<(String, $V)>) -> HashMap<$V>`
+- `HashMap::map_len(map) -> Int`
+- `HashMap::map_contains_key(map, key) -> Boolean`
+- `HashMap::map_get(map, key) -> Result<$V>`（miss は `Err(NoneError)`）
+- `HashMap::map_insert(map, key, value) -> HashMap<$V>`
+- `HashMap::map_remove(map, key) -> HashMap<$V>`
+- `HashMap::map_keys(map) -> List<String>`
+- `HashMap::map_values_list(map) -> List<$V>`
+- `HashMap::entries(map) -> List<(String, $V)>`
+- `HashMap::map_values(map, f) -> HashMap<$B>`
 
 意味論の要点:
 
-- `insert` で duplicate key を更新すると、値のみ差し替える
-- `remove` は key が存在しない場合 no-op
-- `keys` / `values` はキー昇順 deterministic order を保つ
+- `map_insert` で duplicate key を更新すると、値のみ差し替える
+- `map_remove` は key が存在しない場合 no-op
+- `map_keys` / `map_values_list` はキー昇順 deterministic order を保つ
 - `inspect` / `to_string` は key を quoted string で表示し、空 map は `hash![]` と表示する
 
-`hash![key => value, ...]` は `HashMap::from_entries` へ lower される生成 literal で、key は `String` 型を得られる任意の式です。
+`hash![key => value, ...]` は `HashMap::map_from_entries` へ lower される生成 literal で、key は `String` 型を得られる任意の式です。
 
 ## 10. `Result` module の位置づけ
 

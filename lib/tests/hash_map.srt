@@ -5,23 +5,25 @@ import Test;
 test("HashMap") {
   describe("constructors and lookup") {
     it("builds and inspects the empty map") {
-      assert_eq("hash![]", inspect(HashMap::empty()))
+      empty_map: HashMap<Int> = HashMap::empty_map()
+      empty_literal: HashMap<Int> = hash![]
+      assert_eq(("hash![]", "hash![]"), (inspect(empty_map), inspect(empty_literal)))
     }
 
     it("inserts and reports entry presence") {
-      map = HashMap::insert(HashMap::insert(HashMap::empty(), "a", 1), "b", 2)
+      map = HashMap::map_insert(HashMap::map_insert(HashMap::empty_map(), "a", 1), "b", 2)
       assert_eq((2, True, False), (
-        HashMap::len(map),
-        HashMap::contains_key(map, "a"),
-        HashMap::contains_key(map, "z"),
+        HashMap::map_len(map),
+        HashMap::map_contains_key(map, "a"),
+        HashMap::map_contains_key(map, "z"),
       ))
     }
 
     it("returns Ok for present keys and NoneError for missing keys") {
-      map = HashMap::insert(HashMap::insert(HashMap::empty(), "a", 1), "b", 2)
+      map = HashMap::map_insert(HashMap::map_insert(HashMap::empty_map(), "a", 1), "b", 2)
       assert_eq(
         ("Ok(1)", "Err(NoneError(\"None Value.\"))"),
-        (inspect(HashMap::get(map, "a")), inspect(HashMap::get(map, "z"))),
+        (inspect(HashMap::map_get(map, "a")), inspect(HashMap::map_get(map, "z"))),
       )
     }
   }
@@ -30,35 +32,35 @@ test("HashMap") {
     it("from_entries keeps the last duplicate value") {
       assert_eq(
         "hash![\"a\" => 3, \"b\" => 2]",
-        inspect(HashMap::from_entries([("b", 2), ("a", 1), ("a", 3)])),
+        inspect(HashMap::map_from_entries([("b", 2), ("a", 1), ("a", 3)])),
       )
     }
 
     it("remove deletes present keys and ignores missing keys") {
-      from_entries = HashMap::from_entries([("b", 2), ("a", 1), ("a", 3)])
-      removed = HashMap::remove(from_entries, "b")
+      from_entries = HashMap::map_from_entries([("b", 2), ("a", 1), ("a", 3)])
+      removed = HashMap::map_remove(from_entries, "b")
       assert_eq(
         ("hash![\"a\" => 3]", "hash![\"a\" => 3]"),
-        (inspect(removed), inspect(HashMap::remove(removed, "missing"))),
+        (inspect(removed), inspect(HashMap::map_remove(removed, "missing"))),
       )
     }
   }
 
   describe("deterministic views") {
     it("returns keys values and entries in sorted key order") {
-      from_entries = HashMap::from_entries([("b", 2), ("a", 1), ("a", 3)])
+      from_entries = HashMap::map_from_entries([("b", 2), ("a", 1), ("a", 3)])
       assert_eq(
         ("[\"a\", \"b\"]", "[3, 2]", "[(\"a\", 3), (\"b\", 2)]"),
         (
-          inspect(HashMap::keys(from_entries)),
-          inspect(HashMap::values(from_entries)),
+          inspect(HashMap::map_keys(from_entries)),
+          inspect(HashMap::map_values_list(from_entries)),
           inspect(HashMap::entries(from_entries)),
         ),
       )
     }
 
     it("maps only the values while preserving key order") {
-      from_entries = HashMap::from_entries([("b", 2), ("a", 1), ("a", 3)])
+      from_entries = HashMap::map_from_entries([("b", 2), ("a", 1), ("a", 3)])
       assert_eq(
         "hash![\"a\" => 30, \"b\" => 20]",
         inspect(HashMap::map_values(from_entries, {|v| v * 10})),
@@ -66,19 +68,19 @@ test("HashMap") {
     }
 
     it("supports user value types with Show and map_values") {
-      counters = HashMap::from_entries([("b", Counter::new(2)), ("a", Counter::new(1))])
+      counters = HashMap::map_from_entries([("b", Counter::new(2)), ("a", Counter::new(1))])
       bumped = HashMap::map_values(counters, {|counter| Counter::new(counter.value + 1)})
       assert_eq(
         ("[(\"a\", Counter(value: 1)), (\"b\", Counter(value: 2))]", "[\"Counter(2)\", \"Counter(3)\"]"),
         (
           inspect(HashMap::entries(counters)),
-          inspect(List::map(HashMap::values(bumped), {|counter| to_string(counter)})),
+          inspect(List::map(HashMap::map_values_list(bumped), {|counter| to_string(counter)})),
         ),
       )
     }
 
     it("renders escaped keys safely") {
-      escaped = HashMap::from_entries([
+      escaped = HashMap::map_from_entries([
         ("line\nfeed", 1),
         ("path\\to", 2),
         ("say\"hi", 3),

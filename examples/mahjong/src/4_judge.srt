@@ -131,7 +131,7 @@ defmod MahjongJudge {
     match ids {
       [] => Ok(acc),
       [head, ..tail] => {
-        yaku =? HashMap::get(table, head)
+        yaku =? HashMap::map_get(table, head)
           |> map_err(HandValidationError("unknown yaku id: " ++ head))
         _sum_han_go(tail, table, acc + yaku.han)
       },
