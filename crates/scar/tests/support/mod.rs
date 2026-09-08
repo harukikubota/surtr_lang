@@ -308,7 +308,8 @@ pub(crate) fn std_module_stages() -> Vec<Vec<sigil::StagedModuleAst>> {
 struct CachedStdPrelude {
     module_stages: Vec<Vec<sigil::StagedModuleAst>>,
     declaration_index: sigil::DeclarationIndex,
-    resolved_len: usize,
+    process_specs: Vec<sigil::resolved::ResolvedProcessSpec>,
+    boot_plan: spire::ast::SupervisorInitSpec,
     resolve_resume_state: sigil::ResolveResumeState,
     checkpoint: ScarCheckpoint,
 }
@@ -327,7 +328,8 @@ fn cached_std_prelude() -> &'static CachedStdPrelude {
             None,
         )
         .expect("std modules should resolve");
-        let resolved_len = std_resolved.resolved.len();
+        let process_specs = std_resolved.process_specs.clone();
+        let boot_plan = std_resolved.boot_plan.clone();
         let resolve_resume_state = std_resolved.resume_state.clone();
         let mut session = ScarSession::new();
         session
@@ -346,7 +348,8 @@ fn cached_std_prelude() -> &'static CachedStdPrelude {
         CachedStdPrelude {
             module_stages,
             declaration_index,
-            resolved_len,
+            process_specs,
+            boot_plan,
             resolve_resume_state,
             checkpoint,
         }
@@ -749,23 +752,45 @@ pub(crate) fn typecheck_module_source_result(source: &str) -> Result<Vec<TypedNo
 pub(crate) fn typecheck_resolved_program_suffix_with_builtin_prelude(
     resolved: sigil::ResolvedStagedProgram,
 ) -> Result<scar::typed::TypedProgram, scar::error::TypeError> {
+    let mut session = session_from_cached_std_prelude();
+    session.typecheck_staged_program_in_place_with_context(resolved, TypecheckContext::default())
+}
+
+pub(crate) fn resolve_staged_program_suffix_with_builtin_prelude(
+    module_stages: &[Vec<sigil::StagedModuleAst>],
+    user_ast: Vec<Ast>,
+    declaration_index: &sigil::DeclarationIndex,
+    user_module_path: Option<String>,
+) -> Result<sigil::ResolvedStagedProgram, sigil::error::ResolveError> {
     let prelude = cached_std_prelude();
     assert!(
-        resolved.resolved.len() >= prelude.resolved_len,
-        "resolved program is shorter than the cached std prefix"
+        module_stages.len() >= prelude.module_stages.len(),
+        "staged program is shorter than the cached std prefix"
     );
-    let suffix = sigil::ResolvedStagedProgram {
-        resolved: resolved
-            .resolved
-            .into_iter()
-            .skip(prelude.resolved_len)
-            .collect(),
-        process_specs: resolved.process_specs,
-        boot_plan: resolved.boot_plan,
-        resume_state: resolved.resume_state,
-    };
-    let mut session = session_from_cached_std_prelude();
-    session.typecheck_staged_program_in_place_with_context(suffix, TypecheckContext::default())
+    let mut suffix = sigil::resolve_staged_program_from_state(
+        module_stages,
+        user_ast,
+        declaration_index,
+        user_module_path,
+        prelude.module_stages.len(),
+        prelude.resolve_resume_state,
+    )?;
+
+    let mut process_specs = prelude.process_specs.clone();
+    process_specs.append(&mut suffix.process_specs);
+    suffix.process_specs = process_specs;
+
+    let mut boot_plan = prelude.boot_plan.clone();
+    boot_plan.entries.append(&mut suffix.boot_plan.entries);
+    boot_plan
+        .singletons
+        .append(&mut suffix.boot_plan.singletons);
+    boot_plan
+        .supervisors
+        .append(&mut suffix.boot_plan.supervisors);
+    suffix.boot_plan = boot_plan;
+
+    Ok(suffix)
 }
 
 pub(crate) fn typecheck_std_modules_with_overrides(

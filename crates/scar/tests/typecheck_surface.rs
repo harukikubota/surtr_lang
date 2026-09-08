@@ -8290,9 +8290,13 @@ fn process_self_typechecks_inside_process_handler() {
     )]);
     let declaration_index =
         sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
-    let resolved =
-        sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
-            .expect("resolve should succeed");
+    let resolved = resolve_staged_program_suffix_with_builtin_prelude(
+        &stages,
+        Vec::new(),
+        &declaration_index,
+        None,
+    )
+    .expect("resolve should succeed");
     typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
         .expect("Process::self should typecheck inside process handler");
 }
@@ -8322,7 +8326,7 @@ fn singleton_agent_pid_surface_returns_concrete_pid() {
     let user_ast =
         spire::parse_with_context("pid = Counter::pid()", spire::ParserContext::project(0))
             .expect("script should parse");
-    let resolved = sigil::resolve_staged_program_with_state(
+    let resolved = resolve_staged_program_suffix_with_builtin_prelude(
         &stages,
         user_ast,
         &declaration_index,
@@ -8370,7 +8374,7 @@ fn singleton_genserver_pid_surface_returns_concrete_pid() {
     let user_ast =
         spire::parse_with_context("pid = QueueServer::pid()", spire::ParserContext::project(0))
             .expect("script should parse");
-    let resolved = sigil::resolve_staged_program_with_state(
+    let resolved = resolve_staged_program_suffix_with_builtin_prelude(
         &stages,
         user_ast,
         &declaration_index,
@@ -8423,7 +8427,7 @@ done =? Counter::set(pid, 1)"#,
         spire::ParserContext::project(0),
     )
     .expect("script should parse");
-    let resolved = sigil::resolve_staged_program_with_state(
+    let resolved = resolve_staged_program_suffix_with_builtin_prelude(
         &stages,
         user_ast,
         &declaration_index,
@@ -8474,7 +8478,7 @@ done = Logger::log("hello")"#,
         spire::ParserContext::project(0),
     )
     .expect("script should parse");
-    let resolved = sigil::resolve_staged_program_with_state(
+    let resolved = resolve_staged_program_suffix_with_builtin_prelude(
         &stages,
         user_ast,
         &declaration_index,
@@ -8511,9 +8515,13 @@ fn genserver_call_handler_accepts_call_result_contract() {
     )]);
     let declaration_index =
         sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
-    let resolved =
-        sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
-            .expect("resolve should succeed");
+    let resolved = resolve_staged_program_suffix_with_builtin_prelude(
+        &stages,
+        Vec::new(),
+        &declaration_index,
+        None,
+    )
+    .expect("resolve should succeed");
     typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
         .expect("CallResult/CastResult handlers should typecheck");
 }
@@ -8537,9 +8545,13 @@ fn process_meta_state_mismatch_is_rejected() {
     )]);
     let declaration_index =
         sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
-    let resolved =
-        sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
-            .expect("resolve should succeed");
+    let resolved = resolve_staged_program_suffix_with_builtin_prelude(
+        &stages,
+        Vec::new(),
+        &declaration_index,
+        None,
+    )
+    .expect("resolve should succeed");
     let err = typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
         .expect_err("meta.state mismatch should fail");
 
@@ -8622,9 +8634,13 @@ defmod Helper {
     stages.push(user_modules);
     let declaration_index =
         sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
-    let resolved =
-        sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
-            .expect("resolve should succeed");
+    let resolved = resolve_staged_program_suffix_with_builtin_prelude(
+        &stages,
+        Vec::new(),
+        &declaration_index,
+        None,
+    )
+    .expect("resolve should succeed");
 
     typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
         .expect("user-defined process state should be allowed in public signatures");
@@ -8676,9 +8692,13 @@ fn typecheck_staged_program_keeps_process_specs() {
     stages.push(vec![staged_module]);
     let declaration_index =
         sigil::precollect_declaration_index(&stages).expect("precollect should succeed");
-    let resolved =
-        sigil::resolve_staged_program_with_state(&stages, Vec::new(), &declaration_index, None)
-            .expect("resolve should succeed");
+    let resolved = resolve_staged_program_suffix_with_builtin_prelude(
+        &stages,
+        Vec::new(),
+        &declaration_index,
+        None,
+    )
+    .expect("resolve should succeed");
     let typed: TypedProgram = typecheck_resolved_program_suffix_with_builtin_prelude(resolved)
         .expect("typecheck should succeed");
 
@@ -8794,7 +8814,7 @@ fn typecheck_supervisor_spawn_fixture(
     );
     let user_ast = spire::parse_with_context(&project_source, spire::ParserContext::project(0))
         .expect("script should parse");
-    let resolved = sigil::resolve_staged_program_with_state(
+    let resolved = resolve_staged_program_suffix_with_builtin_prelude(
         &stages,
         user_ast,
         &declaration_index,
@@ -8850,7 +8870,7 @@ fn typecheck_supervisor_pool_fixture(
         spire::ParserContext::project(0),
     )
     .expect("script should parse");
-    let resolved = sigil::resolve_staged_program_with_state(
+    let resolved = resolve_staged_program_suffix_with_builtin_prelude(
         &stages,
         user_ast,
         &declaration_index,
