@@ -3,7 +3,6 @@ Standard `Bifunctor` trait declaration.
 `Bifunctor` maps both element slots of a binary type constructor without
 introducing a runtime trait representation.
 """
-@autoimport
 deftrait Bifunctor
 where
   Self: Type<$A, $B>

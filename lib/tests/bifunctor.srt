@@ -4,6 +4,23 @@ defenum Pair<$L, $R> {
   Pair($L, $R),
 }
 
+impl Eq for Pair<$L, $R>
+where
+  $L: Eq
+  $R: Eq
+{
+  def eq(self: Pair<$L, $R>, other: Pair<$L, $R>) -> Boolean {
+    match self {
+      Pair::Pair(left, right) => match other {
+        Pair::Pair(other_left, other_right) => Boolean::and(
+          Eq::eq(left, other_left),
+          Eq::eq(right, other_right)
+        ),
+      },
+    }
+  }
+}
+
 impl Bifunctor for Pair<$L, $R>
 where
   $L: Bifunctor.$A
@@ -20,17 +37,9 @@ where
   }
 }
 
-def remap_pair(
-  value: Bifunctor<$A, $B>,
-  map_left: Mapper<$A, $C>,
-  map_right: Mapper<$B, $D>
-) -> Bifunctor<$C, $D> {
-  Bifunctor::bimap(value, map_left, map_right)
-}
-
 test("Bifunctor") {
   it("specializes a binary constructor application") {
-    mapped: Pair<String, Int> = remap_pair(Pair::Pair(9, "abcd"), &to_string, &String::len)
+    mapped: Pair<String, Int> = Bifunctor::bimap(Pair::Pair(9, "abcd"), &to_string, &String::len)
     assert_eq(mapped, Pair::Pair("9", 4))
   }
 }
