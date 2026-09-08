@@ -1,0 +1,9 @@
+phase: typecheck
+contains: Argument type mismatch: expected Int, got String
+json: /reason = "ArgumentTypeMismatch"
+json: /origin/kind = "Call"
+json: /data/expected_type = "Int"
+json: /data/actual_type = "String"
+json: /data/expected_origin/kind = "expected"
+json: /data/actual_origin/kind = "value"
+json: /related/0/type = "String"

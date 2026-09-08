@@ -1,4 +1,2 @@
 phase: typecheck
-contains: requires the right-hand side to return Result, got Int
-contains: Use `|*>`
-contains: RHS returns plain Int
+contains: Type constructor family mismatch: expected Result<$A, Error>, got Int

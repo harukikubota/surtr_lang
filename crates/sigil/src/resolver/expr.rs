@@ -624,6 +624,23 @@ impl Resolver {
                 }
                 Ok(())
             }
+            Ast::Cond(_, clauses) => {
+                for (condition, body) in clauses {
+                    self.collect_capture_placeholders(
+                        condition,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                    self.collect_capture_placeholders(
+                        body,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                }
+                Ok(())
+            }
             Ast::Match(_, scrutinee, arms) => {
                 self.collect_capture_placeholders(
                     scrutinee,
@@ -1069,6 +1086,28 @@ impl Resolver {
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?,
             )),
+            Ast::Cond(span, clauses) => Ok(Ast::Cond(
+                span,
+                clauses
+                    .into_iter()
+                    .map(|(condition, body)| {
+                        Ok((
+                            self.rewrite_capture_placeholders(
+                                condition,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                            self.rewrite_capture_placeholders(
+                                body,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
+            )),
             Ast::Match(span, scrutinee, arms) => Ok(Ast::Match(
                 span,
                 Box::new(self.rewrite_capture_placeholders(
@@ -1391,6 +1430,9 @@ impl Resolver {
             Ast::InterpolatedStr(_, parts) => parts.iter().find_map(|part| match part {
                 InterpolatedPart::Text(_) => None,
                 InterpolatedPart::Expr(expr) => Self::pipe_slot_span(expr),
+            }),
+            Ast::Cond(_, clauses) => clauses.iter().find_map(|(condition, body)| {
+                Self::pipe_slot_span(condition).or_else(|| Self::pipe_slot_span(body))
             }),
             Ast::Match(_, scrutinee, arms) => Self::pipe_slot_span(scrutinee).or_else(|| {
                 arms.iter().find_map(|arm| {
@@ -3760,6 +3802,15 @@ impl Resolver {
                 Ok(Resolved::ConstructorCall(span, rid, resolved_args))
             }
 
+            Ast::Cond(span, clauses) => Ok(Resolved::Cond(
+                span,
+                clauses
+                    .into_iter()
+                    .map(|(condition, body)| {
+                        Ok((self.resolve_node(condition)?, self.resolve_node(body)?))
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
+            )),
             Ast::Match(span, scrutinee, arms) => {
                 let resolved_scrut = self.resolve_node(*scrutinee)?;
                 let resolved_arms = arms

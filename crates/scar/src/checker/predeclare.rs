@@ -2251,10 +2251,6 @@ impl Checker {
         }
     }
 
-    pub(super) fn trait_impl_exists(&mut self, trait_name: &str, ty: &Ty) -> bool {
-        self.trait_impl_exists_for_args(trait_name, &[], ty)
-    }
-
     pub(super) fn trait_impl_exists_for_args(
         &mut self,
         trait_name: &str,
@@ -3304,17 +3300,62 @@ impl Checker {
                         impl_constraints: instantiated_impl_constraints,
                     },
                 );
-                let mapping = self.validate_trait_method_contract(
-                    &head_type_list,
-                    &actual_head,
-                    &expected,
-                    &actual,
-                    method_name,
-                    &trait_method.span,
-                    &impl_method.span,
-                    trait_method.where_clause.as_ref(),
-                    impl_method.where_clause.as_ref(),
-                )?;
+                let mapping = self
+                    .validate_trait_method_contract(
+                        &head_type_list,
+                        &actual_head,
+                        &expected,
+                        &actual,
+                        method_name,
+                        &trait_method.span,
+                        &impl_method.span,
+                        trait_method.where_clause.as_ref(),
+                        impl_method.where_clause.as_ref(),
+                    )
+                    .map_err(|mut error| {
+                        let names = self.diagnostic_ty_names(
+                            &std::iter::once(&target_ty)
+                                .chain(trait_arg_tys.iter())
+                                .collect::<Vec<_>>(),
+                        );
+                        let identity = diagnostics::TraitDiagnosticIdentity {
+                            trait_id: trait_key.clone(),
+                            trait_arguments: names[1..].to_vec(),
+                            subject_type: names[0].clone(),
+                        };
+                        let diagnostic = error
+                            .structured
+                            .as_mut()
+                            .expect("contract failures are structured");
+                        match &mut diagnostic.data {
+                            diagnostics::DiagnosticData::TraitMethodTypeList(data) => {
+                                data.identity = Some(identity)
+                            }
+                            diagnostics::DiagnosticData::TraitMethodConstraint(data) => {
+                                data.identity = Some(identity)
+                            }
+                            _ => unreachable!("contract validation returns a contract diagnostic"),
+                        }
+                        let declaration_identity = diagnostics::DeclarationIdentity {
+                            owner: trait_key.clone(),
+                            name: method_name.clone(),
+                        };
+                        let impl_declaration = match &mut diagnostic.data {
+                            diagnostics::DiagnosticData::TraitMethodTypeList(data) => {
+                                &mut data.impl_declaration
+                            }
+                            diagnostics::DiagnosticData::TraitMethodConstraint(data) => {
+                                &mut data.impl_declaration
+                            }
+                            _ => unreachable!("contract diagnostic"),
+                        };
+                        impl_declaration
+                            .as_mut()
+                            .expect("contract impl origin")
+                            .declaration_identity = Some(declaration_identity.clone());
+                        diagnostic.primary.declaration_identity = Some(declaration_identity);
+                        error
+                    })?;
                 // Store method variables in the same namespace as the impl
                 // head; do not rebuild a receiver-only mapping at a later use.
                 for entry in &mut actual.entries {

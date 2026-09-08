@@ -58,7 +58,8 @@ pub(super) fn compile_sources_with_mode(
         return Ok(bytecode);
     }
 
-    let compile_prefix = cached_compile_prefix(compile_sources, mode)?;
+    let compile_prefix =
+        cached_compile_prefix(compile_sources, mode).map_err(|error| error.to_string())?;
     let user_ast = parse_user_program(compile_sources, mode)?;
     let (process_stage, user_ast) = xldr::extract_process_modules_from_user_ast(user_ast);
     let mut module_asts = compile_prefix.module_asts.clone();

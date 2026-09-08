@@ -387,7 +387,13 @@ fn build_cached_script_compile_prefix(
                 let spec = e
                     .structured
                     .as_ref()
-                    .map(diagnostics::structured_type_error_spec)
+                    .map(|diagnostic| {
+                        diagnostics::structured_type_error_spec(
+                            &diagnostic.clone().map_source_locations(|span| {
+                                diagnostic_location_for_span(compile_sources, span)
+                            }),
+                        )
+                    })
                     .unwrap_or_else(|| {
                         diagnostics::type_error_spec_by_id(sources, source_id, &local_error)
                     });
@@ -610,7 +616,13 @@ pub(crate) fn compile_source(
             let spec = e
                 .structured
                 .as_ref()
-                .map(diagnostics::structured_type_error_spec)
+                .map(|diagnostic| {
+                    diagnostics::structured_type_error_spec(
+                        &diagnostic.clone().map_source_locations(|span| {
+                            diagnostic_location_for_span(compile_sources, span)
+                        }),
+                    )
+                })
                 .unwrap_or_else(|| {
                     diagnostics::type_error_spec_by_id(sources, source_id, &local_error)
                 });
@@ -784,6 +796,69 @@ mod tests {
     use crate::error::RuneError;
     use spire::ast::Span;
     use xldr::{SourceKind, StagedModule};
+
+    #[test]
+    fn structured_type_diagnostics_preserve_json_facts_and_source_locations() {
+        let cases = [
+            ("call", include_str!("../../../tests/fixtures/script/fail/typecheck/structured_call_argument.srt"), "ArgumentTypeMismatch"),
+            ("trait", include_str!("../../../tests/fixtures/script/fail/typecheck/structured_trait_dispatch.srt"), "NoApplicableTraitImplementation"),
+            ("carrier", include_str!("../../../tests/fixtures/script/fail/typecheck/structured_carrier_relation.srt"), "TypeConstructorFamilyMismatch"),
+            ("operator", include_str!("../../../tests/fixtures/script/fail/typecheck/structured_operator_relation.srt"), "ArgumentTypeMismatch"),
+            ("branch", include_str!("../../../tests/fixtures/script/fail/typecheck/structured_branch_relation.srt"), "CondBranchTypeMismatch"),
+        ];
+        for (name, source, reason) in cases {
+            let path = format!("structured_{name}.srt");
+            let sources = collect_default_script_compile_sources(
+                ExecutionEnv::Check,
+                &path,
+                source,
+                &[],
+                xldr::StdlibVariant::Default,
+            )
+            .unwrap();
+            let plan = prepare_script_compile_plan(&path, source, None).unwrap();
+            let error = compile_source(ExecutionEnv::Check, &sources, &plan)
+                .expect_err("fixture is rejected");
+            let report = error.to_serializable_report();
+            let diagnostic = &report.errors[0];
+            assert_eq!(
+                diagnostic.reason.as_deref(),
+                Some(reason),
+                "{name}: {diagnostic:?}"
+            );
+            assert_eq!(diagnostic.phase, "typecheck");
+            assert!(diagnostic.span[1] <= source.chars().count() as u32);
+            assert!(!diagnostic.related.is_empty(), "{name}: {diagnostic:?}");
+            for fact in &diagnostic.related {
+                let source = sources
+                    .sources
+                    .source(diagnostics::SourceId(fact.source_id))
+                    .expect("fact source exists");
+                assert!(
+                    fact.span[1] <= source.chars().count() as u32,
+                    "{name}: {fact:?}"
+                );
+            }
+            let primary = &diagnostic.related[0];
+            assert_eq!(
+                primary.source_id, sources.user_source_id.0,
+                "primary belongs to the fixture"
+            );
+            if name == "operator" {
+                assert_eq!(diagnostic.expected.as_deref(), Some("Int"));
+                assert_eq!(diagnostic.got.as_deref(), Some("String"));
+                assert!(
+                    matches!(&diagnostic.origin, Some(diagnostics::DiagnosticOrigin::Operator { operator }) if operator == "+")
+                );
+            }
+            if name == "carrier" {
+                assert!(diagnostic.data["family_id"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("family:"));
+            }
+        }
+    }
 
     #[test]
     fn script_compile_plan_extracts_include_directives() {

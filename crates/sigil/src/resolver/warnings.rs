@@ -174,6 +174,12 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 }
             }
         }
+        Resolved::Cond(_, clauses) => {
+            for (condition, body) in clauses {
+                collect_node_usage(condition, usage);
+                collect_node_usage(body, usage);
+            }
+        }
         Resolved::If(_, cond, then_branch, else_branch) => {
             collect_node_usage(cond, usage);
             collect_node_usage(then_branch, usage);
@@ -199,7 +205,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
             collect_node_usage(marker, usage);
             collect_node_usage(handler, usage);
         }
-        Resolved::Match(_, scrutinee, arms) => {
+        Resolved::Match(_, scrutinee, arms) | Resolved::IfLet(_, scrutinee, arms) => {
             collect_node_usage(scrutinee, usage);
             for ResolvedMatchArm {
                 pattern,

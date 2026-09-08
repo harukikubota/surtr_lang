@@ -1037,6 +1037,18 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                 .map(|item| rewrite_process_owner_refs(item, old_name, new_name))
                 .collect(),
         ),
+        Ast::Cond(span, clauses) => Ast::Cond(
+            span,
+            clauses
+                .into_iter()
+                .map(|(condition, body)| {
+                    (
+                        rewrite_process_owner_refs(condition, old_name, new_name),
+                        rewrite_process_owner_refs(body, old_name, new_name),
+                    )
+                })
+                .collect(),
+        ),
         Ast::Grouped(span, expr) => Ast::Grouped(
             span,
             Box::new(rewrite_process_owner_refs(*expr, old_name, new_name)),
@@ -1949,6 +1961,18 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|e| shift_ast_span(e, delta))
                 .collect(),
         ),
+        Ast::Cond(span, clauses) => Ast::Cond(
+            shift_span(span, delta),
+            clauses
+                .into_iter()
+                .map(|(condition, body)| {
+                    (
+                        shift_ast_span(condition, delta),
+                        shift_ast_span(body, delta),
+                    )
+                })
+                .collect(),
+        ),
         Ast::Grouped(span, inner) => Ast::Grouped(
             shift_span(span, delta),
             Box::new(shift_ast_span(*inner, delta)),
@@ -2475,6 +2499,7 @@ impl Ast {
             | Ast::HashMapLiteral(s, _)
             | Ast::RangeLiteral(s, _, _)
             | Ast::TupleLiteral(s, _)
+            | Ast::Cond(s, _)
             | Ast::Grouped(s, _)
             | Ast::InterpolatedStr(s, _)
             | Ast::Dbg(s, _)

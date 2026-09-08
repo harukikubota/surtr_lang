@@ -151,9 +151,9 @@ result = Use::use(value)"#,
     )
     .expect_err("a bare capability must not prove a missing Marker<Int> body obligation");
 
-    assert!(
-        err.message
-            .contains("Use::use requires a receiver type implementing Use"),
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
         "{err:?}"
     );
     assert!(err.message.contains("Box<Int>"), "{err:?}");
@@ -198,7 +198,7 @@ where
     .expect_err("builtin proof forwarding without Equal must be rejected");
 
     assert!(
-        err.message.contains("Builtin group_count requires Equal"),
+        err.reason() == Some(diagnostics::TypeDiagnosticReason::MissingGenericBound),
         "{err:?}"
     );
 }
@@ -387,7 +387,11 @@ def hidden(values: List<$A>) -> Int { Use::use(values) }"#,
     )
     .expect_err("an unbounded rigid caller must not select the generic Use implementation");
 
-    assert!(err.message.contains("implementing Use"), "{err:?}");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -434,9 +438,9 @@ result = Use::use(value)"#,
     )
     .expect_err("the concrete Use candidate must prove the nested Equal obligation");
 
-    assert!(
-        err.message
-            .contains("Use::use requires a receiver type implementing Use"),
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
         "{err:?}"
     );
     assert!(err.message.contains("Box<List<(Int -> Int)>>"), "{err:?}");

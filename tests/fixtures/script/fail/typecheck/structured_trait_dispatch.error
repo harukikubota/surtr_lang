@@ -1,0 +1,8 @@
+phase: typecheck
+contains: No implementation satisfies Add
+json: /reason = "NoApplicableTraitImplementation"
+json: /origin/kind = "TraitCall"
+json: /data/trait_id = "Add"
+json: /data/expected_type = null
+json: /data/actual_type = null
+json: /data/impl_declaration = null

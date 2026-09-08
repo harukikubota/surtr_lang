@@ -996,6 +996,17 @@ git commit -m "refactor(types): unify method instantiation and constructor carri
 
 ### Task 9: Typed Diagnostic Reasons for Signatures, Traits, Operators, and Branches
 
+**事前調査による補正（2026-09-08）:**
+
+- reason enum は Task 2 で導入済みだが、呼び出し・演算子・分岐の producer は未移行。enum の追加だけで完了とはせず、実際の source 入力から reason / facts を検証する。
+- `cond` は Spire で `if` 呼び出しへ即時変換される。節を AST / Resolved に保持し、Scar の検査後に既存 `TypedInner::If` へ lowering する。capture / UID rebase / usage / span shift と expected-type 判定の走査も変更対象に含める。
+- 型関係の assertion は `checker/relations.rs` に分離する。解決済み型を同じ表示環境で描画し、失敗時の部分 substitution を rollback する。
+- named 引数は名前の正規化前の個数検査で重複・不足を隠さない。正規化した契約に基づいて reason を決める。
+- renderer は structured input の optional field が空でも message 解析へ戻らない。未移行 family の heuristic 全撤去は Task 10 の範囲とする。
+- Step 8 の対象には Spire / Sigil / Rune / Xldr の adapter・走査、計画・診断仕様、追加した Scar integration test と既存 integration / module fixture の診断期待値も含める。
+- 引数内の List / Tuple / closure と record・Result constructor の呼び出しも同じ reason 契約へ揃える。ゼロ引数 helper も明示 RTA を検査し、期待型との矛盾を上書きしない。
+- apply の receiverless constructor 入力には、method signature に基づいて mapper 側から期待型を伝播する。`cond` の遅延節では期待型を thunk の戻り値へ渡す。
+
 **Files:**
 
 - Modify: `crates/spire/src/ast.rs`
@@ -1022,7 +1033,7 @@ git commit -m "refactor(types): unify method instantiation and constructor carri
 - Consumes: structured diagnostic envelope from Task 2 and semantic failures emitted by Tasks 4--8.
 - Invariant: operator and helper calls share semantic reasons; `if`, `if_let`, `match`, and `cond` keep their context-specific final reasons while using the same inner assertion primitive.
 
-- [ ] **Step 1: Add failing reason and parity tests**
+- [x] **Step 1: Add failing reason and parity tests**
 
 Add table-driven tests for every reason in the common families: argument arity/mode/name, argument/return/annotation type relation, callable shape, RTA, invalid constraint subject, missing/deferred Trait capability, dispatch, constructor constraint/family/payload/capability, and Trait method contract. For `1 + "x"` and the equivalent `Add::add(1, "x")`, assert equal semantic reason and types but different origins:
 
@@ -1036,7 +1047,7 @@ assert!(matches!(helper.origin(), DiagnosticOrigin::TraitCall { .. }));
 
 Add branch regressions asserting `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, and `CondBranchTypeMismatch`, with every branch/arm span and full type supplied by Scar.
 
-- [ ] **Step 2: Run focused diagnostics and fixture tests**
+- [x] **Step 2: Run focused diagnostics and fixture tests**
 
 ```bash
 cargo nextest run -p diagnostics typecheck
@@ -1045,25 +1056,25 @@ cargo nextest run -p rune --test integration run_srt
 
 Expected: templates still infer reasons/types from messages or source text, and operator/helper parity fails.
 
-- [ ] **Step 3: Centralize typed assertions in Scar**
+- [x] **Step 3: Centralize typed assertions in Scar**
 
 Add one primitive that consumes two canonical types and two `SourceFact`s and returns either a committed substitution or a typed relation failure. Use it for callable arguments, expected return, annotations, operator operands, Trait invocation entries, carrier payloads, and branch bodies. The caller may wrap a relation failure in a contextual branch reason without discarding facts.
 
 Preserve `cond` provenance, clause ordinals, and body spans through Spire and Sigil before its existing nested-`if` execution lowering. Without this metadata Scar cannot emit `CondBranchTypeMismatch` without searching source text.
 
-- [ ] **Step 4: Emit the complete stable reason families**
+- [x] **Step 4: Emit the complete stable reason families**
 
 Implement the names fixed by `signature_diagnostics_unification.md` sections 5.7 and 6.2. Keep `MissingGenericBound`, `MissingTraitCapability`, and `MissingTypeConstructorCapability` separate. Convert a deferred input only at its defined boundary to `AmbiguousReturnTypeArgument` or `UnresolvedTraitMethodInstantiation`; do not report a candidate-local rejection directly.
 
-- [ ] **Step 5: Lower operators and helpers to the common invocation path**
+- [x] **Step 5: Lower operators and helpers to the common invocation path**
 
 Resolve an operator to its full Trait obligation and `CallableSignature`, then invoke the Task 5/7 solver. Preserve the token and left/right spans as `DiagnosticOrigin::Operator` plus `SourceRole::LeftValue` / `RightValue`. Delete arithmetic, concat, equality, comparison, context map/apply/bind, and compose diagnostic branches that re-check the same signature by callable or data-type name.
 
-- [ ] **Step 6: Render only from reason and typed data**
+- [x] **Step 6: Render only from reason and typed data**
 
 For each migrated reason, create its `DiagnosticSpec` directly from closed `DiagnosticData`. Ensure call-site RTA labels may show the head alone, while relations between source values show both complete types. Serialize `reason`, `origin`, `data`, and `related` from the same failure and retain existing `kind`, `phase`, span, `expected`, `got`, and `hint` meanings.
 
-- [ ] **Step 7: Verify focused families**
+- [x] **Step 7: Verify focused families**
 
 ```bash
 cargo nextest run -p diagnostics
@@ -1071,10 +1082,35 @@ cargo nextest run -p scar
 cargo nextest run -p rune --test integration run_srt
 ```
 
-- [ ] **Step 8: Commit**
+**実施結果（2026-09-08）:**
+
+- diagnostics の common reason / JSON schema テスト 79 件成功。Scar の operator/helper・call・branch 契約、constructor carrier identity / captured 型、失敗時 rollback を検証。
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace`: 一度 1996 件すべて成功。最後の List / Tuple / closure 診断移行後は 1997 件中 1996 件成功、`block_literal_as_int_argument.error` の旧文言期待値だけが失敗。
+- 上記 fixture の期待値を変更した後、`rtk cargo nextest run -p rune --test integration run_srt`: 27 バケットすべて成功（170 skipped）。この最後の変更は `.error` の期待文言のみで、compiler code は上記 CI と同一。
+- 実 REPL で captured 値を使う `cond` の成功（42）、`CondBranchTypeMismatch`、エラー後の継続（41）を確認。実 CLI の JSON で `ArgumentTypeMismatch`、operator `+`、左右の型と source role を確認。
+- `cargo fmt --all -- --check` と `git diff --check` 成功。Task 10 の SafeBind / policy 変更、未移行 family の repository-wide heuristic 撤去は実施していない。
+
+**レビュー指摘への追修正（2026-09-08）:**
+
+- constructor capability は具体 impl の where 制約を証明する。出所不明の値を無条件に許可せず、分岐・block・転送引数・コンテナの射影の全経路の保証を保持する。関数入力の constructor witness は rigid とし、根拠のない抽象 carrier から具体 carrier への注釈による絞り込みを拒否する。
+- `ScarSession` の継続と checkpoint の保存・復元にも capability provenance を保持する。checkpoint の必須 field を追加し、旧 semantic cache は schema version を更新して無効化する。
+- map / apply / bind、compose 系、非 Facet `/` を共通 Trait invocation へ揃え、期待型・明示 RTA・演算子の source facts を運ぶ。plain RHS の制約は V9 §3.6 の方針を維持し、対象 carrier を canonical metadata で判定する。block 内の型検査は外側の推論制約を保持する。receiverless helper は宣言 signature と入力・期待型・明示 RTA から解き、登録 impl が一つでも carrier の根拠がなければ曖昧として拒否する。
+- `Function::on`、closure の Unit 戻り値、`ensure` の callback を共通型関係検査へ移す。callback の source fact は関数型全体を保持する。
+- JSON の origin・branch form / ordinal・capability は closed data に保持し、表示用 related の順序や role から復元しない。Missing RTA の存在しない actual/got、Trait arity の不適用型は null とする。
+- `.error` の `json: /pointer = value` で実 producer の reason / origin / data / related を検証する。module stage の型エラーも payload と source registry を保持し、欠落 key と null を区別する。
+- 既存 capability の carrier 照合は構造を比較し、同じ証明を再帰的に開始しない。通常の適用可能性の検査は impl 制約の証明を維持し、相互依存は `CyclicTraitObligation` として拒否する。
+
+**追修正後の検証（2026-09-08）:**
+
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace -j 2`: 最終コードで 2023 件すべて成功（41 binaries、256.773 秒）。CLI / REPL の process 境界を含む。
+- 事前の対象検証は constructor carrier / session 32 件、language_features / script / module の 47 バケットが成功。独立レビューの 26 ケースで、制約付き view の拒否と fresh な具体値の成功を確認した。
+- `cargo fmt --all -- --check` と `git diff --check` 成功。レビュー 6 指摘と追検証で見つかった循環・pipeline の退行を修正した。上記は Task 9 作業ブランチでの検証結果。main 統合時のテスト再実行はユーザ指示により省略する。
+
+
+- [x] **Step 8: Commit**
 
 ```bash
-git add crates/scar crates/sindr crates/diagnostics tests/fixtures
+git add crates/spire crates/sigil crates/scar crates/diagnostics crates/rune crates/xldr tests/fixtures tests/integration docs/dev/diagnostics.md doc/type_constructor_signature_unification_implementation_plan.md
 git commit -m "refactor(diagnostics): render signature failures from typed reasons"
 ```
 

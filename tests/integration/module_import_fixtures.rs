@@ -19,7 +19,10 @@ fn compile_sources_for_case(case: &ModuleFixtureCase) -> Result<xldr::CompileSou
     support::compile_sources_for_module_fixture(case)
 }
 
-fn check_multi_source_case_phase(case: &ModuleFixtureCase, phase: &str) -> Result<(), String> {
+fn check_multi_source_case_phase(
+    case: &ModuleFixtureCase,
+    phase: &str,
+) -> Result<(), support::CompilePhaseFailure> {
     let compile_sources = compile_sources_for_case(case)?;
     support::check_script_sources_phase(&compile_sources, phase)
 }
@@ -129,7 +132,9 @@ fn run_module_compile_error_bucket(bucket: usize, bucket_count: usize) {
             Some(phase @ ("parse" | "resolve" | "typecheck")) => {
                 check_multi_source_case_phase(&fixture.case, phase)
             }
-            None | Some(_) => compile_multi_source_case(&fixture.case).map(|_| ()),
+            None | Some(_) => compile_multi_source_case(&fixture.case)
+                .map(|_| ())
+                .map_err(Into::into),
         };
         if timing_enabled {
             slowest.push(support::SlowFixtureTiming {
@@ -286,4 +291,36 @@ fn dump_includes_qualified_function_names_for_module_defined_functions() {
     );
 
     let _ = fs::remove_dir_all(temp);
+}
+
+#[test]
+fn structured_module_stage_failure_keeps_json_contract() {
+    let fixture = module_compile_error_fixtures()
+        .into_iter()
+        .find(|fixture| fixture.case.case_dir.ends_with("structured_module_return"))
+        .expect("structured module fixture");
+    let expected = parse_compile_error_expectation(&fixture.error_path);
+    let error = check_multi_source_case_phase(&fixture.case, "typecheck")
+        .expect_err("module must fail typechecking");
+    assert!(error.message.starts_with("phase=typecheck;"), "{error}");
+    let (sources, _) = error
+        .source_context
+        .as_ref()
+        .expect("retained source registry");
+    let diagnostic = error
+        .type_error
+        .as_ref()
+        .unwrap()
+        .structured
+        .as_ref()
+        .unwrap();
+    let (source_id, span) =
+        xldr::decode_rebased_module_span(&diagnostic.primary.span).expect("module source span");
+    assert!(sources.file_name(source_id).unwrap().ends_with("Bad.srt"));
+    assert_eq!(
+        &sources.source(source_id).unwrap()[span.start..span.end],
+        "\"wrong\""
+    );
+
+    assert_compile_error_matches(&expected, &error, &fixture.case.case_dir);
 }

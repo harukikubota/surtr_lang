@@ -1,2 +1,2 @@
 phase: typecheck
-contains: `==` requires the same type on both sides, but got Int and Boolean
+contains: Argument type mismatch: expected Int, got Boolean

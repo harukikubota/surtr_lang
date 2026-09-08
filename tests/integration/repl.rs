@@ -1509,7 +1509,7 @@ fn repl_reports_return_mismatch_for_concretized_trait_helper_closure() {
     );
     let combined = strip_ansi(&combined);
     assert!(
-        combined.contains("Argument type mismatch: expected Unit, got String"),
+        combined.contains("Return type mismatch: expected Unit, got String"),
         "expected return mismatch, got:\n{}",
         combined
     );

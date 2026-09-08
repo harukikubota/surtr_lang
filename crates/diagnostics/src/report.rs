@@ -57,11 +57,11 @@ pub struct SerializableDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SerializableSourceFact {
     pub role: String,
+    pub ordinal: Option<u32>,
     pub source_id: u32,
     pub span: [u32; 2],
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "type")]
     pub ty: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub declaration_identity: Option<crate::DeclarationIdentity>,
 }
 

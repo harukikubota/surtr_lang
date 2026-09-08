@@ -1,2 +1,2 @@
 phase: typecheck
-contains: `-` is not defined for Duration
+contains: No implementation satisfies Sub for Duration

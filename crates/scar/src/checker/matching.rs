@@ -1,4 +1,5 @@
 use super::*;
+use diagnostics::{DiagnosticOrigin, SourceRole, TypeDiagnosticReason};
 
 impl Checker {
     pub(super) fn check_match(
@@ -23,55 +24,80 @@ impl Checker {
         };
         let mut typed_arms = Vec::new();
         let mut result_ty: Option<Ty> = None;
+        let mut failure = None;
 
-        for arm in arms {
-            let mut typed_arm = self.check_match_arm(arm, &typed_scrut.ty, span, expected)?;
+        let scrutinee_provenance = self.constructor_capability_for_node(&typed_scrut);
+        for (ordinal, arm) in arms.iter().enumerate() {
+            let mut typed_arm =
+                self.check_match_arm(arm, &typed_scrut.ty, &scrutinee_provenance, span, expected)?;
             if let Some(ref rt) = result_ty {
-                if !self.types_compatible(rt, &typed_arm.body.ty)
+                let checkpoint = self.candidate_probe_checkpoint();
+                let coerce = !self.types_compatible(rt, &typed_arm.body.ty)
                     && self.can_coerce_err_only_result_self_arm(
                         &typed_scrut,
                         &typed_arms,
                         &typed_arm,
                         rt,
-                    )
-                {
+                    );
+                self.rollback_candidate_probe(checkpoint);
+                if coerce {
                     typed_arm.body.ty = self.resolve_ty(rt);
                 }
             }
             let body_node = &typed_arm.body;
-            if let Some(expected) = expected {
-                if !self.types_compatible(expected, &body_node.ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Match arm type mismatch: expected {}, got {}",
-                            self.ty_name(&self.resolve_ty(expected)),
-                            self.ty_name(&body_node.ty)
-                        ),
-                        span: body_node.span.clone(),
-                        hint: None,
-                    });
+            if let Some(first) = typed_arms.first() {
+                let first: &TypedMatchArm = first;
+                let relation = self.assert_type_relation(
+                    &first.body.ty,
+                    &body_node.ty,
+                    self.branch_fact(SourceRole::Branch, &first.body, 0),
+                    self.branch_fact(SourceRole::Branch, body_node, ordinal),
+                    TypeDiagnosticReason::MatchArmTypeMismatch,
+                    DiagnosticOrigin::Branch {
+                        form: diagnostics::BranchForm::Match,
+                        ordinal: ordinal as u32,
+                    },
+                    "match",
+                    ordinal as u32,
+                );
+                if failure.is_none() {
+                    failure = relation.err();
                 }
             }
-            if let Some(ref rt) = result_ty {
-                if !self.types_compatible(rt, &body_node.ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Match arm type mismatch: expected {}, got {}",
-                            self.ty_name(rt),
-                            self.ty_name(&body_node.ty)
-                        ),
-                        span: body_node.span.clone(),
-                        hint: None,
-                    });
+            if let Some(expected) = expected {
+                let relation = self.assert_type_relation(
+                    expected,
+                    &body_node.ty,
+                    self.type_fact(SourceRole::Expected, span, expected),
+                    self.branch_fact(SourceRole::Branch, body_node, ordinal),
+                    TypeDiagnosticReason::MatchArmTypeMismatch,
+                    DiagnosticOrigin::Branch {
+                        form: diagnostics::BranchForm::Match,
+                        ordinal: ordinal as u32,
+                    },
+                    "match",
+                    ordinal as u32,
+                );
+                if failure.is_none() {
+                    failure = relation.err();
                 }
-            } else {
+            }
+            if result_ty.is_none() {
                 result_ty = Some(body_node.ty.clone());
             }
             typed_arms.push(typed_arm);
         }
 
+        if let Some(error) = failure {
+            return Err(self.complete_branch_error(
+                error,
+                &typed_arms.iter().map(|arm| &arm.body).collect::<Vec<_>>(),
+                &typed_arms
+                    .iter()
+                    .map(|arm| arm.guard.as_ref())
+                    .collect::<Vec<_>>(),
+            ));
+        }
         // Arm-local bindings are rolled back by each arm scope. Keep typed arm
         // subtrees unresolved here and let check_program do one final pass.
         self.check_match_exhaustive(span, &typed_scrut.ty, &typed_arms)?;
@@ -360,13 +386,19 @@ impl Checker {
         &mut self,
         arm: &ResolvedMatchArm,
         scrut_ty: &Ty,
+        scrutinee_provenance: &ConstructorCapabilityProvenance,
         _span: &Span,
         expected: Option<&Ty>,
     ) -> Result<TypedMatchArm, TypeError> {
         let profile = self.profiler.start();
         self.env.push_var_scope();
+        let saved_provenance = self.constructor_capabilities.clone();
         let result = (|| {
             let typed_pat = self.check_match_subpattern(&arm.pattern, scrut_ty)?;
+            self.bind_match_constructor_provenance(
+                &typed_pat,
+                (scrutinee_provenance.clone(), scrut_ty.clone()),
+            );
             let typed_guard = if let Some(guard) = &arm.guard {
                 let typed_guard = self.check_node(guard)?;
                 if !self.types_compatible(&Ty::Bool, &typed_guard.ty) {
@@ -398,6 +430,7 @@ impl Checker {
             })
         })();
         self.env.pop_var_scope();
+        self.constructor_capabilities = saved_provenance;
         self.profiler.finish(ProfileEvent::MatchArm, profile);
         result
     }
@@ -953,5 +986,45 @@ impl Checker {
             | TypedMatchPattern::ErrorKind(_)
             | TypedMatchPattern::ListNil => false,
         }
+    }
+}
+
+impl Checker {
+    pub(super) fn check_if_let(
+        &mut self,
+        span: &Span,
+        scrutinee: &Resolved,
+        arms: &[ResolvedMatchArm],
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        self.check_match(span, scrutinee, arms, expected)
+            .map_err(|mut error| {
+                if let Some(diagnostic) = &mut error.structured {
+                    if diagnostic.reason == TypeDiagnosticReason::MatchArmTypeMismatch
+                        && matches!(
+                            diagnostic.origin,
+                            DiagnosticOrigin::Branch {
+                                form: diagnostics::BranchForm::Match,
+                                ..
+                            }
+                        )
+                        && arms
+                            .iter()
+                            .any(|arm| self.resolved_span(&arm.body) == &diagnostic.primary.span)
+                    {
+                        diagnostic.reason = TypeDiagnosticReason::IfBranchTypeMismatch;
+                        if let DiagnosticOrigin::Branch { form, .. } = &mut diagnostic.origin {
+                            *form = diagnostics::BranchForm::IfLet;
+                        }
+                        if let diagnostics::DiagnosticData::BranchAssertion(data) =
+                            &mut diagnostic.data
+                        {
+                            data.form = diagnostics::BranchForm::IfLet;
+                        }
+                        return TypeError::from_structured(diagnostic.clone());
+                    }
+                }
+                error
+            })
     }
 }

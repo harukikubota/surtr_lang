@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Undefined function parse/0
+contains: expects 1 argument(s), got 0

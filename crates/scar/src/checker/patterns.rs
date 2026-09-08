@@ -85,23 +85,20 @@ impl Checker {
             ResolvedPattern::Annotated(id, ast_ty) => {
                 let expected =
                     self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
-                if !self.types_compatible(&expected, rhs_ty) {
-                    if let Some(err) =
-                        self.plain_value_result_context_error(&expected, rhs_ty, span)
-                    {
-                        return Err(err);
-                    }
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "expected {}, got {}",
-                            self.ty_name(&expected),
-                            self.ty_name(rhs_ty)
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
+                self.assert_type_relation(
+                    &expected,
+                    rhs_ty,
+                    self.type_fact(
+                        diagnostics::SourceRole::Annotation,
+                        Self::ast_ty_span(ast_ty),
+                        &expected,
+                    ),
+                    self.type_fact(diagnostics::SourceRole::Value, span, rhs_ty),
+                    diagnostics::TypeDiagnosticReason::AnnotationTypeMismatch,
+                    diagnostics::DiagnosticOrigin::Annotation,
+                    &id.name,
+                    0,
+                )?;
                 let expected = self.resolve_ty(&expected);
                 Ok((TypedPattern::Var(expected.clone(), id.clone()), expected))
             }

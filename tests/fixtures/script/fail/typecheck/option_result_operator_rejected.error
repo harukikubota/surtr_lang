@@ -1,4 +1,2 @@
 phase: typecheck
-contains: cannot use Option as a standard failure container for Result bind
-contains: Option is not standard for failure propagation
-contains: from::<Result>(value)
+contains: Type constructor family mismatch:

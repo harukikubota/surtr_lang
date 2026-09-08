@@ -92,13 +92,14 @@ impl TypeDiagnosticReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
 pub enum DiagnosticOrigin {
     Call,
     TraitCall,
-    Operator,
+    Operator { operator: String },
     Annotation,
     Return,
-    Branch,
+    Branch { form: BranchForm, ordinal: u32 },
     Pattern,
     Declaration,
     Intrinsic,
@@ -106,7 +107,16 @@ pub enum DiagnosticOrigin {
     ReturnTypeArgument { ordinal: u32 },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BranchForm {
+    If,
+    IfLet,
+    Match,
+    Cond,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SourceRole {
     Value,
     ReturnTypeArgument,
@@ -118,6 +128,7 @@ pub enum SourceRole {
     LeftValue,
     RightValue,
     Branch,
+    Guard,
     Pattern,
     Declaration,
     CallTarget,
@@ -125,6 +136,26 @@ pub enum SourceRole {
 }
 
 impl SourceRole {
+    pub const fn json_name(self) -> &'static str {
+        match self {
+            Self::Value => "value",
+            Self::ReturnTypeArgument => "return_type_argument",
+            Self::Annotation => "annotation",
+            Self::Expected => "expected",
+            Self::Contract => "contract",
+            Self::Impl => "impl",
+            Self::Trait => "trait",
+            Self::LeftValue => "left_value",
+            Self::RightValue => "right_value",
+            Self::Branch => "branch",
+            Self::Guard => "guard",
+            Self::Pattern => "pattern",
+            Self::Declaration => "declaration",
+            Self::CallTarget => "call_target",
+            Self::Other => "other",
+        }
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Value => "Value",
@@ -137,6 +168,7 @@ impl SourceRole {
             Self::LeftValue => "LeftValue",
             Self::RightValue => "RightValue",
             Self::Branch => "Branch",
+            Self::Guard => "Guard",
             Self::Pattern => "Pattern",
             Self::Declaration => "Declaration",
             Self::CallTarget => "CallTarget",
@@ -154,6 +186,7 @@ pub struct DeclarationIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SourceFact {
     pub role: SourceRole,
+    pub ordinal: Option<u32>,
     pub source_id: crate::SourceId,
     pub span: Span,
     pub ty: Option<String>,
@@ -169,6 +202,7 @@ impl SourceFact {
     ) -> Self {
         Self {
             role,
+            ordinal: None,
             source_id,
             span,
             ty: Some(ty.into()),
@@ -179,6 +213,7 @@ impl SourceFact {
     pub fn untyped(role: SourceRole, source_id: crate::SourceId, span: Span) -> Self {
         Self {
             role,
+            ordinal: None,
             source_id,
             span,
             ty: None,
@@ -187,8 +222,35 @@ impl SourceFact {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum CallableReturnShape {
+    Any,
+    Plain,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CallableShapeData {
+    pub callable: String,
+    pub actual_type: Option<String>,
+    pub expected_arity: Option<u32>,
+    pub actual_arity: Option<u32>,
+    pub return_shape: CallableReturnShape,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ArgumentContractData {
+    pub callable: String,
+    pub name: Option<String>,
+    pub expected_count: u32,
+    pub actual_count: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ArgumentRelationData {
+    #[serde(skip)]
+    pub expected_origin: Option<SourceFact>,
+    #[serde(skip)]
+    pub actual_origin: Option<SourceFact>,
+
     pub callable: String,
     pub ordinal: u32,
     pub expected_type: Option<String>,
@@ -197,10 +259,22 @@ pub struct ArgumentRelationData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReturnTypeArgumentData {
+    pub declared_origin: Option<SourceFact>,
+    pub value_parameter_origin: Option<SourceFact>,
+    pub return_origin: Option<SourceFact>,
+    #[serde(skip)]
+    pub left_origin: Option<SourceFact>,
+    #[serde(skip)]
+    pub right_origin: Option<SourceFact>,
+    #[serde(skip)]
+    pub required_trait: Option<String>,
+    pub expected_count: Option<u32>,
+    pub actual_count: Option<u32>,
+
     pub callable: String,
-    pub ordinal: u32,
-    pub expected_type: String,
-    pub actual_type: String,
+    pub ordinal: Option<u32>,
+    pub expected_type: Option<String>,
+    pub actual_type: Option<String>,
 }
 
 /// Stable signature-list roles shared by the checker and diagnostic consumers.
@@ -226,19 +300,32 @@ impl TypeListRole {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TraitDiagnosticIdentity {
+    pub trait_id: String,
+    pub trait_arguments: Vec<String>,
+    pub subject_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TraitMethodTypeListData {
+    pub impl_declaration: Option<SourceFact>,
+
+    pub identity: Option<TraitDiagnosticIdentity>,
     pub method_name: String,
     pub role: TypeListRole,
     pub ordinal: u32,
     pub nested_path: Vec<u32>,
-    pub expected_type: String,
-    pub actual_type: String,
+    pub expected_type: Option<String>,
+    pub actual_type: Option<String>,
     pub expected_count: Option<u32>,
     pub actual_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TraitMethodConstraintData {
+    pub impl_declaration: Option<SourceFact>,
+
+    pub identity: Option<TraitDiagnosticIdentity>,
     pub method_name: String,
     pub expected_constraints: Vec<String>,
     pub actual_constraints: Vec<String>,
@@ -255,21 +342,35 @@ pub struct CallableSignatureData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConstraintSubjectData {
+    #[serde(skip)]
+    pub subject_origin: Option<SourceFact>,
+    #[serde(skip)]
+    pub required_trait: Option<String>,
+    #[serde(skip)]
+    pub suggested_type_variable: Option<String>,
+
     pub subject: String,
     pub constraint: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TraitObligationData {
+    #[serde(skip)]
+    pub obligation_origin: Option<SourceFact>,
+
     pub trait_name: String,
+    pub trait_arguments: Vec<String>,
     pub subject_type: String,
     pub position: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TraitDispatchData {
+    pub impl_declaration: Option<SourceFact>,
+
     pub trait_name: String,
-    pub method: String,
+    pub trait_arguments: Vec<String>,
+    pub method: Option<String>,
     pub subject_type: Option<String>,
 }
 
@@ -281,6 +382,10 @@ pub struct CandidateFailureData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CandidateSelectionData {
+    pub subject_type: Option<String>,
+    pub trait_arguments: Vec<String>,
+    pub impl_declaration: Option<SourceFact>,
+
     pub trait_name: String,
     pub method: String,
     pub failures: Vec<CandidateFailureData>,
@@ -288,13 +393,36 @@ pub struct CandidateSelectionData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TypeConstructorCarrierData {
+    #[serde(skip)]
+    pub left_type: Option<String>,
+    #[serde(skip)]
+    pub right_type: Option<String>,
+    #[serde(skip)]
+    pub left_origin: Option<SourceFact>,
+    #[serde(skip)]
+    pub right_origin: Option<SourceFact>,
+    #[serde(skip)]
+    pub required_capability: String,
+
     pub family: String,
+    pub family_id: String,
     pub expected_carrier: String,
     pub actual_carrier: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BranchAssertionData {
+    #[serde(skip)]
+    pub form: BranchForm,
+    #[serde(skip)]
+    pub left_ordinal: Option<u32>,
+    #[serde(skip)]
+    pub right_ordinal: Option<u32>,
+    #[serde(skip)]
+    pub left_origin: Option<SourceFact>,
+    #[serde(skip)]
+    pub right_origin: Option<SourceFact>,
+
     pub expected_type: String,
     pub actual_type: String,
     pub branch: Option<u32>,
@@ -319,6 +447,8 @@ pub struct RuntimeData {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticData {
+    CallableShape(CallableShapeData),
+    ArgumentContract(ArgumentContractData),
     ArgumentRelation(ArgumentRelationData),
     ReturnTypeArgument(ReturnTypeArgumentData),
     CallableSignature(CallableSignatureData),
@@ -340,7 +470,13 @@ impl DiagnosticData {
     /// retained as `kind`, while fields such as `ordinal` remain directly
     /// addressable to keep the JSON contract useful to clients.
     pub fn to_json_value(&self) -> Value {
+        self.project_json()
+    }
+
+    pub(crate) fn raw_json_value(&self) -> Value {
         let (kind, payload) = match self {
+            Self::CallableShape(value) => ("CallableShape", serde_json::to_value(value)),
+            Self::ArgumentContract(value) => ("ArgumentContract", serde_json::to_value(value)),
             Self::ArgumentRelation(value) => ("ArgumentRelation", serde_json::to_value(value)),
             Self::ReturnTypeArgument(value) => ("ReturnTypeArgument", serde_json::to_value(value)),
             Self::CallableSignature(value) => ("CallableSignature", serde_json::to_value(value)),
@@ -406,6 +542,53 @@ impl StructuredDiagnostic {
             Remediation::Help { text } => Some(text.clone()),
             Remediation::Candidates { items } if items.is_empty() => None,
             Remediation::Candidates { items } => Some(items.join("\n")),
+        }
+    }
+}
+
+impl StructuredDiagnostic {
+    pub fn map_source_locations(
+        mut self,
+        mut map: impl FnMut(&Span) -> (crate::SourceId, Span),
+    ) -> Self {
+        self.map_source_facts(|fact| {
+            let (source_id, span) = map(&fact.span);
+            fact.source_id = source_id;
+            fact.span = span;
+        });
+        self
+    }
+
+    /// Apply phase source adaptation to both semantic origins and display labels.
+    pub fn map_source_facts(&mut self, mut map: impl FnMut(&mut SourceFact)) {
+        for fact in std::iter::once(&mut self.primary).chain(self.related.iter_mut()) {
+            map(fact);
+        }
+        let origins: Vec<&mut Option<SourceFact>> = match &mut self.data {
+            DiagnosticData::ArgumentRelation(v) => {
+                vec![&mut v.expected_origin, &mut v.actual_origin]
+            }
+            DiagnosticData::ReturnTypeArgument(v) => vec![
+                &mut v.declared_origin,
+                &mut v.value_parameter_origin,
+                &mut v.return_origin,
+                &mut v.left_origin,
+                &mut v.right_origin,
+            ],
+            DiagnosticData::ConstraintSubject(v) => vec![&mut v.subject_origin],
+            DiagnosticData::TraitObligation(v) => vec![&mut v.obligation_origin],
+            DiagnosticData::TraitDispatch(v) => vec![&mut v.impl_declaration],
+            DiagnosticData::TraitMethodTypeList(v) => vec![&mut v.impl_declaration],
+            DiagnosticData::TraitMethodConstraint(v) => vec![&mut v.impl_declaration],
+            DiagnosticData::CandidateSelection(v) => vec![&mut v.impl_declaration],
+            DiagnosticData::TypeConstructorCarrier(v) => {
+                vec![&mut v.left_origin, &mut v.right_origin]
+            }
+            DiagnosticData::BranchAssertion(v) => vec![&mut v.left_origin, &mut v.right_origin],
+            _ => vec![],
+        };
+        for origin in origins.into_iter().flatten() {
+            map(origin);
         }
     }
 }

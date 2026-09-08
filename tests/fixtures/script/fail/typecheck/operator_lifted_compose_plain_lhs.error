@@ -1,3 +1,7 @@
 phase: typecheck
-contains: `>*` requires Result, List, or Option on the left-hand side
-contains: Use `>>` for plain composition
+contains: No implementation satisfies Functor for Int
+json: /reason = "NoApplicableTraitImplementation"
+json: /origin/kind = "Operator"
+json: /origin/operator = ">*"
+json: /data/subject_type = "Int"
+json: /related/0/type = "(Int -> Int)"

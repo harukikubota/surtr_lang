@@ -1,0 +1,2 @@
+def take(value: Int) -> Int { value }
+print(take("x"))

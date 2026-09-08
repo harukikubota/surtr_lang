@@ -1,0 +1,10 @@
+phase: typecheck
+contains: Type constructor family mismatch
+json: /reason = "TypeConstructorFamilyMismatch"
+json: /origin/kind = "Operator"
+json: /origin/operator = "|>="
+json: /data/required_capability = "Monad"
+json: /data/left_type = "List<Int>"
+json: /data/right_type = "(Int -> Option<Int>)"
+json: /data/left_origin/kind = "left_value"
+json: /data/right_origin/kind = "right_value"

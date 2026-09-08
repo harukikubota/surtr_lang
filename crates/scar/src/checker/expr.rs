@@ -1,9 +1,8 @@
 use super::*;
 use crate::env::TypeScheme;
 use diagnostics::{
-    CandidateFailureData, CandidateSelectionData, DiagnosticData, DiagnosticOrigin, Remediation,
-    SourceFact, SourceId, SourceRole, StructuredDiagnostic, TypeConstructorCarrierData,
-    TypeDiagnosticReason,
+    CandidateFailureData, CandidateSelectionData, DiagnosticData, DiagnosticOrigin, SourceFact,
+    SourceId, SourceRole, StructuredDiagnostic, TypeConstructorCarrierData, TypeDiagnosticReason,
 };
 use sindr::names::FacetRootKind;
 use sindr::primitives::int;
@@ -11,20 +10,6 @@ use spire::ast::Symbol;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static SYNTHETIC_RANGE_UID: AtomicU32 = AtomicU32::new(3_000_000_000);
-
-fn combine_hint_parts(parts: &[Option<String>]) -> Option<String> {
-    let joined = parts
-        .iter()
-        .filter_map(|part| part.as_deref())
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-    if joined.is_empty() {
-        None
-    } else {
-        Some(joined)
-    }
-}
 
 enum FacetPathInput<'a> {
     Expr(&'a Resolved),
@@ -185,28 +170,24 @@ impl Checker {
         if self.trait_obligations_depend_on(body, inputs) {
             return Ok(());
         }
-        if let Some((method, span)) = self.first_pending_trait_helper(body) {
-            return Err(self.pending_trait_helper_error(method, span));
+        if let Some((trait_name, method, subject, span)) = self.first_pending_trait_helper(body) {
+            return Err(self.pending_trait_helper_error(trait_name, method, subject, span));
         }
         Ok(())
     }
 
-    pub(super) fn pending_trait_helper_error(&self, method_name: &str, span: &Span) -> TypeError {
-        TypeError {
-            structured: None,
-            message: format!(
-                "UnresolvedTraitObligation: Trait helper `{}` could not be concretized for this callable binding",
-                method_name
-            ),
-            span: span.clone(),
-            hint: Some(
-                "Add parameter or binding type annotations, or pass the callable where an expected function type is available."
-                    .into(),
-            ),
-        }
+    pub(super) fn pending_trait_helper_error(
+        &self,
+        trait_name: &str,
+        method_name: &str,
+        subject: &Ty,
+        span: &Span,
+    ) -> TypeError {
+        self.trait_dispatch_failure(TypeDiagnosticReason::UnresolvedTraitMethodInstantiation, trait_name, method_name, Some(subject), span)
+            .with_hint("Add parameter or binding type annotations, or pass the callable where an expected function type is available.")
     }
 
-    fn constructor_capability_allows(
+    pub(super) fn constructor_capability_allows(
         &self,
         actual: &str,
         required: &str,
@@ -232,38 +213,26 @@ impl Checker {
     fn check_constructor_capability(
         &self,
         required_trait: &str,
-        method_name: &str,
+        _method_name: &str,
         arg: &TypedNode,
     ) -> Result<(), TypeError> {
         let actual = self.constructor_capability_for_node(arg);
-        let ConstructorCapabilityProvenance::Constrained(capabilities) = &actual else {
-            return Ok(());
-        };
         let Some(required_info) = self.traits.get(required_trait) else {
             return Ok(());
         };
         if required_info.constructor_slots.is_empty() {
             return Ok(());
         }
-        if capabilities.iter().any(|actual_trait| {
-            self.constructor_capability_allows(actual_trait, required_trait, &mut HashSet::new())
-        }) {
+        if self.constructor_provenance_allows(&actual, required_trait, &arg.ty) {
             return Ok(());
         }
-        Err(TypeError {
-            structured: None,
-            message: format!(
-                "{}::{} is not available for {}",
-                Self::surface_name(required_trait),
-                method_name,
-                Self::constructor_provenance_description(&actual)
-            ),
-            span: arg.span.clone(),
-            hint: Some(format!(
-                "Use a concrete constructor type or a parameter constrained by {}.",
-                Self::surface_name(required_trait)
-            )),
-        })
+        Err(self.trait_failure(
+            TypeDiagnosticReason::MissingTypeConstructorCapability,
+            required_trait,
+            &arg.ty,
+            &arg.span,
+            DiagnosticOrigin::TraitCall,
+        ))
     }
 
     pub(super) fn constructor_annotation_compatible(
@@ -271,54 +240,22 @@ impl Checker {
         trait_key: &str,
         expected: &Ty,
         actual: &Ty,
-        source_provenance: &ConstructorCapabilityProvenance,
     ) -> bool {
         let expected = self.resolve_ty(expected);
         let actual = self.resolve_ty(actual);
-        let (abstract_ty, concrete_ty, abstract_is_actual) = match (&expected, &actual) {
-            (Ty::SelfApp(expected_items), concrete)
-                if Self::constructor_application_parts(expected_items).is_some() =>
-            {
-                (&expected, concrete, false)
-            }
-            (concrete, Ty::SelfApp(actual_items))
-                if Self::constructor_application_parts(actual_items).is_some() =>
-            {
-                (&actual, concrete, true)
-            }
-            _ => return false,
-        };
-        let Ty::SelfApp(items) = abstract_ty else {
+        // A concrete value can expose a constructor capability. An abstract
+        // caller-owned carrier cannot be chosen by a nominal body annotation.
+        let Ty::SelfApp(items) = &expected else {
             return false;
         };
         let Some((_, abstract_slots)) = Self::constructor_application_parts(items) else {
             return false;
         };
-        let Some(concrete_slots) =
-            self.constructor_application_slots_for_trait(trait_key, concrete_ty)
+        let Some(concrete_slots) = self.constructor_application_slots_for_trait(trait_key, &actual)
         else {
             return false;
         };
         if abstract_slots.len() != concrete_slots.len() {
-            return false;
-        }
-
-        let capability_ok = if abstract_is_actual {
-            let ConstructorCapabilityProvenance::Constrained(capabilities) = source_provenance
-            else {
-                return false;
-            };
-            capabilities.iter().any(|source_capability| {
-                self.constructor_capability_allows(
-                    source_capability,
-                    trait_key,
-                    &mut HashSet::new(),
-                ) && self.trait_impl_exists(source_capability, concrete_ty)
-            })
-        } else {
-            self.trait_impl_exists(trait_key, concrete_ty)
-        };
-        if !capability_ok {
             return false;
         }
 
@@ -331,181 +268,26 @@ impl Checker {
         slots_ok
     }
 
-    fn constructor_capability_for_node(&self, node: &TypedNode) -> ConstructorCapabilityProvenance {
-        match &node.node {
-            TypedInner::Var(id) => self
-                .constructor_capabilities
-                .get(&id.unique_id)
-                .cloned()
-                .unwrap_or(ConstructorCapabilityProvenance::Unrestricted),
-            TypedInner::App(func, args) => {
-                let TypedInner::Var(id) = &func.node else {
-                    return ConstructorCapabilityProvenance::Unrestricted;
-                };
-                let Some(signature) = self.callable_signatures.get(&id.unique_id) else {
-                    return ConstructorCapabilityProvenance::Unrestricted;
-                };
-                if let Some(capability) =
-                    self.constructor_capability_for_type(&signature.return_type.ty)
-                {
-                    return ConstructorCapabilityProvenance::constrained(capability);
-                }
-                if signature.identity.declaration_kind
-                    != sindr::signature::CallableDeclarationKind::Function
-                {
-                    return ConstructorCapabilityProvenance::Unrestricted;
-                }
-                let Ty::Var(return_var) = &signature.return_type.ty else {
-                    return ConstructorCapabilityProvenance::Unrestricted;
-                };
-                let sources = signature
-                    .value_parameters
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, parameter)| {
-                        matches!(&parameter.ty, Ty::Var(var) if var == return_var).then_some(index)
-                    })
-                    .collect::<Vec<_>>();
-                if sources.is_empty() {
-                    return ConstructorCapabilityProvenance::Unrestricted;
-                }
-                let provenances = sources
-                    .into_iter()
-                    .filter_map(|source| args.get(source))
-                    .map(|arg| self.constructor_capability_for_node(arg))
-                    .collect::<Vec<_>>();
-                self.common_constructor_provenance(&provenances)
-            }
-            TypedInner::EagerBoundary(inner) => self.constructor_capability_for_node(inner),
-            _ => ConstructorCapabilityProvenance::Unrestricted,
-        }
-    }
-
-    fn constructor_capability_for_type(&self, ty: &Ty) -> Option<String> {
-        let Ty::SelfApp(items) = ty else {
-            return None;
-        };
-        let (witness, _) = Self::constructor_application_parts(items)?;
-        let Ty::Var(var) = witness else {
-            return None;
-        };
-        self.constructor_witness_traits.get(var).cloned()
-    }
-
-    fn common_constructor_provenance(
-        &self,
-        provenances: &[ConstructorCapabilityProvenance],
-    ) -> ConstructorCapabilityProvenance {
-        let constrained = provenances
-            .iter()
-            .filter_map(|provenance| match provenance {
-                ConstructorCapabilityProvenance::Unrestricted => None,
-                ConstructorCapabilityProvenance::Constrained(capabilities) => Some(capabilities),
-            })
-            .collect::<Vec<_>>();
-        if constrained.is_empty() {
-            return ConstructorCapabilityProvenance::Unrestricted;
-        }
-        let candidates = self
-            .traits
-            .iter()
-            .filter_map(|(candidate, info)| {
-                if info.constructor_slots.is_empty() {
-                    return None;
-                }
-                constrained
-                    .iter()
-                    .all(|capabilities| {
-                        capabilities.iter().any(|actual| {
-                            self.constructor_capability_allows(
-                                actual,
-                                candidate,
-                                &mut HashSet::new(),
-                            )
-                        })
-                    })
-                    .then_some(candidate.clone())
-            })
-            .collect::<BTreeSet<_>>();
-        let maximal = candidates
-            .iter()
-            .filter(|candidate| {
-                !candidates.iter().any(|other| {
-                    candidate != &other
-                        && self.constructor_capability_allows(other, candidate, &mut HashSet::new())
-                })
-            })
-            .cloned()
-            .collect();
-        ConstructorCapabilityProvenance::Constrained(maximal)
-    }
-
-    fn constructor_provenance_description(provenance: &ConstructorCapabilityProvenance) -> String {
-        match provenance {
-            ConstructorCapabilityProvenance::Unrestricted => {
-                "an unrestricted concrete value".into()
-            }
-            ConstructorCapabilityProvenance::Constrained(capabilities)
-                if capabilities.is_empty() =>
-            {
-                "a constrained value with no guaranteed constructor capability".into()
-            }
-            ConstructorCapabilityProvenance::Constrained(capabilities) => format!(
-                "a value constrained by {}",
-                capabilities
-                    .iter()
-                    .map(|capability| Self::surface_name(capability))
-                    .collect::<Vec<_>>()
-                    .join(" + ")
-            ),
-        }
-    }
-
-    fn constructor_provenance_allows(
-        &self,
-        provenance: &ConstructorCapabilityProvenance,
-        required: &str,
-    ) -> bool {
-        match provenance {
-            ConstructorCapabilityProvenance::Unrestricted => true,
-            ConstructorCapabilityProvenance::Constrained(capabilities) => {
-                capabilities.iter().any(|actual| {
-                    self.constructor_capability_allows(actual, required, &mut HashSet::new())
-                })
-            }
-        }
-    }
-
     fn check_expected_constructor_capability(
         &self,
         expected: &Ty,
-        callee_label: &str,
+        _callee_label: &str,
         arg: &TypedNode,
     ) -> Result<(), TypeError> {
         let Some(required_trait) = self.constructor_capability_for_type(expected) else {
             return Ok(());
         };
         let actual = self.constructor_capability_for_node(arg);
-        if matches!(actual, ConstructorCapabilityProvenance::Unrestricted) {
+        if self.constructor_provenance_allows(&actual, &required_trait, &arg.ty) {
             return Ok(());
         }
-        if self.constructor_provenance_allows(&actual, &required_trait) {
-            return Ok(());
-        }
-        Err(TypeError {
-            structured: None,
-            message: format!(
-                "{} requires a value constrained by {}, got {}",
-                callee_label,
-                Self::surface_name(&required_trait),
-                Self::constructor_provenance_description(&actual)
-            ),
-            span: arg.span.clone(),
-            hint: Some(format!(
-                "Pass a concrete constructor type or a value constrained by {}.",
-                Self::surface_name(&required_trait)
-            )),
-        })
+        Err(self.trait_failure(
+            TypeDiagnosticReason::MissingTypeConstructorCapability,
+            &required_trait,
+            &arg.ty,
+            &arg.span,
+            DiagnosticOrigin::Call,
+        ))
     }
 
     fn check_trait_method_constructor_capabilities(
@@ -535,16 +317,23 @@ impl Checker {
     pub(super) fn first_pending_trait_helper<'a>(
         &self,
         node: &'a TypedNode,
-    ) -> Option<(&'a str, &'a Span)> {
+    ) -> Option<(&'a str, &'a str, &'a Ty, &'a Span)> {
         match &node.node {
             TypedInner::TraitCall {
+                trait_name,
                 method_name,
+                receiver_ty,
                 dispatch,
                 args,
                 ..
             } => {
                 if matches!(dispatch, crate::typed::TraitDispatch::Pending) {
-                    Some((method_name.as_str(), &node.span))
+                    Some((
+                        trait_name.as_str(),
+                        method_name.as_str(),
+                        receiver_ty,
+                        &node.span,
+                    ))
                 } else {
                     args.iter()
                         .find_map(|arg| self.first_pending_trait_helper(arg))
@@ -823,7 +612,13 @@ impl Checker {
                             }
                             CandidateApplicability::Deferred(_) => TraitDispatch::Pending,
                             CandidateApplicability::Rejected(_) => {
-                                return Err(self.pending_trait_helper_error(&method_name, &span))
+                                return Err(self.trait_failure(
+                                    TypeDiagnosticReason::NoApplicableTraitImplementation,
+                                    &obligation.trait_id,
+                                    &obligation.receiver,
+                                    &span,
+                                    DiagnosticOrigin::TraitCall,
+                                ))
                             }
                         }
                     }
@@ -1345,43 +1140,23 @@ impl Checker {
                     }
                     let mut typed_rhs = self.check_node_with_expected(rhs, Some(&expected))?;
                     self.apply_facet_annotation(&mut typed_rhs, &expected, span)?;
-                    if !self.types_compatible(&expected, &typed_rhs.ty) {
-                        let source_provenance = self.constructor_capability_for_node(&typed_rhs);
-                        let annotation_capability = self.constructor_trait_key_for_ast_ty(ast_ty);
-                        let constructor_coercion = if let Some(trait_key) = annotation_capability {
-                            self.constructor_annotation_compatible(
-                                &trait_key,
-                                &expected,
-                                &typed_rhs.ty,
-                                &source_provenance,
-                            )
-                        } else if let ConstructorCapabilityProvenance::Constrained(capabilities) =
-                            &source_provenance
-                        {
-                            capabilities.iter().any(|trait_key| {
+                    let relation = self.assert_type_relation(&expected, &typed_rhs.ty,
+                        self.type_fact(SourceRole::Annotation, Self::ast_ty_span(ast_ty), &expected), self.type_fact(SourceRole::Value, &typed_rhs.span, &typed_rhs.ty),
+                        TypeDiagnosticReason::AnnotationTypeMismatch, DiagnosticOrigin::Annotation, "binding", 0);
+                    if let Err(error) = relation {
+                        let constructor_coercion = self
+                            .constructor_trait_key_for_ast_ty(ast_ty)
+                            .is_some_and(|trait_key| {
                                 self.constructor_annotation_compatible(
-                                    trait_key,
+                                    &trait_key,
                                     &expected,
                                     &typed_rhs.ty,
-                                    &source_provenance,
                                 )
-                            })
-                        } else {
-                            false
-                        };
+                            });
                         if constructor_coercion {
                             typed_rhs.ty = expected.clone();
                         } else {
-                            if let Some(err) = self
-                                .facet_replace_result_context_error(&typed_rhs, &expected, span)
-                            {
-                                return Err(err);
-                            }
-                            if let Some(err) = self
-                                .plain_value_result_context_error(&expected, &typed_rhs.ty, span)
-                            {
-                                return Err(err);
-                            }
+                            return Err(error);
                         }
                     }
                     typed_rhs
@@ -1395,8 +1170,8 @@ impl Checker {
                         _ => false,
                     };
                     if !can_instantiate {
-                    if let Some((method_name, pending_span)) = self.first_pending_trait_helper(&typed_rhs) {
-                        return Err(self.pending_trait_helper_error(method_name, pending_span));
+                    if let Some((trait_name, method_name, subject, pending_span)) = self.first_pending_trait_helper(&typed_rhs) {
+                        return Err(self.pending_trait_helper_error(trait_name, method_name, subject, pending_span));
                     }
                     }
                 }
@@ -1423,20 +1198,13 @@ impl Checker {
                     ResolvedPattern::Annotated(_, ast_ty) => self
                         .constructor_trait_key_for_ast_ty(ast_ty)
                         .map(ConstructorCapabilityProvenance::constrained)
-                        .unwrap_or(ConstructorCapabilityProvenance::Unrestricted),
+                        .unwrap_or(inherited_constructor_provenance),
                     _ => inherited_constructor_provenance,
                 };
-                if let ConstructorCapabilityProvenance::Constrained(_) =
-                    binding_constructor_provenance
-                {
-                    match &typed_pat {
-                        TypedPattern::Var(_, id) | TypedPattern::As(_, _, id) => {
-                            self.constructor_capabilities
-                                .insert(id.unique_id, binding_constructor_provenance);
-                        }
-                        _ => {}
-                    }
-                }
+                self.bind_constructor_provenance(
+                    &typed_pat,
+                    (binding_constructor_provenance, typed_rhs.ty.clone()),
+                );
                 if !matches!(pat, ResolvedPattern::Annotated(..))
                     && self.is_non_expansive_callable_value(&typed_rhs)
                 {
@@ -1492,6 +1260,7 @@ impl Checker {
             Resolved::InterpolatedStr(span, parts) => self.check_interpolated_str(span, parts),
             Resolved::Dbg(span, args) => self.check_dbg(span, args),
 
+            Resolved::Cond(span, clauses) => self.check_cond(span, clauses, None),
             Resolved::If(span, cond, then, else_opt) => self.check_if(span, cond, then, else_opt),
             Resolved::Assert(span, cond, err) => self.check_assert(span, cond, err),
             Resolved::Ensure(span, value, pred, err) => self.check_ensure(span, value, pred, err),
@@ -1502,6 +1271,7 @@ impl Checker {
             }
 
             Resolved::Match(span, scrutinee, arms) => self.check_match(span, scrutinee, arms, None),
+            Resolved::IfLet(span, scrutinee, arms) => self.check_if_let(span, scrutinee, arms, None),
 
             Resolved::FieldAccess(span, expr, field) => self.check_field_access(span, expr, field),
             Resolved::FacetSegmentAccess(span, expr, segment) => {
@@ -1849,7 +1619,23 @@ impl Checker {
             let Some(explicit_ty) = constraint.explicit_ty() else {
                 continue;
             };
-            if !self.types_compatible(&slot.ty, explicit_ty) {
+            if self
+                .assert_type_relation(
+                    &slot.ty,
+                    explicit_ty,
+                    self.type_fact(SourceRole::Contract, constraint.span(), &slot.ty),
+                    self.type_fact(
+                        SourceRole::ReturnTypeArgument,
+                        constraint.span(),
+                        explicit_ty,
+                    ),
+                    TypeDiagnosticReason::ArgumentTypeMismatch,
+                    DiagnosticOrigin::Call,
+                    &constraints.signature.identity.name,
+                    slot.ordinal,
+                )
+                .is_err()
+            {
                 return Err(super::signatures::return_type_argument_mismatch_error(
                     &constraints.signature.identity.name,
                     slot.ordinal,
@@ -1962,10 +1748,23 @@ impl Checker {
         else {
             return Ok(());
         };
-        if self.types_compatible(&constraints.signature.return_type.ty, expected) {
-            return Ok(());
-        }
-        Err(self.call_expected_return_mismatch_error(constraints, expected, span, explicit))
+        self.assert_type_relation(
+            expected,
+            &constraints.signature.return_type.ty,
+            self.type_fact(SourceRole::Expected, span, expected),
+            self.type_fact(
+                SourceRole::Value,
+                span,
+                &constraints.signature.return_type.ty,
+            ),
+            TypeDiagnosticReason::ReturnTypeMismatch,
+            DiagnosticOrigin::Return,
+            &constraints.signature.identity.name,
+            0,
+        )
+        .map_err(|_| {
+            self.call_expected_return_mismatch_error(constraints, expected, span, explicit)
+        })
     }
 
     fn complete_call_constraint_set(
@@ -2001,7 +1800,17 @@ impl Checker {
         }
 
         for argument in &constraints.value_arguments {
-            if !self.types_compatible(&argument.expected, &argument.actual) {
+            let relation = self.assert_type_relation(
+                &argument.expected,
+                &argument.actual,
+                self.type_fact(SourceRole::Expected, span, &argument.expected),
+                self.type_fact(SourceRole::Value, &argument.span, &argument.actual),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::Call,
+                &constraints.signature.identity.name,
+                argument.ordinal,
+            );
+            if let Err(error) = relation {
                 if let Some(ordinal) = self.conflicting_return_type_argument_ordinal(
                     &argument.expected,
                     &argument.actual,
@@ -2032,62 +1841,102 @@ impl Checker {
                 if explicit.is_none() {
                     if let Ty::SelfApp(items) = &argument.expected {
                         if let Some((witness, _)) = Self::constructor_application_parts(items) {
+                            let family_trait = self
+                                .constructor_capability_for_type(&argument.expected)
+                                .expect(
+                                    "constructor occurrence retains canonical capability metadata",
+                                );
                             let expected_carrier = self.resolve_ty(witness);
                             let actual_carrier = self.resolve_ty(&argument.actual);
-                            let family = match witness {
-                                Ty::Var(var) => self
-                                    .constructor_witness_traits
-                                    .get(var)
-                                    .map(|key| self.trait_display_name(key))
-                                    .unwrap_or_else(|| "type constructor".into()),
-                                _ => "type constructor".into(),
+                            let previous = constraints
+                                .value_arguments
+                                .iter()
+                                .take(argument.ordinal as usize)
+                                .find(|previous| {
+                                    self.constructor_capability_for_type(&previous.expected)
+                                        .is_some_and(|capability| {
+                                            self.constructor_family_key(&capability)
+                                                == self.constructor_family_key(&family_trait)
+                                        })
+                                });
+                            let expected_identity = previous
+                                .and_then(|previous| {
+                                    let capability =
+                                        self.constructor_capability_for_type(&previous.expected)?;
+                                    self.canonical_constructor_carrier(
+                                        &capability,
+                                        &self.resolve_ty(&previous.actual),
+                                    )
+                                })
+                                .or_else(|| {
+                                    self.canonical_constructor_carrier(
+                                        &family_trait,
+                                        &expected_carrier,
+                                    )
+                                });
+                            let actual_identity =
+                                self.canonical_constructor_carrier(&family_trait, &actual_carrier);
+                            let reason = if actual_identity.is_some()
+                                && (expected_identity.is_none()
+                                    || expected_identity == actual_identity)
+                            {
+                                TypeDiagnosticReason::TypePayloadMismatch
+                            } else {
+                                TypeDiagnosticReason::TypeConstructorFamilyMismatch
                             };
-                            let expected_name = self.diagnostic_ty_name(&expected_carrier);
-                            let actual_name = self.diagnostic_ty_name(&actual_carrier);
-                            return super::signatures::SolveState::Failed(TypeError {
-                                message: format!(
-                                    "type constructor family mismatch: expected {}, got {}",
-                                    expected_name, actual_name
-                                ),
-                                span: argument.span.clone(),
-                                hint: None,
-                                structured: Some(StructuredDiagnostic {
-                                    reason: TypeDiagnosticReason::TypeConstructorFamilyMismatch,
+                            let left_ty = previous.map_or(&argument.expected, |arg| &arg.actual);
+                            let left_span = previous.map_or(span, |arg| &arg.span);
+                            return super::signatures::SolveState::Failed(
+                                TypeError::from_structured(StructuredDiagnostic {
+                                    reason,
                                     origin: DiagnosticOrigin::Call,
                                     data: DiagnosticData::TypeConstructorCarrier(
                                         TypeConstructorCarrierData {
-                                            family,
-                                            expected_carrier: expected_name.clone(),
-                                            actual_carrier: actual_name.clone(),
+                                            left_type: Some(
+                                                self.diagnostic_ty_name(&self.resolve_ty(left_ty)),
+                                            ),
+                                            right_type: Some(
+                                                self.diagnostic_ty_name(&actual_carrier),
+                                            ),
+                                            left_origin: Some(self.type_fact(
+                                                SourceRole::LeftValue,
+                                                left_span,
+                                                left_ty,
+                                            )),
+                                            right_origin: Some(self.type_fact(
+                                                SourceRole::RightValue,
+                                                &argument.span,
+                                                &actual_carrier,
+                                            )),
+                                            required_capability: self
+                                                .trait_display_name(&family_trait),
+                                            family: self.trait_display_name(&family_trait),
+                                            family_id: self
+                                                .diagnostic_constructor_family_id(&family_trait),
+                                            expected_carrier: self.diagnostic_ty_name(
+                                                &self.resolve_ty(&argument.expected),
+                                            ),
+                                            actual_carrier: self
+                                                .diagnostic_ty_name(&actual_carrier),
                                         },
                                     ),
-                                    primary: SourceFact::typed(
-                                        SourceRole::Expected,
-                                        SourceId(0),
-                                        span.clone(),
-                                        expected_name,
+                                    primary: self.type_fact(
+                                        SourceRole::RightValue,
+                                        &argument.span,
+                                        &actual_carrier,
                                     ),
-                                    related: vec![SourceFact::typed(
-                                        SourceRole::Value,
-                                        SourceId(0),
-                                        argument.span.clone(),
-                                        actual_name,
+                                    related: vec![self.type_fact(
+                                        SourceRole::LeftValue,
+                                        left_span,
+                                        left_ty,
                                     )],
                                     remediation: None,
                                 }),
-                            });
+                            );
                         }
                     }
                 }
-                return super::signatures::SolveState::Failed(TypeError {
-                    structured: None,
-                    message: format!(
-                        "argument {} does not satisfy the instantiated callable signature",
-                        argument.ordinal
-                    ),
-                    span: argument.span.clone(),
-                    hint: None,
-                });
+                return super::signatures::SolveState::Failed(error);
             }
         }
 
@@ -2095,34 +1944,19 @@ impl Checker {
             let subject = self.resolve_ty(&obligation.subject);
             let trait_key = &obligation.trait_name;
             if !self.ty_satisfies_bounds(&subject, std::slice::from_ref(trait_key)) {
-                let callable = &constraints.signature.identity;
-                let callable_name = callable
-                    .owner
-                    .as_ref()
-                    .map(|owner| format!("{}::{}", Self::surface_name(owner), callable.name))
-                    .unwrap_or_else(|| callable.name.clone());
-                let callable_label = match callable.declaration_kind {
-                    sindr::signature::CallableDeclarationKind::Builtin => {
-                        format!("Builtin {callable_name}")
-                    }
-                    _ => callable_name,
+                let reason = if matches!(subject, Ty::Var(var) if self.rigid_tyvars.contains(&var))
+                {
+                    TypeDiagnosticReason::MissingGenericBound
+                } else {
+                    TypeDiagnosticReason::MissingTraitCapability
                 };
-                return super::signatures::SolveState::Failed(TypeError {
-                    structured: None,
-                    message: format!(
-                        "{} requires {} for {}, got {}",
-                        callable_label,
-                        self.trait_display_name(trait_key),
-                        self.ty_name(&subject),
-                        self.ty_name(&subject),
-                    ),
-                    span: span.clone(),
-                    hint: Some(format!(
-                        "Add a {} implementation for {} or use a type that already implements it.",
-                        self.trait_display_name(trait_key),
-                        self.ty_name(&subject),
-                    )),
-                });
+                return super::signatures::SolveState::Failed(self.trait_failure(
+                    reason,
+                    trait_key,
+                    &subject,
+                    span,
+                    DiagnosticOrigin::Call,
+                ));
             }
         }
 
@@ -2196,11 +2030,6 @@ impl Checker {
                         .position(|slot| slot.ordinal == ordinal)
                 })
                 .and_then(|index| items.get(index).map(|item| (index, item)))
-                .or_else(|| {
-                    items.iter().enumerate().find(|(_, item)| {
-                !matches!(item, AstTy::Named(_, name) if Self::surface_name(name) == "_")
-            })
-                })
         });
         if let Some((slot, ast_ty)) = explicit_item {
             let ordinal = signature
@@ -2218,16 +2047,16 @@ impl Checker {
                 span,
             );
         }
-        TypeError {
-            structured: None,
-            message: format!(
-                "Return type mismatch: expected {}, got {}",
-                self.diagnostic_ty_name(expected),
-                self.diagnostic_ty_name(&signature.return_type.ty)
-            ),
-            span: span.clone(),
-            hint: None,
-        }
+        self.type_relation_error(
+            expected,
+            &signature.return_type.ty,
+            self.type_fact(SourceRole::Expected, span, expected),
+            self.type_fact(SourceRole::Value, span, &signature.return_type.ty),
+            TypeDiagnosticReason::ReturnTypeMismatch,
+            DiagnosticOrigin::Return,
+            &signature.identity.name,
+            0,
+        )
     }
 
     fn conflicting_return_type_argument_ordinal(
@@ -2322,18 +2151,16 @@ impl Checker {
                 let expected_ty = self.resolve_ty(expected_ty);
                 if matches!(expected_ty, Ty::Var(var) if !self.rigid_tyvars.contains(&var)) {
                     let typed = self.check_closure(span, params, captures, body, None)?;
-                    if !self.types_compatible(&expected_ty, &typed.ty) {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Expected {}, got {}",
-                                self.ty_name(&expected_ty),
-                                self.ty_name(&typed.ty)
-                            ),
-                            span: typed.span.clone(),
-                            hint: None,
-                        });
-                    }
+                    self.assert_type_relation(
+                        &expected_ty,
+                        &typed.ty,
+                        self.type_fact(SourceRole::Expected, span, &expected_ty),
+                        self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::Call,
+                        "closure",
+                        0,
+                    )?;
                     Ok(typed)
                 } else {
                     self.check_closure(span, params, captures, body, Some(&expected_ty))
@@ -2354,20 +2181,18 @@ impl Checker {
                     .iter()
                     .map(|elem| self.check_node_with_expected(elem, Some(element_ty.as_ref())))
                     .collect::<Result<Vec<_>, _>>()?;
-                for typed in &typed_elems {
+                for (ordinal, typed) in typed_elems.iter().enumerate() {
                     self.ensure_no_runtime_facet_value(typed, "List literal")?;
-                    if !self.types_compatible(element_ty.as_ref(), &typed.ty) {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "expected List<{}>, got List<{}>",
-                                self.ty_name(element_ty.as_ref()),
-                                self.ty_name(&typed.ty)
-                            ),
-                            span: typed.span.clone(),
-                            hint: Some("All list elements must have the same type".into()),
-                        });
-                    }
+                    self.assert_type_relation(
+                        element_ty.as_ref(),
+                        &typed.ty,
+                        self.type_fact(SourceRole::Expected, span, element_ty.as_ref()),
+                        self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::Call,
+                        "list element",
+                        ordinal as u32,
+                    )?;
                 }
                 Ok(TypedNode {
                     ty: Ty::List(element_ty),
@@ -2388,20 +2213,18 @@ impl Checker {
                     .zip(item_tys.iter())
                     .map(|(elem, expected)| self.check_node_with_expected(elem, Some(expected)))
                     .collect::<Result<Vec<_>, _>>()?;
-                for (expected, typed) in item_tys.iter().zip(&typed_elems) {
+                for (ordinal, (expected, typed)) in item_tys.iter().zip(&typed_elems).enumerate() {
                     self.ensure_no_runtime_facet_value(typed, "Tuple literal")?;
-                    if !self.types_compatible(expected, &typed.ty) {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "expected {}, got {}",
-                                self.ty_name(expected),
-                                self.ty_name(&typed.ty)
-                            ),
-                            span: typed.span.clone(),
-                            hint: Some("Tuple elements must match their expected types".into()),
-                        });
-                    }
+                    self.assert_type_relation(
+                        expected,
+                        &typed.ty,
+                        self.type_fact(SourceRole::Expected, span, expected),
+                        self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::Call,
+                        "tuple element",
+                        ordinal as u32,
+                    )?;
                 }
                 Ok(TypedNode {
                     ty: Ty::Tuple(item_tys),
@@ -2424,8 +2247,14 @@ impl Checker {
             (Resolved::ContextBind(span, left, right), Some(expected_ty)) => {
                 self.check_context_bind_with_expected(span, left, right, Some(expected_ty))
             }
+            (Resolved::Cond(span, clauses), Some(expected_ty)) => {
+                self.check_cond(span, clauses, Some(expected_ty))
+            }
             (Resolved::If(span, cond, then, else_opt), Some(expected_ty)) => {
                 self.check_if_with_expected(span, cond, then, else_opt, expected_ty)
+            }
+            (Resolved::IfLet(span, scrutinee, arms), Some(expected_ty)) => {
+                self.check_if_let(span, scrutinee, arms, Some(expected_ty))
             }
             (Resolved::Match(span, scrutinee, arms), Some(expected_ty)) => {
                 self.check_match(span, scrutinee, arms, Some(expected_ty))
@@ -2447,6 +2276,9 @@ impl Checker {
                     unreachable!("constructor guard requires a variable callee")
                 };
                 self.check_constructor_call(span, id, args, Some(expected_ty))
+            }
+            (Resolved::BinOp(span, op, left, right), Some(expected_ty)) => {
+                self.check_binop_with_expected(span, op, left, right, Some(expected_ty))
             }
             (Resolved::Compose(span, left, right), Some(expected_ty)) => {
                 self.check_compose_with_expected(span, left, right, Some(expected_ty))
@@ -2521,12 +2353,14 @@ impl Checker {
         stmts: &[Resolved],
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
+        let inherited_substitutions = self.substitutions.clone();
         let mut typed_stmts = Vec::new();
         let mut last_ty = Ty::Unit;
         for (index, stmt) in stmts.iter().enumerate() {
             // Inference substitutions are statement-local inside blocks too.
-            // Otherwise an earlier generic call can monomorphize later siblings.
-            self.substitutions.clear();
+            // Retain the surrounding callable contract while preventing an
+            // earlier generic call from monomorphizing later siblings.
+            self.substitutions = inherited_substitutions.clone();
             let is_last = index + 1 == stmts.len();
             let typed = if is_last {
                 match expected {
@@ -2603,84 +2437,6 @@ impl Checker {
         }
         typed.ty = expected;
         Ok(())
-    }
-
-    pub(super) fn facet_replace_result_context_error(
-        &self,
-        typed: &TypedNode,
-        expected: &Ty,
-        span: &Span,
-    ) -> Option<TypeError> {
-        let typed = self.tail_typed_node(typed);
-        let TypedInner::FacetSet { mode, .. } = &typed.node else {
-            return None;
-        };
-        if *mode != TypedFacetSetMode::Exact {
-            return None;
-        }
-
-        let expected = self.resolve_ty(expected);
-        let actual = self.resolve_ty(&typed.ty);
-        let Ty::Result(ok_ty, _) = &expected else {
-            return None;
-        };
-        if self.resolve_ty(ok_ty.as_ref()) != actual {
-            return None;
-        }
-
-        Some(TypeError {
-            structured: None,
-            message: format!(
-                "Facet::put returns plain {}, not {}",
-                self.ty_name(&actual),
-                self.ty_name(&expected)
-            ),
-            span: span.clone(),
-            hint: Some(format!(
-                "Use Facet::set when the update should stay in {} context, or wrap the replaced value with Ok(...).",
-                self.ty_name(&expected)
-            )),
-        })
-    }
-
-    pub(super) fn plain_value_result_context_error(
-        &self,
-        expected: &Ty,
-        actual: &Ty,
-        span: &Span,
-    ) -> Option<TypeError> {
-        let expected = self.resolve_ty(expected);
-        let actual = self.resolve_ty(actual);
-        let Ty::Result(ok_ty, _) = &expected else {
-            return None;
-        };
-        if self.resolve_ty(ok_ty.as_ref()) != actual {
-            return None;
-        }
-        Some(TypeError {
-            structured: None,
-            message: format!(
-                "Result context expects {}, but the expression returns plain {}",
-                self.ty_name(&expected),
-                self.ty_name(&actual)
-            ),
-            span: span.clone(),
-            hint: Some(format!(
-                "Wrap the value with Ok(...), or use an API that already returns {}.",
-                self.ty_name(&expected)
-            )),
-        })
-    }
-
-    fn tail_typed_node<'a>(&self, typed: &'a TypedNode) -> &'a TypedNode {
-        match &typed.node {
-            TypedInner::Semi(inner) => self.tail_typed_node(inner),
-            TypedInner::Block(items) => items
-                .last()
-                .map(|last| self.tail_typed_node(last))
-                .unwrap_or(typed),
-            _ => typed,
-        }
     }
 
     fn stored_facet_path_from_node(
@@ -2861,6 +2617,10 @@ impl Checker {
         }
 
         self.bind_typed_pattern(&typed_pat, &pat_ty);
+        self.bind_constructor_provenance(
+            &typed_pat,
+            self.result_constructor_provenance(&typed_rhs),
+        );
 
         Ok(TypedNode {
             ty: Ty::Unit,
@@ -3015,37 +2775,6 @@ impl Checker {
             Some((self.resolve_ty(&params[0]), self.resolve_ty(ret.as_ref())))
         } else {
             None
-        }
-    }
-
-    fn context_payload_ty(&mut self, ty: &Ty) -> Option<Ty> {
-        match self.resolve_ty(ty) {
-            Ty::Result(ok, _) => Some(self.resolve_ty(ok.as_ref())),
-            Ty::List(item) => Some(self.resolve_ty(item.as_ref())),
-            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
-                Some(self.resolve_ty(&args[0]))
-            }
-            _ => None,
-        }
-    }
-
-    fn map_rhs_output_from_expected(
-        &mut self,
-        receiver_ty: &Ty,
-        expected: Option<&Ty>,
-    ) -> Option<Ty> {
-        let expected = self.resolve_ty(expected?);
-        match (self.resolve_ty(receiver_ty), expected) {
-            (Ty::Result(_, _), Ty::Result(ok, _)) => Some(self.resolve_ty(ok.as_ref())),
-            (Ty::List(_), Ty::List(item)) => Some(self.resolve_ty(item.as_ref())),
-            (Ty::Enum(receiver_name, _), Ty::Enum(expected_name, expected_args))
-                if Self::surface_name(&receiver_name) == "Option"
-                    && Self::surface_name(&expected_name) == "Option"
-                    && expected_args.len() == 1 =>
-            {
-                Some(self.resolve_ty(&expected_args[0]))
-            }
-            _ => None,
         }
     }
 
@@ -3408,50 +3137,32 @@ impl Checker {
         let key_ty = self.env.fresh_tyvar();
         let key_expected = Ty::Func(vec![source_ty.clone()], Box::new(key_ty.clone()));
         let typed_key = self.check_node_with_expected(key_expr, Some(&key_expected))?;
-        if !self.types_compatible(&key_expected, &typed_key.ty) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "Function::on key type mismatch: expected {}, got {}",
-                    self.ty_name(&key_expected),
-                    self.ty_name(&typed_key.ty)
-                ),
-                span: typed_key.span.clone(),
-                hint: None,
-            });
-        }
-
-        let key_ty = match self.resolve_ty(&typed_key.ty) {
-            Ty::Func(_, focus) => focus.as_ref().clone(),
-            other => {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Function::on key must be unary, got {}",
-                        self.ty_name(&other)
-                    ),
-                    span: typed_key.span.clone(),
-                    hint: None,
-                })
-            }
-        };
+        self.assert_type_relation(
+            &key_expected,
+            &typed_key.ty,
+            self.type_fact(SourceRole::Expected, span, &key_expected),
+            self.type_fact(SourceRole::Value, &typed_key.span, &typed_key.ty),
+            TypeDiagnosticReason::ArgumentTypeMismatch,
+            DiagnosticOrigin::Call,
+            "Function::on",
+            1,
+        )?;
+        let key_ty = self.resolve_ty(&key_ty);
         let compare_expected = Ty::Func(
             vec![self.resolve_ty(&key_ty), self.resolve_ty(&key_ty)],
             Box::new(self.resolve_ty(ret.as_ref())),
         );
         let typed_compare = self.check_node_with_expected(compare_expr, Some(&compare_expected))?;
-        if !self.types_compatible(&compare_expected, &typed_compare.ty) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "Function::on comparator type mismatch: expected {}, got {}",
-                    self.ty_name(&compare_expected),
-                    self.ty_name(&typed_compare.ty)
-                ),
-                span: typed_compare.span.clone(),
-                hint: None,
-            });
-        }
+        self.assert_type_relation(
+            &compare_expected,
+            &typed_compare.ty,
+            self.type_fact(SourceRole::Expected, span, &compare_expected),
+            self.type_fact(SourceRole::Value, &typed_compare.span, &typed_compare.ty),
+            TypeDiagnosticReason::ArgumentTypeMismatch,
+            DiagnosticOrigin::Call,
+            "Function::on",
+            0,
+        )?;
 
         let typed_func = self.check_node(func)?;
         let result_ty = Ty::Func(
@@ -3470,61 +3181,19 @@ impl Checker {
         node: &Resolved,
         op_name: &str,
     ) -> Result<TypedNode, TypeError> {
-        let typed = match self.check_node(node) {
-            Ok(typed) => typed,
-            Err(err) => return Err(self.remap_compose_operand_error(node, op_name, err)),
-        };
+        let typed = self.check_node(node)?;
         if matches!(self.resolve_ty(&typed.ty), Ty::Func(_, _)) {
             Ok(typed)
         } else {
-            let span = typed.span.clone();
-            let hint = self.compose_function_value_hint(&typed, op_name);
-            Err(TypeError {
-                structured: None,
-                message: format!("{} requires a function value", op_name),
-                span,
-                hint: Some(hint),
-            })
-        }
-    }
-
-    fn remap_compose_operand_error(
-        &self,
-        node: &Resolved,
-        op_name: &str,
-        err: TypeError,
-    ) -> TypeError {
-        let Resolved::App(_, func, args) = node else {
-            return err;
-        };
-
-        let Some(name) = self.compose_operand_callee_name(func) else {
-            return err;
-        };
-        let arity = args.len();
-        let is_arity_error = err.message.contains("expects")
-            && err.message.contains("argument(s)")
-            && err.message.contains(", got ");
-        if !is_arity_error {
-            return err;
-        }
-
-        TypeError {
-            structured: None,
-            message: format!("Undefined function {}/{}", name, arity),
-            span: self.resolved_span(func).clone(),
-            hint: Some(format!(
-                "{} composes one-argument function values. `{}` is being called with arity {}, but no callable with that arity is available here.",
-                op_name, name, arity
-            )),
-        }
-    }
-
-    fn compose_operand_callee_name(&self, node: &Resolved) -> Option<String> {
-        match node {
-            Resolved::Var(_, id) => Some(id.name.clone()),
-            Resolved::Grouped(_, inner) => self.compose_operand_callee_name(inner),
-            _ => None,
+            Err(self
+                .callable_shape_error(
+                    &typed.ty,
+                    op_name,
+                    &typed.span,
+                    Some(1),
+                    diagnostics::CallableReturnShape::Any,
+                )
+                .with_hint(self.compose_function_value_hint(&typed, op_name)))
         }
     }
 
@@ -3543,58 +3212,6 @@ impl Checker {
             (_, Ty::Func(params, ret)) => {
                 self.callable_signature_hint(&Ty::Func(params.clone(), ret.clone()))
             }
-            _ => None,
-        }
-    }
-
-    fn argument_type_mismatch_message(&mut self, expected: &Ty, actual: &Ty) -> String {
-        if let Some(message) = self.bound_mismatch_message(expected, actual) {
-            return message;
-        }
-        let rendered = self.diagnostic_ty_names(&[expected, actual]);
-        format!(
-            "Argument type mismatch: expected {}, got {}",
-            rendered[0], rendered[1]
-        )
-    }
-
-    fn bound_mismatch_message(&mut self, expected: &Ty, actual: &Ty) -> Option<String> {
-        match (self.resolve_ty(expected), self.resolve_ty(actual)) {
-            (Ty::Var(var), actual_ty) => {
-                let bounds = self.tyvar_bound_names(var);
-                if !bounds.is_empty() && !self.ty_satisfies_bounds(&actual_ty, &bounds) {
-                    let rendered = self.diagnostic_ty_names(&[expected, &actual_ty]);
-                    Some(format!(
-                        "Argument type mismatch: expected {} implementing {}, got {}",
-                        rendered[0],
-                        bounds.join(" + "),
-                        rendered[1]
-                    ))
-                } else {
-                    None
-                }
-            }
-            (Ty::List(expected_inner), Ty::List(actual_inner)) => {
-                self.bound_mismatch_message(&expected_inner, &actual_inner)
-            }
-            (Ty::Tuple(expected_items), Ty::Tuple(actual_items)) => expected_items
-                .iter()
-                .zip(actual_items.iter())
-                .find_map(|(expected_item, actual_item)| {
-                    self.bound_mismatch_message(expected_item, actual_item)
-                }),
-            (Ty::Func(expected_params, expected_ret), Ty::Func(actual_params, actual_ret)) => {
-                expected_params
-                    .iter()
-                    .zip(actual_params.iter())
-                    .find_map(|(expected_param, actual_param)| {
-                        self.bound_mismatch_message(expected_param, actual_param)
-                    })
-                    .or_else(|| self.bound_mismatch_message(&expected_ret, &actual_ret))
-            }
-            (Ty::Result(expected_ok, expected_err), Ty::Result(actual_ok, actual_err)) => self
-                .bound_mismatch_message(&expected_ok, &actual_ok)
-                .or_else(|| self.bound_mismatch_message(&expected_err, &actual_err)),
             _ => None,
         }
     }
@@ -3659,12 +3276,14 @@ impl Checker {
             | Resolved::Grouped(span, _)
             | Resolved::InterpolatedStr(span, _)
             | Resolved::Dbg(span, _)
+            | Resolved::Cond(span, _)
             | Resolved::If(span, _, _, _)
             | Resolved::Assert(span, _, _)
             | Resolved::Ensure(span, _, _, _)
             | Resolved::MapErr(span, _, _)
             | Resolved::Cause(span, _, _)
             | Resolved::RecoverKind(span, _, _, _)
+            | Resolved::IfLet(span, _, _)
             | Resolved::Match(span, _, _)
             | Resolved::FieldAccess(span, _, _)
             | Resolved::FacetSegmentAccess(span, _, _)
@@ -3856,58 +3475,29 @@ impl Checker {
         format!("{}({}) -> {}", qualified_name, param_list, ret)
     }
 
-    pub(super) fn operator_type_display(&self, ty: &Ty) -> String {
-        self.callable_signature_for_ty(ty)
-            .unwrap_or_else(|| self.ty_name(ty))
-    }
-
-    pub(super) fn operator_rule_hint(
-        &self,
-        op_name: &str,
-        rule: &str,
-        lhs_ty: &Ty,
-        rhs_ty: &Ty,
-        extra: Option<String>,
-    ) -> String {
-        let mut hint = format!(
-            "{} signature rule: {}. LHS: {}. RHS: {}. Operators share precedence and resolve left-to-right, so LHS is the type produced so far.",
-            op_name,
-            rule,
-            self.operator_type_display(lhs_ty),
-            self.operator_type_display(rhs_ty)
-        );
-        if let Some(extra) = extra {
-            hint.push(' ');
-            hint.push_str(&extra);
-        }
-        hint
-    }
-
     pub(super) fn unary_function_parts(
         &self,
         ty: &Ty,
-        op_name: &str,
+        callable: &str,
         span: &Span,
     ) -> Result<(Ty, Ty), TypeError> {
         let Some((params, ret)) = self.function_parts(ty) else {
-            return Err(TypeError {
-                structured: None,
-                message: format!("{} expects a function value", op_name),
-                span: span.clone(),
-                hint: None,
-            });
+            return Err(self.callable_shape_error(
+                ty,
+                callable,
+                span,
+                Some(1),
+                diagnostics::CallableReturnShape::Any,
+            ));
         };
         if params.len() != 1 {
-            return Err(TypeError {
-                structured: None,
-                message: format!("{} expects a unary callable", op_name),
-                span: span.clone(),
-                hint: Some(format!(
-                    "{} can compose/apply only one-argument callables. Callable type signature: {}",
-                    op_name,
-                    self.callable_signature_from_parts(params, ret)
-                )),
-            });
+            return Err(self.callable_shape_error(
+                ty,
+                callable,
+                span,
+                Some(1),
+                diagnostics::CallableReturnShape::Any,
+            ));
         }
         Ok((self.resolve_ty(&params[0]), self.resolve_ty(ret)))
     }
@@ -4006,46 +3596,6 @@ impl Checker {
         }))
     }
 
-    fn constructor_functor_dispatch(
-        &mut self,
-        trait_name: &str,
-        method_name: &str,
-        receiver_ty: &Ty,
-        input_ty: &Ty,
-        output_ty: &Ty,
-    ) -> Result<Option<(TraitDispatch, Ty)>, TypeError> {
-        let Some((info, mut mapping)) = self.constructor_projection(trait_name, receiver_ty) else {
-            return Ok(None);
-        };
-        let [slot] = info.constructor_slot_vars.as_slice() else {
-            return Ok(None);
-        };
-        let Some(actual_slot) = mapping.get(slot) else {
-            return Ok(None);
-        };
-        if !self.operator_trait_arg_compatible(actual_slot, input_ty) {
-            return Ok(None);
-        }
-        mapping.insert(*slot, output_ty.clone());
-        let result = self.resolve_ty(&self.substitute_ty_with_mapping(&info.target_ty, &mapping));
-        let args = [
-            receiver_ty.clone(),
-            Ty::Func(vec![input_ty.clone()], Box::new(output_ty.clone())),
-        ];
-        Ok(self
-            .select_method_dispatch(trait_name, method_name, receiver_ty, &[], &args, &result)?
-            .map(|dispatch| (dispatch, result)))
-    }
-
-    fn constructor_pure_dispatch(
-        &mut self,
-        trait_name: &str,
-        expected_ty: &Ty,
-        value_ty: &Ty,
-    ) -> Result<Option<TraitDispatch>, TypeError> {
-        self.constructor_slot_value_dispatch(trait_name, "pure", expected_ty, value_ty)
-    }
-
     fn constructor_target_dispatch(
         &mut self,
         trait_name: &str,
@@ -4085,33 +3635,6 @@ impl Checker {
         )
     }
 
-    fn constructor_slot_value_dispatch(
-        &mut self,
-        trait_name: &str,
-        method_name: &str,
-        expected_ty: &Ty,
-        value_ty: &Ty,
-    ) -> Result<Option<TraitDispatch>, TypeError> {
-        let expected_ty = self.resolve_ty(expected_ty);
-        if let Ty::SelfApp(items) = &expected_ty {
-            if let Some((witness, slots)) = Self::constructor_application_parts(items) {
-                let supported = self.constructor_witness_supports_trait(witness, trait_name);
-                if slots.len() != 1 || !self.types_compatible(&slots[0], value_ty) || !supported {
-                    return Ok(None);
-                }
-                return Ok(Some(TraitDispatch::Pending));
-            }
-        }
-        self.select_method_dispatch(
-            trait_name,
-            method_name,
-            &expected_ty,
-            &[],
-            &[value_ty.clone()],
-            &expected_ty,
-        )
-    }
-
     fn constructor_witness_supports_trait(&mut self, witness: &Ty, trait_name: &str) -> bool {
         let Ty::Var(var) = self.resolve_ty(witness) else {
             return false;
@@ -4128,6 +3651,13 @@ impl Checker {
     }
 
     fn constructor_slot_type_for(&mut self, trait_name: &str, container_ty: &Ty) -> Option<Ty> {
+        if let Ty::SelfApp(items) = self.resolve_ty(container_ty) {
+            if let Some((witness, [slot])) = Self::constructor_application_parts(&items) {
+                return self
+                    .constructor_witness_supports_trait(witness, trait_name)
+                    .then(|| slot.clone());
+            }
+        }
         let (info, mapping) = self.constructor_projection(trait_name, container_ty)?;
         let [slot] = info.constructor_slot_vars.as_slice() else {
             return None;
@@ -4141,6 +3671,13 @@ impl Checker {
         container_ty: &Ty,
         slot_ty: &Ty,
     ) -> Option<Ty> {
+        if let Ty::SelfApp(items) = self.resolve_ty(container_ty) {
+            if let Some((witness, [_])) = Self::constructor_application_parts(&items) {
+                return self
+                    .constructor_witness_supports_trait(witness, trait_name)
+                    .then(|| Ty::SelfApp(vec![Ty::Hole, witness.clone(), slot_ty.clone()]));
+            }
+        }
         let (info, mut mapping) = self.constructor_projection(trait_name, container_ty)?;
         let [slot] = info.constructor_slot_vars.as_slice() else {
             return None;
@@ -4152,7 +3689,11 @@ impl Checker {
     /// Enumerate the concrete constructor contexts which can carry `slot_ty`.
     /// This is used when a constructor helper appears on the opposite side of
     /// an operator and the other operand must provide the missing `Self`.
-    fn constructor_context_candidates(&mut self, trait_name: &str, slot_ty: &Ty) -> Vec<Ty> {
+    fn constructor_context_candidates(
+        &mut self,
+        trait_name: &str,
+        slot_ty: &Ty,
+    ) -> Result<Vec<Ty>, TypeError> {
         let mut candidates = Vec::new();
         for impl_key in self.trait_impl_candidate_keys(trait_name) {
             let Some(impl_info) = self.trait_impls.get(&impl_key).cloned() else {
@@ -4175,59 +3716,21 @@ impl Checker {
                         fresh
                             .get(&var)
                             .map(|ty| self.resolve_ty(ty))
-                            .unwrap_or(Ty::Var(var))
+                            .ok_or_else(|| {
+                                TypeError::new(
+                                    "Constructor candidate lacks fresh type input metadata",
+                                    impl_info.trait_id.span.clone(),
+                                )
+                            })?
                     };
-                    (var, replacement)
+                    Ok((var, replacement))
                 })
-                .collect::<HashMap<_, _>>();
+                .collect::<Result<HashMap<_, _>, TypeError>>()?;
             candidates.push(
                 self.resolve_ty(&self.substitute_ty_with_mapping(&impl_info.target_ty, &mapping)),
             );
         }
-        candidates
-    }
-
-    fn constructor_monad_dispatch(
-        &mut self,
-        trait_name: &str,
-        receiver_ty: &Ty,
-        input_ty: &Ty,
-        contextual_output_ty: &Ty,
-    ) -> Result<Option<(TraitDispatch, Ty)>, TypeError> {
-        let Some((info, mut mapping)) = self.constructor_projection(trait_name, receiver_ty) else {
-            return Ok(None);
-        };
-        let [slot] = info.constructor_slot_vars.as_slice() else {
-            return Ok(None);
-        };
-        let Some(actual_slot) = mapping.get(slot) else {
-            return Ok(None);
-        };
-        if !self.operator_trait_arg_compatible(actual_slot, input_ty) {
-            return Ok(None);
-        }
-        mapping.insert(*slot, self.env.fresh_tyvar());
-        let expected = self.substitute_ty_with_mapping(&info.target_ty, &mapping);
-        if !self.types_compatible(&expected, contextual_output_ty) {
-            return Ok(None);
-        }
-        let args = [
-            receiver_ty.clone(),
-            Ty::Func(
-                vec![input_ty.clone()],
-                Box::new(contextual_output_ty.clone()),
-            ),
-        ];
-        Ok(self
-            .select_method_dispatch(
-                trait_name,
-                "bind",
-                receiver_ty,
-                &[],
-                &args,
-                contextual_output_ty,
-            )?
-            .map(|dispatch| (dispatch, self.resolve_ty(contextual_output_ty))))
+        Ok(candidates)
     }
 
     fn opposite_conversion_hint(
@@ -4299,19 +3802,46 @@ impl Checker {
         expected_ret_ty: Option<&Ty>,
         explicit_type_args: Option<&[AstTy]>,
     ) -> Result<TypedNode, TypeError> {
+        self.check_trait_invocation(
+            span,
+            trait_name,
+            method_name,
+            args,
+            receiver_owner_hint,
+            expected_ret_ty,
+            explicit_type_args,
+            None,
+            None,
+        )
+    }
+
+    fn check_trait_invocation(
+        &mut self,
+        span: &Span,
+        trait_name: &str,
+        method_name: &str,
+        args: &[ResolvedRecordLitArg],
+        receiver_owner_hint: Option<&str>,
+        expected_ret_ty: Option<&Ty>,
+        explicit_type_args: Option<&[AstTy]>,
+        operator: Option<OperatorTraitOp>,
+        receiver_hint: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
         if args
             .iter()
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "{}::{} does not accept named arguments",
-                    trait_name, method_name
+            return Err(TypeError::from_structured(
+                self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArgumentModeMismatch,
+                    &format!("{trait_name}::{method_name}"),
+                    None,
+                    0,
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::TraitCall,
                 ),
-                span: span.clone(),
-                hint: None,
-            });
+            ));
         }
 
         let trait_info = self
@@ -4342,128 +3872,23 @@ impl Checker {
                 ResolvedRecordLitArg::Named(_, _) => None,
             })
             .collect::<Vec<_>>();
-        if self.trait_matches_short_name(trait_name, "Functor")
-            && method_name == "fmap"
-            && positional_args.len() == 2
-        {
-            let mut typed = self.check_context_map(span, positional_args[0], positional_args[1])?;
-            if let TypedInner::TraitCall { args, .. } = &typed.node {
-                if let Some(receiver) = args.first() {
-                    self.check_constructor_capability(trait_name, method_name, receiver)?;
-                }
-            }
-            if let TypedInner::TraitCall { origin, .. } = &mut typed.node {
-                *origin = TraitCallOrigin::Explicit;
-            }
-            return Ok(typed);
-        }
-        if self.trait_matches_short_name(trait_name, "Monad")
-            && method_name == "bind"
-            && positional_args.len() == 2
-        {
-            let typed_receiver = self.check_node(positional_args[0])?;
-            self.check_constructor_capability(trait_name, method_name, &typed_receiver)?;
-            let mut typed =
-                self.check_context_bind(span, positional_args[0], positional_args[1])?;
-            if let TypedInner::TraitCall { args, .. } = &typed.node {
-                if let Some(receiver) = args.first() {
-                    self.check_constructor_capability(trait_name, method_name, receiver)?;
-                }
-            }
-            if let TypedInner::TraitCall { origin, .. } = &mut typed.node {
-                *origin = TraitCallOrigin::Explicit;
-            }
-            return Ok(typed);
-        }
-        if self.trait_matches_short_name(trait_name, "Applicative")
-            && method_name == "pure"
-            && positional_args.len() == 1
-        {
-            let expected = expected_ret_ty.ok_or_else(|| TypeError {
-                structured: None,
-                message: "Applicative::pure requires an expected return type".into(),
-                span: span.clone(),
-                hint: Some(
-                    "Add a result annotation, for example `value: Option<Int> = Applicative::pure(1)`."
-                        .into(),
-                ),
-            })?;
-            let typed_value = self.check_node(positional_args[0])?;
-            let dispatch = self
-                .constructor_pure_dispatch(trait_name, expected, &typed_value.ty)?
-                .ok_or_else(|| TypeError {
-                    structured: None,
-                    message: format!(
-                        "Applicative::pure cannot construct {}",
-                        self.ty_name(expected)
-                    ),
-                    span: span.clone(),
-                    hint: Some(self.trait_implementation_summary("Applicative")),
-                })?;
-            return Ok(TypedNode {
-                ty: self.resolve_ty(expected),
-                span: span.clone(),
-                node: TypedInner::TraitCall {
-                    trait_name: trait_name.to_string(),
-                    method_name: "pure".into(),
-                    receiver_ty: self.resolve_ty(expected),
-                    obligation: TraitObligation {
-                        trait_id: trait_name.to_string(),
-                        trait_args: Vec::new(),
-                        receiver: self.resolve_ty(expected),
-                    },
-                    dispatch,
-                    origin: TraitCallOrigin::Explicit,
-                    args: vec![typed_value],
-                },
-            });
-        }
-        if self.trait_matches_short_name(trait_name, "Monad")
-            && method_name == "return"
-            && positional_args.len() == 1
-        {
-            let expected = expected_ret_ty.ok_or_else(|| TypeError {
-                structured: None,
-                message: "Monad::return requires an expected return type".into(),
-                span: span.clone(),
-                hint: Some(
-                    "Add a result annotation, for example `value: Result<Int> = Monad::return(1)`, or use it in a typed operator context.".into(),
-                ),
-            })?;
-            let typed_value = self.check_node(positional_args[0])?;
-            let dispatch = self
-                .constructor_slot_value_dispatch(trait_name, "return", expected, &typed_value.ty)?
-                .ok_or_else(|| TypeError {
-                    structured: None,
-                    message: format!("Monad::return cannot construct {}", self.ty_name(expected)),
-                    span: span.clone(),
-                    hint: Some(self.trait_implementation_summary("Monad")),
-                })?;
-            return Ok(TypedNode {
-                ty: self.resolve_ty(expected),
-                span: span.clone(),
-                node: TypedInner::TraitCall {
-                    trait_name: trait_name.to_string(),
-                    method_name: "return".into(),
-                    receiver_ty: self.resolve_ty(expected),
-                    obligation: TraitObligation {
-                        trait_id: trait_name.to_string(),
-                        trait_args: Vec::new(),
-                        receiver: self.resolve_ty(expected),
-                    },
-                    dispatch,
-                    origin: TraitCallOrigin::Explicit,
-                    args: vec![typed_value],
-                },
-            });
-        }
         // Generic zero-argument constructor helpers (for example
         // `Monoid::mempty()`) use the same expected-result dispatch.  Keep
         // this signature-driven rather than growing another trait-name list.
-        if positional_args.is_empty() {
+        if positional_args.is_empty() && method.value_parameters.is_empty() {
             let probe_self = self.env.fresh_tyvar();
-            let (_, probe_ret, _, _, _) =
+            let (_, probe_ret, _, probe_slots, _) =
                 self.resolve_trait_method_signature(&trait_info, &method, &probe_self)?;
+            if let Some(arguments) = explicit_type_args {
+                if arguments.len() != probe_slots.len() {
+                    return Err(super::signatures::return_type_argument_arity_error(
+                        &format!("{trait_name}::{method_name}"),
+                        probe_slots.len(),
+                        arguments.len(),
+                        span,
+                    ));
+                }
+            }
             if matches!(probe_ret, Ty::SelfApp(_))
                 || (self.trait_matches_short_name(trait_name, "Default")
                     && method_name == "default"
@@ -4477,17 +3902,12 @@ impl Checker {
                             Some(self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?)
                         }
                         Some(args) => {
-                            return Err(TypeError {
-                                structured: None,
-                                message: format!(
-                                    "{}::{} expects one explicit target type, got {}",
-                                    trait_name,
-                                    method_name,
-                                    args.len()
-                                ),
-                                span: span.clone(),
-                                hint: None,
-                            });
+                            return Err(super::signatures::return_type_argument_arity_error(
+                                &format!("{trait_name}::{method_name}"),
+                                1,
+                                args.len(),
+                                span,
+                            ));
                         }
                         None => None,
                     }
@@ -4497,30 +3917,84 @@ impl Checker {
                 let expected = explicit_target
                     .as_ref()
                     .or(expected_ret_ty)
-                    .ok_or_else(|| TypeError {
-                        structured: None,
-                        message: format!(
-                            "{}::{} requires an expected return type",
-                            trait_name, method_name
-                        ),
-                        span: span.clone(),
-                        hint: Some(format!(
-                            "Add a type annotation so {}::{} can select a concrete implementation.",
-                            trait_name, method_name
-                        )),
+                    .ok_or_else(|| {
+                        self.ambiguous_constructor_result(trait_name, method_name, span)
                     })?;
+                if !self.trait_matches_short_name(trait_name, "Default") {
+                    if let Some(arguments) = explicit_type_args {
+                        if let Some((implementation, mapping)) =
+                            self.constructor_projection(trait_name, expected)
+                        {
+                            let expanded = self.expand_trait_self_apps(
+                                probe_ret.clone(),
+                                &implementation.target_ty,
+                                &implementation.constructor_slot_vars,
+                            )?;
+                            let return_type = self.substitute_ty_with_mapping(&expanded, &mapping);
+                            self.assert_type_relation(
+                                expected,
+                                &return_type,
+                                self.type_fact(SourceRole::Expected, span, expected),
+                                self.type_fact(SourceRole::Value, span, &return_type),
+                                TypeDiagnosticReason::ReturnTypeMismatch,
+                                DiagnosticOrigin::Return,
+                                &format!("{trait_name}::{method_name}"),
+                                0,
+                            )?;
+                        }
+                        for (ordinal, (slot, argument)) in
+                            probe_slots.iter().zip(arguments).enumerate()
+                        {
+                            let explicit = if slot == &probe_self
+                                && !trait_info.constructor_slots.is_empty()
+                            {
+                                self.resolve_type_constructor_head(argument)?
+                            } else {
+                                self.resolve_call_site_return_type_argument(slot, argument)?
+                            };
+                            let target = if slot == &probe_self { expected } else { slot };
+                            if self
+                                .assert_type_relation(
+                                    target,
+                                    &explicit,
+                                    self.type_fact(SourceRole::Expected, span, target),
+                                    self.type_fact(
+                                        SourceRole::ReturnTypeArgument,
+                                        Self::ast_ty_span(argument),
+                                        &explicit,
+                                    ),
+                                    TypeDiagnosticReason::ArgumentTypeMismatch,
+                                    DiagnosticOrigin::TraitCall,
+                                    &format!("{trait_name}::{method_name}"),
+                                    ordinal as u32,
+                                )
+                                .is_err()
+                            {
+                                return Err(
+                                    super::signatures::return_type_argument_mismatch_error(
+                                        &format!("{trait_name}::{method_name}"),
+                                        ordinal as u32,
+                                        &self.diagnostic_ty_name(target),
+                                        &Self::surface_ast_ty(argument),
+                                        Self::ast_ty_span(argument),
+                                        SourceRole::Expected,
+                                        span,
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
                 let dispatch = self
                     .constructor_target_dispatch(trait_name, method_name, expected)?
-                    .ok_or_else(|| TypeError {
-                        structured: None,
-                        message: format!(
-                            "{}::{} cannot construct {}",
+                    .ok_or_else(|| {
+                        self.trait_dispatch_failure(
+                            TypeDiagnosticReason::NoApplicableTraitImplementation,
                             trait_name,
                             method_name,
-                            self.ty_name(expected)
-                        ),
-                        span: span.clone(),
-                        hint: Some(self.trait_implementation_summary(trait_name)),
+                            Some(expected),
+                            span,
+                        )
                     })?;
                 let typed = TypedNode {
                     ty: self.resolve_ty(expected),
@@ -4540,200 +4014,20 @@ impl Checker {
                     },
                 };
                 if let Some(expected_ret_ty) = expected_ret_ty {
-                    if !self.types_compatible(&typed.ty, expected_ret_ty) {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "{}::{} target {} does not match expected return type {}",
-                                trait_name,
-                                method_name,
-                                self.ty_name(&typed.ty),
-                                self.ty_name(expected_ret_ty)
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
+                    self.assert_type_relation(
+                        expected_ret_ty,
+                        &typed.ty,
+                        self.type_fact(SourceRole::Expected, span, expected_ret_ty),
+                        self.type_fact(SourceRole::Value, span, &typed.ty),
+                        TypeDiagnosticReason::ReturnTypeMismatch,
+                        DiagnosticOrigin::Return,
+                        &format!("{trait_name}::{method_name}"),
+                        0,
+                    )?;
                 }
                 return Ok(typed);
             }
         }
-        if self.trait_matches_short_name(trait_name, "Applicative")
-            && method_name == "ap"
-            && positional_args.len() == 2
-        {
-            let typed_mapper = self.check_node(positional_args[0])?;
-            self.check_constructor_capability(trait_name, method_name, &typed_mapper)?;
-            let mapper_inner = self
-                .constructor_slot_type_for(trait_name, &typed_mapper.ty)
-                .ok_or_else(|| TypeError {
-                    structured: None,
-                    message: format!(
-                        "Applicative::ap requires a contextual callable, got {}",
-                        self.ty_name(&typed_mapper.ty)
-                    ),
-                    span: typed_mapper.span.clone(),
-                    hint: None,
-                })?;
-            let (input, output) =
-                self.unary_function_parts(&mapper_inner, "Applicative::ap", span)?;
-            let expected_value_ty = self
-                .constructor_context_type_for(trait_name, &typed_mapper.ty, &input)
-                .ok_or_else(|| TypeError {
-                    structured: None,
-                    message: format!(
-                        "Applicative::ap cannot infer value context from {}",
-                        self.ty_name(&typed_mapper.ty)
-                    ),
-                    span: typed_mapper.span.clone(),
-                    hint: None,
-                })?;
-            let typed_value =
-                self.check_node_with_expected(positional_args[1], Some(&expected_value_ty))?;
-            self.check_constructor_capability(trait_name, method_name, &typed_value)?;
-            let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
-            let Some(expected_mapper) =
-                self.constructor_context_type_for(trait_name, &typed_value.ty, &callable_ty)
-            else {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Applicative::ap requires Applicative implementation for {}",
-                        self.ty_name(&typed_value.ty)
-                    ),
-                    span: typed_value.span.clone(),
-                    hint: Some(self.trait_implementation_summary("Applicative")),
-                });
-            };
-            if !self.types_compatible(&expected_mapper, &typed_mapper.ty) {
-                return Err(TypeError {
-                    structured: None,
-                    message: "Applicative::ap requires mapper and value in the same context".into(),
-                    span: span.clone(),
-                    hint: None,
-                });
-            }
-            let result_ty = self
-                .constructor_context_type_for(trait_name, &typed_value.ty, &output)
-                .ok_or_else(|| {
-                    TypeError::new(
-                        "Applicative::ap has no declared result context",
-                        span.clone(),
-                    )
-                })?;
-            let dispatch = self
-                .select_method_dispatch(
-                    trait_name,
-                    "ap",
-                    &typed_value.ty,
-                    &[],
-                    &[typed_mapper.ty.clone(), typed_value.ty.clone()],
-                    &result_ty,
-                )?
-                .ok_or_else(|| {
-                    TypeError::new("Applicative::ap has no applicable method", span.clone())
-                })?;
-            return Ok(TypedNode {
-                ty: result_ty,
-                span: span.clone(),
-                node: TypedInner::TraitCall {
-                    trait_name: trait_name.to_string(),
-                    method_name: "ap".into(),
-                    receiver_ty: self.resolve_ty(&typed_value.ty),
-                    obligation: TraitObligation {
-                        trait_id: trait_name.to_string(),
-                        trait_args: Vec::new(),
-                        receiver: self.resolve_ty(&typed_value.ty),
-                    },
-                    dispatch,
-                    origin: TraitCallOrigin::Explicit,
-                    args: vec![typed_mapper, typed_value],
-                },
-            });
-        }
-
-        // A constructor-trait application carries an unresolved constructor
-        // witness. Expand `Self<...>` positions with that same witness, then
-        // defer dispatch until specialization has a concrete receiver. This
-        // is arity-agnostic and therefore also supports Bifunctor.
-        if !trait_info.constructor_slots.is_empty() {
-            if let Some(ResolvedRecordLitArg::Positional(receiver)) = args.first() {
-                let typed_receiver = self.check_node(receiver)?;
-                let receiver_ty = self.resolve_ty(&typed_receiver.ty);
-                if let Ty::SelfApp(items) = &receiver_ty {
-                    if let Some((witness, slots)) = Self::constructor_application_parts(items) {
-                        if slots.len() == trait_info.constructor_slots.len() {
-                            let self_ty = self.env.fresh_tyvar();
-                            let (param_tys, ret_ty, _, _, _) = self
-                                .resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
-                            let apply_witness = |ty: Ty| match ty {
-                                Ty::SelfApp(args)
-                                    if Self::constructor_application_parts(&args).is_none() =>
-                                {
-                                    let mut application = vec![Ty::Hole, witness.clone()];
-                                    application.extend(args);
-                                    Ty::SelfApp(application)
-                                }
-                                other => other,
-                            };
-                            let param_tys =
-                                param_tys.into_iter().map(apply_witness).collect::<Vec<_>>();
-                            let ret_ty = apply_witness(ret_ty);
-                            if args.len() != param_tys.len() {
-                                return Err(TypeError {
-                                    structured: None,
-                                    message: format!(
-                                        "{}::{} expects {} argument(s), got {}",
-                                        trait_name,
-                                        method_name,
-                                        param_tys.len(),
-                                        args.len()
-                                    ),
-                                    span: span.clone(),
-                                    hint: None,
-                                });
-                            }
-                            let typed_args = args
-                                .iter()
-                                .zip(param_tys.iter())
-                                .map(|(arg, expected)| match arg {
-                                    ResolvedRecordLitArg::Positional(expr) => {
-                                        self.check_node_with_expected(expr, Some(expected))
-                                    }
-                                    ResolvedRecordLitArg::Named(_, _) => unreachable!(
-                                        "named arguments are rejected before constructor dispatch"
-                                    ),
-                                })
-                                .collect::<Result<Vec<_>, _>>()?;
-                            self.check_trait_method_constructor_capabilities(
-                                trait_name,
-                                method_name,
-                                &param_tys,
-                                &typed_args,
-                            )?;
-                            return Ok(TypedNode {
-                                ty: self.resolve_ty(&ret_ty),
-                                span: span.clone(),
-                                node: TypedInner::TraitCall {
-                                    trait_name: trait_name.to_string(),
-                                    method_name: method_name.to_string(),
-                                    receiver_ty,
-                                    obligation: TraitObligation {
-                                        trait_id: trait_name.to_string(),
-                                        trait_args: Vec::new(),
-                                        receiver: self.resolve_ty(&typed_receiver.ty),
-                                    },
-                                    dispatch: TraitDispatch::Pending,
-                                    origin: TraitCallOrigin::Explicit,
-                                    args: typed_args,
-                                },
-                            });
-                        }
-                    }
-                }
-            }
-        }
-
         let self_ty = if method.attrs.visibility == spire::ast::Visibility::Private {
             self.local_annotation_tyvars
                 .get("Self")
@@ -4747,58 +4041,284 @@ impl Checker {
         } else {
             self.env.fresh_tyvar()
         };
-        let (param_tys, ret_ty, trait_arg_tys, explicit_slots, _) =
+        let (mut param_tys, mut ret_ty, trait_arg_tys, explicit_slots, _) =
             self.resolve_trait_method_signature(&trait_info, &method, &self_ty)?;
-
         if let Some(explicit_args) = explicit_type_args {
             if explicit_args.len() != explicit_slots.len() {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "{}::{} expects {} explicit type argument(s), got {}",
-                        trait_name,
-                        method_name,
-                        explicit_slots.len(),
-                        explicit_args.len()
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                });
+                return Err(super::signatures::return_type_argument_arity_error(
+                    &format!("{trait_name}::{method_name}"),
+                    explicit_slots.len(),
+                    explicit_args.len(),
+                    span,
+                ));
             }
-            for (slot, arg) in explicit_slots.iter().zip(explicit_args) {
-                let explicit_ty = match arg {
-                    // Conversion traits use a bare constructor name to select
-                    // the destination family (`from::<Result>(...)`).  Keep
-                    // its element slot inferable rather than treating it as
-                    // an invalid un-applied concrete type.
-                    AstTy::Named(_, name) if Self::surface_name(name) == "Result" => {
-                        Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error))
+        }
+        if let Some(explicit_args) = explicit_type_args {
+            for (ordinal, (slot, arg)) in explicit_slots.iter().zip(explicit_args).enumerate() {
+                let explicit_ty = if slot == &self_ty && !trait_info.constructor_slots.is_empty() {
+                    self.resolve_type_constructor_head(arg)?
+                } else {
+                    match arg {
+                        // Conversion traits use a bare constructor name to select
+                        // the destination family (`from::<Result>(...)`).  Keep
+                        // its element slot inferable rather than treating it as
+                        // an invalid un-applied concrete type.
+                        AstTy::Named(_, name) if Self::surface_name(name) == "Result" => {
+                            Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error))
+                        }
+                        AstTy::Named(_, name) if Self::surface_name(name) == "Option" => {
+                            Ty::Enum("Option".into(), vec![self.env.fresh_tyvar()])
+                        }
+                        AstTy::Named(_, name) if Self::surface_name(name) == "List" => {
+                            Ty::List(Box::new(self.env.fresh_tyvar()))
+                        }
+                        _ => self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?,
                     }
-                    AstTy::Named(_, name) if Self::surface_name(name) == "Option" => {
-                        Ty::Enum("Option".into(), vec![self.env.fresh_tyvar()])
-                    }
-                    AstTy::Named(_, name) if Self::surface_name(name) == "List" => {
-                        Ty::List(Box::new(self.env.fresh_tyvar()))
-                    }
-                    _ => self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?,
                 };
-                if !self.types_compatible(slot, &explicit_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Explicit type argument {} does not match generic slot {}",
-                            self.ty_name(&explicit_ty),
-                            self.ty_name(slot)
+                if self
+                    .assert_type_relation(
+                        slot,
+                        &explicit_ty,
+                        self.type_fact(SourceRole::Contract, span, slot),
+                        self.type_fact(
+                            SourceRole::ReturnTypeArgument,
+                            Self::ast_ty_span(arg),
+                            &explicit_ty,
                         ),
-                        span: Self::ast_ty_span(arg).clone(),
-                        hint: None,
-                    });
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::TraitCall,
+                        &format!("{trait_name}::{method_name}"),
+                        ordinal as u32,
+                    )
+                    .is_err()
+                {
+                    return Err(super::signatures::return_type_argument_mismatch_error(
+                        &format!("{trait_name}::{method_name}"),
+                        ordinal as u32,
+                        &self.diagnostic_ty_name(slot),
+                        &self.diagnostic_ty_name(&explicit_ty),
+                        Self::ast_ty_span(arg),
+                        SourceRole::Contract,
+                        span,
+                    ));
                 }
             }
         }
 
+        let declared_param_tys = param_tys.clone();
+        let mut constructor_receiver_index = None;
+        let plain_output_parameters = param_tys
+            .iter()
+            .map(|param| {
+                matches!((param, &ret_ty), (Ty::Func(_, output), Ty::SelfApp(slots))
+                if slots.contains(output.as_ref()))
+            })
+            .collect::<Vec<_>>();
+        let mut prepared_args = vec![None; args.len()];
+        // Resolve the standard operator's inference policy once. Preparation
+        // supplies value constraints; every helper and operator still reaches
+        // the same signature assertions and candidate solver below.
+        let composition = [
+            ("Composable", "compose", OperatorTraitOp::Compose),
+            (
+                "LiftComposable",
+                "lift_compose",
+                OperatorTraitOp::LiftCompose,
+            ),
+            (
+                "KleisliComposable",
+                "kleisli_compose",
+                OperatorTraitOp::KleisliCompose,
+            ),
+        ]
+        .into_iter()
+        .find_map(|(name, method, kind)| {
+            (self.trait_matches_short_name(trait_name, name) && method_name == method)
+                .then_some(kind)
+        });
+        if let Some(kind) = composition.as_ref() {
+            if positional_args.len() == 2 && param_tys.len() == 2 {
+                let (values, inferred_args) = self
+                    .prepare_composition_invocation(
+                        span,
+                        &kind,
+                        positional_args[0],
+                        positional_args[1],
+                        expected_ret_ty,
+                    )
+                    .map_err(|mut error| {
+                        if let Some(diagnostic) = &mut error.structured {
+                            diagnostic.origin = DiagnosticOrigin::TraitCall;
+                        }
+                        error
+                    })?;
+                if inferred_args.len() != trait_arg_tys.len() {
+                    return Err(TypeError::new(
+                        "Composition trait argument metadata mismatch",
+                        span.clone(),
+                    ));
+                }
+                for (declared, inferred) in trait_arg_tys.iter().zip(&inferred_args) {
+                    self.assert_type_relation(
+                        declared,
+                        inferred,
+                        self.type_fact(SourceRole::Contract, span, declared),
+                        self.type_fact(SourceRole::Value, span, inferred),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::TraitCall,
+                        &format!("{trait_name}::{method_name}"),
+                        0,
+                    )?;
+                }
+                prepared_args = values.into_iter().map(Some).collect();
+            }
+        }
+
+        if !trait_info.constructor_slots.is_empty() && args.len() == param_tys.len() {
+            let receiver_index = param_tys
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, ty)| matches!(ty, Ty::SelfApp(_)).then_some(index));
+            let typed_receiver = if let Some(index) = receiver_index {
+                constructor_receiver_index = Some(index);
+                if receiver_hint.is_none() {
+                    if let Some(typed) = self.try_constructor_invocation_from_arguments(
+                        span,
+                        trait_name,
+                        method_name,
+                        args,
+                        &declared_param_tys,
+                        expected_ret_ty,
+                        explicit_type_args,
+                        operator.clone(),
+                        index,
+                    )? {
+                        return Ok(typed);
+                    }
+                }
+                Some(self.check_node_with_expected(positional_args[index], receiver_hint)?)
+            } else {
+                None
+            };
+            let receiver_ty = if let Some(typed) = &typed_receiver {
+                self.resolve_ty(&typed.ty)
+            } else if matches!(ret_ty, Ty::SelfApp(_)) {
+                let contextual = expected_ret_ty
+                    .map(|ty| self.resolve_ty(ty))
+                    .unwrap_or_else(|| self.resolve_ty(&self_ty));
+                if matches!(contextual, Ty::Var(_) | Ty::Hole) {
+                    return Err(self.ambiguous_constructor_result(trait_name, method_name, span));
+                }
+                contextual
+            } else {
+                self.resolve_ty(&self_ty)
+            };
+            if !matches!(receiver_ty, Ty::Var(_) | Ty::Hole) {
+                let receiver_span = typed_receiver
+                    .as_ref()
+                    .map(|typed| &typed.span)
+                    .unwrap_or(span);
+                let (target, slots, captured) = if let Ty::SelfApp(items) = &receiver_ty {
+                    let (witness, payloads) = Self::constructor_application_parts(items)
+                        .ok_or_else(|| {
+                            TypeError::new(
+                                "Constructor application has no witness",
+                                receiver_span.clone(),
+                            )
+                        })?;
+                    let mut target = vec![Ty::Hole, witness.clone()];
+                    let mut slots = Vec::new();
+                    for _ in payloads {
+                        let slot = self.env.fresh_tyvar();
+                        let Ty::Var(var) = slot else { unreachable!() };
+                        slots.push(var);
+                        target.push(slot);
+                    }
+                    (Ty::SelfApp(target), slots, HashMap::new())
+                } else {
+                    let (implementation, mut captured) = self
+                        .constructor_projection(trait_name, &receiver_ty)
+                        .ok_or_else(|| {
+                            self.trait_dispatch_failure(
+                                TypeDiagnosticReason::NoApplicableTraitImplementation,
+                                trait_name,
+                                method_name,
+                                Some(&receiver_ty),
+                                receiver_span,
+                            )
+                        })?;
+                    for slot in &implementation.constructor_slot_vars {
+                        captured.remove(slot);
+                    }
+                    (
+                        implementation.target_ty,
+                        implementation.constructor_slot_vars,
+                        captured,
+                    )
+                };
+                if let Some(typed) = &typed_receiver {
+                    self.check_constructor_capability(trait_name, method_name, typed)?;
+                }
+                let expand = |ty| {
+                    self.expand_trait_self_apps(ty, &target, &slots)
+                        .map(|ty| self.substitute_ty_with_mapping(&ty, &captured))
+                };
+                param_tys = param_tys
+                    .into_iter()
+                    .map(&expand)
+                    .collect::<Result<_, _>>()?;
+                ret_ty = expand(ret_ty)?;
+                self.assert_type_relation(
+                    &self_ty,
+                    &receiver_ty,
+                    self.type_fact(SourceRole::Expected, span, &self_ty),
+                    self.type_fact(SourceRole::Value, receiver_span, &receiver_ty),
+                    TypeDiagnosticReason::ArgumentTypeMismatch,
+                    DiagnosticOrigin::TraitCall,
+                    &format!("{trait_name}::{method_name}"),
+                    receiver_index.unwrap_or(0) as u32,
+                )?;
+                if let (Some(index), Some(typed)) = (receiver_index, typed_receiver) {
+                    self.assert_type_relation(
+                        &param_tys[index],
+                        &typed.ty,
+                        self.type_fact(SourceRole::Expected, span, &param_tys[index]),
+                        self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::TraitCall,
+                        &format!("{trait_name}::{method_name}"),
+                        index as u32,
+                    )?;
+                    prepared_args[index] = Some(typed);
+                } else {
+                    self.assert_type_relation(
+                        &self_ty,
+                        &ret_ty,
+                        self.type_fact(SourceRole::Expected, span, &self_ty),
+                        self.type_fact(SourceRole::Value, span, &ret_ty),
+                        TypeDiagnosticReason::ReturnTypeMismatch,
+                        DiagnosticOrigin::TraitCall,
+                        &format!("{trait_name}::{method_name}"),
+                        0,
+                    )?;
+                }
+            }
+        }
+        if let Some(expected) = expected_ret_ty {
+            self.assert_type_relation(
+                expected,
+                &ret_ty,
+                self.type_fact(SourceRole::Expected, span, expected),
+                self.type_fact(SourceRole::Value, span, &ret_ty),
+                TypeDiagnosticReason::ReturnTypeMismatch,
+                DiagnosticOrigin::TraitCall,
+                &format!("{trait_name}::{method_name}"),
+                0,
+            )?;
+        }
+
         let trait_display_name = self.trait_display_name(trait_name);
-        let trait_impl_summary = self.trait_implementation_summary(trait_name);
         let trait_signature_hint = |checker: &Self| {
             let params = param_tys
                 .iter()
@@ -4807,54 +4327,76 @@ impl Checker {
             let ret = checker.resolve_ty(&ret_ty);
             checker.trait_method_signature_hint(&trait_display_name, method_name, &params, &ret)
         };
-        let trait_hint = |checker: &Self| {
-            combine_hint_parts(&[
-                Some(trait_signature_hint(checker)),
-                Some(trait_impl_summary.clone()),
-            ])
-        };
 
         if args.len() != param_tys.len() {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "{}::{} expects {} argument(s), got {}",
-                    trait_name,
-                    method_name,
+            return Err(
+                TypeError::from_structured(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArityMismatch,
+                    &format!("{trait_name}::{method_name}"),
+                    None,
                     param_tys.len(),
-                    args.len()
-                ),
-                span: span.clone(),
-                hint: Some(trait_signature_hint(self)),
-            });
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::TraitCall,
+                ))
+                .with_hint(trait_signature_hint(self)),
+            );
         }
 
         let typed_args = args
             .iter()
             .zip(param_tys.iter())
-            .map(|(arg, expected)| match arg {
-                ResolvedRecordLitArg::Positional(expr) => {
-                    self.check_node_with_expected(expr, Some(expected))
+            .enumerate()
+            .map(|(index, (arg, expected))| {
+                if let Some(typed) = prepared_args[index].take() {
+                    return Ok(typed);
                 }
-                ResolvedRecordLitArg::Named(_, _) => Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "{}::{} does not accept named arguments",
-                        trait_name, method_name
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                }),
+                match arg {
+                    ResolvedRecordLitArg::Positional(expr) => self
+                        .check_invocation_argument(expr, expected, operator.clone(), index)
+                        .map_err(|mut error| {
+                            if let Some(diagnostic) = &mut error.structured {
+                                if diagnostic.origin == DiagnosticOrigin::Call
+                                    && diagnostic.primary.span == *self.resolved_span(expr)
+                                {
+                                    diagnostic.origin = DiagnosticOrigin::TraitCall;
+                                }
+                            }
+                            error
+                        }),
+                    ResolvedRecordLitArg::Named(_, _) => unreachable!("named arguments rejected"),
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if expected_ret_ty.is_none() {
+            for (index, arg) in typed_args.iter().enumerate() {
+                if plain_output_parameters[index] {
+                    if let Some((_, output)) = self.function_parts(&arg.ty) {
+                        self.ensure_plain_map_output(
+                            &output,
+                            &format!("{trait_name}::{method_name}"),
+                            arg,
+                        )
+                        .map_err(|mut error| {
+                            if let Some(diagnostic) = &mut error.structured {
+                                diagnostic.origin = DiagnosticOrigin::TraitCall;
+                            }
+                            error
+                        })?;
+                    }
+                }
+            }
+        }
         self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
 
-        self.check_trait_method_constructor_capabilities(
-            trait_name,
-            method_name,
-            &param_tys,
-            &typed_args,
-        )?;
+        if constructor_receiver_index.is_some() || trait_info.constructor_slots.is_empty() {
+            self.check_trait_method_constructor_capabilities(
+                trait_name,
+                method_name,
+                &param_tys,
+                &typed_args,
+            )?;
+        }
 
         if let Some(owner_hint) = receiver_owner_hint {
             if let Some(receiver) = typed_args.first() {
@@ -4882,116 +4424,83 @@ impl Checker {
         }
 
         for (idx, (expected, arg)) in param_tys.iter().zip(&typed_args).enumerate() {
-            if !self.types_compatible(expected, &arg.ty) {
-                if typed_args.len() == 2 {
-                    let left_ty = self.ty_name(&typed_args[0].ty);
-                    let right_ty = self.ty_name(&typed_args[1].ty);
-                    if self.trait_matches_short_name(trait_name, "Eq") && method_name == "eq" {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Eq::eq helper cannot compare {} and {}",
-                                left_ty, right_ty
-                            ),
-                            span: arg.span.clone(),
-                            hint: trait_hint(self),
-                        });
-                    }
-                    if self.trait_matches_short_name(trait_name, "Eq") && method_name == "neq" {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Eq::neq helper cannot compare {} and {}",
-                                left_ty, right_ty
-                            ),
-                            span: arg.span.clone(),
-                            hint: trait_hint(self),
-                        });
-                    }
-                    if self.trait_matches_short_name(trait_name, "Compare")
-                        && method_name == "compare"
-                    {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Compare::compare helper cannot compare {} and {}",
-                                left_ty, right_ty
-                            ),
-                            span: arg.span.clone(),
-                            hint: trait_hint(self),
-                        });
-                    }
-                    if self.trait_matches_short_name(trait_name, "Concat") {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Concat::concat helper requires String on both sides, but got {} and {}",
-                                left_ty, right_ty,
-                            ),
-                            span: arg.span.clone(),
-                            hint: trait_hint(self),
-                        });
-                    }
+            let contextual_policy = if constructor_receiver_index.is_some()
+                && matches!(declared_param_tys[idx], Ty::Func(..))
+            {
+                Some((
+                    trait_name,
+                    matches!(&declared_param_tys[idx], Ty::Func(_, output) if matches!(output.as_ref(), Ty::SelfApp(_))),
+                ))
+            } else if idx == 1 {
+                match composition {
+                    Some(OperatorTraitOp::LiftCompose) => Some(("Functor", false)),
+                    Some(OperatorTraitOp::KleisliCompose) => Some(("Monad", true)),
+                    _ => None,
                 }
-                let receiver_ty = self.resolve_ty(&self_ty);
-                if !matches!(receiver_ty, Ty::Var(_))
-                    && self.trait_impl_exists(trait_name, &receiver_ty)
-                {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "{}::{} expects argument {} to match receiver type {}, got {}",
-                            trait_display_name,
-                            method_name,
-                            idx + 1,
-                            self.ty_name(&receiver_ty),
-                            self.ty_name(&arg.ty)
-                        ),
-                        span: arg.span.clone(),
-                        hint: trait_hint(self),
-                    });
-                }
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Argument type mismatch in {}::{}: expected {}, got {}",
-                        trait_display_name,
-                        method_name,
-                        self.ty_name(expected),
-                        self.ty_name(&arg.ty)
+            } else {
+                None
+            };
+            if let Some((capability, contextual_return)) = contextual_policy {
+                let source_index = constructor_receiver_index.unwrap_or(0);
+                self.assert_contextual_callable_argument(
+                    expected,
+                    arg,
+                    &typed_args[source_index],
+                    capability,
+                    contextual_return,
+                    &format!("{trait_name}::{method_name}"),
+                    idx as u32,
+                )?;
+            } else {
+                let expected_fact = if idx > 0 {
+                    self.type_fact(
+                        SourceRole::LeftValue,
+                        &typed_args[0].span,
+                        &typed_args[0].ty,
+                    )
+                } else {
+                    self.type_fact(SourceRole::Expected, span, expected)
+                };
+                self.assert_type_relation(
+                    expected,
+                    &arg.ty,
+                    expected_fact,
+                    self.type_fact(
+                        if idx > 0 {
+                            SourceRole::RightValue
+                        } else {
+                            SourceRole::Value
+                        },
+                        &arg.span,
+                        &arg.ty,
                     ),
-                    span: arg.span.clone(),
-                    hint: trait_hint(self),
-                });
+                    TypeDiagnosticReason::ArgumentTypeMismatch,
+                    DiagnosticOrigin::TraitCall,
+                    &format!("{trait_name}::{method_name}"),
+                    idx as u32,
+                )?;
             }
         }
 
         let trait_call_name = self.trait_instance_key_from_tys(trait_name, &trait_arg_tys);
-        let trait_call_display_name = self.trait_display_name(&trait_call_name);
-        let trait_call_summary = self.trait_implementation_summary(&trait_call_name);
         let receiver_ty = self.resolve_ty(&self_ty);
         if let Ty::Var(var) = receiver_ty {
             if self.rigid_tyvars.contains(&var)
                 && !self.tyvar_has_bound(var, trait_name)
                 && !self.tyvar_satisfies_compiler_trait(var, trait_name)
             {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "MissingGenericBound: {} must implement {}",
-                        self.ty_name(&receiver_ty),
-                        trait_call_display_name
-                    ),
-                    span: typed_args
+                return Err(self.trait_obligation_failure(
+                    TypeDiagnosticReason::MissingGenericBound,
+                    trait_name,
+                    &trait_arg_tys,
+                    Some(method_name),
+                    &receiver_ty,
+                    &typed_args
                         .first()
                         .map(|arg| arg.span.clone())
                         .unwrap_or_else(|| span.clone()),
-                    hint: Some(format!(
-                        "Add `where {}: {}` to this declaration.",
-                        self.ty_name(&receiver_ty),
-                        trait_call_display_name
-                    )),
-                });
+                    DiagnosticOrigin::TraitCall,
+                ));
             }
             if !self.rigid_tyvars.contains(&var) {
                 let obligations = self.pending_trait_obligations.entry(var).or_default();
@@ -5026,7 +4535,17 @@ impl Checker {
                 )?
                 .is_none()
             {
-                return Err(err);
+                return Err(self
+                    .trait_obligation_failure(
+                        TypeDiagnosticReason::NoApplicableTraitImplementation,
+                        trait_name,
+                        &trait_arg_tys,
+                        Some(method_name),
+                        &receiver_ty,
+                        &receiver_span,
+                        DiagnosticOrigin::TraitCall,
+                    )
+                    .with_hint(err.message));
             }
         }
 
@@ -5037,44 +4556,58 @@ impl Checker {
             .map(|arg| self.resolve_ty(&arg.ty))
             .collect::<Vec<_>>();
         let mut rejection_note = None;
-        let dispatch = match self.select_trait_method_instantiation(
-            trait_name,
-            method_name,
-            &receiver_ty,
-            &trait_arg_tys,
-            &argument_tys,
-            &ret_ty,
-        )? {
-            CandidateApplicability::Applicable(instantiation) => {
-                Some(TraitDispatch::Selected(Box::new(instantiation)))
-            }
-            CandidateApplicability::Deferred(_) => self.trait_dispatch_target_for_args(
+        let mut rejection_facts = Vec::new();
+        let abstract_constructor = match &receiver_ty {
+            Ty::SelfApp(items) => Self::constructor_application_parts(items)
+                .map(|(witness, _)| self.constructor_witness_supports_trait(witness, trait_name))
+                .unwrap_or(false),
+            _ => false,
+        };
+        let dispatch = if abstract_constructor {
+            Some(TraitDispatch::Pending)
+        } else {
+            match self.select_trait_method_instantiation(
                 trait_name,
                 method_name,
                 &receiver_ty,
                 &trait_arg_tys,
-            )?,
-            CandidateApplicability::Rejected(rejection) => {
-                rejection_note = self.candidate_rejection_note(&rejection);
-                self.consume_matching_capability(&receiver_ty, trait_name)
-                    .then_some(TraitDispatch::Pending)
+                &argument_tys,
+                &ret_ty,
+            )? {
+                CandidateApplicability::Applicable(instantiation) => {
+                    Some(TraitDispatch::Selected(Box::new(instantiation)))
+                }
+                CandidateApplicability::Deferred(_) => self.trait_dispatch_target_for_args(
+                    trait_name,
+                    method_name,
+                    &receiver_ty,
+                    &trait_arg_tys,
+                )?,
+                CandidateApplicability::Rejected(rejection) => {
+                    rejection_note = self.candidate_rejection_note(&rejection);
+                    rejection_facts = self.candidate_rejection_facts(&rejection);
+                    self.consume_matching_capability(&receiver_ty, trait_name)
+                        .then_some(TraitDispatch::Pending)
+                }
             }
         }
-        .ok_or_else(|| TypeError {
-            structured: None,
-            message: format!(
-                "{}::{} requires a receiver type implementing {}, got {}",
-                trait_call_display_name,
-                method_name,
-                trait_call_display_name,
-                self.ty_name(&receiver_ty)
-            ),
-            span: receiver_span,
-            hint: combine_hint_parts(&[
-                Some(trait_signature_hint(self)),
-                Some(trait_call_summary),
-                rejection_note,
-            ]),
+        .ok_or_else(|| {
+            let mut error = self.trait_obligation_failure(
+                TypeDiagnosticReason::NoApplicableTraitImplementation,
+                trait_name,
+                &trait_arg_tys,
+                Some(method_name),
+                &receiver_ty,
+                &receiver_span,
+                DiagnosticOrigin::TraitCall,
+            );
+            if let Some(diagnostic) = &mut error.structured {
+                diagnostic.related.extend(rejection_facts);
+            }
+            if let Some(note) = rejection_note {
+                error = error.with_hint(note);
+            }
+            error
         })?;
 
         Ok(TypedNode {
@@ -5176,20 +4709,20 @@ impl Checker {
             .collect::<Result<Vec<_>, _>>()?;
         self.ensure_no_runtime_facet_args(&typed_args, span, op_name)?;
 
-        for (expected, arg) in params.iter().skip(1).zip(&typed_args) {
-            if !matches!(self.resolve_ty(expected), Ty::Hole)
-                && !self.types_compatible(expected, &arg.ty)
-            {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Argument type mismatch: expected {}, got {}",
-                        self.ty_name(expected),
-                        self.ty_name(&arg.ty)
-                    ),
-                    span: arg.span.clone(),
-                    hint: None,
-                });
+        for (ordinal, (expected, arg)) in params.iter().skip(1).zip(&typed_args).enumerate() {
+            if !matches!(self.resolve_ty(expected), Ty::Hole) {
+                self.assert_type_relation(
+                    expected,
+                    &arg.ty,
+                    self.type_fact(SourceRole::Expected, span, expected),
+                    self.type_fact(SourceRole::Value, &arg.span, &arg.ty),
+                    TypeDiagnosticReason::ArgumentTypeMismatch,
+                    DiagnosticOrigin::Operator {
+                        operator: op_name.trim_matches('`').into(),
+                    },
+                    op_name,
+                    (ordinal + 1) as u32,
+                )?;
             }
         }
 
@@ -5268,30 +4801,31 @@ impl Checker {
         &self,
         output_ty: &Ty,
         op_name: &str,
-        span: &Span,
+        operand: &TypedNode,
     ) -> Result<(), TypeError> {
-        match self.resolve_ty(output_ty) {
-            Ty::Result(_, _) | Ty::List(_) => Err(TypeError {
-                structured: None,
-                message: format!(
-                    "{} expects a plain function on the right-hand side; use {} for contextual output",
-                    op_name,
-                    if op_name == "`>*`" { "`>=>`" } else { "`|>=`" }
-                ),
-                span: span.clone(),
-                hint: None,
-            }),
-            Ty::Enum(name, _) if Self::surface_name(&name) == "Option" => Err(TypeError {
-                structured: None,
-                message: format!(
-                    "{} expects a plain function on the right-hand side; use {} for contextual output",
-                    op_name,
-                    if op_name == "`>*`" { "`>=>`" } else { "`|>=`" }
-                ),
-                span: span.clone(),
-                hint: None,
-            }),
-            _ => Ok(()),
+        let contextual = self.constructor_capability_for_type(output_ty).is_some()
+            || self
+                .trait_key_by_short_name("Functor")
+                .is_some_and(|trait_name| {
+                    self.constructor_projection(&trait_name, output_ty)
+                        .is_some()
+                });
+        if contextual {
+            let mut error = self.callable_shape_error(
+                output_ty,
+                op_name,
+                &operand.span,
+                None,
+                diagnostics::CallableReturnShape::Plain,
+            );
+            error
+                .structured
+                .as_mut()
+                .expect("callable shape is structured")
+                .primary = self.type_fact(SourceRole::RightValue, &operand.span, &operand.ty);
+            Err(error)
+        } else {
+            Ok(())
         }
     }
 
@@ -5327,18 +4861,17 @@ impl Checker {
             &result_ty,
         )?
         else {
-            let summary = self.trait_implementation_summary(trait_short_name);
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "{} requires {} implementation on the left, got {}",
-                    op_name,
-                    trait_short_name,
-                    self.ty_name(receiver_ty)
-                ),
-                span: span.clone(),
-                hint: Some(summary),
-            });
+            return Err(self.trait_obligation_failure(
+                TypeDiagnosticReason::NoApplicableTraitImplementation,
+                &trait_key,
+                &requested_trait_args,
+                Some(method_name),
+                receiver_ty,
+                span,
+                DiagnosticOrigin::Operator {
+                    operator: op_name.trim_matches('`').into(),
+                },
+            ));
         };
         let trait_name = self.trait_instance_key_from_tys(&trait_key, &resolved_trait_args);
         let (lhs_ty, rhs_ty) = if op == OperatorTraitOp::PipeApply {
@@ -5395,85 +4928,285 @@ impl Checker {
         right: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_node(left)?;
-        let rhs_ret_expected = expected.map(|ty| self.resolve_ty(ty));
-        let typed_right = match right {
-            Resolved::InferredFacetCapture(_, _)
-            | Resolved::Capture(_, _, _)
-            | Resolved::Closure(_, _, _, _)
-            | Resolved::Grouped(_, _) => {
-                let contract = self.callable_contract(
-                    &typed_left.ty,
-                    rhs_ret_expected.clone(),
-                    ExpectedCallableSlot::Plain,
-                );
-                self.check_apply_callable_with_contract(right, &contract, "`|>`")?
+        (|| {
+            let typed_left = self.check_node(left)?;
+            let rhs_ret_expected = expected.map(|ty| self.resolve_ty(ty));
+            let typed_right = match right {
+                Resolved::InferredFacetCapture(_, _)
+                | Resolved::Capture(_, _, _)
+                | Resolved::Closure(_, _, _, _)
+                | Resolved::Grouped(_, _) => {
+                    let contract = self.callable_contract(
+                        &typed_left.ty,
+                        rhs_ret_expected.clone(),
+                        ExpectedCallableSlot::Plain,
+                    );
+                    self.check_apply_callable_with_contract(right, &contract, "`|>`")?
+                }
+                Resolved::App(call_span, func, args) => {
+                    if let Some(typed) = self.check_trait_helper_pipe_callable(
+                        call_span,
+                        func,
+                        args,
+                        self.resolve_ty(&typed_left.ty),
+                        rhs_ret_expected.clone(),
+                        "`|>`",
+                    )? {
+                        typed
+                    } else {
+                        self.check_apply_callable(right, "`|>`")?
+                    }
+                }
+                Resolved::ReturnTypeArgumentApply(call_span, _, _) => self
+                    .check_trait_helper_pipe_callable(
+                        call_span,
+                        right,
+                        &[],
+                        self.resolve_ty(&typed_left.ty),
+                        rhs_ret_expected.clone(),
+                        "`|>`",
+                    )?
+                    .ok_or_else(|| TypeError {
+                        structured: None,
+                        message: "`|>` requires a specialized trait helper on the right".into(),
+                        span: call_span.clone(),
+                        hint: None,
+                    })?,
+                _ => self.check_apply_callable(right, "`|>`")?,
+            };
+            let (param, ret) =
+                self.unary_function_parts(&typed_right.ty, "`|>`", &typed_right.span)?;
+            self.assert_operand_relation(
+                &param,
+                &typed_left.ty,
+                &typed_left,
+                &typed_right,
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                "PipeApply::pipe_apply",
+                "|>",
+                None,
+                SourceRole::RightValue,
+            )?;
+            let receiver_ty = self.resolve_ty(&typed_right.ty);
+            let left_ty = self.resolve_ty(&typed_left.ty);
+            self.flow_operator_trait_call(
+                span,
+                "PipeApply",
+                "pipe_apply",
+                &receiver_ty,
+                vec![left_ty, self.resolve_ty(&ret)],
+                OperatorTraitOp::PipeApply,
+                vec![typed_right, typed_left],
+                ret,
+                "`|>`",
+            )
+        })()
+        .map_err(|error| {
+            Self::operator_operand_error(
+                error,
+                "|>",
+                self.resolved_span(left),
+                self.resolved_span(right),
+            )
+        })
+    }
+
+    fn assert_contextual_callable_argument(
+        &mut self,
+        expected: &Ty,
+        argument: &TypedNode,
+        source: &TypedNode,
+        capability: &str,
+        contextual_return: bool,
+        callable: &str,
+        ordinal: u32,
+    ) -> Result<(), TypeError> {
+        let expected = self.resolve_ty(expected);
+        let actual = self.resolve_ty(&argument.ty);
+        let (Some((inputs, output)), Some((actual_inputs, actual_output))) =
+            (self.function_parts(&expected), self.function_parts(&actual))
+        else {
+            return self.assert_type_relation(
+                &expected,
+                &actual,
+                self.type_fact(SourceRole::LeftValue, &source.span, &source.ty),
+                self.type_fact(SourceRole::RightValue, &argument.span, &argument.ty),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::TraitCall,
+                callable,
+                ordinal,
+            );
+        };
+        if inputs.len() != actual_inputs.len() {
+            return Err(self.callable_shape_error(
+                &actual,
+                callable,
+                &argument.span,
+                Some(inputs.len()),
+                diagnostics::CallableReturnShape::Any,
+            ));
+        }
+        let inputs = inputs.to_vec();
+        let actual_inputs = actual_inputs.to_vec();
+        let output = output.clone();
+        let actual_output = actual_output.clone();
+        for (input, actual_input) in inputs.iter().zip(&actual_inputs) {
+            if matches!(self.resolve_ty(actual_input), Ty::Hole) {
+                continue;
             }
-            Resolved::App(call_span, func, args) => {
-                if let Some(typed) = self.check_trait_helper_pipe_callable(
-                    call_span,
-                    func,
-                    args,
-                    self.resolve_ty(&typed_left.ty),
-                    rhs_ret_expected.clone(),
-                    "`|>`",
-                )? {
-                    typed
-                } else {
-                    self.check_apply_callable(right, "`|>`")?
+            self.assert_operand_relation(
+                input,
+                actual_input,
+                source,
+                argument,
+                TypeDiagnosticReason::TypePayloadMismatch,
+                callable,
+                "",
+                Some(capability),
+                SourceRole::LeftValue,
+            )
+            .map_err(Self::trait_helper_origin)?;
+        }
+        if contextual_return {
+            self.assert_carrier_relation(
+                &output,
+                &actual_output,
+                source,
+                argument,
+                capability,
+                "",
+                SourceRole::LeftValue,
+            )
+            .map_err(Self::trait_helper_origin)
+        } else {
+            self.assert_type_relation(
+                &output,
+                &actual_output,
+                self.type_fact(SourceRole::LeftValue, &source.span, &source.ty),
+                self.type_fact(SourceRole::RightValue, &argument.span, &argument.ty),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::TraitCall,
+                callable,
+                ordinal,
+            )
+        }
+    }
+
+    fn check_invocation_argument(
+        &mut self,
+        expr: &Resolved,
+        expected: &Ty,
+        operator: Option<OperatorTraitOp>,
+        index: usize,
+    ) -> Result<TypedNode, TypeError> {
+        if index == 1
+            && matches!(
+                operator,
+                Some(OperatorTraitOp::PipeMap | OperatorTraitOp::PipeBind)
+            )
+        {
+            if let Resolved::ReturnTypeArgumentApply(span, _, _) = expr {
+                if let Ty::Func(inputs, output) = self.resolve_ty(expected) {
+                    if let [input] = inputs.as_slice() {
+                        if let Some(typed) = self.check_trait_helper_pipe_callable(
+                            span,
+                            expr,
+                            &[],
+                            input.clone(),
+                            Some(*output),
+                            "context operator",
+                        )? {
+                            return Ok(typed);
+                        }
+                    }
                 }
             }
-            Resolved::ReturnTypeArgumentApply(call_span, _, _) => self
-                .check_trait_helper_pipe_callable(
-                    call_span,
-                    right,
-                    &[],
-                    self.resolve_ty(&typed_left.ty),
-                    rhs_ret_expected.clone(),
-                    "`|>`",
-                )?
-                .ok_or_else(|| TypeError {
-                    structured: None,
-                    message: "`|>` requires a specialized trait helper on the right".into(),
-                    span: call_span.clone(),
-                    hint: None,
-                })?,
-            _ => self.check_apply_callable(right, "`|>`")?,
-        };
-        let (param, ret) = self.unary_function_parts(&typed_right.ty, "`|>`", &typed_right.span)?;
-        if !matches!(self.resolve_ty(&param), Ty::Hole)
-            && !self.types_compatible(&param, &typed_left.ty)
-        {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "`|>` type mismatch: expected {}, got {}",
-                    self.ty_name(&param),
-                    self.ty_name(&typed_left.ty)
-                ),
-                span: typed_left.span.clone(),
-                hint: Some(self.operator_rule_hint(
-                    "`|>`",
-                    "LHS: A; RHS: (A -> B); result: B",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    None,
-                )),
-            });
+
+            if let Resolved::App(span, func, args) = expr {
+                let resolved = self.resolve_ty(expected);
+                if let Ty::Func(inputs, output) = resolved {
+                    if let [input] = inputs.as_slice() {
+                        if let Some(typed) = self.check_trait_helper_pipe_callable(
+                            span,
+                            func,
+                            args,
+                            input.clone(),
+                            Some(*output),
+                            "context operator",
+                        )? {
+                            return Ok(typed);
+                        }
+                    }
+                }
+                return self.check_apply_callable(expr, "context operator");
+            }
         }
-        let receiver_ty = self.resolve_ty(&typed_right.ty);
-        let left_ty = self.resolve_ty(&typed_left.ty);
-        self.flow_operator_trait_call(
-            span,
-            "PipeApply",
-            "pipe_apply",
-            &receiver_ty,
-            vec![left_ty, self.resolve_ty(&ret)],
-            OperatorTraitOp::PipeApply,
-            vec![typed_right, typed_left],
-            ret,
-            "`|>`",
-        )
+        self.check_node_with_expected(expr, Some(expected))
+    }
+
+    fn check_operator_invocation(
+        &mut self,
+        span: &Span,
+        trait_short_name: &str,
+        method_name: &str,
+        op: OperatorTraitOp,
+        token: &str,
+        left: &Resolved,
+        right: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let trait_name = self
+            .trait_key_by_short_name(trait_short_name)
+            .ok_or_else(|| {
+                TypeError::new(format!("Unknown trait: {trait_short_name}"), span.clone())
+            })?;
+        let args = vec![
+            ResolvedRecordLitArg::Positional(left.clone()),
+            ResolvedRecordLitArg::Positional(right.clone()),
+        ];
+        let mut typed = self
+            .check_trait_invocation(
+                span,
+                &trait_name,
+                method_name,
+                &args,
+                None,
+                expected,
+                None,
+                Some(op.clone()),
+                None,
+            )
+            .map_err(|mut error| {
+                if let Some(diagnostic) = &mut error.structured {
+                    if diagnostic.origin == DiagnosticOrigin::TraitCall {
+                        diagnostic.origin = DiagnosticOrigin::Operator {
+                            operator: token.into(),
+                        };
+                        diagnostic.map_source_facts(|fact| {
+                            if fact.span == *self.resolved_span(left) {
+                                fact.role = SourceRole::LeftValue;
+                            }
+                            if fact.span == *self.resolved_span(right) {
+                                fact.role = SourceRole::RightValue;
+                            }
+                        });
+                    }
+                }
+                Self::operator_operand_error(
+                    error,
+                    token,
+                    self.resolved_span(left),
+                    self.resolved_span(right),
+                )
+            })?;
+        if let TypedInner::TraitCall { origin, args, .. } = &mut typed.node {
+            *origin = TraitCallOrigin::Operator {
+                op,
+                lhs_ty: self.resolve_ty(&args[0].ty),
+                rhs_ty: self.resolve_ty(&args[1].ty),
+            };
+        }
+        Ok(typed)
     }
 
     pub(super) fn check_context_apply(
@@ -5490,115 +5223,18 @@ impl Checker {
         span: &Span,
         left: &Resolved,
         right: &Resolved,
-        _expected: Option<&Ty>,
+        expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        // The value determines the applicative context and mapper input.  Check it
-        // first so contextual trait helpers such as `&Add::add` receive the
-        // expected callable type while being resolved.
-        let typed_value = self.check_node(right)?;
-        let value_inner = self
-            .constructor_slot_type_for("Applicative", &typed_value.ty)
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: format!(
-                    "`|*|` requires an Applicative value on the right, got {}",
-                    self.ty_name(&typed_value.ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: Some(self.trait_implementation_summary("Applicative")),
-            })?;
-        let output_hint = self.env.fresh_tyvar();
-        let callable_hint = Ty::Func(vec![value_inner.clone()], Box::new(output_hint));
-        let expected_mapper_ty = self
-            .constructor_context_type_for("Applicative", &typed_value.ty, &callable_hint)
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: "`|*|` cannot infer mapper context from the value".into(),
-                span: typed_value.span.clone(),
-                hint: None,
-            })?;
-        let typed_mapper = self.check_node_with_expected(left, Some(&expected_mapper_ty))?;
-        let mapper_inner = self
-            .constructor_slot_type_for("Applicative", &typed_mapper.ty)
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: format!(
-                    "`|*|` requires a contextual callable on the left, got {}",
-                    self.ty_name(&typed_mapper.ty)
-                ),
-                span: typed_mapper.span.clone(),
-                hint: Some(self.trait_implementation_summary("Applicative")),
-            })?;
-        let (input, output) = self.unary_function_parts(&mapper_inner, "`|*|`", span)?;
-        if !self.types_compatible(&input, &value_inner) {
-            return Err(TypeError {
-                structured: None,
-                message: "`|*|` mapper input and value type do not match".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        let callable_ty = Ty::Func(vec![input.clone()], Box::new(output.clone()));
-        let Some(expected_mapper) =
-            self.constructor_context_type_for("Applicative", &typed_value.ty, &callable_ty)
-        else {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "`|*|` requires Applicative implementation for {}",
-                    self.ty_name(&typed_value.ty)
-                ),
-                span: typed_value.span.clone(),
-                hint: Some(self.trait_implementation_summary("Applicative")),
-            });
-        };
-        if !self.types_compatible(&expected_mapper, &typed_mapper.ty) {
-            return Err(TypeError {
-                structured: None,
-                message: "`|*|` requires mapper and value in the same context".into(),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        let result_ty = self
-            .constructor_context_type_for("Applicative", &typed_value.ty, &output)
-            .ok_or_else(|| TypeError::new("`|*|` has no declared result context", span.clone()))?;
-        let dispatch = self
-            .select_method_dispatch(
-                "Applicative",
-                "ap",
-                &typed_value.ty,
-                &[],
-                &[typed_mapper.ty.clone(), typed_value.ty.clone()],
-                &result_ty,
-            )?
-            .ok_or_else(|| {
-                TypeError::new("`|*|` has no applicable Applicative method", span.clone())
-            })?;
-        let applicative_trait = self
-            .trait_key_by_short_name("Applicative")
-            .unwrap_or_else(|| "Applicative".into());
-        Ok(TypedNode {
-            ty: result_ty,
-            span: span.clone(),
-            node: TypedInner::TraitCall {
-                trait_name: "Applicative".into(),
-                method_name: "ap".into(),
-                receiver_ty: self.resolve_ty(&typed_value.ty),
-                obligation: TraitObligation {
-                    trait_id: applicative_trait,
-                    trait_args: Vec::new(),
-                    receiver: self.resolve_ty(&typed_value.ty),
-                },
-                dispatch,
-                origin: TraitCallOrigin::Operator {
-                    op: OperatorTraitOp::ContextApply,
-                    lhs_ty: self.resolve_ty(&typed_mapper.ty),
-                    rhs_ty: self.resolve_ty(&typed_value.ty),
-                },
-                args: vec![typed_mapper, typed_value],
-            },
-        })
+        self.check_operator_invocation(
+            span,
+            "Applicative",
+            "ap",
+            OperatorTraitOp::ContextApply,
+            "|*|",
+            left,
+            right,
+            expected,
+        )
     }
 
     pub(super) fn check_context_map(
@@ -5617,223 +5253,16 @@ impl Checker {
         right: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let typed_left = self.check_node(left)?;
-        let receiver_ty = self.resolve_ty(&typed_left.ty);
-        let rhs_input_hint = match &receiver_ty {
-            Ty::Result(ok, _) => Some(ok.as_ref().clone()),
-            Ty::List(item) => Some(item.as_ref().clone()),
-            Ty::Enum(name, args) if Self::surface_name(name) == "Option" && args.len() == 1 => {
-                Some(args[0].clone())
-            }
-            _ => None,
-        };
-        let rhs_ret_expected = self.map_rhs_output_from_expected(&receiver_ty, expected);
-        let allow_contextual_map_output = rhs_ret_expected
-            .as_ref()
-            .map(|ty| match self.resolve_ty(ty) {
-                Ty::Result(_, _) | Ty::List(_) => true,
-                Ty::Enum(name, _) if Self::surface_name(&name) == "Option" => true,
-                _ => false,
-            })
-            .unwrap_or(false);
-        let typed_right = if let Some(rhs_in) = &rhs_input_hint {
-            if matches!(
-                right,
-                Resolved::InferredFacetCapture(_, _)
-                    | Resolved::Capture(_, _, _)
-                    | Resolved::Closure(_, _, _, _)
-                    | Resolved::Grouped(_, _)
-            ) {
-                let contract = self.callable_contract(
-                    rhs_in,
-                    rhs_ret_expected.clone(),
-                    ExpectedCallableSlot::Plain,
-                );
-                self.check_apply_callable_with_contract(right, &contract, "`|*>`")?
-            } else {
-                let contract = self.callable_contract(
-                    rhs_in,
-                    rhs_ret_expected.clone(),
-                    ExpectedCallableSlot::Plain,
-                );
-                let expected_callable = self.expected_callable_ty(&contract);
-                let checkpoint = self.candidate_probe_checkpoint();
-                match self.check_node_with_expected(right, Some(&expected_callable)) {
-                    Ok(typed) => typed,
-                    Err(_) => {
-                        self.rollback_candidate_probe(checkpoint);
-                        self.check_apply_callable(right, "`|*>`")?
-                    }
-                }
-            }
-        } else {
-            self.check_apply_callable(right, "`|*>`")?
-        };
-        let (rhs_in, rhs_out) =
-            self.unary_function_parts(&typed_right.ty, "`|*>`", &typed_right.span)?;
-        if !allow_contextual_map_output {
-            self.ensure_plain_map_output(&rhs_out, "`|*>`", &typed_right.span)?;
-        }
-
-        match &receiver_ty {
-            Ty::Result(ok, _) => {
-                if !self.callable_accepts_input(&rhs_in, ok.as_ref()) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`|*>` type mismatch: expected {}, got {}",
-                            self.ty_name(ok.as_ref()),
-                            self.ty_name(&rhs_in)
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`|*>`",
-                            "LHS: Functor container such as Result<A>, List<A>, or Option<A>; RHS: (A -> B); result: mapped container",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            None,
-                        )),
-                    });
-                }
-            }
-            Ty::List(item) => {
-                if !self.callable_accepts_input(&rhs_in, item.as_ref()) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`|*>` type mismatch: expected {}, got {}",
-                            self.ty_name(item.as_ref()),
-                            self.ty_name(&rhs_in)
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`|*>`",
-                            "LHS: Functor container such as Result<A>, List<A>, or Option<A>; RHS: (A -> B); result: mapped container",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            None,
-                        )),
-                    });
-                }
-            }
-            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
-                if !self.callable_accepts_input(&rhs_in, &args[0]) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`|*>` type mismatch: expected {}, got {}",
-                            self.ty_name(&args[0]),
-                            self.ty_name(&rhs_in)
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`|*>`",
-                            "LHS: Functor container such as Result<A>, List<A>, or Option<A>; RHS: (A -> B); result: mapped container",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            None,
-                        )),
-                    });
-                }
-            }
-            _ => {}
-        }
-
-        let functor_trait = self
-            .trait_key_by_short_name("Functor")
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: "Unknown trait: Functor".into(),
-                span: span.clone(),
-                hint: None,
-            })?;
-        if let Ty::SelfApp(items) = &receiver_ty {
-            if let Some((witness, [input])) = Self::constructor_application_parts(items) {
-                if !self.callable_accepts_input(&rhs_in, input) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`|*>` type mismatch: expected {}, got {}",
-                            self.ty_name(input),
-                            self.ty_name(&rhs_in)
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: None,
-                    });
-                }
-                return Ok(TypedNode {
-                    ty: Ty::SelfApp(vec![Ty::Hole, witness.clone(), rhs_out.clone()]),
-                    span: span.clone(),
-                    node: TypedInner::TraitCall {
-                        trait_name: functor_trait.clone(),
-                        method_name: "fmap".into(),
-                        receiver_ty: receiver_ty.clone(),
-                        obligation: TraitObligation {
-                            trait_id: functor_trait,
-                            trait_args: Vec::new(),
-                            receiver: receiver_ty.clone(),
-                        },
-                        dispatch: TraitDispatch::Pending,
-                        origin: TraitCallOrigin::Operator {
-                            op: OperatorTraitOp::PipeMap,
-                            lhs_ty: receiver_ty,
-                            rhs_ty: self.resolve_ty(&typed_right.ty),
-                        },
-                        args: vec![typed_left, typed_right],
-                    },
-                });
-            }
-        }
-        let Some((dispatch, result_ty)) = self.constructor_functor_dispatch(
-            &functor_trait,
+        self.check_operator_invocation(
+            span,
+            "Functor",
             "fmap",
-            &receiver_ty,
-            &rhs_in,
-            &rhs_out,
-        )?
-        else {
-            let functor_summary = self.trait_implementation_summary("Functor");
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "`|*>` requires Functor implementation on the left, got {}",
-                    self.ty_name(&receiver_ty)
-                ),
-                span: typed_left.span.clone(),
-                hint: Some(self.operator_rule_hint(
-                    "`|*>`",
-                    "LHS: Functor container such as Result<A>, List<A>, or Option<A>; RHS: (A -> B); result: mapped container",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    Some(format!(
-                        "{} The evaluated LHS is {}.",
-                        functor_summary,
-                        self.ty_name(&receiver_ty),
-                    )),
-                )),
-            });
-        };
-        Ok(TypedNode {
-            ty: result_ty,
-            span: span.clone(),
-            node: TypedInner::TraitCall {
-                trait_name: functor_trait.clone(),
-                method_name: "fmap".into(),
-                receiver_ty: receiver_ty.clone(),
-                obligation: TraitObligation {
-                    trait_id: functor_trait,
-                    trait_args: Vec::new(),
-                    receiver: receiver_ty.clone(),
-                },
-                dispatch,
-                origin: TraitCallOrigin::Operator {
-                    op: OperatorTraitOp::PipeMap,
-                    lhs_ty: receiver_ty,
-                    rhs_ty: self.resolve_ty(&typed_right.ty),
-                },
-                args: vec![typed_left, typed_right],
-            },
-        })
+            OperatorTraitOp::PipeMap,
+            "|*>",
+            left,
+            right,
+            expected,
+        )
     }
 
     pub(super) fn check_context_bind(
@@ -5845,242 +5274,153 @@ impl Checker {
         self.check_context_bind_with_expected(span, left, right, None)
     }
 
-    /// Try the reverse direction for a constructor helper such as
-    /// `Monad::return(1)`.  The helper has no concrete receiver argument, so
-    /// its `Self` can only be selected after the contextual RHS is inspected.
-    /// Candidate probing is deliberately generic over Monad impl targets; the
-    /// same pattern can later be reused by other contextual operators.
-    fn try_check_context_bind_from_constructor(
+    /// A receiverless constructor helper exposes its mapped input through its
+    /// signature. Probe each carrier with the complete invocation constraints;
+    /// only a unique successful carrier may commit its substitutions.
+    fn try_constructor_invocation_from_arguments(
         &mut self,
         span: &Span,
-        left: &Resolved,
-        right: &Resolved,
+        trait_name: &str,
+        method_name: &str,
+        args: &[ResolvedRecordLitArg],
+        declared_params: &[Ty],
+        expected: Option<&Ty>,
+        explicit: Option<&[AstTy]>,
+        operator: Option<OperatorTraitOp>,
+        receiver_index: usize,
     ) -> Result<Option<TypedNode>, TypeError> {
-        let Resolved::App(_, func, args) = left else {
+        let ResolvedRecordLitArg::Positional(Resolved::App(_, helper, helper_args)) =
+            &args[receiver_index]
+        else {
             return Ok(None);
         };
-        let Some((_, trait_name, method_name)) = self.trait_method_ref(func) else {
+        let Some((_, helper_trait, helper_method)) = self.trait_method_ref(helper) else {
             return Ok(None);
         };
-        if !self.trait_matches_short_name(&trait_name, "Monad") || method_name != "return" {
+        let helper_info = self.traits[&helper_trait].clone();
+        let helper_method = helper_info.methods[&helper_method].clone();
+        if helper_info.constructor_slots.len() != 1 {
             return Ok(None);
         }
-        let [ResolvedRecordLitArg::Positional(value)] = args.as_slice() else {
+        let [ResolvedRecordLitArg::Positional(value)] = helper_args.as_slice() else {
             return Ok(None);
         };
+        let helper_self = self.env.fresh_tyvar();
+        let (helper_params, helper_result, _, _, _) =
+            self.resolve_trait_method_signature(&helper_info, &helper_method, &helper_self)?;
+        let (Some(parameter), Ty::SelfApp(slots)) = (helper_params.first(), &helper_result) else {
+            return Ok(None);
+        };
+        if helper_params.len() != 1 || slots.as_slice() != std::slice::from_ref(parameter) {
+            return Ok(None);
+        }
         let typed_value = self.check_node(value)?;
-        let monad_trait = self
-            .trait_key_by_short_name("Monad")
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: "Unknown trait: Monad".into(),
-                span: span.clone(),
-                hint: None,
-            })?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-
-        let candidates = self.constructor_context_candidates(&monad_trait, &value_ty);
-        let mut failures = Vec::new();
-        for context in candidates {
-            let candidate_type = self.ty_name(&context);
-            let checkpoint = self.candidate_probe_checkpoint();
-            let Some(input_ty) = self.constructor_slot_type_for(&monad_trait, &context) else {
-                self.rollback_candidate_probe(checkpoint);
-                failures.push(CandidateFailureData {
-                    candidate_type,
-                    detail: "constructor slot mapping is unavailable".into(),
-                });
-                continue;
+        let mut carrier_evidence =
+            expected.and_then(|ty| self.constructor_context_type_for(trait_name, ty, &value_ty));
+        if carrier_evidence.is_none() && Self::explicit_type_args(helper).is_some() {
+            let ResolvedRecordLitArg::Positional(receiver) = &args[receiver_index] else {
+                unreachable!()
             };
-            let next_ty = self.env.fresh_tyvar();
-            let Some(ret_ty) = self.constructor_context_type_for(&monad_trait, &context, &next_ty)
-            else {
-                self.rollback_candidate_probe(checkpoint);
-                failures.push(CandidateFailureData {
-                    candidate_type,
-                    detail: "contextual result type cannot be constructed".into(),
-                });
-                continue;
-            };
-            let contract = self.callable_contract(
-                &input_ty,
-                Some(ret_ty.clone()),
-                ExpectedCallableSlot::Contextual,
-            );
-            let typed_right = match right {
-                Resolved::InferredFacetCapture(_, _)
-                | Resolved::Capture(_, _, _)
-                | Resolved::Closure(_, _, _, _)
-                | Resolved::Grouped(_, _) => {
-                    self.check_apply_callable_with_contract(right, &contract, "`|>=`")
-                }
-                Resolved::App(call_span, rhs_func, rhs_args) => {
-                    match self.check_trait_helper_pipe_callable(
-                        call_span,
-                        rhs_func,
-                        rhs_args,
-                        contract.input.clone(),
-                        contract.ret.clone(),
-                        "`|>=`",
-                    ) {
-                        Ok(Some(typed)) => Ok(typed),
-                        Ok(None) => {
-                            let expected_callable = self.expected_callable_ty(&contract);
-                            let checkpoint = self.candidate_probe_checkpoint();
-                            match self.check_node_with_expected(right, Some(&expected_callable)) {
-                                Ok(typed) => Ok(typed),
-                                Err(expected_error) => {
-                                    self.rollback_candidate_probe(checkpoint);
-                                    match self.check_apply_callable(right, "`|>=`") {
-                                        Ok(typed) => Ok(typed),
-                                        Err(_) => Err(expected_error),
-                                    }
-                                }
-                            }
-                        }
-                        Err(error) => Err(error),
-                    }
-                }
-                Resolved::ReturnTypeArgumentApply(call_span, _, _) => {
-                    match self.check_trait_helper_pipe_callable(
-                        call_span,
-                        right,
-                        &[],
-                        contract.input.clone(),
-                        contract.ret.clone(),
-                        "`|>=`",
-                    ) {
-                        Ok(Some(typed)) => Ok(typed),
-                        Ok(None) => Err(TypeError {
-                            structured: None,
-                            message: "`|>=` requires a specialized trait helper on the right"
-                                .into(),
-                            span: call_span.clone(),
-                            hint: None,
-                        }),
-                        Err(error) => Err(error),
-                    }
-                }
-                _ => self.check_apply_callable(right, "`|>=`"),
-            };
-            let typed_right = match typed_right {
-                Ok(typed) => typed,
-                Err(error) => {
-                    self.rollback_candidate_probe(checkpoint);
-                    failures.push(CandidateFailureData {
-                        candidate_type,
-                        detail: error.message,
-                    });
+            let typed = self.check_node(receiver)?;
+            carrier_evidence = self.constructor_context_type_for(trait_name, &typed.ty, &value_ty);
+        }
+        if carrier_evidence.is_none() {
+            for (index, (argument, parameter)) in args.iter().zip(declared_params).enumerate() {
+                if index == receiver_index {
                     continue;
                 }
-            };
-            let (rhs_in, rhs_ret) =
-                match self.unary_function_parts(&typed_right.ty, "`|>=`", &typed_right.span) {
-                    Ok(parts) => parts,
-                    Err(error) => {
-                        self.rollback_candidate_probe(checkpoint);
-                        failures.push(CandidateFailureData {
-                            candidate_type,
-                            detail: error.message,
-                        });
-                        continue;
-                    }
+                let ResolvedRecordLitArg::Positional(argument) = argument else {
+                    continue;
                 };
-            if !self.callable_accepts_input(&rhs_in, &input_ty)
-                || !self.types_compatible(&rhs_ret, &ret_ty)
-            {
-                let detail = format!(
-                    "right-hand side {} does not satisfy expected ({} -> {})",
-                    self.ty_name(&typed_right.ty),
-                    self.ty_name(&input_ty),
-                    self.ty_name(&ret_ty)
-                );
-                self.rollback_candidate_probe(checkpoint);
-                failures.push(CandidateFailureData {
-                    candidate_type,
-                    detail,
-                });
-                continue;
-            }
-            let typed_left = match self.check_node_with_expected(left, Some(&context)) {
-                Ok(typed) => typed,
-                Err(error) => {
-                    self.rollback_candidate_probe(checkpoint);
-                    failures.push(CandidateFailureData {
-                        candidate_type,
-                        detail: error.message,
-                    });
-                    continue;
+                let checkpoint = self.candidate_probe_checkpoint();
+                let observed = match parameter {
+                    Ty::SelfApp(_) => self.check_node(argument).ok().map(|typed| typed.ty),
+                    Ty::Func(inputs, output)
+                        if inputs.len() == 1 && matches!(output.as_ref(), Ty::SelfApp(_)) =>
+                    {
+                        let result = self.env.fresh_tyvar();
+                        let callable = Ty::Func(vec![value_ty.clone()], Box::new(result));
+                        self.check_invocation_argument(argument, &callable, operator.clone(), index)
+                            .ok()
+                            .and_then(|typed| {
+                                self.function_parts(&typed.ty)
+                                    .map(|(_, output)| self.resolve_ty(output))
+                            })
+                    }
+                    _ => None,
+                };
+                if let Some(observed) = observed {
+                    carrier_evidence =
+                        self.constructor_context_type_for(trait_name, &observed, &value_ty);
                 }
-            };
-            let Some((dispatch, result_ty)) =
-                self.constructor_monad_dispatch(&monad_trait, &context, &rhs_in, &rhs_ret)?
-            else {
                 self.rollback_candidate_probe(checkpoint);
-                failures.push(CandidateFailureData {
-                    candidate_type,
-                    detail: "Monad::bind dispatch could not be selected".into(),
-                });
-                continue;
-            };
-            return Ok(Some(TypedNode {
-                ty: result_ty,
-                span: span.clone(),
-                node: TypedInner::TraitCall {
-                    trait_name: monad_trait.clone(),
-                    method_name: "bind".into(),
-                    receiver_ty: self.resolve_ty(&context),
-                    obligation: TraitObligation {
-                        trait_id: monad_trait,
-                        trait_args: Vec::new(),
-                        receiver: self.resolve_ty(&context),
-                    },
-                    dispatch,
-                    origin: TraitCallOrigin::Operator {
-                        op: OperatorTraitOp::PipeBind,
-                        lhs_ty: self.resolve_ty(&typed_left.ty),
-                        rhs_ty: self.resolve_ty(&typed_right.ty),
-                    },
-                    args: vec![typed_left, typed_right],
-                },
-            }));
+                if carrier_evidence.is_some() {
+                    break;
+                }
+            }
         }
-        if failures.is_empty() {
-            return Ok(None);
+        let candidates = self.constructor_context_candidates(trait_name, &value_ty)?;
+        let mut accepted = Vec::new();
+        let mut failures = Vec::new();
+        for candidate in candidates {
+            let checkpoint = self.candidate_probe_checkpoint();
+            let result = self.check_trait_invocation(
+                span,
+                trait_name,
+                method_name,
+                args,
+                None,
+                expected,
+                explicit,
+                operator.clone(),
+                Some(&candidate),
+            );
+            match result {
+                Ok(_) => accepted.push(candidate.clone()),
+                Err(error) => failures.push(CandidateFailureData {
+                    candidate_type: self.diagnostic_ty_name(&candidate),
+                    detail: error.message,
+                }),
+            }
+            self.rollback_candidate_probe(checkpoint);
         }
-        let candidate_names = failures
-            .iter()
-            .map(|failure| failure.candidate_type.clone())
-            .collect::<Vec<_>>();
-        let detail = failures
-            .iter()
-            .map(|failure| format!("{}: {}", failure.candidate_type, failure.detail))
-            .collect::<Vec<_>>()
-            .join("\n");
-        Err(TypeError {
-            structured: Some(StructuredDiagnostic {
-                reason: TypeDiagnosticReason::NoApplicableTraitImplementation,
-                origin: DiagnosticOrigin::Operator,
-                data: DiagnosticData::CandidateSelection(CandidateSelectionData {
-                    trait_name: self.trait_display_name(&monad_trait),
-                    method: "bind".into(),
-                    failures,
-                }),
-                primary: SourceFact::typed(
-                    SourceRole::LeftValue,
-                    SourceId(0),
-                    span.clone(),
-                    self.ty_name(&value_ty),
-                ),
-                related: Vec::new(),
-                remediation: Some(Remediation::Candidates {
-                    items: candidate_names,
-                }),
+        if !accepted.is_empty() && carrier_evidence.is_none() {
+            return Err(self.ambiguous_constructor_result(trait_name, method_name, span));
+        }
+        if let [candidate] = accepted.as_slice() {
+            return self
+                .check_trait_invocation(
+                    span,
+                    trait_name,
+                    method_name,
+                    args,
+                    None,
+                    expected,
+                    explicit,
+                    operator,
+                    Some(candidate),
+                )
+                .map(Some);
+        }
+        if !accepted.is_empty() {
+            return Err(self.ambiguous_constructor_result(trait_name, method_name, span));
+        }
+        Err(TypeError::from_structured(StructuredDiagnostic {
+            reason: TypeDiagnosticReason::NoApplicableTraitImplementation,
+            origin: DiagnosticOrigin::TraitCall,
+            data: DiagnosticData::CandidateSelection(CandidateSelectionData {
+                subject_type: Some(self.diagnostic_ty_name(&value_ty)),
+                trait_arguments: vec![],
+                impl_declaration: None,
+                trait_name: self.trait_display_name(trait_name),
+                method: method_name.into(),
+                failures,
             }),
-            message: "No Monad constructor candidate satisfies `|>=`".into(),
-            span: span.clone(),
-            hint: Some(detail),
-        })
+            primary: self.type_fact(SourceRole::Value, &typed_value.span, &typed_value.ty),
+            related: vec![],
+            remediation: None,
+        }))
     }
 
     fn check_context_bind_with_expected(
@@ -6088,333 +5428,123 @@ impl Checker {
         span: &Span,
         left: &Resolved,
         right: &Resolved,
-        _expected: Option<&Ty>,
+        expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        if let Some(typed) = self.try_check_context_bind_from_constructor(span, left, right)? {
-            return Ok(typed);
-        }
-        let typed_left = self.check_node(left)?;
-        let receiver_ty = self.resolve_ty(&typed_left.ty);
-        let trait_helper_contract = match &receiver_ty {
-            Ty::Result(ok, err) => {
-                let next_ok = self.env.fresh_tyvar();
-                let err_ty = self.resolve_ty(err.as_ref());
-                Some(self.callable_contract(
-                    ok.as_ref(),
-                    Some(Ty::Result(Box::new(next_ok), Box::new(err_ty))),
-                    ExpectedCallableSlot::Contextual,
-                ))
+        self.check_operator_invocation(
+            span,
+            "Monad",
+            "bind",
+            OperatorTraitOp::PipeBind,
+            "|>=",
+            left,
+            right,
+            expected,
+        )
+    }
+
+    fn prepare_composition_invocation(
+        &mut self,
+        span: &Span,
+        kind: &OperatorTraitOp,
+        left: &Resolved,
+        right: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<(Vec<TypedNode>, Vec<Ty>), TypeError> {
+        let (label, capability) = match kind {
+            OperatorTraitOp::Compose => ("Composable::compose", None),
+            OperatorTraitOp::LiftCompose => ("LiftComposable::lift_compose", Some("Functor")),
+            OperatorTraitOp::KleisliCompose => {
+                ("KleisliComposable::kleisli_compose", Some("Monad"))
             }
-            Ty::List(item) => {
-                let next_item = self.env.fresh_tyvar();
-                Some(self.callable_contract(
-                    item.as_ref(),
-                    Some(Ty::List(Box::new(next_item))),
-                    ExpectedCallableSlot::Contextual,
-                ))
-            }
-            Ty::Enum(name, args) if Self::surface_name(name) == "Option" && args.len() == 1 => {
-                let next_item = self.env.fresh_tyvar();
-                Some(self.callable_contract(
-                    &args[0],
-                    Some(Ty::Enum(name.clone(), vec![next_item])),
-                    ExpectedCallableSlot::Contextual,
-                ))
-            }
-            _ => None,
+            _ => unreachable!("composition policy"),
         };
-        let typed_right = match (right, trait_helper_contract) {
-            (
-                Resolved::InferredFacetCapture(_, _)
-                | Resolved::Capture(_, _, _)
-                | Resolved::Closure(_, _, _, _)
-                | Resolved::Grouped(_, _),
-                Some(contract),
-            ) => self.check_apply_callable_with_contract(right, &contract, "`|>=`")?,
-            (Resolved::App(call_span, func, args), Some(contract)) => {
-                if let Some(typed) = self.check_trait_helper_pipe_callable(
-                    call_span,
-                    func,
-                    args,
-                    contract.input.clone(),
-                    contract.ret.clone(),
-                    "`|>=`",
-                )? {
-                    typed
-                } else {
-                    let expected_callable = self.expected_callable_ty(&contract);
-                    let checkpoint = self.candidate_probe_checkpoint();
-                    match self.check_node_with_expected(right, Some(&expected_callable)) {
-                        Ok(typed) => typed,
-                        Err(_) => {
-                            self.rollback_candidate_probe(checkpoint);
-                            self.check_apply_callable(right, "`|>=`")?
-                        }
+        let expected_parts = self.expected_unary_function_parts(expected);
+        let expected_output = expected_parts.as_ref().map(|(_, output)| output.clone());
+        let typed_left = if let Some((input, output)) = &expected_parts {
+            let output_hint = if let Some(capability) = capability {
+                let payload = self.env.fresh_tyvar();
+                self.constructor_context_type_for(capability, output, &payload)
+            } else {
+                None
+            };
+            let contract =
+                self.callable_contract(input, output_hint, ExpectedCallableSlot::Contextual);
+            self.check_compose_callable_with_contract(left, &contract, label)?
+        } else {
+            self.check_operator_compose_callable(left, label)?
+        };
+        let (left_input, left_output) =
+            self.unary_function_parts(&typed_left.ty, label, &typed_left.span)?;
+        let input = if let Some(capability) = capability {
+            self.constructor_slot_type_for(capability, &left_output)
+                .ok_or_else(|| {
+                    let mut error = self.trait_failure(
+                        TypeDiagnosticReason::NoApplicableTraitImplementation,
+                        capability,
+                        &left_output,
+                        &typed_left.span,
+                        DiagnosticOrigin::TraitCall,
+                    );
+                    if let Some(diagnostic) = &mut error.structured {
+                        diagnostic.map_source_facts(|fact| {
+                            if fact.span == typed_left.span {
+                                fact.ty = Some(self.diagnostic_ty_name(&typed_left.ty));
+                                fact.role = SourceRole::LeftValue;
+                            }
+                        });
                     }
-                }
-            }
-            (Resolved::ReturnTypeArgumentApply(call_span, _, _), Some(contract)) => self
-                .check_trait_helper_pipe_callable(
-                    call_span,
-                    right,
-                    &[],
-                    contract.input.clone(),
-                    contract.ret.clone(),
-                    "`|>=`",
-                )?
-                .ok_or_else(|| TypeError {
-                    structured: None,
-                    message: "`|>=` requires a specialized trait helper on the right".into(),
-                    span: call_span.clone(),
-                    hint: None,
-                })?,
-            _ => self.check_apply_callable(right, "`|>=`")?,
+                    error
+                })?
+        } else {
+            left_output.clone()
         };
-        let (rhs_in, rhs_ret) =
-            self.unary_function_parts(&typed_right.ty, "`|>=`", &typed_right.span)?;
-
-        let is_option_ctx =
-            |ty: &Ty| matches!(ty, Ty::Enum(name, _) if Self::surface_name(name) == "Option");
-        match (&receiver_ty, self.resolve_ty(&rhs_ret)) {
-            (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
-                if !self.callable_accepts_input(&rhs_in, ok.as_ref())
-                    || !self.types_compatible(err.as_ref(), next_err.as_ref())
-                {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "`|>=` requires matching Result context on both sides".into(),
-                        span: span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`|>=`",
-                            "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            Some(format!(
-                                "LHS Ok type is {}; RHS input is {}; RHS returns Result<{}>. Error types must match. Use `|*>` when the RHS is a plain function and you only want to map over a Result.",
-                                self.ty_name(ok.as_ref()),
-                                self.ty_name(&rhs_in),
-                                self.ty_name(next_ok.as_ref())
-                            )),
-                        )),
-                    });
-                }
-            }
-            (Ty::List(item), Ty::List(_)) => {
-                if !self.callable_accepts_input(&rhs_in, item.as_ref()) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`|>=` type mismatch: expected {}, got {}",
-                            self.ty_name(item.as_ref()),
-                            self.ty_name(&rhs_in)
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`|>=`",
-                            "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List/Option.".into()),
-                        )),
-                    });
-                }
-            }
-            (Ty::Enum(name, args), Ty::Enum(next_name, _))
-                if Self::surface_name(&name) == "Option"
-                    && args.len() == 1
-                    && Self::surface_name(&next_name) == "Option" =>
-            {
-                if !self.callable_accepts_input(&rhs_in, &args[0]) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`|>=` type mismatch: expected {}, got {}",
-                            self.ty_name(&args[0]),
-                            self.ty_name(&rhs_in)
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`|>=`",
-                            "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            Some("Use `|*>` when the RHS is a plain function and you only want to map over a Result/List/Option.".into()),
-                        )),
-                    });
-                }
-            }
-            (lhs_ctx, Ty::Result(_, _)) if is_option_ctx(lhs_ctx) => {
-                return Err(TypeError {
-                    structured: None,
-                    message: "`|>=` cannot use Option as a standard failure container for Result bind"
-                        .into(),
-                    span: span.clone(),
-                    hint: Some(self.operator_rule_hint(
-                        "`|>=`",
-                        "LHS: Option<A>; RHS: (A -> Result<B, E>); Option is not the standard failure container for this bind",
-                        &typed_left.ty,
-                        &typed_right.ty,
-                        Some(
-                            "Option is not standard for failure propagation. Convert explicitly with `from::<Result>(value)` before using `|>=`, for example `from::<Result>(option_value) |>= rhs()`.".into(),
-                        ),
-                    )),
-                });
-            }
-            (Ty::Result(_, _), rhs_ctx) if is_option_ctx(&rhs_ctx) => {
-                return Err(TypeError {
-                    structured: None,
-                    message: "`|>=` cannot switch from Result into Option bind context".into(),
-                    span: span.clone(),
-                    hint: Some(self.operator_rule_hint(
-                        "`|>=`",
-                        "LHS: Result<A, E>; RHS: (A -> Option<B>); Option is not the standard failure container for this bind",
-                        &typed_left.ty,
-                        &typed_right.ty,
-                        Some(
-                            "Option is not standard for failure propagation. Convert the RHS explicitly to Result with `from::<Result>(value)` around the Option result, for example `result_value |>= {|value| from::<Result>(option_rhs(value))}`.".into(),
-                        ),
-                    )),
-                });
-            }
-            (lhs_ctx, rhs_ctx)
-                if (matches!(lhs_ctx, Ty::Result(_, _))
-                    && (matches!(rhs_ctx, Ty::List(_)) || is_option_ctx(&rhs_ctx)))
-                    || (matches!(lhs_ctx, Ty::List(_))
-                        && (matches!(rhs_ctx, Ty::Result(_, _)) || is_option_ctx(&rhs_ctx)))
-                    || (is_option_ctx(lhs_ctx)
-                        && (matches!(rhs_ctx, Ty::Result(_, _))
-                            || matches!(rhs_ctx, Ty::List(_)))) =>
-            {
-                return Err(TypeError {
-                structured: None,
-                message: "`|>=` container context mismatch: cannot mix Result, List, and Option context"
-                    .into(),
-                span: span.clone(),
-                hint: Some(self.operator_rule_hint(
-                    "`|>=`",
-                    "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    Some("Result, List, and Option containers cannot be mixed in one bind operator.".into()),
-                )),
-                });
-            }
-            (Ty::Result(_, _), rhs_plain) => {
-                return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "`|>=` requires the right-hand side to return Result, got {}",
-                    self.ty_name(&rhs_plain)
-                ),
-                span: typed_right.span.clone(),
-                hint: Some(self.operator_rule_hint(
-                    "`|>=`",
-                    "LHS: Result<A, E>; RHS: (A -> Result<B, E>); result: Result<B, E>",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    Some(format!(
-                        "RHS returns plain {}. Use `|*>` when the RHS is a plain function and you want to keep the Result context.",
-                        self.ty_name(&rhs_plain)
-                    )),
-                )),
-                });
-            }
-            (Ty::List(_), rhs_plain) => {
-                return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "`|>=` requires the right-hand side to return List, got {}",
-                    self.ty_name(&rhs_plain)
-                ),
-                span: typed_right.span.clone(),
-                hint: Some(self.operator_rule_hint(
-                    "`|>=`",
-                    "LHS: List<A>; RHS: (A -> List<B>); result: List<B>",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    Some(format!(
-                        "RHS returns plain {}. Use `|*>` when the RHS is a plain function and you want to keep the List context.",
-                        self.ty_name(&rhs_plain)
-                    )),
-                )),
-                });
-            }
-            (Ty::Enum(name, _), rhs_plain) if Self::surface_name(&name) == "Option" => {
-                return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "`|>=` requires the right-hand side to return Option, got {}",
-                    self.ty_name(&rhs_plain)
-                ),
-                span: typed_right.span.clone(),
-                hint: Some(self.operator_rule_hint(
-                    "`|>=`",
-                    "LHS: Option<A>; RHS: (A -> Option<B>); result: Option<B>",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    Some(format!(
-                        "RHS returns plain {}. Use `|*>` when the RHS is a plain function and you want to keep the Option context.",
-                        self.ty_name(&rhs_plain)
-                    )),
-                )),
-                });
-            }
-            _ => {}
-        }
-
-        let monad_trait = self
-            .trait_key_by_short_name("Monad")
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: "Unknown trait: Monad".into(),
-                span: span.clone(),
-                hint: None,
-            })?;
-        let Some((dispatch, result_ty)) =
-            self.constructor_monad_dispatch(&monad_trait, &receiver_ty, &rhs_in, &rhs_ret)?
-        else {
-            let monad_summary = self.trait_implementation_summary("Monad");
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "`|>=` requires Monad implementation on the left, got {}",
-                    self.ty_name(&receiver_ty)
-                ),
-                span: typed_left.span.clone(),
-                hint: Some(self.operator_rule_hint(
-                    "`|>=`",
-                    "LHS: Monad container such as Result<A>, List<A>, or Option<A>; RHS: contextual function; result: same context family",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    Some(format!(
-                        "{} The evaluated LHS is {}. Use `|*>` after a contextual value when the RHS is plain.",
-                        monad_summary,
-                        self.ty_name(&receiver_ty)
-                    )),
-                )),
-            });
+        let result_payload = self.env.fresh_tyvar();
+        let result_context = if matches!(kind, OperatorTraitOp::KleisliCompose) {
+            Some(
+                self.constructor_context_type_for("Monad", &left_output, &result_payload)
+                    .ok_or_else(|| {
+                        TypeError::new("Monad result projection is unavailable", span.clone())
+                    })?,
+            )
+        } else {
+            None
         };
-        Ok(TypedNode {
-            ty: result_ty,
-            span: span.clone(),
-            node: TypedInner::TraitCall {
-                trait_name: monad_trait.clone(),
-                method_name: "bind".into(),
-                receiver_ty: receiver_ty.clone(),
-                obligation: TraitObligation {
-                    trait_id: monad_trait,
-                    trait_args: Vec::new(),
-                    receiver: receiver_ty.clone(),
-                },
-                dispatch,
-                origin: TraitCallOrigin::Operator {
-                    op: OperatorTraitOp::PipeBind,
-                    lhs_ty: receiver_ty,
-                    rhs_ty: self.resolve_ty(&typed_right.ty),
-                },
-                args: vec![typed_left, typed_right],
-            },
-        })
+        let output_hint = match kind {
+            OperatorTraitOp::Compose => expected_output.clone(),
+            OperatorTraitOp::LiftCompose => expected_output
+                .as_ref()
+                .and_then(|ty| self.constructor_slot_type_for("Functor", ty)),
+            OperatorTraitOp::KleisliCompose => {
+                expected_output.clone().or_else(|| result_context.clone())
+            }
+            _ => unreachable!(),
+        };
+        let contract =
+            self.callable_contract(&input, output_hint, ExpectedCallableSlot::Contextual);
+        let typed_right = self.check_compose_callable_with_contract(right, &contract, label)?;
+        let (_, right_output) =
+            self.unary_function_parts(&typed_right.ty, label, &typed_right.span)?;
+        let trait_args = match kind {
+            OperatorTraitOp::Compose => vec![left_input, left_output, right_output],
+            OperatorTraitOp::LiftCompose => {
+                if expected_output.is_none() {
+                    self.ensure_plain_map_output(&right_output, label, &typed_right)?;
+                }
+                let mapped = self
+                    .constructor_context_type_for("Functor", &left_output, &right_output)
+                    .ok_or_else(|| {
+                        TypeError::new("Functor result projection is unavailable", span.clone())
+                    })?;
+                vec![left_input, input, right_output, mapped]
+            }
+            OperatorTraitOp::KleisliCompose => vec![
+                left_input,
+                input,
+                result_context.expect("Kleisli contextual result"),
+            ],
+            _ => unreachable!(),
+        };
+        Ok((vec![typed_left, typed_right], trait_args))
     }
 
     pub(super) fn check_compose(
@@ -6433,69 +5563,15 @@ impl Checker {
         right: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let expected_parts = self.expected_unary_function_parts(expected);
-        let typed_left = if let Some((expected_in, _)) = &expected_parts {
-            let contract = self.callable_contract(expected_in, None, ExpectedCallableSlot::Plain);
-            self.check_compose_callable_with_contract(left, &contract, "`>>`")?
-        } else {
-            self.check_operator_compose_callable(left, "`>>`")?
-        };
-        let (left_in, left_out) =
-            self.unary_function_parts(&typed_left.ty, "`>>`", &typed_left.span)?;
-        let right_ret_expected = expected_parts.map(|(_, ret)| ret);
-        let right_contract =
-            self.callable_contract(&left_out, right_ret_expected, ExpectedCallableSlot::Plain);
-        let typed_right =
-            self.check_compose_callable_with_contract(right, &right_contract, "`>>`")?;
-        let (right_in, right_out) =
-            self.unary_function_parts(&typed_right.ty, "`>>`", &typed_right.span)?;
-        if !self.callable_accepts_input(&right_in, &left_out) {
-            let extra = match self.resolve_ty(&left_out) {
-                Ty::Result(ok, _) if self.resolve_ty(ok.as_ref()) == self.resolve_ty(&right_in) => {
-                    Some(format!(
-                        "`>>` is plain composition, so it passes the whole Result<{}> onward. Use `>*` to compose a plain RHS over the Ok value.",
-                        self.ty_name(ok.as_ref())
-                    ))
-                }
-                _ => None,
-            };
-            return Err(TypeError {
-                structured: None,
-                message: "`>>` requires the left output type to match the right input type".into(),
-                span: span.clone(),
-                hint: Some(self.operator_rule_hint(
-                    "`>>`",
-                    "LHS: (A -> B); RHS: (B -> C); result: (A -> C)",
-                    &typed_left.ty,
-                    &typed_right.ty,
-                    Some(format!(
-                        "Left output is {}; right input is {}.{}",
-                        self.ty_name(&left_out),
-                        self.ty_name(&right_in),
-                        extra.map(|msg| format!(" {}", msg)).unwrap_or_default()
-                    )),
-                )),
-            });
-        }
-        let result_ty = Ty::Func(
-            vec![self.resolve_ty(&left_in)],
-            Box::new(self.resolve_ty(&right_out)),
-        );
-        let receiver_ty = self.resolve_ty(&typed_left.ty);
-        self.flow_operator_trait_call(
+        self.check_operator_invocation(
             span,
             "Composable",
             "compose",
-            &receiver_ty,
-            vec![
-                self.resolve_ty(&left_in),
-                self.resolve_ty(&left_out),
-                self.resolve_ty(&right_out),
-            ],
             OperatorTraitOp::Compose,
-            vec![typed_left, typed_right],
-            result_ty,
-            "`>>`",
+            ">>",
+            left,
+            right,
+            expected,
         )
     }
 
@@ -6515,243 +5591,16 @@ impl Checker {
         right: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let expected_parts = self.expected_unary_function_parts(expected);
-        let expected_ret = expected_parts.as_ref().map(|(_, ret)| ret.clone());
-        let typed_left = if let Some((expected_in, expected_ret)) = &expected_parts {
-            let left_context_ret = match self.resolve_ty(expected_ret) {
-                Ty::Result(_, err) => Some(Ty::Result(
-                    Box::new(self.env.fresh_tyvar()),
-                    Box::new(self.resolve_ty(err.as_ref())),
-                )),
-                Ty::List(_) => Some(Ty::List(Box::new(self.env.fresh_tyvar()))),
-                Ty::Enum(name, args)
-                    if Self::surface_name(&name) == "Option" && args.len() == 1 =>
-                {
-                    Some(Ty::Enum(name, vec![self.env.fresh_tyvar()]))
-                }
-                _ => None,
-            };
-            if let Some(left_ret) = left_context_ret {
-                let contract = self.callable_contract(
-                    expected_in,
-                    Some(left_ret),
-                    ExpectedCallableSlot::Contextual,
-                );
-                self.check_compose_callable_with_contract(left, &contract, "`>*`")?
-            } else {
-                self.check_operator_compose_callable(left, "`>*`")?
-            }
-        } else {
-            self.check_operator_compose_callable(left, "`>*`")?
-        };
-        let (left_in, left_out) =
-            self.unary_function_parts(&typed_left.ty, "`>*`", &typed_left.span)?;
-        let rhs_input_hint = match self.resolve_ty(&left_out) {
-            Ty::Result(ok, _) => Some(self.resolve_ty(ok.as_ref())),
-            Ty::List(item) => Some(self.resolve_ty(item.as_ref())),
-            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
-                Some(self.resolve_ty(&args[0]))
-            }
-            _ => None,
-        };
-        let mut allow_contextual_lift_output = false;
-        let typed_right = if let Some(rhs_in) = &rhs_input_hint {
-            let rhs_ret_expected = expected_ret.as_ref().and_then(|ret| {
-                let payload = self.context_payload_ty(ret)?;
-                allow_contextual_lift_output = matches!(self.resolve_ty(&payload), Ty::Result(_, _) | Ty::List(_))
-                    || matches!(self.resolve_ty(&payload), Ty::Enum(name, _) if Self::surface_name(&name) == "Option");
-                Some(payload)
-            });
-            let contract =
-                self.callable_contract(rhs_in, rhs_ret_expected, ExpectedCallableSlot::Plain);
-            self.check_compose_callable_with_contract(right, &contract, "`>*`")?
-        } else {
-            self.check_operator_compose_callable(right, "`>*`")?
-        };
-        let (right_in, right_out) =
-            self.unary_function_parts(&typed_right.ty, "`>*`", &typed_right.span)?;
-        if !allow_contextual_lift_output {
-            self.ensure_plain_map_output(&right_out, "`>*`", &typed_right.span)?;
-        }
-        match self.resolve_ty(&left_out) {
-            Ty::Result(ok, err) => {
-                if !self.callable_accepts_input(&right_in, ok.as_ref()) {
-                    return Err(TypeError {
-                        structured: None,
-                        message:
-                            "`>*` requires the left contextual output to match the right input type"
-                                .into(),
-                        span: span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`>*`",
-                            "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>)",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            Some(format!(
-                                "Left contextual output is Result<{}>; right input is {}.",
-                                self.ty_name(ok.as_ref()),
-                                self.ty_name(&right_in)
-                            )),
-                        )),
-                    });
-                }
-                let mapped_ty = Ty::Result(
-                    Box::new(self.resolve_ty(&right_out)),
-                    Box::new(self.resolve_ty(err.as_ref())),
-                );
-                let result_ty =
-                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(mapped_ty.clone()));
-                let receiver_ty = self.resolve_ty(&typed_left.ty);
-                self.flow_operator_trait_call(
-                    span,
-                    "LiftComposable",
-                    "lift_compose",
-                    &receiver_ty,
-                    vec![
-                        self.resolve_ty(&left_in),
-                        self.resolve_ty(ok.as_ref()),
-                        self.resolve_ty(&right_out),
-                        mapped_ty,
-                    ],
-                    OperatorTraitOp::LiftCompose,
-                    vec![typed_left, typed_right],
-                    result_ty,
-                    "`>*`",
-                )
-            }
-            Ty::List(item) => {
-                if !self.callable_accepts_input(&right_in, item.as_ref()) {
-                    return Err(TypeError {
-                        structured: None,
-                        message:
-                            "`>*` requires the left contextual output to match the right input type"
-                                .into(),
-                        span: span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`>*`",
-                            "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>)",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            Some(format!(
-                                "Left contextual output is List<{}>; right input is {}.",
-                                self.ty_name(item.as_ref()),
-                                self.ty_name(&right_in)
-                            )),
-                        )),
-                    });
-                }
-                let mapped_ty = Ty::List(Box::new(self.resolve_ty(&right_out)));
-                let result_ty =
-                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(mapped_ty.clone()));
-                let receiver_ty = self.resolve_ty(&typed_left.ty);
-                self.flow_operator_trait_call(
-                    span,
-                    "LiftComposable",
-                    "lift_compose",
-                    &receiver_ty,
-                    vec![
-                        self.resolve_ty(&left_in),
-                        self.resolve_ty(item.as_ref()),
-                        self.resolve_ty(&right_out),
-                        mapped_ty,
-                    ],
-                    OperatorTraitOp::LiftCompose,
-                    vec![typed_left, typed_right],
-                    result_ty,
-                    "`>*`",
-                )
-            }
-            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
-                if !self.callable_accepts_input(&right_in, &args[0]) {
-                    return Err(TypeError {
-                        structured: None,
-                        message:
-                            "`>*` requires the left contextual output to match the right input type"
-                                .into(),
-                        span: span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`>*`",
-                            "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            Some(format!(
-                                "Left contextual output is Option<{}>; right input is {}.",
-                                self.ty_name(&args[0]),
-                                self.ty_name(&right_in)
-                            )),
-                        )),
-                    });
-                }
-                let mapped_ty = Ty::Enum(name, vec![self.resolve_ty(&right_out)]);
-                let result_ty =
-                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(mapped_ty.clone()));
-                let receiver_ty = self.resolve_ty(&typed_left.ty);
-                self.flow_operator_trait_call(
-                    span,
-                    "LiftComposable",
-                    "lift_compose",
-                    &receiver_ty,
-                    vec![
-                        self.resolve_ty(&left_in),
-                        self.resolve_ty(&args[0]),
-                        self.resolve_ty(&right_out),
-                        mapped_ty,
-                    ],
-                    OperatorTraitOp::LiftCompose,
-                    vec![typed_left, typed_right],
-                    result_ty,
-                    "`>*`",
-                )
-            }
-            _ => {
-                let mapped_ty = match self.trait_key_by_short_name("Functor") {
-                    Some(functor) => {
-                        match self.constructor_context_type_for(&functor, &left_out, &right_out) {
-                            Some(mapped) => mapped,
-                            None => self.env.fresh_tyvar(),
-                        }
-                    }
-                    None => self.env.fresh_tyvar(),
-                };
-                let result_ty =
-                    Ty::Func(vec![self.resolve_ty(&left_in)], Box::new(mapped_ty.clone()));
-                let receiver_ty = self.resolve_ty(&typed_left.ty);
-                self.flow_operator_trait_call(
-                    span,
-                    "LiftComposable",
-                    "lift_compose",
-                    &receiver_ty,
-                    vec![
-                        self.resolve_ty(&left_in),
-                        self.resolve_ty(&right_in),
-                        self.resolve_ty(&right_out),
-                        mapped_ty,
-                    ],
-                    OperatorTraitOp::LiftCompose,
-                    vec![typed_left.clone(), typed_right.clone()],
-                    result_ty,
-                    "`>*`",
-                )
-                .or_else(|_| {
-                    Err(TypeError {
-                        structured: None,
-                        message: "`>*` requires Result, List, or Option on the left-hand side"
-                            .into(),
-                        span: span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`>*`",
-                            "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> C); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            Some(format!(
-                                "The left callable returns {}, so no Result/List/Option container is available at this step. Use `>>` for plain composition; use `|*>` when you already have an evaluated contextual value and want to map a plain RHS over it.",
-                                self.ty_name(&left_out)
-                            )),
-                        )),
-                    })
-                })
-            }
-        }
+        self.check_operator_invocation(
+            span,
+            "LiftComposable",
+            "lift_compose",
+            OperatorTraitOp::LiftCompose,
+            ">*",
+            left,
+            right,
+            expected,
+        )
     }
 
     pub(super) fn check_kleisli_compose(
@@ -6770,250 +5619,16 @@ impl Checker {
         right: &Resolved,
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        let expected_parts = self.expected_unary_function_parts(expected);
-        let expected_ret = expected_parts.as_ref().map(|(_, ret)| ret.clone());
-        let typed_left = if let Some((expected_in, expected_ret)) = &expected_parts {
-            let left_context_ret = match self.resolve_ty(expected_ret) {
-                Ty::Result(_, err) => Some(Ty::Result(
-                    Box::new(self.env.fresh_tyvar()),
-                    Box::new(self.resolve_ty(err.as_ref())),
-                )),
-                Ty::List(_) => Some(Ty::List(Box::new(self.env.fresh_tyvar()))),
-                Ty::Enum(name, args)
-                    if Self::surface_name(&name) == "Option" && args.len() == 1 =>
-                {
-                    Some(Ty::Enum(name, vec![self.env.fresh_tyvar()]))
-                }
-                _ => None,
-            };
-            if let Some(left_ret) = left_context_ret {
-                let contract = self.callable_contract(
-                    expected_in,
-                    Some(left_ret),
-                    ExpectedCallableSlot::Contextual,
-                );
-                self.check_compose_callable_with_contract(left, &contract, "`>=>`")?
-            } else {
-                self.check_operator_compose_callable(left, "`>=>`")?
-            }
-        } else {
-            self.check_operator_compose_callable(left, "`>=>`")?
-        };
-        let (left_in, left_out) =
-            self.unary_function_parts(&typed_left.ty, "`>=>`", &typed_left.span)?;
-        let rhs_input_hint = match self.resolve_ty(&left_out) {
-            Ty::Result(ok, _) => Some(self.resolve_ty(ok.as_ref())),
-            Ty::List(item) => Some(self.resolve_ty(item.as_ref())),
-            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
-                Some(self.resolve_ty(&args[0]))
-            }
-            _ => None,
-        };
-        let typed_right = if let Some(rhs_in) = &rhs_input_hint {
-            let rhs_ret_expected =
-                expected_ret
-                    .clone()
-                    .or_else(|| match self.resolve_ty(&left_out) {
-                        Ty::Result(_, err) => Some(Ty::Result(
-                            Box::new(self.env.fresh_tyvar()),
-                            Box::new(self.resolve_ty(err.as_ref())),
-                        )),
-                        Ty::List(_) => Some(Ty::List(Box::new(self.env.fresh_tyvar()))),
-                        Ty::Enum(name, args)
-                            if Self::surface_name(&name) == "Option" && args.len() == 1 =>
-                        {
-                            Some(Ty::Enum(name, vec![self.env.fresh_tyvar()]))
-                        }
-                        _ => None,
-                    });
-            let contract =
-                self.callable_contract(rhs_in, rhs_ret_expected, ExpectedCallableSlot::Contextual);
-            self.check_compose_callable_with_contract(right, &contract, "`>=>`")?
-        } else {
-            self.check_operator_compose_callable(right, "`>=>`")?
-        };
-        let (right_in, right_out) =
-            self.unary_function_parts(&typed_right.ty, "`>=>`", &typed_right.span)?;
-        match (self.resolve_ty(&left_out), self.resolve_ty(&right_out)) {
-            (Ty::Result(ok, err), Ty::Result(next_ok, next_err)) => {
-                if !self.callable_accepts_input(&right_in, ok.as_ref())
-                    || !self.types_compatible(err.as_ref(), next_err.as_ref())
-                {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "`>=>` requires matching Result context on both sides".into(),
-                        span: span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`>=>`",
-                            "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> Result<C, E>) or (B -> List<C>); result: (A -> Result<C, E>) or (A -> List<C>)",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            Some(format!(
-                                "Left output is Result<{}>; right input is {}; error types must match. Use `>*` when the RHS is plain.",
-                                self.ty_name(ok.as_ref()),
-                                self.ty_name(&right_in)
-                            )),
-                        )),
-                    });
-                }
-                let chained_ty = Ty::Result(
-                    Box::new(self.resolve_ty(next_ok.as_ref())),
-                    Box::new(self.resolve_ty(err.as_ref())),
-                );
-                let result_ty = Ty::Func(
-                    vec![self.resolve_ty(&left_in)],
-                    Box::new(chained_ty.clone()),
-                );
-                let receiver_ty = self.resolve_ty(&typed_left.ty);
-                self.flow_operator_trait_call(
-                    span,
-                    "KleisliComposable",
-                    "kleisli_compose",
-                    &receiver_ty,
-                    vec![
-                        self.resolve_ty(&left_in),
-                        self.resolve_ty(ok.as_ref()),
-                        chained_ty,
-                    ],
-                    OperatorTraitOp::KleisliCompose,
-                    vec![typed_left, typed_right],
-                    result_ty,
-                    "`>=>`",
-                )
-            }
-            (Ty::List(item), Ty::List(next_item)) => {
-                if !self.callable_accepts_input(&right_in, item.as_ref()) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "`>=>` requires matching List element types across both sides"
-                            .into(),
-                        span: span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`>=>`",
-                            "LHS: (A -> Result<B, E>) or (A -> List<B>); RHS: (B -> Result<C, E>) or (B -> List<C>); result: (A -> Result<C, E>) or (A -> List<C>)",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            Some(format!(
-                                "Left output is List<{}>; right input is {}.",
-                                self.ty_name(item.as_ref()),
-                                self.ty_name(&right_in)
-                            )),
-                        )),
-                    });
-                }
-                let chained_ty = Ty::List(Box::new(self.resolve_ty(next_item.as_ref())));
-                let result_ty = Ty::Func(
-                    vec![self.resolve_ty(&left_in)],
-                    Box::new(chained_ty.clone()),
-                );
-                let receiver_ty = self.resolve_ty(&typed_left.ty);
-                self.flow_operator_trait_call(
-                    span,
-                    "KleisliComposable",
-                    "kleisli_compose",
-                    &receiver_ty,
-                    vec![
-                        self.resolve_ty(&left_in),
-                        self.resolve_ty(item.as_ref()),
-                        chained_ty,
-                    ],
-                    OperatorTraitOp::KleisliCompose,
-                    vec![typed_left, typed_right],
-                    result_ty,
-                    "`>=>`",
-                )
-            }
-            (Ty::Enum(name, args), Ty::Enum(next_name, next_args))
-                if Self::surface_name(&name) == "Option"
-                    && Self::surface_name(&next_name) == "Option"
-                    && args.len() == 1
-                    && next_args.len() == 1 =>
-            {
-                if !self.callable_accepts_input(&right_in, &args[0]) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "`>=>` requires matching Option payload types across both sides"
-                            .into(),
-                        span: span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`>=>`",
-                            "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> Result<C, E>) or (B -> List<C>) or (B -> Option<C>); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            Some(format!(
-                                "Left output is Option<{}>; right input is {}.",
-                                self.ty_name(&args[0]),
-                                self.ty_name(&right_in)
-                            )),
-                        )),
-                    });
-                }
-                let chained_ty = Ty::Enum(name, vec![self.resolve_ty(&next_args[0])]);
-                let result_ty = Ty::Func(
-                    vec![self.resolve_ty(&left_in)],
-                    Box::new(chained_ty.clone()),
-                );
-                let receiver_ty = self.resolve_ty(&typed_left.ty);
-                self.flow_operator_trait_call(
-                    span,
-                    "KleisliComposable",
-                    "kleisli_compose",
-                    &receiver_ty,
-                    vec![
-                        self.resolve_ty(&left_in),
-                        self.resolve_ty(&args[0]),
-                        chained_ty,
-                    ],
-                    OperatorTraitOp::KleisliCompose,
-                    vec![typed_left, typed_right],
-                    result_ty,
-                    "`>=>`",
-                )
-            }
-            _ => {
-                let chained_ty = self.resolve_ty(&right_out);
-                let result_ty = Ty::Func(
-                    vec![self.resolve_ty(&left_in)],
-                    Box::new(chained_ty.clone()),
-                );
-                let receiver_ty = self.resolve_ty(&typed_left.ty);
-                self.flow_operator_trait_call(
-                    span,
-                    "KleisliComposable",
-                    "kleisli_compose",
-                    &receiver_ty,
-                    vec![
-                        self.resolve_ty(&left_in),
-                        self.resolve_ty(&right_in),
-                        chained_ty,
-                    ],
-                    OperatorTraitOp::KleisliCompose,
-                    vec![typed_left.clone(), typed_right.clone()],
-                    result_ty,
-                    "`>=>`",
-                )
-                .or_else(|_| {
-                    Err(TypeError {
-                        structured: None,
-                        message:
-                            "`>=>` requires matching Result, List, or Option context on both sides"
-                                .into(),
-                        span: span.clone(),
-                        hint: Some(self.operator_rule_hint(
-                            "`>=>`",
-                            "LHS: (A -> Result<B, E>) or (A -> List<B>) or (A -> Option<B>); RHS: (B -> Result<C, E>) or (B -> List<C>) or (B -> Option<C>); result: (A -> Result<C, E>) or (A -> List<C>) or (A -> Option<C>)",
-                            &typed_left.ty,
-                            &typed_right.ty,
-                            Some(format!(
-                                "Left output is {}; right output is {}. Use `>*` when the left side is contextual but the RHS is plain; use `>>` when both sides are plain.",
-                                self.ty_name(&left_out),
-                                self.ty_name(&right_out)
-                            )),
-                        )),
-                    })
-                })
-            }
-        }
+        self.check_operator_invocation(
+            span,
+            "KleisliComposable",
+            "kleisli_compose",
+            OperatorTraitOp::KleisliCompose,
+            ">=>",
+            left,
+            right,
+            expected,
+        )
     }
 
     pub(super) fn option_variant_tags(&self, span: &Span) -> Result<(u32, u32, u32), TypeError> {
@@ -7230,7 +5845,15 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Positional(_)));
         if has_named && has_positional {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArgumentModeMismatch,
+                    callee_label,
+                    None,
+                    params.len(),
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: "Cannot mix positional and named arguments".into(),
                 span: span.clone(),
                 hint: None,
@@ -7252,31 +5875,33 @@ impl Checker {
 
         if has_named {
             let names = param_names.as_ref().ok_or_else(|| TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArgumentModeMismatch,
+                    callee_label,
+                    None,
+                    params.len(),
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: "This function value does not accept named arguments".into(),
                 span: span.clone(),
                 hint: None,
             })?;
 
-            if args.len() != params.len() {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "{} expects {} argument(s), got {}",
-                        callee_label,
-                        params.len(),
-                        args.len()
-                    ),
-                    span: span.clone(),
-                    hint: callable_hint.map(str::to_string),
-                });
-            }
-
             let mut reordered: Vec<Option<&Resolved>> = vec![None; params.len()];
             for arg in args {
                 let ResolvedRecordLitArg::Named(name, expr) = arg else {
                     return Err(TypeError {
-                        structured: None,
+                        structured: Some(self.argument_contract_diagnostic(
+                            TypeDiagnosticReason::ArgumentModeMismatch,
+                            callee_label,
+                            None,
+                            params.len(),
+                            args.len(),
+                            span,
+                            DiagnosticOrigin::Call,
+                        )),
                         message: "Cannot mix positional and named arguments".into(),
                         span: span.clone(),
                         hint: None,
@@ -7286,14 +5911,30 @@ impl Checker {
                     .iter()
                     .position(|n| n == name)
                     .ok_or_else(|| TypeError {
-                        structured: None,
+                        structured: Some(self.argument_contract_diagnostic(
+                            TypeDiagnosticReason::UnknownNamedArgument,
+                            callee_label,
+                            Some(name),
+                            params.len(),
+                            args.len(),
+                            span,
+                            DiagnosticOrigin::Call,
+                        )),
                         message: format!("Unknown argument name '{}' for function", name),
                         span: span.clone(),
                         hint: None,
                     })?;
                 if reordered[idx].is_some() {
                     return Err(TypeError {
-                        structured: None,
+                        structured: Some(self.argument_contract_diagnostic(
+                            TypeDiagnosticReason::DuplicateArgument,
+                            callee_label,
+                            Some(name),
+                            params.len(),
+                            args.len(),
+                            span,
+                            DiagnosticOrigin::Call,
+                        )),
                         message: format!("Duplicate argument '{}'", name),
                         span: span.clone(),
                         hint: None,
@@ -7304,7 +5945,15 @@ impl Checker {
 
             for (idx, expected_ty) in params.iter().enumerate() {
                 let expr = reordered[idx].ok_or_else(|| TypeError {
-                    structured: None,
+                    structured: Some(self.argument_contract_diagnostic(
+                        TypeDiagnosticReason::MissingArgument,
+                        callee_label,
+                        Some(&names[idx]),
+                        params.len(),
+                        args.len(),
+                        span,
+                        DiagnosticOrigin::Call,
+                    )),
                     message: format!("Missing argument '{}'", names[idx]),
                     span: span.clone(),
                     hint: None,
@@ -7322,16 +5971,21 @@ impl Checker {
                 };
                 self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
                 self.check_expected_constructor_capability(expected_ty, callee_label, &typed)?;
-                if !defer
-                    && !matches!(self.resolve_ty(expected_ty), Ty::Hole)
-                    && !self.types_compatible(expected_ty, &typed.ty)
-                {
-                    return Err(TypeError {
-                        structured: None,
-                        message: self.argument_type_mismatch_message(expected_ty, &typed.ty),
-                        span: typed.span.clone(),
-                        hint: callable_hint.map(str::to_string),
-                    });
+                if !defer && !matches!(self.resolve_ty(expected_ty), Ty::Hole) {
+                    self.assert_type_relation(
+                        expected_ty,
+                        &typed.ty,
+                        self.type_fact(SourceRole::Expected, span, expected_ty),
+                        self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::Call,
+                        callee_label,
+                        typed_args.len() as u32,
+                    )
+                    .map_err(|error| match callable_hint {
+                        Some(hint) => error.with_hint(hint),
+                        None => error,
+                    })?;
                 }
                 typed_args.push(typed);
             }
@@ -7340,7 +5994,15 @@ impl Checker {
 
         if args.len() != params.len() {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArityMismatch,
+                    callee_label,
+                    None,
+                    params.len(),
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: format!(
                     "{} expects {} argument(s), got {}",
                     callee_label,
@@ -7355,7 +6017,15 @@ impl Checker {
         for (expected_ty, arg) in params.iter().zip(args) {
             let ResolvedRecordLitArg::Positional(expr) = arg else {
                 return Err(TypeError {
-                    structured: None,
+                    structured: Some(self.argument_contract_diagnostic(
+                        TypeDiagnosticReason::ArgumentModeMismatch,
+                        callee_label,
+                        None,
+                        params.len(),
+                        args.len(),
+                        span,
+                        DiagnosticOrigin::Call,
+                    )),
                     message: "Cannot mix positional and named arguments".into(),
                     span: span.clone(),
                     hint: None,
@@ -7374,16 +6044,21 @@ impl Checker {
             };
             self.ensure_no_runtime_facet_value(&typed, "Function call arguments")?;
             self.check_expected_constructor_capability(expected_ty, callee_label, &typed)?;
-            if !defer
-                && !matches!(self.resolve_ty(expected_ty), Ty::Hole)
-                && !self.types_compatible(expected_ty, &typed.ty)
-            {
-                return Err(TypeError {
-                    structured: None,
-                    message: self.argument_type_mismatch_message(expected_ty, &typed.ty),
-                    span: typed.span.clone(),
-                    hint: callable_hint.map(str::to_string),
-                });
+            if !defer && !matches!(self.resolve_ty(expected_ty), Ty::Hole) {
+                self.assert_type_relation(
+                    expected_ty,
+                    &typed.ty,
+                    self.type_fact(SourceRole::Expected, span, expected_ty),
+                    self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                    TypeDiagnosticReason::ArgumentTypeMismatch,
+                    DiagnosticOrigin::Call,
+                    callee_label,
+                    typed_args.len() as u32,
+                )
+                .map_err(|error| match callable_hint {
+                    Some(hint) => error.with_hint(hint),
+                    None => error,
+                })?;
             }
             typed_args.push(typed);
         }
@@ -9431,7 +8106,7 @@ impl Checker {
         }
     }
 
-    fn ensure_no_runtime_facet_args(
+    pub(super) fn ensure_no_runtime_facet_args(
         &self,
         args: &[TypedNode],
         span: &Span,
@@ -9945,12 +8620,13 @@ impl Checker {
                         node: TypedInner::App(Box::new(typed_func), typed_args),
                     })
                 }
-                _ => Err(TypeError {
-                    structured: None,
-                    message: format!("Not a function: {}", self.ty_name(&typed_func.ty)),
-                    span: span.clone(),
-                    hint: None,
-                }),
+                _ => Err(self.callable_shape_error(
+                    &typed_func.ty,
+                    "function",
+                    &typed_func.span,
+                    None,
+                    diagnostics::CallableReturnShape::Any,
+                )),
             }
         })();
         result
@@ -9991,7 +8667,7 @@ impl Checker {
         Ok(typed_args)
     }
 
-    fn typecheck_positional_call_args(
+    pub(super) fn typecheck_positional_call_args(
         &mut self,
         span: &Span,
         callee_name: &str,
@@ -10005,7 +8681,15 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArgumentModeMismatch,
+                    callee_name,
+                    None,
+                    params.len(),
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: named_arg_error,
                 span: span.clone(),
                 hint: None,
@@ -10014,7 +8698,15 @@ impl Checker {
 
         if args.len() != params.len() {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArityMismatch,
+                    callee_name,
+                    None,
+                    params.len(),
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: format!(
                     "{} expects {} argument(s), got {}",
                     callee_name,
@@ -10043,19 +8735,22 @@ impl Checker {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        for (param, arg) in params.iter().zip(&typed_args) {
-            if !matches!(self.resolve_ty(param), Ty::Hole) && !self.types_compatible(param, &arg.ty)
-            {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Argument type mismatch: expected {}, got {}",
-                        self.ty_name(param),
-                        self.ty_name(&arg.ty)
-                    ),
-                    span: arg.span.clone(),
-                    hint: callable_hint.clone(),
-                });
+        for (ordinal, (param, arg)) in params.iter().zip(&typed_args).enumerate() {
+            if !matches!(self.resolve_ty(param), Ty::Hole) {
+                self.assert_type_relation(
+                    param,
+                    &arg.ty,
+                    self.type_fact(SourceRole::Expected, span, param),
+                    self.type_fact(SourceRole::Value, &arg.span, &arg.ty),
+                    TypeDiagnosticReason::ArgumentTypeMismatch,
+                    DiagnosticOrigin::Call,
+                    callee_name,
+                    ordinal as u32,
+                )
+                .map_err(|error| match &callable_hint {
+                    Some(hint) => error.with_hint(hint),
+                    None => error,
+                })?;
             }
         }
 
@@ -10844,29 +9539,33 @@ impl Checker {
             let param_tys = match expected {
                 Some(Ty::Func(expected_params, _)) => {
                     if expected_params.len() != params.len() {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "closure expects {} parameter(s), got {}",
-                                expected_params.len(),
-                                params.len()
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        });
+                        return Err(self.closure_arity_error(
+                            expected_params.len(),
+                            params.len(),
+                            span,
+                        ));
                     }
                     expected_params.clone()
                 }
                 Some(other) => {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Expected function type, got {}",
-                            self.diagnostic_ty_name(other)
+                    return Err(TypeError::from_structured(StructuredDiagnostic {
+                        reason: TypeDiagnosticReason::CallableShapeMismatch,
+                        origin: DiagnosticOrigin::Call,
+                        data: DiagnosticData::CallableShape(diagnostics::CallableShapeData {
+                            callable: "closure".into(),
+                            actual_type: None,
+                            expected_arity: None,
+                            actual_arity: Some(params.len() as u32),
+                            return_shape: diagnostics::CallableReturnShape::Any,
+                        }),
+                        primary: SourceFact::untyped(
+                            SourceRole::CallTarget,
+                            SourceId(0),
+                            span.clone(),
                         ),
-                        span: span.clone(),
-                        hint: None,
-                    });
+                        related: vec![self.type_fact(SourceRole::Expected, span, other)],
+                        remediation: None,
+                    }));
                 }
                 None => params
                     .iter()
@@ -10888,19 +9587,20 @@ impl Checker {
                             self.error_function_param_not_allowed_error(Self::ast_ty_span(ast_ty))
                         );
                     }
-                    if !self.types_compatible(param_ty, &annotated) {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "closure parameter `{}` expected {}, got {}",
-                                param.id.name,
-                                self.diagnostic_ty_names(&[param_ty, &annotated])[0],
-                                self.diagnostic_ty_names(&[param_ty, &annotated])[1]
-                            ),
-                            span: param.id.span.clone(),
-                            hint: None,
-                        });
-                    }
+                    self.assert_type_relation(
+                        param_ty,
+                        &annotated,
+                        self.type_fact(SourceRole::Expected, span, param_ty),
+                        self.type_fact(
+                            SourceRole::Annotation,
+                            Self::ast_ty_span(ast_ty),
+                            &annotated,
+                        ),
+                        TypeDiagnosticReason::AnnotationTypeMismatch,
+                        DiagnosticOrigin::Annotation,
+                        &param.id.name,
+                        typed_params.len() as u32,
+                    )?;
                     self.resolve_ty(&annotated)
                 } else {
                     self.resolve_ty(param_ty)
@@ -10947,10 +9647,15 @@ impl Checker {
                 && self.current_function_symbol.is_none()
                 && !self.local_callable_obligations_depend_on(&typed_body, &param_tys)
             {
-                if let Some((method_name, pending_span)) =
+                if let Some((trait_name, method_name, subject, pending_span)) =
                     self.first_pending_trait_helper(&typed_body)
                 {
-                    return Err(self.pending_trait_helper_error(method_name, pending_span));
+                    return Err(self.pending_trait_helper_error(
+                        trait_name,
+                        method_name,
+                        subject,
+                        pending_span,
+                    ));
                 }
             }
             if matches!(typed_body.ty, Ty::Facet(..)) {
@@ -10968,20 +9673,17 @@ impl Checker {
             let body_ty = self.resolve_ty(&typed_body.ty);
             if let Some(Ty::Func(_, expected_ret)) = expected {
                 let expected_ret = self.resolve_ty(expected_ret);
-                if matches!(expected_ret, Ty::Unit)
-                    && !self.types_compatible(&expected_ret, &body_ty)
-                {
-                    let err = TypeError {
-                        structured: None,
-                        message: format!(
-                            "Argument type mismatch: expected {}, got {}",
-                            self.ty_name(&expected_ret),
-                            self.ty_name(&body_ty)
-                        ),
-                        span: typed_body.span.clone(),
-                        hint: None,
-                    };
-                    return Err(err);
+                if matches!(expected_ret, Ty::Unit) {
+                    self.assert_type_relation(
+                        &expected_ret,
+                        &body_ty,
+                        self.type_fact(SourceRole::Expected, span, &expected_ret),
+                        self.type_fact(SourceRole::Value, &typed_body.span, &body_ty),
+                        TypeDiagnosticReason::ReturnTypeMismatch,
+                        DiagnosticOrigin::Return,
+                        "closure",
+                        0,
+                    )?;
                 }
             }
 
@@ -11265,15 +9967,13 @@ impl Checker {
             Ty::UserFunc { params, ret, .. } => (params.clone(), ret.as_ref().clone()),
             Ty::Func(params, ret) => (params.clone(), ret.as_ref().clone()),
             other => {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!("Not a function: {}", self.diagnostic_ty_name(other)),
-                    span: typed_target.span.clone(),
-                    hint: Some(
-                        "Capture (`&`) requires a function name, function value, or closure."
-                            .into(),
-                    ),
-                });
+                return Err(self.callable_shape_error(
+                    other,
+                    "capture",
+                    &typed_target.span,
+                    None,
+                    diagnostics::CallableReturnShape::Any,
+                ))
             }
         };
         if let Some(signature) = &capture_signature {
@@ -11333,10 +10033,23 @@ impl Checker {
                         },
                         data: DiagnosticData::ReturnTypeArgument(
                             diagnostics::ReturnTypeArgumentData {
+                                declared_origin: None,
+                                value_parameter_origin: None,
+                                return_origin: None,
+                                left_origin: None,
+                                right_origin: Some(SourceFact::typed(
+                                    SourceRole::ReturnTypeArgument,
+                                    SourceId(0),
+                                    span.clone(),
+                                    unresolved_ty.clone(),
+                                )),
+                                required_trait: None,
+                                expected_count: None,
+                                actual_count: None,
                                 callable: signature.identity.name.clone(),
-                                ordinal: slot.ordinal,
-                                expected_type: "concrete return type argument".into(),
-                                actual_type: unresolved_ty.clone(),
+                                ordinal: Some(slot.ordinal),
+                                expected_type: Some("concrete return type argument".into()),
+                                actual_type: Some(unresolved_ty.clone()),
                             },
                         ),
                         primary: SourceFact::typed(
@@ -11405,384 +10118,89 @@ impl Checker {
         left: &Resolved,
         right: &Resolved,
     ) -> Result<TypedNode, TypeError> {
+        self.check_binop_with_expected(span, op, left, right, None)
+    }
+
+    fn check_binop_with_expected(
+        &mut self,
+        span: &Span,
+        op: &BinOp,
+        left: &Resolved,
+        right: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
         if matches!(op, BinOp::Slash) {
-            return self.check_slash_compose(span, left, right);
+            return self.check_slash_compose(span, left, right, expected);
         }
 
-        let mut typed_left = self.check_node(left)?;
-        let mut typed_right = self.check_node(right)?;
-        // Constructor-style helpers such as `Monad::return` can leave a
-        // `SelfApp` result until another operand supplies the concrete type.
-        // Operators are compile-time constraints, so either operand may be
-        // used as that expected type without changing runtime evaluation order.
-        if matches!(self.resolve_ty(&typed_left.ty), Ty::SelfApp(_))
-            && !matches!(self.resolve_ty(&typed_right.ty), Ty::SelfApp(_))
-        {
-            let checkpoint = self.candidate_probe_checkpoint();
-            match self.check_node_with_expected(right, Some(&typed_left.ty)) {
-                Ok(candidate) => typed_right = candidate,
-                Err(_) => self.rollback_candidate_probe(checkpoint),
-            }
-            let checkpoint = self.candidate_probe_checkpoint();
-            match self.check_node_with_expected(left, Some(&typed_right.ty)) {
-                Ok(candidate) => typed_left = candidate,
-                Err(_) => self.rollback_candidate_probe(checkpoint),
-            }
-        } else if matches!(self.resolve_ty(&typed_right.ty), Ty::SelfApp(_))
-            && !matches!(self.resolve_ty(&typed_left.ty), Ty::SelfApp(_))
-        {
-            let checkpoint = self.candidate_probe_checkpoint();
-            match self.check_node_with_expected(right, Some(&typed_left.ty)) {
-                Ok(candidate) => typed_right = candidate,
-                Err(_) => self.rollback_candidate_probe(checkpoint),
-            }
-        }
-        let lt = self.resolve_ty(&typed_left.ty);
-        let rt = self.resolve_ty(&typed_right.ty);
-        let compatibility_checkpoint = self.substitutions.clone();
-        let compatible = self.types_compatible(&lt, &rt);
-
-        let make_trait_call = |trait_name: String,
-                               method_name: &str,
-                               receiver_ty: Ty,
-                               dispatch: TraitDispatch,
-                               result_ty: Ty,
-                               origin: TraitCallOrigin,
-                               typed_left: TypedNode,
-                               typed_right: TypedNode| {
-            TypedNode {
-                ty: result_ty,
-                span: span.clone(),
-                node: TypedInner::TraitCall {
-                    trait_name: trait_name.clone(),
-                    method_name: method_name.into(),
-                    receiver_ty: receiver_ty.clone(),
-                    obligation: TraitObligation {
-                        trait_id: trait_name,
-                        trait_args: Vec::new(),
-                        receiver: receiver_ty,
-                    },
-                    dispatch,
-                    origin,
-                    args: vec![typed_left, typed_right],
-                },
-            }
+        let (trait_short, method, token) = match op {
+            BinOp::Add => ("Add", "add", "+"),
+            BinOp::Sub => ("Sub", "sub", "-"),
+            BinOp::Mul => ("Mul", "mul", "*"),
+            BinOp::Eq => ("Eq", "eq", "=="),
+            BinOp::Neq => ("Eq", "neq", "!="),
+            BinOp::Lt => ("Compare", "lt", "<"),
+            BinOp::Lte => ("Compare", "lte", "<="),
+            BinOp::Gt => ("Compare", "gt", ">"),
+            BinOp::Gte => ("Compare", "gte", ">="),
+            BinOp::Concat => ("Concat", "concat", "++"),
+            BinOp::Choice => ("Alternative", "choose", "<|>"),
+            BinOp::Slash => return Err(Self::unsupported_binop_type_error(op, span)),
         };
-
-        match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul => {
-                let (trait_short_name, method_name, symbol) = match op {
-                    BinOp::Add => ("Add", "add", "+"),
-                    BinOp::Sub => ("Sub", "sub", "-"),
-                    BinOp::Mul => ("Mul", "mul", "*"),
-                    _ => return Err(Self::unsupported_binop_type_error(op, span)),
+        let trait_name = self
+            .trait_key_by_short_name(trait_short)
+            .ok_or_else(|| TypeError::new(format!("Unknown trait: {trait_short}"), span.clone()))?;
+        self.check_trait_method_call(
+            span,
+            &trait_name,
+            method,
+            &[
+                ResolvedRecordLitArg::Positional(left.clone()),
+                ResolvedRecordLitArg::Positional(right.clone()),
+            ],
+            None,
+            expected,
+            None,
+        )
+        .map(|mut typed| {
+            if let TypedInner::TraitCall { origin, args, .. } = &mut typed.node {
+                let comparison = match op {
+                    BinOp::Lt => Some(ComparisonOperator::Lt),
+                    BinOp::Lte => Some(ComparisonOperator::Lte),
+                    BinOp::Gt => Some(ComparisonOperator::Gt),
+                    BinOp::Gte => Some(ComparisonOperator::Gte),
+                    _ => None,
                 };
-                if !compatible {
-                    self.substitutions = compatibility_checkpoint;
-                    let summary = self.trait_implementation_summary(trait_short_name);
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`{}` requires the same type on both sides, but got {} and {}",
-                            symbol,
-                            self.ty_name(&lt),
-                            self.ty_name(&rt),
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(format!(
-                            "Operator `{:?}` requires compatible operand types. Left operand is {}, right operand is {}.\n{}",
-                            op,
-                            self.ty_name(&lt),
-                            self.ty_name(&rt),
-                            summary
-                        )),
+                if let Some(op) = comparison {
+                    *origin = TraitCallOrigin::Comparison {
+                        op,
+                        lhs_ty: args[0].ty.clone(),
+                        rhs_ty: args[1].ty.clone(),
+                    };
+                }
+            }
+            typed
+        })
+        .map_err(|mut error| {
+            if let Some(diagnostic) = &mut error.structured {
+                if diagnostic.origin == DiagnosticOrigin::TraitCall
+                    && (diagnostic.primary.span == *self.resolved_span(left)
+                        || diagnostic.primary.span == *self.resolved_span(right))
+                {
+                    diagnostic.origin = DiagnosticOrigin::Operator {
+                        operator: token.into(),
+                    };
+                    diagnostic.map_source_facts(|fact| {
+                        if fact.span == *self.resolved_span(left) {
+                            fact.role = SourceRole::LeftValue;
+                        } else if fact.span == *self.resolved_span(right) {
+                            fact.role = SourceRole::RightValue;
+                        }
                     });
                 }
-                let receiver_ty = self.resolve_ty(&lt);
-                let operator_trait =
-                    self.trait_key_by_short_name(trait_short_name)
-                        .ok_or_else(|| TypeError {
-                            structured: None,
-                            message: format!("Unknown trait: {}", trait_short_name),
-                            span: span.clone(),
-                            hint: None,
-                        })?;
-                let dispatch = self
-                    .select_method_dispatch(
-                        &operator_trait,
-                        method_name,
-                        &receiver_ty,
-                        &[],
-                        &[lt.clone(), rt.clone()],
-                        &receiver_ty,
-                    )?
-                    .ok_or_else(|| TypeError {
-                        structured: None,
-                        message: format!(
-                            "`{}` is not defined for {}",
-                            symbol,
-                            self.ty_name(&receiver_ty)
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.trait_implementation_summary(trait_short_name)),
-                    })?;
-                Ok(make_trait_call(
-                    operator_trait,
-                    method_name,
-                    receiver_ty.clone(),
-                    dispatch,
-                    receiver_ty,
-                    TraitCallOrigin::Explicit,
-                    typed_left,
-                    typed_right,
-                ))
             }
-            BinOp::Slash => Err(Self::unsupported_binop_type_error(op, span)),
-            BinOp::Choice => {
-                if !compatible {
-                    self.substitutions = compatibility_checkpoint;
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`<|>` requires the same type on both sides, but got {} and {}",
-                            self.ty_name(&lt),
-                            self.ty_name(&rt),
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.trait_implementation_summary("Alternative")),
-                    });
-                }
-                let receiver_ty = self.resolve_ty(&lt);
-                let alternative_trait =
-                    self.trait_key_by_short_name("Alternative")
-                        .ok_or_else(|| TypeError {
-                            structured: None,
-                            message: "Unknown trait: Alternative".into(),
-                            span: span.clone(),
-                            hint: None,
-                        })?;
-                let dispatch = self
-                    .select_method_dispatch(
-                        &alternative_trait,
-                        "choose",
-                        &receiver_ty,
-                        &[],
-                        &[lt.clone(), rt.clone()],
-                        &receiver_ty,
-                    )?
-                    .ok_or_else(|| TypeError {
-                        structured: None,
-                        message: format!("`<|>` is not defined for {}", self.ty_name(&receiver_ty)),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.trait_implementation_summary("Alternative")),
-                    })?;
-                Ok(make_trait_call(
-                    alternative_trait,
-                    "choose",
-                    receiver_ty.clone(),
-                    dispatch,
-                    receiver_ty,
-                    TraitCallOrigin::Explicit,
-                    typed_left,
-                    typed_right,
-                ))
-            }
-            BinOp::Eq | BinOp::Neq => {
-                if !compatible {
-                    self.substitutions = compatibility_checkpoint;
-                    let summary = self.trait_implementation_summary(match op {
-                        BinOp::Eq => "Eq",
-                        BinOp::Neq => "Neq",
-                        _ => return Err(Self::unsupported_binop_type_error(op, span)),
-                    });
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`{}` requires the same type on both sides, but got {} and {}",
-                            match op {
-                                BinOp::Eq => "==",
-                                BinOp::Neq => "!=",
-                                _ => return Err(Self::unsupported_binop_type_error(op, span)),
-                            },
-                            self.ty_name(&lt),
-                            self.ty_name(&rt),
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(summary),
-                    });
-                }
-                let receiver_ty = self.resolve_ty(&lt);
-                let (trait_short_name, method_name, symbol) = match op {
-                    BinOp::Eq => ("Eq", "eq", "=="),
-                    BinOp::Neq => ("Eq", "neq", "!="),
-                    _ => return Err(Self::unsupported_binop_type_error(op, span)),
-                };
-                let eq_trait = self
-                    .trait_key_by_short_name(trait_short_name)
-                    .ok_or_else(|| TypeError {
-                        structured: None,
-                        message: format!("Unknown trait: {}", trait_short_name),
-                        span: span.clone(),
-                        hint: None,
-                    })?;
-                let dispatch = self
-                    .select_method_dispatch(
-                        &eq_trait,
-                        method_name,
-                        &receiver_ty,
-                        &[],
-                        &[lt.clone(), rt.clone()],
-                        &Ty::Bool,
-                    )?
-                    .ok_or_else(|| TypeError {
-                        structured: None,
-                        message: format!(
-                            "`{}` is not defined for {}",
-                            symbol,
-                            self.ty_name(&receiver_ty)
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.trait_implementation_summary(trait_short_name)),
-                    })?;
-                Ok(make_trait_call(
-                    eq_trait,
-                    method_name,
-                    receiver_ty,
-                    dispatch,
-                    Ty::Bool,
-                    TraitCallOrigin::Explicit,
-                    typed_left,
-                    typed_right,
-                ))
-            }
-            BinOp::Lt | BinOp::Gt | BinOp::Lte | BinOp::Gte => {
-                if !compatible {
-                    self.substitutions = compatibility_checkpoint;
-                    let summary = self.trait_implementation_summary("Compare");
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`{}` requires the same type on both sides, but got {} and {}",
-                            match op {
-                                BinOp::Lt => "<",
-                                BinOp::Gt => ">",
-                                BinOp::Lte => "<=",
-                                BinOp::Gte => ">=",
-                                _ => return Err(Self::unsupported_binop_type_error(op, span)),
-                            },
-                            self.ty_name(&lt),
-                            self.ty_name(&rt),
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(summary),
-                    });
-                }
-                let receiver_ty = self.resolve_ty(&lt);
-                let (comparison_op, symbol) = match op {
-                    BinOp::Lt => (ComparisonOperator::Lt, "<"),
-                    BinOp::Gt => (ComparisonOperator::Gt, ">"),
-                    BinOp::Lte => (ComparisonOperator::Lte, "<="),
-                    BinOp::Gte => (ComparisonOperator::Gte, ">="),
-                    _ => return Err(Self::unsupported_binop_type_error(op, span)),
-                };
-                let method_name = match comparison_op {
-                    ComparisonOperator::Lt => "lt",
-                    ComparisonOperator::Lte => "lte",
-                    ComparisonOperator::Gt => "gt",
-                    ComparisonOperator::Gte => "gte",
-                };
-                let compare_trait =
-                    self.trait_key_by_short_name("Compare")
-                        .ok_or_else(|| TypeError {
-                            structured: None,
-                            message: "Unknown trait: Compare".into(),
-                            span: span.clone(),
-                            hint: None,
-                        })?;
-                let dispatch = self
-                    .select_method_dispatch(
-                        &compare_trait,
-                        method_name,
-                        &receiver_ty,
-                        &[],
-                        &[lt.clone(), rt.clone()],
-                        &Ty::Bool,
-                    )?
-                    .ok_or_else(|| TypeError {
-                        structured: None,
-                        message: format!(
-                            "`{}` is not defined for {}",
-                            symbol,
-                            self.ty_name(&receiver_ty)
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.trait_implementation_summary("Compare")),
-                    })?;
-                Ok(make_trait_call(
-                    compare_trait,
-                    method_name,
-                    receiver_ty,
-                    dispatch,
-                    Ty::Bool,
-                    TraitCallOrigin::Comparison {
-                        op: comparison_op,
-                        lhs_ty: self.resolve_ty(&lt),
-                        rhs_ty: self.resolve_ty(&rt),
-                    },
-                    typed_left,
-                    typed_right,
-                ))
-            }
-            BinOp::Concat => {
-                if !compatible {
-                    self.substitutions = compatibility_checkpoint;
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "++ requires (String, String), got ({}, {})",
-                            self.ty_name(&lt),
-                            self.ty_name(&rt)
-                        ),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.trait_implementation_summary("Concat")),
-                    });
-                }
-                let receiver_ty = self.resolve_ty(&lt);
-                let concat_trait =
-                    self.trait_key_by_short_name("Concat")
-                        .ok_or_else(|| TypeError {
-                            structured: None,
-                            message: "Unknown trait: Concat".into(),
-                            span: span.clone(),
-                            hint: None,
-                        })?;
-                let dispatch = self
-                    .select_method_dispatch(
-                        &concat_trait,
-                        "concat",
-                        &receiver_ty,
-                        &[],
-                        &[lt.clone(), rt.clone()],
-                        &receiver_ty,
-                    )?
-                    .ok_or_else(|| TypeError {
-                        structured: None,
-                        message: format!("`++` is not defined for {}", self.ty_name(&receiver_ty)),
-                        span: typed_right.span.clone(),
-                        hint: Some(self.trait_implementation_summary("Concat")),
-                    })?;
-                Ok(make_trait_call(
-                    concat_trait,
-                    "concat",
-                    receiver_ty.clone(),
-                    dispatch,
-                    receiver_ty,
-                    TraitCallOrigin::Explicit,
-                    typed_left,
-                    typed_right,
-                ))
-            }
-        }
+            error
+        })
     }
 
     fn check_slash_compose(
@@ -11790,6 +10208,7 @@ impl Checker {
         span: &Span,
         left: &Resolved,
         right: &Resolved,
+        expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
         let typed_left = self.check_node(left)?;
         if matches!(typed_left.ty, Ty::Facet(..)) {
@@ -11810,74 +10229,11 @@ impl Checker {
             };
         }
 
-        let typed_right = self.check_node(right)?;
-        let receiver_ty = self.resolve_ty(&typed_left.ty);
-        let rhs_ty = self.resolve_ty(&typed_right.ty);
-        let compose_trait = self
-            .trait_key_by_short_name("Compose")
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: "Unknown trait: Compose".into(),
-                span: span.clone(),
-                hint: None,
-            })?;
-        let result_ty = self.env.fresh_tyvar();
-        let Some((dispatch, resolved_trait_args)) = self.operator_trait_dispatch_for_args(
-            &compose_trait,
-            "compose",
-            &receiver_ty,
-            &[rhs_ty.clone(), result_ty.clone()],
-            &[receiver_ty.clone(), rhs_ty.clone()],
-            &result_ty,
-        )?
-        else {
-            let hint = if matches!(receiver_ty, Ty::Int | Ty::Float)
-                || matches!(rhs_ty, Ty::Int | Ty::Float)
-            {
-                Some(
-                    "Infix `/` is reserved for compose/join. Use `Int::safe_div(...)` or `Float::safe_div(...)` for division."
-                        .into(),
-                )
-            } else {
-                None
-            };
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "`/` requires Compose implementation on the left, got {} and {}",
-                    self.ty_name(&receiver_ty),
-                    self.ty_name(&rhs_ty)
-                ),
-                span: span.clone(),
-                hint,
-            });
-        };
-        let result_ty = resolved_trait_args
-            .get(1)
-            .cloned()
-            .unwrap_or_else(|| self.resolve_ty(&typed_left.ty));
-        let trait_name = self.trait_instance_key_from_tys(&compose_trait, &resolved_trait_args);
-        Ok(TypedNode {
-            ty: result_ty,
-            span: span.clone(),
-            node: TypedInner::TraitCall {
-                trait_name,
-                method_name: "compose".into(),
-                receiver_ty: receiver_ty.clone(),
-                obligation: TraitObligation {
-                    trait_id: compose_trait,
-                    trait_args: resolved_trait_args,
-                    receiver: receiver_ty.clone(),
-                },
-                dispatch,
-                origin: TraitCallOrigin::Operator {
-                    op: OperatorTraitOp::SlashCompose,
-                    lhs_ty: receiver_ty,
-                    rhs_ty,
-                },
-                args: vec![typed_left, typed_right],
-            },
-        })
+        self.check_operator_invocation(span, "Compose", "compose",
+            OperatorTraitOp::SlashCompose, "/", left, right, expected)
+            .map_err(|error| error.with_hint(
+                "Infix `/` is reserved for compose/join. Use `Int::safe_div(...)` or `Float::safe_div(...)` for division.",
+            ))
     }
 
     pub(super) fn check_list_nil(&mut self, span: &Span) -> Result<TypedNode, TypeError> {
@@ -12350,7 +10706,7 @@ impl Checker {
     /// parentheses as an explicit eager boundary.  An ungrouped argument keeps
     /// the historical branch convention: a zero-argument callable is invoked
     /// only if its lazy path is selected.
-    fn check_lazy_argument(
+    pub(super) fn check_lazy_argument(
         &mut self,
         arg: &Resolved,
         call_span: &Span,
@@ -12388,13 +10744,19 @@ impl Checker {
         }
     }
 
-    fn check_lazy_argument_with_expected(
+    pub(super) fn check_lazy_argument_with_expected(
         &mut self,
         arg: &Resolved,
         expected: &Ty,
         call_span: &Span,
     ) -> Result<TypedNode, TypeError> {
         match arg {
+            Resolved::Closure(span, params, captures, body) if params.is_empty() => {
+                let thunk_type = Ty::Func(Vec::new(), Box::new(expected.clone()));
+                let raw = self.check_closure(span, params, captures, body, Some(&thunk_type))?;
+                Ok(self.maybe_call_zero_arg_function(raw, call_span.clone()))
+            }
+
             Resolved::Grouped(span, inner) => {
                 let inner = self.check_node_with_expected(inner, Some(expected))?;
                 Ok(TypedNode {
@@ -12418,69 +10780,7 @@ impl Checker {
         else_opt: &Option<Box<Resolved>>,
         expected: &Ty,
     ) -> Result<TypedNode, TypeError> {
-        let typed_cond = self.check_node(cond)?;
-        if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "if condition must be Boolean, got {}",
-                    self.ty_name(&typed_cond.ty)
-                ),
-                span: typed_cond.span.clone(),
-                hint: None,
-            });
-        }
-        let typed_then = self.check_lazy_argument_with_expected(then, expected, span)?;
-        if !self.types_compatible(expected, &typed_then.ty) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "if branches have different types: {} and {}",
-                    self.ty_name(&self.resolve_ty(expected)),
-                    self.ty_name(&typed_then.ty)
-                ),
-                span: typed_then.span.clone(),
-                hint: None,
-            });
-        }
-        let typed_else = else_opt
-            .as_ref()
-            .map(|branch| self.check_lazy_argument_with_expected(branch, expected, span))
-            .transpose()?;
-        if typed_else.is_none() && !self.types_compatible(expected, &Ty::Unit) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "expected {}, got Unit",
-                    self.ty_name(&self.resolve_ty(expected))
-                ),
-                span: span.clone(),
-                hint: None,
-            });
-        }
-        if let Some(typed_else) = &typed_else {
-            if !self.types_compatible(expected, &typed_else.ty) {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "if branches have different types: {} and {}",
-                        self.ty_name(&self.resolve_ty(expected)),
-                        self.ty_name(&typed_else.ty)
-                    ),
-                    span: typed_else.span.clone(),
-                    hint: None,
-                });
-            }
-        }
-        Ok(TypedNode {
-            ty: self.resolve_ty(expected),
-            span: span.clone(),
-            node: TypedInner::If(
-                Box::new(typed_cond),
-                Box::new(typed_then),
-                typed_else.map(Box::new),
-            ),
-        })
+        self.check_if_branches(span, cond, then, else_opt, Some(expected))
     }
 
     pub(super) fn check_if(
@@ -12490,72 +10790,96 @@ impl Checker {
         then: &Resolved,
         else_opt: &Option<Box<Resolved>>,
     ) -> Result<TypedNode, TypeError> {
+        self.check_if_branches(span, cond, then, else_opt, None)
+    }
+
+    fn check_if_branches(
+        &mut self,
+        span: &Span,
+        cond: &Resolved,
+        then: &Resolved,
+        else_opt: &Option<Box<Resolved>>,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
         let typed_cond = self.check_node(cond)?;
-        if !self.types_compatible(&Ty::Bool, &typed_cond.ty) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "if condition must be Boolean, got {}",
-                    self.ty_name(&typed_cond.ty)
-                ),
-                span: typed_cond.span.clone(),
-                hint: None,
-            });
+        self.assert_type_relation(
+            &Ty::Bool,
+            &typed_cond.ty,
+            self.type_fact(SourceRole::Expected, span, &Ty::Bool),
+            self.type_fact(SourceRole::Value, &typed_cond.span, &typed_cond.ty),
+            TypeDiagnosticReason::ArgumentTypeMismatch,
+            DiagnosticOrigin::Branch {
+                form: diagnostics::BranchForm::If,
+                ordinal: 0,
+            },
+            "if",
+            0,
+        )?;
+        let typed_then = match expected {
+            Some(expected) => self.check_lazy_argument_with_expected(then, expected, span)?,
+            None => self.check_lazy_argument(then, span)?,
+        };
+        let typed_else = else_opt
+            .as_ref()
+            .map(|branch| match expected {
+                Some(expected) => self.check_lazy_argument_with_expected(branch, expected, span),
+                None => self.check_lazy_argument(branch, span),
+            })
+            .transpose()?;
+        if let Some(other) = &typed_else {
+            self.assert_type_relation(
+                &typed_then.ty,
+                &other.ty,
+                self.branch_fact(SourceRole::Branch, &typed_then, 0),
+                self.branch_fact(SourceRole::Branch, other, 1),
+                TypeDiagnosticReason::IfBranchTypeMismatch,
+                DiagnosticOrigin::Branch {
+                    form: diagnostics::BranchForm::If,
+                    ordinal: 1,
+                },
+                "if",
+                1,
+            )
+            .map_err(|error| {
+                self.complete_branch_error(error, &[&typed_then, other], &[Some(&typed_cond), None])
+            })?;
         }
-
-        let typed_then = self.check_lazy_argument(then, span)?;
-
-        match else_opt {
-            Some(else_branch) => {
-                let typed_else = self.check_lazy_argument(else_branch, span)?;
-                if !self.types_compatible(&typed_then.ty, &typed_else.ty) {
-                    if self.function_return_ty.as_ref().is_some_and(|expected| {
-                        matches!(expected, Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some())
-                    }) && Self::constructor_application_slots(&typed_then.ty).is_some()
-                        && Self::constructor_application_slots(&typed_else.ty).is_some()
-                    {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "MixedConstructorResult: contextual return branches resolve to {} and {}",
-                                self.ty_name(&typed_then.ty),
-                                self.ty_name(&typed_else.ty)
-                            ),
-                            span: span.clone(),
-                            hint: Some(
-                                "Return the same concrete constructor family from every branch."
-                                    .into(),
-                            ),
-                        });
-                    }
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "if branches have different types: {} and {}",
-                            self.ty_name(&typed_then.ty),
-                            self.ty_name(&typed_else.ty)
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
+        let ty = if typed_else.is_some() {
+            typed_then.ty.clone()
+        } else {
+            Ty::Unit
+        };
+        if let Some(expected) = expected {
+            self.assert_type_relation(
+                expected,
+                &ty,
+                self.type_fact(SourceRole::Expected, span, expected),
+                self.type_fact(SourceRole::Value, span, &ty),
+                TypeDiagnosticReason::IfBranchTypeMismatch,
+                DiagnosticOrigin::Branch {
+                    form: diagnostics::BranchForm::If,
+                    ordinal: 0,
+                },
+                "if",
+                0,
+            )
+            .map_err(|error| {
+                let mut bodies = vec![&typed_then];
+                if let Some(other) = &typed_else {
+                    bodies.push(other);
                 }
-                let ty = typed_then.ty.clone();
-                Ok(TypedNode {
-                    ty,
-                    span: span.clone(),
-                    node: TypedInner::If(
-                        Box::new(typed_cond),
-                        Box::new(typed_then),
-                        Some(Box::new(typed_else)),
-                    ),
-                })
-            }
-            None => Ok(TypedNode {
-                ty: Ty::Unit,
-                span: span.clone(),
-                node: TypedInner::If(Box::new(typed_cond), Box::new(typed_then), None),
-            }),
+                self.complete_branch_error(error, &bodies, &[Some(&typed_cond)])
+            })?;
         }
+        Ok(TypedNode {
+            ty: self.resolve_ty(&ty),
+            span: span.clone(),
+            node: TypedInner::If(
+                Box::new(typed_cond),
+                Box::new(typed_then),
+                typed_else.map(Box::new),
+            ),
+        })
     }
 
     pub(super) fn check_dbg(
@@ -12628,31 +10952,18 @@ impl Checker {
             });
         }
         let typed_pred = self.check_compose_callable(pred, "ensure")?;
-        let (pred_in, pred_out) =
-            self.unary_function_parts(&typed_pred.ty, "ensure", &typed_pred.span)?;
-        if !self.types_compatible(&pred_in, &typed_value.ty) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "ensure predicate type mismatch: expected {}, got {}",
-                    self.ty_name(&typed_value.ty),
-                    self.ty_name(&pred_in)
-                ),
-                span: typed_pred.span.clone(),
-                hint: None,
-            });
-        }
-        if !self.types_compatible(&Ty::Bool, &pred_out) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "ensure predicate must return Boolean, got {}",
-                    self.ty_name(&pred_out)
-                ),
-                span: typed_pred.span.clone(),
-                hint: None,
-            });
-        }
+        self.unary_function_parts(&typed_pred.ty, "ensure", &typed_pred.span)?;
+        let expected_pred = Ty::Func(vec![self.resolve_ty(&typed_value.ty)], Box::new(Ty::Bool));
+        self.assert_type_relation(
+            &expected_pred,
+            &typed_pred.ty,
+            self.type_fact(SourceRole::Expected, span, &expected_pred),
+            self.type_fact(SourceRole::Value, &typed_pred.span, &typed_pred.ty),
+            TypeDiagnosticReason::ArgumentTypeMismatch,
+            DiagnosticOrigin::Call,
+            "ensure",
+            1,
+        )?;
 
         let typed_err = self.check_lazy_argument(err, span)?;
         self.ensure_guard_error_value(&typed_err, "ensure")?;

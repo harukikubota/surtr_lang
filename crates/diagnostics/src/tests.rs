@@ -15,3 +15,6 @@ mod typecheck;
 
 #[path = "tests/repl.rs"]
 mod repl;
+
+#[path = "tests/structured_reasons.rs"]
+mod structured_reasons;

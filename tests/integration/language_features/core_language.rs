@@ -273,7 +273,7 @@ fn symbolic_boolean_operators_require_boolean_operands() {
     );
     assert_compile_error(
         "print(to_string(1 && True))",
-        "if condition must be Boolean, got Int",
+        "Argument type mismatch: expected Boolean, got Int",
     );
 }
 
@@ -385,7 +385,7 @@ fn arithmetic_precedence() {
 fn equality_reject_mixed_types() {
     assert_compile_error(
         "x = 1 == \"one\"",
-        "`==` requires the same type on both sides",
+        "Argument type mismatch: expected Int, got String",
     );
 }
 
@@ -1057,7 +1057,7 @@ fn cond_condition_must_be_boolean() {
   1 => 10,
   True => 20,
 }))"#,
-        "if condition must be Boolean, got Int",
+        "Argument type mismatch: expected Boolean, got Int",
     );
 }
 
@@ -1067,7 +1067,7 @@ fn cond_branch_types_must_match() {
   False => 1,
   True => "x",
 }))"#,
-        "if branches have different types: Int and String",
+        "cond branches have different types: Int and String",
     );
 }
 

@@ -1,2 +1,2 @@
 phase: typecheck
-contains: closure expects 0 parameter(s), got 1
+contains: closure expects a callable with 0 argument(s), got closure with 1 parameter(s)

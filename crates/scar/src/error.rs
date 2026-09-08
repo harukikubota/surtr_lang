@@ -12,6 +12,16 @@ pub struct TypeError {
 }
 
 impl TypeError {
+    pub fn from_structured(diagnostic: StructuredDiagnostic) -> Self {
+        let spec = diagnostics::structured_type_error_spec(&diagnostic);
+        Self {
+            message: spec.message,
+            span: diagnostic.primary.span.clone(),
+            hint: diagnostic.remediation_text(),
+            structured: Some(diagnostic),
+        }
+    }
+
     pub fn reason(&self) -> Option<TypeDiagnosticReason> {
         self.structured.as_ref().map(|diagnostic| diagnostic.reason)
     }
@@ -26,7 +36,11 @@ impl TypeError {
     }
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
-        self.hint = Some(hint.into());
+        let hint = hint.into();
+        if let Some(diagnostic) = &mut self.structured {
+            diagnostic.remediation = Some(diagnostics::Remediation::Help { text: hint.clone() });
+        }
+        self.hint = Some(hint);
         self
     }
 

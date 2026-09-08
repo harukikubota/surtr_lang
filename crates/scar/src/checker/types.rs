@@ -1108,6 +1108,13 @@ impl Checker {
             return self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General);
         }
 
+        self.resolve_type_constructor_head(ast_ty)
+    }
+
+    pub(super) fn resolve_type_constructor_head(
+        &mut self,
+        ast_ty: &AstTy,
+    ) -> Result<Ty, TypeError> {
         let AstTy::Named(span, name) = ast_ty else {
             return Err(TypeError {
                 structured: None,
@@ -1830,7 +1837,16 @@ impl Checker {
                     self.rigid_tyvars.contains(left),
                     self.rigid_tyvars.contains(right),
                 ) {
-                    (true, true) => left == right,
+                    (true, true) => {
+                        left == right
+                            || (self.constructor_witness_traits.contains_key(left)
+                                && self.constructor_witness_traits.contains_key(right)
+                                && self.constructor_family_witness_root(*left).is_some_and(
+                                    |root| {
+                                        Some(root) == self.constructor_family_witness_root(*right)
+                                    },
+                                ))
+                    }
                     (true, false) => self.bind_tyvar(*right, &Ty::Var(*left)),
                     (false, true) => self.bind_tyvar(*left, &Ty::Var(*right)),
                     (false, false) => self.bind_tyvar(*left, &Ty::Var(*right)),
@@ -2001,12 +2017,13 @@ impl Checker {
         if self.resolve_ty(subject) == self.resolve_ty(receiver) {
             return true;
         }
-        let Some(canonical_subject) = self.canonical_constructor_carrier(capability_trait, subject)
+        let Some(canonical_subject) =
+            self.contextual_constructor_carrier(capability_trait, subject)
         else {
             return false;
         };
         let Some(canonical_receiver) =
-            self.canonical_constructor_carrier(capability_trait, receiver)
+            self.contextual_constructor_carrier(capability_trait, receiver)
         else {
             return false;
         };
@@ -2594,13 +2611,45 @@ impl Checker {
             Ty::Unit => "Unit".into(),
             Ty::Error => "Error".into(),
             Ty::Hole => "_".into(),
-            Ty::SelfApp(args) => format!(
-                "Self<{}>",
-                args.iter()
-                    .map(|arg| self.diagnostic_ty_name_with_state(arg, tyvars, next_tyvar_index))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
+            Ty::SelfApp(args) => {
+                let (head, slots) = match Self::constructor_application_parts(args) {
+                    Some((Ty::Var(witness), slots)) => {
+                        let head = self
+                            .constructor_witness_traits
+                            .get(witness)
+                            .map(|name| self.trait_display_name(name))
+                            .unwrap_or_else(|| {
+                                self.diagnostic_ty_name_with_state(
+                                    &Ty::Var(*witness),
+                                    tyvars,
+                                    next_tyvar_index,
+                                )
+                            });
+                        (head, slots)
+                    }
+                    Some((witness, slots)) => (
+                        self.diagnostic_ty_name_with_state(witness, tyvars, next_tyvar_index),
+                        slots,
+                    ),
+                    None => ("Self".into(), args.as_slice()),
+                };
+                if slots.is_empty() {
+                    return head;
+                }
+                format!(
+                    "{}<{}>",
+                    head,
+                    slots
+                        .iter()
+                        .map(|arg| self.diagnostic_ty_name_with_state(
+                            arg,
+                            tyvars,
+                            next_tyvar_index
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
             Ty::List(inner) => format!(
                 "List<{}>",
                 self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
@@ -2628,9 +2677,10 @@ impl Checker {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            Ty::Result(ok, _) => format!(
-                "Result<{}>",
-                self.diagnostic_ty_name_with_state(ok, tyvars, next_tyvar_index)
+            Ty::Result(ok, err) => format!(
+                "Result<{}, {}>",
+                self.diagnostic_ty_name_with_state(ok, tyvars, next_tyvar_index),
+                self.diagnostic_ty_name_with_state(err, tyvars, next_tyvar_index)
             ),
             Ty::Var(var) => tyvars
                 .entry(*var)
@@ -2640,7 +2690,24 @@ impl Checker {
                     name
                 })
                 .clone(),
-            Ty::Struct(name, _) | Ty::Record(name, _) => Self::surface_name(name).to_string(),
+            Ty::Struct(name, _) | Ty::Record(name, _) => {
+                let name_text = Self::surface_name(name);
+                match self.resolved_named_type_args(name, ty) {
+                    Some(args) if !args.is_empty() => format!(
+                        "{}<{}>",
+                        name_text,
+                        args.iter()
+                            .map(|arg| self.diagnostic_ty_name_with_state(
+                                &self.resolve_ty(arg),
+                                tyvars,
+                                next_tyvar_index
+                            ))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    _ => name_text.to_string(),
+                }
+            }
             Ty::Enum(name, args) => {
                 if args.is_empty() {
                     Self::surface_name(name).to_string()
@@ -2657,7 +2724,9 @@ impl Checker {
                     )
                 }
             }
-            Ty::Func(params, ret) => {
+            Ty::Func(params, ret)
+            | Ty::BuiltinFunc { params, ret, .. }
+            | Ty::UserFunc { params, ret, .. } => {
                 let param_str = params
                     .iter()
                     .map(|ty| self.diagnostic_ty_name_with_state(ty, tyvars, next_tyvar_index))
@@ -2676,8 +2745,6 @@ impl Checker {
                     )
                 }
             }
-            Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
-            Ty::UserFunc { .. } => "UserFunc".into(),
         }
     }
 

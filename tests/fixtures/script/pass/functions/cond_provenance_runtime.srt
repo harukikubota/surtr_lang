@@ -1,0 +1,19 @@
+def choose(flag: Boolean, base: Int) -> Int {
+  cond {
+    flag => { base + 1 },
+    True => { base + 2 },
+  }
+}
+base = 40
+choose_local = {|flag: Boolean|
+  cond {
+    flag => { print("selected"); base + 1 },
+    True => { print("fallback"); base + 2 },
+  }
+}
+print(to_string(choose(True, base)))
+print(to_string(choose_local(False)))
+print(to_string(cond {
+  False => { print("unreachable"); 0 },
+  True => if_let(Option::Some(3), Option::Some(value), value + base, base),
+}))

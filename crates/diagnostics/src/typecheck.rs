@@ -156,11 +156,30 @@ pub fn type_error_spec_from_structured(input: &StructuredDiagnostic) -> Diagnost
 
 fn structured_headline(input: &StructuredDiagnostic) -> String {
     match input.reason {
+        TypeDiagnosticReason::ConcreteReturnTypeArgumentInDefinition => {
+            return "Definition return type arguments must introduce type inputs".into()
+        }
+        TypeDiagnosticReason::InlineReturnTypeArgumentConstraint => {
+            return "Return type argument constraints belong in the where clause".into()
+        }
+        TypeDiagnosticReason::ReturnTypeArgumentArityMismatch => {
+            if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
+                return format!(
+                    "{} expects {} return type argument(s), got {}",
+                    value.callable,
+                    value.expected_count.expect("arity requires expected count"),
+                    value.actual_count.expect("arity requires actual count")
+                );
+            }
+        }
         TypeDiagnosticReason::DuplicateReturnTypeArgumentInput => {
             if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
                 return format!(
                     "type input `{}` is introduced more than once",
-                    value.expected_type
+                    value
+                        .expected_type
+                        .as_deref()
+                        .expect("definition input type")
                 );
             }
         }
@@ -168,7 +187,10 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
                 return format!(
                     "return-only type input `{}` is not declared",
-                    value.expected_type
+                    value
+                        .expected_type
+                        .as_deref()
+                        .expect("definition input type")
                 );
             }
         }
@@ -176,7 +198,10 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
                 return format!(
                     "return type argument `{}` does not appear in the return type",
-                    value.expected_type
+                    value
+                        .expected_type
+                        .as_deref()
+                        .expect("definition input type")
                 );
             }
         }
@@ -262,16 +287,79 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
         },
         DiagnosticData::ReturnTypeArgument(value) => format!(
             "Return type argument {} for `{}` does not match the callable signature",
-            value.ordinal, value.callable
+            value.ordinal.expect("type argument mismatch ordinal"), value.callable
         ),
-        DiagnosticData::ArgumentRelation(value) => format!(
-            "Argument {} does not match the callable signature `{}`",
-            value.ordinal, value.callable
-        ),
-        DiagnosticData::TypeConstructorCarrier(_value) => {
-            "Type constructor carrier does not match the required family".into()
+        DiagnosticData::CallableShape(value) => {
+            let actual = value.actual_type.clone().unwrap_or_else(|| format!("closure with {} parameter(s)", value.actual_arity.expect("closure shape carries its arity")));
+            match input.reason {
+                TypeDiagnosticReason::NotCallable => format!("Not a function: {actual}"),
+                TypeDiagnosticReason::CallableShapeMismatch => match value.return_shape {
+                    crate::CallableReturnShape::Plain => format!("{} expects a plain function return, got {actual}", value.callable),
+                    crate::CallableReturnShape::Any => match value.expected_arity {
+                        Some(arity) => format!("{} expects a callable with {arity} argument(s), got {actual}", value.callable),
+                        None => {
+                            let expected = input.related.iter().find(|fact| fact.role == crate::SourceRole::Expected).and_then(|fact| fact.ty.as_deref()).expect("non-callable expected shape carries its type fact");
+                            format!("{} does not match expected type {expected}", value.callable)
+                        }
+                    },
+                },
+                _ => unreachable!("callable shape requires callable reason"),
+            }
+        },
+        DiagnosticData::ArgumentContract(value) => match input.reason {
+            TypeDiagnosticReason::ArityMismatch => format!("{} expects {} argument(s), got {}", value.callable, value.expected_count, value.actual_count),
+            TypeDiagnosticReason::ArgumentModeMismatch => "Cannot mix positional and named arguments, or use named arguments with this callable".into(),
+            TypeDiagnosticReason::UnknownNamedArgument => format!("Unknown argument name '{}' for function", value.name.as_deref().expect("named argument diagnostic requires name")),
+            TypeDiagnosticReason::DuplicateArgument => format!("Duplicate argument '{}'", value.name.as_deref().expect("duplicate argument requires name")),
+            TypeDiagnosticReason::MissingArgument => format!("Missing argument '{}'", value.name.as_deref().expect("missing argument requires name")),
+            _ => unreachable!("argument contract requires a contract reason"),
+        },
+        DiagnosticData::ArgumentRelation(value) => {
+            let expected = value.expected_type.as_deref();
+            let actual = value.actual_type.as_deref();
+            let label = match input.reason {
+                TypeDiagnosticReason::ReturnTypeMismatch => "Return type mismatch",
+                TypeDiagnosticReason::AnnotationTypeMismatch => "Annotation type mismatch",
+                TypeDiagnosticReason::CallableShapeMismatch => "Callable shape mismatch",
+                _ => "Argument type mismatch",
+            };
+            match (expected, actual) {
+                (Some(expected), Some(actual)) => format!("{label}: expected {expected}, got {actual}"),
+                _ => label.into(),
+            }
+        },
+        DiagnosticData::TraitObligation(value) => {
+            let prefix = match input.reason {
+                TypeDiagnosticReason::MissingGenericBound => "MissingGenericBound",
+                TypeDiagnosticReason::MissingTraitCapability => "MissingTraitCapability",
+                TypeDiagnosticReason::MissingTypeConstructorCapability => "MissingTypeConstructorCapability",
+                TypeDiagnosticReason::NoApplicableTraitImplementation => "NoApplicableTraitImplementation",
+                _ => unreachable!("trait obligation requires a capability or applicability reason"),
+            };
+            format!("{prefix}: {} must implement {}{}", value.subject_type, value.trait_name,
+                if value.trait_arguments.is_empty() { String::new() } else { format!("<{}>", value.trait_arguments.join(", ")) })
+        },
+        DiagnosticData::TraitDispatch(value) => {
+            let obligation = if value.trait_arguments.is_empty() { value.trait_name.clone() } else { format!("{}<{}>", value.trait_name, value.trait_arguments.join(", ")) };
+            match input.reason {
+                TypeDiagnosticReason::NoApplicableTraitImplementation => format!("No implementation satisfies {} for {}", obligation, value.subject_type.as_deref().expect("concrete obligation has a subject")),
+                TypeDiagnosticReason::UnresolvedTraitMethodInstantiation => format!("{}::{} requires a concrete method instantiation", obligation, value.method.as_deref().expect("method instantiation has a method")),
+                TypeDiagnosticReason::MissingTraitDispatchTarget => format!("{}::{} has no concrete dispatch target", obligation, value.method.as_deref().expect("method instantiation has a method")),
+                _ => unreachable!("dispatch diagnostic requires dispatch reason"),
+            }
+        },
+        DiagnosticData::TypeConstructorCarrier(value) => match input.reason {
+            TypeDiagnosticReason::TypePayloadMismatch => format!("Type payload mismatch: expected {}, got {}", value.expected_carrier, value.actual_carrier),
+            TypeDiagnosticReason::TypeConstructorFamilyMismatch => format!("Type constructor family mismatch: expected {}, got {}", value.expected_carrier, value.actual_carrier),
+            TypeDiagnosticReason::MissingTypeConstructorCapability => format!("Type constructor occurrence requires {}", value.family),
+            _ => unreachable!("carrier diagnostic requires carrier reason"),
         }
-        DiagnosticData::BranchAssertion(_) => "Branch types do not match".into(),
+        DiagnosticData::BranchAssertion(value) => match input.reason {
+            TypeDiagnosticReason::IfBranchTypeMismatch => format!("if branches have different types: {} and {}", value.expected_type, value.actual_type),
+            TypeDiagnosticReason::MatchArmTypeMismatch => format!("Match arm type mismatch: expected {}, got {}", value.expected_type, value.actual_type),
+            TypeDiagnosticReason::CondBranchTypeMismatch => format!("cond branches have different types: {} and {}", value.expected_type, value.actual_type),
+            _ => unreachable!("branch assertions require a branch reason"),
+        },
         _ => match input.reason {
             TypeDiagnosticReason::ArityMismatch
             | TypeDiagnosticReason::ReturnTypeArgumentArityMismatch
@@ -280,7 +368,9 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             }
             TypeDiagnosticReason::ReturnTypeMismatch => "Return type does not match".into(),
             TypeDiagnosticReason::AnnotationTypeMismatch => "Annotation type does not match".into(),
-            _ => "Type checking failed".into(),
+            TypeDiagnosticReason::ConcreteReturnTypeArgumentInDefinition => "Definition return type arguments must introduce type inputs".into(),
+            TypeDiagnosticReason::InlineReturnTypeArgumentConstraint => "Return type argument constraints belong in the where clause".into(),
+            reason => reason.as_str().to_string(),
         },
     }
 }

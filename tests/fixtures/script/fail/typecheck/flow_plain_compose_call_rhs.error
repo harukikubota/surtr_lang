@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Undefined function inc/0
+contains: expects 1 argument(s), got 0

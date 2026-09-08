@@ -1,6 +1,29 @@
 use super::*;
 
 impl Checker {
+    /// Public identity is independent of session-local declaration numbering.
+    pub(super) fn diagnostic_constructor_family_id(&self, trait_key: &str) -> String {
+        let family = self.constructor_family_key(trait_key);
+        let mut identities = family
+            .0
+            .iter()
+            .map(|id| {
+                let info = self
+                    .traits
+                    .values()
+                    .find(|info| info.id.unique_id == *id)
+                    .expect("family member metadata");
+                info.id
+                    .qualified_name
+                    .as_deref()
+                    .unwrap_or(&info.id.name)
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        identities.sort();
+        format!("family:{}", identities.join("+"))
+    }
+
     pub(super) fn constructor_family_witness_root(&self, mut witness: u32) -> Option<u32> {
         let mut visited = HashSet::new();
         while let Some(shared) = self.constructor_family_witnesses.get(&witness).copied() {
@@ -154,7 +177,28 @@ impl Checker {
         trait_key: &str,
         ty: &Ty,
     ) -> Option<CanonicalConstructorCarrier> {
-        let (implementation, _) = self.constructor_projection(trait_key, ty)?;
+        self.canonical_constructor_carrier_projection(trait_key, ty, false)
+    }
+
+    pub(super) fn contextual_constructor_carrier(
+        &self,
+        trait_key: &str,
+        ty: &Ty,
+    ) -> Option<CanonicalConstructorCarrier> {
+        self.canonical_constructor_carrier_projection(trait_key, ty, true)
+    }
+
+    fn canonical_constructor_carrier_projection(
+        &self,
+        trait_key: &str,
+        ty: &Ty,
+        contextual: bool,
+    ) -> Option<CanonicalConstructorCarrier> {
+        let (implementation, _) = if contextual {
+            self.constructor_capability_projection(trait_key, ty)?
+        } else {
+            self.constructor_projection(trait_key, ty)?
+        };
         let target = self.canonical_request(ty).ok()?;
         let family_id = self.constructor_family_key(trait_key);
         let positions = &implementation.constructor_slot_positions;

@@ -141,12 +141,23 @@ pub(super) fn return_type_argument_arity_error(
         structured: Some(StructuredDiagnostic {
             reason: TypeDiagnosticReason::ReturnTypeArgumentArityMismatch,
             origin: DiagnosticOrigin::Call,
-            data: DiagnosticData::CallableSignature(CallableSignatureData {
+            data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
                 callable: callable.into(),
-                role: "return type argument".into(),
+                ordinal: None,
+                expected_type: None,
+                actual_type: None,
                 expected_count: Some(expected as u32),
                 actual_count: Some(actual as u32),
-                detail: "call-site ReturnTypeArgument arity must match exactly".into(),
+                declared_origin: None,
+                value_parameter_origin: None,
+                return_origin: None,
+                left_origin: None,
+                right_origin: Some(SourceFact::untyped(
+                    SourceRole::CallTarget,
+                    SourceId(0),
+                    span.clone(),
+                )),
+                required_trait: None,
             }),
             primary: SourceFact::untyped(SourceRole::CallTarget, SourceId(0), span.clone()),
             related: Vec::new(),
@@ -175,10 +186,34 @@ pub(super) fn return_type_argument_mismatch_error(
             reason: TypeDiagnosticReason::ReturnTypeArgumentMismatch,
             origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
             data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+                declared_origin: (related_role == SourceRole::Declaration).then(|| {
+                    SourceFact::typed(related_role, SourceId(0), related_span.clone(), expected)
+                }),
+                value_parameter_origin: (related_role == SourceRole::Value).then(|| {
+                    SourceFact::typed(related_role, SourceId(0), related_span.clone(), expected)
+                }),
+                return_origin: (related_role == SourceRole::Expected).then(|| {
+                    SourceFact::typed(related_role, SourceId(0), related_span.clone(), expected)
+                }),
+                left_origin: Some(SourceFact::typed(
+                    related_role,
+                    SourceId(0),
+                    related_span.clone(),
+                    expected,
+                )),
+                right_origin: Some(SourceFact::typed(
+                    SourceRole::ReturnTypeArgument,
+                    SourceId(0),
+                    explicit_span.clone(),
+                    actual,
+                )),
+                required_trait: None,
+                expected_count: None,
+                actual_count: None,
                 callable: callable.into(),
-                ordinal,
-                expected_type: expected.into(),
-                actual_type: actual.into(),
+                ordinal: Some(ordinal),
+                expected_type: Some(expected.into()),
+                actual_type: Some(actual.into()),
             }),
             primary: SourceFact::typed(
                 SourceRole::ReturnTypeArgument,
@@ -290,7 +325,7 @@ fn occurrence_error(
     input: &str,
     ordinal: u32,
     primary: SourceFact,
-    related: Vec<SourceFact>,
+    value_parameter_origin: Option<SourceFact>,
     message: String,
     help: &str,
 ) -> crate::error::TypeError {
@@ -303,13 +338,24 @@ fn occurrence_error(
             reason,
             origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
             data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+                declared_origin: (reason != TypeDiagnosticReason::MissingReturnTypeArgument)
+                    .then(|| primary.clone()),
+                value_parameter_origin: value_parameter_origin.clone(),
+                return_origin: (reason == TypeDiagnosticReason::MissingReturnTypeArgument)
+                    .then(|| primary.clone()),
+                left_origin: None,
+                right_origin: Some(primary.clone()),
+                required_trait: None,
+                expected_count: None,
+                actual_count: None,
                 callable: callable.into(),
-                ordinal,
-                expected_type: input.into(),
-                actual_type: input.into(),
+                ordinal: (reason != TypeDiagnosticReason::MissingReturnTypeArgument)
+                    .then_some(ordinal),
+                expected_type: Some(input.into()),
+                actual_type: None,
             }),
             primary,
-            related,
+            related: value_parameter_origin.into_iter().collect(),
             remediation: Some(Remediation::Help { text: help.into() }),
         }),
     }
@@ -340,9 +386,7 @@ pub(super) fn validate_return_type_argument_definition(
         if let Some(argument_origins) = occurrences.argument_inputs.get(&input) {
             let related = argument_origins
                 .first()
-                .map(|origin| source_fact(SourceRole::Value, origin.span.clone(), name))
-                .into_iter()
-                .collect();
+                .map(|origin| source_fact(SourceRole::Value, origin.span.clone(), name));
             return Err(occurrence_error(
                 TypeDiagnosticReason::DuplicateReturnTypeArgumentInput,
                 callable,
@@ -361,7 +405,7 @@ pub(super) fn validate_return_type_argument_definition(
                 name,
                 ordinal as u32,
                 source_fact(SourceRole::ReturnTypeArgument, argument.span.clone(), name),
-                Vec::new(),
+                None,
                 format!("return type argument `{name}` does not appear in the return type"),
                 "remove the unused return type argument or use it in the return type",
             ));
@@ -386,9 +430,12 @@ pub(super) fn validate_return_type_argument_definition(
             name,
             0,
             source_fact(SourceRole::Expected, origin.span.clone(), name),
-            Vec::new(),
+            None,
             format!("return-only type input `{name}` is not declared"),
-            &format!("declare it as `def {callable}::<{name}>(...)`"),
+            &format!(
+                "declare `{name}` in the return type argument list: `def {}::<{name}>(...)`",
+                callable.rsplit("::").next().expect("callable surface name")
+            ),
         ));
     }
     Ok(())
@@ -469,6 +516,9 @@ pub(super) fn validate_constructor_variable_constraints(
             reason: TypeDiagnosticReason::MissingTypeConstructorConstraint,
             origin: DiagnosticOrigin::Declaration,
             data: DiagnosticData::ConstraintSubject(ConstraintSubjectData {
+                subject_origin: Some(source_fact(SourceRole::Declaration, span.clone(), &name)),
+                required_trait: Some("TypeCtorTrait".into()),
+                suggested_type_variable: Some(name.clone()),
                 subject: name.clone(),
                 constraint: "TypeCtorTrait".into(),
             }),
@@ -493,6 +543,9 @@ pub(super) fn invalid_trait_constraint_subject_error(
             reason: TypeDiagnosticReason::InvalidTraitConstraintSubject,
             origin: DiagnosticOrigin::Declaration,
             data: DiagnosticData::ConstraintSubject(ConstraintSubjectData {
+                subject_origin: Some(source_fact(SourceRole::Trait, span.clone(), subject)),
+                required_trait: None,
+                suggested_type_variable: Some("$F".into()),
                 subject: subject.into(),
                 constraint: "trait constraint subject".into(),
             }),

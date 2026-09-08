@@ -1,4 +1,5 @@
 use super::*;
+use diagnostics::{DiagnosticOrigin, SourceRole, TypeDiagnosticReason};
 
 struct SpecialFormContract {
     expected_qname: &'static str,
@@ -188,19 +189,10 @@ impl Checker {
         span: &Span,
     ) -> Option<TypeError> {
         match (self.resolve_ty(expected_ret), self.resolve_ty(actual_ret)) {
-            (Ty::Var(_), Ty::Result(_, _)) => Some(TypeError {
-                structured: None,
-                message: format!(
-                    "expected {}, got {}",
-                    self.ty_name(expected_ret),
-                    self.ty_name(actual_ret)
-                ),
-                span: span.clone(),
-                hint: Some(
-                    "A plain return type variable cannot be satisfied by Err(...). Declare Result<$T> when the function propagates failures."
-                        .into(),
-                ),
-            }),
+            (Ty::Var(_), Ty::Result(_, _)) => Some(self.type_relation_error(expected_ret, actual_ret,
+                self.type_fact(SourceRole::Expected, span, expected_ret), self.type_fact(SourceRole::Value, span, actual_ret),
+                TypeDiagnosticReason::ReturnTypeMismatch, DiagnosticOrigin::Return, "function", 0)
+                .with_hint("A plain return type variable cannot be satisfied by Err(...). Declare Result<$T> when the function propagates failures.")),
             _ => None,
         }
     }
@@ -1178,6 +1170,20 @@ impl Checker {
         self.function_return_ty = Some(function_return_ty.clone());
         self.local_annotation_tyvars = local_annotation_tyvars;
         self.rigid_tyvars = rigid_tyvars;
+        // Direct constructor inputs introduce witnesses outside the named
+        // type-variable map. They are caller-owned just like named generics.
+        for (_, ty) in local_bindings {
+            let mut variables = Vec::new();
+            Self::collect_ty_vars(ty, &mut variables);
+            for variable in variables {
+                if self.constructor_witness_traits.contains_key(&variable) {
+                    self.rigid_tyvars.insert(variable);
+                    if let Some(root) = self.constructor_family_witness_root(variable) {
+                        self.rigid_tyvars.insert(root);
+                    }
+                }
+            }
+        }
         self.current_function_symbol = Some(function_symbol);
         self.current_impl_struct_target = impl_target;
         self.in_extractor_body = in_extractor_body;
@@ -1259,7 +1265,7 @@ impl Checker {
         result
     }
 
-    fn body_tail_is_receiverless_trait_call(&self, body: &Resolved) -> bool {
+    pub(super) fn body_tail_is_receiverless_trait_call(&self, body: &Resolved) -> bool {
         match body {
             Resolved::Block(_, statements) => statements
                 .last()
@@ -1288,13 +1294,16 @@ impl Checker {
                 .last()
                 .is_some_and(|tail| self.body_tail_is_return_type_argument_call(tail)),
             Resolved::Grouped(_, inner) => self.body_tail_is_return_type_argument_call(inner),
+            Resolved::Cond(_, clauses) => clauses
+                .iter()
+                .any(|(_, body)| self.body_tail_is_return_type_argument_call(body)),
             Resolved::If(_, _, then_branch, else_branch) => {
                 self.body_tail_is_return_type_argument_call(then_branch)
                     || else_branch
                         .as_ref()
                         .is_some_and(|branch| self.body_tail_is_return_type_argument_call(branch))
             }
-            Resolved::Match(_, _, arms) => arms
+            Resolved::Match(_, _, arms) | Resolved::IfLet(_, _, arms) => arms
                 .iter()
                 .any(|arm| self.body_tail_is_return_type_argument_call(&arm.body)),
             Resolved::App(_, function, _) | Resolved::Capture(_, function, _) => {
@@ -1317,6 +1326,9 @@ impl Checker {
                 .last()
                 .is_some_and(|tail| self.constructor_body_needs_expected(tail)),
             Resolved::Grouped(_, inner) => self.constructor_body_needs_expected(inner),
+            Resolved::Cond(_, clauses) => clauses
+                .iter()
+                .all(|(_, body)| self.body_tail_is_receiverless_trait_call(body)),
             Resolved::If(_, _, then_branch, Some(else_branch)) => {
                 self.body_tail_is_receiverless_trait_call(then_branch)
                     && self.body_tail_is_receiverless_trait_call(else_branch)
@@ -1626,53 +1638,37 @@ impl Checker {
             .as_ref()
             .and_then(|ast_ty| self.constructor_trait_key_for_ast_ty(ast_ty))
             .is_some_and(|trait_key| {
-                self.constructor_annotation_compatible(
-                    &trait_key,
-                    &expected_ret,
-                    &typed_body.ty,
-                    &ConstructorCapabilityProvenance::Unrestricted,
-                )
+                self.constructor_annotation_compatible(&trait_key, &expected_ret, &typed_body.ty)
             });
-        if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars)
-            && !return_constructor_coercion
-        {
-            if let Some(err) = self.facet_replace_result_context_error(
-                &typed_body,
+        let saved_rigid = std::mem::replace(&mut self.rigid_tyvars, rigid_tyvars.clone());
+        let relation = self.assert_type_relation(
+            &expected_ret,
+            &typed_body.ty,
+            self.type_fact(
+                SourceRole::Expected,
+                ret_ty.as_ref().map(Self::ast_ty_span).unwrap_or(span),
                 &expected_ret,
+            ),
+            self.type_fact(
+                SourceRole::Value,
                 &self.return_mismatch_span(&typed_body),
-            ) {
-                return Err(err);
+                &actual_ret,
+            ),
+            TypeDiagnosticReason::ReturnTypeMismatch,
+            DiagnosticOrigin::Return,
+            &id.name,
+            0,
+        );
+        self.rigid_tyvars = saved_rigid;
+        if let Err(mut error) = relation {
+            if !return_constructor_coercion {
+                if matches!(actual_ret, Ty::Unit) {
+                    if let Some(hint) = self.describe_unit_return_hint(&typed_body) {
+                        error = error.with_hint(hint);
+                    }
+                }
+                return Err(error);
             }
-            if let Some(err) = self.plain_value_result_context_error(
-                &expected_ret,
-                &typed_body.ty,
-                &self.return_mismatch_span(&typed_body),
-            ) {
-                return Err(err);
-            }
-            let hint = if matches!(actual_ret, Ty::Unit) {
-                self.describe_unit_return_hint(&typed_body)
-            } else {
-                None
-            };
-            return Err(TypeError {
-                structured: None,
-                message: if ret_ty.is_some() {
-                    format!(
-                        "expected {}, got {}",
-                        self.ty_name(&expected_ret),
-                        self.ty_name(&actual_ret)
-                    )
-                } else {
-                    format!(
-                        "def {} without an explicit return type must return Unit, got {}",
-                        id.name,
-                        self.ty_name(&actual_ret)
-                    )
-                },
-                span: self.return_mismatch_span(&typed_body),
-                hint,
-            });
         }
 
         let typed_body = self.concretize_pending_trait_calls(typed_body)?;
@@ -2119,37 +2115,27 @@ impl Checker {
             ) {
                 return Err(err);
             }
-            if !self.types_compatible_with_rigid(&expected_ret, &typed_body.ty, &rigid_tyvars) {
-                if let Some(err) = self.facet_replace_result_context_error(
-                    &typed_body,
+            let saved_rigid = std::mem::replace(&mut self.rigid_tyvars, rigid_tyvars.clone());
+            let relation = self.assert_type_relation(
+                &expected_ret,
+                &typed_body.ty,
+                self.type_fact(
+                    SourceRole::Expected,
+                    Self::ast_ty_span(return_ast),
                     &expected_ret,
+                ),
+                self.type_fact(
+                    SourceRole::Value,
                     &self.return_mismatch_span(&typed_body),
-                ) {
-                    return Err(err);
-                }
-                if let Some(err) = self.plain_value_result_context_error(
-                    &expected_ret,
-                    &typed_body.ty,
-                    &self.return_mismatch_span(&typed_body),
-                ) {
-                    return Err(err);
-                }
-                let hint = if matches!(actual_ret, Ty::Unit) {
-                    self.describe_unit_return_hint(&typed_body)
-                } else {
-                    None
-                };
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "expected {}, got {}",
-                        self.ty_name(&expected_ret),
-                        self.ty_name(&actual_ret)
-                    ),
-                    span: self.return_mismatch_span(&typed_body),
-                    hint,
-                });
-            }
+                    &actual_ret,
+                ),
+                TypeDiagnosticReason::ReturnTypeMismatch,
+                DiagnosticOrigin::Return,
+                &method.method_name,
+                0,
+            );
+            self.rigid_tyvars = saved_rigid;
+            relation?;
 
             let typed_body = self.concretize_pending_trait_calls(typed_body)?;
             let signature_inputs = local_bindings
@@ -2670,12 +2656,17 @@ impl Checker {
         let expected = expected.cloned();
         if id.name == "Ok" || id.name == "Err" {
             if args.len() != 1 {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!("{} expects 1 argument(s), got {}", id.name, args.len()),
-                    span: span.clone(),
-                    hint: None,
-                });
+                return Err(TypeError::from_structured(
+                    self.argument_contract_diagnostic(
+                        TypeDiagnosticReason::ArityMismatch,
+                        &id.name,
+                        None,
+                        1,
+                        args.len(),
+                        span,
+                        DiagnosticOrigin::Call,
+                    ),
+                ));
             }
             let inner = match &args[0] {
                 ResolvedRecordLitArg::Positional(expr) => {
@@ -2703,12 +2694,17 @@ impl Checker {
                     self.maybe_call_zero_arg_function(typed, span.clone())
                 }
                 ResolvedRecordLitArg::Named(_, _) => {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!("{} does not accept named arguments", id.name),
-                        span: span.clone(),
-                        hint: None,
-                    });
+                    return Err(TypeError::from_structured(
+                        self.argument_contract_diagnostic(
+                            TypeDiagnosticReason::ArgumentModeMismatch,
+                            &id.name,
+                            None,
+                            1,
+                            args.len(),
+                            span,
+                            DiagnosticOrigin::Call,
+                        ),
+                    ));
                 }
             };
             if id.name == "Err" {
@@ -2769,12 +2765,17 @@ impl Checker {
             let enum_surface_name = Self::surface_name(&variant.enum_name);
             if enum_surface_name == "Boolean" {
                 if !args.is_empty() {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!("{} expects 0 argument(s), got {}", id.name, args.len()),
-                        span: span.clone(),
-                        hint: None,
-                    });
+                    return Err(TypeError::from_structured(
+                        self.argument_contract_diagnostic(
+                            TypeDiagnosticReason::ArityMismatch,
+                            &id.name,
+                            None,
+                            0,
+                            args.len(),
+                            span,
+                            DiagnosticOrigin::Call,
+                        ),
+                    ));
                 }
                 let value = match variant.short_name.as_str() {
                     "True" => true,
@@ -2799,12 +2800,17 @@ impl Checker {
             }
             if enum_surface_name == "Result" {
                 if args.len() != 1 {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!("{} expects 1 argument(s), got {}", id.name, args.len()),
-                        span: span.clone(),
-                        hint: None,
-                    });
+                    return Err(TypeError::from_structured(
+                        self.argument_contract_diagnostic(
+                            TypeDiagnosticReason::ArityMismatch,
+                            &id.name,
+                            None,
+                            1,
+                            args.len(),
+                            span,
+                            DiagnosticOrigin::Call,
+                        ),
+                    ));
                 }
                 let inner = match &args[0] {
                     ResolvedRecordLitArg::Positional(expr) => {
@@ -2837,12 +2843,17 @@ impl Checker {
                         self.maybe_call_zero_arg_function(typed, span.clone())
                     }
                     ResolvedRecordLitArg::Named(_, _) => {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!("{} does not accept named arguments", id.name),
-                            span: span.clone(),
-                            hint: None,
-                        });
+                        return Err(TypeError::from_structured(
+                            self.argument_contract_diagnostic(
+                                TypeDiagnosticReason::ArgumentModeMismatch,
+                                &id.name,
+                                None,
+                                1,
+                                args.len(),
+                                span,
+                                DiagnosticOrigin::Call,
+                            ),
+                        ));
                     }
                 };
                 if variant.short_name == "Err" {
@@ -2901,57 +2912,15 @@ impl Checker {
             {
                 return Err(self.stop_constructor_error(span, &variant.enum_name));
             }
-            if args.len() != variant.payload.len() {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "{} expects {} argument(s), got {}",
-                        id.name,
-                        variant.payload.len(),
-                        args.len()
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                });
-            }
-            let mut payload_values = Vec::new();
-            for (idx, arg) in args.iter().enumerate() {
-                let expected = &variant.payload[idx];
-                let typed = match arg {
-                    ResolvedRecordLitArg::Positional(expr) => self.check_node(expr)?,
-                    ResolvedRecordLitArg::Named(_, _) => {
-                        return Err(TypeError {
-                            structured: None,
-                            message: "Enum constructors do not accept named arguments".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                };
-                if self.ty_contains_facet(&typed.ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message:
-                            "Enum constructors cannot contain Facet values in Stage1 (Facet is compile-time only)"
-                                .into(),
-                        span: typed.span.clone(),
-                        hint: Some("Apply Facet::view/set/over before constructing runtime values.".into()),
-                    });
-                }
-                if !self.types_compatible(expected, &typed.ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Argument type mismatch: expected {}, got {}",
-                            self.ty_name(expected),
-                            self.ty_name(&typed.ty)
-                        ),
-                        span: typed.span.clone(),
-                        hint: None,
-                    });
-                }
-                payload_values.push(typed);
-            }
+            let payload_values = self.typecheck_positional_call_args(
+                span,
+                &id.name,
+                &variant.payload,
+                args,
+                None,
+                "Enum constructors do not accept named arguments".into(),
+            )?;
+            self.ensure_no_runtime_facet_args(&payload_values, span, "Enum constructor arguments")?;
 
             let mut fields = Vec::with_capacity(payload_values.len() + 1);
             fields.push(TypedNode {
@@ -2973,59 +2942,15 @@ impl Checker {
                 Ty::BuiltinFunc { params, ret, .. } => {
                     let callable_hint =
                         Some(self.call_target_signature_hint_for_id(id, params, ret.as_ref()));
-                    if args.len() != params.len() {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "function expects {} argument(s), got {}",
-                                params.len(),
-                                args.len()
-                            ),
-                            span: span.clone(),
-                            hint: callable_hint.clone(),
-                        });
-                    }
-
-                    let mut typed_args = Vec::new();
-                    for (param_ty, arg) in params.iter().zip(args) {
-                        let typed_val = match arg {
-                            ResolvedRecordLitArg::Positional(expr) => self.check_node(expr)?,
-                            ResolvedRecordLitArg::Named(_, _) => {
-                                return Err(TypeError {
-                                    structured: None,
-                                    message: "Function calls do not accept named arguments".into(),
-                                    span: span.clone(),
-                                    hint: None,
-                                });
-                            }
-                        };
-                        if self.ty_contains_facet(&typed_val.ty) {
-                            return Err(TypeError {
-                                structured: None,
-                                message:
-                                    "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
-                                        .into(),
-                                span: typed_val.span.clone(),
-                                hint: Some(
-                                    "Apply Facet::view/set/over before passing constructor arguments."
-                                        .into(),
-                                ),
-                            });
-                        }
-                        if !self.types_compatible(param_ty, &typed_val.ty) {
-                            return Err(TypeError {
-                                structured: None,
-                                message: format!(
-                                    "Argument type mismatch: expected {}, got {}",
-                                    self.ty_name(param_ty),
-                                    self.ty_name(&typed_val.ty)
-                                ),
-                                span: typed_val.span.clone(),
-                                hint: callable_hint.clone(),
-                            });
-                        }
-                        typed_args.push(typed_val);
-                    }
+                    let typed_args = self.typecheck_positional_call_args(
+                        span,
+                        &id.name,
+                        params,
+                        args,
+                        callable_hint,
+                        "Constructor calls do not accept named arguments".into(),
+                    )?;
+                    self.ensure_no_runtime_facet_args(&typed_args, span, "Constructor arguments")?;
 
                     return Ok(TypedNode {
                         ty: ret.as_ref().clone(),
@@ -3068,63 +2993,15 @@ impl Checker {
                 Ty::Func(params, ret) => {
                     let callable_hint =
                         self.callable_signature_hint(&Ty::Func(params.clone(), ret.clone()));
-                    if args
-                        .iter()
-                        .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
-                    {
-                        return Err(TypeError {
-                            structured: None,
-                            message: "Function calls do not accept named arguments".into(),
-                            span: span.clone(),
-                            hint: None,
-                        });
-                    }
-                    if args.len() != params.len() {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "function expects {} argument(s), got {}",
-                                params.len(),
-                                args.len()
-                            ),
-                            span: span.clone(),
-                            hint: callable_hint.clone(),
-                        });
-                    }
-
-                    let mut typed_args = Vec::with_capacity(params.len());
-                    for (expected_ty, arg) in params.iter().zip(args) {
-                        let ResolvedRecordLitArg::Positional(expr) = arg else {
-                            unreachable!("validated argument form above")
-                        };
-                        let typed = self.check_node(expr)?;
-                        if self.ty_contains_facet(&typed.ty) {
-                            return Err(TypeError {
-                                structured: None,
-                                message:
-                                    "Constructor arguments cannot contain Facet values in Stage1 (Facet is compile-time only)"
-                                        .into(),
-                                span: typed.span.clone(),
-                                hint: Some(
-                                    "Apply Facet::view/set/over before passing constructor arguments."
-                                        .into(),
-                                ),
-                            });
-                        }
-                        if !self.types_compatible(expected_ty, &typed.ty) {
-                            return Err(TypeError {
-                                structured: None,
-                                message: format!(
-                                    "Argument type mismatch: expected {}, got {}",
-                                    self.ty_name(expected_ty),
-                                    self.ty_name(&typed.ty)
-                                ),
-                                span: typed.span.clone(),
-                                hint: callable_hint.clone(),
-                            });
-                        }
-                        typed_args.push(typed);
-                    }
+                    let typed_args = self.typecheck_positional_call_args(
+                        span,
+                        &id.name,
+                        params,
+                        args,
+                        callable_hint,
+                        "Constructor calls do not accept named arguments".into(),
+                    )?;
+                    self.ensure_no_runtime_facet_args(&typed_args, span, "Constructor arguments")?;
 
                     return Ok(TypedNode {
                         ty: ret.as_ref().clone(),
@@ -3272,17 +3149,17 @@ impl Checker {
 
         if all_positional {
             if args.len() != def.fields.len() {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "{} expects {} field(s), got {}",
-                        id.name,
+                return Err(TypeError::from_structured(
+                    self.argument_contract_diagnostic(
+                        TypeDiagnosticReason::ArityMismatch,
+                        &id.name,
+                        None,
                         def.fields.len(),
-                        args.len()
+                        args.len(),
+                        span,
+                        DiagnosticOrigin::Call,
                     ),
-                    span: span.clone(),
-                    hint: None,
-                });
+                ));
             }
             for (i, arg) in args.iter().enumerate() {
                 if let ResolvedRecordLitArg::Positional(expr) = arg {
@@ -3298,19 +3175,16 @@ impl Checker {
                         });
                     }
                     let (_, def_ty) = &def.fields[i];
-                    if !self.types_compatible(def_ty, &typed_val.ty) {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Field '{}': expected {}, got {}",
-                                def.fields[i].0,
-                                self.ty_name(def_ty),
-                                self.ty_name(&typed_val.ty)
-                            ),
-                            span: typed_val.span.clone(),
-                            hint: None,
-                        });
-                    }
+                    self.assert_type_relation(
+                        def_ty,
+                        &typed_val.ty,
+                        self.type_fact(SourceRole::Expected, &id.span, def_ty),
+                        self.type_fact(SourceRole::Value, &typed_val.span, &typed_val.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::Call,
+                        &id.name,
+                        i as u32,
+                    )?;
                     typed_fields[i] = Some(typed_val);
                 }
             }
@@ -3319,22 +3193,32 @@ impl Checker {
             for arg in args {
                 if let ResolvedRecordLitArg::Named(name, expr) = arg {
                     if !seen.insert(name.clone()) {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!("Duplicate field '{}' in {}", name, id.name),
-                            span: span.clone(),
-                            hint: None,
-                        });
+                        return Err(TypeError::from_structured(
+                            self.argument_contract_diagnostic(
+                                TypeDiagnosticReason::DuplicateArgument,
+                                &id.name,
+                                Some(name),
+                                def.fields.len(),
+                                args.len(),
+                                span,
+                                DiagnosticOrigin::Call,
+                            ),
+                        ));
                     }
                     let idx = def
                         .fields
                         .iter()
                         .position(|(n, _)| n == name)
-                        .ok_or_else(|| TypeError {
-                            structured: None,
-                            message: format!("Unknown field '{}' in {}", name, id.name),
-                            span: span.clone(),
-                            hint: None,
+                        .ok_or_else(|| {
+                            TypeError::from_structured(self.argument_contract_diagnostic(
+                                TypeDiagnosticReason::UnknownNamedArgument,
+                                &id.name,
+                                Some(name),
+                                def.fields.len(),
+                                args.len(),
+                                span,
+                                DiagnosticOrigin::Call,
+                            ))
                         })?;
                     let typed_val = self.check_node(expr)?;
                     if self.ty_contains_facet(&typed_val.ty) {
@@ -3348,40 +3232,47 @@ impl Checker {
                         });
                     }
                     let (_, def_ty) = &def.fields[idx];
-                    if !self.types_compatible(def_ty, &typed_val.ty) {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Field '{}': expected {}, got {}",
-                                name,
-                                self.ty_name(def_ty),
-                                self.ty_name(&typed_val.ty)
-                            ),
-                            span: typed_val.span.clone(),
-                            hint: None,
-                        });
-                    }
+                    self.assert_type_relation(
+                        def_ty,
+                        &typed_val.ty,
+                        self.type_fact(SourceRole::Expected, &id.span, def_ty),
+                        self.type_fact(SourceRole::Value, &typed_val.span, &typed_val.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::Call,
+                        &id.name,
+                        idx as u32,
+                    )?;
                     typed_fields[idx] = Some(typed_val);
                 }
             }
         } else {
-            return Err(TypeError {
-                structured: None,
-                message: "Cannot mix positional and named arguments".into(),
-                span: span.clone(),
-                hint: None,
-            });
+            return Err(TypeError::from_structured(
+                self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArgumentModeMismatch,
+                    &id.name,
+                    None,
+                    def.fields.len(),
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                ),
+            ));
         }
 
         let final_fields: Vec<TypedNode> = typed_fields
             .into_iter()
             .enumerate()
             .map(|(i, f)| {
-                f.ok_or_else(|| TypeError {
-                    structured: None,
-                    message: format!("Missing field '{}' in {}", def.fields[i].0, id.name),
-                    span: span.clone(),
-                    hint: None,
+                f.ok_or_else(|| {
+                    TypeError::from_structured(self.argument_contract_diagnostic(
+                        TypeDiagnosticReason::MissingArgument,
+                        &id.name,
+                        Some(&def.fields[i].0),
+                        def.fields.len(),
+                        args.len(),
+                        span,
+                        DiagnosticOrigin::Call,
+                    ))
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;

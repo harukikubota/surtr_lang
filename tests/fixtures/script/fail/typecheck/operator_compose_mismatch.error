@@ -1,3 +1,2 @@
 phase: typecheck
-contains: `>>` requires the left output type to match the right input type
-contains: Left output is String; right input is Int
+contains: Argument type mismatch: expected (String -> Int), got (Int -> Int)

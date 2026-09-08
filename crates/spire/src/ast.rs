@@ -648,6 +648,9 @@ pub enum Ast {
     /// Debug special form: `dbg!(expr1, expr2, ...)`
     Dbg(Span, Vec<DbgArg>),
 
+    /// Cond clauses retained until type checking for branch diagnostics.
+    Cond(Span, Vec<(Ast, Ast)>),
+
     /// Match expression
     Match(Span, Box<Ast>, Vec<AstMatchArm>),
 

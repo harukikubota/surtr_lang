@@ -1,0 +1,1 @@
+[1] |>= {|value: Int| Option::Some(value)}

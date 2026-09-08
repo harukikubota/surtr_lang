@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Concat::concat helper requires String on both sides, but got String and Int
+contains: Argument type mismatch: expected String, got Int

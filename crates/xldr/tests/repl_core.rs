@@ -4943,7 +4943,7 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
     let add_call = engine.handle_line("Add::add(False, True)");
     assert!(!add_call.should_exit);
     let add_text = rendered_text(&add_call);
-    assert!(add_text.contains("Add::add requires a receiver type implementing Add, got Boolean"));
+    assert!(add_text.contains("No implementation satisfies Add for Boolean"));
 }
 
 fn core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_appears() {

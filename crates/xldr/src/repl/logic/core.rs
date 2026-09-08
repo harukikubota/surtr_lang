@@ -50,7 +50,14 @@ fn type_error_spec_from_scar(
     error
         .structured
         .as_ref()
-        .map(diagnostics::structured_type_error_spec)
+        .map(|diagnostic| {
+            diagnostics::structured_type_error_spec(&diagnostic.clone().map_source_locations(
+                |span| {
+                    crate::decode_rebased_module_span(span)
+                        .unwrap_or_else(|| (source_id, span.clone()))
+                },
+            ))
+        })
         .unwrap_or_else(|| diagnostics::type_error_spec_by_id(sources, source_id, &legacy))
 }
 use crate::error_display::StackTraceDisplayMode;
@@ -8655,6 +8662,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::Grouped(span, _)
         | Ast::InterpolatedStr(span, _)
         | Ast::Dbg(span, _)
+        | Ast::Cond(span, _)
         | Ast::Match(span, _, _)
         | Ast::BulkUpdate(span, _, _)
         | Ast::FieldAccess(span, _, _)

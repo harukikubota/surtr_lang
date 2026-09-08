@@ -1,2 +1,2 @@
 phase: typecheck
-contains: type constructor family mismatch
+contains: Type constructor family mismatch

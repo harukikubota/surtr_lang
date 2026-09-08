@@ -59,20 +59,11 @@ impl Checker {
         }
 
         rewritten.extend(generated_defs);
-        if let Some(pending) = rewritten
+        if let Some((trait_name, method, subject, span)) = rewritten
             .iter()
-            .find(|node| Self::typed_node_has_pending_trait_call(node))
+            .find_map(|node| self.first_pending_trait_helper(node))
         {
-            return Err(TypeError {
-                structured: None,
-                message: "UnresolvedTraitObligation: pending trait dispatch reached the Forge boundary"
-                    .into(),
-                span: pending.span.clone(),
-                hint: Some(
-                    "Concretize the generic receiver and all trait arguments before code generation."
-                        .into(),
-                ),
-            });
+            return Err(self.pending_trait_helper_error(trait_name, method, subject, span));
         }
         if let Some((callable, ordinal, unresolved, span)) = rewritten
             .iter()
@@ -88,10 +79,23 @@ impl Checker {
                     reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument,
                     origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
                     data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+                        declared_origin: None,
+                        value_parameter_origin: None,
+                        return_origin: None,
+                        left_origin: None,
+                        right_origin: Some(SourceFact::typed(
+                            SourceRole::ReturnTypeArgument,
+                            SourceId(0),
+                            span.clone(),
+                            unresolved.clone(),
+                        )),
+                        required_trait: None,
+                        expected_count: None,
+                        actual_count: None,
                         callable,
-                        ordinal,
-                        expected_type: "concrete return type argument".into(),
-                        actual_type: unresolved.clone(),
+                        ordinal: Some(ordinal),
+                        expected_type: Some("concrete return type argument".into()),
+                        actual_type: Some(unresolved.clone()),
                     }),
                     primary: SourceFact::typed(
                         SourceRole::ReturnTypeArgument,
@@ -1630,9 +1634,12 @@ impl Checker {
         }) {
             implementation = Some(self.trait_implementation_identity(info, method)?);
             let contract = method.instantiation_contract.as_ref().ok_or_else(|| {
-                TypeError::new(
-                    "UnresolvedTraitMethodInstantiation: missing method contract",
-                    def.span.clone(),
+                self.trait_dispatch_failure(
+                    TypeDiagnosticReason::UnresolvedTraitMethodInstantiation,
+                    &info.trait_id.name,
+                    &method.function_id.name,
+                    Some(&info.target_ty),
+                    &def.span,
                 )
             })?;
             for entry in contract
@@ -1643,9 +1650,12 @@ impl Checker {
             {
                 let ty = self.substitute_canonical_type(&entry.ty, substitution)?;
                 if ty.has_pending_instantiation() {
-                    return Err(TypeError::new(
-                        "UnresolvedTraitMethodInstantiation: incomplete callable type input",
-                        def.span.clone(),
+                    return Err(self.trait_dispatch_failure(
+                        TypeDiagnosticReason::UnresolvedTraitMethodInstantiation,
+                        &info.trait_id.name,
+                        &method.function_id.name,
+                        Some(&info.target_ty),
+                        &def.span,
                     ));
                 }
                 trait_inputs.push((entry.role, entry.ordinal, ty));
@@ -3317,9 +3327,16 @@ impl Checker {
             )
             .any(CanonicalTy::has_pending_instantiation)
         {
-            return Err(TypeError::new(
-                "UnresolvedTraitMethodInstantiation: pending callable signature",
-                span.clone(),
+            return Err(self.trait_dispatch_failure(
+                TypeDiagnosticReason::UnresolvedTraitMethodInstantiation,
+                signature
+                    .identity
+                    .owner
+                    .as_deref()
+                    .expect("trait method signature owner"),
+                &signature.identity.name,
+                None,
+                span,
             ));
         }
         match instantiation.dispatch_target {

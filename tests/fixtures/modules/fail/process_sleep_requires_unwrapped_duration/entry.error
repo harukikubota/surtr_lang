@@ -1,2 +1,2 @@
 phase: typecheck
-contains: expected Duration, got Result<Duration>
+contains: expected Duration, got Result<Duration, Error>

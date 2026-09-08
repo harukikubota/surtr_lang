@@ -1,3 +1,4 @@
+mod projection;
 pub use ariadne::Color;
 
 mod data;
@@ -17,12 +18,13 @@ mod typecheck;
 mod tests;
 
 pub use data::{
-    ArgumentRelationData, BranchAssertionData, CallableSignatureData, CandidateFailureData,
+    ArgumentContractData, ArgumentRelationData, BranchAssertionData, BranchForm,
+    CallableReturnShape, CallableShapeData, CallableSignatureData, CandidateFailureData,
     CandidateSelectionData, ConstraintSubjectData, DeclarationIdentity, DiagnosticData,
     DiagnosticOrigin, Remediation, ReturnTypeArgumentData, RuntimeData, SafeBindRelationData,
-    SourceFact, SourceRole, StructuredDiagnostic, TraitDispatchData, TraitMethodConstraintData,
-    TraitMethodTypeListData, TraitObligationData, TypeConstructorCarrierData, TypeDiagnosticReason,
-    TypeListRole,
+    SourceFact, SourceRole, StructuredDiagnostic, TraitDiagnosticIdentity, TraitDispatchData,
+    TraitMethodConstraintData, TraitMethodTypeListData, TraitObligationData,
+    TypeConstructorCarrierData, TypeDiagnosticReason, TypeListRole,
 };
 pub use debug_render::{render_debug_report, DebugLabel};
 pub use parse::parse_error_spec;

@@ -2724,24 +2724,14 @@ impl Parser<'_> {
             ));
         }
 
-        let mut expr = last_body;
-        while let Some((cond, body)) = clauses.pop() {
-            let span = Span {
+        clauses.push((last_cond, last_body));
+        Ok(Ast::Cond(
+            Span {
                 start: sp.start,
                 end: end.end,
-            };
-            expr = Ast::App(
-                span,
-                Box::new(Ast::Var(sp.clone(), "if".to_string())),
-                vec![
-                    RecordLitArg::Positional(cond),
-                    RecordLitArg::Positional(body),
-                    RecordLitArg::Positional(expr),
-                ],
-            );
-        }
-
-        Ok(expr)
+            },
+            clauses,
+        ))
     }
 
     /// Match pattern now reuses the same grammar as bind/safe-bind patterns.
@@ -2759,6 +2749,10 @@ fn expand_top_level_or_pattern(pattern: AstPattern) -> Vec<AstPattern> {
 
 fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
     match expr {
+        Ast::Cond(_, clauses) => clauses.iter().any(|(condition, body)| {
+            bulk_update_proc_contains_operation_call(condition)
+                || bulk_update_proc_contains_operation_call(body)
+        }),
         Ast::App(_, func, args) => {
             let is_bulk_proc = match func.as_ref() {
                 Ast::Var(_, name) => {

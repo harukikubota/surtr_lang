@@ -182,7 +182,7 @@ fn namespaced_duplicate_type_in_same_namespace_is_rejected() {
     let fixture = find_module_compile_error_case("namespaced_duplicate_type_same_namespace");
     let expected = parse_compile_error_expectation(&fixture.error_path);
     let err = compile_case(&fixture.case).expect_err("fixture should fail");
-    assert_compile_error_matches(&expected, &err, &fixture.case.case_dir);
+    assert_compile_error_matches(&expected, &err.into(), &fixture.case.case_dir);
 }
 
 #[test]
@@ -190,5 +190,5 @@ fn namespaced_import_collision_keeps_existing_function_import_rules() {
     let fixture = find_module_compile_error_case("namespaced_function_import_collision");
     let expected = parse_compile_error_expectation(&fixture.error_path);
     let err = compile_case(&fixture.case).expect_err("fixture should fail");
-    assert_compile_error_matches(&expected, &err, &fixture.case.case_dir);
+    assert_compile_error_matches(&expected, &err.into(), &fixture.case.case_dir);
 }

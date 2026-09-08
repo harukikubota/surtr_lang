@@ -1,2 +1,2 @@
 phase: typecheck
-contains: ++ requires (String, String), got (Int, String)
+contains: Argument type mismatch: expected String, got Int

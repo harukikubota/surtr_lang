@@ -128,6 +128,6 @@ fn private_visibility_compile_error_fixtures_pass() {
         let err = compile_multi_source_case(&fixture.case)
             .expect_err("private visibility compile fixture should fail");
 
-        assert_compile_error_matches(&expected, &err, &fixture.case.case_dir);
+        assert_compile_error_matches(&expected, &err.into(), &fixture.case.case_dir);
     }
 }

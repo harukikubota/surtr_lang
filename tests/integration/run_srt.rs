@@ -18,10 +18,13 @@ fn compile_surtr(source: &str) -> Result<forge::bytecode::Bytecode, String> {
     support::compile_script("fixture.srt", source)
 }
 
-fn check_compile_phase(source: &str, phase: Option<&str>) -> Result<(), String> {
+fn check_compile_phase(
+    source: &str,
+    phase: Option<&str>,
+) -> Result<(), support::CompilePhaseFailure> {
     match phase {
         Some(phase) => support::check_script_phase("fixture.srt", source, phase),
-        None => compile_surtr(source).map(|_| ()),
+        None => compile_surtr(source).map(|_| ()).map_err(Into::into),
     }
 }
 
@@ -274,7 +277,7 @@ fn compile_error_phase_primes_semantic_prefix_cache_without_final_bytecode_cache
         .expect_err("type mismatch should fail in the typecheck phase");
 
     assert!(
-        err.contains("expected Int, got String"),
+        err.message.contains("expected Int, got String"),
         "unexpected compile failure: {err}"
     );
     assert!(
