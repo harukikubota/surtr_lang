@@ -1,4 +1,7 @@
+#![deny(dead_code)]
+
 use crate::common::{surtr_command, unique_temp_dir};
+use std::collections::HashSet;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -241,7 +244,113 @@ impl Drop for PtyGuard {
     }
 }
 
+macro_rules! repl_case {
+    ($case:ident) => {
+        (stringify!($case), $case as fn())
+    };
+}
+
+const REPL_CASES: &[(&str, fn())] = &[
+    repl_case!(repl_quit_exits_cleanly),
+    repl_case!(repl_exit_exits_cleanly),
+    repl_case!(repl_fails_fast_when_additional_stdlib_bootstrap_fails),
+    repl_case!(repl_preload_diagnostic_stays_on_stderr_and_exits_non_zero),
+    repl_case!(repl_prints_light_banner_by_default),
+    repl_case!(repl_quiet_suppresses_banner),
+    repl_case!(repl_banner_flag_prints_detailed_banner),
+    repl_case!(repl_version_prints_version_and_exits),
+    repl_case!(repl_pipe_stdin_prints_prompts_and_eval_output),
+    repl_case!(repl_accepts_single_item_list_literal_with_trailing_comma),
+    #[cfg(unix)]
+    repl_case!(repl_completion_candidates_render_over_pty),
+    repl_case!(repl_implicit_local_config_loads_workspace_file_without_asserting_value_effect),
+    #[cfg(unix)]
+    repl_case!(repl_explicit_config_applies_completion_candidate_limit),
+    repl_case!(repl_static_impl_methods_keep_declared_arity),
+    repl_case!(repl_range_duration_comparisons_execute_without_arity_mismatch),
+    repl_case!(repl_colorizes_sig_command_signature),
+    repl_case!(repl_sig_expression_query_flows_through_cli_presentation),
+    repl_case!(repl_rejects_persisting_unresolved_result_callable_binding),
+    repl_case!(repl_rejects_persisting_unresolved_result_value_binding),
+    repl_case!(repl_rejects_direct_generator_bridge_builtin_call),
+    repl_case!(repl_persists_public_generator_bindings),
+    repl_case!(repl_accepts_explicitly_constrained_result_binding),
+    repl_case!(repl_accepts_result_mapping_when_chunk_constrains_type),
+    repl_case!(repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli),
+    repl_case!(repl_sig_type_owner_constructor_fallback_renders_through_cli),
+    repl_case!(repl_doc_type_owner_prefers_canonical_type_docs),
+    repl_case!(repl_sig_attached_extractor_owner_query_matches_zero_arg_form),
+    repl_case!(repl_range_constructor_and_extractor_queries_render_through_cli),
+    repl_case!(repl_sig_enum_rejects_extra_input_with_shared_message),
+    repl_case!(repl_info_renders_styled_summary_for_queries),
+    repl_case!(repl_supports_session_listing_and_reload_commands),
+    repl_case!(repl_sig_missing_symbol_prints_guidance),
+    repl_case!(repl_colorizes_doc_for_qualified_kernel_if),
+    repl_case!(repl_keeps_print_output_plain_while_coloring_bindings_and_values),
+    repl_case!(repl_error_summary_then_full_changes_diagnostic_detail),
+    repl_case!(repl_runtime_diagnostic_points_at_the_full_call),
+    repl_case!(repl_human_diagnostic_stays_on_stderr),
+    repl_case!(repl_rejects_test_module_usage),
+    repl_case!(repl_script_preload_flag_exposes_preloaded_docs_and_defs),
+    repl_case!(repl_script_preload_flag_prints_preload_runtime_output_before_prompt),
+    repl_case!(repl_script_preload_flag_resolves_include_and_keeps_preloaded_binding),
+    repl_case!(repl_script_preload_top_level_sig_has_surface_name_without_docs),
+    repl_case!(repl_process_script_preload_survives_live_repl_process_declaration_rejection),
+    repl_case!(repl_process_pid_queries_cover_hidden_and_concrete_singleton_surfaces),
+    repl_case!(repl_module_and_script_preload_flags_share_one_compile_unit),
+    repl_case!(repl_doc_and_sig_cover_tuple_scope_and_lens_queries),
+    repl_case!(repl_colorizes_closure_doc_footer_and_type_output),
+    repl_case!(repl_supports_deferred_lens_bindings_and_lens_command),
+    repl_case!(repl_renders_top_level_lens_chain_expressions),
+    repl_case!(repl_reports_return_mismatch_for_concretized_trait_helper_closure),
+    repl_case!(repl_propagates_apply_context_into_nested_pure),
+    repl_case!(repl_infers_monad_return_context_from_bind_rhs),
+    repl_case!(repl_allows_trait_helper_capture_with_expected_callable_annotation),
+    repl_case!(repl_allows_trait_helper_capture_when_function_on_supplies_same_expression_evidence),
+    repl_case!(repl_rejects_function_on_inferred_facet_capture_without_source_evidence),
+    repl_case!(repl_keeps_bare_trait_helper_capture_unresolved_without_same_expression_evidence),
+    repl_case!(repl_eprint_reports_generation_site_line),
+];
+
 #[test]
+fn repl_case_inventory_has_unique_names_and_functions() {
+    let direct_tests = include_str!("repl.rs")
+        .lines()
+        .filter(|line| *line == "#[test]")
+        .count();
+    assert_eq!(
+        direct_tests, 1,
+        "REPL cases must be registered instead of using standalone #[test]"
+    );
+
+    let mut names = HashSet::new();
+    let mut functions = HashSet::new();
+    for &(name, case) in REPL_CASES {
+        assert!(names.insert(name), "duplicate REPL case name: {name}");
+        assert!(
+            functions.insert(case as usize),
+            "duplicate REPL case function: {name}"
+        );
+    }
+}
+
+macro_rules! repl_bucket_test {
+    ($name:ident, $bucket:expr) => {
+        #[test]
+        fn $name() {
+            for &(case_name, case) in REPL_CASES.iter().skip($bucket).step_by(4) {
+                eprintln!("Rune REPL case: {case_name}");
+                case();
+            }
+        }
+    };
+}
+
+repl_bucket_test!(repl_bucket_0, 0);
+repl_bucket_test!(repl_bucket_1, 1);
+repl_bucket_test!(repl_bucket_2, 2);
+repl_bucket_test!(repl_bucket_3, 3);
+
 fn repl_quit_exits_cleanly() {
     let output = run_repl_session(":quit\n");
     assert!(
@@ -252,7 +361,6 @@ fn repl_quit_exits_cleanly() {
     );
 }
 
-#[test]
 fn repl_exit_exits_cleanly() {
     let output = run_repl_session(":exit\n");
     assert!(
@@ -263,7 +371,6 @@ fn repl_exit_exits_cleanly() {
     );
 }
 
-#[test]
 fn repl_fails_fast_when_additional_stdlib_bootstrap_fails() {
     let dir = unique_temp_dir("repl-bootstrap-failure");
     let lib_dir = dir.join("lib");
@@ -285,7 +392,6 @@ fn repl_fails_fast_when_additional_stdlib_bootstrap_fails() {
     assert!(stderr.contains("lib/bad.srt"));
 }
 
-#[test]
 fn repl_preload_diagnostic_stays_on_stderr_and_exits_non_zero() {
     let dir = unique_temp_dir("repl-preload-diagnostic");
     let script_path = dir.join("bad.srt");
@@ -316,7 +422,6 @@ fn repl_preload_diagnostic_stays_on_stderr_and_exits_non_zero() {
     assert!(stderr.contains("bad.srt"), "{stderr}");
 }
 
-#[test]
 fn repl_prints_light_banner_by_default() {
     let output = run_repl_session(":quit\n");
     assert!(
@@ -330,7 +435,6 @@ fn repl_prints_light_banner_by_default() {
     assert!(stdout.contains("Surtr xldr"));
 }
 
-#[test]
 fn repl_quiet_suppresses_banner() {
     let output = run_repl_session_with_args(&["--quiet"], ":quit\n");
     assert!(
@@ -344,7 +448,6 @@ fn repl_quiet_suppresses_banner() {
     assert!(!stdout.contains("Surtr xldr"));
 }
 
-#[test]
 fn repl_banner_flag_prints_detailed_banner() {
     let output = run_repl_session_with_args(&["--banner"], ":quit\n");
     assert!(
@@ -359,7 +462,6 @@ fn repl_banner_flag_prints_detailed_banner() {
     assert!(stdout.contains("\\__|  \\__|\\_______|\\______/ \\__|  \\__|"));
 }
 
-#[test]
 fn repl_version_prints_version_and_exits() {
     let output = run_repl_session_with_args(&["--version"], "");
     assert!(
@@ -373,7 +475,6 @@ fn repl_version_prints_version_and_exits() {
     assert_eq!(stdout.trim(), "xldr 0.1.0");
 }
 
-#[test]
 fn repl_pipe_stdin_prints_prompts_and_eval_output() {
     let output = run_repl_session("x = 42\nx\n:quit\n");
     assert!(
@@ -390,7 +491,6 @@ fn repl_pipe_stdin_prints_prompts_and_eval_output() {
     assert!(stdout.contains("xldr(2)> 42"));
 }
 
-#[test]
 fn repl_accepts_single_item_list_literal_with_trailing_comma() {
     let output = run_repl_session("[1,]\n:quit\n");
     assert!(
@@ -407,7 +507,6 @@ fn repl_accepts_single_item_list_literal_with_trailing_comma() {
 }
 
 #[cfg(unix)]
-#[test]
 fn repl_completion_candidates_render_over_pty() {
     const COMPLETION_WAIT: Duration = Duration::from_secs(10);
 
@@ -446,7 +545,6 @@ fn repl_completion_candidates_render_over_pty() {
     session.write_all(b":q\r");
 }
 
-#[test]
 fn repl_implicit_local_config_loads_workspace_file_without_asserting_value_effect() {
     let dir = unique_temp_dir("repl-implicit-local-config");
     fs::write(dir.join(".xldr.yaml"), "repl:\n  cli: {}\n").expect("config file should be written");
@@ -464,7 +562,6 @@ fn repl_implicit_local_config_loads_workspace_file_without_asserting_value_effec
 }
 
 #[cfg(unix)]
-#[test]
 fn repl_explicit_config_applies_completion_candidate_limit() {
     const COMPLETION_WAIT: Duration = Duration::from_secs(10);
 
@@ -512,7 +609,6 @@ fn repl_explicit_config_applies_completion_candidate_limit() {
     session.write_all(b":q\r");
 }
 
-#[test]
 fn repl_static_impl_methods_keep_declared_arity() {
     let output = run_repl_session(
         "print(to_string(Generator::to_list(Generator::range(1, 3))))\nprint(to_string(String::codepoints(\"a\", StringEncoding::Ascii)))\n:quit\n",
@@ -530,7 +626,6 @@ fn repl_static_impl_methods_keep_declared_arity() {
     assert!(!stdout.contains("Call arity mismatch"), "{stdout}");
 }
 
-#[test]
 fn repl_range_duration_comparisons_execute_without_arity_mismatch() {
     let output = run_repl_session(
         "print(to_string(compare(Range(10ms, 20ms), Range(10ms, 30ms))))\nprint(to_string(Range(10ms, 20ms) == Range(10ms, 20ms)))\nprint(to_string(Range(10ms, 20ms) != Range(10ms, 30ms)))\n:quit\n",
@@ -548,7 +643,6 @@ fn repl_range_duration_comparisons_execute_without_arity_mismatch() {
     assert!(!stdout.contains("Call arity mismatch"), "{stdout}");
 }
 
-#[test]
 fn repl_colorizes_sig_command_signature() {
     let output = run_repl_session_with_color(":sig print\n:quit\n");
     assert!(
@@ -568,7 +662,6 @@ fn repl_colorizes_sig_command_signature() {
     assert!(strip_ansi(&stdout).contains("Kernel::print(a: String) -> Unit"));
 }
 
-#[test]
 fn repl_sig_expression_query_flows_through_cli_presentation() {
     let output = run_repl_session(
         "ret = Ok(\"3\")\nup = {|term: String| try_from::<Int>(term)}\n:sig ret |>= up\n:quit\n",
@@ -590,7 +683,6 @@ fn repl_sig_expression_query_flows_through_cli_presentation() {
     assert!(!combined.contains("ret |>= up: Result<Int>"));
 }
 
-#[test]
 fn repl_rejects_persisting_unresolved_result_callable_binding() {
     let output = run_repl_session("todo = {|| Err(NoneError)}\n:quit\n");
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
@@ -613,7 +705,6 @@ fn repl_rejects_persisting_unresolved_result_callable_binding() {
     );
 }
 
-#[test]
 fn repl_rejects_persisting_unresolved_result_value_binding() {
     let output = run_repl_session("todo = {|| Err(NoneError)}\nret = todo()\n:quit\n");
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
@@ -628,7 +719,6 @@ fn repl_rejects_persisting_unresolved_result_value_binding() {
     assert!(!combined.contains("ret: Result<_, Error>"), "{combined}");
 }
 
-#[test]
 fn repl_rejects_direct_generator_bridge_builtin_call() {
     let output = run_repl_session("Generator::gen_make(3, [1, 2])\n:quit\n");
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
@@ -643,7 +733,6 @@ fn repl_rejects_direct_generator_bridge_builtin_call() {
     );
 }
 
-#[test]
 fn repl_persists_public_generator_bindings() {
     let output = run_repl_session(
         "g = Generator::range(1, 3)\n:type g\nGenerator::idx(g)\nGenerator::to_list(g)\n:quit\n",
@@ -668,7 +757,6 @@ fn repl_persists_public_generator_bindings() {
     assert!(stdout.contains("[1, 2, 3]"), "{stdout}");
 }
 
-#[test]
 fn repl_accepts_explicitly_constrained_result_binding() {
     let output = run_repl_session("todo: (-> Result<Int>) = {|| Err(NoneError)}\nret: Result<Int> = todo()\n:type ret\n:quit\n");
     assert!(
@@ -686,7 +774,6 @@ fn repl_accepts_explicitly_constrained_result_binding() {
     assert!(stdout.contains("type: Result<Int, Error>"), "{stdout}");
 }
 
-#[test]
 fn repl_accepts_result_mapping_when_chunk_constrains_type() {
     let output = run_repl_session(
         "todo: (-> Result<Int>) = {|| Err(NoneError)}\nmapped = todo() |*> inspect()\n:type mapped\n:quit\n",
@@ -706,7 +793,6 @@ fn repl_accepts_result_mapping_when_chunk_constrains_type() {
     assert!(stdout.contains("type: Result<String, Error>"), "{stdout}");
 }
 
-#[test]
 fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
     let output = run_repl_session(":sig |>\n:sig id(Int)\n:quit\n");
     assert!(
@@ -723,7 +809,6 @@ fn repl_sig_symbolic_operator_and_polymorphic_query_render_through_cli() {
     assert!(stdout.contains("id(Int) -> Int"));
 }
 
-#[test]
 fn repl_sig_type_owner_constructor_fallback_renders_through_cli() {
     let output = run_repl_session(":sig Duration\n:sig Duration()\n:sig Option\n:quit\n");
     assert!(
@@ -750,7 +835,6 @@ fn repl_sig_type_owner_constructor_fallback_renders_through_cli() {
     assert!(stdout.contains("* Option::None"), "{stdout}");
 }
 
-#[test]
 fn repl_doc_type_owner_prefers_canonical_type_docs() {
     let output = run_repl_session(":doc Option\n:quit\n");
     assert!(
@@ -766,7 +850,6 @@ fn repl_doc_type_owner_prefers_canonical_type_docs() {
     assert!(!stdout.contains("status: undocumented"), "{stdout}");
 }
 
-#[test]
 fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
     let output =
         run_repl_session(":sig Duration!\n:sig Duration!()\n:sig Duration!(Duration)\n:quit\n");
@@ -795,7 +878,6 @@ fn repl_sig_attached_extractor_owner_query_matches_zero_arg_form() {
     );
 }
 
-#[test]
 fn repl_range_constructor_and_extractor_queries_render_through_cli() {
     let output =
         run_repl_session(":doc Range(Int, Int)\n:sig Range\n:sig Range()\n:doc Range!()\n:sig Range!\n:sig Range!()\n:quit\n");
@@ -827,7 +909,6 @@ fn repl_range_constructor_and_extractor_queries_render_through_cli() {
     );
 }
 
-#[test]
 fn repl_sig_enum_rejects_extra_input_with_shared_message() {
     let output = run_repl_session(
         ":sig Option(Int)\n:sig Option::Some\n:sig Option::Some()\n:sig Option::Some(1)\n:sig Option::Some(Int)\n:quit\n",
@@ -851,7 +932,6 @@ fn repl_sig_enum_rejects_extra_input_with_shared_message() {
     assert!(stdout.contains("xldr(1)> xldr(1)>"), "{stdout}");
 }
 
-#[test]
 fn repl_info_renders_styled_summary_for_queries() {
     let output = run_repl_session_with_color(
         "ret = Ok(\"3\")\nup = {|term: String| try_from::<Int>(term)}\n:info ret |>= up\n:quit\n",
@@ -875,7 +955,6 @@ fn repl_info_renders_styled_summary_for_queries() {
     assert!(!plain.contains("ret |>= up: Result<Int>"), "{plain}");
 }
 
-#[test]
 fn repl_supports_session_listing_and_reload_commands() {
     let output = run_repl_session(
         "seed = 41\ndef keep() -> Int { 42 }\n:vars\n:defs\n:history\n:clear\n:reload\nkeep()\nseed\n:quit\n",
@@ -904,7 +983,6 @@ fn repl_supports_session_listing_and_reload_commands() {
     assert!(stderr.contains("Undefined variable: seed"), "{stderr}");
 }
 
-#[test]
 fn repl_sig_missing_symbol_prints_guidance() {
     let output = run_repl_session(":sig a\n:quit\n");
     assert!(
@@ -919,7 +997,6 @@ fn repl_sig_missing_symbol_prints_guidance() {
     assert!(stdout.contains(":doc <symbol>"));
 }
 
-#[test]
 fn repl_colorizes_doc_for_qualified_kernel_if() {
     let output = run_repl_session_with_color(":doc Kernel::if\n:quit\n");
     assert!(
@@ -938,7 +1015,6 @@ fn repl_colorizes_doc_for_qualified_kernel_if() {
     assert!(strip_ansi(&stdout).contains("xldr(1)> if(True, \"ok\", \"ng\")"));
 }
 
-#[test]
 fn repl_keeps_print_output_plain_while_coloring_bindings_and_values() {
     let output = run_repl_session_with_color(
         "print(\"tick 1\")\nprint(inspect(Ok(True)))\nx = 1\nStringEncoding::Utf8\n:quit\n",
@@ -967,7 +1043,6 @@ fn repl_keeps_print_output_plain_while_coloring_bindings_and_values() {
     );
 }
 
-#[test]
 fn repl_error_summary_then_full_changes_diagnostic_detail() {
     let output =
         run_repl_session(":error summary\n:error bad\n:error full\nworse: Int = \"oops\"\n:quit\n");
@@ -998,7 +1073,6 @@ fn repl_error_summary_then_full_changes_diagnostic_detail() {
     assert!(second_block.contains("╭─["));
 }
 
-#[test]
 fn repl_runtime_diagnostic_points_at_the_full_call() {
     let output = run_repl_session("safe_mod(10, 0)\n:quit\n");
     assert!(
@@ -1014,7 +1088,6 @@ fn repl_runtime_diagnostic_points_at_the_full_call() {
     assert!(stderr.contains("safe_mod(10, 0)"));
 }
 
-#[test]
 fn repl_human_diagnostic_stays_on_stderr() {
     let output = run_repl_session("defstruct User { name: String }\n:quit\n");
     assert!(
@@ -1030,7 +1103,6 @@ fn repl_human_diagnostic_stays_on_stderr() {
     assert!(stderr.contains("This top-level declaration is not allowed in REPL chunks"));
 }
 
-#[test]
 fn repl_rejects_test_module_usage() {
     let output = run_repl_session("Test::it(\"a\", {Ok(())})\n:quit\n");
     assert!(
@@ -1044,7 +1116,6 @@ fn repl_rejects_test_module_usage() {
     assert!(stderr.contains("Undefined function Test::it/2"), "{stderr}");
 }
 
-#[test]
 fn repl_script_preload_flag_exposes_preloaded_docs_and_defs() {
     let temp = unique_temp_dir("repl-script-preload");
     let source_path = temp.join("preload.srt");
@@ -1080,7 +1151,6 @@ def greet() -> String { "hello" }
     let _ = fs::remove_dir_all(temp);
 }
 
-#[test]
 fn repl_script_preload_flag_prints_preload_runtime_output_before_prompt() {
     let temp = unique_temp_dir("repl-script-preload-output");
     let source_path = temp.join("preload_output.srt");
@@ -1115,7 +1185,6 @@ value = 42
     let _ = fs::remove_dir_all(temp);
 }
 
-#[test]
 fn repl_script_preload_flag_resolves_include_and_keeps_preloaded_binding() {
     let temp = unique_temp_dir("repl-script-preload-include");
     let module_path = temp.join("m.srt");
@@ -1159,7 +1228,6 @@ answer = one()
     let _ = fs::remove_dir_all(temp);
 }
 
-#[test]
 fn repl_script_preload_top_level_sig_has_surface_name_without_docs() {
     let temp = unique_temp_dir("repl-script-top-level-sig");
     let script_path = temp.join("top_level.srt");
@@ -1193,7 +1261,6 @@ def greet(name: String) -> String { name }
     let _ = fs::remove_dir_all(temp);
 }
 
-#[test]
 fn repl_process_script_preload_survives_live_repl_process_declaration_rejection() {
     let temp = unique_temp_dir("repl-process-script-preload");
     let script_path = temp.join("process_preload.srt");
@@ -1254,7 +1321,6 @@ supervisor_init {
     let _ = fs::remove_dir_all(temp);
 }
 
-#[test]
 fn repl_process_pid_queries_cover_hidden_and_concrete_singleton_surfaces() {
     let temp = unique_temp_dir("repl-process-pid-query");
     let script_path = temp.join("process_pid_query.srt");
@@ -1326,7 +1392,6 @@ supervisor_init {
     let _ = fs::remove_dir_all(temp);
 }
 
-#[test]
 fn repl_module_and_script_preload_flags_share_one_compile_unit() {
     let temp = unique_temp_dir("repl-module-script-preload");
     let module_path = temp.join("helper.srt");
@@ -1375,7 +1440,6 @@ def from_script() -> Int { inc(1) }
     let _ = fs::remove_dir_all(temp);
 }
 
-#[test]
 fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     let output = run_repl_session(
         ":doc Tuple\n:sig Tuple\n:doc Config\n:doc StyledDocStyle\n:sig StyledDocStyle\n:doc add\nimport Add::add\n:doc add\npair = (\"alice\", 2)\nstyle = StyledDocStyle::new(Option::None, Option::None, True, False, False, False)\nresult_pair = (Ok(2), \"ok\")\n:sig pair._1\n:sig Facet::over_result(Tuple._0, result_pair, {|value: Result<Int>| Ok(value)})\n:quit\n",
@@ -1413,7 +1477,6 @@ fn repl_doc_and_sig_cover_tuple_scope_and_lens_queries() {
     );
 }
 
-#[test]
 fn repl_colorizes_closure_doc_footer_and_type_output() {
     let output =
         run_repl_session_with_color("c = {|x: Int, y: Int| x + y}\n:doc c\n:type c\n:quit\n");
@@ -1432,7 +1495,6 @@ fn repl_colorizes_closure_doc_footer_and_type_output() {
     assert!(plain.contains("identity: TypeIdentity::Closure"), "{plain}");
 }
 
-#[test]
 fn repl_supports_deferred_lens_bindings_and_lens_command() {
     let output = run_repl_session(
         "a = Tuple._1\npair = (\"alice\", 2)\nFacet::view(a, pair)\n:facet a\n:facet BitWidth.Any\n:quit\n",
@@ -1464,7 +1526,6 @@ fn repl_supports_deferred_lens_bindings_and_lens_command() {
     );
 }
 
-#[test]
 fn repl_renders_top_level_lens_chain_expressions() {
     let output =
         run_repl_session("ep = IntBase.Oct\na = Tuple._1\na / ep\nFacet::chain(a, ep)\n:quit\n");
@@ -1490,7 +1551,6 @@ fn repl_renders_top_level_lens_chain_expressions() {
     );
 }
 
-#[test]
 fn repl_reports_return_mismatch_for_concretized_trait_helper_closure() {
     let output = run_repl_session(
         "f: (String, String -> Unit) = {|x: String, y: String| concat(x, y)}\n:quit\n",
@@ -1520,7 +1580,6 @@ fn repl_reports_return_mismatch_for_concretized_trait_helper_closure() {
     );
 }
 
-#[test]
 fn repl_propagates_apply_context_into_nested_pure() {
     let output = run_repl_session(
         "l: Result<(Int -> Int)> = Applicative::pure({|n| n + 10})\nApplicative::ap(l, Applicative::pure(10))\n:quit\n",
@@ -1550,7 +1609,6 @@ fn repl_propagates_apply_context_into_nested_pure() {
     );
 }
 
-#[test]
 fn repl_infers_monad_return_context_from_bind_rhs() {
     let output = run_repl_session("Monad::return(1) |>= {|n| Ok(10 + n)}\n:quit\n");
     assert!(
@@ -1572,7 +1630,6 @@ fn repl_infers_monad_return_context_from_bind_rhs() {
     );
 }
 
-#[test]
 fn repl_allows_trait_helper_capture_with_expected_callable_annotation() {
     let output = run_repl_session(
         "cmp: (Int, Int -> Ordering) = &compare\njoin: (String, String -> String) = &concat\ncmp(1, 2)\njoin(\"sur\", \"tr\")\n:quit\n",
@@ -1597,7 +1654,6 @@ fn repl_allows_trait_helper_capture_with_expected_callable_annotation() {
     assert!(stdout.contains("\"surtr\""), "{stdout}");
 }
 
-#[test]
 fn repl_allows_trait_helper_capture_when_function_on_supplies_same_expression_evidence() {
     let output = run_repl_session(
         "by_len = &compare `Function::on` &String::len\nby_len(\"a\", \"abcd\")\n:quit\n",
@@ -1617,7 +1673,6 @@ fn repl_allows_trait_helper_capture_when_function_on_supplies_same_expression_ev
     assert!(stdout.contains("Ordering::Less"), "{stdout}");
 }
 
-#[test]
 fn repl_rejects_function_on_inferred_facet_capture_without_source_evidence() {
     let output = run_repl_session("by_age = &compare `Function::on` _.age\n:quit\n");
     assert!(
@@ -1640,7 +1695,6 @@ fn repl_rejects_function_on_inferred_facet_capture_without_source_evidence() {
     );
 }
 
-#[test]
 fn repl_keeps_bare_trait_helper_capture_unresolved_without_same_expression_evidence() {
     let output = run_repl_session("cmp = &compare\n:quit\n");
     assert!(
@@ -1663,7 +1717,6 @@ fn repl_keeps_bare_trait_helper_capture_unresolved_without_same_expression_evide
     );
 }
 
-#[test]
 fn repl_eprint_reports_generation_site_line() {
     let output = run_repl_session(
         "err_result: Result<Int> = Err(NoneError)\nmatch err_result {\n  Ok(num) => print(to_string(num)),\n  Err(e)  => eprint(e)\n}\n:quit\n",
