@@ -1,6 +1,29 @@
 use super::*;
 
 impl Checker {
+    /// Public identity is independent of session-local declaration numbering.
+    pub(super) fn diagnostic_constructor_family_id(&self, trait_key: &str) -> String {
+        let family = self.constructor_family_key(trait_key);
+        let mut identities = family
+            .0
+            .iter()
+            .map(|id| {
+                let info = self
+                    .traits
+                    .values()
+                    .find(|info| info.id.unique_id == *id)
+                    .expect("family member metadata");
+                info.id
+                    .qualified_name
+                    .as_deref()
+                    .unwrap_or(&info.id.name)
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        identities.sort();
+        format!("family:{}", identities.join("+"))
+    }
+
     pub(super) fn constructor_family_witness_root(&self, mut witness: u32) -> Option<u32> {
         let mut visited = HashSet::new();
         while let Some(shared) = self.constructor_family_witnesses.get(&witness).copied() {

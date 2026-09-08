@@ -169,7 +169,7 @@ fn structured_type_diagnostic_projects_the_same_facts_to_json_and_rendering() {
         diagnostic.reason.as_deref(),
         Some("ReturnTypeArgumentMismatch")
     );
-    assert_eq!(diagnostic.related.len(), 1);
+    assert_eq!(diagnostic.related.len(), 2);
     assert_eq!(diagnostic.data["ordinal"], 0);
     assert_eq!(diagnostic.expected.as_deref(), Some("Option"));
     assert_eq!(diagnostic.got.as_deref(), Some("List"));
@@ -218,7 +218,9 @@ fn rejected_trait_candidates_preserve_structured_failure_details() {
     let source_id = sources.register("main.srt", "Monad::return(1) |>= {|x| x + 1}");
     let input = StructuredDiagnostic {
         reason: TypeDiagnosticReason::NoApplicableTraitImplementation,
-        origin: DiagnosticOrigin::Operator,
+        origin: DiagnosticOrigin::Operator {
+            operator: "+".into(),
+        },
         data: DiagnosticData::CandidateSelection(CandidateSelectionData {
             trait_name: "Monad".into(),
             method: "bind".into(),
@@ -249,7 +251,7 @@ fn rejected_trait_candidates_preserve_structured_failure_details() {
         report.errors[0].reason.as_deref(),
         Some("NoApplicableTraitImplementation")
     );
-    assert_eq!(report.errors[0].data["kind"], "CandidateSelection");
+    assert_eq!(report.errors[0].data["kind"], "TraitDispatch");
     assert_eq!(
         report.errors[0].data["failures"][0]["detail"],
         "right-hand side returns Int"
@@ -302,6 +304,7 @@ fn trait_method_type_list_preserves_path_and_both_origins() {
         reason: TypeDiagnosticReason::TraitMethodTypeListMismatch,
         origin: DiagnosticOrigin::Declaration,
         data: DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
+            identity: None,
             method_name: "Build::build".into(),
             role: TypeListRole::ReturnType,
             ordinal: 0,
@@ -349,6 +352,7 @@ fn trait_method_constraints_preserve_expected_and_actual_sets() {
         reason: TypeDiagnosticReason::TraitMethodConstraintMismatch,
         origin: DiagnosticOrigin::Declaration,
         data: DiagnosticData::TraitMethodConstraint(TraitMethodConstraintData {
+            identity: None,
             method_name: "Display::show".into(),
             expected_constraints: vec!["$0: Eq".into()],
             actual_constraints: vec!["$0: Compare".into()],
@@ -376,6 +380,7 @@ fn trait_method_arity_displays_expected_and_actual_counts() {
         reason: TypeDiagnosticReason::TraitMethodTypeListArityMismatch,
         origin: DiagnosticOrigin::Declaration,
         data: DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
+            identity: None,
             method_name: "Make::make".into(),
             role: TypeListRole::ReturnTypeArgument,
             ordinal: 0,
@@ -392,4 +397,37 @@ fn trait_method_arity_displays_expected_and_actual_counts() {
     let spec = structured_type_error_spec(&input);
     assert!(spec.message.contains("ReturnTypeArgument"));
     assert!(spec.message.contains("expected 1, got 0"));
+}
+
+#[test]
+fn structured_diagnostics_never_extract_optional_fields_from_prose() {
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register("main.srt", "value");
+    let input = StructuredDiagnostic {
+        reason: TypeDiagnosticReason::MissingTraitCapability,
+        origin: DiagnosticOrigin::Call,
+        data: DiagnosticData::TraitObligation(crate::TraitObligationData {
+            trait_arguments: vec![],
+            trait_name: "Show".into(),
+            subject_type: "Box<Int>".into(),
+            position: Some(0),
+        }),
+        primary: SourceFact::typed(
+            SourceRole::Value,
+            source_id,
+            Span { start: 0, end: 5 },
+            "Box<Int>",
+        ),
+        related: vec![],
+        remediation: None,
+    };
+    let mut spec = structured_type_error_spec(&input);
+    spec.message = "expected Fake, got Forged".into();
+    let json = serializable_report_by_id(&sources, source_id, "typecheck", &spec);
+    assert_eq!(json.errors[0].expected, None);
+    assert_eq!(json.errors[0].got, None);
+    assert_eq!(
+        json.errors[0].reason.as_deref(),
+        Some("MissingTraitCapability")
+    );
 }

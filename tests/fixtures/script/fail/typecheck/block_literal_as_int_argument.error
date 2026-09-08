@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Expected function type, got Int
+contains: closure does not match expected type Int

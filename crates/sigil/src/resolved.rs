@@ -151,6 +151,9 @@ pub enum Resolved {
     /// Parenthesized expression preserved for operator RHS disambiguation.
     Grouped(Span, Box<Resolved>),
 
+    /// Ordered cond conditions and bodies; lowered after type checking.
+    Cond(Span, Vec<(Resolved, Resolved)>),
+
     /// Interpolated string
     InterpolatedStr(Span, Vec<ResolvedInterpolatedPart>),
 
@@ -177,6 +180,7 @@ pub enum Resolved {
 
     /// Match expression
     Match(Span, Box<Resolved>, Vec<ResolvedMatchArm>),
+    IfLet(Span, Box<Resolved>, Vec<ResolvedMatchArm>),
 
     /// Field access: `expr.field`
     FieldAccess(Span, Box<Resolved>, Symbol),

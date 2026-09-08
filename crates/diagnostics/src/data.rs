@@ -92,13 +92,14 @@ impl TypeDiagnosticReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
 pub enum DiagnosticOrigin {
     Call,
     TraitCall,
-    Operator,
+    Operator { operator: String },
     Annotation,
     Return,
-    Branch,
+    Branch { form: BranchForm, ordinal: u32 },
     Pattern,
     Declaration,
     Intrinsic,
@@ -106,7 +107,16 @@ pub enum DiagnosticOrigin {
     ReturnTypeArgument { ordinal: u32 },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BranchForm {
+    If,
+    IfLet,
+    Match,
+    Cond,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SourceRole {
     Value,
     ReturnTypeArgument,
@@ -118,6 +128,7 @@ pub enum SourceRole {
     LeftValue,
     RightValue,
     Branch,
+    Guard,
     Pattern,
     Declaration,
     CallTarget,
@@ -125,6 +136,26 @@ pub enum SourceRole {
 }
 
 impl SourceRole {
+    pub const fn json_name(self) -> &'static str {
+        match self {
+            Self::Value => "value",
+            Self::ReturnTypeArgument => "return_type_argument",
+            Self::Annotation => "annotation",
+            Self::Expected => "expected",
+            Self::Contract => "contract",
+            Self::Impl => "impl",
+            Self::Trait => "trait",
+            Self::LeftValue => "left_value",
+            Self::RightValue => "right_value",
+            Self::Branch => "branch",
+            Self::Guard => "guard",
+            Self::Pattern => "pattern",
+            Self::Declaration => "declaration",
+            Self::CallTarget => "call_target",
+            Self::Other => "other",
+        }
+    }
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Value => "Value",
@@ -137,6 +168,7 @@ impl SourceRole {
             Self::LeftValue => "LeftValue",
             Self::RightValue => "RightValue",
             Self::Branch => "Branch",
+            Self::Guard => "Guard",
             Self::Pattern => "Pattern",
             Self::Declaration => "Declaration",
             Self::CallTarget => "CallTarget",
@@ -154,6 +186,7 @@ pub struct DeclarationIdentity {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SourceFact {
     pub role: SourceRole,
+    pub ordinal: Option<u32>,
     pub source_id: crate::SourceId,
     pub span: Span,
     pub ty: Option<String>,
@@ -169,6 +202,7 @@ impl SourceFact {
     ) -> Self {
         Self {
             role,
+            ordinal: None,
             source_id,
             span,
             ty: Some(ty.into()),
@@ -179,12 +213,35 @@ impl SourceFact {
     pub fn untyped(role: SourceRole, source_id: crate::SourceId, span: Span) -> Self {
         Self {
             role,
+            ordinal: None,
             source_id,
             span,
             ty: None,
             declaration_identity: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum CallableReturnShape {
+    Any,
+    Plain,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CallableShapeData {
+    pub callable: String,
+    pub actual_type: Option<String>,
+    pub expected_arity: Option<u32>,
+    pub actual_arity: Option<u32>,
+    pub return_shape: CallableReturnShape,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ArgumentContractData {
+    pub callable: String,
+    pub name: Option<String>,
+    pub expected_count: u32,
+    pub actual_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -226,7 +283,15 @@ impl TypeListRole {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TraitDiagnosticIdentity {
+    pub trait_id: String,
+    pub trait_arguments: Vec<String>,
+    pub subject_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TraitMethodTypeListData {
+    pub identity: Option<TraitDiagnosticIdentity>,
     pub method_name: String,
     pub role: TypeListRole,
     pub ordinal: u32,
@@ -239,6 +304,7 @@ pub struct TraitMethodTypeListData {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TraitMethodConstraintData {
+    pub identity: Option<TraitDiagnosticIdentity>,
     pub method_name: String,
     pub expected_constraints: Vec<String>,
     pub actual_constraints: Vec<String>,
@@ -262,6 +328,7 @@ pub struct ConstraintSubjectData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TraitObligationData {
     pub trait_name: String,
+    pub trait_arguments: Vec<String>,
     pub subject_type: String,
     pub position: Option<u32>,
 }
@@ -269,7 +336,8 @@ pub struct TraitObligationData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TraitDispatchData {
     pub trait_name: String,
-    pub method: String,
+    pub trait_arguments: Vec<String>,
+    pub method: Option<String>,
     pub subject_type: Option<String>,
 }
 
@@ -289,6 +357,7 @@ pub struct CandidateSelectionData {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct TypeConstructorCarrierData {
     pub family: String,
+    pub family_id: String,
     pub expected_carrier: String,
     pub actual_carrier: String,
 }
@@ -319,6 +388,8 @@ pub struct RuntimeData {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DiagnosticData {
+    CallableShape(CallableShapeData),
+    ArgumentContract(ArgumentContractData),
     ArgumentRelation(ArgumentRelationData),
     ReturnTypeArgument(ReturnTypeArgumentData),
     CallableSignature(CallableSignatureData),
@@ -341,6 +412,8 @@ impl DiagnosticData {
     /// addressable to keep the JSON contract useful to clients.
     pub fn to_json_value(&self) -> Value {
         let (kind, payload) = match self {
+            Self::CallableShape(value) => ("CallableShape", serde_json::to_value(value)),
+            Self::ArgumentContract(value) => ("ArgumentContract", serde_json::to_value(value)),
             Self::ArgumentRelation(value) => ("ArgumentRelation", serde_json::to_value(value)),
             Self::ReturnTypeArgument(value) => ("ReturnTypeArgument", serde_json::to_value(value)),
             Self::CallableSignature(value) => ("CallableSignature", serde_json::to_value(value)),
@@ -407,5 +480,19 @@ impl StructuredDiagnostic {
             Remediation::Candidates { items } if items.is_empty() => None,
             Remediation::Candidates { items } => Some(items.join("\n")),
         }
+    }
+}
+
+impl StructuredDiagnostic {
+    pub fn map_source_locations(
+        mut self,
+        mut map: impl FnMut(&Span) -> (crate::SourceId, Span),
+    ) -> Self {
+        for fact in std::iter::once(&mut self.primary).chain(self.related.iter_mut()) {
+            let (source_id, span) = map(&fact.span);
+            fact.source_id = source_id;
+            fact.span = span;
+        }
+        self
     }
 }

@@ -127,6 +127,12 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 collect_captures_inner(elem, bound, free);
             }
         }
+        Resolved::Cond(_, clauses) => {
+            for (condition, body) in clauses {
+                collect_captures_inner(condition, bound, free);
+                collect_captures_inner(body, bound, free);
+            }
+        }
         Resolved::Grouped(_, inner) => collect_captures_inner(inner, bound, free),
         Resolved::InterpolatedStr(_, parts) => {
             for part in parts {
@@ -164,7 +170,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(value, bound, free);
             collect_captures_inner(handler, bound, free);
         }
-        Resolved::Match(_, scrutinee, arms) => {
+        Resolved::Match(_, scrutinee, arms) | Resolved::IfLet(_, scrutinee, arms) => {
             collect_captures_inner(scrutinee, bound, free);
             for arm in arms {
                 let mut arm_bound = bound.clone();

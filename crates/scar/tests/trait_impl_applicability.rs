@@ -77,7 +77,14 @@ fn impl_where_rejects_a_concrete_subject_without_capability() {
         "Read::read(Box::new(1), 2)",
     );
     let error = check(&source).expect_err("impl where must be proved");
-    assert!(error.message.contains("implementing Read<Int>"), "{error}");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation)
+    );
+    let data = error.structured.as_ref().unwrap().data_json();
+    assert_eq!(data["trait_id"], "Read");
+    assert_eq!(data["trait_arguments"].as_array().unwrap().len(), 1);
+    assert_eq!(data["trait_arguments"][0], "Int");
 }
 
 #[test]
@@ -90,7 +97,14 @@ fn full_head_requires_trait_arguments_and_subject_in_one_mapping() {
         "Pick::pick(Box::new(1), 2)",
     );
     let error = check(&source).expect_err("no complete head matches");
-    assert!(error.message.contains("implementing Pick<Int>"), "{error}");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation)
+    );
+    let data = error.structured.as_ref().unwrap().data_json();
+    assert_eq!(data["trait_id"], "Pick");
+    assert_eq!(data["trait_arguments"].as_array().unwrap().len(), 1);
+    assert_eq!(data["trait_arguments"][0], "Int");
 }
 
 #[test]

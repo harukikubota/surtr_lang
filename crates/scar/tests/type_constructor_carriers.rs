@@ -159,12 +159,14 @@ use(Box::Box(1), Box::Box(2))
 "#,
     )
     .expect_err("aliasing must not grant a stronger constructor capability");
-    assert!(
-        error
-            .to_string()
-            .contains("Monad::run is not available for a value constrained by Functor"),
-        "{error}"
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+        "{error:?}"
     );
+    let data = error.structured.as_ref().unwrap().data_json();
+    assert!(data["family_id"].as_str().unwrap().starts_with("family:"));
+    assert_eq!(data["required_capability"], "Monad");
 }
 
 #[test]
@@ -185,12 +187,14 @@ use(Box::Box(1))
 "#,
     )
     .expect_err("generic value forwarding must not grant a stronger capability");
-    assert!(
-        error
-            .to_string()
-            .contains("Monad::run is not available for a value constrained by Functor"),
-        "{error}"
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+        "{error:?}"
     );
+    let data = error.structured.as_ref().unwrap().data_json();
+    assert!(data["family_id"].as_str().unwrap().starts_with("family:"));
+    assert_eq!(data["required_capability"], "Monad");
 }
 
 #[test]
@@ -217,12 +221,14 @@ use(Box::Box(1), Box::Box(2))
 "#,
     )
     .expect_err("forwarding must retain every incomparable common capability");
-    assert!(
-        error.to_string().contains(
-            "Stronger::run is not available for a value constrained by FirstRoot + SecondRoot"
-        ),
-        "{error}"
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+        "{error:?}"
     );
+    let data = error.structured.as_ref().unwrap().data_json();
+    assert!(data["family_id"].as_str().unwrap().starts_with("family:"));
+    assert_eq!(data["required_capability"], "Stronger");
 }
 
 #[test]
@@ -310,12 +316,14 @@ def use(a: Left<Int>, b: Right<Int>) -> Int {{
 use(Box::Box(1), Box::Box(2))"#
     ))
     .expect_err("an empty guarantee intersection remains constrained");
-    assert!(
-        error
-            .to_string()
-            .contains("function requires a value constrained by Stronger, got a constrained value with no guaranteed constructor capability"),
-        "{error}"
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+        "{error:?}"
     );
+    let data = error.structured.as_ref().unwrap().data_json();
+    assert!(data["family_id"].as_str().unwrap().starts_with("family:"));
+    assert_eq!(data["required_capability"], "Stronger");
 }
 
 #[test]
@@ -333,12 +341,14 @@ use(Box::Box(1))
 "#,
     )
     .expect_err("ordinary calls must enforce the parameter's constructor capability");
-    assert!(
-        error.to_string().contains(
-            "function requires a value constrained by Monad, got a value constrained by Functor"
-        ),
-        "{error}"
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+        "{error:?}"
     );
+    let data = error.structured.as_ref().unwrap().data_json();
+    assert!(data["family_id"].as_str().unwrap().starts_with("family:"));
+    assert_eq!(data["required_capability"], "Monad");
 }
 
 #[test]
@@ -359,12 +369,14 @@ use(Box::Box(1), Box::Box(2))
 "#,
     )
     .expect_err("each Self argument must satisfy the method trait capability");
-    assert!(
-        error
-            .to_string()
-            .contains("Monad::combine is not available for a value constrained by Functor"),
-        "{error}"
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+        "{error:?}"
     );
+    let data = error.structured.as_ref().unwrap().data_json();
+    assert!(data["family_id"].as_str().unwrap().starts_with("family:"));
+    assert_eq!(data["required_capability"], "Monad");
 }
 
 #[test]
@@ -455,4 +467,54 @@ result: Box<String> = replace([1])
 "#,
     )
     .expect_err("return and input occurrences share the same family carrier");
+}
+
+#[test]
+fn family_diagnostic_identity_and_full_types_do_not_depend_on_registration_order() {
+    let mut identities = Vec::new();
+    for definitions in [
+        "deftrait Left where Self: Type<$A> {}\ndeftrait Right where Self: Type<$A> {}",
+        "deftrait Right where Self: Type<$A> {}\ndeftrait Left where Self: Type<$A> {}",
+    ] {
+        let source = format!(
+            r#"
+{definitions}
+deftrait Joined where Self: Left + Right {{}}
+defenum Carrier<$L, $R> {{ Pair($L, $R), }}
+impl Left for Carrier<$L, $R> where $R: Left.$A {{}}
+impl Right for Carrier<$L, $R> where $R: Right.$A {{}}
+def accept(first: Left<Int>, second: Right<Boolean>) -> Unit {{ () }}
+accept(Carrier::Pair("left", 1), Carrier::Pair(2, True))
+"#
+        );
+        let error = check(&source).expect_err("captured argument changed");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::TypeConstructorFamilyMismatch)
+        );
+        let diagnostic = error.structured.unwrap();
+        let json = diagnostic.data_json();
+        assert_eq!(json["left_type"], "Carrier<String, Int>");
+        assert_eq!(json["right_type"], "Carrier<Int, Boolean>");
+        identities.push(json["family_id"].as_str().unwrap().to_owned());
+    }
+    assert_eq!(identities[0], identities[1]);
+    assert_eq!(identities[0], "family:Joined+Left+Right");
+}
+
+#[test]
+fn zero_argument_helper_checks_explicit_payload_against_expected_return() {
+    let error = check(
+        r#"
+deftrait Factory where Self: Type<$A> { def make::<Self, $T>() -> Self<$T> }
+impl Factory for List<$A> { def make::<Self, $T>() -> List<$T> { [] } }
+value: List<String> = Factory::make::<List, Int>()
+"#,
+    )
+    .expect_err("explicit Int payload cannot be replaced by expected String");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ReturnTypeArgumentMismatch),
+        "{error:?}"
+    );
 }

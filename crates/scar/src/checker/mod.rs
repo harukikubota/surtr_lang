@@ -29,6 +29,7 @@ mod expr;
 mod matching;
 mod patterns;
 mod predeclare;
+mod relations;
 mod signatures;
 mod specialize;
 mod trait_selection;
@@ -3923,6 +3924,12 @@ impl Checker {
                 self.validate_constructor_body_positions(left, constructor_traits)?;
                 self.validate_constructor_body_positions(right, constructor_traits)?;
             }
+            Resolved::Cond(_, clauses) => {
+                for (condition, body) in clauses {
+                    self.validate_constructor_body_positions(condition, constructor_traits)?;
+                    self.validate_constructor_body_positions(body, constructor_traits)?;
+                }
+            }
             Resolved::If(_, cond, then_branch, else_branch) => {
                 self.validate_constructor_body_positions(cond, constructor_traits)?;
                 self.validate_constructor_body_positions(then_branch, constructor_traits)?;
@@ -3935,7 +3942,7 @@ impl Checker {
                 self.validate_constructor_body_positions(b, constructor_traits)?;
                 self.validate_constructor_body_positions(c, constructor_traits)?;
             }
-            Resolved::Match(_, scrutinee, arms) => {
+            Resolved::Match(_, scrutinee, arms) | Resolved::IfLet(_, scrutinee, arms) => {
                 self.validate_constructor_body_positions(scrutinee, constructor_traits)?;
                 for arm in arms {
                     self.validate_constructor_pattern(&arm.pattern, constructor_traits)?;
@@ -4263,11 +4270,16 @@ impl Checker {
             if let Some(start) = t {
                 specialize_program_dur = start.elapsed();
             }
-            if let Some((method_name, span)) = specialized
+            if let Some((trait_name, method_name, subject, span)) = specialized
                 .iter()
                 .find_map(|node| self.first_pending_trait_helper(node))
             {
-                return Err(self.pending_trait_helper_error(method_name, span));
+                return Err(self.pending_trait_helper_error(
+                    trait_name,
+                    method_name,
+                    subject,
+                    span,
+                ));
             }
             self.collect_unused_value_warnings_in_sequence(&specialized);
             Ok(specialized)
@@ -4341,10 +4353,11 @@ impl Checker {
             Resolved::EnumDef(_, id, ..) => format!("EnumDef {}", id.name),
             Resolved::Bind(..) => "Bind".to_string(),
             Resolved::SafeBind(..) => "SafeBind".to_string(),
-            Resolved::Match(..) => "Match".to_string(),
+            Resolved::Match(..) | Resolved::IfLet(..) => "Match".to_string(),
             Resolved::Block(..) => "Block".to_string(),
             Resolved::App(..) => "App".to_string(),
             Resolved::Dbg(..) => "Dbg".to_string(),
+            Resolved::Cond(..) => "Cond".to_string(),
             Resolved::If(..) => "If".to_string(),
             Resolved::Ensure(..) => "Ensure".to_string(),
             Resolved::Assert(..) => "Assert".to_string(),
@@ -4373,10 +4386,11 @@ impl Checker {
             Resolved::EnumDef(..) => "EnumDef",
             Resolved::Bind(..) => "Bind",
             Resolved::SafeBind(..) => "SafeBind",
-            Resolved::Match(..) => "Match",
+            Resolved::Match(..) | Resolved::IfLet(..) => "Match",
             Resolved::Block(..) => "Block",
             Resolved::App(..) => "App",
             Resolved::Dbg(..) => "Dbg",
+            Resolved::Cond(..) => "Cond",
             Resolved::If(..) => "If",
             Resolved::Ensure(..) => "Ensure",
             Resolved::Assert(..) => "Assert",

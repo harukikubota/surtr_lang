@@ -581,8 +581,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         eq_helper_typechecks_as_trait_call as fn(),
     ),
     (
-        "eq_helper_mismatch_uses_operator_helper_message",
-        eq_helper_mismatch_uses_operator_helper_message as fn(),
+        "eq_helper_mismatch_uses_shared_reason",
+        eq_helper_mismatch_uses_shared_reason as fn(),
     ),
     (
         "shadowed_eq_keeps_generic_call_mismatch_message",
@@ -942,24 +942,24 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         scar_session_preserves_trait_registry_across_chunks as fn(),
     ),
     (
-        "add_trait_mismatch_lists_available_implementations",
-        add_trait_mismatch_lists_available_implementations as fn(),
+        "add_trait_mismatch_retains_typed_signature_relation",
+        add_trait_mismatch_retains_typed_signature_relation as fn(),
     ),
     (
         "trait_method_call_rejects_named_arguments_without_panic",
         trait_method_call_rejects_named_arguments_without_panic as fn(),
     ),
     (
-        "add_trait_missing_receiver_lists_available_implementations",
-        add_trait_missing_receiver_lists_available_implementations as fn(),
+        "add_trait_missing_receiver_retains_obligation",
+        add_trait_missing_receiver_retains_obligation as fn(),
     ),
     (
-        "add_operator_missing_impl_lists_available_implementations_in_hint",
-        add_operator_missing_impl_lists_available_implementations_in_hint as fn(),
+        "add_operator_missing_impl_retains_obligation",
+        add_operator_missing_impl_retains_obligation as fn(),
     ),
     (
-        "bind_operator_missing_impl_lists_available_implementations_in_hint",
-        bind_operator_missing_impl_lists_available_implementations_in_hint as fn(),
+        "bind_operator_missing_impl_retains_obligation",
+        bind_operator_missing_impl_retains_obligation as fn(),
     ),
     (
         "from_helper_typechecks_as_generic_trait_call",
@@ -2466,7 +2466,9 @@ updated: Result<User> = Facet::put(User.name, User("alice"), "bob")"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("Facet::put should explain Result annotation mismatch");
-    assert!(err.message.contains("expected Result<User>, got User"));
+    assert!(err
+        .message
+        .contains("expected Result<User, Error>, got User"));
 }
 
 fn facet_put_rejects_result_return_context() {
@@ -2478,7 +2480,9 @@ def rename() -> Result<User> {
         RuntimeSourcePolicy::script(),
     )
     .expect_err("Facet::put should explain Result return mismatch");
-    assert!(err.message.contains("expected Result<User>, got User"));
+    assert!(err
+        .message
+        .contains("expected Result<User, Error>, got User"));
 }
 
 fn facet_over_requires_unary_result_callable() {
@@ -2528,14 +2532,14 @@ fn optional_type_annotation_rejects_result_value() {
 boxed = Boxed(Ok(1))"#,
     );
     let err = typecheck(resolved).expect_err("Result value should not typecheck for Int?");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ArgumentTypeMismatch)
+    );
     assert!(
         err.message
-            .contains("expected Option<Int>, got Result<Int>")
-            || err
-                .message
-                .contains("Record field value expected Option<Int>, got Result<Int>"),
-        "{}",
-        err.message
+            .contains("expected Option<Int>, got Result<Int, Error>"),
+        "{err:?}"
     );
 }
 
@@ -3687,9 +3691,9 @@ result = Use::use(values)"#,
     );
 
     let err = typecheck(resolved).expect_err("unsatisfied impl bound must reject dispatch");
-    assert!(
-        err.message
-            .contains("Use::use requires a receiver type implementing Use"),
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
         "{err:?}"
     );
     assert!(err.message.contains("List<Int>"), "{err:?}");
@@ -4566,7 +4570,11 @@ def make::<Context>(flag: Boolean) -> Context<Int> {
     )
     .expect_err("all contextual result paths must resolve to one constructor");
 
-    assert!(err.message.contains("MixedConstructorResult"), "{err:?}");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::IfBranchTypeMismatch),
+        "{err:?}"
+    );
 }
 
 #[test]
@@ -5045,9 +5053,14 @@ def invalid(value: Applicative<$A>) -> Applicative<$A> {
         RuntimeSourcePolicy::script(),
     )
     .expect_err("an Applicative binding must not expose Monad operations");
-    assert!(
-        err.message.contains("Monad::bind is not available") && err.message.contains("Applicative"),
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
         "{err:?}"
+    );
+    assert_eq!(
+        err.structured.as_ref().unwrap().data_json()["required_capability"],
+        "Monad"
     );
 
     typecheck_with_rules(
@@ -5180,9 +5193,8 @@ impl Keep for Int {
     )
     .expect_err("an impl body cannot specialize its method generic to String");
     assert!(
-        !err.message.contains("expected $")
-            && err.message.contains("expected the inferred argument type")
-            && err.message.contains("got String"),
+        err.reason() == Some(diagnostics::TypeDiagnosticReason::ReturnTypeMismatch)
+            && err.message.contains("expected $A, got String"),
         "{err:?}"
     );
 }
@@ -5590,12 +5602,16 @@ fn eq_helper_typechecks_as_trait_call() {
     }
 }
 
-fn eq_helper_mismatch_uses_operator_helper_message() {
+fn eq_helper_mismatch_uses_shared_reason() {
     let resolved = resolve_with_builtin_prelude("print(to_string(eq(1, True)))");
     let err = typecheck(resolved).expect_err("eq helper mismatch must fail");
-    assert!(err
-        .message
-        .contains("Eq::eq helper cannot compare Int and Boolean"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ArgumentTypeMismatch)
+    );
+    let data = err.structured.as_ref().unwrap().data_json();
+    assert_eq!(data["expected_type"], "Int");
+    assert_eq!(data["actual_type"], "Boolean");
 }
 
 fn shadowed_eq_keeps_generic_call_mismatch_message() {
@@ -5940,11 +5956,17 @@ def inc(x: Int) -> Int {
 bad = &text >> &inc"#,
     );
     let err = typecheck(resolved).expect_err("compose mismatch should fail");
-    assert!(err.message.contains("left output type"));
-    let hint = err.hint.as_deref().expect("compose mismatch hint");
-    assert!(hint.contains("Left output is String; right input is Int"));
-    assert!(hint.contains("LHS: (Int -> String)"));
-    assert!(hint.contains("RHS: (Int -> Int)"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ArgumentTypeMismatch)
+    );
+    let facts = err.structured.as_ref().unwrap();
+    let types = std::iter::once(&facts.primary)
+        .chain(facts.related.iter())
+        .filter_map(|fact| fact.ty.as_deref())
+        .collect::<Vec<_>>();
+    assert!(types.contains(&"(Int -> String)"));
+    assert!(types.contains(&"(Int -> Int)"));
 }
 
 fn compose_accepts_calls_returning_function_values() {
@@ -5971,7 +5993,10 @@ fn compose_rejects_non_function_call_results_after_typechecking_call() {
 plain = inc(1) >> inc(1)"#,
     );
     let err = typecheck(resolved).expect_err("compose should reject Int call results");
-    assert_eq!(err.message, "`>>` requires a function value");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NotCallable)
+    );
     let hint = err.hint.as_deref().expect("compose function-value hint");
     assert!(hint.contains("Call target signature:"));
     assert!(hint.contains("result type Int is not a function value"));
@@ -5980,9 +6005,11 @@ plain = inc(1) >> inc(1)"#,
 fn closure_trait_helper_binding_requires_concrete_callable_boundary() {
     let resolved = resolve_with_builtin_prelude(r#"cmp = {|left, right| compare(left, right)}"#);
     let err = typecheck(resolved).expect_err("unresolved closure helper binding must fail");
-    assert!(err
-        .message
-        .contains("Trait helper `compare` could not be concretized for this callable binding"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::UnresolvedTraitMethodInstantiation),
+        "{err:?}"
+    );
 }
 
 fn closure_trait_helper_binding_accepts_binding_annotation() {
@@ -6026,12 +6053,24 @@ def inc(x: Int) -> Int {
 bad = parse(1) |> &inc"#,
     );
     let err = typecheck(resolved).expect_err("plain pipe over Result should fail");
-    assert!(err.message.contains("expected Int, got Result<Int>"));
-    let hint = err.hint.as_deref().expect("operator rule hint");
-    assert!(hint.contains("`|>` signature rule"));
-    assert!(hint.contains("LHS: Result<Int>"));
-    assert!(hint.contains("RHS: (Int -> Int)"));
-    assert!(!hint.contains("`|*>`"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ArgumentTypeMismatch)
+    );
+    let diagnostic = err.structured.as_ref().expect("structured pipe relation");
+    let diagnostics::DiagnosticData::ArgumentRelation(data) = &diagnostic.data else {
+        panic!("{err:?}")
+    };
+    assert_eq!(data.expected_type.as_deref(), Some("Int"));
+    assert!(
+        data.actual_type
+            .as_deref()
+            .is_some_and(|ty| ty.starts_with("Result<Int")),
+        "{err:?}"
+    );
+    assert!(
+        matches!(&diagnostic.origin, diagnostics::DiagnosticOrigin::Operator { operator } if operator == "|>")
+    );
 }
 
 fn context_bind_rejects_plain_rhs_return() {
@@ -6047,13 +6086,11 @@ def inc(x: Int) -> Int {
 bad = parse(1) |>= &inc"#,
     );
     let err = typecheck(resolved).expect_err("bind with plain RHS should fail");
-    assert!(err
-        .message
-        .contains("requires the right-hand side to return Result, got Int"));
-    let hint = err.hint.as_deref().expect("operator rule hint");
-    assert!(hint.contains("`|>=` signature rule"));
-    assert!(hint.contains("RHS: (Int -> Int)"));
-    assert!(hint.contains("Use `|*>`"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::TypeConstructorFamilyMismatch),
+        "{err:?}"
+    );
 }
 
 fn constructor_context_bind_preserves_candidate_failures() {
@@ -6602,9 +6639,11 @@ fn result_match_wildcard_self_requires_err_proven_branch() {
 fn closure_param_annotation_must_match_expected_signature() {
     let resolved = resolve_with_builtin_prelude(r#"id: (String -> String) = {|value: Int| value}"#);
     let err = typecheck(resolved).expect_err("mismatched expected signature must fail");
-    assert!(err
-        .message
-        .contains("closure parameter `value` expected String, got Int"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::AnnotationTypeMismatch),
+        "{err:?}"
+    );
 }
 
 fn local_binding_annotation_can_reference_outer_generic_type_param() {
@@ -6784,7 +6823,10 @@ fn constructor_named_args_reject_duplicate_fields() {
 pair = Pair(first: 1, first: 2)"#,
     );
     let err = typecheck(resolved).expect_err("duplicate named args must fail");
-    assert!(err.message.contains("Duplicate field 'first' in Pair"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::DuplicateArgument)
+    );
 }
 
 fn struct_literal_field_shorthand_typechecks() {
@@ -7687,55 +7729,61 @@ fn scar_session_preserves_trait_registry_across_chunks() {
     }));
 }
 
-fn add_trait_mismatch_lists_available_implementations() {
+fn add_trait_mismatch_retains_typed_signature_relation() {
     let resolved = resolve_with_builtin_prelude("value = Add::add(1, False)");
     let err = typecheck(resolved).expect_err("mismatched add trait call must fail");
-    assert!(err.message.contains("Add::add expects argument 2"));
-    assert!(err.message.contains("receiver type Int"));
-    assert!(err.message.contains("got Boolean"));
-    let hint = err.hint.as_deref().expect("trait summary hint");
-    assert!(hint.contains("Call target signature: Add::add"));
-    assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ArgumentTypeMismatch)
+    );
+    let data = err.structured.as_ref().unwrap().data_json();
+    assert_eq!(data["expected_type"], "Int");
+    assert_eq!(data["actual_type"], "Boolean");
 }
 
 fn trait_method_call_rejects_named_arguments_without_panic() {
     let resolved = resolve_with_builtin_prelude("value = Add::add(self: 1, rhs: 2)");
     let err = typecheck(resolved).expect_err("named trait method args should fail");
-    assert!(err
-        .message
-        .contains("Add::add does not accept named arguments"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ArgumentModeMismatch)
+    );
 }
 
-fn add_trait_missing_receiver_lists_available_implementations() {
+fn add_trait_missing_receiver_retains_obligation() {
     let resolved = resolve_with_builtin_prelude("value = Add::add(False, True)");
     let err = typecheck(resolved).expect_err("invalid add receiver must fail");
-    assert!(err
-        .message
-        .contains("Add::add requires a receiver type implementing Add, got Boolean"));
-    let hint = err.hint.as_deref().expect("trait summary hint");
-    assert!(hint.contains("Call target signature: Add::add"));
-    assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation)
+    );
+    let data = err.structured.as_ref().unwrap().data_json();
+    assert_eq!(data["trait_id"], "Add");
+    assert_eq!(data["subject_type"], "Boolean");
 }
 
-fn add_operator_missing_impl_lists_available_implementations_in_hint() {
+fn add_operator_missing_impl_retains_obligation() {
     let resolved = resolve_with_builtin_prelude("value = False + True");
     let err = typecheck(resolved).expect_err("invalid add operator must fail");
-    assert!(err.message.contains("`+` is not defined for Boolean"));
-    let hint = err.hint.as_deref().expect("operator hint");
-    assert!(hint.contains("Add is implemented for: Duration, Float, Int"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation)
+    );
+    let data = err.structured.as_ref().unwrap().data_json();
+    assert_eq!(data["trait_id"], "Add");
+    assert_eq!(data["subject_type"], "Boolean");
 }
 
-fn bind_operator_missing_impl_lists_available_implementations_in_hint() {
+fn bind_operator_missing_impl_retains_obligation() {
     let resolved = resolve_with_builtin_prelude("value = 1 |>= {|x| Ok(x)}");
     let err = typecheck(resolved).expect_err("plain lhs bind must fail");
-    assert!(err
-        .message
-        .contains("`|>=` requires Monad implementation on the left, got Int"));
-    let hint = err.hint.as_deref().expect("bind hint");
-    assert!(hint.contains("Monad is implemented for:"));
-    assert!(hint.contains("List<$T>"));
-    assert!(hint.contains("Option<$T>"));
-    assert!(hint.contains("Result<$T>"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation)
+    );
+    let data = err.structured.as_ref().unwrap().data_json();
+    assert_eq!(data["trait_id"], "Monad");
+    assert_eq!(data["subject_type"], "Int");
 }
 
 fn from_helper_typechecks_as_generic_trait_call() {
@@ -8072,18 +8120,30 @@ fn from_helper_suggests_try_from_when_only_fallible_impl_exists() {
     let resolved = resolve_with_builtin_prelude(r#"value = from::<Int>("42")"#);
     let err = typecheck(resolved).expect_err("from on fallible conversion must fail");
     assert!(err
-        .message
+        .hint
+        .as_ref()
+        .expect("conversion remediation")
         .contains("String -> Int implements TryFrom, not From"));
-    assert!(err.message.contains("Use try_from::<Int>(value)."));
+    assert!(err
+        .hint
+        .as_ref()
+        .unwrap()
+        .contains("Use try_from::<Int>(value)."));
 }
 
 fn try_from_helper_suggests_from_when_only_infallible_impl_exists() {
     let resolved = resolve_with_builtin_prelude(r#"value = try_from::<String>(42)"#);
     let err = typecheck(resolved).expect_err("try_from on infallible conversion must fail");
     assert!(err
-        .message
+        .hint
+        .as_ref()
+        .expect("conversion remediation")
         .contains("Int -> String implements From, not TryFrom"));
-    assert!(err.message.contains("Use from::<String>(value)."));
+    assert!(err
+        .hint
+        .as_ref()
+        .unwrap()
+        .contains("Use from::<String>(value)."));
 }
 
 fn from_and_try_from_impls_are_mutually_exclusive() {
@@ -9150,9 +9210,9 @@ value: Box<Int> = Box::Box(1)
 result = Use::use(value)"#;
     let err = typecheck_without_std_prelude(mismatched)
         .expect_err("a same-name trait with different arguments must not prove an obligation");
-    assert!(
-        err.message
-            .contains("Use::use requires a receiver type implementing Use"),
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
         "{err:?}"
     );
     assert!(err.message.contains("Box<Int>"), "{err:?}");
@@ -9201,7 +9261,7 @@ fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
     let err = typecheck(resolved).expect_err("Self must not be supplied as an explicit type input");
     assert!(
         err.message
-            .contains("Concat::concat expects 0 explicit type argument(s), got 1"),
+            .contains("Concat::concat expects 0 return type argument(s), got 1"),
         "{err:?}"
     );
 
@@ -9209,7 +9269,7 @@ fn explicit_type_arguments_exclude_self_and_enforce_generic_arity() {
     let err = typecheck(resolved).expect_err("trait generics must use their declared arity");
     assert!(
         err.message
-            .contains("TryFrom::try_from expects 1 explicit type argument(s), got 2"),
+            .contains("TryFrom::try_from expects 1 return type argument(s), got 2"),
         "{err:?}"
     );
 }

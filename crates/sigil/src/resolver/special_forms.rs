@@ -183,6 +183,10 @@ impl Resolver {
                 },
             ],
         ))
+        .map(|resolved| match resolved {
+            Resolved::Match(span, scrutinee, arms) => Resolved::IfLet(span, scrutinee, arms),
+            _ => unreachable!("match resolver retains its form"),
+        })
     }
 
     pub(super) fn resolve_if_let_then(

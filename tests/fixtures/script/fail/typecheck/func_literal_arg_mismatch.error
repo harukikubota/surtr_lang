@@ -1,4 +1,2 @@
 phase: typecheck
-contains: `+` requires the same type on both sides, but got Int and String
-contains: Operator `Add` requires compatible operand types
-contains: Left operand is Int, right operand is String
+contains: Argument type mismatch: expected Int, got String

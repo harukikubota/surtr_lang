@@ -243,8 +243,7 @@ test("Diagnostics") {
 
     let stderr = strip_ansi(&String::from_utf8_lossy(&output.stderr));
     assert!(
-        stderr
-            .contains("Argument type mismatch: expected $A implementing Compare, got Option<Int>"),
+        stderr.contains("MissingTraitCapability: Option<Int> must implement Compare"),
         "{stderr}"
     );
     assert!(

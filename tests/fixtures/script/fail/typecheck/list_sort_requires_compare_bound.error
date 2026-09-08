@@ -1,2 +1,2 @@
 phase: typecheck
-contains: implementing Compare, got Boolean
+contains: MissingTraitCapability: Boolean must implement Compare

@@ -1,2 +1,2 @@
 phase: typecheck
-contains: Concat::concat does not accept named arguments
+contains: Cannot mix positional and named arguments, or use named arguments with this callable

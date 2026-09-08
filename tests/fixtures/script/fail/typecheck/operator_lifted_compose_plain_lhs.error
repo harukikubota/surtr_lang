@@ -1,3 +1,2 @@
 phase: typecheck
-contains: `>*` requires Result, List, or Option on the left-hand side
-contains: Use `>>` for plain composition
+contains: No implementation satisfies LiftComposable<Int, Int, String, $A> for (Int -> Int)

@@ -3163,7 +3163,7 @@ fn test_if_let_conversion() {
     let resolved = parse_and_resolve("x = if_let(Ok(1), Ok(v), v, 0)").unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Match(_, _, arms) => {
+            Resolved::IfLet(_, _, arms) => {
                 assert_eq!(arms.len(), 2);
                 assert!(matches!(
                     &arms[0].pattern,

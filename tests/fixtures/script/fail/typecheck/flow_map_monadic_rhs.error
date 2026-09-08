@@ -1,3 +1,2 @@
 phase: typecheck
-contains: expects a plain function on the right-hand side
-contains: use `|>=`
+contains: expects a plain function return, got Result<Int, Error>

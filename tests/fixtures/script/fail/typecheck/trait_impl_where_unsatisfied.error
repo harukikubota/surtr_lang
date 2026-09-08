@@ -1,2 +1,3 @@
 phase: typecheck
-contains: requires a receiver type implementing Read<Int>
+contains: No implementation satisfies
+contains: Read<Int> for Box<Int>

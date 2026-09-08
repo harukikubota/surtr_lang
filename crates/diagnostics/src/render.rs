@@ -95,18 +95,19 @@ fn build_report(
     let primary_range = char_span_to_byte_range(source, &primary);
     let lines = line_spans(source);
     let primary_line = line_index_for_span(&lines, primary.start);
-    let suppress_primary_label = spec.kind == "TypeError"
-        && (is_flow_operator_message(&spec.message)
-            || parse_binary_operator_error(&spec.message).is_some()
-            || has_annotation_assignment_labels(spec))
-        || has_duplicate_definition_labels(spec)
-        || has_duplicate_pattern_binding_labels(spec)
-        || has_missing_trait_method_labels(spec)
-        || has_trait_impl_signature_mismatch_labels(spec)
-        || has_total_bind_pattern_labels(spec)
-        || has_parse_focus_labels(spec)
-        || has_runtime_safebind_labels(spec)
-        || has_runtime_error_focus_labels(spec);
+    let suppress_primary_label = spec.structured.is_some()
+        || (spec.kind == "TypeError"
+            && (is_flow_operator_message(&spec.message)
+                || parse_binary_operator_error(&spec.message).is_some()
+                || has_annotation_assignment_labels(spec))
+            || has_duplicate_definition_labels(spec)
+            || has_duplicate_pattern_binding_labels(spec)
+            || has_missing_trait_method_labels(spec)
+            || has_trait_impl_signature_mismatch_labels(spec)
+            || has_total_bind_pattern_labels(spec)
+            || has_parse_focus_labels(spec)
+            || has_runtime_safebind_labels(spec)
+            || has_runtime_error_focus_labels(spec));
     let primary_source = RenderSourceId::Primary(file_name.to_string());
     let related_source = RenderSourceId::Related(file_name.to_string());
     let mut builder = Report::build(
@@ -126,12 +127,13 @@ fn build_report(
     for label in &spec.labels {
         let span = normalized_char_span(source, &label.span);
         let range = char_span_to_byte_range(source, &span);
-        let label_source =
-            if should_render_related_label_with_own_source(spec, primary_line, &lines, &span) {
-                related_source.clone()
-            } else {
-                primary_source.clone()
-            };
+        let label_source = if spec.structured.is_none()
+            && should_render_related_label_with_own_source(spec, primary_line, &lines, &span)
+        {
+            related_source.clone()
+        } else {
+            primary_source.clone()
+        };
         builder = builder.with_label(match label.color {
             Some(color) => Label::new((label_source, range))
                 .with_message(label.message.clone())
@@ -183,18 +185,19 @@ fn build_report_with_registry(
     let primary_range = char_span_to_byte_range(primary_source, &primary);
     let lines = line_spans(primary_source);
     let primary_line = line_index_for_span(&lines, primary.start);
-    let suppress_primary_label = spec.kind == "TypeError"
-        && (is_flow_operator_message(&spec.message)
-            || parse_binary_operator_error(&spec.message).is_some()
-            || has_annotation_assignment_labels(spec))
-        || has_duplicate_definition_labels(spec)
-        || has_duplicate_pattern_binding_labels(spec)
-        || has_missing_trait_method_labels(spec)
-        || has_trait_impl_signature_mismatch_labels(spec)
-        || has_total_bind_pattern_labels(spec)
-        || has_parse_focus_labels(spec)
-        || has_runtime_safebind_labels(spec)
-        || has_runtime_error_focus_labels(spec);
+    let suppress_primary_label = spec.structured.is_some()
+        || (spec.kind == "TypeError"
+            && (is_flow_operator_message(&spec.message)
+                || parse_binary_operator_error(&spec.message).is_some()
+                || has_annotation_assignment_labels(spec))
+            || has_duplicate_definition_labels(spec)
+            || has_duplicate_pattern_binding_labels(spec)
+            || has_missing_trait_method_labels(spec)
+            || has_trait_impl_signature_mismatch_labels(spec)
+            || has_total_bind_pattern_labels(spec)
+            || has_parse_focus_labels(spec)
+            || has_runtime_safebind_labels(spec)
+            || has_runtime_error_focus_labels(spec));
     let primary_render_source = RenderSourceId::Primary(primary_file_name.clone());
     let related_render_source = RenderSourceId::Related(primary_file_name.clone());
     let mut builder = Report::build(
@@ -224,7 +227,13 @@ fn build_report_with_registry(
         let label_span = normalized_char_span(&label_entry.source, &label.span);
         let label_range = char_span_to_byte_range(&label_entry.source, &label_span);
         let label_render_source = if label.source_id.is_none() && label_source_id == source_id {
-            if should_render_related_label_with_own_source(spec, primary_line, &lines, &label_span)
+            if spec.structured.is_none()
+                && should_render_related_label_with_own_source(
+                    spec,
+                    primary_line,
+                    &lines,
+                    &label_span,
+                )
             {
                 related_render_source.clone()
             } else {
@@ -314,24 +323,27 @@ pub fn serializable_diagnostic_by_id(
     let phase = phase.into();
     let source = sources.source(source_id).unwrap_or("");
     let (line, column) = line_column_for_offset(source, spec.primary_span.start);
-    let (expected, got) = structured_expected_got(spec)
-        .filter(|(expected, got)| expected.is_some() || got.is_some())
-        .or_else(|| Some(extract_expected_got(&spec.message)))
-        .unwrap_or((None, None));
-    let hint = spec
-        .help
-        .clone()
-        .or_else(|| serializable_callable_hint_from_labels(spec));
+    let (expected, got) = if spec.structured.is_some() {
+        structured_expected_got(spec).unwrap_or((None, None))
+    } else {
+        extract_expected_got(&spec.message)
+    };
+    let hint = spec.help.clone().or_else(|| {
+        spec.structured
+            .is_none()
+            .then(|| serializable_callable_hint_from_labels(spec))
+            .flatten()
+    });
     let (reason, origin, data, related) = match spec.structured.as_ref() {
         Some(structured) => (
             Some(structured.reason.as_str().to_string()),
             Some(structured.origin.clone()),
-            structured.data.to_json_value(),
-            structured
-                .related
-                .iter()
+            structured.data_json(),
+            std::iter::once(&structured.primary)
+                .chain(structured.related.iter())
                 .map(|fact| SerializableSourceFact {
-                    role: fact.role.as_str().to_string(),
+                    role: fact.role.json_name().to_string(),
+                    ordinal: fact.ordinal,
                     source_id: fact.source_id.0,
                     span: [fact.span.start as u32, fact.span.end as u32],
                     ty: fact.ty.clone(),
@@ -366,7 +378,13 @@ fn structured_expected_got(spec: &DiagnosticSpec) -> Option<(Option<String>, Opt
             (Some(value.expected_type), Some(value.actual_type))
         }
         DiagnosticData::TypeConstructorCarrier(value) => {
-            (Some(value.expected_carrier), Some(value.actual_carrier))
+            if spec.structured.as_ref()?.reason
+                == crate::TypeDiagnosticReason::MissingTypeConstructorCapability
+            {
+                (None, None)
+            } else {
+                (Some(value.expected_carrier), Some(value.actual_carrier))
+            }
         }
         DiagnosticData::BranchAssertion(value) => {
             (Some(value.expected_type), Some(value.actual_type))

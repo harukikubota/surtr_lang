@@ -702,6 +702,12 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 }
             }
         }
+        Resolved::Cond(_, clauses) => {
+            for (condition, body) in clauses {
+                rebase_resolved_node(condition, base, offset);
+                rebase_resolved_node(body, base, offset);
+            }
+        }
         Resolved::If(_, cond, then_branch, else_branch) => {
             rebase_resolved_node(cond, base, offset);
             rebase_resolved_node(then_branch, base, offset);
@@ -727,7 +733,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_resolved_node(marker, base, offset);
             rebase_resolved_node(handler, base, offset);
         }
-        Resolved::Match(_, scrutinee, arms) => {
+        Resolved::Match(_, scrutinee, arms) | Resolved::IfLet(_, scrutinee, arms) => {
             rebase_resolved_node(scrutinee, base, offset);
             for arm in arms {
                 rebase_pattern(&mut arm.pattern, base, offset);

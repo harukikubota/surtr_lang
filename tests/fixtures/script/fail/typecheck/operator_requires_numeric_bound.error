@@ -1,2 +1,2 @@
 phase: typecheck
-contains: `+` is not defined for $
+contains: MissingGenericBound: $A must implement Add

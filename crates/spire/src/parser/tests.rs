@@ -4305,8 +4305,8 @@ fn test_cond_expression_can_be_the_left_operand_of_pair_constructor() {
         &ast[0],
         Ast::Bind(_, _, rhs)
             if matches!(rhs.as_ref(), Ast::TupleLiteral(_, items)
-                if matches!(&items[..], [Ast::App(_, func, _), Ast::Lit(_, Lit::Str(right))]
-                    if matches!(func.as_ref(), Ast::Var(_, name) if name == "if") && right == "one"))
+                if matches!(&items[..], [Ast::Cond(_, clauses), Ast::Lit(_, Lit::Str(right))]
+                    if clauses.len() == 2 && right == "one"))
     ));
 }
 
@@ -4915,67 +4915,38 @@ fn test_empty_match_is_error() {
 }
 
 #[test]
-fn test_cond_desugars_to_nested_if_apps() {
-    let ast = parse(
-        r#"x = cond {
-  a => 1,
-  b => 2,
-  True => 3,
-}"#,
-    )
-    .expect("cond should parse");
-
-    match &ast[0] {
-        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
-            Ast::App(_, func, args) => {
-                assert!(matches!(func.as_ref(), Ast::Var(_, name) if name == "if"));
-                assert!(
-                    matches!(&args[0], RecordLitArg::Positional(Ast::Var(_, name)) if name == "a")
-                );
-                assert!(
-                    matches!(&args[1], RecordLitArg::Positional(Ast::Lit(_, Lit::Int(n))) if n == &int(1))
-                );
-                assert!(matches!(
-                    &args[2],
-                    RecordLitArg::Positional(Ast::App(_, inner_func, inner_args))
-                        if matches!(inner_func.as_ref(), Ast::Var(_, name) if name == "if")
-                            && matches!(&inner_args[0], RecordLitArg::Positional(Ast::Var(_, name)) if name == "b")
-                            && matches!(&inner_args[1], RecordLitArg::Positional(Ast::Lit(_, Lit::Int(n))) if n == &int(2))
-                            && matches!(&inner_args[2], RecordLitArg::Positional(Ast::Lit(_, Lit::Int(n))) if n == &int(3))
-                ));
-            }
-            _ => panic!("Expected App"),
-        },
-        _ => panic!("Expected Bind with cond RHS"),
+fn test_cond_retains_ordered_clause_bodies_and_spans() {
+    let source = "x = cond { a => 1, b => 2, True => 3 }";
+    let ast = parse(source).expect("cond should parse");
+    let Ast::Bind(_, _, rhs) = &ast[0] else {
+        panic!("binding")
+    };
+    let Ast::Cond(span, clauses) = rhs.as_ref() else {
+        panic!("cond provenance")
+    };
+    assert_eq!(
+        &source[span.start..span.end],
+        "cond { a => 1, b => 2, True => 3 }"
+    );
+    assert_eq!(clauses.len(), 3);
+    for (ordinal, (_, body)) in clauses.iter().enumerate() {
+        assert_eq!(
+            &source[body.span().start..body.span().end],
+            (ordinal + 1).to_string()
+        );
     }
 }
 
 #[test]
 fn test_cond_accepts_zero_arg_closure_body() {
-    let ast = parse(
-        r#"x = cond {
-  True => { print("ok"); 1 },
-}"#,
-    )
-    .expect("cond with closure body should parse");
-
-    match &ast[0] {
-        Ast::Bind(_, _, rhs) => match rhs.as_ref() {
-            Ast::Closure(_, params, body) => {
-                assert!(params.is_empty());
-                assert!(matches!(
-                    body.as_ref(),
-                    Ast::Block(_, stmts)
-                        if matches!(stmts.as_slice(), [Ast::Semi(_, _), Ast::Lit(_, Lit::Int(n))] if n == &int(1))
-                ));
-            }
-            other => panic!(
-                "Expected final True clause body to become closure, got {:?}",
-                other
-            ),
-        },
-        _ => panic!("Expected Bind"),
-    }
+    let ast = parse(r#"x = cond { True => { print("ok"); 1 }, }"#).expect("parse");
+    let Ast::Bind(_, _, rhs) = &ast[0] else {
+        panic!("binding")
+    };
+    let Ast::Cond(_, clauses) = rhs.as_ref() else {
+        panic!("cond provenance")
+    };
+    assert!(matches!(&clauses[0].1, Ast::Closure(_, params, _) if params.is_empty()));
 }
 
 #[test]

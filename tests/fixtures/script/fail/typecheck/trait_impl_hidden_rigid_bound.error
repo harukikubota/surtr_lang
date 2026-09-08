@@ -1,2 +1,3 @@
 phase: typecheck
-contains: requires a receiver type implementing Use
+contains: No implementation satisfies
+contains: Use for List<$A>

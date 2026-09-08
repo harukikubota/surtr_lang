@@ -1,2 +1,2 @@
 phase: typecheck
-contains: requires a function value
+contains: expects a callable with 1 argument(s)

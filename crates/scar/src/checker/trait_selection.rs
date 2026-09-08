@@ -866,6 +866,7 @@ impl Checker {
                 reason: TypeDiagnosticReason::TraitMethodConstraintMismatch,
                 origin: DiagnosticOrigin::Declaration,
                 data: DiagnosticData::TraitMethodConstraint(TraitMethodConstraintData {
+                    identity: None,
                     method_name: method.into(),
                     expected_constraints: describe(&expected.where_constraints),
                     actual_constraints: describe(&actual.where_constraints),
@@ -978,6 +979,7 @@ impl Checker {
                 expected_type.clone(),
             )],
             data: DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
+                identity: None,
                 role,
                 ordinal,
                 nested_path,
@@ -2161,12 +2163,16 @@ impl Checker {
                 deferred.extend(caller_waiting.clone());
                 continue;
             }
+            let receiver_ty = candidate.canonical_to_ty(&receiver)?;
             let dispatch = candidate
                 .impl_method_dispatch_target(method)
                 .ok_or_else(|| {
-                    TypeError::new(
-                        "MissingTraitDispatchTarget: applicable impl has no concrete target",
-                        method.span.clone(),
+                    self.trait_dispatch_failure(
+                        TypeDiagnosticReason::MissingTraitDispatchTarget,
+                        trait_name,
+                        method_name,
+                        Some(&receiver_ty),
+                        &method.span,
                     )
                 })?;
             if selected.is_some() {
@@ -2285,6 +2291,30 @@ impl Checker {
         }))
     }
 
+    pub(super) fn candidate_rejection_facts(
+        &self,
+        rejection: &CandidateRejection,
+    ) -> Vec<SourceFact> {
+        rejection
+            .failures
+            .iter()
+            .map(|failure| {
+                let implementation = self
+                    .trait_impls
+                    .values()
+                    .find(|info| info.declaration_key == failure.declaration)
+                    .expect("candidate rejection retains its declaration");
+                let mut fact =
+                    self.type_fact(SourceRole::Impl, &failure.span, &implementation.target_ty);
+                fact.declaration_identity = Some(diagnostics::DeclarationIdentity {
+                    owner: self.trait_key(&implementation.trait_id),
+                    name: self.diagnostic_ty_name(&implementation.target_ty),
+                });
+                fact
+            })
+            .collect()
+    }
+
     pub(super) fn candidate_rejection_note(
         &self,
         rejection: &CandidateRejection,
@@ -2295,7 +2325,7 @@ impl Checker {
                 CandidateFailureKind::TraitMethodInvocationMismatch => 1,
                 CandidateFailureKind::TraitImplHeadMismatch => 2,
             };
-            (priority, failure.declaration.declaration_id)
+            (priority, failure.span.start, failure.span.end)
         })?;
         let reason = match failure.kind {
             CandidateFailureKind::TraitImplHeadMismatch => {
@@ -2309,8 +2339,8 @@ impl Checker {
             }
         };
         Some(format!(
-            "Impl declaration {} at {}..{} was rejected because {}.",
-            failure.declaration.declaration_id, failure.span.start, failure.span.end, reason
+            "Impl declaration at {}..{} was rejected because {}.",
+            failure.span.start, failure.span.end, reason
         ))
     }
 

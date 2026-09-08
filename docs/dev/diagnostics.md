@@ -34,6 +34,15 @@ typecheck 診断は、phase 固有の error 型を維持したまま、次の構
 - JSON の既存フィールド `kind`、`phase`、`line`、`column`、`span`、`message`、`expected`、`got`、`hint` は意味を変えずに保持し、`reason`、`origin`、`data`、`related` を additive に追加する。
 - 移行中の未移行診断は明示的に不安定な legacy payload として扱い、legacy message から安定した reason を推測したり、偽の reason を付与したりしない。各診断 family の移行完了時に対応する legacy payload を削除する。
 
+## Task 9: 型関係と呼び出しの診断
+
+- Scar の `assert_type_relation` は、失敗時に部分的な型代入と capability / obligation の変更を rollback する。成功した制約だけを後続へ渡す。両側の source fact は照合対象の型とともに保持する。
+- 呼び出しの arity / mode / named 引数、通常の型関係、Trait obligation / dispatch、constructor family / payload / capability は共通の reason を使う。演算子と対応する helper は同じ検査を通し、文脈の違いを `DiagnosticOrigin` に保持する。入れ子の呼び出し・annotation の失敗を外側の演算子へ付け替えない。
+- `cond` の節と `if_let` の発生文脈は Spire / Sigil から Scar まで保持する。分岐診断には全 body の型・span・ordinal と guard の source fact を含める。`cond` の実行は型検査後に既存の `TypedInner::If` へ lowering する。
+- JSON の `data` は source location の rebase 後に typed projection から生成する。必須 key は省略せず、該当しない値は `null` にする。`related` は primary fact も含み、型は `type`、source role は `left_value` / `right_value` などの snake_case とする。
+- constructor `family_id` は同じ族の canonical Trait ID をソートして構成する。完全な source value の型には captured 引数と `Result` の error 型も含める。登録順や内部 inference ID を表示しない。
+- structured input がある場合、optional field の欠落を理由に message / label / source の解析へ戻らない。未移行の policy / runtime 等の legacy 経路の全撤去は Task 10 で行う。
+
 ## 実装規則
 
 - `labels` の各 `span` は、表示する本文と対応するソース範囲を指す。関連ファイルの定義は `source_id` を設定する。

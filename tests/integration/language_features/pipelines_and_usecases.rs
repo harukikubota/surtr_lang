@@ -429,7 +429,7 @@ fn flow_operators_reject_naked_function_refs() {
 }
 
 value = 1 |> inc"#,
-        "requires a function value",
+        "expects a callable with 1 argument(s)",
     );
 
     assert_compile_error(
@@ -442,7 +442,7 @@ def render(x: Int) -> Result<String> {
 }
 
 pipeline = parse >=> render"#,
-        "requires a function value",
+        "expects a callable with 1 argument(s)",
     );
 }
 
@@ -457,7 +457,7 @@ def render(x: Int) -> Result<String> {
 }
 
 pipeline = parse() >=> render()"#,
-        "Undefined function parse/0",
+        "expects 1 argument(s), got 0",
     );
 
     assert_compile_error(
@@ -470,7 +470,7 @@ def render(x: Int) -> String {
 }
 
 pipeline = parse() >* render()"#,
-        "Undefined function parse/0",
+        "expects 1 argument(s), got 0",
     );
 
     assert_compile_error(
@@ -479,7 +479,7 @@ pipeline = parse() >* render()"#,
 }
 
 plain = inc() >> inc()"#,
-        "Undefined function inc/0",
+        "expects 1 argument(s), got 0",
     );
 }
 
@@ -507,7 +507,7 @@ fn flow_operators_reject_context_mismatch_and_monadic_map_rhs() {
 
 value: Result<Int> = Ok(1)
 bad = value |*> lift()"#,
-        "expects a plain function on the right-hand side",
+        "expects a plain function return",
     );
 
     assert_compile_error(
@@ -517,7 +517,7 @@ bad = value |*> lift()"#,
 
 value: Result<Int> = Ok(1)
 bad = value |>= expand()"#,
-        "cannot mix Result, List, and Option context",
+        "Type constructor family mismatch:",
     );
 
     assert_compile_error(
@@ -527,13 +527,13 @@ bad = value |>= expand()"#,
 
 value: Result<Int> = Ok(1)
 bad = value |>= maybe_inc()"#,
-        "cannot switch from Result into Option bind context",
+        "Type constructor family mismatch:",
     );
 
     assert_compile_error(
         r#"value: Option<Int> = Option::Some(1)
 bad = value |*> {|value| Option::Some(value + 1)}"#,
-        "expects a plain function on the right-hand side",
+        "expects a plain function return",
     );
 
     assert_compile_error(
@@ -546,7 +546,7 @@ def render(x: Int) -> Result<String> {
 }
 
 pipeline = &parse >* &render"#,
-        "expects a plain function on the right-hand side",
+        "expects a plain function return",
     );
 }
 
