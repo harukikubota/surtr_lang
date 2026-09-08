@@ -13,60 +13,6 @@ pub(super) enum Projection {
 }
 
 impl Checker {
-    pub(super) fn resolved_constructor_provenance(&self, provenance: &Provenance) -> Provenance {
-        let resolve = |source: &Source| {
-            (
-                self.resolved_constructor_provenance(&source.0),
-                self.resolve_ty(&source.1),
-            )
-        };
-        match provenance {
-            Provenance::Intersection(sources) => {
-                Provenance::Intersection(sources.iter().map(resolve).collect())
-            }
-            Provenance::Fields(fields) => Provenance::Fields(fields.iter().map(resolve).collect()),
-            Provenance::Sequence(elements) => {
-                Provenance::Sequence(elements.iter().map(resolve).collect())
-            }
-            Provenance::Variants(variants) => Provenance::Variants(
-                variants
-                    .iter()
-                    .map(|(tag, fields)| (*tag, fields.iter().map(resolve).collect()))
-                    .collect(),
-            ),
-            Provenance::Callable { parameters, result } => Provenance::Callable {
-                parameters: parameters.clone(),
-                result: Box::new(resolve(result)),
-            },
-            Provenance::Injected {
-                function,
-                arguments,
-            } => Provenance::Injected {
-                function: Box::new(resolve(function)),
-                arguments: arguments.iter().map(resolve).collect(),
-            },
-            Provenance::Call {
-                function,
-                arguments,
-            } => Provenance::Call {
-                function: Box::new(resolve(function)),
-                arguments: arguments.iter().map(resolve).collect(),
-            },
-            Provenance::Projection { source, projection } => Provenance::Projection {
-                source: Box::new(resolve(source)),
-                projection: projection.clone(),
-            },
-            Provenance::Template { ty, variables } => Provenance::Template {
-                ty: ty.clone(),
-                variables: variables
-                    .iter()
-                    .map(|(variable, source)| (*variable, resolve(source)))
-                    .collect(),
-            },
-            other => other.clone(),
-        }
-    }
-
     pub(super) fn constructor_capability_for_node(&self, node: &TypedNode) -> Provenance {
         self.value_provenance(node, &Bindings::new())
     }
