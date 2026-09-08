@@ -60,6 +60,16 @@ impl Checker {
         }
     }
 
+    fn bare_constructor_occurrence(ty: &Ty) -> Option<u32> {
+        let Ty::SelfApp(items) = ty else {
+            return None;
+        };
+        match Self::constructor_application_parts(items) {
+            Some((Ty::Var(occurrence), [])) => Some(*occurrence),
+            _ => None,
+        }
+    }
+
     pub(super) fn constructor_application_slots(ty: &Ty) -> Option<Vec<Ty>> {
         match ty {
             Ty::List(inner) => Some(vec![inner.as_ref().clone()]),
@@ -1809,6 +1819,8 @@ impl Checker {
 
     pub(super) fn types_compatible(&mut self, expected: &Ty, got: &Ty) -> bool {
         let profile = self.profiler.start();
+        let expected_bare_occurrence = Self::bare_constructor_occurrence(expected);
+        let got_bare_occurrence = Self::bare_constructor_occurrence(got);
         let expected = self.resolve_ty(expected);
         let got = self.resolve_ty(got);
         let result =
@@ -1886,28 +1898,41 @@ impl Checker {
                 (Ty::SelfApp(a), other) if Self::constructor_application_parts(a).is_some() => {
                     let (witness, expected_slots) =
                         Self::constructor_application_parts(a).expect("checked above");
-                    if !self.types_compatible(witness, other) {
+                    if expected_slots.is_empty() {
+                        match expected_bare_occurrence {
+                            Some(occurrence) => {
+                                self.match_bare_constructor_occurrence(occurrence, other)
+                            }
+                            None => self.types_compatible(witness, other),
+                        }
+                    } else if !self.types_compatible(witness, other) {
                         false
                     } else {
-                        expected_slots.is_empty()
-                            || self
-                                .constructor_application_slots_for_witness(
-                                    witness,
-                                    expected_slots.len(),
-                                    other,
+                        self.constructor_application_slots_for_witness(
+                            witness,
+                            expected_slots.len(),
+                            other,
+                        )
+                        .is_some_and(|actual_slots| {
+                            actual_slots.len() == expected_slots.len()
+                                && expected_slots.iter().zip(actual_slots.iter()).all(
+                                    |(expected, actual)| self.types_compatible(expected, actual),
                                 )
-                                .is_some_and(|actual_slots| {
-                                    actual_slots.len() == expected_slots.len()
-                                        && expected_slots.iter().zip(actual_slots.iter()).all(
-                                            |(expected, actual)| {
-                                                self.types_compatible(expected, actual)
-                                            },
-                                        )
-                                })
+                        })
                     }
                 }
                 (other, Ty::SelfApp(b)) if Self::constructor_application_parts(b).is_some() => {
-                    self.types_compatible(&Ty::SelfApp(b.clone()), other)
+                    let (_, slots) = Self::constructor_application_parts(b).expect("checked above");
+                    if slots.is_empty() {
+                        match got_bare_occurrence {
+                            Some(occurrence) => {
+                                self.match_bare_constructor_occurrence(occurrence, other)
+                            }
+                            None => self.types_compatible(&Ty::SelfApp(b.clone()), other),
+                        }
+                    } else {
+                        self.types_compatible(&Ty::SelfApp(b.clone()), other)
+                    }
                 }
                 (Ty::SelfApp(a), Ty::SelfApp(b)) => {
                     a.len() == b.len()

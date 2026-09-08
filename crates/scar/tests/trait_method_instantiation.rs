@@ -189,3 +189,40 @@ Default::default::<Wrapped<Int>>()
 "#,
     );
 }
+
+#[test]
+fn unconstrained_generic_impl_method_uses_selected_substitution() {
+    let nodes = check(
+        r#"
+defstruct Box<$T> { value: $T }
+impl Box { def new(value: $T) -> Box<$T> { Box { value: value } } }
+deftrait Echo { def echo(self: Self) -> Self }
+impl Echo for Box<$T> { def echo(self: Self) -> Self { self } }
+Echo::echo(Box::new(1))
+"#,
+    );
+    let call = nodes
+        .iter()
+        .find(|node| matches!(&node.node, TypedInner::TraitCall { .. }))
+        .expect("call");
+    let TypedInner::TraitCall {
+        dispatch: TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }),
+        ..
+    } = &call.node
+    else {
+        panic!("concrete dispatch required: {call:?}")
+    };
+    let def = nodes
+        .iter()
+        .find(|node| matches!(&node.node, TypedInner::Def(idx, ..) if idx == fun_idx))
+        .expect("specialized method");
+    let TypedInner::Def(_, _, _, params, ret, _, body, _) = &def.node else {
+        unreachable!()
+    };
+    assert_eq!(
+        params[0].ty,
+        Ty::Struct("Global::Box".into(), vec![("value".into(), Ty::Int)])
+    );
+    assert_eq!(*ret, params[0].ty);
+    assert_eq!(body.ty, params[0].ty);
+}

@@ -82,6 +82,29 @@ impl Checker {
         }
     }
 
+    pub(super) fn match_bare_constructor_occurrence(&mut self, occurrence: u32, ty: &Ty) -> bool {
+        let Some(required_trait) = self.constructor_witness_traits.get(&occurrence).cloned() else {
+            return false;
+        };
+        let Some(root) = self.constructor_family_witness_root(occurrence) else {
+            return false;
+        };
+        let Some(root_trait) = self.constructor_witness_traits.get(&root).cloned() else {
+            return false;
+        };
+        match self.resolve_ty(&Ty::Var(root)) {
+            Ty::Var(unbound) => self.bind_tyvar(unbound, ty),
+            witness => {
+                let Some(actual_carrier) = self.canonical_constructor_carrier(&required_trait, ty)
+                else {
+                    return false;
+                };
+                self.canonical_constructor_carrier(&root_trait, &witness)
+                    .is_some_and(|root_carrier| root_carrier == actual_carrier)
+            }
+        }
+    }
+
     pub(super) fn canonical_constructor_carrier(
         &self,
         trait_key: &str,

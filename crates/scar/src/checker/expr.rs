@@ -1204,19 +1204,25 @@ impl Checker {
                         hint: None,
                     });
                 }
+                let inherited_constructor_capability =
+                    self.constructor_capability_for_node(&typed_rhs);
                 let (typed_pat, pat_ty) = self.check_pattern(pat, &typed_rhs.ty, span)?;
                 self.ensure_self_rebinding_types(&typed_pat, span)?;
 
                 self.bind_typed_pattern(&typed_pat, &self.resolve_ty(&pat_ty));
-                if let ResolvedPattern::Annotated(_, ast_ty) = pat {
-                    if let Some(capability) = self.constructor_trait_key_for_ast_ty(ast_ty) {
-                        match &typed_pat {
-                            TypedPattern::Var(_, id) | TypedPattern::As(_, _, id) => {
-                                self.constructor_capabilities
-                                    .insert(id.unique_id, capability);
-                            }
-                            _ => {}
+                let binding_constructor_capability = match pat {
+                    ResolvedPattern::Annotated(_, ast_ty) => {
+                        self.constructor_trait_key_for_ast_ty(ast_ty)
+                    }
+                    _ => inherited_constructor_capability,
+                };
+                if let Some(capability) = binding_constructor_capability {
+                    match &typed_pat {
+                        TypedPattern::Var(_, id) | TypedPattern::As(_, _, id) => {
+                            self.constructor_capabilities
+                                .insert(id.unique_id, capability);
                         }
+                        _ => {}
                     }
                 }
                 if !matches!(pat, ResolvedPattern::Annotated(..))

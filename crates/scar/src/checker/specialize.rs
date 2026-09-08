@@ -1921,7 +1921,12 @@ impl Checker {
         let mut ordered = Vec::new();
         let mut seen = HashSet::new();
         match &def.node {
-            TypedInner::Def(_, _, return_type_arguments, params, ret_ty, _, _body, _) => {
+            TypedInner::Def(_, id, return_type_arguments, params, ret_ty, _, _body, _) => {
+                let is_trait_impl_method = self.trait_impls.values().any(|info| {
+                    info.methods
+                        .values()
+                        .any(|method| method.function_id.unique_id == id.unique_id)
+                });
                 for argument in return_type_arguments {
                     let mut declared = Vec::new();
                     Self::collect_ty_vars(&argument.ty, &mut declared);
@@ -1932,9 +1937,29 @@ impl Checker {
                     }
                 }
                 for param in params {
-                    self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
+                    if is_trait_impl_method {
+                        let mut declared = Vec::new();
+                        Self::collect_ty_vars(&param.ty, &mut declared);
+                        for var in declared {
+                            if seen.insert(var) {
+                                ordered.push(var);
+                            }
+                        }
+                    } else {
+                        self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
+                    }
                 }
-                self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
+                if is_trait_impl_method {
+                    let mut declared = Vec::new();
+                    Self::collect_ty_vars(ret_ty, &mut declared);
+                    for var in declared {
+                        if seen.insert(var) {
+                            ordered.push(var);
+                        }
+                    }
+                } else {
+                    self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
+                }
                 self.collect_pending_trait_receiver_tyvars_in_node(_body, &mut ordered, &mut seen);
                 // Function-local inference variables can carry trait bounds,
                 // but callers cannot infer them from a call site. Only the

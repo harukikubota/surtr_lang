@@ -1333,11 +1333,17 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
         else {
             unreachable!()
         };
-        let mut generated = typed
-            .iter()
-            .find(|node| matches!(&node.node,TypedInner::Def(idx,..) if *idx==original))
+        assert!(
+            typed
+                .iter()
+                .all(|node| !matches!(&node.node, TypedInner::Def(idx, ..) if *idx == original)),
+            "generic implementation method must wait for a selected substitution"
+        );
+        let mut generated = checker
+            .specializable_defs
+            .get(&original)
             .cloned()
-            .expect("original emitted definition");
+            .expect("original retained as specialization source");
         let generated_idx = checker.env.next_fun_idx + 10;
         let TypedInner::Def(fun_idx, ..) = &mut generated.node else {
             unreachable!()

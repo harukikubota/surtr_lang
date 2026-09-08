@@ -143,6 +143,87 @@ impl Monad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
 }
 
 #[test]
+fn unannotated_alias_preserves_constructor_capability() {
+    let error = check(
+        r#"
+deftrait Functor where Self: Type<$A> {}
+deftrait Monad where Self: Functor { def run(self: Self<Int>) -> Int }
+defenum Box<$T> { Box($T), }
+impl Functor for Box<$T> {}
+impl Monad for Box<$T> { def run(self: Self<Int>) -> Int { 1 } }
+def use(a: Functor<Int>, b: Monad<Int>) -> Int {
+  alias = a
+  Monad::run(alias)
+}
+use(Box::Box(1), Box::Box(2))
+"#,
+    )
+    .expect_err("aliasing must not grant a stronger constructor capability");
+    assert!(
+        error
+            .to_string()
+            .contains("Monad::run is not available for a value constrained by Functor"),
+        "{error}"
+    );
+}
+
+#[test]
+fn bare_occurrences_keep_mapped_payloads_independent() {
+    check(
+        r#"
+deftrait Functor where Self: Type<$A> {}
+deftrait Monad where Self: Functor {}
+impl Functor for List<$T> {}
+impl Monad for List<$T> {}
+def accept(a: Functor, b: Monad) -> Unit { () }
+accept([1], [True])
+"#,
+    )
+    .expect("bare occurrences compare the carrier without equating mapped payloads");
+}
+
+#[test]
+fn repeated_bare_trait_occurrences_keep_mapped_payloads_independent() {
+    check(
+        r#"
+deftrait Functor where Self: Type<$A> {}
+impl Functor for List<$T> {}
+def accept(a: Functor, b: Functor) -> Unit { () }
+accept([1], [True])
+"#,
+    )
+    .expect("reusing one bare witness still ignores mapped payload values");
+}
+
+#[test]
+fn bare_occurrences_still_compare_every_mapped_slot() {
+    let error = check(
+        r#"
+deftrait Left where Self: Type<$A, $B> {}
+deftrait Right where Self: Type<$A, $B> {}
+deftrait Joined where Self: Left + Right {}
+defenum Pair<$T, $U> { Pair($T, $U), }
+impl Left for Pair<$T, $U> where
+  $T: Left.$A
+  $U: Left.$B
+{}
+impl Right for Pair<$T, $U> where
+  $U: Right.$A
+  $T: Right.$B
+{}
+def accept(a: Left, b: Right) -> Unit { () }
+accept(Pair::Pair(1, "a"), Pair::Pair(2, "b"))
+"#,
+    )
+    .expect_err("bare occurrences must reject reversed mapped-slot positions");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::TypeConstructorFamilyMismatch),
+        "{error}"
+    );
+}
+
+#[test]
 fn same_family_result_cannot_replace_the_input_carrier() {
     check(
         r#"
