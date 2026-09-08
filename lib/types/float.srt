@@ -136,9 +136,7 @@ impl Show for Float {
   xldr(1)> to_string(1.5)
   "1.5"
   """
-  def to_string(self: Self) -> String {
-    inspect(self)
-  }
+  @builtin def to_string(self: Self) -> String
 }
 
 impl From<Float> for Float {

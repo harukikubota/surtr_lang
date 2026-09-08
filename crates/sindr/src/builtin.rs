@@ -35,7 +35,7 @@ pub type BuiltinSurfaceSignatureMeta = CallableSignature<String>;
 pub struct BuiltinTraitMethodMeta {
     pub trait_name: &'static str,
     pub method_name: &'static str,
-    pub target: TypeName,
+    pub targets: &'static [TypeName],
     pub builtin_id: BuiltinId,
 }
 
@@ -73,39 +73,52 @@ impl BuiltinMeta {
     }
 
     pub fn trait_method(&self) -> Option<BuiltinTraitMethodMeta> {
-        let (trait_name, method_name, target) = match self.name {
-            "__operator_int_add" => ("Add", "add", TypeName::Int),
-            "__operator_float_add" => ("Add", "add", TypeName::Float),
-            "__operator_int_sub" => ("Sub", "sub", TypeName::Int),
-            "__operator_float_sub" => ("Sub", "sub", TypeName::Float),
-            "__operator_int_mul" => ("Mul", "mul", TypeName::Int),
-            "__operator_float_mul" => ("Mul", "mul", TypeName::Float),
-            "__operator_int_eq" => ("Eq", "eq", TypeName::Int),
-            "__operator_float_eq" => ("Eq", "eq", TypeName::Float),
-            "__operator_string_eq" => ("Eq", "eq", TypeName::String),
-            "__operator_boolean_eq" => ("Eq", "eq", TypeName::Boolean),
-            "__operator_int_neq" => ("Eq", "neq", TypeName::Int),
-            "__operator_float_neq" => ("Eq", "neq", TypeName::Float),
-            "__operator_string_neq" => ("Eq", "neq", TypeName::String),
-            "__operator_boolean_neq" => ("Eq", "neq", TypeName::Boolean),
-            "__compare_int" => ("Compare", "compare", TypeName::Int),
-            "__compare_float" => ("Compare", "compare", TypeName::Float),
-            "__operator_int_lt" => ("Compare", "lt", TypeName::Int),
-            "__operator_float_lt" => ("Compare", "lt", TypeName::Float),
-            "__operator_int_lte" => ("Compare", "lte", TypeName::Int),
-            "__operator_float_lte" => ("Compare", "lte", TypeName::Float),
-            "__operator_int_gt" => ("Compare", "gt", TypeName::Int),
-            "__operator_float_gt" => ("Compare", "gt", TypeName::Float),
-            "__operator_int_gte" => ("Compare", "gte", TypeName::Int),
-            "__operator_float_gte" => ("Compare", "gte", TypeName::Float),
-            "__operator_string_concat" => ("Concat", "concat", TypeName::String),
-            "__facet_chain" => ("Compose", "compose", TypeName::Facet),
+        let (trait_name, method_name, targets): (&str, &str, &'static [TypeName]) = match self.name
+        {
+            "to_string" => (
+                "Show",
+                "to_string",
+                &[
+                    TypeName::Int,
+                    TypeName::Float,
+                    TypeName::String,
+                    TypeName::Boolean,
+                    TypeName::Unit,
+                    TypeName::Error,
+                ],
+            ),
+            "__operator_int_add" => ("Add", "add", &[TypeName::Int]),
+            "__operator_float_add" => ("Add", "add", &[TypeName::Float]),
+            "__operator_int_sub" => ("Sub", "sub", &[TypeName::Int]),
+            "__operator_float_sub" => ("Sub", "sub", &[TypeName::Float]),
+            "__operator_int_mul" => ("Mul", "mul", &[TypeName::Int]),
+            "__operator_float_mul" => ("Mul", "mul", &[TypeName::Float]),
+            "__operator_int_eq" => ("Eq", "eq", &[TypeName::Int]),
+            "__operator_float_eq" => ("Eq", "eq", &[TypeName::Float]),
+            "__operator_string_eq" => ("Eq", "eq", &[TypeName::String]),
+            "__operator_boolean_eq" => ("Eq", "eq", &[TypeName::Boolean]),
+            "__operator_int_neq" => ("Eq", "neq", &[TypeName::Int]),
+            "__operator_float_neq" => ("Eq", "neq", &[TypeName::Float]),
+            "__operator_string_neq" => ("Eq", "neq", &[TypeName::String]),
+            "__operator_boolean_neq" => ("Eq", "neq", &[TypeName::Boolean]),
+            "__compare_int" => ("Compare", "compare", &[TypeName::Int]),
+            "__compare_float" => ("Compare", "compare", &[TypeName::Float]),
+            "__operator_int_lt" => ("Compare", "lt", &[TypeName::Int]),
+            "__operator_float_lt" => ("Compare", "lt", &[TypeName::Float]),
+            "__operator_int_lte" => ("Compare", "lte", &[TypeName::Int]),
+            "__operator_float_lte" => ("Compare", "lte", &[TypeName::Float]),
+            "__operator_int_gt" => ("Compare", "gt", &[TypeName::Int]),
+            "__operator_float_gt" => ("Compare", "gt", &[TypeName::Float]),
+            "__operator_int_gte" => ("Compare", "gte", &[TypeName::Int]),
+            "__operator_float_gte" => ("Compare", "gte", &[TypeName::Float]),
+            "__operator_string_concat" => ("Concat", "concat", &[TypeName::String]),
+            "__facet_chain" => ("Compose", "compose", &[TypeName::Facet]),
             _ => return None,
         };
         Some(BuiltinTraitMethodMeta {
             trait_name,
             method_name,
-            target,
+            targets,
             builtin_id: self.builtin_id(),
         })
     }
@@ -1776,7 +1789,7 @@ mod tests {
         parse_surface_signature, standard_owner_identity_by_name, BUILTIN_FUNCTION_METAS,
         BUILTIN_METAS, BUILTIN_TYPE_HEAD_METAS, BUILTIN_TYPE_METAS,
     };
-    use crate::names::TypeIdentity;
+    use crate::names::{TypeIdentity, TypeName};
 
     #[test]
     fn builtin_ids_match_definition_order() {
@@ -1795,6 +1808,33 @@ mod tests {
         assert!(BUILTIN_TYPE_HEAD_METAS
             .iter()
             .any(|meta| meta.name == "StandbyInit"));
+    }
+
+    #[test]
+    fn to_string_trait_metadata_lists_every_builtin_show_target() {
+        let metadata = builtin_meta_by_name("to_string")
+            .expect("to_string metadata")
+            .trait_method()
+            .expect("to_string Trait surface");
+        assert_eq!(metadata.trait_name, "Show");
+        assert_eq!(metadata.method_name, "to_string");
+        assert_eq!(
+            metadata.targets,
+            &[
+                TypeName::Int,
+                TypeName::Float,
+                TypeName::String,
+                TypeName::Boolean,
+                TypeName::Unit,
+                TypeName::Error,
+            ]
+        );
+        assert_eq!(
+            metadata.builtin_id,
+            builtin_meta_by_name("to_string")
+                .expect("to_string metadata")
+                .builtin_id()
+        );
     }
 
     #[test]

@@ -528,9 +528,7 @@ impl Show for String {
   xldr(1)> to_string("abc")
   "abc"
   """
-  def to_string(self: Self) -> String {
-    self
-  }
+  @builtin def to_string(self: Self) -> String
 }
 
 impl From<String> for String {

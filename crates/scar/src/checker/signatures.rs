@@ -15,7 +15,10 @@ use sigil::resolved::{
     ResolvedReturnTypeArgument, ResolvedValueParameter, ResolvedWhereClause,
     ResolvedWhereConstraintRhs,
 };
-use sindr::builtin::{builtin_surface_variant_for_decl, BuiltinSurfaceSignatureMeta};
+use sindr::builtin::{
+    builtin_meta_by_id, builtin_surface_variant_for_decl, BuiltinSurfaceSignatureMeta,
+    BuiltinTraitMethodMeta,
+};
 use sindr::signature::{
     CallableDeclarationKind, CallableIdentity, CallableSignature, CanonicalConstraint,
     CanonicalConstraintSet, CanonicalReturnTypeArgument, CanonicalTypeOccurrence,
@@ -1002,6 +1005,233 @@ pub(super) fn builtin_surface_matches(
         return false;
     }
     true
+}
+
+/// Validate an `@builtin` Trait implementation against the runtime entry, not
+/// merely against its source Trait declaration. Both source declarations can
+/// drift together, so the builtin id is attached only after this independent
+/// metadata check succeeds.
+pub(super) fn builtin_trait_surface_matches(
+    checker: &Checker,
+    metadata: &BuiltinTraitMethodMeta,
+    target: &Ty,
+    value_parameters: &[ResolvedValueParameter],
+    params: &[Ty],
+    ret_ty: &Ty,
+) -> bool {
+    let Some(runtime) = builtin_meta_by_id(metadata.builtin_id.0) else {
+        return false;
+    };
+    if params.len() != usize::from(runtime.runtime_arity()) {
+        return false;
+    }
+    let Some(signature) = runtime.surface_variants().into_iter().next() else {
+        return false;
+    };
+    if signature.value_parameters.len() != value_parameters.len()
+        || signature
+            .value_parameters
+            .iter()
+            .zip(value_parameters)
+            .any(|(expected, actual)| expected.mode != canonical_parameter_mode(actual.mode))
+    {
+        return false;
+    }
+
+    let mut env = crate::env::TypeEnv::new();
+    let Ty::BuiltinFunc {
+        params: expected_params,
+        ret: expected_ret,
+        ..
+    } = super::builtin_ty_from_meta(runtime, &mut env)
+    else {
+        unreachable!("builtin metadata always parses to a builtin function")
+    };
+    if expected_params.len() != params.len() {
+        return false;
+    }
+
+    let Some(actual_receiver) = params.first() else {
+        return false;
+    };
+    let target = checker.resolve_ty(target);
+    let mut target_variables = HashMap::new();
+    if !builtin_runtime_type_matches(checker, &target, actual_receiver, &mut target_variables) {
+        return false;
+    }
+
+    let mut expected_variables = HashMap::new();
+    expected_params
+        .iter()
+        .zip(params)
+        .all(|(expected, actual)| {
+            builtin_runtime_type_matches(checker, expected, actual, &mut expected_variables)
+        })
+        && builtin_runtime_type_matches(checker, &expected_ret, ret_ty, &mut expected_variables)
+}
+
+fn builtin_runtime_type_matches(
+    checker: &Checker,
+    expected: &Ty,
+    actual: &Ty,
+    expected_variables: &mut HashMap<u32, Ty>,
+) -> bool {
+    // Expected metadata uses an isolated TypeEnv, so its variable ids must
+    // never be resolved through the active checker's substitution namespace.
+    let expected = expected.clone();
+    let actual = checker.resolve_ty(actual);
+    if matches!(&expected, Ty::Enum(name, arguments) if name == "_" && arguments.is_empty()) {
+        return true;
+    }
+    if let Ty::Var(variable) = expected {
+        return match expected_variables.get(&variable) {
+            Some(bound) => checker.resolve_ty(bound) == actual,
+            None => {
+                expected_variables.insert(variable, actual);
+                true
+            }
+        };
+    }
+
+    match (expected, actual) {
+        (Ty::Int, Ty::Int)
+        | (Ty::Float, Ty::Float)
+        | (Ty::Str, Ty::Str)
+        | (Ty::Bool, Ty::Bool)
+        | (Ty::Unit, Ty::Unit)
+        | (Ty::Error, Ty::Error)
+        | (Ty::Hole, Ty::Hole) => true,
+        (Ty::List(expected), Ty::List(actual)) | (Ty::Lazy(expected), Ty::Lazy(actual)) => {
+            builtin_runtime_type_matches(checker, &expected, &actual, expected_variables)
+        }
+        (Ty::Tuple(expected), Ty::Tuple(actual)) => {
+            expected.len() == actual.len()
+                && expected.iter().zip(&actual).all(|(expected, actual)| {
+                    builtin_runtime_type_matches(checker, expected, actual, expected_variables)
+                })
+        }
+        (Ty::Func(expected_params, expected_ret), Ty::Func(actual_params, actual_ret)) => {
+            expected_params.len() == actual_params.len()
+                && expected_params
+                    .iter()
+                    .zip(&actual_params)
+                    .all(|(expected, actual)| {
+                        builtin_runtime_type_matches(checker, expected, actual, expected_variables)
+                    })
+                && builtin_runtime_type_matches(
+                    checker,
+                    &expected_ret,
+                    &actual_ret,
+                    expected_variables,
+                )
+        }
+        (
+            Ty::Facet(
+                expected_kind,
+                expected_source,
+                expected_focus,
+                expected_update_source,
+                expected_update_focus,
+            ),
+            Ty::Facet(
+                actual_kind,
+                actual_source,
+                actual_focus,
+                actual_update_source,
+                actual_update_focus,
+            ),
+        ) => {
+            expected_kind == actual_kind
+                && builtin_runtime_type_matches(
+                    checker,
+                    &expected_source,
+                    &actual_source,
+                    expected_variables,
+                )
+                && builtin_runtime_type_matches(
+                    checker,
+                    &expected_focus,
+                    &actual_focus,
+                    expected_variables,
+                )
+                && builtin_runtime_type_matches(
+                    checker,
+                    &expected_update_source,
+                    &actual_update_source,
+                    expected_variables,
+                )
+                && builtin_runtime_type_matches(
+                    checker,
+                    &expected_update_focus,
+                    &actual_update_focus,
+                    expected_variables,
+                )
+        }
+        (Ty::Pid(expected), Ty::Pid(actual)) => expected == actual,
+        (Ty::Struct(expected_name, expected_fields), Ty::Struct(actual_name, actual_fields))
+        | (Ty::Record(expected_name, expected_fields), Ty::Record(actual_name, actual_fields)) => {
+            Checker::surface_name(&expected_name) == Checker::surface_name(&actual_name)
+                && expected_fields.len() == actual_fields.len()
+                && expected_fields.iter().zip(&actual_fields).all(
+                    |((expected_name, expected_ty), (actual_name, actual_ty))| {
+                        expected_name == actual_name
+                            && builtin_runtime_type_matches(
+                                checker,
+                                expected_ty,
+                                actual_ty,
+                                expected_variables,
+                            )
+                    },
+                )
+        }
+        (Ty::Enum(expected_name, expected_args), Ty::Enum(actual_name, actual_args)) => {
+            Checker::surface_name(&expected_name) == Checker::surface_name(&actual_name)
+                && expected_args.len() == actual_args.len()
+                && expected_args
+                    .iter()
+                    .zip(&actual_args)
+                    .all(|(expected, actual)| {
+                        builtin_runtime_type_matches(checker, expected, actual, expected_variables)
+                    })
+        }
+        (Ty::Result(expected_ok, expected_err), Ty::Result(actual_ok, actual_err)) => {
+            builtin_runtime_type_matches(checker, &expected_ok, &actual_ok, expected_variables)
+                && builtin_runtime_type_matches(
+                    checker,
+                    &expected_err,
+                    &actual_err,
+                    expected_variables,
+                )
+        }
+        (
+            Ty::BuiltinFunc {
+                name: expected_name,
+                params: expected_params,
+                ret: expected_ret,
+            },
+            Ty::BuiltinFunc {
+                name: actual_name,
+                params: actual_params,
+                ret: actual_ret,
+            },
+        ) => {
+            expected_name == actual_name
+                && expected_params.len() == actual_params.len()
+                && expected_params
+                    .iter()
+                    .zip(&actual_params)
+                    .all(|(expected, actual)| {
+                        builtin_runtime_type_matches(checker, expected, actual, expected_variables)
+                    })
+                && builtin_runtime_type_matches(
+                    checker,
+                    &expected_ret,
+                    &actual_ret,
+                    expected_variables,
+                )
+        }
+        _ => false,
+    }
 }
 
 fn normalize_surface_type(ty: &str, variables: &mut HashMap<String, String>) -> String {

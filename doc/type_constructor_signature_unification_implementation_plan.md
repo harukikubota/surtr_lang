@@ -903,7 +903,7 @@ git commit -m "refactor(types): select trait implementations structurally"
 - Consumes: the single substitution produced by Task 7 and TypeCtorTrait inheritance / mapped-slot metadata.
 - Invariant: same family means same concrete carrier including captured arguments, while mapped payload variables remain ordinary independent type variables; capability is checked per signature position.
 
-- [ ] **Step 1: Add failing instantiation and carrier tests**
+- [x] **Step 1: Add failing instantiation and carrier tests**
 
 Cover:
 
@@ -921,7 +921,7 @@ Cover:
 
 Assert that a typed call contains a concrete dispatch target and no pending inference variable before Forge receives it.
 
-- [ ] **Step 2: Run both focused tests**
+- [x] **Step 2: Run both focused tests**
 
 ```bash
 cargo nextest run -p scar --test trait_method_instantiation
@@ -930,7 +930,7 @@ cargo nextest run -p scar --test type_constructor_carriers
 
 Expected: current specialization rebuilds a value-only mapping or represents constructor families too weakly.
 
-- [ ] **Step 3: Add canonical family and carrier structures**
+- [x] **Step 3: Add canonical family and carrier structures**
 
 ```rust
 pub struct CanonicalConstructorCarrier {
@@ -952,21 +952,21 @@ pub struct TraitMethodInstantiation {
 
 Derive `TypeCtorTraitFamilyId` from the canonical inheritance graph's connected component. Do not use the root display name, process-local insertion order, or implementation count as family identity.
 
-- [ ] **Step 4: Unify carrier identity separately from capability**
+- [x] **Step 4: Unify carrier identity separately from capability**
 
 Unify constructor head, arity, every mapped slot, and all captured/fixed arguments for occurrences in one family. Keep mapped payload types outside carrier identity. Record each occurrence's required Trait capability as an obligation on the shared carrier; a Functor position cannot call Monad methods merely because another position requires Monad.
 
-- [ ] **Step 5: Carry the selection substitution through specialization**
+- [x] **Step 5: Carry the selection substitution through specialization**
 
 Apply the exact Task 7 substitution to impl target, field types, method RTA/value/return, body, obligations, closure captures, and dispatch target. Build `CallableInstantiationKey` from canonical callable identity, concrete implementation identity, and all type inputs in stable role/ordinal order. Reject incomplete mappings as `UnresolvedTraitMethodInstantiation` at the instantiation boundary.
 
 Use this same route for explicit impl bodies, default bodies, derived synthetic methods, and builtin Trait methods. Derive creates a stable `SyntheticMethodId` from derive site, target, and contract identity; builtin dispatch resolves `BuiltinId` through Task 3 metadata only.
 
-- [ ] **Step 6: Enforce the Forge boundary**
+- [x] **Step 6: Enforce the Forge boundary**
 
 Remove Forge-side Trait candidate lookup or type reconstruction. Add an assertion/error at codegen entry if a typed call lacks a concrete `TraitDispatchTarget` or retains a pending type/carrier; do not add a runtime dictionary.
 
-- [ ] **Step 7: Verify the correction phase's type engine**
+- [x] **Step 7: Verify the correction phase's type engine**
 
 ```bash
 cargo nextest run -p scar --test trait_method_instantiation
@@ -976,12 +976,21 @@ cargo nextest run -p forge
 cargo nextest run -p rune --test integration run_srt
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add crates/scar crates/sigil/src/resolver/derive.rs crates/sindr/src/builtin.rs crates/forge tests/fixtures
 git commit -m "refactor(types): unify method instantiation and constructor carriers"
 ```
+
+**Completion verification (2026-09-08):**
+
+- Method instantiation now carries the selected implementation substitution through explicit, default, derived, and builtin Trait methods. Forge receives only concrete dispatch targets; it does not reconstruct Trait selection.
+- Constructor carriers preserve structural family identity, every mapped slot, captured arguments, and the exact intersection of forwarded capabilities. Failed probes and implementation order cannot create a fallback capability or dispatch result.
+- Primitive `Show::to_string` implementations are explicit canonical builtin surfaces. Scar attaches their runtime id only after validating the resolved receiver, parameters, and inherited return against runtime metadata; same-named user implementations remain user functions.
+- Independent review approved the final tree with no Critical, Important, or Minor findings.
+- `cargo nextest run -p sindr -p scar -p forge`: **457 passed**. `SURTR_TEST_CACHE=1 cargo nextest run -p rune --test integration run_srt`: **27 passed, 170 skipped**. The TCO regression bucket: **1 passed, 196 skipped**.
+- Final workspace gate: `SURTR_TEST_CACHE=1 cargo nextest run --workspace` ran **1,768 tests: 1,768 passed, 206 skipped**. The skipped tests are the default profile's cold exclusions. `cargo fmt --all -- --check` and `git diff --check` passed.
 
 ---
 

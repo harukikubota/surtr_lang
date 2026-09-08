@@ -844,9 +844,7 @@ impl Show for Int {
   xldr(1)> to_string(42)
   "42"
   """
-  def to_string(self: Self) -> String {
-    inspect(self)
-  }
+  @builtin def to_string(self: Self) -> String
 }
 
 impl From<Int> for Int {

@@ -2318,9 +2318,12 @@ impl Checker {
         trait_id: &ResolvedId,
         method_name: &str,
         target: &Ty,
+        value_parameters: &[ResolvedValueParameter],
+        params: &[Ty],
+        ret_ty: &Ty,
         span: &Span,
     ) -> Result<TraitDispatchTarget, TypeError> {
-        let target = self.canonical_request(target)?;
+        let canonical_target = self.canonical_request(target)?;
         let metadata = builtin_function_metas()
             .iter()
             .filter_map(BuiltinMeta::trait_method)
@@ -2329,9 +2332,9 @@ impl Checker {
                     .and_then(|key| self.traits.get(&key))
                     .is_some_and(|info| info.id.unique_id == trait_id.unique_id)
                     && meta.method_name == method_name
-                    && (target.head == CanonicalTypeHead::Builtin(meta.target)
-                        || matches!(target.head, CanonicalTypeHead::Facet(_))
-                            && meta.target == sindr::names::TypeName::Facet)
+                    && (matches!(canonical_target.head, CanonicalTypeHead::Builtin(name) if meta.targets.contains(&name))
+                        || matches!(canonical_target.head, CanonicalTypeHead::Facet(_))
+                            && meta.targets.contains(&sindr::names::TypeName::Facet))
             })
             .ok_or_else(|| {
                 TypeError::new(
@@ -2339,11 +2342,28 @@ impl Checker {
                         "MissingCanonicalBuiltinTraitImplementation: {}::{} for {:?}",
                         self.trait_key(trait_id),
                         method_name,
-                        target
+                        canonical_target
                     ),
                     span.clone(),
                 )
-            })?;
+        })?;
+        if !super::signatures::builtin_trait_surface_matches(
+            self,
+            &metadata,
+            target,
+            value_parameters,
+            params,
+            ret_ty,
+        ) {
+            return Err(TypeError::new(
+                format!(
+                    "Builtin Trait method {}::{} does not match its canonical runtime signature",
+                    self.trait_key(trait_id),
+                    method_name
+                ),
+                span.clone(),
+            ));
+        }
         Ok(TraitDispatchTarget::Builtin(metadata.builtin_id))
     }
 
@@ -3014,16 +3034,7 @@ impl Checker {
                         attrs: method.attrs.clone(),
                         span: method.span.clone(),
                         display_name_override: None,
-                        dispatch_override: if method.is_builtin {
-                            Some(self.trait_dispatch_override(
-                                &trait_info.id,
-                                &method.method_name,
-                                &target_ty,
-                                &method.span,
-                            )?)
-                        } else {
-                            None
-                        },
+                        dispatch_override: None,
                         is_builtin: method.is_builtin,
                         body_obligations: Vec::new(),
                         instantiation_contract: None,
@@ -3129,6 +3140,7 @@ impl Checker {
                 .where_constraints;
             let mut method_signature_lists = HashMap::new();
             let mut instantiation_contracts = HashMap::new();
+            let mut dispatch_overrides = HashMap::new();
             for (method_name, impl_method) in &method_map {
                 let trait_method =
                     trait_info
@@ -3196,6 +3208,20 @@ impl Checker {
                         &trait_method.ret_ty,
                         where_clause.as_ref().map(TypedWhereClause::from).as_ref(),
                     )?;
+                if impl_method.is_builtin {
+                    dispatch_overrides.insert(
+                        method_name.clone(),
+                        self.trait_dispatch_override(
+                            &trait_info.id,
+                            method_name,
+                            &target_ty,
+                            &impl_method.value_parameters,
+                            &impl_params,
+                            &impl_ret,
+                            &impl_method.span,
+                        )?,
+                    );
+                }
 
                 for ty in contract_env.bindings.values_mut() {
                     *ty = self.substitute_ty_with_mapping(ty, &trait_head_mapping);
@@ -3310,6 +3336,12 @@ impl Checker {
                     .get_mut(&name)
                     .expect("declared method")
                     .instantiation_contract = Some(contract);
+            }
+            for (name, dispatch) in dispatch_overrides {
+                method_map
+                    .get_mut(&name)
+                    .expect("declared method")
+                    .dispatch_override = Some(dispatch);
             }
             let impl_key =
                 CanonicalTraitImplPatternKey::from_head(trait_id.unique_id, &head_type_list);

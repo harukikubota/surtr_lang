@@ -51,9 +51,7 @@ impl Show for Error {
   xldr(1)> to_string(NoneError)
   "NoneError"
   """
-  def to_string(self: Self) -> String {
-    inspect(self)
-  }
+  @builtin def to_string(self: Self) -> String
 }
 
 impl From<String> for Error {

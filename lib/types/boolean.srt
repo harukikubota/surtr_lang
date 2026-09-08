@@ -64,9 +64,7 @@ impl Show for Boolean {
   xldr(1)> to_string(True)
   "True"
   """
-  def to_string(self: Self) -> String {
-    inspect(self)
-  }
+  @builtin def to_string(self: Self) -> String
 }
 
 impl From<Boolean> for Boolean {

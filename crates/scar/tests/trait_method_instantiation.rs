@@ -1,9 +1,15 @@
+use scar::error::TypeError;
 use scar::typed::{TraitDispatch, TraitDispatchTarget, TypedInner};
 use scar::types::Ty;
 
 fn check(source: &str) -> Vec<scar::typed::TypedNode> {
     let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).expect("parse");
     scar::typecheck(sigil::resolve(ast).expect("resolve")).expect("typecheck")
+}
+
+fn check_error(source: &str) -> TypeError {
+    let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).expect("parse");
+    scar::typecheck(sigil::resolve(ast).expect("resolve")).expect_err("typecheck must fail")
 }
 
 #[test]
@@ -97,7 +103,7 @@ Add::add(1, 2)
         .find(|metadata| {
             metadata.trait_name == "Add"
                 && metadata.method_name == "add"
-                && metadata.target == sindr::names::TypeName::Int
+                && metadata.targets.contains(&sindr::names::TypeName::Int)
         })
         .expect("canonical Add<Int> metadata")
         .builtin_id;
@@ -112,6 +118,73 @@ Add::add(1, 2)
             ..
         } if *actual == expected
     ));
+}
+
+#[test]
+fn builtin_show_trait_method_keeps_the_to_string_metadata_id() {
+    let nodes = check(
+        r#"
+deftrait Show { def to_string(self: Self) -> String }
+impl Show for Int { @builtin def to_string(self: Self) -> String }
+Show::to_string(1)
+"#,
+    );
+    let expected = sindr::builtin::builtin_meta_by_name("to_string")
+        .expect("canonical to_string metadata")
+        .builtin_id();
+    let call = nodes
+        .iter()
+        .find(|node| matches!(&node.node, TypedInner::TraitCall { .. }))
+        .expect("call");
+    assert!(matches!(
+        &call.node,
+        TypedInner::TraitCall {
+            dispatch: TraitDispatch::Static(TraitDispatchTarget::Builtin(actual)),
+            ..
+        } if *actual == expected
+    ));
+}
+
+#[test]
+fn builtin_trait_method_rejects_runtime_signature_drift() {
+    for source in [
+        r#"
+deftrait Show { def to_string(self: Self) -> Int }
+impl Show for Int { @builtin def to_string(self: Self) -> Int }
+"#,
+        r#"
+deftrait Show { def to_string(self: Self, extra: Self) -> String }
+impl Show for Int { @builtin def to_string(self: Self, extra: Self) -> String }
+"#,
+        r#"
+deftrait Show { def to_string(value: String) -> String }
+impl Show for Int { @builtin def to_string(value: String) -> String }
+"#,
+    ] {
+        let error = check_error(source);
+        assert!(
+            error.message.contains("canonical runtime signature"),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn builtin_trait_method_validates_the_instantiated_inherited_return() {
+    check(
+        r#"
+deftrait Compose<$Rhs, $Out> {
+  def compose::<$Out>(self: Self, rhs: $Rhs) -> $Out
+}
+impl Compose<Facet<$L, $A, $B, _, _>, Facet<$K, $S, $B, _, _>>
+for Facet<$K, $S, $A, _, _> {
+  @builtin def compose::<Facet<$K, $S, $B, _, _>>(
+    self: Self,
+    rhs: Facet<$L, $A, $B, _, _>,
+  )
+}
+"#,
+    );
 }
 
 #[test]
