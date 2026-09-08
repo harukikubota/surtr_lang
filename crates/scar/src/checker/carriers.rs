@@ -100,9 +100,53 @@ impl Checker {
                     return false;
                 };
                 self.canonical_constructor_carrier(&root_trait, &witness)
-                    .is_some_and(|root_carrier| root_carrier == actual_carrier)
+                    .is_some_and(|root_carrier| {
+                        self.unify_constructor_carriers(&root_carrier, &actual_carrier)
+                    })
             }
         }
+    }
+
+    fn unify_constructor_carriers(
+        &mut self,
+        expected: &CanonicalConstructorCarrier,
+        actual: &CanonicalConstructorCarrier,
+    ) -> bool {
+        if expected.family_id != actual.family_id
+            || expected.constructor != actual.constructor
+            || expected.arity != actual.arity
+            || expected.mapped_slots != actual.mapped_slots
+            || expected.captured_arguments.len() != actual.captured_arguments.len()
+            || expected
+                .captured_arguments
+                .iter()
+                .zip(&actual.captured_arguments)
+                .any(|(expected, actual)| expected.position != actual.position)
+        {
+            return false;
+        }
+        let captured = expected
+            .captured_arguments
+            .iter()
+            .zip(&actual.captured_arguments)
+            .map(|(expected, actual)| {
+                Some((
+                    self.canonical_to_ty(&expected.ty).ok()?,
+                    self.canonical_to_ty(&actual.ty).ok()?,
+                ))
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(captured) = captured else {
+            return false;
+        };
+        let checkpoint = self.candidate_probe_checkpoint();
+        for (expected, actual) in captured {
+            if !self.types_compatible(&expected, &actual) {
+                self.rollback_candidate_probe(checkpoint);
+                return false;
+            }
+        }
+        true
     }
 
     pub(super) fn canonical_constructor_carrier(

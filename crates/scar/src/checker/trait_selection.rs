@@ -1581,7 +1581,7 @@ impl Checker {
         })
     }
 
-    fn canonical_to_ty(&self, ty: &CanonicalTy) -> Result<Ty, TypeError> {
+    pub(super) fn canonical_to_ty(&self, ty: &CanonicalTy) -> Result<Ty, TypeError> {
         let args = ty
             .arguments
             .iter()

@@ -196,6 +196,22 @@ accept([1], [True])
 }
 
 #[test]
+fn bare_occurrences_unify_captured_inference_variables() {
+    check(
+        r#"
+deftrait Functor where Self: Type<$A> {}
+deftrait Monad where Self: Functor {}
+defenum Carrier<$L, $R> { Pair($L, $R), }
+impl Functor for Carrier<$L, $R> where $R: Functor.$A {}
+impl Monad for Carrier<$L, $R> where $R: Monad.$A {}
+def accept(a: Functor, b: Monad) -> Unit { () }
+accept(Carrier::Pair([], 1), Carrier::Pair(["left"], 2))
+"#,
+    )
+    .expect("the later occurrence may determine an earlier captured inference variable");
+}
+
+#[test]
 fn bare_occurrences_still_compare_every_mapped_slot() {
     let error = check(
         r#"
