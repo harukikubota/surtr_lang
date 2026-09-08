@@ -2820,10 +2820,13 @@ impl Checker {
     }
 
     pub(super) fn predeclare_traits(&mut self, stmts: &[Resolved]) -> Result<(), TypeError> {
+        let mut declared_trait = false;
+        let mut declared_trait_impl = false;
         for stmt in stmts {
             let Resolved::TraitDef(span, id, type_params, where_clause, methods, _) = stmt else {
                 continue;
             };
+            declared_trait = true;
             let trait_key = self.trait_key(id);
             let constructor_slots = self.trait_constructor_slots(id, where_clause.as_ref())?;
             let parents = Self::trait_parents(where_clause.as_ref());
@@ -2957,7 +2960,9 @@ impl Checker {
             let _ = span;
         }
 
-        self.resolve_trait_constraint_closure()?;
+        if declared_trait {
+            self.resolve_trait_constraint_closure()?;
+        }
 
         for stmt in stmts {
             let Resolved::TraitImplDef(
@@ -2972,6 +2977,7 @@ impl Checker {
             else {
                 continue;
             };
+            declared_trait_impl = true;
 
             let trait_key = self.trait_key(trait_id);
             let trait_info = self
@@ -3475,9 +3481,11 @@ impl Checker {
             self.index_trait_impl(impl_key);
         }
 
-        let impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
-        for child_impl in &impls {
-            self.validate_parent_impl_chain(child_impl, &mut HashSet::new())?;
+        if declared_trait_impl {
+            let impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
+            for child_impl in &impls {
+                self.validate_parent_impl_chain(child_impl, &mut HashSet::new())?;
+            }
         }
 
         Ok(())
@@ -4016,6 +4024,10 @@ impl Checker {
             }
         }
 
+        if trait_impl_keys_in_stmts.is_empty() {
+            self.env.next_fun_idx = fun_idx;
+            return Ok(());
+        }
         let mut trait_impls = self.trait_impls.values().cloned().collect::<Vec<_>>();
         trait_impls.sort_by_key(|info| info.declaration_key.declaration_id);
 
