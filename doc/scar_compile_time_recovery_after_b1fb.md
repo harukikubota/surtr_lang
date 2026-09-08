@@ -170,7 +170,8 @@ bench_dir=$(mktemp -d)
 
 `c027048b`、変更直前 HEAD、変更後を同じマシン・toolchain で各 5 回測定し、
 stdlib の Scar total と wall time の中央値を比較する。Rust build 時間は含めない。
-hot compile も 1 回確認し、cache 利用時の退行がないことを確認する。
+hot compile は変更前後を交互に 20 回ずつ測定し、中央値で cache 利用時の退行が
+ないことを確認する。
 
 ## 受入条件
 
@@ -186,6 +187,37 @@ hot compile も 1 回確認し、cache 利用時の退行がないことを確�
 
 参考目標として、cold stdlib Scar total が `c027048b` の 1.25 倍以内まで戻ることを
 目指すが、これは必須条件にはしない。
+
+## 実装・検証結果
+
+`check_match` の Err-only self arm coercion を `with_type_relation_probe` で囲み、
+`TypeEnv` などを含む full candidate checkpoint を除去した。軽量 checkpoint は
+比較対象の型から変更可能な型変数を収集し、substitutions、型変数 bound、pending
+Trait obligation だけを保存する。通常の type relation assertion は同じ保存対象収集を
+共有するが、従来どおり成功時 commit、失敗時 rollback とする。
+
+crate-local 検証結果:
+
+- 新規の軽量 probe 回帰テスト: 1 passed
+- coercion、branch diagnostic、既存 rollback の対象テスト: 4 passed
+- `rtk cargo nextest run -p scar`: 333 passed
+
+次の性能値は、計測後に同じマシンで別処理の CPU 負荷が並行していたことが判明した
+ため参考値とし、正式な受入判定には使用しない。
+
+cold compile の参考 5 回中央値:
+
+| revision | stdlib Scar total | wall time |
+|---|---:|---:|
+| `c027048b` | 603.605 ms | 1.50 s |
+| 変更直前 `85465d17` | 1275.167 ms | 2.19 s |
+| 変更後 | 598.809 ms | 1.53 s |
+
+参考値では、変更直前比で stdlib Scar total は約 53.0%、wall time は約 30.1%
+短縮した。変更後は `c027048b` の Scar total も約 0.8% 下回った。ただし並行負荷の
+影響を除いた再測定を行うまで、性能の必須条件と参考目標は未検証として扱う。
+
+hot compile の交互 20 回参考中央値は変更前 0.158411 s、変更後 0.153246 s だった。
 
 ## 対象外
 

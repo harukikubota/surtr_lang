@@ -12,6 +12,20 @@ struct TypeRelationCheckpoint {
 }
 
 impl Checker {
+    fn type_relation_checkpoint_for(&self, types: &[&Ty]) -> Option<TypeRelationCheckpoint> {
+        let mut variables = Vec::new();
+        for ty in types {
+            Self::collect_ty_vars(ty, &mut variables);
+        }
+        variables
+            .iter()
+            .any(|var| {
+                !self.rigid_tyvars.contains(var)
+                    && matches!(self.resolve_ty(&Ty::Var(*var)), Ty::Var(_))
+            })
+            .then(|| self.type_relation_checkpoint(&variables))
+    }
+
     fn type_relation_checkpoint(&self, variables: &[u32]) -> TypeRelationCheckpoint {
         let mut tracked = variables.to_vec();
         let mut cursor = 0;
@@ -74,6 +88,19 @@ impl Checker {
             }
         }
     }
+
+    pub(super) fn with_type_relation_probe<T>(
+        &mut self,
+        types: &[&Ty],
+        probe: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let checkpoint = self.type_relation_checkpoint_for(types);
+        let result = probe(self);
+        if let Some(checkpoint) = checkpoint {
+            self.rollback_type_relation(checkpoint);
+        }
+        result
+    }
 }
 
 impl Checker {
@@ -91,16 +118,7 @@ impl Checker {
         // Concrete and rigid-only comparisons cannot bind inference variables.
         // Avoid cloning the candidate-probe state for declaration-owned generics:
         // they are common in standard-library bodies but are immutable here.
-        let mut variables = Vec::new();
-        Self::collect_ty_vars(expected, &mut variables);
-        Self::collect_ty_vars(actual, &mut variables);
-        let checkpoint = variables
-            .iter()
-            .any(|var| {
-                !self.rigid_tyvars.contains(var)
-                    && matches!(self.resolve_ty(&Ty::Var(*var)), Ty::Var(_))
-            })
-            .then(|| self.type_relation_checkpoint(&variables));
+        let checkpoint = self.type_relation_checkpoint_for(&[expected, actual]);
         if self.types_compatible(expected, actual) {
             return Ok(());
         }
@@ -771,6 +789,58 @@ impl Checker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn speculative_type_relation_restores_success_and_failure_state_without_candidate_snapshot() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let Ty::Var(source) = checker.env.fresh_tyvar() else {
+            unreachable!("fresh source type variable")
+        };
+        let Ty::Var(alias) = checker.env.fresh_tyvar() else {
+            unreachable!("fresh alias type variable")
+        };
+        checker.tyvar_bounds.insert(source, vec!["Marker".into()]);
+        checker.pending_trait_obligations.insert(
+            source,
+            vec![PendingTraitObligation {
+                trait_id: "Marker".into(),
+                args: vec![Ty::Var(source)],
+                receiver: Ty::Var(source),
+            }],
+        );
+        let substitutions = checker.substitutions.clone();
+        let bounds = checker.tyvar_bounds.clone();
+        let obligations = checker.pending_trait_obligations.clone();
+
+        let source_ty = Ty::Var(source);
+        let alias_ty = Ty::Var(alias);
+        assert!(
+            checker.with_type_relation_probe(&[&source_ty, &alias_ty], |checker| {
+                let compatible = checker.types_compatible(&source_ty, &alias_ty);
+                assert_eq!(checker.resolve_ty(&source_ty), alias_ty);
+                assert!(!checker.pending_trait_obligations.contains_key(&source));
+                assert!(checker.pending_trait_obligations.contains_key(&alias));
+                compatible
+            })
+        );
+        assert_eq!(checker.substitutions, substitutions);
+        assert_eq!(checker.tyvar_bounds, bounds);
+        assert_eq!(checker.pending_trait_obligations, obligations);
+
+        let variable = checker.env.fresh_tyvar();
+        let expected = Ty::Tuple(vec![variable.clone(), Ty::Int]);
+        let rejected = Ty::Tuple(vec![Ty::Bool, Ty::Str]);
+        assert!(
+            !checker.with_type_relation_probe(&[&expected, &rejected], |checker| {
+                let compatible = checker.types_compatible(&expected, &rejected);
+                assert_eq!(checker.resolve_ty(&variable), Ty::Bool);
+                compatible
+            })
+        );
+        assert_eq!(checker.resolve_ty(&variable), variable);
+        assert_eq!(checker.candidate_probe_checkpoint_count.get(), 0);
+    }
+
     #[test]
     fn failed_type_assertion_rolls_back_partial_substitution() {
         let mut checker = Checker::new(TypecheckContext::default());
