@@ -5,6 +5,77 @@ use diagnostics::{
     SourceId, SourceRole, StructuredDiagnostic, TypeDiagnosticReason,
 };
 
+struct TypeRelationCheckpoint {
+    substitutions: Vec<(u32, Option<Ty>)>,
+    tyvar_bounds: Vec<(u32, Option<Vec<String>>)>,
+    pending_trait_obligations: Vec<(u32, Option<Vec<PendingTraitObligation>>)>,
+}
+
+impl Checker {
+    fn type_relation_checkpoint(&self, variables: &[u32]) -> TypeRelationCheckpoint {
+        let mut tracked = variables.to_vec();
+        let mut cursor = 0;
+        while cursor < tracked.len() {
+            let variable = tracked[cursor];
+            Self::collect_ty_vars(&self.resolve_ty(&Ty::Var(variable)), &mut tracked);
+            if let Some(root) = self.constructor_family_witness_root(variable) {
+                if !tracked.contains(&root) {
+                    tracked.push(root);
+                }
+                Self::collect_ty_vars(&self.resolve_ty(&Ty::Var(root)), &mut tracked);
+            }
+            cursor += 1;
+        }
+        TypeRelationCheckpoint {
+            substitutions: tracked
+                .iter()
+                .map(|var| (*var, self.substitutions.get(var).cloned()))
+                .collect(),
+            tyvar_bounds: tracked
+                .iter()
+                .map(|var| (*var, self.tyvar_bounds.get(var).cloned()))
+                .collect(),
+            pending_trait_obligations: tracked
+                .iter()
+                .map(|var| (*var, self.pending_trait_obligations.get(var).cloned()))
+                .collect(),
+        }
+    }
+
+    fn rollback_type_relation(&mut self, checkpoint: TypeRelationCheckpoint) {
+        for (var, value) in checkpoint.substitutions {
+            match value {
+                Some(value) => {
+                    self.substitutions.insert(var, value);
+                }
+                None => {
+                    self.substitutions.remove(&var);
+                }
+            }
+        }
+        for (var, value) in checkpoint.tyvar_bounds {
+            match value {
+                Some(value) => {
+                    self.tyvar_bounds.insert(var, value);
+                }
+                None => {
+                    self.tyvar_bounds.remove(&var);
+                }
+            }
+        }
+        for (var, value) in checkpoint.pending_trait_obligations {
+            match value {
+                Some(value) => {
+                    self.pending_trait_obligations.insert(var, value);
+                }
+                None => {
+                    self.pending_trait_obligations.remove(&var);
+                }
+            }
+        }
+    }
+}
+
 impl Checker {
     pub(super) fn assert_type_relation(
         &mut self,
@@ -17,17 +88,24 @@ impl Checker {
         callable: &str,
         ordinal: u32,
     ) -> Result<(), TypeError> {
-        // Concrete comparisons cannot bind inference variables. Do not clone the
-        // inference environment on the ordinary monomorphic call path.
+        // Concrete and rigid-only comparisons cannot bind inference variables.
+        // Avoid cloning the candidate-probe state for declaration-owned generics:
+        // they are common in standard-library bodies but are immutable here.
         let mut variables = Vec::new();
         Self::collect_ty_vars(expected, &mut variables);
         Self::collect_ty_vars(actual, &mut variables);
-        let checkpoint = (!variables.is_empty()).then(|| self.candidate_probe_checkpoint());
+        let checkpoint = variables
+            .iter()
+            .any(|var| {
+                !self.rigid_tyvars.contains(var)
+                    && matches!(self.resolve_ty(&Ty::Var(*var)), Ty::Var(_))
+            })
+            .then(|| self.type_relation_checkpoint(&variables));
         if self.types_compatible(expected, actual) {
             return Ok(());
         }
         if let Some(checkpoint) = checkpoint {
-            self.rollback_candidate_probe(checkpoint);
+            self.rollback_type_relation(checkpoint);
         }
         if reason == TypeDiagnosticReason::ArgumentTypeMismatch {
             if let Some((trait_name, subject)) = self.unsatisfied_relation_bound(expected, actual) {
@@ -713,6 +791,7 @@ mod tests {
             )
             .expect_err("second slot fails");
         assert_eq!(checker.resolve_ty(&variable), variable);
+        assert_eq!(checker.candidate_probe_checkpoint_count.get(), 0);
         let accepted = Ty::Tuple(vec![Ty::Bool, Ty::Int]);
         checker
             .assert_type_relation(
@@ -727,6 +806,33 @@ mod tests {
             )
             .expect("a subsequent relation can select a different type");
         assert_eq!(checker.resolve_ty(&variable), Ty::Bool);
+    }
+
+    #[test]
+    fn rigid_type_assertion_does_not_create_candidate_probe_checkpoint() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let Ty::Var(variable) = checker.env.fresh_tyvar() else {
+            unreachable!("fresh type variable")
+        };
+        checker.rigid_tyvars.insert(variable);
+        let expected = Ty::Tuple(vec![Ty::Var(variable), Ty::Int]);
+        let actual = expected.clone();
+        let span = Span { start: 0, end: 1 };
+
+        checker
+            .assert_type_relation(
+                &expected,
+                &actual,
+                checker.type_fact(SourceRole::Expected, &span, &expected),
+                checker.type_fact(SourceRole::Value, &span, &actual),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::Call,
+                "pair",
+                0,
+            )
+            .expect("identical rigid types are compatible");
+
+        assert_eq!(checker.candidate_probe_checkpoint_count.get(), 0);
     }
 }
 
