@@ -434,6 +434,10 @@ test("Math") {
     let first_prefix_files = fs::read_dir(&prefix_dir)
         .expect("prefix cache dir should be readable")
         .map(|entry| entry.expect("prefix cache entry should load").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "semantic")
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         first_files.len(),
@@ -461,6 +465,10 @@ test("Math") {
     let second_prefix_files = fs::read_dir(&prefix_dir)
         .expect("prefix cache dir should be readable")
         .map(|entry| entry.expect("prefix cache entry should load").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "semantic")
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         second_files.len(),

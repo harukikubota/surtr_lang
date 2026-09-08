@@ -603,6 +603,37 @@ pub fn load_cached_test_semantic_prefix(
     Some(envelope.payload)
 }
 
+#[derive(Debug)]
+pub struct SemanticCacheLockGuard {
+    _file: fs::File,
+}
+
+fn semantic_cache_lock_path(cache_path: &Path) -> PathBuf {
+    let extension = cache_path
+        .extension()
+        .map(|extension| {
+            let mut extension = extension.to_os_string();
+            extension.push(".lock");
+            extension
+        })
+        .unwrap_or_else(|| "lock".into());
+    cache_path.with_extension(extension)
+}
+
+pub fn acquire_semantic_cache_lock(cache_path: &Path) -> Option<SemanticCacheLockGuard> {
+    let parent = cache_path.parent()?;
+    fs::create_dir_all(parent).ok()?;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(semantic_cache_lock_path(cache_path))
+        .ok()?;
+    file.lock().ok()?;
+    Some(SemanticCacheLockGuard { _file: file })
+}
+
 pub fn store_cached_test_semantic_prefix(
     cache_path: &Path,
     key: &str,
@@ -733,10 +764,8 @@ fn build_stdlib_snapshot(
         .collect::<BTreeSet<_>>();
     let default_stage_count = module_stages.len();
 
-    if let Some(payload) = load_cached_stdlib_semantic_snapshot(
-        &stdlib_semantic_cache_path(stdlib_variant),
-        &cache_key,
-    ) {
+    let cache_path = stdlib_semantic_cache_path(stdlib_variant);
+    if let Some(payload) = load_cached_stdlib_semantic_snapshot(&cache_path, &cache_key) {
         if payload.default_stage_count == default_stage_count {
             record_stdlib_cache_state(stdlib_variant, StdlibCacheState::DiskHit);
             return Ok(DefaultStdlibSnapshot {
@@ -747,6 +776,23 @@ fn build_stdlib_snapshot(
                 auto_import_modules: payload.auto_import_modules,
                 default_stage_count: payload.default_stage_count,
             });
+        }
+    }
+
+    let _cache_lock = acquire_semantic_cache_lock(&cache_path);
+    if _cache_lock.is_some() {
+        if let Some(payload) = load_cached_stdlib_semantic_snapshot(&cache_path, &cache_key) {
+            if payload.default_stage_count == default_stage_count {
+                record_stdlib_cache_state(stdlib_variant, StdlibCacheState::DiskHit);
+                return Ok(DefaultStdlibSnapshot {
+                    module_stages,
+                    compile_prefix: payload.compile_prefix,
+                    docs: payload.docs,
+                    signatures: payload.signatures,
+                    auto_import_modules: payload.auto_import_modules,
+                    default_stage_count: payload.default_stage_count,
+                });
+            }
         }
     }
 
@@ -823,7 +869,7 @@ fn build_stdlib_snapshot(
         module_stages,
     };
     store_cached_stdlib_semantic_snapshot(
-        &stdlib_semantic_cache_path(stdlib_variant),
+        &cache_path,
         &cache_key,
         CachedStdlibSemanticPayload {
             compile_prefix: snapshot.compile_prefix.clone(),
@@ -1225,6 +1271,114 @@ defmod B {
 
         assert!(loaded.is_none());
         let _ = std::fs::remove_file(cache_path);
+    }
+
+    #[test]
+    fn semantic_cache_lock_serializes_concurrent_prefix_builds() {
+        let cache_path = std::env::temp_dir().join(format!(
+            "surtr-concurrent-test-prefix-cache-{}.semantic",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&cache_path);
+        let _ = std::fs::remove_file(semantic_cache_lock_path(&cache_path));
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+        let builds = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut workers = Vec::new();
+        for _ in 0..4 {
+            let cache_path = cache_path.clone();
+            let barrier = std::sync::Arc::clone(&barrier);
+            let builds = std::sync::Arc::clone(&builds);
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                if let Some(payload) = load_cached_test_semantic_prefix(&cache_path, "expected-key")
+                {
+                    assert_eq!(payload.resolve_state.next_local_id, 7);
+                    return;
+                }
+
+                let _cache_lock = acquire_semantic_cache_lock(&cache_path)
+                    .expect("semantic cache lock should be available");
+                if let Some(payload) = load_cached_test_semantic_prefix(&cache_path, "expected-key")
+                {
+                    assert_eq!(payload.resolve_state.next_local_id, 7);
+                    return;
+                }
+
+                builds.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                let snapshot = CompilationPrefixSnapshot::from_parts(
+                    sigil::DeclarationIndex::new(),
+                    sigil::ResolveResumeState { next_local_id: 7 },
+                    scar::ScarSession::new().checkpoint(),
+                    forge::bytecode::Bytecode::default(),
+                );
+                store_cached_test_semantic_prefix_snapshot(&cache_path, "expected-key", &snapshot);
+            }));
+        }
+
+        for worker in workers {
+            worker.join().expect("semantic cache worker should finish");
+        }
+        assert_eq!(builds.load(std::sync::atomic::Ordering::Relaxed), 1);
+
+        let _ = std::fs::remove_file(&cache_path);
+        let _ = std::fs::remove_file(semantic_cache_lock_path(&cache_path));
+    }
+
+    #[test]
+    fn stdlib_semantic_cache_serializes_concurrent_processes() {
+        if let Some(cache_dir) = std::env::var_os("SURTR_STDLIB_SINGLE_FLIGHT_WORKER") {
+            std::env::set_var("SURTR_STDLIB_CACHE_DIR", &cache_dir);
+            test_enabled_stdlib_semantic_snapshot()
+                .expect("test-enabled stdlib snapshot should build or load");
+            let state = stdlib_semantic_snapshot_cache_state(StdlibVariant::TestEnabled)
+                .expect("stdlib cache state should be recorded");
+            std::fs::write(
+                PathBuf::from(cache_dir).join(format!("state-{}", std::process::id())),
+                state.as_str(),
+            )
+            .expect("stdlib cache state should be written");
+            return;
+        }
+
+        let cache_dir =
+            std::env::temp_dir().join(format!("surtr-stdlib-single-flight-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        let test_binary = std::env::current_exe().expect("test binary path should be available");
+
+        let mut children = Vec::new();
+        for _ in 0..2 {
+            children.push(
+                std::process::Command::new(&test_binary)
+                    .args([
+                        "--exact",
+                        "tests::stdlib_semantic_cache_serializes_concurrent_processes",
+                        "--nocapture",
+                    ])
+                    .env("SURTR_STDLIB_SINGLE_FLIGHT_WORKER", &cache_dir)
+                    .spawn()
+                    .expect("stdlib cache worker should start"),
+            );
+        }
+
+        for mut child in children {
+            let status = child.wait().expect("stdlib cache worker should finish");
+            assert!(status.success(), "stdlib cache worker failed: {status}");
+        }
+
+        let mut states = std::fs::read_dir(&cache_dir)
+            .expect("stdlib cache directory should exist")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("state-"))
+            .map(|entry| {
+                std::fs::read_to_string(entry.path()).expect("cache state should be readable")
+            })
+            .collect::<Vec<_>>();
+        states.sort();
+        assert_eq!(states, ["cold", "disk_hit"]);
+
+        let _ = std::fs::remove_dir_all(cache_dir);
     }
 
     #[test]

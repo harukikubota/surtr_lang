@@ -352,9 +352,17 @@ fn build_cached_script_compile_prefix(
             .map_err(|message| RuneError::message(1, message));
     }
 
-    let prefix = if let Some(payload) =
-        xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key)
-    {
+    let mut cached_payload = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key);
+    let _semantic_cache_lock = if cached_payload.is_none() {
+        xldr::acquire_semantic_cache_lock(&cache_path)
+    } else {
+        None
+    };
+    if cached_payload.is_none() && _semantic_cache_lock.is_some() {
+        cached_payload = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key);
+    }
+
+    let prefix = if let Some(payload) = cached_payload {
         Arc::new(xldr::CompilationPrefixSnapshot::from_parts(
             rebuilt_declaration_index.clone(),
             payload.resolve_state,

@@ -323,7 +323,18 @@ fn cached_script_compile_prefix(
     })?;
     let cache_path = cached_semantic_prefix_path(compile_sources, TestCompileMode::Script)?;
 
-    if let Some(payload) = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key) {
+    let cache_existed = cache_path.exists();
+    let mut cached_payload = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key);
+    let _semantic_cache_lock = if cached_payload.is_none() {
+        xldr::acquire_semantic_cache_lock(&cache_path)
+    } else {
+        None
+    };
+    if cached_payload.is_none() && _semantic_cache_lock.is_some() {
+        cached_payload = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key);
+    }
+
+    if let Some(payload) = cached_payload {
         record_cache_event(|stats| stats.semantic_prefix_hits += 1);
         return Ok(Arc::new(CachedCompilePrefix {
             module_asts: cached_modules.module_asts,
@@ -335,7 +346,7 @@ fn cached_script_compile_prefix(
             },
         }));
     }
-    if cache_path.exists() {
+    if cache_existed {
         record_cache_event(|stats| stats.semantic_prefix_corrupt += 1);
     } else {
         record_cache_event(|stats| stats.semantic_prefix_misses += 1);
@@ -436,7 +447,18 @@ pub(super) fn cached_compile_prefix(
                 })?;
         let cache_path = cached_semantic_prefix_path(compile_sources, mode)?;
 
-        if let Some(payload) = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key) {
+        let cache_existed = cache_path.exists();
+        let mut cached_payload = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key);
+        let _semantic_cache_lock = if cached_payload.is_none() {
+            xldr::acquire_semantic_cache_lock(&cache_path)
+        } else {
+            None
+        };
+        if cached_payload.is_none() && _semantic_cache_lock.is_some() {
+            cached_payload = xldr::load_cached_test_semantic_prefix(&cache_path, &cache_key);
+        }
+
+        if let Some(payload) = cached_payload {
             record_cache_event(|stats| stats.semantic_prefix_hits += 1);
             Arc::new(CachedCompilePrefix {
                 module_asts: cached_modules.module_asts,
@@ -448,7 +470,7 @@ pub(super) fn cached_compile_prefix(
                 },
             })
         } else {
-            if cache_path.exists() {
+            if cache_existed {
                 record_cache_event(|stats| stats.semantic_prefix_corrupt += 1);
             } else {
                 record_cache_event(|stats| stats.semantic_prefix_misses += 1);
