@@ -30,6 +30,48 @@ mod tests {
     use sindr::primitives::int;
     use spire::ast::{Ast, BinOp, Lit, Span, Visibility};
 
+    #[test]
+    fn concrete_trait_target_does_not_admit_pending_type_inputs() {
+        use scar::typed::{TraitCallOrigin, TraitDispatch, TraitDispatchTarget, TraitObligation};
+        let span = Span { start: 0, end: 1 };
+        for (result, receiver, obligation_arg) in [
+            (Ty::Var(91), Ty::Int, Ty::Int),
+            (Ty::Int, Ty::List(Box::new(Ty::Var(92))), Ty::Int),
+            (Ty::Int, Ty::Int, Ty::SelfApp(vec![Ty::Int])),
+        ] {
+            let node = TypedNode {
+                ty: result,
+                span: span.clone(),
+                node: TypedInner::TraitCall {
+                    trait_name: "Add".into(),
+                    method_name: "add".into(),
+                    receiver_ty: receiver.clone(),
+                    obligation: TraitObligation {
+                        trait_id: "Add".into(),
+                        trait_args: vec![obligation_arg],
+                        receiver,
+                    },
+                    dispatch: TraitDispatch::Static(TraitDispatchTarget::BinOp(BinOp::Add)),
+                    origin: TraitCallOrigin::Explicit,
+                    args: vec![
+                        TypedNode {
+                            ty: Ty::Int,
+                            span: span.clone(),
+                            node: TypedInner::Lit(Lit::Int(int(1)))
+                        };
+                        2
+                    ],
+                },
+            };
+            let error = codegen(vec![node])
+                .expect_err("pending trait input must be rejected at the Forge boundary");
+            assert!(
+                error.message.contains("UnresolvedTraitMethodInstantiation"),
+                "{error:?}"
+            );
+        }
+    }
+
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/types/special_types.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");

@@ -5334,6 +5334,35 @@ impl Codegen {
         }
     }
 
+    fn emit_trait_builtin(
+        &mut self,
+        id: sindr::signature::BuiltinId,
+        arity: usize,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        let metadata = sindr::builtin::builtin_meta_by_id(id.0).ok_or_else(|| CodegenError {
+            message: "UnresolvedTraitMethodInstantiation: invalid builtin target".into(),
+            span: span.clone(),
+        })?;
+        if usize::from(metadata.arity) != arity {
+            return Err(CodegenError {
+                message: "UnresolvedTraitMethodInstantiation: builtin target arity mismatch".into(),
+                span: span.clone(),
+            });
+        }
+        if let Some(opcode) = metadata.primitive_opcode() {
+            self.emit(opcode);
+        } else {
+            self.emit(Opcode::CallBuiltin {
+                builtin_id: id.0,
+                arity: metadata.arity,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
+        }
+        Ok(())
+    }
+
     fn direct_builtin_opcode(name: &str, arity: usize) -> Option<Opcode> {
         match name.rsplit("::").next().unwrap_or(name) {
             "shl" if arity == 2 => Some(Opcode::ShlInt),
@@ -5654,6 +5683,7 @@ impl Codegen {
         captures: &[ResolvedId],
         body: &TypedNode,
     ) -> Result<Option<CallableTemplateKind>, CodegenError> {
+        Self::validate_trait_call_boundary(body)?;
         let (target, args): (DirectCallableTarget, &[TypedNode]) = match &body.node {
             TypedInner::App(func, args) => {
                 let Some(target) = self.direct_callable_target_for_ref(func)? else {
@@ -5662,15 +5692,9 @@ impl Codegen {
                 (target, args)
             }
             TypedInner::TraitCall { dispatch, args, .. } => match dispatch {
-                TraitDispatch::Static(TraitDispatchTarget::Builtin(name)) => (
-                    DirectCallableTarget::Builtin(Self::builtin_id(name).ok_or_else(|| {
-                        CodegenError {
-                            message: format!("Unknown builtin: {}", name),
-                            span: body.span.clone(),
-                        }
-                    })?),
-                    args,
-                ),
+                TraitDispatch::Static(TraitDispatchTarget::Builtin(id)) => {
+                    (DirectCallableTarget::Builtin(id.0), args)
+                }
                 TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) => {
                     (DirectCallableTarget::User(*fun_idx), args)
                 }
@@ -6628,7 +6652,49 @@ impl Codegen {
         Ok(())
     }
 
+    fn validate_trait_call_boundary(node: &TypedNode) -> Result<(), CodegenError> {
+        fn pending(ty: &Ty) -> bool {
+            match ty {
+                Ty::Var(_) | Ty::SelfApp(_) => true,
+                Ty::List(inner) | Ty::Lazy(inner) => pending(inner),
+                Ty::Tuple(items) | Ty::Enum(_, items) => items.iter().any(pending),
+                Ty::Func(params, ret)
+                | Ty::BuiltinFunc { params, ret, .. }
+                | Ty::UserFunc { params, ret, .. } => params.iter().any(pending) || pending(ret),
+                Ty::Result(ok, err) => pending(ok) || pending(err),
+                Ty::Facet(_, a, b, c, d) => [a, b, c, d].into_iter().any(|ty| pending(ty)),
+                Ty::Struct(_, fields) | Ty::Record(_, fields) => {
+                    fields.iter().any(|(_, ty)| pending(ty))
+                }
+                _ => false,
+            }
+        }
+        if let TypedInner::TraitCall {
+            receiver_ty,
+            obligation,
+            dispatch,
+            args,
+            ..
+        } = &node.node
+        {
+            if !matches!(dispatch, TraitDispatch::Static(_))
+                || [&node.ty, receiver_ty, &obligation.receiver]
+                    .into_iter()
+                    .chain(&obligation.trait_args)
+                    .chain(args.iter().map(|arg| &arg.ty))
+                    .any(pending)
+            {
+                return Err(CodegenError {
+                    message: "UnresolvedTraitMethodInstantiation: trait calls require a concrete target and concrete type inputs before codegen".into(),
+                    span: node.span.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn emit_node(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
+        Self::validate_trait_call_boundary(node)?;
         match &node.node {
             TypedInner::Lit(lit) => {
                 let c = self.lit_to_constant(lit);
@@ -6812,7 +6878,7 @@ impl Codegen {
                     }
                 }
                 match dispatch {
-                    TraitDispatch::Pending => {
+                    TraitDispatch::Pending | TraitDispatch::Selected(_) => {
                         return Err(CodegenError {
                             message: "bounded trait call must be specialized before codegen".into(),
                             span: node.span.clone(),
@@ -6839,25 +6905,11 @@ impl Codegen {
                         let opcode = self.binop_to_opcode(op, receiver_ty, &node.span)?;
                         self.emit(opcode);
                     }
-                    TraitDispatch::Static(TraitDispatchTarget::Builtin(name)) => {
+                    TraitDispatch::Static(TraitDispatchTarget::Builtin(id)) => {
                         for arg in args {
                             self.emit_node(arg)?;
                         }
-                        if let Some(opcode) = Self::direct_builtin_opcode(name, args.len()) {
-                            self.emit(opcode);
-                        } else {
-                            let builtin_id =
-                                Self::builtin_id(name).ok_or_else(|| CodegenError {
-                                    message: format!("Unknown builtin: {}", name),
-                                    span: node.span.clone(),
-                                })?;
-                            self.emit(Opcode::CallBuiltin {
-                                builtin_id,
-                                arity: args.len() as u8,
-                                span_start: node.span.start as u32,
-                                span_end: node.span.end as u32,
-                            });
-                        }
+                        self.emit_trait_builtin(*id, args.len(), &node.span)?;
                     }
                     TraitDispatch::Static(TraitDispatchTarget::UserFunction {
                         fun_idx, ..
@@ -10838,7 +10890,7 @@ impl Codegen {
         span: &Span,
     ) -> Result<(), CodegenError> {
         match dispatch {
-            TraitDispatch::Pending => Err(CodegenError {
+            TraitDispatch::Pending | TraitDispatch::Selected(_) => Err(CodegenError {
                 message: "bounded trait call must be specialized before codegen".into(),
                 span: span.clone(),
             }),
@@ -10856,23 +10908,10 @@ impl Codegen {
                 self.emit(opcode);
                 Ok(())
             }
-            TraitDispatch::Static(TraitDispatchTarget::Builtin(name)) => {
+            TraitDispatch::Static(TraitDispatchTarget::Builtin(id)) => {
                 self.emit(Opcode::LoadLocal(left_slot));
                 self.emit(Opcode::LoadLocal(right_slot));
-                if let Some(opcode) = Self::direct_builtin_opcode(name, 2) {
-                    self.emit(opcode);
-                } else {
-                    let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
-                        message: format!("Unknown builtin: {}", name),
-                        span: span.clone(),
-                    })?;
-                    self.emit(Opcode::CallBuiltin {
-                        builtin_id,
-                        arity: 2,
-                        span_start: span.start as u32,
-                        span_end: span.end as u32,
-                    });
-                }
+                self.emit_trait_builtin(*id, 2, span)?;
                 Ok(())
             }
             TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) => {
@@ -10926,7 +10965,7 @@ impl Codegen {
         }
 
         match dispatch {
-            TraitDispatch::Pending => {
+            TraitDispatch::Pending | TraitDispatch::Selected(_) => {
                 return Err(CodegenError {
                     message: "bounded trait call must be specialized before codegen".into(),
                     span: span.clone(),
@@ -10939,20 +10978,11 @@ impl Codegen {
                 self.emit(opcode);
                 return Ok(());
             }
-            TraitDispatch::Static(TraitDispatchTarget::Builtin(name)) => {
+            TraitDispatch::Static(TraitDispatchTarget::Builtin(id)) => {
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
-                    message: format!("Unknown builtin: {}", name),
-                    span: span.clone(),
-                })?;
-                self.emit(Opcode::CallBuiltin {
-                    builtin_id,
-                    arity: args.len() as u8,
-                    span_start: span.start as u32,
-                    span_end: span.end as u32,
-                });
+                self.emit_trait_builtin(*id, args.len(), span)?;
             }
             TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) => {
                 for arg in args {

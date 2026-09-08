@@ -8,7 +8,7 @@ struct SpecializationContext<'a> {
     defs_by_fun_idx: &'a HashMap<u32, TypedNode>,
     bound_tyvars_by_fun_idx: &'a HashMap<u32, Vec<u32>>,
     needs_specialization: &'a HashSet<u32>,
-    specialization_fun_idxs: &'a mut HashMap<SpecializationKey, u32>,
+    specialization_fun_idxs: &'a mut HashMap<CallableInstantiationKey, u32>,
     generated_defs: &'a mut Vec<TypedNode>,
 }
 
@@ -289,7 +289,7 @@ impl Checker {
         defs_by_fun_idx: &HashMap<u32, TypedNode>,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
-        specialization_fun_idxs: &mut HashMap<SpecializationKey, u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
     ) -> Result<TypedNode, TypeError> {
         let span = node.span.clone();
@@ -497,7 +497,9 @@ impl Checker {
                         .collect(),
                     receiver: self.resolve_ty(&obligation.receiver),
                 };
-                let instantiation = if matches!(dispatch, TraitDispatch::Pending)
+                let instantiation = if let TraitDispatch::Selected(instantiation) = &dispatch {
+                    Some(instantiation.as_ref().clone())
+                } else if matches!(dispatch, TraitDispatch::Pending)
                     || matches!(&dispatch,
                         TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. })
                             if needs_specialization.contains(fun_idx))
@@ -1025,8 +1027,26 @@ impl Checker {
             TypedInner::ProcessContextHandler { process_name, slot } => {
                 TypedInner::ProcessContextHandler { process_name, slot }
             }
-            TypedInner::FacetPath(path) => TypedInner::FacetPath(path),
-            TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(path),
+            TypedInner::FacetPath(path) => {
+                TypedInner::FacetPath(self.rewrite_specializations_in_facet_path(
+                    path,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?)
+            }
+            TypedInner::PendingFacetPath(path) => {
+                TypedInner::PendingFacetPath(self.rewrite_specializations_in_pending_facet_path(
+                    path,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?)
+            }
             TypedInner::FacetView {
                 source,
                 path,
@@ -1040,7 +1060,14 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 )?),
-                path,
+                path: self.rewrite_specializations_in_facet_path(
+                    path,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
                 source_is_result,
             },
             TypedInner::FacetSet {
@@ -1058,7 +1085,14 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 )?),
-                path,
+                path: self.rewrite_specializations_in_facet_path(
+                    path,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
                 value: Box::new(self.rewrite_specializations_in_node(
                     *value,
                     defs_by_fun_idx,
@@ -1085,7 +1119,14 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 )?),
-                path,
+                path: self.rewrite_specializations_in_facet_path(
+                    path,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
                 update_fun: Box::new(self.rewrite_specializations_in_node(
                     *update_fun,
                     defs_by_fun_idx,
@@ -1321,6 +1362,183 @@ impl Checker {
         Ok(TypedNode { ty, span, node })
     }
 
+    fn rewrite_specializations_in_facet_path(
+        &mut self,
+        mut path: TypedFacetPath,
+        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        needs_specialization: &HashSet<u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
+        generated_defs: &mut Vec<TypedNode>,
+    ) -> Result<TypedFacetPath, TypeError> {
+        path.segments = path
+            .segments
+            .into_iter()
+            .map(|segment| {
+                self.rewrite_specializations_in_facet_segment(
+                    segment,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(path)
+    }
+
+    fn rewrite_specializations_in_facet_segment(
+        &mut self,
+        segment: TypedFacetSegment,
+        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        needs_specialization: &HashSet<u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
+        generated_defs: &mut Vec<TypedNode>,
+    ) -> Result<TypedFacetSegment, TypeError> {
+        Ok(match segment {
+            TypedFacetSegment::ListIndex {
+                index,
+                display,
+                literal_index,
+                focus_readonly_root,
+                focus_type_name,
+            } => TypedFacetSegment::ListIndex {
+                index: Box::new(self.rewrite_specializations_in_node(
+                    *index,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                display,
+                literal_index,
+                focus_readonly_root,
+                focus_type_name,
+            },
+            TypedFacetSegment::ListRange {
+                start,
+                end,
+                display,
+                literal_start,
+                literal_end,
+                focus_readonly_root,
+                focus_type_name,
+            } => TypedFacetSegment::ListRange {
+                start: Box::new(self.rewrite_specializations_in_node(
+                    *start,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                end: Box::new(self.rewrite_specializations_in_node(
+                    *end,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                display,
+                literal_start,
+                literal_end,
+                focus_readonly_root,
+                focus_type_name,
+            },
+            TypedFacetSegment::MapKey {
+                key,
+                display,
+                literal_key,
+                focus_readonly_root,
+                focus_type_name,
+            } => TypedFacetSegment::MapKey {
+                key: Box::new(self.rewrite_specializations_in_node(
+                    *key,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?),
+                display,
+                literal_key,
+                focus_readonly_root,
+                focus_type_name,
+            },
+            other => other,
+        })
+    }
+
+    fn rewrite_specializations_in_pending_facet_path(
+        &mut self,
+        mut path: PendingFacetPath,
+        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        needs_specialization: &HashSet<u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
+        generated_defs: &mut Vec<TypedNode>,
+    ) -> Result<PendingFacetPath, TypeError> {
+        path.segments = path
+            .segments
+            .into_iter()
+            .map(|segment| {
+                self.rewrite_specializations_in_pending_facet_segment(
+                    segment,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(path)
+    }
+
+    fn rewrite_specializations_in_pending_facet_segment(
+        &mut self,
+        segment: PendingFacetSegment,
+        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        needs_specialization: &HashSet<u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
+        generated_defs: &mut Vec<TypedNode>,
+    ) -> Result<PendingFacetSegment, TypeError> {
+        let mut rewrite_expr = |this: &mut Self, expr| match expr {
+            PendingFacetExpr::Resolved(expr) => Ok(PendingFacetExpr::Resolved(expr)),
+            PendingFacetExpr::Typed(expr) => Ok(PendingFacetExpr::Typed(Box::new(
+                this.rewrite_specializations_in_node(
+                    *expr,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+            ))),
+        };
+        Ok(match segment {
+            PendingFacetSegment::Bracket { expr, display } => PendingFacetSegment::Bracket {
+                expr: rewrite_expr(self, expr)?,
+                display,
+            },
+            PendingFacetSegment::RangeBracket {
+                start,
+                end,
+                display,
+            } => PendingFacetSegment::RangeBracket {
+                start: rewrite_expr(self, start)?,
+                end: rewrite_expr(self, end)?,
+                display,
+            },
+            other => other,
+        })
+    }
+
     fn ensure_specialized_def(
         &mut self,
         original_fun_idx: u32,
@@ -1329,7 +1547,7 @@ impl Checker {
         defs_by_fun_idx: &HashMap<u32, TypedNode>,
         bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
         needs_specialization: &HashSet<u32>,
-        specialization_fun_idxs: &mut HashMap<SpecializationKey, u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
     ) -> Result<u32, TypeError> {
         let original_def = defs_by_fun_idx
@@ -1343,7 +1561,7 @@ impl Checker {
                 span: Span { start: 0, end: 0 },
                 hint: None,
             })?;
-        let key = self.specialization_key_for_def(original_def, concrete_tys)?;
+        let key = self.specialization_key_for_def(original_def, concrete_tys, mapping)?;
         if let Some(existing) = specialization_fun_idxs.get(&key).copied() {
             let is_available = defs_by_fun_idx.contains_key(&existing)
                 || generated_defs
@@ -1388,29 +1606,61 @@ impl Checker {
         &self,
         def: &TypedNode,
         concrete_tys: &[Ty],
-    ) -> Result<SpecializationKey, TypeError> {
-        let function_name = Self::specialization_function_name(def).ok_or_else(|| TypeError {
+        substitution: &CanonicalSubstitution,
+    ) -> Result<CallableInstantiationKey, TypeError> {
+        let callable = match &def.node {
+            TypedInner::Def(_, id, ..) | TypedInner::ExtractorDef(_, id, ..) => {
+                Some(MethodDeclarationId(id.unique_id))
+            }
+            _ => None,
+        }
+        .ok_or_else(|| TypeError {
             structured: None,
             message: "Expected def/extractor for specialization key".into(),
             span: def.span.clone(),
             hint: None,
         })?;
-        Ok(SpecializationKey {
-            function_name,
+        let mut implementation = None;
+        let mut trait_inputs = Vec::new();
+        if let Some((info, method)) = self.trait_impls.values().find_map(|info| {
+            info.methods
+                .values()
+                .find(|method| method.function_id.unique_id == callable.0)
+                .map(|method| (info, method))
+        }) {
+            implementation = Some(self.trait_implementation_identity(info, method)?);
+            let contract = method.instantiation_contract.as_ref().ok_or_else(|| {
+                TypeError::new(
+                    "UnresolvedTraitMethodInstantiation: missing method contract",
+                    def.span.clone(),
+                )
+            })?;
+            for entry in contract
+                .head
+                .entries
+                .iter()
+                .chain(&contract.signature.entries)
+            {
+                let ty = self.substitute_canonical_type(&entry.ty, substitution)?;
+                if ty.has_pending_instantiation() {
+                    return Err(TypeError::new(
+                        "UnresolvedTraitMethodInstantiation: incomplete callable type input",
+                        def.span.clone(),
+                    ));
+                }
+                trait_inputs.push((entry.role, entry.ordinal, ty));
+            }
+            trait_inputs.sort_by_key(|(role, ordinal, _)| (*role, *ordinal));
+        }
+        Ok(CallableInstantiationKey {
+            callable,
+            implementation,
+            trait_inputs,
             type_args: concrete_tys
                 .iter()
                 .map(|ty| self.canonical_ty_key(ty))
                 .collect(),
         })
-    }
-
-    fn specialization_function_name(def: &TypedNode) -> Option<String> {
-        match &def.node {
-            TypedInner::Def(_, id, ..) | TypedInner::ExtractorDef(_, id, ..) => {
-                Some(id.qualified_name.clone().unwrap_or_else(|| id.name.clone()))
-            }
-            _ => None,
-        }
     }
 
     pub(super) fn canonical_ty_key(&self, ty: &Ty) -> CanonicalTyKey {
@@ -2185,7 +2435,7 @@ impl Checker {
                         .collect(),
                     receiver: self.substitute_ty_with_mapping(&obligation.receiver, mapping),
                 },
-                dispatch,
+                dispatch: self.substitute_selected_dispatch(dispatch, mapping),
                 origin: self.substitute_trait_call_origin_with_mapping(origin, mapping),
                 args: args
                     .into_iter()
@@ -2326,41 +2576,19 @@ impl Checker {
             TypedInner::ProcessContextHandler { process_name, slot } => {
                 TypedInner::ProcessContextHandler { process_name, slot }
             }
-            TypedInner::FacetPath(path) => TypedInner::FacetPath(TypedFacetPath {
-                source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
-                focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
-                update_source_ty: self.substitute_ty_with_mapping(&path.update_source_ty, mapping),
-                update_focus_ty: self.substitute_ty_with_mapping(&path.update_focus_ty, mapping),
-                path_kind: path.path_kind,
-                may_fail: path.may_fail,
-                source_readonly_root: path.source_readonly_root,
-                segments: path.segments,
-            }),
-            TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(PendingFacetPath {
-                root_path_name: path.root_path_name,
-                source_ty_hint: path
-                    .source_ty_hint
-                    .map(|ty| self.substitute_ty_with_mapping(&ty, mapping)),
-                segments: path.segments,
-            }),
+            TypedInner::FacetPath(path) => {
+                TypedInner::FacetPath(self.substitute_typed_facet_path_with_mapping(path, mapping))
+            }
+            TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(
+                self.substitute_pending_facet_path_with_mapping(path, mapping),
+            ),
             TypedInner::FacetView {
                 source,
                 path,
                 source_is_result,
             } => TypedInner::FacetView {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
-                path: TypedFacetPath {
-                    source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
-                    focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
-                    update_source_ty: self
-                        .substitute_ty_with_mapping(&path.update_source_ty, mapping),
-                    update_focus_ty: self
-                        .substitute_ty_with_mapping(&path.update_focus_ty, mapping),
-                    path_kind: path.path_kind,
-                    may_fail: path.may_fail,
-                    source_readonly_root: path.source_readonly_root,
-                    segments: path.segments,
-                },
+                path: self.substitute_typed_facet_path_with_mapping(path, mapping),
                 source_is_result,
             },
             TypedInner::FacetSet {
@@ -2371,18 +2599,7 @@ impl Checker {
                 mode,
             } => TypedInner::FacetSet {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
-                path: TypedFacetPath {
-                    source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
-                    focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
-                    update_source_ty: self
-                        .substitute_ty_with_mapping(&path.update_source_ty, mapping),
-                    update_focus_ty: self
-                        .substitute_ty_with_mapping(&path.update_focus_ty, mapping),
-                    path_kind: path.path_kind,
-                    may_fail: path.may_fail,
-                    source_readonly_root: path.source_readonly_root,
-                    segments: path.segments,
-                },
+                path: self.substitute_typed_facet_path_with_mapping(path, mapping),
                 value: Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
                 source_is_result,
                 mode,
@@ -2395,18 +2612,7 @@ impl Checker {
                 mode,
             } => TypedInner::FacetOver {
                 source: Box::new(self.substitute_typed_node_with_mapping(*source, mapping)),
-                path: TypedFacetPath {
-                    source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
-                    focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
-                    update_source_ty: self
-                        .substitute_ty_with_mapping(&path.update_source_ty, mapping),
-                    update_focus_ty: self
-                        .substitute_ty_with_mapping(&path.update_focus_ty, mapping),
-                    path_kind: path.path_kind,
-                    may_fail: path.may_fail,
-                    source_readonly_root: path.source_readonly_root,
-                    segments: path.segments,
-                },
+                path: self.substitute_typed_facet_path_with_mapping(path, mapping),
                 update_fun: Box::new(self.substitute_typed_node_with_mapping(*update_fun, mapping)),
                 source_is_result,
                 mode,
@@ -2542,6 +2748,127 @@ impl Checker {
         TypedNode { ty, span, node }
     }
 
+    fn substitute_typed_facet_path_with_mapping(
+        &self,
+        path: TypedFacetPath,
+        mapping: &HashMap<u32, Ty>,
+    ) -> TypedFacetPath {
+        TypedFacetPath {
+            source_ty: self.substitute_ty_with_mapping(&path.source_ty, mapping),
+            focus_ty: self.substitute_ty_with_mapping(&path.focus_ty, mapping),
+            update_source_ty: self.substitute_ty_with_mapping(&path.update_source_ty, mapping),
+            update_focus_ty: self.substitute_ty_with_mapping(&path.update_focus_ty, mapping),
+            path_kind: path.path_kind,
+            may_fail: path.may_fail,
+            source_readonly_root: path.source_readonly_root,
+            segments: path
+                .segments
+                .into_iter()
+                .map(|segment| self.substitute_typed_facet_segment_with_mapping(segment, mapping))
+                .collect(),
+        }
+    }
+
+    fn substitute_typed_facet_segment_with_mapping(
+        &self,
+        segment: TypedFacetSegment,
+        mapping: &HashMap<u32, Ty>,
+    ) -> TypedFacetSegment {
+        match segment {
+            TypedFacetSegment::ListIndex {
+                index,
+                display,
+                literal_index,
+                focus_readonly_root,
+                focus_type_name,
+            } => TypedFacetSegment::ListIndex {
+                index: Box::new(self.substitute_typed_node_with_mapping(*index, mapping)),
+                display,
+                literal_index,
+                focus_readonly_root,
+                focus_type_name,
+            },
+            TypedFacetSegment::ListRange {
+                start,
+                end,
+                display,
+                literal_start,
+                literal_end,
+                focus_readonly_root,
+                focus_type_name,
+            } => TypedFacetSegment::ListRange {
+                start: Box::new(self.substitute_typed_node_with_mapping(*start, mapping)),
+                end: Box::new(self.substitute_typed_node_with_mapping(*end, mapping)),
+                display,
+                literal_start,
+                literal_end,
+                focus_readonly_root,
+                focus_type_name,
+            },
+            TypedFacetSegment::MapKey {
+                key,
+                display,
+                literal_key,
+                focus_readonly_root,
+                focus_type_name,
+            } => TypedFacetSegment::MapKey {
+                key: Box::new(self.substitute_typed_node_with_mapping(*key, mapping)),
+                display,
+                literal_key,
+                focus_readonly_root,
+                focus_type_name,
+            },
+            other => other,
+        }
+    }
+
+    fn substitute_pending_facet_path_with_mapping(
+        &self,
+        path: PendingFacetPath,
+        mapping: &HashMap<u32, Ty>,
+    ) -> PendingFacetPath {
+        PendingFacetPath {
+            root_path_name: path.root_path_name,
+            source_ty_hint: path
+                .source_ty_hint
+                .map(|ty| self.substitute_ty_with_mapping(&ty, mapping)),
+            segments: path
+                .segments
+                .into_iter()
+                .map(|segment| self.substitute_pending_facet_segment_with_mapping(segment, mapping))
+                .collect(),
+        }
+    }
+
+    fn substitute_pending_facet_segment_with_mapping(
+        &self,
+        segment: PendingFacetSegment,
+        mapping: &HashMap<u32, Ty>,
+    ) -> PendingFacetSegment {
+        let substitute_expr = |expr| match expr {
+            PendingFacetExpr::Resolved(expr) => PendingFacetExpr::Resolved(expr),
+            PendingFacetExpr::Typed(expr) => PendingFacetExpr::Typed(Box::new(
+                self.substitute_typed_node_with_mapping(*expr, mapping),
+            )),
+        };
+        match segment {
+            PendingFacetSegment::Bracket { expr, display } => PendingFacetSegment::Bracket {
+                expr: substitute_expr(expr),
+                display,
+            },
+            PendingFacetSegment::RangeBracket {
+                start,
+                end,
+                display,
+            } => PendingFacetSegment::RangeBracket {
+                start: substitute_expr(start),
+                end: substitute_expr(end),
+                display,
+            },
+            other => other,
+        }
+    }
+
     fn substitute_typed_pattern_with_mapping(
         &self,
         pattern: TypedPattern,
@@ -2551,9 +2878,11 @@ impl Checker {
             TypedPattern::Var(ty, id) => {
                 TypedPattern::Var(self.substitute_ty_with_mapping(&ty, mapping), id)
             }
-            TypedPattern::Pin(ty, id, dispatch) => {
-                TypedPattern::Pin(self.substitute_ty_with_mapping(&ty, mapping), id, dispatch)
-            }
+            TypedPattern::Pin(ty, id, dispatch) => TypedPattern::Pin(
+                self.substitute_ty_with_mapping(&ty, mapping),
+                id,
+                self.substitute_selected_dispatch(dispatch, mapping),
+            ),
             TypedPattern::As(ty, inner, id) => TypedPattern::As(
                 self.substitute_ty_with_mapping(&ty, mapping),
                 Box::new(self.substitute_typed_pattern_with_mapping(*inner, mapping)),
@@ -2631,7 +2960,7 @@ impl Checker {
             TypedMatchPattern::Pin { id, ty, dispatch } => TypedMatchPattern::Pin {
                 id,
                 ty: self.substitute_ty_with_mapping(&ty, mapping),
-                dispatch,
+                dispatch: self.substitute_selected_dispatch(dispatch, mapping),
             },
             TypedMatchPattern::As(inner, id) => TypedMatchPattern::As(
                 Box::new(self.substitute_typed_match_pattern_with_mapping(*inner, mapping)),
@@ -2829,13 +3158,80 @@ impl Checker {
         }
     }
 
+    fn substitute_selected_dispatch(
+        &self,
+        dispatch: TraitDispatch,
+        mapping: &CanonicalSubstitution,
+    ) -> TraitDispatch {
+        let TraitDispatch::Selected(mut instantiation) = dispatch else {
+            return dispatch;
+        };
+        for ty in instantiation.substitution.values_mut() {
+            *ty = self.substitute_ty_with_mapping(ty, mapping);
+        }
+        for ty in instantiation.caller_substitution.values_mut() {
+            *ty = self.substitute_ty_with_mapping(ty, mapping);
+        }
+        let signature = &mut instantiation.callable_signature;
+        for ty in signature
+            .return_type_arguments
+            .iter_mut()
+            .map(|argument| &mut argument.ty)
+            .chain(
+                signature
+                    .value_parameters
+                    .iter_mut()
+                    .map(|parameter| &mut parameter.ty),
+            )
+            .chain(std::iter::once(&mut signature.return_type.ty))
+            .chain(
+                signature
+                    .where_constraints
+                    .constraints
+                    .iter_mut()
+                    .map(|constraint| &mut constraint.subject),
+            )
+        {
+            *ty = self
+                .substitute_canonical_type(ty, mapping)
+                .expect("selected canonical substitution must preserve canonical types");
+        }
+        TraitDispatch::Selected(instantiation)
+    }
+
     fn materialize_trait_method_instantiation(
         &mut self,
-        instantiation: MethodInstantiation,
+        instantiation: TraitMethodInstantiation,
         span: &Span,
         context: &mut SpecializationContext<'_>,
     ) -> Result<TraitDispatch, TypeError> {
-        match instantiation.dispatch {
+        let signature = &instantiation.callable_signature;
+        if signature
+            .return_type_arguments
+            .iter()
+            .map(|argument| &argument.ty)
+            .chain(
+                signature
+                    .value_parameters
+                    .iter()
+                    .map(|parameter| &parameter.ty),
+            )
+            .chain(std::iter::once(&signature.return_type.ty))
+            .chain(
+                signature
+                    .where_constraints
+                    .constraints
+                    .iter()
+                    .map(|constraint| &constraint.subject),
+            )
+            .any(CanonicalTy::has_pending_instantiation)
+        {
+            return Err(TypeError::new(
+                "UnresolvedTraitMethodInstantiation: pending callable signature",
+                span.clone(),
+            ));
+        }
+        match instantiation.dispatch_target {
             TraitDispatchTarget::UserFunction { name, fun_idx }
                 if context.needs_specialization.contains(&fun_idx) =>
             {
@@ -2886,6 +3282,9 @@ impl Checker {
         span: &Span,
         context: &mut SpecializationContext<'_>,
     ) -> Result<TraitDispatch, TypeError> {
+        if let TraitDispatch::Selected(instantiation) = dispatch {
+            return self.materialize_trait_method_instantiation(*instantiation, span, context);
+        }
         if !matches!(dispatch, TraitDispatch::Pending)
             && !matches!(&dispatch, TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. })
                 if context.needs_specialization.contains(fun_idx))
@@ -3068,7 +3467,10 @@ impl Checker {
     fn typed_match_pattern_has_pending_dispatch(pattern: &TypedMatchPattern) -> bool {
         match pattern {
             TypedMatchPattern::Pin { dispatch, .. } => {
-                matches!(dispatch, TraitDispatch::Pending)
+                matches!(
+                    dispatch,
+                    TraitDispatch::Pending | TraitDispatch::Selected(_)
+                )
             }
             TypedMatchPattern::As(inner, _) => {
                 Self::typed_match_pattern_has_pending_dispatch(inner)
@@ -3104,6 +3506,48 @@ impl Checker {
                 items.iter().any(Self::typed_pattern_has_pending_dispatch)
             }
             _ => false,
+        }
+    }
+
+    fn typed_facet_path_has_pending_trait_call(path: &TypedFacetPath) -> bool {
+        path.segments
+            .iter()
+            .any(Self::typed_facet_segment_has_pending_trait_call)
+    }
+
+    fn typed_facet_segment_has_pending_trait_call(segment: &TypedFacetSegment) -> bool {
+        match segment {
+            TypedFacetSegment::ListIndex { index, .. }
+            | TypedFacetSegment::MapKey { key: index, .. } => {
+                Self::typed_node_has_pending_trait_call(index)
+            }
+            TypedFacetSegment::ListRange { start, end, .. } => {
+                Self::typed_node_has_pending_trait_call(start)
+                    || Self::typed_node_has_pending_trait_call(end)
+            }
+            TypedFacetSegment::Field { .. }
+            | TypedFacetSegment::Tuple { .. }
+            | TypedFacetSegment::Variant { .. } => false,
+        }
+    }
+
+    fn pending_facet_path_has_pending_trait_call(path: &PendingFacetPath) -> bool {
+        path.segments.iter().any(|segment| match segment {
+            PendingFacetSegment::Field { .. } => false,
+            PendingFacetSegment::Bracket { expr, .. } => {
+                Self::pending_facet_expr_has_pending_trait_call(expr)
+            }
+            PendingFacetSegment::RangeBracket { start, end, .. } => {
+                Self::pending_facet_expr_has_pending_trait_call(start)
+                    || Self::pending_facet_expr_has_pending_trait_call(end)
+            }
+        })
+    }
+
+    fn pending_facet_expr_has_pending_trait_call(expr: &PendingFacetExpr) -> bool {
+        match expr {
+            PendingFacetExpr::Resolved(_) => false,
+            PendingFacetExpr::Typed(expr) => Self::typed_node_has_pending_trait_call(expr),
         }
     }
 
@@ -3203,16 +3647,32 @@ impl Checker {
                     || Self::typed_node_has_pending_trait_call(strategy)
             }
             TypedInner::ProcessContextHandler { .. } => false,
-            TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => false,
-            TypedInner::FacetView { source, .. } => Self::typed_node_has_pending_trait_call(source),
-            TypedInner::FacetSet { source, value, .. } => {
+            TypedInner::FacetPath(path) => Self::typed_facet_path_has_pending_trait_call(path),
+            TypedInner::PendingFacetPath(path) => {
+                Self::pending_facet_path_has_pending_trait_call(path)
+            }
+            TypedInner::FacetView { source, path, .. } => {
                 Self::typed_node_has_pending_trait_call(source)
+                    || Self::typed_facet_path_has_pending_trait_call(path)
+            }
+            TypedInner::FacetSet {
+                source,
+                path,
+                value,
+                ..
+            } => {
+                Self::typed_node_has_pending_trait_call(source)
+                    || Self::typed_facet_path_has_pending_trait_call(path)
                     || Self::typed_node_has_pending_trait_call(value)
             }
             TypedInner::FacetOver {
-                source, update_fun, ..
+                source,
+                path,
+                update_fun,
+                ..
             } => {
                 Self::typed_node_has_pending_trait_call(source)
+                    || Self::typed_facet_path_has_pending_trait_call(path)
                     || Self::typed_node_has_pending_trait_call(update_fun)
             }
             TypedInner::StructLit(_, fields) | TypedInner::ConstructorCall(_, fields) => {
@@ -3477,6 +3937,32 @@ mod tests {
                 .unwrap(),
             vec![Ty::List(Box::new(Ty::Int))],
             "impl head variables outside the body binders must not invalidate the substitution",
+        );
+    }
+
+    #[test]
+    fn callable_instantiations_with_equal_display_names_remain_distinct() {
+        let checker = Checker::new(TypecheckContext::default());
+        let first = generic_identity_def(
+            20,
+            resolved_id("same", Some("Global::same"), 10),
+            resolved_id("x", None, 11),
+            1,
+        );
+        let second = generic_identity_def(
+            21,
+            resolved_id("same", Some("Global::same"), 12),
+            resolved_id("x", None, 13),
+            2,
+        );
+        assert_ne!(
+            checker
+                .specialization_key_for_def(&first, &[Ty::Int], &HashMap::from([(1, Ty::Int)]))
+                .unwrap(),
+            checker
+                .specialization_key_for_def(&second, &[Ty::Int], &HashMap::from([(2, Ty::Int)]))
+                .unwrap(),
+            "canonical declaration identity must distinguish callables"
         );
     }
 

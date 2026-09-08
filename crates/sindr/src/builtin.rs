@@ -29,6 +29,88 @@ pub type BuiltinFunctionMeta = BuiltinMeta;
 /// `runtime_target` is shared by those variants.
 pub type BuiltinSurfaceSignatureMeta = CallableSignature<String>;
 
+/// A canonical Trait implementation surface of a runtime entry. Source
+/// declarations resolve this metadata once; candidate selection keeps the id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinTraitMethodMeta {
+    pub trait_name: &'static str,
+    pub method_name: &'static str,
+    pub target: TypeName,
+    pub builtin_id: BuiltinId,
+}
+
+impl BuiltinMeta {
+    /// Optional direct lowering for a runtime primitive. The runtime entry
+    /// remains its canonical dispatch identity even when Forge emits an opcode.
+    pub fn primitive_opcode(&self) -> Option<crate::ir::Opcode> {
+        use crate::ir::Opcode;
+        Some(match self.name {
+            "__operator_int_add" => Opcode::AddInt,
+            "__operator_int_sub" => Opcode::SubInt,
+            "__operator_int_mul" => Opcode::MulInt,
+            "__operator_float_add" => Opcode::AddFloat,
+            "__operator_float_sub" => Opcode::SubFloat,
+            "__operator_float_mul" => Opcode::MulFloat,
+            "__operator_int_eq" => Opcode::EqInt,
+            "__operator_int_neq" => Opcode::NeqInt,
+            "__operator_int_lt" => Opcode::LtInt,
+            "__operator_int_lte" => Opcode::LteInt,
+            "__operator_int_gt" => Opcode::GtInt,
+            "__operator_int_gte" => Opcode::GteInt,
+            "__operator_float_eq" => Opcode::EqFloat,
+            "__operator_float_neq" => Opcode::NeqFloat,
+            "__operator_float_lt" => Opcode::LtFloat,
+            "__operator_float_lte" => Opcode::LteFloat,
+            "__operator_float_gt" => Opcode::GtFloat,
+            "__operator_float_gte" => Opcode::GteFloat,
+            "__operator_string_eq" => Opcode::EqStr,
+            "__operator_string_neq" => Opcode::NeqStr,
+            "__operator_boolean_eq" => Opcode::EqBool,
+            "__operator_boolean_neq" => Opcode::NeqBool,
+            "__operator_string_concat" => Opcode::ConcatStr,
+            _ => return None,
+        })
+    }
+
+    pub fn trait_method(&self) -> Option<BuiltinTraitMethodMeta> {
+        let (trait_name, method_name, target) = match self.name {
+            "__operator_int_add" => ("Add", "add", TypeName::Int),
+            "__operator_float_add" => ("Add", "add", TypeName::Float),
+            "__operator_int_sub" => ("Sub", "sub", TypeName::Int),
+            "__operator_float_sub" => ("Sub", "sub", TypeName::Float),
+            "__operator_int_mul" => ("Mul", "mul", TypeName::Int),
+            "__operator_float_mul" => ("Mul", "mul", TypeName::Float),
+            "__operator_int_eq" => ("Eq", "eq", TypeName::Int),
+            "__operator_float_eq" => ("Eq", "eq", TypeName::Float),
+            "__operator_string_eq" => ("Eq", "eq", TypeName::String),
+            "__operator_boolean_eq" => ("Eq", "eq", TypeName::Boolean),
+            "__operator_int_neq" => ("Eq", "neq", TypeName::Int),
+            "__operator_float_neq" => ("Eq", "neq", TypeName::Float),
+            "__operator_string_neq" => ("Eq", "neq", TypeName::String),
+            "__operator_boolean_neq" => ("Eq", "neq", TypeName::Boolean),
+            "__compare_int" => ("Compare", "compare", TypeName::Int),
+            "__compare_float" => ("Compare", "compare", TypeName::Float),
+            "__operator_int_lt" => ("Compare", "lt", TypeName::Int),
+            "__operator_float_lt" => ("Compare", "lt", TypeName::Float),
+            "__operator_int_lte" => ("Compare", "lte", TypeName::Int),
+            "__operator_float_lte" => ("Compare", "lte", TypeName::Float),
+            "__operator_int_gt" => ("Compare", "gt", TypeName::Int),
+            "__operator_float_gt" => ("Compare", "gt", TypeName::Float),
+            "__operator_int_gte" => ("Compare", "gte", TypeName::Int),
+            "__operator_float_gte" => ("Compare", "gte", TypeName::Float),
+            "__operator_string_concat" => ("Concat", "concat", TypeName::String),
+            "__facet_chain" => ("Compose", "compose", TypeName::Facet),
+            _ => return None,
+        };
+        Some(BuiltinTraitMethodMeta {
+            trait_name,
+            method_name,
+            target,
+            builtin_id: self.builtin_id(),
+        })
+    }
+}
+
 impl BuiltinMeta {
     /// Arity at the VM boundary. Kept as a method so callers do not need to
     /// infer it from a surface variant (variants may be qualified aliases).

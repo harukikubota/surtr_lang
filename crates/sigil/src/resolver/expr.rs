@@ -3299,7 +3299,7 @@ impl Resolver {
                             name: local_function_name,
                             qualified_name: Some(qualified_function_name),
                             unique_id: method_uid,
-                            compiler_generated: false,
+                            compiler_generated: attrs.compiler_generated,
                             symbol_info,
                             span: method_span.clone(),
                         },

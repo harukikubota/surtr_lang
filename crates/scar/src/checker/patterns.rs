@@ -36,7 +36,7 @@ impl Checker {
             &result_ty,
         )? {
             CandidateApplicability::Applicable(instantiation) => {
-                Some(TraitDispatch::Static(instantiation.dispatch))
+                Some(TraitDispatch::Selected(Box::new(instantiation)))
             }
             CandidateApplicability::Deferred(_) => {
                 self.trait_dispatch_target_for_args(&eq_trait, "eq", &receiver_ty, &trait_args)?

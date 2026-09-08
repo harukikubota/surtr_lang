@@ -182,6 +182,9 @@ pub struct TypedTypeParam {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TraitDispatch {
     Pending,
+    /// The selected implementation and its one complete solver substitution.
+    /// Scar materializes this value before the Forge boundary.
+    Selected(Box<TraitMethodInstantiation>),
     Static(TraitDispatchTarget),
 }
 
@@ -198,7 +201,7 @@ pub struct TraitObligation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TraitDispatchTarget {
     BinOp(BinOp),
-    Builtin(String),
+    Builtin(sindr::signature::BuiltinId),
     UserFunction { name: String, fun_idx: u32 },
 }
 
@@ -710,6 +713,53 @@ pub struct CanonicalTy {
     pub arguments: Vec<CanonicalTy>,
 }
 
+impl CanonicalTy {
+    pub fn has_pending_instantiation(&self) -> bool {
+        matches!(
+            self.head,
+            CanonicalTypeHead::Variable(_) | CanonicalTypeHead::SelfApplication
+        ) || self.arguments.iter().any(Self::has_pending_instantiation)
+    }
+}
+
+/// The sorted canonical Trait identities of one inheritance component.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TypeCtorTraitFamilyId(pub Vec<u32>);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ConstructorHead {
+    Concrete(CanonicalTypeHead),
+    DeclarationVariable(u32),
+    InferenceVariable(u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ConstructorSlotId {
+    pub family_id: TypeCtorTraitFamilyId,
+    pub ordinal: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CanonicalMappedSlot {
+    pub slot_id: ConstructorSlotId,
+    pub position: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CanonicalCapturedArgument {
+    pub position: u32,
+    pub ty: CanonicalTy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CanonicalConstructorCarrier {
+    pub family_id: TypeCtorTraitFamilyId,
+    pub constructor: ConstructorHead,
+    pub arity: u32,
+    pub mapped_slots: Vec<CanonicalMappedSlot>,
+    pub captured_arguments: Vec<CanonicalCapturedArgument>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CanonicalTraitRef {
     pub trait_id: u32,
@@ -726,6 +776,51 @@ pub struct CanonicalTraitImplPatternKey {
 pub struct TraitImplDeclarationKey {
     pub pattern: CanonicalTraitImplPatternKey,
     pub declaration_id: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct MethodDeclarationId(pub u32);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SyntheticMethodId {
+    pub site_start: usize,
+    pub site_end: usize,
+    pub target: CanonicalTy,
+    pub contract: MethodDeclarationId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TraitMethodOrigin {
+    Explicit(MethodDeclarationId),
+    Default(MethodDeclarationId),
+    Derived(SyntheticMethodId),
+    Builtin(sindr::signature::BuiltinId),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TraitImplementationId {
+    Declared {
+        declaration: TraitImplDeclarationKey,
+        origin: TraitMethodOrigin,
+    },
+    Compiler {
+        contract: MethodDeclarationId,
+        subject: CanonicalTy,
+    },
+}
+
+/// Canonical declaration variables mapped by the single applicability probe.
+pub type CanonicalSubstitution = std::collections::HashMap<u32, Ty>;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TraitMethodInstantiation {
+    pub implementation: TraitImplementationId,
+    pub method: MethodDeclarationId,
+    pub substitution: CanonicalSubstitution,
+    pub callable_signature: sindr::signature::CallableSignature<CanonicalTy>,
+    pub dispatch_target: TraitDispatchTarget,
+    pub(crate) caller_substitution: std::collections::HashMap<u32, Ty>,
+    pub(crate) proof_evidence: Vec<usize>,
 }
 
 /// Source location of one complete type entry; nested types remain recursive.

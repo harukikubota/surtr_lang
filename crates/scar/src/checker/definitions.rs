@@ -2587,8 +2587,14 @@ impl Checker {
             }
         }
 
+        let mut fresh = HashMap::new();
+        let fields = def
+            .fields
+            .iter()
+            .map(|(name, ty)| (name.clone(), self.instantiate_ty_with_fresh(ty, &mut fresh)))
+            .collect::<Vec<_>>();
         let mut typed_fields = Vec::new();
-        for (def_name, def_ty) in &def.fields {
+        for (def_name, def_ty) in &fields {
             let resolved_val = field_vals
                 .iter()
                 .find_map(|field| match field {
@@ -2633,7 +2639,7 @@ impl Checker {
             typed_fields.push(typed_val);
         }
 
-        let result_ty = Ty::Struct(id.name.clone(), def.fields.clone());
+        let result_ty = Ty::Struct(id.name.clone(), fields);
         Ok(TypedNode {
             ty: result_ty,
             span: span.clone(),

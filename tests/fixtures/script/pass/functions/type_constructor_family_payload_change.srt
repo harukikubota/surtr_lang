@@ -1,0 +1,7 @@
+deftrait FamilyFunctor where Self: Type<$A> {}
+deftrait FamilyMonad where Self: FamilyFunctor {}
+defenum Carrier<$L, $R> { Pair($L, $R), }
+impl FamilyFunctor for Carrier<$L, $R> where $R: FamilyFunctor.$A {}
+impl FamilyMonad for Carrier<$L, $R> where $R: FamilyMonad.$A {}
+def accept(first: FamilyFunctor<Int>, second: FamilyMonad<Boolean>) -> Int { 42 }
+print(to_string(accept(Carrier::Pair("left", 1), Carrier::Pair("left", True))))

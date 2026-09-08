@@ -43,7 +43,7 @@ pub(super) struct SignatureOccurrences {
 
 #[derive(Debug, Default)]
 pub(super) struct DirectConstructorInputs {
-    witnesses: HashMap<String, Ty>,
+    witnesses: HashMap<crate::typed::TypeCtorTraitFamilyId, Ty>,
 }
 
 #[derive(Debug, Clone)]
@@ -522,7 +522,7 @@ pub(super) fn remember_direct_constructor_input(
 }
 
 pub(super) fn coalesce_direct_constructor_inputs(
-    checker: &Checker,
+    checker: &mut Checker,
     ty: Ty,
     inputs: &DirectConstructorInputs,
 ) -> Ty {
@@ -532,7 +532,17 @@ pub(super) fn coalesce_direct_constructor_inputs(
                 if let Some(trait_key) = checker.constructor_witness_traits.get(var) {
                     let family_key = checker.constructor_family_key(trait_key);
                     if let Some(shared) = inputs.witnesses.get(&family_key) {
-                        items[1] = shared.clone();
+                        if let Ty::Var(shared) = shared {
+                            if shared != var {
+                                if checker.constructor_witness_traits.get(shared) == Some(trait_key)
+                                {
+                                    items[1] = Ty::Var(*shared);
+                                } else {
+                                    checker.constructor_family_witnesses.insert(*var, *shared);
+                                    checker.substitutions.insert(*var, Ty::Var(*shared));
+                                }
+                            }
+                        }
                     }
                 }
             }

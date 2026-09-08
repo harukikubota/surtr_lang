@@ -153,6 +153,22 @@ fn call(span: &Span, segments: &[&str], args: Vec<Ast>) -> Ast {
     )
 }
 
+fn default_value(span: &Span, ty: &AstTy) -> Ast {
+    Ast::App(
+        span.clone(),
+        Box::new(Ast::ReturnTypeArgumentApply(
+            span.clone(),
+            Box::new(path(span, &["Default", "default"])),
+            vec![ReturnTypeArgument {
+                ordinal: 0,
+                ty: ty.clone(),
+                span: span.clone(),
+            }],
+        )),
+        Vec::new(),
+    )
+}
+
 fn constructor(span: &Span, name: &str, args: Vec<Ast>) -> Ast {
     Ast::ConstructorCall(
         span.clone(),
@@ -390,10 +406,10 @@ fn make_derived_impl(
                     name.to_string(),
                     fields
                         .iter()
-                        .map(|(field_name, _)| {
+                        .map(|(field_name, field_ty)| {
                             StructLitField::Explicit(
                                 field_name.clone(),
-                                call(span, &["Default", "default"], Vec::new()),
+                                default_value(span, field_ty),
                             )
                         })
                         .collect(),
@@ -410,7 +426,7 @@ fn make_derived_impl(
                     variant
                         .payload
                         .iter()
-                        .map(|_| call(span, &["Default", "default"], Vec::new()))
+                        .map(|ty| default_value(span, ty))
                         .collect(),
                 )
             };
@@ -472,6 +488,7 @@ fn make_derived_impl(
         });
     }
     let mut generated_attrs = DeclAttrs::default();
+    generated_attrs.compiler_generated = true;
     if generator == DeriveGenerator::Default {
         generated_attrs.return_type_arguments = vec![ReturnTypeArgument {
             ordinal: 0,

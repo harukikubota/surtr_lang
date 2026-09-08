@@ -155,6 +155,164 @@ impl AlphaEnvironment {
 }
 
 impl Checker {
+    pub(super) fn substitute_canonical_type(
+        &self,
+        ty: &CanonicalTy,
+        substitution: &CanonicalSubstitution,
+    ) -> Result<CanonicalTy, TypeError> {
+        if let CanonicalTypeHead::Variable(var) = ty.head {
+            if let Some(actual) = substitution.get(&var) {
+                return self.canonical_request(actual);
+            }
+        }
+        Ok(CanonicalTy {
+            head: ty.head.clone(),
+            arguments: ty
+                .arguments
+                .iter()
+                .map(|ty| self.substitute_canonical_type(ty, substitution))
+                .collect::<Result<_, _>>()?,
+        })
+    }
+
+    pub(super) fn trait_implementation_identity(
+        &self,
+        info: &TraitImplInfo,
+        method: &TraitImplMethodInfo,
+    ) -> Result<TraitImplementationId, TypeError> {
+        let contract = self
+            .traits
+            .get(&self.trait_key(&info.trait_id))
+            .and_then(|info| info.methods.get(&method.method_name))
+            .ok_or_else(|| TypeError::new("MissingCanonicalTraitMethod", method.span.clone()))?;
+        let contract = MethodDeclarationId(contract.id.unique_id);
+        let origin = match &method.dispatch_override {
+            Some(TraitDispatchTarget::Builtin(id)) => TraitMethodOrigin::Builtin(*id),
+            _ if method.display_name_override.is_some() => TraitMethodOrigin::Default(contract),
+            _ if method.function_id.compiler_generated => {
+                TraitMethodOrigin::Derived(SyntheticMethodId {
+                    site_start: method.span.start,
+                    site_end: method.span.end,
+                    target: info.declaration_key.pattern.target.clone(),
+                    contract,
+                })
+            }
+            _ => TraitMethodOrigin::Explicit(MethodDeclarationId(method.function_id.unique_id)),
+        };
+        Ok(TraitImplementationId::Declared {
+            declaration: info.declaration_key.clone(),
+            origin,
+        })
+    }
+
+    fn instantiated_trait_callable(
+        &self,
+        trait_id: &ResolvedId,
+        method_id: &ResolvedId,
+        parameters: &[ResolvedValueParameter],
+        signature: &MethodSignatureTypeList,
+        substitution: &CanonicalSubstitution,
+        dispatch: &TraitDispatchTarget,
+    ) -> Result<sindr::signature::CallableSignature<CanonicalTy>, TypeError> {
+        use sindr::signature::{
+            CallableDeclarationKind, CallableIdentity, CallableSignature,
+            CanonicalReturnTypeArgument, CanonicalTypeOccurrence, CanonicalValueParameter,
+            RuntimeTarget, SignatureOrigin, ValueParameterMode,
+        };
+        let origin =
+            SignatureOrigin::new(format!("{}::{}", self.trait_key(trait_id), method_id.name));
+        let mut rtas = Vec::new();
+        let mut values = Vec::new();
+        let mut result = None;
+        for entry in &signature.entries {
+            let ty = self.substitute_canonical_type(&entry.ty, substitution)?;
+            match entry.role {
+                TypeListRole::ReturnTypeArgument => rtas.push(CanonicalReturnTypeArgument {
+                    ordinal: entry.ordinal,
+                    ty,
+                    origin: origin.clone(),
+                }),
+                TypeListRole::ValueParameter => {
+                    let parameter = parameters.get(entry.ordinal as usize).ok_or_else(|| {
+                        TypeError::new("MissingCanonicalValueParameter", method_id.span.clone())
+                    })?;
+                    values.push(CanonicalValueParameter {
+                        ordinal: entry.ordinal,
+                        name: parameter.id.name.clone(),
+                        mode: match parameter.mode {
+                            spire::ast::ValueParameterMode::PositionalOrNamed => {
+                                ValueParameterMode::PositionalOrNamed
+                            }
+                            spire::ast::ValueParameterMode::Variadic => {
+                                ValueParameterMode::Variadic
+                            }
+                        },
+                        ty,
+                        origin: origin.clone(),
+                    });
+                }
+                TypeListRole::ReturnType => {
+                    if result
+                        .replace(CanonicalTypeOccurrence {
+                            ty,
+                            origin: origin.clone(),
+                        })
+                        .is_some()
+                    {
+                        return Err(TypeError::new(
+                            "DuplicateCanonicalReturnType",
+                            method_id.span.clone(),
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(TypeError::new(
+                        "InvalidCanonicalMethodRole",
+                        method_id.span.clone(),
+                    ))
+                }
+            }
+        }
+        let mut constraints = Vec::new();
+        for constraint in &signature.where_constraints.constraints {
+            if let CanonicalMethodBound::Trait(id) = constraint.bound {
+                let info = self
+                    .traits
+                    .values()
+                    .find(|info| info.id.unique_id == id)
+                    .ok_or_else(|| {
+                        TypeError::new("MissingCanonicalTraitConstraint", method_id.span.clone())
+                    })?;
+                constraints.push(sindr::signature::CanonicalConstraint {
+                    subject: self.substitute_canonical_type(&constraint.subject, substitution)?,
+                    trait_name: self.trait_key(&info.id),
+                    origin: origin.clone(),
+                });
+            }
+        }
+        Ok(CallableSignature {
+            identity: CallableIdentity {
+                owner: Some(self.trait_key(trait_id)),
+                name: method_id.name.clone(),
+                declaration_kind: CallableDeclarationKind::TraitMethod,
+            },
+            return_type_arguments: rtas,
+            value_parameters: values,
+            return_type: result.ok_or_else(|| {
+                TypeError::new("MissingCanonicalReturnType", method_id.span.clone())
+            })?,
+            where_constraints: sindr::signature::CanonicalConstraintSet { constraints },
+            runtime_target: match dispatch {
+                TraitDispatchTarget::Builtin(id) => RuntimeTarget::Builtin(*id),
+                TraitDispatchTarget::UserFunction { fun_idx, .. } => {
+                    RuntimeTarget::UserFunction(*fun_idx)
+                }
+                TraitDispatchTarget::BinOp(_) => RuntimeTarget::TraitDispatch(method_id.unique_id),
+            },
+            declaration_origins: vec![origin],
+        })
+    }
+
     fn canonical_resolved_type(&self, ty: &Ty) -> Result<CanonicalTy, TypeError> {
         let recurse = |ty| self.canonical_resolved_type(ty);
         Ok(match ty {
@@ -991,6 +1149,98 @@ mod applicability_tests {
     }
 
     #[test]
+    fn derived_method_keeps_a_synthetic_contract_identity() {
+        let mut checker = checker(
+            r#"
+deftrait Default { def default::<Self>() -> Self }
+impl Default for Int { def default::<Int>() -> Int { 0 } }
+@derive Default
+defstruct Wrapped { value: Int }
+impl Wrapped { def new(value: Int) -> Wrapped { Wrapped { value: value } } }
+Default::default::<Wrapped>()
+"#,
+        );
+        let implementation = checker
+            .trait_impls
+            .values()
+            .find(|info| info.target_name.ends_with("Wrapped"))
+            .unwrap()
+            .clone();
+        let method = &implementation.methods["default"];
+        let identity = checker
+            .trait_implementation_identity(&implementation, method)
+            .unwrap();
+        assert!(
+            matches!(
+                &identity,
+                TraitImplementationId::Declared {
+                    origin: TraitMethodOrigin::Derived(_),
+                    ..
+                }
+            ),
+            "derived identity must retain its site, target and contract: {identity:?}"
+        );
+        assert_eq!(
+            method.return_type_arguments.len(),
+            1,
+            "Default introduces Self exactly once"
+        );
+        let receiver = Ty::Struct(
+            implementation.target_name.clone(),
+            vec![("value".into(), Ty::Int)],
+        );
+        for _ in 0..2 {
+            let CandidateApplicability::Applicable(instantiation) = checker
+                .select_trait_method_instantiation(
+                    "Default",
+                    "default",
+                    &receiver,
+                    &[],
+                    &[],
+                    &receiver,
+                )
+                .unwrap()
+            else {
+                panic!("concrete derive candidate")
+            };
+            assert_eq!(instantiation.implementation, identity);
+        }
+    }
+
+    #[test]
+    fn failed_method_probe_does_not_change_complete_instantiation_identity() {
+        let mut checker = checker(
+            r#"
+deftrait Pick<$T> { def pick(self: Self, value: $T) -> Int }
+impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
+"#,
+        );
+        let mut select = |argument: Ty| {
+            checker
+                .select_trait_method_instantiation(
+                    "Pick",
+                    "pick",
+                    &Ty::Int,
+                    &[Ty::Int],
+                    &[Ty::Int, argument],
+                    &Ty::Int,
+                )
+                .unwrap()
+        };
+        let CandidateApplicability::Applicable(before) = select(Ty::Int) else {
+            panic!("applicable")
+        };
+        assert!(matches!(
+            select(Ty::Str),
+            CandidateApplicability::Rejected(_)
+        ));
+        let CandidateApplicability::Applicable(after) = select(Ty::Int) else {
+            panic!("applicable after retry")
+        };
+        assert_eq!(before, after);
+    }
+
+    #[test]
     fn declared_composite_capability_does_not_alpha_rename_distinct_rigid_slots() {
         let mut checker = checker("deftrait Marker {}\n");
         let Ty::Var(declared) = checker.env.fresh_tyvar() else {
@@ -1457,7 +1707,7 @@ impl Checker {
         }
     }
 
-    fn canonical_waiting_variables(&self, ty: &CanonicalTy, waiting: &mut Vec<u32>) {
+    pub(super) fn canonical_waiting_variables(&self, ty: &CanonicalTy, waiting: &mut Vec<u32>) {
         if let CanonicalTypeHead::Variable(var) = ty.head {
             if !self.rigid_tyvars.contains(&var) && !waiting.contains(&var) {
                 waiting.push(var);
@@ -1932,8 +2182,26 @@ impl Checker {
                         .map(|ty| (*var, ty))
                 })
                 .collect::<Result<HashMap<_, _>, _>>()?;
-            selected = Some(MethodInstantiation {
-                dispatch,
+            let contract_method = self
+                .traits
+                .get(&self.trait_key(&info.trait_id))
+                .and_then(|info| info.methods.get(method_name))
+                .ok_or_else(|| {
+                    TypeError::new("MissingCanonicalTraitMethod", method.span.clone())
+                })?;
+            let callable_signature = self.instantiated_trait_callable(
+                &info.trait_id,
+                &contract_method.id,
+                &method.value_parameters,
+                &contract.signature,
+                &substitution,
+                &dispatch,
+            )?;
+            selected = Some(TraitMethodInstantiation {
+                implementation: self.trait_implementation_identity(&info, method)?,
+                method: MethodDeclarationId(contract_method.id.unique_id),
+                callable_signature,
+                dispatch_target: dispatch,
                 substitution,
                 caller_substitution,
                 proof_evidence,
@@ -1954,12 +2222,57 @@ impl Checker {
         if let Some(dispatch) =
             self.compiler_trait_dispatch_target(trait_name, method_name, &receiver_ty)
         {
-            return Ok(CandidateApplicability::Applicable(MethodInstantiation {
-                dispatch,
-                substitution: HashMap::new(),
-                caller_substitution: HashMap::new(),
-                proof_evidence: Vec::new(),
-            }));
+            let info = self.traits.get(trait_name).ok_or_else(|| {
+                TypeError::new("MissingCanonicalTrait", Span { start: 0, end: 0 })
+            })?;
+            let method = info.methods.get(method_name).ok_or_else(|| {
+                TypeError::new("MissingCanonicalTraitMethod", info.id.span.clone())
+            })?;
+            let mut entries = invocation
+                .iter()
+                .enumerate()
+                .map(|(ordinal, ty)| TypeListEntry {
+                    role: TypeListRole::ValueParameter,
+                    ordinal: ordinal as u32,
+                    ty: ty.clone(),
+                    origin: TypeOrigin {
+                        span: method.span.clone(),
+                    },
+                })
+                .collect::<Vec<_>>();
+            entries.push(TypeListEntry {
+                role: TypeListRole::ReturnType,
+                ordinal: 0,
+                ty: result.clone(),
+                origin: TypeOrigin {
+                    span: method.span.clone(),
+                },
+            });
+            let signature = MethodSignatureTypeList {
+                entries,
+                where_constraints: CanonicalConstraintSet::default(),
+            };
+            return Ok(CandidateApplicability::Applicable(
+                TraitMethodInstantiation {
+                    implementation: TraitImplementationId::Compiler {
+                        contract: MethodDeclarationId(method.id.unique_id),
+                        subject: receiver.clone(),
+                    },
+                    method: MethodDeclarationId(method.id.unique_id),
+                    callable_signature: self.instantiated_trait_callable(
+                        &info.id,
+                        &method.id,
+                        &method.value_parameters,
+                        &signature,
+                        &HashMap::new(),
+                        &dispatch,
+                    )?,
+                    dispatch_target: dispatch,
+                    substitution: HashMap::new(),
+                    caller_substitution: HashMap::new(),
+                    proof_evidence: Vec::new(),
+                },
+            ));
         }
         Ok(CandidateApplicability::Rejected(CandidateRejection {
             failures,
@@ -2260,7 +2573,7 @@ impl Checker {
             .finish(ProfileEvent::TraitDispatchLookup, profile);
         match selected? {
             CandidateApplicability::Applicable(instantiation) => {
-                Ok(Some(TraitDispatch::Static(instantiation.dispatch)))
+                Ok(Some(TraitDispatch::Selected(Box::new(instantiation))))
             }
             CandidateApplicability::Deferred(_) => {
                 self.trait_dispatch_target_for_args(trait_name, method_name, receiver, trait_args)

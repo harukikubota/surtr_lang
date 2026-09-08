@@ -7162,9 +7162,8 @@ largest = Float::max(1.5, 2.5)"#,
                 && *method_name == "add"
                 && matches!(
                     dispatch,
-                    scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::BinOp(
-                        spire::ast::BinOp::Add
-                    ))
+                    scar::typed::TraitDispatch::Static(scar::typed::TraitDispatchTarget::Builtin(id))
+                        if Some(id.0) == sindr::builtin::builtin_id_by_name("__operator_int_add")
                 )
         }));
 }
@@ -7679,10 +7678,10 @@ fn scar_session_preserves_trait_registry_across_chunks() {
                     TypedInner::TraitCall {
                         method_name,
                         dispatch: scar::typed::TraitDispatch::Static(
-                            scar::typed::TraitDispatchTarget::BinOp(spire::ast::BinOp::Add)
+                            scar::typed::TraitDispatchTarget::Builtin(id)
                         ),
                         ..
-                    } if method_name == "add"
+                    } if method_name == "add" && Some(id.0) == sindr::builtin::builtin_id_by_name("__operator_int_add")
                 )
         )
     }));

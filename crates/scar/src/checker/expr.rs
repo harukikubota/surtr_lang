@@ -58,6 +58,7 @@ pub(super) struct CandidateProbeCheckpoint {
     active_capabilities: Vec<CapabilityUse>,
     constructor_capabilities: HashMap<u32, String>,
     constructor_witness_traits: HashMap<u32, String>,
+    constructor_family_witnesses: HashMap<u32, u32>,
     warnings: WarningBuffer,
 }
 
@@ -74,6 +75,7 @@ impl Checker {
             active_capabilities: self.active_capabilities.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
+            constructor_family_witnesses: self.constructor_family_witnesses.clone(),
             warnings: self.warnings.clone(),
         }
     }
@@ -86,6 +88,7 @@ impl Checker {
         self.active_capabilities = checkpoint.active_capabilities;
         self.constructor_capabilities = checkpoint.constructor_capabilities;
         self.constructor_witness_traits = checkpoint.constructor_witness_traits;
+        self.constructor_family_witnesses = checkpoint.constructor_family_witnesses;
         self.warnings = checkpoint.warnings;
     }
 
@@ -618,7 +621,7 @@ impl Checker {
                             &ty,
                         )? {
                             CandidateApplicability::Applicable(instantiation) => {
-                                TraitDispatch::Static(instantiation.dispatch)
+                                TraitDispatch::Selected(Box::new(instantiation))
                             }
                             CandidateApplicability::Deferred(_) => TraitDispatch::Pending,
                             CandidateApplicability::Rejected(_) => {
@@ -1817,7 +1820,7 @@ impl Checker {
                                 Ty::Var(var) => self
                                     .constructor_witness_traits
                                     .get(var)
-                                    .map(|key| self.constructor_family_key(key))
+                                    .map(|key| self.trait_display_name(key))
                                     .unwrap_or_else(|| "type constructor".into()),
                                 _ => "type constructor".into(),
                             };
@@ -2017,6 +2020,7 @@ impl Checker {
         constraints: &[super::signatures::TypeConstraint],
     ) -> Option<u32> {
         let explicit_slot_for_var = |var| {
+            let family_root = self.constructor_family_witness_root(var);
             signature
                 .return_type_arguments
                 .iter()
@@ -2025,7 +2029,13 @@ impl Checker {
                     constraint.explicit_ty()?;
                     let mut vars = Vec::new();
                     Self::collect_ty_vars(&slot.ty, &mut vars);
-                    vars.contains(&var).then_some(slot.ordinal)
+                    vars.into_iter()
+                        .any(|slot_var| {
+                            slot_var == var
+                                || family_root.is_some()
+                                    && self.constructor_family_witness_root(slot_var) == family_root
+                        })
+                        .then_some(slot.ordinal)
                 })
         };
 
@@ -4477,6 +4487,13 @@ impl Checker {
                                     ),
                                 })
                                 .collect::<Result<Vec<_>, _>>()?;
+                            if let Some(receiver) = typed_args.first() {
+                                self.check_constructor_capability(
+                                    trait_name,
+                                    method_name,
+                                    receiver,
+                                )?;
+                            }
                             return Ok(TypedNode {
                                 ty: self.resolve_ty(&ret_ty),
                                 span: span.clone(),
@@ -4809,7 +4826,7 @@ impl Checker {
             &ret_ty,
         )? {
             CandidateApplicability::Applicable(instantiation) => {
-                Some(TraitDispatch::Static(instantiation.dispatch))
+                Some(TraitDispatch::Selected(Box::new(instantiation)))
             }
             CandidateApplicability::Deferred(_) => self.trait_dispatch_target_for_args(
                 trait_name,
@@ -11039,16 +11056,41 @@ impl Checker {
         };
         if let Some(signature) = &capture_signature {
             if let Some(slot) = signature.return_type_arguments.iter().find(|slot| {
-                let input = match &slot.ty {
-                    Ty::SelfApp(items) => Self::constructor_application_parts(items)
-                        .map(|(witness, _)| witness)
-                        .unwrap_or(&slot.ty),
-                    _ => &slot.ty,
-                };
                 let mut variables = Vec::new();
-                Self::collect_ty_vars(&self.resolve_ty(input), &mut variables);
+                match &slot.ty {
+                    Ty::SelfApp(items) => {
+                        let Some((witness, _)) = Self::constructor_application_parts(items) else {
+                            Self::collect_ty_vars(&self.resolve_ty(&slot.ty), &mut variables);
+                            return variables.iter().any(|var| !self.rigid_tyvars.contains(var));
+                        };
+                        let resolved_witness = self.resolve_ty(witness);
+                        let carrier = match witness {
+                            Ty::Var(var) => {
+                                self.constructor_witness_traits
+                                    .get(var)
+                                    .and_then(|trait_key| {
+                                        self.canonical_constructor_carrier(
+                                            trait_key,
+                                            &resolved_witness,
+                                        )
+                                    })
+                            }
+                            _ => None,
+                        };
+                        if let Some(carrier) = carrier {
+                            for captured in carrier.captured_arguments {
+                                self.canonical_waiting_variables(&captured.ty, &mut variables);
+                            }
+                        } else {
+                            Self::collect_ty_vars(&resolved_witness, &mut variables);
+                        }
+                    }
+                    _ => Self::collect_ty_vars(&self.resolve_ty(&slot.ty), &mut variables),
+                }
                 // The enclosing signature witnesses its own generic inputs;
-                // only fresh inference variables remain ambiguous here.
+                // only fresh carrier or captured variables remain ambiguous.
+                // Mapped payload variables are ordinary invocation inputs and
+                // do not make an otherwise concrete constructor head pending.
                 variables.iter().any(|var| !self.rigid_tyvars.contains(var))
             }) {
                 let unresolved_ty = self.diagnostic_ty_name(&self.resolve_ty(&slot.ty));

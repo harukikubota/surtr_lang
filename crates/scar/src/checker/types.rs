@@ -34,13 +34,6 @@ impl Checker {
         self.unique_constructor_trait_key(name)
     }
 
-    pub(super) fn constructor_family_key(&self, trait_key: &str) -> String {
-        self.traits
-            .get(trait_key)
-            .and_then(|info| info.constructor_root.clone())
-            .unwrap_or_else(|| trait_key.to_string())
-    }
-
     fn unique_constructor_trait_key(&self, name: &str) -> Option<String> {
         let mut candidates = self
             .traits
@@ -99,6 +92,9 @@ impl Checker {
     ) -> Option<Vec<Ty>> {
         if let Ty::Var(var) = witness {
             if let Some(trait_key) = self.constructor_witness_traits.get(var).cloned() {
+                if !self.constructor_occurrence_matches_family(*var, concrete_ty) {
+                    return None;
+                }
                 return self.constructor_application_slots_for_trait(&trait_key, concrete_ty);
             }
         }
@@ -111,6 +107,11 @@ impl Checker {
         witness: &Ty,
         slots: &[Ty],
     ) -> Option<Ty> {
+        if let Ty::Var(var) = witness_source {
+            if !self.constructor_occurrence_matches_family(*var, witness) {
+                return None;
+            }
+        }
         let constructor_positions = match witness_source {
             Ty::Var(var) => self
                 .constructor_witness_traits
@@ -1112,60 +1113,9 @@ impl Checker {
             return Ok(self.env.fresh_tyvar());
         }
 
-        let trait_key = match slot_ty {
-            Ty::SelfApp(items) => {
-                Self::constructor_application_parts(items).and_then(|(witness, _)| match witness {
-                    Ty::Var(var) => self.constructor_witness_traits.get(var).cloned(),
-                    _ => None,
-                })
-            }
-            _ => None,
-        };
-        if let Some(trait_key) = trait_key {
-            let requested_head = match self.env.lookup_type_def(name) {
-                Some(def) => self.canonical_nominal_head(&def.name)?,
-                None => builtin_type_name(name)
-                    .map(CanonicalTypeHead::Builtin)
-                    .ok_or_else(|| {
-                        TypeError::new(format!("Unknown type constructor: {}", name), span.clone())
-                    })?,
-            };
-            let mut candidates = self
-                .trait_impl_candidate_keys(&trait_key)
-                .into_iter()
-                .filter_map(|key| self.trait_impls.get(&key))
-                .filter(|info| info.declaration_key.pattern.target.head == requested_head)
-                .cloned()
-                .collect::<Vec<_>>();
-            if candidates.len() > 1 {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Type constructor {} has multiple {} implementations",
-                        name,
-                        self.trait_display_name(&trait_key)
-                    ),
-                    span: span.clone(),
-                    hint: None,
-                });
-            }
-            if let Some(info) = candidates.pop() {
-                let mapping = info
-                    .type_param_vars
-                    .iter()
-                    .map(|var| {
-                        let replacement = if info.constructor_slot_vars.contains(var) {
-                            Ty::Hole
-                        } else {
-                            self.env.fresh_tyvar()
-                        };
-                        (*var, replacement)
-                    })
-                    .collect::<HashMap<_, _>>();
-                return Ok(self.substitute_ty_with_mapping(&info.target_ty, &mapping));
-            }
-        }
-
+        // A bare head constrains only the declaration identity. Every
+        // argument remains an invocation variable, including captured ones;
+        // implementation patterns are not sources of inferred inputs.
         let Some(def) = self.env.lookup_type_def(name).cloned() else {
             let mut fresh = || self.env.fresh_tyvar();
             let builtin_head = match builtin_type_name(Self::surface_name(name)) {
@@ -1174,7 +1124,7 @@ impl Checker {
                 Some(TypeName::Generator) => {
                     Some(Ty::Enum("Generator".into(), vec![fresh(), fresh()]))
                 }
-                Some(TypeName::Result) => Some(Ty::Result(Box::new(fresh()), Box::new(Ty::Error))),
+                Some(TypeName::Result) => Some(Ty::Result(Box::new(fresh()), Box::new(fresh()))),
                 Some(TypeName::StandbyInit) => Some(Ty::Enum("StandbyInit".into(), vec![fresh()])),
                 Some(TypeName::Lazy) => Some(Ty::Lazy(Box::new(fresh()))),
                 Some(TypeName::TaskHandle) => Some(Ty::Enum("TaskHandle".into(), vec![fresh()])),
@@ -2026,27 +1976,16 @@ impl Checker {
         if self.resolve_ty(subject) == self.resolve_ty(receiver) {
             return true;
         }
-        let Ok(canonical_subject) = self.canonical_request(subject) else {
+        let Some(canonical_subject) = self.canonical_constructor_carrier(capability_trait, subject)
+        else {
             return false;
         };
-        let Ok(canonical_receiver) = self.canonical_request(receiver) else {
+        let Some(canonical_receiver) =
+            self.canonical_constructor_carrier(capability_trait, receiver)
+        else {
             return false;
         };
-        if canonical_subject.head != canonical_receiver.head
-            || canonical_subject.arguments.len() != canonical_receiver.arguments.len()
-        {
-            return false;
-        }
-        let Some((info, _)) = self.constructor_projection(capability_trait, subject) else {
-            return false;
-        };
-        canonical_subject
-            .arguments
-            .iter()
-            .zip(&canonical_receiver.arguments)
-            .enumerate()
-            .filter(|(index, _)| !info.constructor_slot_positions.contains(index))
-            .all(|(_, (subject, receiver))| subject == receiver)
+        canonical_subject == canonical_receiver
     }
 
     pub(super) fn signature_tyvar_ids(tyvars: &HashMap<String, Ty>) -> HashSet<u32> {
@@ -2247,7 +2186,7 @@ impl Checker {
             Ty::SelfApp(items) => {
                 let source_witness =
                     Self::constructor_application_parts(items).map(|(witness, _)| witness.clone());
-                let resolved = items
+                let mut resolved = items
                     .iter()
                     .map(|item| self.resolve_ty(item))
                     .collect::<Vec<_>>();
@@ -2257,6 +2196,11 @@ impl Checker {
                     }) {
                         return self.resolve_ty(&applied);
                     }
+                }
+                // An unresolved application still needs its declaration's
+                // mapped-slot metadata after call-site constraints arrive.
+                if let Some(source) = source_witness.filter(|_| resolved.len() > 2) {
+                    resolved[1] = source;
                 }
                 Ty::SelfApp(resolved)
             }
@@ -2331,6 +2275,19 @@ impl Checker {
                         }
                     }
                     fresh.insert(*var, instantiated.clone());
+                    if self.constructor_witness_traits.contains_key(var) {
+                        if let Some(shared) = self.constructor_family_witnesses.get(var).copied() {
+                            let fresh_shared =
+                                self.instantiate_ty_with_fresh(&Ty::Var(shared), fresh);
+                            if let Ty::Var(new_var) = instantiated {
+                                if let Ty::Var(fresh_shared) = fresh_shared {
+                                    self.constructor_family_witnesses
+                                        .insert(new_var, fresh_shared);
+                                }
+                                self.substitutions.insert(new_var, fresh_shared);
+                            }
+                        }
+                    }
                     instantiated
                 }
             }
@@ -2832,7 +2789,97 @@ impl Checker {
             path_kind: path.path_kind,
             may_fail: path.may_fail,
             source_readonly_root: path.source_readonly_root,
-            segments: path.segments,
+            segments: path
+                .segments
+                .into_iter()
+                .map(|segment| self.resolve_typed_facet_segment(segment))
+                .collect(),
+        }
+    }
+
+    fn resolve_typed_facet_segment(&self, segment: TypedFacetSegment) -> TypedFacetSegment {
+        match segment {
+            TypedFacetSegment::ListIndex {
+                index,
+                display,
+                literal_index,
+                focus_readonly_root,
+                focus_type_name,
+            } => TypedFacetSegment::ListIndex {
+                index: Box::new(self.resolve_typed_node(*index)),
+                display,
+                literal_index,
+                focus_readonly_root,
+                focus_type_name,
+            },
+            TypedFacetSegment::ListRange {
+                start,
+                end,
+                display,
+                literal_start,
+                literal_end,
+                focus_readonly_root,
+                focus_type_name,
+            } => TypedFacetSegment::ListRange {
+                start: Box::new(self.resolve_typed_node(*start)),
+                end: Box::new(self.resolve_typed_node(*end)),
+                display,
+                literal_start,
+                literal_end,
+                focus_readonly_root,
+                focus_type_name,
+            },
+            TypedFacetSegment::MapKey {
+                key,
+                display,
+                literal_key,
+                focus_readonly_root,
+                focus_type_name,
+            } => TypedFacetSegment::MapKey {
+                key: Box::new(self.resolve_typed_node(*key)),
+                display,
+                literal_key,
+                focus_readonly_root,
+                focus_type_name,
+            },
+            other => other,
+        }
+    }
+
+    fn resolve_pending_facet_path(&self, path: PendingFacetPath) -> PendingFacetPath {
+        PendingFacetPath {
+            root_path_name: path.root_path_name,
+            source_ty_hint: path.source_ty_hint.map(|ty| self.resolve_ty(&ty)),
+            segments: path
+                .segments
+                .into_iter()
+                .map(|segment| self.resolve_pending_facet_segment(segment))
+                .collect(),
+        }
+    }
+
+    fn resolve_pending_facet_segment(&self, segment: PendingFacetSegment) -> PendingFacetSegment {
+        let resolve_expr = |expr| match expr {
+            PendingFacetExpr::Resolved(expr) => PendingFacetExpr::Resolved(expr),
+            PendingFacetExpr::Typed(expr) => {
+                PendingFacetExpr::Typed(Box::new(self.resolve_typed_node(*expr)))
+            }
+        };
+        match segment {
+            PendingFacetSegment::Bracket { expr, display } => PendingFacetSegment::Bracket {
+                expr: resolve_expr(expr),
+                display,
+            },
+            PendingFacetSegment::RangeBracket {
+                start,
+                end,
+                display,
+            } => PendingFacetSegment::RangeBracket {
+                start: resolve_expr(start),
+                end: resolve_expr(end),
+                display,
+            },
+            other => other,
         }
     }
 
@@ -3052,11 +3099,9 @@ impl Checker {
             TypedInner::FacetPath(path) => {
                 TypedInner::FacetPath(self.resolve_typed_facet_path(path))
             }
-            TypedInner::PendingFacetPath(path) => TypedInner::PendingFacetPath(PendingFacetPath {
-                root_path_name: path.root_path_name,
-                source_ty_hint: path.source_ty_hint.map(|ty| self.resolve_ty(&ty)),
-                segments: path.segments,
-            }),
+            TypedInner::PendingFacetPath(path) => {
+                TypedInner::PendingFacetPath(self.resolve_pending_facet_path(path))
+            }
             TypedInner::FacetView {
                 source,
                 path,
@@ -3430,7 +3475,6 @@ mod tests {
             type_params: Vec::new(),
             where_clause: None,
             constructor_slots: vec!["$A".into()],
-            constructor_root: Some(qualified_name.into()),
             parents: Vec::new(),
             methods: HashMap::new(),
         }

@@ -1,0 +1,9 @@
+deftrait FamilyFunctor where Self: Type<$A> {}
+deftrait FamilyMonad where Self: FamilyFunctor {}
+defenum OtherCarrier<$T> { Box($T), }
+impl FamilyFunctor for List<$T> where $T: FamilyFunctor.$A {}
+impl FamilyMonad for List<$T> where $T: FamilyMonad.$A {}
+impl FamilyFunctor for OtherCarrier<$T> where $T: FamilyFunctor.$A {}
+impl FamilyMonad for OtherCarrier<$T> where $T: FamilyMonad.$A {}
+def accept(first: FamilyFunctor<Int>, second: FamilyMonad<Boolean>) -> Unit { () }
+accept([1], OtherCarrier::Box(True))

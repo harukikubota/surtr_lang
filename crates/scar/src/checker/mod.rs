@@ -23,6 +23,7 @@ use crate::error::TypeError;
 use crate::typed::*;
 use crate::types::Ty;
 
+mod carriers;
 mod definitions;
 mod expr;
 mod matching;
@@ -430,7 +431,6 @@ struct TraitInfo {
     type_params: Vec<ResolvedTypeParam>,
     where_clause: Option<TypedWhereClause>,
     constructor_slots: Vec<String>,
-    constructor_root: Option<String>,
     parents: Vec<TraitParent>,
     methods: HashMap<String, TraitMethodInfo>,
 }
@@ -489,12 +489,6 @@ struct ImplMethodInstantiationContract {
     impl_constraints: CanonicalConstraintSet,
 }
 
-pub(super) struct MethodInstantiation {
-    pub dispatch: TraitDispatchTarget,
-    pub substitution: HashMap<u32, Ty>,
-    pub caller_substitution: HashMap<u32, Ty>,
-    pub proof_evidence: Vec<usize>,
-}
 pub(super) struct PendingTraitCandidate {
     pub waiting_on: Vec<u32>,
     pub candidates: Vec<TraitImplDeclarationKey>,
@@ -516,7 +510,7 @@ pub(super) struct CandidateRejection {
     pub failures: Vec<CandidateFailure>,
 }
 pub(super) enum CandidateApplicability {
-    Applicable(MethodInstantiation),
+    Applicable(TraitMethodInstantiation),
     Deferred(PendingTraitCandidate),
     Rejected(CandidateRejection),
 }
@@ -1085,8 +1079,10 @@ type TraitImplKey = CanonicalTraitImplPatternKey;
 type TraitImplIndex = HashMap<u32, Vec<TraitImplKey>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-struct SpecializationKey {
-    function_name: String,
+pub struct CallableInstantiationKey {
+    callable: MethodDeclarationId,
+    implementation: Option<TraitImplementationId>,
+    trait_inputs: Vec<(TypeListRole, u32, CanonicalTy)>,
     type_args: Vec<CanonicalTyKey>,
 }
 
@@ -1166,13 +1162,14 @@ struct PersistentCheckerState {
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
-    specialization_fun_idxs: HashMap<SpecializationKey, u32>,
+    specialization_fun_idxs: HashMap<CallableInstantiationKey, u32>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<TraitImplKey, TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
     constructor_witness_traits: HashMap<u32, String>,
+    constructor_family_witnesses: HashMap<u32, u32>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
 }
 
@@ -1195,6 +1192,7 @@ impl PersistentCheckerState {
             trait_methods_by_qualified_name: HashMap::new(),
             tyvar_bounds: HashMap::new(),
             constructor_witness_traits: HashMap::new(),
+            constructor_family_witnesses: HashMap::new(),
             signature_aliases: HashMap::new(),
         }
     }
@@ -1217,6 +1215,7 @@ impl PersistentCheckerState {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
+            constructor_family_witnesses: self.constructor_family_witnesses.clone(),
             signature_aliases: self.signature_aliases.clone(),
             process_specs,
         }
@@ -1242,6 +1241,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             trait_methods_by_qualified_name: checkpoint.trait_methods_by_qualified_name,
             tyvar_bounds: checkpoint.tyvar_bounds,
             constructor_witness_traits: checkpoint.constructor_witness_traits,
+            constructor_family_witnesses: checkpoint.constructor_family_witnesses,
             signature_aliases: checkpoint.signature_aliases,
         }
     }
@@ -1261,7 +1261,7 @@ pub struct ScarCheckpoint {
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
     #[serde(default)]
-    specialization_fun_idxs: HashMap<SpecializationKey, u32>,
+    specialization_fun_idxs: HashMap<CallableInstantiationKey, u32>,
     traits: HashMap<String, TraitInfo>,
     trait_impls: HashMap<TraitImplKey, TraitImplInfo>,
     trait_impl_index_by_base_trait: TraitImplIndex,
@@ -1269,6 +1269,7 @@ pub struct ScarCheckpoint {
     tyvar_bounds: HashMap<u32, Vec<String>>,
     #[serde(default)]
     constructor_witness_traits: HashMap<u32, String>,
+    constructor_family_witnesses: HashMap<u32, u32>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     process_specs: Vec<TypedProcessSpec>,
 }
@@ -1579,7 +1580,7 @@ impl ScarSession {
     }
 
     fn rewrite_specialization_fun_indices(
-        specialization_fun_idxs: &mut HashMap<SpecializationKey, u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         rewrites: &HashMap<u32, u32>,
     ) {
         for fun_idx in specialization_fun_idxs.values_mut() {
@@ -1694,7 +1695,24 @@ impl ScarSession {
     }
 
     fn rewrite_fun_indices_in_dispatch(dispatch: &mut TraitDispatch, rewrites: &HashMap<u32, u32>) {
-        if let TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) = dispatch {
+        let target = match dispatch {
+            TraitDispatch::Static(target) => target,
+            TraitDispatch::Selected(instantiation) => {
+                for ty in instantiation.substitution.values_mut() {
+                    Self::rewrite_fun_indices_in_ty(ty, rewrites);
+                }
+                if let sindr::signature::RuntimeTarget::UserFunction(fun_idx) =
+                    &mut instantiation.callable_signature.runtime_target
+                {
+                    if let Some(new_fun_idx) = rewrites.get(fun_idx) {
+                        *fun_idx = *new_fun_idx;
+                    }
+                }
+                &mut instantiation.dispatch_target
+            }
+            TraitDispatch::Pending => return,
+        };
+        if let TraitDispatchTarget::UserFunction { fun_idx, .. } = target {
             if let Some(new_fun_idx) = rewrites.get(fun_idx) {
                 *fun_idx = *new_fun_idx;
             }
@@ -1704,6 +1722,23 @@ impl ScarSession {
     fn rewrite_fun_indices_in_facet_path(path: &mut TypedFacetPath, rewrites: &HashMap<u32, u32>) {
         Self::rewrite_fun_indices_in_ty(&mut path.source_ty, rewrites);
         Self::rewrite_fun_indices_in_ty(&mut path.focus_ty, rewrites);
+        Self::rewrite_fun_indices_in_ty(&mut path.update_source_ty, rewrites);
+        Self::rewrite_fun_indices_in_ty(&mut path.update_focus_ty, rewrites);
+        for segment in &mut path.segments {
+            match segment {
+                TypedFacetSegment::ListIndex { index, .. }
+                | TypedFacetSegment::MapKey { key: index, .. } => {
+                    Self::rewrite_fun_indices_in_node(index, rewrites);
+                }
+                TypedFacetSegment::ListRange { start, end, .. } => {
+                    Self::rewrite_fun_indices_in_node(start, rewrites);
+                    Self::rewrite_fun_indices_in_node(end, rewrites);
+                }
+                TypedFacetSegment::Field { .. }
+                | TypedFacetSegment::Tuple { .. }
+                | TypedFacetSegment::Variant { .. } => {}
+            }
+        }
     }
 
     fn rewrite_fun_indices_in_pending_facet_path(
@@ -1712,6 +1747,27 @@ impl ScarSession {
     ) {
         if let Some(source_ty_hint) = &mut path.source_ty_hint {
             Self::rewrite_fun_indices_in_ty(source_ty_hint, rewrites);
+        }
+        for segment in &mut path.segments {
+            match segment {
+                PendingFacetSegment::Field { .. } => {}
+                PendingFacetSegment::Bracket { expr, .. } => {
+                    Self::rewrite_fun_indices_in_pending_facet_expr(expr, rewrites);
+                }
+                PendingFacetSegment::RangeBracket { start, end, .. } => {
+                    Self::rewrite_fun_indices_in_pending_facet_expr(start, rewrites);
+                    Self::rewrite_fun_indices_in_pending_facet_expr(end, rewrites);
+                }
+            }
+        }
+    }
+
+    fn rewrite_fun_indices_in_pending_facet_expr(
+        expr: &mut PendingFacetExpr,
+        rewrites: &HashMap<u32, u32>,
+    ) {
+        if let PendingFacetExpr::Typed(expr) = expr {
+            Self::rewrite_fun_indices_in_node(expr, rewrites);
         }
     }
 
@@ -1738,16 +1794,25 @@ impl ScarSession {
             }
             TypedInner::TraitCall {
                 receiver_ty,
+                obligation,
                 dispatch,
                 origin,
                 args,
                 ..
             } => {
                 Self::rewrite_fun_indices_in_ty(receiver_ty, rewrites);
+                Self::rewrite_fun_indices_in_ty(&mut obligation.receiver, rewrites);
+                for trait_arg in &mut obligation.trait_args {
+                    Self::rewrite_fun_indices_in_ty(trait_arg, rewrites);
+                }
                 Self::rewrite_fun_indices_in_dispatch(dispatch, rewrites);
-                if let TraitCallOrigin::Operator { lhs_ty, rhs_ty, .. } = origin {
-                    Self::rewrite_fun_indices_in_ty(lhs_ty, rewrites);
-                    Self::rewrite_fun_indices_in_ty(rhs_ty, rewrites);
+                match origin {
+                    TraitCallOrigin::Operator { lhs_ty, rhs_ty, .. }
+                    | TraitCallOrigin::Comparison { lhs_ty, rhs_ty, .. } => {
+                        Self::rewrite_fun_indices_in_ty(lhs_ty, rewrites);
+                        Self::rewrite_fun_indices_in_ty(rhs_ty, rewrites);
+                    }
+                    TraitCallOrigin::Explicit => {}
                 }
                 for arg in args {
                     Self::rewrite_fun_indices_in_node(arg, rewrites);
@@ -2087,9 +2152,11 @@ mod specialization_state_tests {
         }
     }
 
-    fn specialization_key() -> SpecializationKey {
-        SpecializationKey {
-            function_name: "Global::helper".to_string(),
+    fn specialization_key() -> CallableInstantiationKey {
+        CallableInstantiationKey {
+            callable: MethodDeclarationId(10),
+            implementation: None,
+            trait_inputs: Vec::new(),
             type_args: vec![CanonicalTyKey::Int],
         }
     }
@@ -2251,7 +2318,7 @@ struct Checker {
     impl_method_uids: HashMap<String, u32>,
     function_ids_by_name: HashMap<String, ResolvedId>,
     specializable_defs: HashMap<u32, TypedNode>,
-    specialization_fun_idxs: HashMap<SpecializationKey, u32>,
+    specialization_fun_idxs: HashMap<CallableInstantiationKey, u32>,
     substitutions: HashMap<u32, Ty>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
     /// Obligations discovered while an inference variable is still unbound.
@@ -2268,6 +2335,7 @@ struct Checker {
     constructor_capabilities: HashMap<u32, String>,
     /// Constructor-trait identity for each signature-position witness.
     constructor_witness_traits: HashMap<u32, String>,
+    constructor_family_witnesses: HashMap<u32, u32>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
@@ -2359,6 +2427,7 @@ impl Checker {
             active_capabilities: Vec::new(),
             constructor_capabilities: HashMap::new(),
             constructor_witness_traits: state.constructor_witness_traits,
+            constructor_family_witnesses: state.constructor_family_witnesses,
             signature_aliases: state.signature_aliases,
             alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
@@ -2409,6 +2478,7 @@ impl Checker {
         checker.active_capabilities = self.active_capabilities.clone();
         checker.constructor_capabilities = self.constructor_capabilities.clone();
         checker.constructor_witness_traits = self.constructor_witness_traits.clone();
+        checker.constructor_family_witnesses = self.constructor_family_witnesses.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();
@@ -3486,6 +3556,7 @@ impl Checker {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
+            constructor_family_witnesses: self.constructor_family_witnesses.clone(),
             signature_aliases: self.signature_aliases.clone(),
         }
     }
@@ -3508,6 +3579,7 @@ impl Checker {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name,
             tyvar_bounds: self.tyvar_bounds,
             constructor_witness_traits: self.constructor_witness_traits,
+            constructor_family_witnesses: self.constructor_family_witnesses,
             signature_aliases: self.signature_aliases,
         }
     }

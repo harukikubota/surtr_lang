@@ -1763,8 +1763,8 @@ impl Checker {
             key: &str,
             traits: &HashMap<String, TraitInfo>,
             visiting: &mut Vec<String>,
-            resolved: &mut HashMap<String, (Vec<String>, Option<String>)>,
-        ) -> Result<(Vec<String>, Option<String>), TypeError> {
+            resolved: &mut HashMap<String, Vec<String>>,
+        ) -> Result<Vec<String>, TypeError> {
             if let Some(result) = resolved.get(key) {
                 return Ok(result.clone());
             }
@@ -1787,14 +1787,13 @@ impl Checker {
             })?;
             visiting.push(key.to_string());
             let mut slots = info.constructor_slots.clone();
-            let mut inherited_root: Option<String> = None;
             for parent in &info.parents {
                 let parent_key = parent
                     .trait_id
                     .qualified_name
                     .clone()
                     .unwrap_or_else(|| parent.trait_id.name.clone());
-                let (parent_slots, parent_root) = visit(&parent_key, traits, visiting, resolved)?;
+                let parent_slots = visit(&parent_key, traits, visiting, resolved)?;
                 if slots.is_empty() {
                     slots = parent_slots;
                 } else if !parent_slots.is_empty() && slots.len() != parent_slots.len() {
@@ -1811,27 +1810,9 @@ impl Checker {
                         hint: None,
                     });
                 }
-                if let Some(parent_root) = parent_root {
-                    if inherited_root
-                        .as_ref()
-                        .is_some_and(|root| root != &parent_root)
-                    {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Trait {} inherits incompatible type-constructor families",
-                                info.id.name
-                            ),
-                            span: info.id.span.clone(),
-                            hint: None,
-                        });
-                    }
-                    inherited_root = Some(parent_root);
-                }
             }
             visiting.pop();
-            let root = inherited_root.or_else(|| (!slots.is_empty()).then(|| key.to_string()));
-            let result = (slots, root);
+            let result = slots;
             resolved.insert(key.to_string(), result.clone());
             Ok(result)
         }
@@ -1842,10 +1823,9 @@ impl Checker {
         for key in &keys {
             visit(key, &snapshot, &mut Vec::new(), &mut resolved)?;
         }
-        for (key, (slots, root)) in resolved {
+        for (key, slots) in resolved {
             if let Some(info) = self.traits.get_mut(&key) {
                 info.constructor_slots = slots;
-                info.constructor_root = root;
             }
         }
         for info in self.traits.values() {
@@ -1883,7 +1863,7 @@ impl Checker {
         &self,
         trait_info: &TraitInfo,
         target_ast_ty: &AstTy,
-        where_clause: Option<&ResolvedWhereClause>,
+        where_clause: Option<&TypedWhereClause>,
         target_param_vars: &HashMap<String, u32>,
         span: &Span,
     ) -> Result<(Vec<u32>, Vec<usize>), TypeError> {
@@ -1896,7 +1876,7 @@ impl Checker {
                     continue;
                 };
                 for bound in &constraint.bounds {
-                    let ResolvedWhereConstraintRhs::TraitSlot {
+                    let TypedWhereConstraintRhs::TraitSlot {
                         trait_id,
                         slot_name,
                         slot_ordinal,
@@ -1986,9 +1966,12 @@ impl Checker {
         let positions = vars
             .iter()
             .map(|var| {
-                target_params
+                let AstTy::Generic(_, _, arguments) = target_ast_ty else {
+                    unreachable!("mapped constructor target is an application")
+                };
+                arguments
                     .iter()
-                    .position(|param| target_param_vars.get(param) == Some(var))
+                    .position(|argument| matches!(argument, AstTy::Named(_, name) if target_param_vars.get(name) == Some(var)))
                     .expect("mapped constructor variable must belong to target parameters")
             })
             .collect();
@@ -2332,71 +2315,36 @@ impl Checker {
 
     pub(super) fn trait_dispatch_override(
         &self,
-        trait_name: &str,
+        trait_id: &ResolvedId,
         method_name: &str,
-        target_name: &str,
-    ) -> Option<TraitDispatchTarget> {
-        let target_name = Self::surface_name(target_name);
-        if matches!(target_name, "Int" | "Float") {
-            let op = if self.trait_matches_short_name(trait_name, "Add") && method_name == "add" {
-                Some(BinOp::Add)
-            } else if self.trait_matches_short_name(trait_name, "Sub") && method_name == "sub" {
-                Some(BinOp::Sub)
-            } else if self.trait_matches_short_name(trait_name, "Mul") && method_name == "mul" {
-                Some(BinOp::Mul)
-            } else {
-                None
-            };
-            if let Some(op) = op {
-                return Some(TraitDispatchTarget::BinOp(op));
-            }
-        }
-        if self.trait_matches_short_name(trait_name, "Compare") && method_name == "compare" {
-            return match target_name {
-                "Int" => Some(TraitDispatchTarget::Builtin("__compare_int".into())),
-                "Float" => Some(TraitDispatchTarget::Builtin("__compare_float".into())),
-                _ => None,
-            };
-        }
-        if self.trait_matches_short_name(trait_name, "Compare")
-            && matches!(target_name, "Int" | "Float")
-        {
-            let op = match method_name {
-                "lt" => Some(BinOp::Lt),
-                "lte" => Some(BinOp::Lte),
-                "gt" => Some(BinOp::Gt),
-                "gte" => Some(BinOp::Gte),
-                _ => None,
-            };
-            if let Some(op) = op {
-                return Some(TraitDispatchTarget::BinOp(op));
-            }
-        }
-        if self.trait_matches_short_name(trait_name, "Show")
-            && matches!(
-                target_name,
-                "Int" | "Float" | "String" | "Boolean" | "Unit" | "Error"
-            )
-        {
-            return (method_name == "to_string")
-                .then(|| TraitDispatchTarget::Builtin("to_string".into()));
-        }
-        if self.trait_matches_short_name(trait_name, "Eq")
-            && matches!(target_name, "Int" | "Float" | "String" | "Boolean")
-            && method_name == "eq"
-        {
-            return Some(TraitDispatchTarget::BinOp(BinOp::Eq));
-        }
-        if self.trait_matches_short_name(trait_name, "Eq")
-            && matches!(target_name, "Int" | "Float" | "String" | "Boolean")
-            && method_name == "neq"
-        {
-            return Some(TraitDispatchTarget::BinOp(BinOp::Neq));
-        }
-        if self.trait_matches_short_name(trait_name, "Concat") && target_name == "String" {
-            return (method_name == "concat").then(|| TraitDispatchTarget::BinOp(BinOp::Concat));
-        }
-        None
+        target: &Ty,
+        span: &Span,
+    ) -> Result<TraitDispatchTarget, TypeError> {
+        let target = self.canonical_request(target)?;
+        let metadata = builtin_function_metas()
+            .iter()
+            .filter_map(BuiltinMeta::trait_method)
+            .find(|meta| {
+                self.trait_key_by_short_name(meta.trait_name)
+                    .and_then(|key| self.traits.get(&key))
+                    .is_some_and(|info| info.id.unique_id == trait_id.unique_id)
+                    && meta.method_name == method_name
+                    && (target.head == CanonicalTypeHead::Builtin(meta.target)
+                        || matches!(target.head, CanonicalTypeHead::Facet(_))
+                            && meta.target == sindr::names::TypeName::Facet)
+            })
+            .ok_or_else(|| {
+                TypeError::new(
+                    format!(
+                        "MissingCanonicalBuiltinTraitImplementation: {}::{} for {:?}",
+                        self.trait_key(trait_id),
+                        method_name,
+                        target
+                    ),
+                    span.clone(),
+                )
+            })?;
+        Ok(TraitDispatchTarget::Builtin(metadata.builtin_id))
     }
 
     pub(super) fn compiler_trait_impl_exists(&self, trait_name: &str, ty: &Ty) -> bool {
@@ -2426,7 +2374,13 @@ impl Checker {
                     target_ty,
                     Ty::Var(_) | Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Error
                 ))
-            .then(|| TraitDispatchTarget::Builtin("to_string".into()));
+            .then(|| {
+                TraitDispatchTarget::Builtin(
+                    sindr::builtin::builtin_meta_by_name("to_string")
+                        .expect("canonical Show implementation metadata")
+                        .builtin_id(),
+                )
+            });
         }
         if self.trait_matches_short_name(trait_name, "Eq") {
             return match (method_name, target_ty) {
@@ -2796,6 +2750,29 @@ impl Checker {
         );
         self.apply_typed_where_trait_bounds(method.where_clause.as_ref(), &tyvars, Some(&self_ty))?;
         self.apply_typed_where_trait_bounds(impl_where_clause, &tyvars, Some(&self_ty))?;
+        let target_vars = head_bindings
+            .iter()
+            .filter_map(|(name, ty)| match ty {
+                Ty::Var(var) => Some((name.clone(), *var)),
+                _ => None,
+            })
+            .collect();
+        let (slots, _) = self.constructor_slot_vars_for_impl(
+            trait_info,
+            target_ast_ty,
+            impl_where_clause,
+            &target_vars,
+            &method.span,
+        )?;
+        let params = params
+            .into_iter()
+            .map(|ty| self.expand_trait_self_apps(ty, &self_ty, &slots))
+            .collect::<Result<Vec<_>, _>>()?;
+        let ret = self.expand_trait_self_apps(ret, &self_ty, &slots)?;
+        let return_type_arguments = return_type_arguments
+            .into_iter()
+            .map(|ty| self.expand_trait_self_apps(ty, &self_ty, &slots))
+            .collect::<Result<Vec<_>, _>>()?;
         let mut type_params = Vec::new();
         for ty in tyvars.values() {
             Self::collect_ty_vars(ty, &mut type_params);
@@ -2933,7 +2910,6 @@ impl Checker {
                 id: id.clone(),
                 type_params: type_params.clone(),
                 where_clause: where_clause.as_ref().map(TypedWhereClause::from),
-                constructor_root: (!constructor_slots.is_empty()).then_some(trait_key.clone()),
                 constructor_slots,
                 parents,
                 methods: method_map,
@@ -3005,7 +2981,6 @@ impl Checker {
                     hint: None,
                 });
             }
-            let trait_instance_key = self.trait_instance_key(trait_id, trait_args);
             let (trait_arg_tys, target_ty, type_param_vars, target_param_vars) =
                 self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
@@ -3018,7 +2993,7 @@ impl Checker {
                 .constructor_slot_vars_for_impl(
                     &trait_info,
                     target_ast_ty,
-                    where_clause.as_ref(),
+                    where_clause.as_ref().map(TypedWhereClause::from).as_ref(),
                     &target_param_vars,
                     span,
                 )?;
@@ -3039,11 +3014,16 @@ impl Checker {
                         attrs: method.attrs.clone(),
                         span: method.span.clone(),
                         display_name_override: None,
-                        dispatch_override: self.trait_dispatch_override(
-                            &trait_instance_key,
-                            &method.method_name,
-                            &target_name,
-                        ),
+                        dispatch_override: if method.is_builtin {
+                            Some(self.trait_dispatch_override(
+                                &trait_info.id,
+                                &method.method_name,
+                                &target_ty,
+                                &method.span,
+                            )?)
+                        } else {
+                            None
+                        },
                         is_builtin: method.is_builtin,
                         body_obligations: Vec::new(),
                         instantiation_contract: None,
@@ -3094,11 +3074,7 @@ impl Checker {
                             &trait_info.id,
                             required_method,
                         )),
-                        dispatch_override: self.trait_dispatch_override(
-                            &trait_instance_key,
-                            required_method,
-                            &target_name,
-                        ),
+                        dispatch_override: None,
                         is_builtin: false,
                         body_obligations: Vec::new(),
                         instantiation_contract: None,
