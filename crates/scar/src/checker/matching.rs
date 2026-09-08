@@ -31,15 +31,18 @@ impl Checker {
             let mut typed_arm =
                 self.check_match_arm(arm, &typed_scrut.ty, &scrutinee_provenance, span, expected)?;
             if let Some(ref rt) = result_ty {
-                let checkpoint = self.candidate_probe_checkpoint();
-                let coerce = !self.types_compatible(rt, &typed_arm.body.ty)
-                    && self.can_coerce_err_only_result_self_arm(
-                        &typed_scrut,
-                        &typed_arms,
-                        &typed_arm,
-                        rt,
-                    );
-                self.rollback_candidate_probe(checkpoint);
+                let coerce = self.with_type_relation_probe(
+                    &[rt, &typed_arm.body.ty, &typed_scrut.ty],
+                    |checker| {
+                        !checker.types_compatible(rt, &typed_arm.body.ty)
+                            && checker.can_coerce_err_only_result_self_arm(
+                                &typed_scrut,
+                                &typed_arms,
+                                &typed_arm,
+                                rt,
+                            )
+                    },
+                );
                 if coerce {
                     typed_arm.body.ty = self.resolve_ty(rt);
                 }
