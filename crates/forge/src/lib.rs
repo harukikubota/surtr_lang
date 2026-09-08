@@ -13,9 +13,10 @@ pub use codegen::{
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::OnceLock;
 
-    use super::{codegen, codegen_typed_program};
+    use super::{codegen, codegen_typed_program, compose_bytecode_with_chunk, ForgeSession};
     use crate::bytecode::Constant;
     use crate::opcode::Opcode;
     use crate::registry::TypeKind;
@@ -24,6 +25,7 @@ mod tests {
         TypedPattern, TypedValueParameter,
     };
     use scar::types::Ty;
+    use scar::{ScarCheckpoint, ScarSession, TypecheckContext};
     use sigil::resolved::ResolvedId;
     use sindr::builtin::builtin_id_by_name;
     use sindr::ir::{CallableTemplateComposeFlavor, CallableTemplateKind};
@@ -329,31 +331,86 @@ mod tests {
         ]
     }
 
-    fn cached_std_modules_and_declarations(
-    ) -> &'static (Vec<Vec<sigil::StagedModuleAst>>, sigil::DeclarationIndex) {
-        static CACHE: OnceLock<(Vec<Vec<sigil::StagedModuleAst>>, sigil::DeclarationIndex)> =
-            OnceLock::new();
+    struct CachedStdCompilePrefix {
+        module_stages: Vec<Vec<sigil::StagedModuleAst>>,
+        declaration_index: sigil::DeclarationIndex,
+        resolve_state: sigil::ResolveResumeState,
+        scar_checkpoint: ScarCheckpoint,
+        bytecode: sindr::ir::Bytecode,
+    }
+
+    fn next_fun_idx(bytecode: &sindr::ir::Bytecode) -> u32 {
+        bytecode
+            .functions
+            .iter()
+            .map(|entry| entry.fun_idx.saturating_add(1))
+            .max()
+            .unwrap_or(0)
+    }
+
+    fn cached_std_compile_prefix() -> &'static CachedStdCompilePrefix {
+        static CACHE: OnceLock<CachedStdCompilePrefix> = OnceLock::new();
 
         CACHE.get_or_init(|| {
             let module_stages = std_module_stages();
             let declaration_index = sigil::precollect_declaration_index(&module_stages)
                 .expect("std modules should precollect");
-            (module_stages, declaration_index)
+            let resolved = sigil::resolve_staged_program_with_state(
+                &module_stages,
+                Vec::new(),
+                &declaration_index,
+                None,
+            )
+            .expect("std modules should resolve");
+            let resolve_state = resolved.resume_state;
+            let mut scar_session = ScarSession::new();
+            let typed = scar_session
+                .typecheck_staged_program_with_context(resolved, TypecheckContext::default())
+                .expect("std modules should typecheck");
+            let bytecode = codegen_typed_program(typed).expect("std modules should codegen");
+            scar_session.ensure_next_fun_idx_at_least(next_fun_idx(&bytecode));
+            scar_session.reconcile_function_indices(bytecode.functions.iter().filter_map(
+                |entry| {
+                    entry
+                        .qualified_name
+                        .as_deref()
+                        .map(|qualified_name| (qualified_name, entry.fun_idx))
+                },
+            ));
+            let scar_checkpoint = scar_session.checkpoint();
+            CachedStdCompilePrefix {
+                module_stages,
+                declaration_index,
+                resolve_state,
+                scar_checkpoint,
+                bytecode,
+            }
         })
     }
 
     fn typed_with_builtin_prelude(source: &str) -> Vec<scar::typed::TypedNode> {
-        let (module_stages, declaration_index) = cached_std_modules_and_declarations();
+        let prelude = cached_std_compile_prefix();
         let user_ast = spire::parse_with_context(source, spire::ParserContext::project(0))
             .expect("source should parse");
-        let resolved =
-            sigil::resolve_staged_program(module_stages, user_ast, declaration_index, None)
-                .expect("source should resolve");
-        scar::typecheck(resolved).expect("source should typecheck")
+        let resolved = sigil::resolve_staged_program_from_state(
+            &prelude.module_stages,
+            user_ast,
+            &prelude.declaration_index,
+            None,
+            prelude.module_stages.len(),
+            prelude.resolve_state,
+        )
+        .expect("source should resolve");
+        let mut scar_session = ScarSession::new();
+        scar_session.rollback(prelude.scar_checkpoint.clone());
+        scar_session
+            .typecheck_staged_program_in_place_with_context(resolved, TypecheckContext::default())
+            .expect("source should typecheck")
+            .nodes
     }
 
     fn typed_module_program_with_builtin_prelude(source: &str) -> scar::typed::TypedProgram {
-        let (module_stages, _) = cached_std_modules_and_declarations();
+        let prelude = cached_std_compile_prefix();
         let ast = spire::parse_with_context(source, spire::ParserContext::project(0))
             .expect("source should parse");
         let shared_imports = ast
@@ -426,7 +483,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let mut all_stages = module_stages.clone();
+        let mut all_stages = prelude.module_stages.clone();
         all_stages.push(lowered);
         let declaration_index = sigil::precollect_declaration_index(&all_stages)
             .expect("module stages should precollect");
@@ -435,17 +492,97 @@ mod tests {
             boot_ast,
             &declaration_index,
             None,
-            0,
-            sigil::ResolveResumeState::default(),
+            prelude.module_stages.len(),
+            prelude.resolve_state,
         )
         .expect("definition source should resolve");
-        scar::typecheck_staged_program(resolved).expect("definition source should typecheck")
+        let mut scar_session = ScarSession::new();
+        scar_session.rollback(prelude.scar_checkpoint.clone());
+        scar_session
+            .typecheck_staged_program_in_place_with_context(resolved, TypecheckContext::default())
+            .expect("definition source should typecheck")
     }
 
     fn codegen_source(source: &str) -> sindr::ir::Bytecode {
         let typed = typed_with_builtin_prelude(source);
-        codegen(typed).expect("codegen should succeed")
+        let prelude = cached_std_compile_prefix();
+        let mut forge_session = ForgeSession::from_bytecode(&prelude.bytecode);
+        let (chunk, _) = forge_session
+            .codegen_chunk(typed)
+            .expect("codegen should succeed");
+        compose_bytecode_with_chunk(prelude.bytecode.clone(), chunk)
+            .expect("bytecode should compose")
     }
+
+    fn codegen_module_source_with_builtin_prelude(
+        source: &str,
+    ) -> Result<sindr::ir::Bytecode, crate::error::CodegenError> {
+        let typed = typed_module_program_with_builtin_prelude(source);
+        let prelude = cached_std_compile_prefix();
+        let mut forge_session = ForgeSession::from_bytecode(&prelude.bytecode);
+        let (chunk, _) = forge_session.codegen_chunk_typed_program(typed)?;
+        compose_bytecode_with_chunk(prelude.bytecode.clone(), chunk)
+    }
+
+    macro_rules! semantic_prefix_case {
+        ($case:ident) => {
+            (stringify!($case), $case as fn())
+        };
+    }
+
+    const SEMANTIC_PREFIX_CASES: &[(&str, fn())] = &[
+        semantic_prefix_case!(function_table_preserves_fun_idx_index_invariant),
+        semantic_prefix_case!(field_access_emits_getfield_with_resolved_index),
+        semantic_prefix_case!(type_registry_reserves_result_tags_and_starts_user_tags_from_two),
+        semantic_prefix_case!(concrete_numeric_helpers_lower_to_existing_targets),
+        semantic_prefix_case!(facet_set_and_over_are_lowered_without_runtime_builtin_calls),
+        semantic_prefix_case!(facet_container_segments_lower_without_public_facet_builtin_calls),
+        semantic_prefix_case!(facet_bindings_are_erased_and_only_viewed_values_are_captured),
+        semantic_prefix_case!(facet_variant_mismatch_detail_includes_segment_context),
+        semantic_prefix_case!(bounded_add_generic_helpers_emit_specialized_functions),
+        semantic_prefix_case!(compare_bound_list_helpers_emit_specialized_functions),
+        semantic_prefix_case!(codegen_typed_program_embeds_runtime_process_specs),
+        semantic_prefix_case!(codegen_typed_program_embeds_runtime_boot_plan),
+        semantic_prefix_case!(codegen_rejects_boot_plan_handler_override_for_unknown_slot),
+        semantic_prefix_case!(codegen_typed_program_embeds_genserver_runtime_handler_specs),
+        semantic_prefix_case!(codegen_typed_program_emits_v2_process_spec_for_standby_process_init),
+    ];
+
+    #[test]
+    fn semantic_prefix_case_inventory_is_complete() {
+        let source = include_str!("lib.rs");
+        let mut names = HashSet::new();
+        let mut functions = HashSet::new();
+
+        for &(name, case) in SEMANTIC_PREFIX_CASES {
+            assert!(names.insert(name), "duplicate semantic prefix case: {name}");
+            assert!(
+                functions.insert(case as usize),
+                "duplicate semantic prefix case function: {name}"
+            );
+            assert!(
+                !source.contains(&format!("#[test]\n    fn {name}(")),
+                "semantic prefix case must run only through a bucket: {name}"
+            );
+        }
+    }
+
+    macro_rules! semantic_prefix_bucket_test {
+        ($name:ident, $bucket:expr) => {
+            #[test]
+            fn $name() {
+                for &(case_name, case) in SEMANTIC_PREFIX_CASES.iter().skip($bucket).step_by(4) {
+                    eprintln!("Forge semantic prefix case: {case_name}");
+                    case();
+                }
+            }
+        };
+    }
+
+    semantic_prefix_bucket_test!(semantic_prefix_bucket_0, 0);
+    semantic_prefix_bucket_test!(semantic_prefix_bucket_1, 1);
+    semantic_prefix_bucket_test!(semantic_prefix_bucket_2, 2);
+    semantic_prefix_bucket_test!(semantic_prefix_bucket_3, 3);
 
     fn test_span() -> Span {
         Span { start: 0, end: 0 }
@@ -855,7 +992,6 @@ mod tests {
             .any(|op| matches!(op, Opcode::Call { arity: 2, .. })));
     }
 
-    #[test]
     fn function_table_preserves_fun_idx_index_invariant() {
         let baseline = codegen_source(r#"print("baseline")"#);
         let bytecode = codegen_source(
@@ -1143,7 +1279,6 @@ print(to_string(add(1, 2)))"#,
             .any(|op| matches!(op, Opcode::CaptureClosure(2))));
     }
 
-    #[test]
     fn field_access_emits_getfield_with_resolved_index() {
         let bytecode = codegen_source(
             r#"defstruct User {
@@ -1167,7 +1302,6 @@ print(to_string(user.age))"#,
             .any(|op| matches!(op, Opcode::GetField { field_index: 1 })));
     }
 
-    #[test]
     fn type_registry_reserves_result_tags_and_starts_user_tags_from_two() {
         let baseline = codegen_source(r#"print("baseline")"#);
         let bytecode = codegen_source(
@@ -1392,7 +1526,6 @@ print("ok")"#,
         }
     }
 
-    #[test]
     fn concrete_numeric_helpers_lower_to_existing_targets() {
         let bytecode = codegen_source(
             r#"sum = 1 + 2
@@ -1423,7 +1556,6 @@ largest = Float::max(1.5, 2.5)"#,
             .any(|op| matches!(op, Opcode::Call { arity: 2, .. })));
     }
 
-    #[test]
     fn facet_set_and_over_are_lowered_without_runtime_builtin_calls() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)
@@ -1450,7 +1582,6 @@ user3 = Facet::over(User.name, user2, {|name| Ok(name ++ "!")})"#,
             .any(|op| matches!(op, Opcode::CallClosure { arity: 1, .. })));
     }
 
-    #[test]
     fn facet_container_segments_lower_without_public_facet_builtin_calls() {
         let bytecode = codegen_source(
             r#"defrecord User(scores: List<Int>, score: HashMap<Int>)
@@ -1494,7 +1625,6 @@ value4 =? Facet::set(User.score.["talk"], user, 90)"#,
         }
     }
 
-    #[test]
     fn facet_bindings_are_erased_and_only_viewed_values_are_captured() {
         let bytecode = codegen_source(
             r#"defrecord User(name: String)
@@ -1523,7 +1653,6 @@ result = getter()"#,
             .any(|op| matches!(op, Opcode::CallClosure { .. })));
     }
 
-    #[test]
     fn facet_variant_mismatch_detail_includes_segment_context() {
         let bytecode = codegen_source(
             r#"defenum Expr {
@@ -1548,7 +1677,6 @@ Facet::view(Expr.Add, expr)"#,
         );
     }
 
-    #[test]
     fn bounded_add_generic_helpers_emit_specialized_functions() {
         let bytecode = codegen_source(
             r#"def double(x: $N) -> $N where $N: Add { x + x }
@@ -1573,7 +1701,6 @@ b = double(1.5)"#,
             .any(|op| matches!(op, Opcode::AddFloat)));
     }
 
-    #[test]
     fn compare_bound_list_helpers_emit_specialized_functions() {
         let bytecode = codegen_source(
             r#"largest = List::max([1, 3, 2])
@@ -1592,9 +1719,8 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
         assert!(function_names.contains(&"Global::List::sort"));
     }
 
-    #[test]
     fn codegen_typed_program_embeds_runtime_process_specs() {
-        let typed = typed_module_program_with_builtin_prelude(
+        let bytecode = codegen_module_source_with_builtin_prelude(
             r#"defagent Counter {
   meta {
     instance: Singleton
@@ -1618,9 +1744,8 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
     Ok(next)
   }
 }"#,
-        );
-
-        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        )
+        .expect("codegen should succeed");
         assert_eq!(bytecode.runtime_process_specs.entries.len(), 2);
         let spec = bytecode
             .runtime_process_specs
@@ -1638,9 +1763,8 @@ sorted = List::sort([3.25, 1.5, 2.0, 1.5])"#,
         assert_eq!(spec.dependencies.handlers[0].default_target.name, "StdOut");
     }
 
-    #[test]
     fn codegen_typed_program_embeds_runtime_boot_plan() {
-        let typed = typed_module_program_with_builtin_prelude(
+        let bytecode = codegen_module_source_with_builtin_prelude(
             r#"defagent Logger {
   meta {
     instance: Singleton
@@ -1671,9 +1795,8 @@ supervisor_init {
     allow_adopt: True
   }
 }"#,
-        );
-
-        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        )
+        .expect("codegen should succeed");
         assert_eq!(bytecode.runtime_boot_plan.singletons.len(), 1);
         let entry = &bytecode.runtime_boot_plan.singletons[0];
         assert_eq!(entry.process_name, "Global::Logger");
@@ -1692,9 +1815,8 @@ supervisor_init {
         assert!(supervisor.policy.allow_adopt);
     }
 
-    #[test]
     fn codegen_rejects_boot_plan_handler_override_for_unknown_slot() {
-        let typed = typed_module_program_with_builtin_prelude(
+        let err = codegen_module_source_with_builtin_prelude(
             r#"defagent Logger {
   meta {
     instance: Singleton
@@ -1719,17 +1841,15 @@ supervisor_init {
     }
   }
 }"#,
-        );
-
-        let err = codegen_typed_program(typed).expect_err("unknown handler slot should fail");
+        )
+        .expect_err("unknown handler slot should fail");
         assert!(err
             .message
             .contains("handler slot is not declared by the target process"));
     }
 
-    #[test]
     fn codegen_typed_program_embeds_genserver_runtime_handler_specs() {
-        let typed = typed_module_program_with_builtin_prelude(
+        let bytecode = codegen_module_source_with_builtin_prelude(
             r#"defgenserver Logger {
   meta {
     instance: Singleton
@@ -1748,9 +1868,8 @@ supervisor_init {
   @cast
   def reset(_state: Int, next: Int) -> Result<CastResult<Int>> { Ok(CastResult::Next(next)) }
 }"#,
-        );
-
-        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        )
+        .expect("codegen should succeed");
         assert_eq!(bytecode.runtime_process_specs.entries.len(), 2);
         let spec = bytecode
             .runtime_process_specs
@@ -1772,9 +1891,8 @@ supervisor_init {
         assert_eq!(spec.handlers[2].kind, sindr::ir::RuntimeHandlerKind::Cast);
     }
 
-    #[test]
     fn codegen_typed_program_emits_v2_process_spec_for_standby_process_init() {
-        let typed = typed_module_program_with_builtin_prelude(
+        let bytecode = codegen_module_source_with_builtin_prelude(
             r#"defgenserver StandbyCache {
   meta {
     instance: Singleton
@@ -1792,9 +1910,8 @@ supervisor_init {
     Ok(CallResult::Reply(state, state))
   }
 }"#,
-        );
-
-        let bytecode = codegen_typed_program(typed).expect("codegen should succeed");
+        )
+        .expect("codegen should succeed");
         assert_eq!(bytecode.runtime_process_specs.entries.len(), 2);
         let spec = bytecode
             .runtime_process_specs
