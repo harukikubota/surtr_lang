@@ -2939,7 +2939,14 @@ const BAD = VALUE / VALUE"#,
 fn slash_operator_rejects_numeric_division_and_points_to_safe_div() {
     let err = typecheck_with_rules(r#"print(to_string(10 / 3))"#, RuntimeSourcePolicy::script())
         .expect_err("numeric infix slash should fail");
-    assert!(err.message.contains("`/` requires Compose implementation"));
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation)
+    );
+    assert!(
+        matches!(err.structured.as_ref().map(|diagnostic| &diagnostic.origin),
+        Some(diagnostics::DiagnosticOrigin::Operator { operator }) if operator == "/")
+    );
     assert!(err
         .hint
         .as_deref()
@@ -5075,7 +5082,7 @@ valid(Option::Some(1))
     )
     .expect("a concrete Option binding must expose its Monad implementation");
 
-    typecheck_with_rules(
+    let err = typecheck_with_rules(
         r#"
 def preserve_applicative2(value: Applicative<Int>) -> Applicative<String> {
   ret: Option<Int> = value
@@ -5086,7 +5093,12 @@ preserve_applicative2(Option::Some(1))
 "#,
         RuntimeSourcePolicy::script(),
     )
-    .expect("an explicitly narrowed Option should support concrete Monad dispatch");
+    .expect_err("an abstract carrier cannot be narrowed to Option by a body annotation");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::AnnotationTypeMismatch),
+        "{err:?}"
+    );
 }
 
 #[test]

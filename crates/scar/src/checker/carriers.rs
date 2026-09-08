@@ -177,7 +177,28 @@ impl Checker {
         trait_key: &str,
         ty: &Ty,
     ) -> Option<CanonicalConstructorCarrier> {
-        let (implementation, _) = self.constructor_projection(trait_key, ty)?;
+        self.canonical_constructor_carrier_projection(trait_key, ty, false)
+    }
+
+    pub(super) fn contextual_constructor_carrier(
+        &self,
+        trait_key: &str,
+        ty: &Ty,
+    ) -> Option<CanonicalConstructorCarrier> {
+        self.canonical_constructor_carrier_projection(trait_key, ty, true)
+    }
+
+    fn canonical_constructor_carrier_projection(
+        &self,
+        trait_key: &str,
+        ty: &Ty,
+        contextual: bool,
+    ) -> Option<CanonicalConstructorCarrier> {
+        let (implementation, _) = if contextual {
+            self.constructor_capability_projection(trait_key, ty)?
+        } else {
+            self.constructor_projection(trait_key, ty)?
+        };
         let target = self.canonical_request(ty).ok()?;
         let family_id = self.constructor_family_key(trait_key);
         let positions = &implementation.constructor_slot_positions;

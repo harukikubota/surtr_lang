@@ -163,7 +163,7 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             return "Return type argument constraints belong in the where clause".into()
         }
         TypeDiagnosticReason::ReturnTypeArgumentArityMismatch => {
-            if let DiagnosticData::CallableSignature(value) = &input.data {
+            if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
                 return format!(
                     "{} expects {} return type argument(s), got {}",
                     value.callable,
@@ -176,7 +176,10 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
                 return format!(
                     "type input `{}` is introduced more than once",
-                    value.expected_type
+                    value
+                        .expected_type
+                        .as_deref()
+                        .expect("definition input type")
                 );
             }
         }
@@ -184,7 +187,10 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
                 return format!(
                     "return-only type input `{}` is not declared",
-                    value.expected_type
+                    value
+                        .expected_type
+                        .as_deref()
+                        .expect("definition input type")
                 );
             }
         }
@@ -192,7 +198,10 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
             if let DiagnosticData::ReturnTypeArgument(value) = &input.data {
                 return format!(
                     "return type argument `{}` does not appear in the return type",
-                    value.expected_type
+                    value
+                        .expected_type
+                        .as_deref()
+                        .expect("definition input type")
                 );
             }
         }
@@ -278,7 +287,7 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
         },
         DiagnosticData::ReturnTypeArgument(value) => format!(
             "Return type argument {} for `{}` does not match the callable signature",
-            value.ordinal, value.callable
+            value.ordinal.expect("type argument mismatch ordinal"), value.callable
         ),
         DiagnosticData::CallableShape(value) => {
             let actual = value.actual_type.clone().unwrap_or_else(|| format!("closure with {} parameter(s)", value.actual_arity.expect("closure shape carries its arity")));

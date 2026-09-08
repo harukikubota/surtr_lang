@@ -1170,6 +1170,20 @@ impl Checker {
         self.function_return_ty = Some(function_return_ty.clone());
         self.local_annotation_tyvars = local_annotation_tyvars;
         self.rigid_tyvars = rigid_tyvars;
+        // Direct constructor inputs introduce witnesses outside the named
+        // type-variable map. They are caller-owned just like named generics.
+        for (_, ty) in local_bindings {
+            let mut variables = Vec::new();
+            Self::collect_ty_vars(ty, &mut variables);
+            for variable in variables {
+                if self.constructor_witness_traits.contains_key(&variable) {
+                    self.rigid_tyvars.insert(variable);
+                    if let Some(root) = self.constructor_family_witness_root(variable) {
+                        self.rigid_tyvars.insert(root);
+                    }
+                }
+            }
+        }
         self.current_function_symbol = Some(function_symbol);
         self.current_impl_struct_target = impl_target;
         self.in_extractor_body = in_extractor_body;
@@ -1624,12 +1638,7 @@ impl Checker {
             .as_ref()
             .and_then(|ast_ty| self.constructor_trait_key_for_ast_ty(ast_ty))
             .is_some_and(|trait_key| {
-                self.constructor_annotation_compatible(
-                    &trait_key,
-                    &expected_ret,
-                    &typed_body.ty,
-                    &ConstructorCapabilityProvenance::Unrestricted,
-                )
+                self.constructor_annotation_compatible(&trait_key, &expected_ret, &typed_body.ty)
             });
         let saved_rigid = std::mem::replace(&mut self.rigid_tyvars, rigid_tyvars.clone());
         let relation = self.assert_type_relation(

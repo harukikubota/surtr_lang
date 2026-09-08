@@ -1,2 +1,13 @@
 phase: typecheck
 contains: cond branches have different types: Int and String
+json: /reason = "CondBranchTypeMismatch"
+json: /origin/kind = "Branch"
+json: /origin/form = "Cond"
+json: /data/expected_type = "Int"
+json: /data/actual_type = "String"
+json: /data/form = "Cond"
+json: /data/left_ordinal = 0
+json: /data/right_ordinal = 1
+json: /data/left_origin/kind = "branch"
+json: /data/right_origin/kind = "branch"
+json: /related/0/type = "String"

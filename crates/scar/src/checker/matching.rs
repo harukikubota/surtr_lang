@@ -26,8 +26,10 @@ impl Checker {
         let mut result_ty: Option<Ty> = None;
         let mut failure = None;
 
+        let scrutinee_provenance = self.constructor_capability_for_node(&typed_scrut);
         for (ordinal, arm) in arms.iter().enumerate() {
-            let mut typed_arm = self.check_match_arm(arm, &typed_scrut.ty, span, expected)?;
+            let mut typed_arm =
+                self.check_match_arm(arm, &typed_scrut.ty, &scrutinee_provenance, span, expected)?;
             if let Some(ref rt) = result_ty {
                 let checkpoint = self.candidate_probe_checkpoint();
                 let coerce = !self.types_compatible(rt, &typed_arm.body.ty)
@@ -48,8 +50,8 @@ impl Checker {
                 let relation = self.assert_type_relation(
                     &first.body.ty,
                     &body_node.ty,
-                    self.type_fact(SourceRole::Branch, &first.body.span, &first.body.ty),
-                    self.type_fact(SourceRole::Branch, &body_node.span, &body_node.ty),
+                    self.branch_fact(SourceRole::Branch, &first.body, 0),
+                    self.branch_fact(SourceRole::Branch, body_node, ordinal),
                     TypeDiagnosticReason::MatchArmTypeMismatch,
                     DiagnosticOrigin::Branch {
                         form: diagnostics::BranchForm::Match,
@@ -67,7 +69,7 @@ impl Checker {
                     expected,
                     &body_node.ty,
                     self.type_fact(SourceRole::Expected, span, expected),
-                    self.type_fact(SourceRole::Branch, &body_node.span, &body_node.ty),
+                    self.branch_fact(SourceRole::Branch, body_node, ordinal),
                     TypeDiagnosticReason::MatchArmTypeMismatch,
                     DiagnosticOrigin::Branch {
                         form: diagnostics::BranchForm::Match,
@@ -384,13 +386,19 @@ impl Checker {
         &mut self,
         arm: &ResolvedMatchArm,
         scrut_ty: &Ty,
+        scrutinee_provenance: &ConstructorCapabilityProvenance,
         _span: &Span,
         expected: Option<&Ty>,
     ) -> Result<TypedMatchArm, TypeError> {
         let profile = self.profiler.start();
         self.env.push_var_scope();
+        let saved_provenance = self.constructor_capabilities.clone();
         let result = (|| {
             let typed_pat = self.check_match_subpattern(&arm.pattern, scrut_ty)?;
+            self.bind_match_constructor_provenance(
+                &typed_pat,
+                (scrutinee_provenance.clone(), scrut_ty.clone()),
+            );
             let typed_guard = if let Some(guard) = &arm.guard {
                 let typed_guard = self.check_node(guard)?;
                 if !self.types_compatible(&Ty::Bool, &typed_guard.ty) {
@@ -422,6 +430,7 @@ impl Checker {
             })
         })();
         self.env.pop_var_scope();
+        self.constructor_capabilities = saved_provenance;
         self.profiler.finish(ProfileEvent::MatchArm, profile);
         result
     }
@@ -1006,6 +1015,11 @@ impl Checker {
                         diagnostic.reason = TypeDiagnosticReason::IfBranchTypeMismatch;
                         if let DiagnosticOrigin::Branch { form, .. } = &mut diagnostic.origin {
                             *form = diagnostics::BranchForm::IfLet;
+                        }
+                        if let diagnostics::DiagnosticData::BranchAssertion(data) =
+                            &mut diagnostic.data
+                        {
+                            data.form = diagnostics::BranchForm::IfLet;
                         }
                         return TypeError::from_structured(diagnostic.clone());
                     }

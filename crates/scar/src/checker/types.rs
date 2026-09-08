@@ -1837,7 +1837,16 @@ impl Checker {
                     self.rigid_tyvars.contains(left),
                     self.rigid_tyvars.contains(right),
                 ) {
-                    (true, true) => left == right,
+                    (true, true) => {
+                        left == right
+                            || (self.constructor_witness_traits.contains_key(left)
+                                && self.constructor_witness_traits.contains_key(right)
+                                && self.constructor_family_witness_root(*left).is_some_and(
+                                    |root| {
+                                        Some(root) == self.constructor_family_witness_root(*right)
+                                    },
+                                ))
+                    }
                     (true, false) => self.bind_tyvar(*right, &Ty::Var(*left)),
                     (false, true) => self.bind_tyvar(*left, &Ty::Var(*right)),
                     (false, false) => self.bind_tyvar(*left, &Ty::Var(*right)),
@@ -2008,12 +2017,13 @@ impl Checker {
         if self.resolve_ty(subject) == self.resolve_ty(receiver) {
             return true;
         }
-        let Some(canonical_subject) = self.canonical_constructor_carrier(capability_trait, subject)
+        let Some(canonical_subject) =
+            self.contextual_constructor_carrier(capability_trait, subject)
         else {
             return false;
         };
         let Some(canonical_receiver) =
-            self.canonical_constructor_carrier(capability_trait, receiver)
+            self.contextual_constructor_carrier(capability_trait, receiver)
         else {
             return false;
         };

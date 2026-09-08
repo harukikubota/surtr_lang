@@ -71,6 +71,7 @@ pub fn write_source(path: &Path, source: &str) {
 pub struct CompileErrorExpectation {
     pub phase: Option<String>,
     pub contains: Vec<String>,
+    pub json: Vec<(String, serde_json::Value)>,
 }
 
 #[derive(Debug, Clone)]
@@ -283,13 +284,53 @@ mod tests {
         let expected = CompileErrorExpectation {
             phase: Some("typecheck".to_string()),
             contains: vec!["expected Int".to_string(), "got String".to_string()],
+            json: Vec::new(),
         };
 
         assert_compile_error_matches(
             &expected,
-            "phase=typecheck; message=expected Int, got String",
+            &"phase=typecheck; message=expected Int, got String"
+                .to_string()
+                .into(),
             Path::new("fixture.srt"),
         );
+    }
+
+    #[test]
+    fn structured_fixture_contract_reads_real_producer_json() {
+        let dir = super::unique_temp_dir("structured-expectation");
+        let path = dir.join("test.error");
+        std::fs::write(&path, "phase: typecheck\njson: /reason = \"ArgumentTypeMismatch\"\njson: /origin/kind = \"Call\"\njson: /data/expected_type = \"Int\"\n").unwrap();
+        let mut expected = super::parse_compile_error_expectation(&path);
+        let source_path = dir.join("fixture.srt");
+        std::fs::write(&source_path, "def take(x: Int) -> Int { x }\ntake(\"x\")").unwrap();
+        let actual = crate::support::check_script_phase(
+            "fixture.srt",
+            "def take(x: Int) -> Int { x }\ntake(\"x\")",
+            "typecheck",
+        )
+        .unwrap_err();
+        assert_compile_error_matches(&expected, &actual, &source_path);
+        // A wrong reason/origin/type and an absent key must all fail, including
+        // an expected null: missing fields cannot masquerade as null values.
+        for (pointer, wrong) in [
+            ("/reason", serde_json::json!("ReturnTypeMismatch")),
+            ("/origin/kind", serde_json::json!("Operator")),
+            ("/data/actual_type", serde_json::json!("Int")),
+            ("/data/not_in_schema", serde_json::Value::Null),
+        ] {
+            expected.json = vec![(pointer.into(), wrong)];
+            assert!(
+                std::panic::catch_unwind(|| assert_compile_error_matches(
+                    &expected,
+                    &actual,
+                    &source_path
+                ))
+                .is_err(),
+                "matcher accepted wrong {pointer}"
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -432,6 +473,7 @@ pub fn parse_compile_error_expectation(path: &Path) -> CompileErrorExpectation {
         .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
     let mut phase = None;
     let mut contains = Vec::new();
+    let mut json = Vec::new();
 
     for raw in content.lines() {
         let line = raw.trim();
@@ -446,6 +488,21 @@ pub fn parse_compile_error_expectation(path: &Path) -> CompileErrorExpectation {
             contains.push(rest.trim().to_string());
             continue;
         }
+        if let Some(rest) = line.strip_prefix("json:") {
+            let (pointer, value) = rest
+                .split_once('=')
+                .unwrap_or_else(|| panic!("expected json: /pointer = value in {}", path.display()));
+            let pointer = pointer.trim();
+            assert!(
+                pointer.starts_with('/'),
+                "JSON pointer must start with / in {}",
+                path.display()
+            );
+            let value = serde_json::from_str(value.trim())
+                .unwrap_or_else(|e| panic!("invalid JSON in {}: {e}", path.display()));
+            json.push((pointer.to_string(), value));
+            continue;
+        }
         panic!(
             "invalid compile error expectation line in {}: {}",
             path.display(),
@@ -453,7 +510,11 @@ pub fn parse_compile_error_expectation(path: &Path) -> CompileErrorExpectation {
         );
     }
 
-    CompileErrorExpectation { phase, contains }
+    CompileErrorExpectation {
+        phase,
+        contains,
+        json,
+    }
 }
 
 pub fn extract_phase_tag(message: &str) -> Option<&str> {
@@ -464,11 +525,11 @@ pub fn extract_phase_tag(message: &str) -> Option<&str> {
 
 pub fn assert_compile_error_matches(
     expected: &CompileErrorExpectation,
-    actual: &str,
+    actual: &crate::support::CompilePhaseFailure,
     display_path: &Path,
 ) {
     if let Some(expected_phase) = expected.phase.as_deref() {
-        let actual_phase = extract_phase_tag(actual).unwrap_or("unknown");
+        let actual_phase = extract_phase_tag(&actual.message).unwrap_or("unknown");
         assert_eq!(
             actual_phase,
             expected_phase,
@@ -476,9 +537,60 @@ pub fn assert_compile_error_matches(
             display_path.display()
         );
     }
+    if !expected.json.is_empty() {
+        let error = actual
+            .type_error
+            .as_ref()
+            .expect("structured fixture requires a retained type error");
+        let structured = error
+            .structured
+            .as_ref()
+            .expect("structured fixture producer has no diagnostic payload");
+        let (sources, fallback_source_id) = match &actual.source_context {
+            Some((sources, source_id)) => (sources.clone(), *source_id),
+            None => {
+                let mut sources = diagnostics::SourceRegistry::new();
+                let source_path = if display_path.is_dir() {
+                    display_path.join("entry.srt")
+                } else {
+                    display_path.to_path_buf()
+                };
+                let source_id =
+                    sources.register(display_path.display().to_string(), read_text(&source_path));
+                (sources, source_id)
+            }
+        };
+        let structured = structured.clone().map_source_locations(|span| {
+            xldr::decode_rebased_module_span(span)
+                .unwrap_or_else(|| (fallback_source_id, span.clone()))
+        });
+        let source_id = structured.primary.source_id;
+        let spec = diagnostics::structured_type_error_spec(&structured);
+        let json = serde_json::to_value(diagnostics::serializable_diagnostic_by_id(
+            &sources,
+            source_id,
+            "typecheck",
+            &spec,
+        ))
+        .unwrap();
+        for (pointer, value) in &expected.json {
+            let actual_value = json.pointer(pointer).unwrap_or_else(|| {
+                panic!(
+                    "missing JSON field {pointer} for {}: {json}",
+                    display_path.display()
+                )
+            });
+            assert_eq!(
+                actual_value,
+                value,
+                "JSON mismatch at {pointer} for {}: {json}",
+                display_path.display()
+            );
+        }
+    }
     for needle in &expected.contains {
         assert!(
-            actual.contains(needle),
+            actual.message.contains(needle),
             "expected '{}' in error for {}\nactual: {}",
             needle,
             display_path.display(),

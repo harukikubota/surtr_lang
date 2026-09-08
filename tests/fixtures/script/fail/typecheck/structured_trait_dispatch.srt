@@ -1,2 +1,2 @@
 defrecord Empty(value: Int)
-print(Add::add(Empty(1), Empty(2)))
+Add::add(Empty(1), Empty(2))

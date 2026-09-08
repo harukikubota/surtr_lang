@@ -137,10 +137,18 @@ fn structured_type_diagnostic_projects_the_same_facts_to_json_and_rendering() {
         reason: TypeDiagnosticReason::ReturnTypeArgumentMismatch,
         origin: DiagnosticOrigin::ReturnTypeArgument { ordinal: 0 },
         data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+            declared_origin: None,
+            value_parameter_origin: None,
+            return_origin: None,
+            left_origin: None,
+            right_origin: None,
+            required_trait: None,
+            expected_count: None,
+            actual_count: None,
             callable: "guard".into(),
-            ordinal: 0,
-            expected_type: "Option".into(),
-            actual_type: "List".into(),
+            ordinal: Some(0),
+            expected_type: Some("Option".into()),
+            actual_type: Some("List".into()),
         }),
         primary: SourceFact::typed(
             SourceRole::ReturnTypeArgument,
@@ -183,10 +191,18 @@ fn ambiguous_return_type_argument_has_a_distinct_headline() {
         reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument,
         origin: DiagnosticOrigin::ReturnTypeArgument { ordinal: 0 },
         data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+            declared_origin: None,
+            value_parameter_origin: None,
+            return_origin: None,
+            left_origin: None,
+            right_origin: None,
+            required_trait: None,
+            expected_count: None,
+            actual_count: None,
             callable: "make".into(),
-            ordinal: 0,
-            expected_type: "concrete return type argument".into(),
-            actual_type: "List<$A>".into(),
+            ordinal: Some(0),
+            expected_type: Some("concrete return type argument".into()),
+            actual_type: Some("List<$A>".into()),
         }),
         primary: SourceFact::typed(
             SourceRole::ReturnTypeArgument,
@@ -222,6 +238,9 @@ fn rejected_trait_candidates_preserve_structured_failure_details() {
             operator: "+".into(),
         },
         data: DiagnosticData::CandidateSelection(CandidateSelectionData {
+            subject_type: None,
+            trait_arguments: vec![],
+            impl_declaration: None,
             trait_name: "Monad".into(),
             method: "bind".into(),
             failures: vec![CandidateFailureData {
@@ -304,13 +323,14 @@ fn trait_method_type_list_preserves_path_and_both_origins() {
         reason: TypeDiagnosticReason::TraitMethodTypeListMismatch,
         origin: DiagnosticOrigin::Declaration,
         data: DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
+            impl_declaration: None,
             identity: None,
             method_name: "Build::build".into(),
             role: TypeListRole::ReturnType,
             ordinal: 0,
             nested_path: vec![0],
-            expected_type: "Box<Int>".into(),
-            actual_type: "Box<String>".into(),
+            expected_type: Some("Box<Int>".into()),
+            actual_type: Some("Box<String>".into()),
             expected_count: None,
             actual_count: None,
         }),
@@ -337,8 +357,8 @@ fn trait_method_type_list_preserves_path_and_both_origins() {
     assert_eq!(spec.labels[1].source_id, Some(SourceId(0)));
     assert_eq!(spec.labels[1].message, "Contract: Box<Int>");
     let data = input.data.to_json_value();
-    assert_eq!(data["kind"], "TraitMethodTypeList");
-    assert_eq!(data["role"], "ReturnType");
+    assert_eq!(data["kind"], "TraitDispatch");
+    assert_eq!(data["type_list_role"], "ReturnType");
     assert_eq!(data["ordinal"], 0);
     assert_eq!(data["nested_path"], serde_json::json!([0]));
     assert_eq!(data["expected_type"], "Box<Int>");
@@ -352,6 +372,7 @@ fn trait_method_constraints_preserve_expected_and_actual_sets() {
         reason: TypeDiagnosticReason::TraitMethodConstraintMismatch,
         origin: DiagnosticOrigin::Declaration,
         data: DiagnosticData::TraitMethodConstraint(TraitMethodConstraintData {
+            impl_declaration: None,
             identity: None,
             method_name: "Display::show".into(),
             expected_constraints: vec!["$0: Eq".into()],
@@ -365,7 +386,7 @@ fn trait_method_constraints_preserve_expected_and_actual_sets() {
     assert!(spec.message.contains("Display::show"));
     assert!(spec.message.contains("incompatible trait constraints"));
     let data = input.data.to_json_value();
-    assert_eq!(data["kind"], "TraitMethodConstraint");
+    assert_eq!(data["kind"], "TraitDispatch");
     assert_eq!(data["expected_constraints"], serde_json::json!(["$0: Eq"]));
     assert_eq!(
         data["actual_constraints"],
@@ -380,13 +401,14 @@ fn trait_method_arity_displays_expected_and_actual_counts() {
         reason: TypeDiagnosticReason::TraitMethodTypeListArityMismatch,
         origin: DiagnosticOrigin::Declaration,
         data: DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
+            impl_declaration: None,
             identity: None,
             method_name: "Make::make".into(),
             role: TypeListRole::ReturnTypeArgument,
             ordinal: 0,
             nested_path: vec![],
-            expected_type: String::new(),
-            actual_type: String::new(),
+            expected_type: None,
+            actual_type: None,
             expected_count: Some(1),
             actual_count: Some(0),
         }),
@@ -407,6 +429,7 @@ fn structured_diagnostics_never_extract_optional_fields_from_prose() {
         reason: TypeDiagnosticReason::MissingTraitCapability,
         origin: DiagnosticOrigin::Call,
         data: DiagnosticData::TraitObligation(crate::TraitObligationData {
+            obligation_origin: None,
             trait_arguments: vec![],
             trait_name: "Show".into(),
             subject_type: "Box<Int>".into(),

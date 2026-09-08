@@ -295,7 +295,7 @@ fn next_fun_idx(bytecode: &Bytecode) -> u32 {
 
 fn cached_script_compile_prefix(
     compile_sources: &CompileSources,
-) -> Result<SharedCompilePrefix, String> {
+) -> Result<SharedCompilePrefix, super::phase::CompilePhaseFailure> {
     let std_snapshot = default_stdlib_snapshot()?;
     let cached_modules = cached_module_pipeline(compile_sources, TestCompileMode::Script)?;
 
@@ -360,7 +360,9 @@ fn cached_script_compile_prefix(
             resolved,
             compile_chunk_typecheck_context_for_mode(TestCompileMode::Script),
         )
-        .map_err(|e| format!("phase=typecheck; message={}", e))?;
+        .map_err(|error| {
+            super::phase::CompilePhaseFailure::from(error).with_sources(compile_sources)
+        })?;
 
     let mut forge_session = forge::ForgeSession::from_bytecode(std_snapshot.bytecode());
     let (chunk, _) = forge_session
@@ -404,9 +406,9 @@ fn cached_script_compile_prefix(
 pub(super) fn cached_compile_prefix(
     compile_sources: &CompileSources,
     mode: TestCompileMode,
-) -> Result<SharedCompilePrefix, String> {
+) -> Result<SharedCompilePrefix, super::phase::CompilePhaseFailure> {
     static COMPILE_PREFIX_CACHE: OnceLock<
-        Mutex<HashMap<String, Result<SharedCompilePrefix, String>>>,
+        Mutex<HashMap<String, Result<SharedCompilePrefix, super::phase::CompilePhaseFailure>>>,
     > = OnceLock::new();
 
     let cache = COMPILE_PREFIX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -465,7 +467,9 @@ pub(super) fn cached_compile_prefix(
                     resolved,
                     std_typecheck_context_for_mode(mode),
                 )
-                .map_err(|e| format!("phase=typecheck; message={}", e))?;
+                .map_err(|error| {
+                    super::phase::CompilePhaseFailure::from(error).with_sources(compile_sources)
+                })?;
             let bytecode = forge::codegen_typed_program(typed)
                 .map_err(|e| format!("phase=codegen; message={}", e))?;
             scar_session.ensure_next_fun_idx_at_least(next_fun_idx(&bytecode));

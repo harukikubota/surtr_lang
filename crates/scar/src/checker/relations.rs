@@ -45,6 +45,9 @@ impl Checker {
                     origin,
                 );
                 let diagnostic = error.structured.as_mut().expect("structured trait failure");
+                if let DiagnosticData::TraitObligation(data) = &mut diagnostic.data {
+                    data.obligation_origin = Some(actual_fact.clone());
+                }
                 diagnostic.primary = actual_fact;
                 diagnostic.related.push(expected_fact);
                 return Err(error);
@@ -103,12 +106,22 @@ impl Checker {
                 | TypeDiagnosticReason::CondBranchTypeMismatch
         ) {
             DiagnosticData::BranchAssertion(BranchAssertionData {
+                form: match origin {
+                    DiagnosticOrigin::Branch { form, .. } => form,
+                    _ => unreachable!("branch assertion origin"),
+                },
+                left_ordinal: expected_fact.ordinal,
+                right_ordinal: actual_fact.ordinal,
+                left_origin: Some(expected_fact.clone()),
+                right_origin: Some(actual_fact.clone()),
                 expected_type: types[0].clone(),
                 actual_type: types[1].clone(),
                 branch: Some(ordinal),
             })
         } else {
             DiagnosticData::ArgumentRelation(ArgumentRelationData {
+                expected_origin: Some(expected_fact.clone()),
+                actual_origin: Some(actual_fact.clone()),
                 callable: callable.into(),
                 ordinal,
                 expected_type: Some(types[0].clone()),
@@ -158,8 +171,8 @@ impl Checker {
                 let relation = self.assert_type_relation(
                     &first.ty,
                     &body.ty,
-                    self.type_fact(SourceRole::Branch, &first.span, &first.ty),
-                    self.type_fact(SourceRole::Branch, &body.span, &body.ty),
+                    self.branch_fact(SourceRole::Branch, first, 0),
+                    self.branch_fact(SourceRole::Branch, &body, ordinal),
                     TypeDiagnosticReason::CondBranchTypeMismatch,
                     DiagnosticOrigin::Branch {
                         form: diagnostics::BranchForm::Cond,
@@ -177,7 +190,7 @@ impl Checker {
                     expected,
                     &body.ty,
                     self.type_fact(SourceRole::Expected, span, expected),
-                    self.type_fact(SourceRole::Branch, &body.span, &body.ty),
+                    self.branch_fact(SourceRole::Branch, &body, ordinal),
                     TypeDiagnosticReason::CondBranchTypeMismatch,
                     DiagnosticOrigin::Branch {
                         form: diagnostics::BranchForm::Cond,
@@ -255,6 +268,11 @@ impl Checker {
                 origin,
                 data: DiagnosticData::TypeConstructorCarrier(
                     diagnostics::TypeConstructorCarrierData {
+                        left_type: None,
+                        right_type: Some(self.diagnostic_ty_name(&self.resolve_ty(subject))),
+                        left_origin: None,
+                        right_origin: Some(self.type_fact(SourceRole::Value, span, subject)),
+                        required_capability: self.trait_display_name(trait_name),
                         family: self.trait_display_name(trait_name),
                         family_id: self.diagnostic_constructor_family_id(trait_name),
                         expected_carrier: self.diagnostic_ty_name(&self.resolve_ty(subject)),
@@ -323,8 +341,8 @@ impl Checker {
         self.assert_type_relation(
             expected,
             actual,
-            expected_fact,
-            actual_fact,
+            expected_fact.clone(),
+            actual_fact.clone(),
             reason,
             DiagnosticOrigin::Operator {
                 operator: operator.into(),
@@ -339,6 +357,19 @@ impl Checker {
                 let diagnostic = error.structured.as_mut().expect("typed payload failure");
                 diagnostic.data = DiagnosticData::TypeConstructorCarrier(
                     diagnostics::TypeConstructorCarrierData {
+                        left_type: Some(self.diagnostic_ty_name(&self.resolve_ty(&left.ty))),
+                        right_type: Some(self.diagnostic_ty_name(&self.resolve_ty(&right.ty))),
+                        left_origin: Some(self.type_fact(
+                            SourceRole::LeftValue,
+                            &left.span,
+                            &left.ty,
+                        )),
+                        right_origin: Some(self.type_fact(
+                            SourceRole::RightValue,
+                            &right.span,
+                            &right.ty,
+                        )),
+                        required_capability: self.trait_display_name(capability),
                         family: self.trait_display_name(capability),
                         family_id: self.diagnostic_constructor_family_id(capability),
                         expected_carrier: self.diagnostic_ty_name(&self.resolve_ty(expected)),
@@ -412,6 +443,15 @@ impl Checker {
             let diagnostic = error.structured.as_mut().expect("relation diagnostic");
             diagnostic.data =
                 DiagnosticData::TypeConstructorCarrier(diagnostics::TypeConstructorCarrierData {
+                    left_type: Some(self.diagnostic_ty_name(&self.resolve_ty(&left.ty))),
+                    right_type: Some(self.diagnostic_ty_name(&self.resolve_ty(&right.ty))),
+                    left_origin: Some(self.type_fact(SourceRole::LeftValue, &left.span, &left.ty)),
+                    right_origin: Some(self.type_fact(
+                        SourceRole::RightValue,
+                        &right.span,
+                        &right.ty,
+                    )),
+                    required_capability: self.trait_display_name(trait_name),
                     family: self.trait_display_name(trait_name),
                     family_id: self.diagnostic_constructor_family_id(trait_name),
                     expected_carrier: self.diagnostic_ty_name(&self.resolve_ty(expected)),
@@ -447,6 +487,7 @@ impl Checker {
             reason,
             origin: DiagnosticOrigin::TraitCall,
             data: DiagnosticData::TraitDispatch(diagnostics::TraitDispatchData {
+                impl_declaration: None,
                 trait_name: trait_name.into(),
                 trait_arguments: vec![],
                 method: Some(method.into()),
@@ -535,6 +576,7 @@ impl Checker {
         let arguments = names;
         let data = if reason == TypeDiagnosticReason::NoApplicableTraitImplementation {
             DiagnosticData::TraitDispatch(diagnostics::TraitDispatchData {
+                impl_declaration: None,
                 trait_name: trait_id.into(),
                 trait_arguments: arguments,
                 method: method.map(str::to_string),
@@ -542,6 +584,7 @@ impl Checker {
             })
         } else {
             DiagnosticData::TraitObligation(diagnostics::TraitObligationData {
+                obligation_origin: Some(self.type_fact(SourceRole::Value, span, subject)),
                 trait_name: trait_id.into(),
                 trait_arguments: arguments,
                 subject_type,
@@ -623,10 +666,22 @@ impl Checker {
             reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument,
             origin: DiagnosticOrigin::ReturnTypeArgument { ordinal: 0 },
             data: DiagnosticData::ReturnTypeArgument(diagnostics::ReturnTypeArgumentData {
+                declared_origin: None,
+                value_parameter_origin: None,
+                return_origin: None,
+                left_origin: None,
+                right_origin: Some(SourceFact::untyped(
+                    SourceRole::ReturnTypeArgument,
+                    SourceId(0),
+                    span.clone(),
+                )),
+                required_trait: None,
+                expected_count: None,
+                actual_count: None,
                 callable: format!("{trait_name}::{method}"),
-                ordinal: 0,
-                expected_type: "concrete return type argument".into(),
-                actual_type: "Self".into(),
+                ordinal: Some(0),
+                expected_type: Some("concrete return type argument".into()),
+                actual_type: Some("Self".into()),
             }),
             primary: SourceFact::untyped(SourceRole::ReturnTypeArgument, SourceId(0), span.clone()),
             related: vec![],

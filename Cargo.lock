@@ -920,6 +920,7 @@ dependencies = [
 name = "scar"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "diagnostics",
  "serde",
  "sigil",

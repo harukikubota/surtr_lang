@@ -1,0 +1,3 @@
+defmod Bad {
+  def broken() -> Int { "wrong" }
+}

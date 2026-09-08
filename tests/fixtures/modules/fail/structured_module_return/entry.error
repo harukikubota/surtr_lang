@@ -1,0 +1,10 @@
+phase: typecheck
+contains: expected Int, got String
+json: /reason = "ReturnTypeMismatch"
+json: /origin/kind = "Return"
+json: /data/expected_type = "Int"
+json: /data/actual_type = "String"
+json: /data/actual_origin/span = [37, 44]
+json: /line = 2
+json: /data/expected_origin/span = [31, 34]
+json: /span = [37, 44]

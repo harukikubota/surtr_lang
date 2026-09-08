@@ -28,8 +28,8 @@ impl Make for Int { def make(self: Self) -> Box<String> { Box::new("x") } }
     assert_eq!(data.role, diagnostics::TypeListRole::ReturnType);
     assert_eq!(data.ordinal, 0);
     assert_eq!(data.nested_path, vec![0]);
-    assert_eq!(data.expected_type, "Box<Int>");
-    assert_eq!(data.actual_type, "Box<String>");
+    assert_eq!(data.expected_type.as_deref(), Some("Box<Int>"));
+    assert_eq!(data.actual_type.as_deref(), Some("Box<String>"));
     assert_eq!(structured.primary.role, diagnostics::SourceRole::Impl);
     assert_eq!(
         structured.related[0].role,
@@ -186,8 +186,8 @@ impl Make for Int { def make(self: Self) -> Pair<Int, Int> { Pair::new(1, 2) } }
     };
     assert_eq!(data.role, diagnostics::TypeListRole::ReturnType);
     assert_eq!(data.nested_path, vec![1]);
-    assert_eq!(data.expected_type, "Pair<Int, String>");
-    assert_eq!(data.actual_type, "Pair<Int, Int>");
+    assert_eq!(data.expected_type.as_deref(), Some("Pair<Int, String>"));
+    assert_eq!(data.actual_type.as_deref(), Some("Pair<Int, Int>"));
 }
 
 #[test]
@@ -320,6 +320,12 @@ impl Make for Int { def make(self: Self) -> Alias<String> { {|value| []} } }
         panic!("type list")
     };
     assert_eq!(data.nested_path, vec![1, 0, 0]);
-    assert_eq!(data.expected_type, "(Int -> List<Phantom<Int>>)");
-    assert_eq!(data.actual_type, "(Int -> List<Phantom<String>>)");
+    assert_eq!(
+        data.expected_type.as_deref(),
+        Some("(Int -> List<Phantom<Int>>)")
+    );
+    assert_eq!(
+        data.actual_type.as_deref(),
+        Some("(Int -> List<Phantom<String>>)")
+    );
 }

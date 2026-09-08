@@ -14,7 +14,9 @@ pub use compile::{
     compile_script_sources, compile_sources_for_module_fixture,
 };
 #[allow(unused_imports)]
-pub use phase::{check_project_phase, check_script_phase, check_script_sources_phase};
+pub use phase::{
+    check_project_phase, check_script_phase, check_script_sources_phase, CompilePhaseFailure,
+};
 #[allow(unused_imports)]
 pub use run::{
     run_module_fixture_case, run_project_script, run_project_script_with_input,

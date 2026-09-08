@@ -518,3 +518,264 @@ value: List<String> = Factory::make::<List, Int>()
         "{error:?}"
     );
 }
+
+#[test]
+fn concrete_constructor_capability_requires_impl_constraints() {
+    let declarations = r#"
+deftrait Marker { def mark(self: Self) -> Int }
+deftrait Family where Self: Type<$A> { def mark(self: Self<Int>) -> Int }
+defenum Plain { Plain(Int), }
+defenum Marked { Marked(Int), }
+impl Marker for Marked { def mark(self: Self) -> Int { 1 } }
+defenum Pair<$L, $R> { Pair($L, $R), }
+impl Family for Pair<$L, $R> where
+  $L: Marker
+  $R: Family.$A
+{ def mark(self: Self<Int>) -> Int { match self { Pair::Pair(left, _) => Marker::mark(left), } } }
+def accept(value: Family<Int>) -> Unit { () }
+"#;
+    check(&format!(
+        "{declarations}\naccept(Pair::Pair(Marked::Marked(1), 2))"
+    ))
+    .expect("satisfied captured argument constraints permit projection");
+    check(&format!(
+        "{declarations}\naccept(Pair::Pair(Plain::Plain(1), 2))"
+    ))
+    .expect_err("constructor projection must prove the captured argument constraint");
+}
+
+#[test]
+fn branch_and_block_results_preserve_constructor_capability() {
+    for expression in [
+        "if (True, a, a)",
+        "if (True, a, b)",
+        "if (True, { a }, { a })",
+        "if (True, { alias = a; alias }, { a })",
+        "match 1 { 1 => a, _ => a, }",
+        "match 1 { 1 => a, _ => b, }",
+    ] {
+        let source = format!(
+            r#"
+deftrait Functor where Self: Type<$A> {{}}
+deftrait Monad where Self: Functor {{}}
+defenum Box<$T> {{ Box($T), }}
+impl Functor for Box<$T> {{}}
+impl Monad for Box<$T> {{}}
+def stronger(value: Monad<Int>) -> Int {{ 1 }}
+def use(a: Functor<Int>, b: Monad<Int>) -> Int {{ choice = {expression}; stronger(choice) }}
+use(Box::Box(1), Box::Box(2))
+"#
+        );
+        check(&source.replace("a: Functor<Int>", "a: Monad<Int>"))
+            .unwrap_or_else(|error| panic!("{expression}: sufficient capability: {error:?}"));
+        let error = check(&source)
+            .expect_err("derived expressions must preserve the input capability restriction");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+            "{expression}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn nominal_annotation_cannot_choose_an_abstract_constructor() {
+    let declarations = r#"
+deftrait Functor where Self: Type<$A> {}
+deftrait Monad where Self: Functor {}
+defenum Box<$T> { Box($T), }
+impl Functor for Box<$T> {}
+impl Functor for List<$T> {}
+impl Monad for Box<$T> {}
+def stronger(value: Monad<Int>) -> Int { 1 }
+"#;
+    for body in [
+        "stronger(value)",
+        "thunk = { value }; stronger(thunk())",
+        "id = {|x| x}; stronger(id(value))",
+        "pair = (value, 1); match pair { (item, _) => stronger(item), }",
+        "values = [value]; match values { [item] => stronger(item), _ => 0, }",
+    ] {
+        let source = format!(
+            r#"{declarations}
+def use(a: Functor<Int>) -> Int {{
+    value: Box<Int> = a
+    {body}
+}}
+"#
+        );
+        check(&format!(
+            "{}\nuse(Box::Box(1))",
+            source.replace("a: Functor<Int>", "a: Box<Int>")
+        ))
+        .expect("an already concrete carrier can retain its nominal annotation");
+        for input in ["Box::Box(1)", "[1]"] {
+            let error = check(&format!("{source}\nuse({input})"))
+                .expect_err("a generic constructor cannot be asserted to have a nominal head");
+            assert_eq!(
+                error.reason(),
+                Some(diagnostics::TypeDiagnosticReason::AnnotationTypeMismatch),
+                "{body}, {input}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn provenance_intersection_proves_every_extracted_source() {
+    let declarations = r#"
+deftrait Functor where Self: Type<$A> {}
+deftrait Monad where Self: Functor {}
+defenum Box<$T> { Box($T), }
+impl Functor for Box<$T> {}
+impl Monad for Box<$T> {}
+def stronger(value: Monad<Int>) -> Int { 1 }
+"#;
+    let source = format!(
+        r#"{declarations}
+def use(a: Functor<Int>, b: Monad<Int>) -> Int {{
+    pair = (a, 1)
+    choice = match pair {{ (item, _) => if (True, item, b), }}
+    stronger(choice)
+}}
+use(Box::Box(1), Box::Box(2))
+"#
+    );
+    check(&source.replace("a: Functor<Int>", "a: Monad<Int>"))
+        .expect("extracted sources retain their declared sufficient capability");
+    let error = check(&source).expect_err("an unknown source cannot be omitted from intersection");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+        "{error:?}"
+    );
+    check(&format!(
+        "{declarations}\nstronger(if (True, Box::Box(1), Box::Box(2)))"
+    ))
+    .expect("fresh concrete branches prove their capability independently");
+    check(&format!(
+        r#"{declarations}
+def retain(value: Monad<Int>) -> Monad<Int> {{ value }}
+stronger(if (True, Box::Box(1), retain(Box::Box(2))))
+"#
+    ))
+    .expect("a fresh concrete branch and a constrained return retain their common capability");
+}
+
+#[test]
+fn specialized_return_views_survive_value_projections() {
+    let declarations = r#"
+deftrait Functor where Self: Type<$A> {}
+deftrait Monad where Self: Functor {}
+defenum Box<$T> { Box($T), }
+impl Functor for Box<$T> {}
+impl Monad for Box<$T> {}
+def retain(value: Functor<Int>) -> Functor<Int> { value }
+def stronger(value: Monad<Int>) -> Int { 1 }
+deferror Marker { "marker" }
+def wrap(value: $T) -> Result<List<$T>, Marker> { Ok([value]) }
+defenum Maybe<$T> { Some($T), None, }
+def head(values: List<$T>) -> Maybe<$T> {
+    match values { [item, .._] => Maybe::Some(item), _ => Maybe::None, }
+}
+defstruct Holder<$T> { value: $T, }
+impl Holder { def new(value: $T) -> Holder<$T> { Holder { value: value } } }
+"#;
+    for expression in [
+        "nums =? wrap(a); [item, ..tail] =? nums; stronger(item)",
+        "thunk = { nums =? wrap(a); [item, ..tail] =? nums; Ok(item) }; match thunk() { Ok(item) => stronger(item), Err(_) => 0, }",
+        "pair = (a, 1); match pair { (item, _) => stronger(item), }",
+        "values = [a]; match values { [item] => stronger(item), _ => 0, }",
+        "identity = {|value| value}; stronger(identity(a))",
+        "thunk = { a }; stronger(thunk())",
+        "holder = Holder(a); stronger(holder.value)",
+        "match head([a]) { Maybe::Some(item) => stronger(item), Maybe::None => 0, }",
+    ] {
+        check(&format!("{declarations}\na = Box::Box(1)\n{expression}"))
+            .unwrap_or_else(|error| panic!("fresh concrete source: {expression}: {error:?}"));
+        let source = format!("{declarations}\na = retain(Box::Box(1))\n{expression}");
+        let error = check(&source)
+            .expect_err("transparent projection must preserve a declared return view");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+            "{expression}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn specialized_return_views_follow_generic_callable_dependencies() {
+    let declarations = r#"
+deftrait Functor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
+deftrait Monad where Self: Functor {}
+defenum Box<$T> { Box($T), }
+impl Functor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
+impl Monad for Box<$T> {}
+def retain(value: Functor<Int>) -> Functor<Int> { value }
+def stronger(value: Monad<Int>) -> Int { 1 }
+def id(value: $T) -> $T { value }
+deftrait PipeApply<$A, $B> { def pipe_apply::<$B>(self: Self, value: $A) -> $B }
+impl PipeApply<$A, $B> for ($A -> $B) { def pipe_apply::<$B>(self: Self, value: $A) -> $B { self(value) } }
+def preserve(values: Functor<$T>) -> Functor<$T> { values }
+"#;
+    for expression in [
+        "stronger(a |> id())",
+        r#"identity = &id
+stronger(identity(a))"#,
+        r#"mapped: Box<Box<Int>> = Functor::fmap(Box::Box(0), {|x: Int| a})
+match mapped { Box::Box(item) => stronger(item), }"#,
+        r#"wrapped = preserve(Box::Box(a))
+match wrapped { Box::Box(item) => stronger(item), }"#,
+    ] {
+        check(&format!("{declarations}\na = Box::Box(1)\n{expression}"))
+            .unwrap_or_else(|error| panic!("fresh concrete source: {expression}: {error:?}"));
+        let source = format!("{declarations}\na = retain(Box::Box(1))\n{expression}");
+        let error =
+            check(&source).expect_err("generic callable results must preserve payload views");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+            "{expression}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn specialized_return_views_survive_receiverless_and_joined_calls() {
+    let declarations = r#"
+deftrait Functor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
+deftrait Monad where Self: Functor { def return::<Self>(value: $A) -> Self<$A> }
+defenum Box<$T> { Box($T), }
+impl Functor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
+impl Monad for Box<$T> { def return::<Box<$T>>(value: $A) -> Box<$A> { Box::Box(value) } }
+def retain(value: Functor<Int>) -> Functor<Int> { value }
+def stronger(value: Monad<Int>) -> Int { 1 }
+def id(value: $T) -> $T { value }
+def factory(sample: $T) -> ($T -> $T) { {|value| value} }
+def callback_factory::<$T>() -> ((Unit -> $T) -> $T) { {|f: (Unit -> $T)| f(())} }
+def preserve(values: Functor<$T>) -> Functor<$T> { values }
+defenum Wrap<$T> { Wrap($T), }
+impl Functor for Wrap<$T> { def fmap(self: Wrap<$A>, mapper: ($A -> $B)) -> Wrap<$B> { match self { Wrap::Wrap(x) => Wrap::Wrap(mapper(x)), } } }
+impl Monad for Wrap<$T> { def return::<Wrap<$T>>(value: $A) -> Wrap<$A> { Wrap::Wrap(value) } }
+"#;
+    for expression in [
+        r#"identity = factory(Box::Box(0)); stronger(identity(a))"#,
+        r#"apply: ((Unit -> Box<Int>) -> Box<Int>) = callback_factory(); stronger(apply({|u: Unit| a}))"#,
+        r#"wrapped: Wrap<Box<Int>> = Monad::return(a)
+match wrapped { Wrap::Wrap(item) => stronger(item), }"#,
+        r#"identity = if (True, &id, &id)
+stronger(identity(a))"#,
+    ] {
+        check(&format!("{declarations}\na = Box::Box(1)\n{expression}"))
+            .unwrap_or_else(|error| panic!("fresh concrete source: {expression}: {error:?}"));
+        let source = format!("{declarations}\na = retain(Box::Box(1))\n{expression}");
+        let error =
+            check(&source).expect_err("receiverless and joined calls must preserve payload views");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+            "{expression}: {error:?}"
+        );
+    }
+}

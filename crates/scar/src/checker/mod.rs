@@ -29,6 +29,7 @@ mod expr;
 mod matching;
 mod patterns;
 mod predeclare;
+mod provenance;
 mod relations;
 mod signatures;
 mod specialize;
@@ -1171,6 +1172,7 @@ struct PersistentCheckerState {
     tyvar_bounds: HashMap<u32, Vec<String>>,
     constructor_witness_traits: HashMap<u32, String>,
     constructor_family_witnesses: HashMap<u32, u32>,
+    constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
 }
 
@@ -1194,6 +1196,7 @@ impl PersistentCheckerState {
             tyvar_bounds: HashMap::new(),
             constructor_witness_traits: HashMap::new(),
             constructor_family_witnesses: HashMap::new(),
+            constructor_capabilities: HashMap::new(),
             signature_aliases: HashMap::new(),
         }
     }
@@ -1217,6 +1220,7 @@ impl PersistentCheckerState {
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             constructor_family_witnesses: self.constructor_family_witnesses.clone(),
+            constructor_capabilities: self.constructor_capabilities.clone(),
             signature_aliases: self.signature_aliases.clone(),
             process_specs,
         }
@@ -1243,6 +1247,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             tyvar_bounds: checkpoint.tyvar_bounds,
             constructor_witness_traits: checkpoint.constructor_witness_traits,
             constructor_family_witnesses: checkpoint.constructor_family_witnesses,
+            constructor_capabilities: checkpoint.constructor_capabilities,
             signature_aliases: checkpoint.signature_aliases,
         }
     }
@@ -1271,6 +1276,7 @@ pub struct ScarCheckpoint {
     #[serde(default)]
     constructor_witness_traits: HashMap<u32, String>,
     constructor_family_witnesses: HashMap<u32, u32>,
+    constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     process_specs: Vec<TypedProcessSpec>,
 }
@@ -2361,10 +2367,38 @@ struct Checker {
     candidate_probe_checkpoint_count: Cell<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 enum ConstructorCapabilityProvenance {
-    Unrestricted,
+    /// No abstract guarantee: concrete constructor applicability must be proved.
+    RequiresProof,
     Constrained(BTreeSet<String>),
+    /// Every source must justify the requested capability at the use site.
+    Intersection(Vec<(ConstructorCapabilityProvenance, Ty)>),
+    Fields(Vec<(ConstructorCapabilityProvenance, Ty)>),
+    Variants(Vec<(u32, Vec<(ConstructorCapabilityProvenance, Ty)>)>),
+    Sequence(Vec<(ConstructorCapabilityProvenance, Ty)>),
+    Callable {
+        parameters: Vec<u32>,
+        result: Box<(ConstructorCapabilityProvenance, Ty)>,
+    },
+    Parameter(u32),
+    DeclaredCallable(u32),
+    Injected {
+        function: Box<(ConstructorCapabilityProvenance, Ty)>,
+        arguments: Vec<(ConstructorCapabilityProvenance, Ty)>,
+    },
+    Call {
+        function: Box<(ConstructorCapabilityProvenance, Ty)>,
+        arguments: Vec<(ConstructorCapabilityProvenance, Ty)>,
+    },
+    Projection {
+        source: Box<(ConstructorCapabilityProvenance, Ty)>,
+        projection: provenance::Projection,
+    },
+    Template {
+        ty: Ty,
+        variables: HashMap<u32, (ConstructorCapabilityProvenance, Ty)>,
+    },
 }
 
 impl ConstructorCapabilityProvenance {
@@ -2440,7 +2474,7 @@ impl Checker {
             tyvar_bounds: state.tyvar_bounds,
             pending_trait_obligations: HashMap::new(),
             active_capabilities: Vec::new(),
-            constructor_capabilities: HashMap::new(),
+            constructor_capabilities: state.constructor_capabilities,
             constructor_witness_traits: state.constructor_witness_traits,
             constructor_family_witnesses: state.constructor_family_witnesses,
             signature_aliases: state.signature_aliases,
@@ -3572,6 +3606,7 @@ impl Checker {
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             constructor_family_witnesses: self.constructor_family_witnesses.clone(),
+            constructor_capabilities: self.constructor_capabilities.clone(),
             signature_aliases: self.signature_aliases.clone(),
         }
     }
@@ -3595,6 +3630,7 @@ impl Checker {
             tyvar_bounds: self.tyvar_bounds,
             constructor_witness_traits: self.constructor_witness_traits,
             constructor_family_witnesses: self.constructor_family_witnesses,
+            constructor_capabilities: self.constructor_capabilities,
             signature_aliases: self.signature_aliases,
         }
     }

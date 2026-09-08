@@ -8,10 +8,51 @@ use super::sources::{
 };
 use super::types::{CompileFailurePhase, TestCompileMode};
 
+/// Keep the checker payload intact until the fixture matcher serializes it.
+#[derive(Debug, Clone)]
+pub struct CompilePhaseFailure {
+    pub message: String,
+    pub type_error: Option<scar::error::TypeError>,
+    pub source_context: Option<(diagnostics::SourceRegistry, diagnostics::SourceId)>,
+}
+
+impl From<String> for CompilePhaseFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            type_error: None,
+            source_context: None,
+        }
+    }
+}
+
+impl From<scar::error::TypeError> for CompilePhaseFailure {
+    fn from(error: scar::error::TypeError) -> Self {
+        Self {
+            message: format!("phase=typecheck; message={error}"),
+            type_error: Some(error),
+            source_context: None,
+        }
+    }
+}
+
+impl CompilePhaseFailure {
+    pub(super) fn with_sources(mut self, sources: &CompileSources) -> Self {
+        self.source_context = Some((sources.sources.clone(), sources.user_source_id));
+        self
+    }
+}
+
+impl std::fmt::Display for CompilePhaseFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.message.fmt(f)
+    }
+}
+
 fn resolve_sources_in_compile_order(
     compile_sources: &CompileSources,
     mode: TestCompileMode,
-) -> Result<(), String> {
+) -> Result<(), CompilePhaseFailure> {
     let cached_modules = cached_module_pipeline(compile_sources, mode)?;
     let user_ast = parse_user_program(compile_sources, mode)?;
     let (process_stage, user_ast) = xldr::extract_process_modules_from_user_ast(user_ast);
@@ -56,7 +97,7 @@ fn resolve_sources_in_compile_order(
 fn typecheck_sources_in_compile_order(
     compile_sources: &CompileSources,
     mode: TestCompileMode,
-) -> Result<(), String> {
+) -> Result<(), CompilePhaseFailure> {
     let compile_prefix = cached_compile_prefix(compile_sources, mode)?;
 
     let user_ast = parse_user_program(compile_sources, mode)?;
@@ -87,12 +128,16 @@ fn typecheck_sources_in_compile_order(
             resolved.resolved,
             compile_chunk_typecheck_context_for_mode(mode),
         )
-        .map_err(|e| format!("phase=typecheck; message={}", e))?;
+        .map_err(|error| CompilePhaseFailure::from(error).with_sources(compile_sources))?;
     Ok(())
 }
 
 #[allow(dead_code)]
-pub fn check_script_phase(source_name: &str, source: &str, phase: &str) -> Result<(), String> {
+pub fn check_script_phase(
+    source_name: &str,
+    source: &str,
+    phase: &str,
+) -> Result<(), CompilePhaseFailure> {
     check_source_phase(source_name, source, TestCompileMode::Script, phase)
 }
 
@@ -100,12 +145,16 @@ pub fn check_script_phase(source_name: &str, source: &str, phase: &str) -> Resul
 pub fn check_script_sources_phase(
     compile_sources: &CompileSources,
     phase: &str,
-) -> Result<(), String> {
+) -> Result<(), CompilePhaseFailure> {
     check_sources_phase(compile_sources, TestCompileMode::Script, phase)
 }
 
 #[allow(dead_code)]
-pub fn check_project_phase(source_name: &str, source: &str, phase: &str) -> Result<(), String> {
+pub fn check_project_phase(
+    source_name: &str,
+    source: &str,
+    phase: &str,
+) -> Result<(), CompilePhaseFailure> {
     check_source_phase(source_name, source, TestCompileMode::Project, phase)
 }
 
@@ -114,7 +163,7 @@ fn check_source_phase(
     source: &str,
     mode: TestCompileMode,
     phase: &str,
-) -> Result<(), String> {
+) -> Result<(), CompilePhaseFailure> {
     let phase = CompileFailurePhase::from_str(phase)?;
     match phase {
         CompileFailurePhase::Parse => {
@@ -134,7 +183,9 @@ fn check_source_phase(
         CompileFailurePhase::Codegen => {
             let compile_sources =
                 super::sources::collect_script_compile_sources(source_name, source)?;
-            compile_sources_with_mode(&compile_sources, mode).map(|_| ())
+            compile_sources_with_mode(&compile_sources, mode)
+                .map(|_| ())
+                .map_err(Into::into)
         }
     }
 }
@@ -143,7 +194,7 @@ fn check_sources_phase(
     compile_sources: &CompileSources,
     mode: TestCompileMode,
     phase: &str,
-) -> Result<(), String> {
+) -> Result<(), CompilePhaseFailure> {
     let phase = CompileFailurePhase::from_str(phase)?;
     match phase {
         CompileFailurePhase::Parse => {
@@ -162,8 +213,8 @@ fn check_sources_phase(
         }
         CompileFailurePhase::Resolve => resolve_sources_in_compile_order(compile_sources, mode),
         CompileFailurePhase::Typecheck => typecheck_sources_in_compile_order(compile_sources, mode),
-        CompileFailurePhase::Codegen => {
-            compile_sources_with_mode(compile_sources, mode).map(|_| ())
-        }
+        CompileFailurePhase::Codegen => compile_sources_with_mode(compile_sources, mode)
+            .map(|_| ())
+            .map_err(Into::into),
     }
 }

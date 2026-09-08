@@ -374,9 +374,7 @@ fn structured_expected_got(spec: &DiagnosticSpec) -> Option<(Option<String>, Opt
     let data = spec.structured.as_ref()?.data.clone();
     Some(match data {
         DiagnosticData::ArgumentRelation(value) => (value.expected_type, value.actual_type),
-        DiagnosticData::ReturnTypeArgument(value) => {
-            (Some(value.expected_type), Some(value.actual_type))
-        }
+        DiagnosticData::ReturnTypeArgument(value) => (value.expected_type, value.actual_type),
         DiagnosticData::TypeConstructorCarrier(value) => {
             if spec.structured.as_ref()?.reason
                 == crate::TypeDiagnosticReason::MissingTypeConstructorCapability

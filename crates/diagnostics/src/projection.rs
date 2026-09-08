@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 #[derive(Serialize)]
-struct Origin<'a> {
+pub(crate) struct Origin<'a> {
     kind: SourceRole,
     ordinal: Option<u32>,
     source_id: u32,
@@ -32,7 +32,7 @@ enum Projection<'a> {
         #[serde(flatten)]
         relation: &'a ArgumentRelationData,
         expected_origin: Option<Origin<'a>>,
-        actual_origin: Origin<'a>,
+        actual_origin: Option<Origin<'a>>,
     },
     ReturnTypeArgument {
         callable: &'a str,
@@ -46,7 +46,7 @@ enum Projection<'a> {
         left_type: Option<&'a str>,
         right_type: Option<&'a str>,
         left_origin: Option<Origin<'a>>,
-        right_origin: Origin<'a>,
+        right_origin: Option<Origin<'a>>,
         required_trait: Option<&'a str>,
         expected_count: Option<u32>,
         actual_count: Option<u32>,
@@ -55,7 +55,7 @@ enum Projection<'a> {
         #[serde(flatten)]
         subject: &'a ConstraintSubjectData,
         subject_type: &'a str,
-        subject_origin: Origin<'a>,
+        subject_origin: Option<Origin<'a>>,
         required_trait: Option<&'a str>,
         suggested_type_variable: Option<&'a str>,
     },
@@ -63,7 +63,7 @@ enum Projection<'a> {
         #[serde(flatten)]
         obligation: &'a TraitObligationData,
         trait_id: &'a str,
-        obligation_origin: Origin<'a>,
+        obligation_origin: Option<Origin<'a>>,
     },
     TraitDispatch {
         trait_id: Option<&'a str>,
@@ -88,7 +88,7 @@ enum Projection<'a> {
         left_type: Option<&'a str>,
         right_type: Option<&'a str>,
         left_origin: Option<Origin<'a>>,
-        right_origin: Origin<'a>,
+        right_origin: Option<Origin<'a>>,
         required_capability: &'a str,
     },
     BranchAssertion {
@@ -100,90 +100,51 @@ enum Projection<'a> {
         left_type: &'a str,
         right_type: &'a str,
         left_origin: Option<Origin<'a>>,
-        right_origin: Origin<'a>,
+        right_origin: Option<Origin<'a>>,
     },
 }
-impl StructuredDiagnostic {
-    pub fn data_json(&self) -> Value {
-        let first = self.related.first();
-        let fact = |role| {
-            std::iter::once(&self.primary)
-                .chain(self.related.iter())
-                .find(|f| f.role == role)
-        };
-        let rta = |callable, ordinal, expected_type, actual_type, expected_count, actual_count| {
-            Projection::ReturnTypeArgument {
-                callable,
-                ordinal,
-                return_type_argument_ordinal: ordinal,
-                expected_type,
-                actual_type,
-                declared_origin: fact(SourceRole::Declaration).map(Origin::from),
-                value_parameter_origin: fact(SourceRole::Value).map(Origin::from),
-                return_origin: fact(SourceRole::Expected).map(Origin::from),
-                left_type: expected_type,
-                right_type: actual_type,
-                left_origin: first.map(Origin::from),
-                right_origin: (&self.primary).into(),
-                required_trait: None,
-                expected_count,
-                actual_count,
-            }
-        };
-        let projection = match &self.data {
+impl DiagnosticData {
+    pub(crate) fn project_json(&self) -> Value {
+        let projection = match self {
             DiagnosticData::ArgumentRelation(relation) => Projection::ArgumentRelation {
                 relation,
-                expected_origin: first.map(Origin::from),
-                actual_origin: (&self.primary).into(),
+                expected_origin: relation.expected_origin.as_ref().map(Origin::from),
+                actual_origin: relation.actual_origin.as_ref().map(Origin::from),
             },
-            DiagnosticData::ReturnTypeArgument(v) => rta(
-                &v.callable,
-                Some(v.ordinal),
-                Some(v.expected_type.as_str()),
-                Some(v.actual_type.as_str()),
-                None,
-                None,
-            ),
-            DiagnosticData::CallableSignature(v)
-                if self.reason == TypeDiagnosticReason::ReturnTypeArgumentArityMismatch =>
-            {
-                rta(
-                    &v.callable,
-                    None,
-                    None,
-                    None,
-                    v.expected_count,
-                    v.actual_count,
-                )
-            }
+            DiagnosticData::ReturnTypeArgument(v) => Projection::ReturnTypeArgument {
+                callable: &v.callable,
+                ordinal: v.ordinal,
+                return_type_argument_ordinal: v.ordinal,
+                expected_type: v.expected_type.as_deref(),
+                actual_type: v.actual_type.as_deref(),
+                declared_origin: v.declared_origin.as_ref().map(Origin::from),
+                value_parameter_origin: v.value_parameter_origin.as_ref().map(Origin::from),
+                return_origin: v.return_origin.as_ref().map(Origin::from),
+                left_type: v.expected_type.as_deref(),
+                right_type: v.actual_type.as_deref(),
+                left_origin: v.left_origin.as_ref().map(Origin::from),
+                right_origin: v.right_origin.as_ref().map(Origin::from),
+                required_trait: v.required_trait.as_deref(),
+                expected_count: v.expected_count,
+                actual_count: v.actual_count,
+            },
             DiagnosticData::ConstraintSubject(v) => Projection::ConstraintSubject {
                 subject: v,
                 subject_type: &v.subject,
-                subject_origin: (&self.primary).into(),
-                required_trait: if self.reason
-                    == TypeDiagnosticReason::InvalidTraitConstraintSubject
-                {
-                    None
-                } else {
-                    Some(&v.constraint)
-                },
-                suggested_type_variable: Some("$F"),
+                subject_origin: v.subject_origin.as_ref().map(Origin::from),
+                required_trait: v.required_trait.as_deref(),
+                suggested_type_variable: v.suggested_type_variable.as_deref(),
             },
-            DiagnosticData::TraitObligation(v)
-                if self.reason != TypeDiagnosticReason::NoApplicableTraitImplementation =>
-            {
-                Projection::TraitObligation {
-                    obligation: v,
-                    trait_id: &v.trait_name,
-                    obligation_origin: (&self.primary).into(),
-                }
-            }
+            DiagnosticData::TraitObligation(v) => Projection::TraitObligation {
+                obligation: v,
+                trait_id: &v.trait_name,
+                obligation_origin: v.obligation_origin.as_ref().map(Origin::from),
+            },
             DiagnosticData::TraitDispatch(_)
-            | DiagnosticData::TraitObligation(_)
             | DiagnosticData::TraitMethodTypeList(_)
             | DiagnosticData::TraitMethodConstraint(_)
             | DiagnosticData::CandidateSelection(_) => {
-                let (trait_id, trait_arguments, subject_type, method_name) = match &self.data {
+                let (trait_id, trait_arguments, subject_type, method_name) = match self {
                     DiagnosticData::TraitDispatch(v) => (
                         Some(v.trait_name.as_str()),
                         v.trait_arguments.as_slice(),
@@ -198,8 +159,8 @@ impl StructuredDiagnostic {
                     ),
                     DiagnosticData::CandidateSelection(v) => (
                         Some(v.trait_name.as_str()),
-                        &[][..],
-                        self.primary.ty.as_deref(),
+                        v.trait_arguments.as_slice(),
+                        v.subject_type.as_deref(),
                         Some(v.method.as_str()),
                     ),
                     DiagnosticData::TraitMethodTypeList(v) => (
@@ -220,11 +181,11 @@ impl StructuredDiagnostic {
                     ),
                     _ => unreachable!(),
                 };
-                let list = match &self.data {
+                let list = match self {
                     DiagnosticData::TraitMethodTypeList(v) => Some(v),
                     _ => None,
                 };
-                let constraints = match &self.data {
+                let constraints = match self {
                     DiagnosticData::TraitMethodConstraint(v) => Some(v),
                     _ => None,
                 };
@@ -235,9 +196,16 @@ impl StructuredDiagnostic {
                     method_name,
                     type_list_role: list.map(|v| v.role),
                     ordinal: list.map(|v| v.ordinal),
-                    expected_type: list.map(|v| v.expected_type.as_str()),
-                    actual_type: list.map(|v| v.actual_type.as_str()),
-                    impl_declaration: fact(SourceRole::Impl).map(Origin::from),
+                    expected_type: list.and_then(|v| v.expected_type.as_deref()),
+                    actual_type: list.and_then(|v| v.actual_type.as_deref()),
+                    impl_declaration: match self {
+                        DiagnosticData::TraitDispatch(v) => v.impl_declaration.as_ref(),
+                        DiagnosticData::TraitMethodTypeList(v) => v.impl_declaration.as_ref(),
+                        DiagnosticData::TraitMethodConstraint(v) => v.impl_declaration.as_ref(),
+                        DiagnosticData::CandidateSelection(v) => v.impl_declaration.as_ref(),
+                        _ => None,
+                    }
+                    .map(Origin::from),
                     nested_path: list.map_or(&[], |v| v.nested_path.as_slice()),
                     expected_count: list.and_then(|v| v.expected_count),
                     actual_count: list.and_then(|v| v.actual_count),
@@ -245,7 +213,7 @@ impl StructuredDiagnostic {
                         .map_or(&[], |v| v.expected_constraints.as_slice()),
                     actual_constraints: constraints
                         .map_or(&[], |v| v.actual_constraints.as_slice()),
-                    failures: match &self.data {
+                    failures: match self {
                         DiagnosticData::CandidateSelection(v) => &v.failures,
                         _ => &[],
                     },
@@ -253,32 +221,30 @@ impl StructuredDiagnostic {
             }
             DiagnosticData::TypeConstructorCarrier(v) => Projection::TypeConstructorCarrier {
                 carrier: v,
-                left_type: fact(SourceRole::LeftValue)
-                    .or(first)
-                    .and_then(|f| f.ty.as_deref()),
-                right_type: fact(SourceRole::RightValue)
-                    .unwrap_or(&self.primary)
-                    .ty
-                    .as_deref(),
-                left_origin: fact(SourceRole::LeftValue).or(first).map(Origin::from),
-                right_origin: fact(SourceRole::RightValue).unwrap_or(&self.primary).into(),
-                required_capability: &v.family,
+                left_type: v.left_type.as_deref(),
+                right_type: v.right_type.as_deref(),
+                left_origin: v.left_origin.as_ref().map(Origin::from),
+                right_origin: v.right_origin.as_ref().map(Origin::from),
+                required_capability: &v.required_capability,
             },
             DiagnosticData::BranchAssertion(v) => Projection::BranchAssertion {
                 branch: v,
-                form: match self.origin {
-                    DiagnosticOrigin::Branch { form, .. } => form,
-                    _ => unreachable!("branch diagnostic requires branch origin"),
-                },
-                left_ordinal: first.and_then(|f| f.ordinal),
-                right_ordinal: v.branch,
+                form: v.form,
+                left_ordinal: v.left_ordinal,
+                right_ordinal: v.right_ordinal,
                 left_type: &v.expected_type,
                 right_type: &v.actual_type,
-                left_origin: first.map(Origin::from),
-                right_origin: (&self.primary).into(),
+                left_origin: v.left_origin.as_ref().map(Origin::from),
+                right_origin: v.right_origin.as_ref().map(Origin::from),
             },
-            _ => return self.data.to_json_value(),
+            _ => return self.raw_json_value(),
         };
         serde_json::to_value(projection).expect("typed diagnostic projection is serializable")
+    }
+}
+
+impl StructuredDiagnostic {
+    pub fn data_json(&self) -> Value {
+        self.data.to_json_value()
     }
 }

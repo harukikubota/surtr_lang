@@ -1,2 +1,7 @@
 phase: typecheck
-contains: ensure predicate must return Boolean
+contains: Argument type mismatch: expected (Int -> Boolean), got (Int -> Int)
+json: /reason = "ArgumentTypeMismatch"
+json: /origin/kind = "Call"
+json: /data/expected_type = "(Int -> Boolean)"
+json: /data/actual_type = "(Int -> Int)"
+json: /related/0/type = "(Int -> Int)"

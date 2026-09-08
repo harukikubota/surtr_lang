@@ -269,7 +269,7 @@ impl Checker {
                     return Err(TypeError::new(
                         "InvalidCanonicalMethodRole",
                         method_id.span.clone(),
-                    ))
+                    ));
                 }
             }
         }
@@ -371,7 +371,7 @@ impl Checker {
                 return Err(TypeError::new(
                     "Internal error: runtime callable identity in declaration type",
                     Span { start: 0, end: 0 },
-                ))
+                ));
             }
         })
     }
@@ -866,6 +866,11 @@ impl Checker {
                 reason: TypeDiagnosticReason::TraitMethodConstraintMismatch,
                 origin: DiagnosticOrigin::Declaration,
                 data: DiagnosticData::TraitMethodConstraint(TraitMethodConstraintData {
+                    impl_declaration: Some(SourceFact::untyped(
+                        SourceRole::Impl,
+                        diagnostics::SourceId(0),
+                        impl_where.map_or(impl_span, |clause| &clause.span).clone(),
+                    )),
                     identity: None,
                     method_name: method.into(),
                     expected_constraints: describe(&expected.where_constraints),
@@ -920,14 +925,14 @@ impl Checker {
                         "({} -> {})",
                         args[..args.len() - 1].join(", "),
                         args.last().expect("return type")
-                    )
+                    );
                 }
                 CanonicalTypeHead::SelfApplication => "Self".into(),
                 CanonicalTypeHead::Facet(kind) => {
-                    return format!("Facet<{}, {}>", kind.as_str(), args.join(", "))
+                    return format!("Facet<{}, {}>", kind.as_str(), args.join(", "));
                 }
                 CanonicalTypeHead::Pid(name) => {
-                    return format!("PID<{}>", Checker::surface_name(name))
+                    return format!("PID<{}>", Checker::surface_name(name));
                 }
                 CanonicalTypeHead::Hole => return "_".into(),
             };
@@ -972,19 +977,26 @@ impl Checker {
         .with_structured(StructuredDiagnostic {
             reason,
             origin: DiagnosticOrigin::Declaration,
-            primary: source_fact(SourceRole::Impl, impl_span, actual_type.clone()),
+            primary: source_fact(SourceRole::Impl, impl_span.clone(), actual_type.clone()),
             related: vec![source_fact(
                 SourceRole::Contract,
                 contract_span,
                 expected_type.clone(),
             )],
             data: DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
+                impl_declaration: Some(source_fact(
+                    SourceRole::Impl,
+                    impl_span.clone(),
+                    actual_type.clone(),
+                )),
                 identity: None,
                 role,
                 ordinal,
                 nested_path,
-                expected_type,
-                actual_type,
+                expected_type: (reason != TypeDiagnosticReason::TraitMethodTypeListArityMismatch)
+                    .then_some(expected_type),
+                actual_type: (reason != TypeDiagnosticReason::TraitMethodTypeListArityMismatch)
+                    .then_some(actual_type),
                 method_name: method.into(),
                 expected_count,
                 actual_count,
@@ -1319,7 +1331,7 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
 
     #[test]
     fn method_target_uses_the_original_declaration_index() {
-        let source="deftrait Only { def value(self: Self) -> Int }\nimpl Only for List<$A> { def value(self: Self) -> Int { 1 } }\n";
+        let source = "deftrait Only { def value(self: Self) -> Int }\nimpl Only for List<$A> { def value(self: Self) -> Int { 1 } }\n";
         let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).unwrap();
         let resolved = sigil::resolve(ast).unwrap();
         let mut checker = Checker::new(TypecheckContext::default());
@@ -1360,7 +1372,9 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
 
     #[test]
     fn one_visible_impl_does_not_determine_unknown_subject() {
-        let mut checker = checker("deftrait Only { def value(self: Self) -> Int }\nimpl Only for Int { def value(self: Self) -> Int { self } }\n");
+        let mut checker = checker(
+            "deftrait Only { def value(self: Self) -> Int }\nimpl Only for Int { def value(self: Self) -> Int { self } }\n",
+        );
         let unknown = checker.env.fresh_tyvar();
         let Ty::Var(var) = unknown else {
             unreachable!()
@@ -1384,7 +1398,9 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
 
     #[test]
     fn one_visible_impl_does_not_determine_unknown_trait_argument() {
-        let mut checker = checker("deftrait Only<$A> { def value(self: Self) -> Int }\nimpl Only<Int> for Int { def value(self: Self) -> Int { self } }\n");
+        let mut checker = checker(
+            "deftrait Only<$A> { def value(self: Self) -> Int }\nimpl Only<Int> for Int { def value(self: Self) -> Int { self } }\n",
+        );
         let unknown = checker.env.fresh_tyvar();
         let Ty::Var(var) = unknown else {
             unreachable!()
@@ -1421,7 +1437,9 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
 
     #[test]
     fn pending_alias_preserves_nested_receiver_and_trait_arguments() {
-        let mut checker = checker("defstruct Box<$T> { value: $T }\nimpl Box { def new(value: $T) -> Box<$T> { Box { value: value } } }\ndeftrait Rel<$A> {}\nimpl Rel<List<Int>> for Box<Int> {}\n");
+        let mut checker = checker(
+            "defstruct Box<$T> { value: $T }\nimpl Box { def new(value: $T) -> Box<$T> { Box { value: value } } }\ndeftrait Rel<$A> {}\nimpl Rel<List<Int>> for Box<Int> {}\n",
+        );
         let Ty::Var(source) = checker.env.fresh_tyvar() else {
             unreachable!()
         };
@@ -1459,7 +1477,9 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
 
     #[test]
     fn where_probe_waits_only_on_call_site_variables() {
-        let mut checker = checker("deftrait Marker { def mark(self: Self) -> Int }\ndefstruct Box<$T> { value: $T }\nimpl Box { def new(value: $T) -> Box<$T> { Box { value: value } } }\ndeftrait Read { def read(self: Self) -> Int }\nimpl Read for Box<$T> where $T: Marker { def read(self: Self) -> Int { Marker::mark(self.value) } }\n");
+        let mut checker = checker(
+            "deftrait Marker { def mark(self: Self) -> Int }\ndefstruct Box<$T> { value: $T }\nimpl Box { def new(value: $T) -> Box<$T> { Box { value: value } } }\ndeftrait Read { def read(self: Self) -> Int }\nimpl Read for Box<$T> where $T: Marker { def read(self: Self) -> Int { Marker::mark(self.value) } }\n",
+        );
         let unknown = checker.env.fresh_tyvar();
         let Ty::Var(var) = unknown else {
             unreachable!()
@@ -2529,6 +2549,26 @@ impl Checker {
         trait_name: &str,
         container: &Ty,
     ) -> Option<(TraitImplInfo, HashMap<u32, Ty>)> {
+        self.constructor_projection_with_proof(trait_name, container, true)
+    }
+
+    /// Match only the declared constructor shape of an existing capability.
+    /// Re-proving its constraints here would recursively consume the evidence
+    /// whose receiver is currently being compared.
+    pub(super) fn constructor_capability_projection(
+        &self,
+        trait_name: &str,
+        container: &Ty,
+    ) -> Option<(TraitImplInfo, HashMap<u32, Ty>)> {
+        self.constructor_projection_with_proof(trait_name, container, false)
+    }
+
+    fn constructor_projection_with_proof(
+        &self,
+        trait_name: &str,
+        container: &Ty,
+        prove_constraints: bool,
+    ) -> Option<(TraitImplInfo, HashMap<u32, Ty>)> {
         let requested = self.canonical_request(container).ok()?;
         if matches!(requested.head, CanonicalTypeHead::Variable(_)) {
             return None;
@@ -2568,6 +2608,20 @@ impl Checker {
             if request_variables.iter().any(|var| {
                 unifier.resolve(&CanonicalTy::variable(*var)) != CanonicalTy::variable(*var)
             }) {
+                continue;
+            }
+            if prove_constraints
+                && !matches!(
+                    self.prove_canonical_constraints(
+                        &info.impl_constraints,
+                        &mut fresh,
+                        &unifier,
+                        &mut HashSet::new(),
+                        &mut next_variable,
+                    ),
+                    Ok(ApplicabilityProof::Satisfied(_))
+                )
+            {
                 continue;
             }
             let mapping = fresh

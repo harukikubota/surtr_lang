@@ -13,6 +13,8 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
         }),
         ArgumentTypeMismatch | ReturnTypeMismatch | AnnotationTypeMismatch => {
             DiagnosticData::ArgumentRelation(ArgumentRelationData {
+                expected_origin: None,
+                actual_origin: None,
                 callable: "take".into(),
                 ordinal: 0,
                 expected_type: Some("Either<String, Int>".into()),
@@ -26,7 +28,7 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             actual_arity: None,
             return_shape: CallableReturnShape::Any,
         }),
-        CallableSignatureMetadataMismatch | ReturnTypeArgumentArityMismatch => {
+        CallableSignatureMetadataMismatch => {
             DiagnosticData::CallableSignature(CallableSignatureData {
                 callable: "make".into(),
                 role: "return type argument".into(),
@@ -35,7 +37,8 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
                 detail: "declaration differs from signature".into(),
             })
         }
-        ReturnTypeArgumentMismatch
+        ReturnTypeArgumentArityMismatch
+        | ReturnTypeArgumentMismatch
         | AmbiguousReturnTypeArgument
         | DuplicateReturnTypeArgumentInput
         | MissingReturnTypeArgument
@@ -43,20 +46,32 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
         | ConcreteReturnTypeArgumentInDefinition
         | InlineReturnTypeArgumentConstraint => {
             DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+                declared_origin: None,
+                value_parameter_origin: None,
+                return_origin: None,
+                left_origin: None,
+                right_origin: None,
+                required_trait: None,
+                expected_count: Some(1),
+                actual_count: Some(2),
                 callable: "make".into(),
-                ordinal: 0,
-                expected_type: "Option".into(),
-                actual_type: "List".into(),
+                ordinal: Some(0),
+                expected_type: Some("Option".into()),
+                actual_type: Some("List".into()),
             })
         }
         InvalidTraitConstraintSubject | MissingTypeConstructorConstraint => {
             DiagnosticData::ConstraintSubject(ConstraintSubjectData {
+                subject_origin: None,
+                required_trait: None,
+                suggested_type_variable: None,
                 subject: "Functor".into(),
                 constraint: "Monad".into(),
             })
         }
         MissingGenericBound | MissingTraitCapability => {
             DiagnosticData::TraitObligation(TraitObligationData {
+                obligation_origin: None,
                 trait_name: "Convert".into(),
                 trait_arguments: vec!["String".into()],
                 subject_type: "Int".into(),
@@ -66,6 +81,7 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
         NoApplicableTraitImplementation
         | UnresolvedTraitMethodInstantiation
         | MissingTraitDispatchTarget => DiagnosticData::TraitDispatch(TraitDispatchData {
+            impl_declaration: None,
             trait_name: "Convert".into(),
             trait_arguments: vec!["String".into()],
             subject_type: Some("Int".into()),
@@ -73,19 +89,21 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
         }),
         TraitMethodTypeListMismatch | TraitMethodTypeListArityMismatch => {
             DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
+                impl_declaration: None,
                 identity: None,
                 method_name: "convert".into(),
                 role: TypeListRole::ReturnTypeArgument,
                 ordinal: 0,
                 nested_path: vec![1],
-                expected_type: "Option<Int>".into(),
-                actual_type: "List<Int>".into(),
+                expected_type: Some("Option<Int>".into()),
+                actual_type: Some("List<Int>".into()),
                 expected_count: Some(1),
                 actual_count: Some(2),
             })
         }
         TraitMethodConstraintMismatch => {
             DiagnosticData::TraitMethodConstraint(TraitMethodConstraintData {
+                impl_declaration: None,
                 identity: None,
                 method_name: "convert".into(),
                 expected_constraints: vec!["$A: Eq".into()],
@@ -94,6 +112,11 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
         }
         TypeConstructorFamilyMismatch | TypePayloadMismatch | MissingTypeConstructorCapability => {
             DiagnosticData::TypeConstructorCarrier(TypeConstructorCarrierData {
+                left_type: None,
+                right_type: None,
+                left_origin: None,
+                right_origin: None,
+                required_capability: String::new(),
                 family: "Monad".into(),
                 family_id: "family:Functor+Monad".into(),
                 expected_carrier: "Either<String, Int>".into(),
@@ -102,6 +125,11 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
         }
         IfBranchTypeMismatch | MatchArmTypeMismatch | CondBranchTypeMismatch => {
             DiagnosticData::BranchAssertion(BranchAssertionData {
+                form: crate::BranchForm::If,
+                left_ordinal: None,
+                right_ordinal: None,
+                left_origin: None,
+                right_origin: None,
                 expected_type: "Int".into(),
                 actual_type: "String".into(),
                 branch: Some(1),

@@ -2251,10 +2251,6 @@ impl Checker {
         }
     }
 
-    pub(super) fn trait_impl_exists(&mut self, trait_name: &str, ty: &Ty) -> bool {
-        self.trait_impl_exists_for_args(trait_name, &[], ty)
-    }
-
     pub(super) fn trait_impl_exists_for_args(
         &mut self,
         trait_name: &str,
@@ -3340,11 +3336,24 @@ impl Checker {
                             }
                             _ => unreachable!("contract validation returns a contract diagnostic"),
                         }
-                        diagnostic.primary.declaration_identity =
-                            Some(diagnostics::DeclarationIdentity {
-                                owner: trait_key.clone(),
-                                name: method_name.clone(),
-                            });
+                        let declaration_identity = diagnostics::DeclarationIdentity {
+                            owner: trait_key.clone(),
+                            name: method_name.clone(),
+                        };
+                        let impl_declaration = match &mut diagnostic.data {
+                            diagnostics::DiagnosticData::TraitMethodTypeList(data) => {
+                                &mut data.impl_declaration
+                            }
+                            diagnostics::DiagnosticData::TraitMethodConstraint(data) => {
+                                &mut data.impl_declaration
+                            }
+                            _ => unreachable!("contract diagnostic"),
+                        };
+                        impl_declaration
+                            .as_mut()
+                            .expect("contract impl origin")
+                            .declaration_identity = Some(declaration_identity.clone());
+                        diagnostic.primary.declaration_identity = Some(declaration_identity);
                         error
                     })?;
                 // Store method variables in the same namespace as the impl

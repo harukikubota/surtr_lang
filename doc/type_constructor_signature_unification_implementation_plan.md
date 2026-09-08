@@ -1090,6 +1090,23 @@ cargo nextest run -p rune --test integration run_srt
 - 実 REPL で captured 値を使う `cond` の成功（42）、`CondBranchTypeMismatch`、エラー後の継続（41）を確認。実 CLI の JSON で `ArgumentTypeMismatch`、operator `+`、左右の型と source role を確認。
 - `cargo fmt --all -- --check` と `git diff --check` 成功。Task 10 の SafeBind / policy 変更、未移行 family の repository-wide heuristic 撤去は実施していない。
 
+**レビュー指摘への追修正（2026-09-08）:**
+
+- constructor capability は具体 impl の where 制約を証明する。出所不明の値を無条件に許可せず、分岐・block・転送引数・コンテナの射影の全経路の保証を保持する。関数入力の constructor witness は rigid とし、根拠のない抽象 carrier から具体 carrier への注釈による絞り込みを拒否する。
+- `ScarSession` の継続と checkpoint の保存・復元にも capability provenance を保持する。checkpoint の必須 field を追加し、旧 semantic cache は schema version を更新して無効化する。
+- map / apply / bind、compose 系、非 Facet `/` を共通 Trait invocation へ揃え、期待型・明示 RTA・演算子の source facts を運ぶ。plain RHS の制約は V9 §3.6 の方針を維持し、対象 carrier を canonical metadata で判定する。block 内の型検査は外側の推論制約を保持する。receiverless helper は宣言 signature と入力・期待型・明示 RTA から解き、登録 impl が一つでも carrier の根拠がなければ曖昧として拒否する。
+- `Function::on`、closure の Unit 戻り値、`ensure` の callback を共通型関係検査へ移す。callback の source fact は関数型全体を保持する。
+- JSON の origin・branch form / ordinal・capability は closed data に保持し、表示用 related の順序や role から復元しない。Missing RTA の存在しない actual/got、Trait arity の不適用型は null とする。
+- `.error` の `json: /pointer = value` で実 producer の reason / origin / data / related を検証する。module stage の型エラーも payload と source registry を保持し、欠落 key と null を区別する。
+- 既存 capability の carrier 照合は構造を比較し、同じ証明を再帰的に開始しない。通常の適用可能性の検査は impl 制約の証明を維持し、相互依存は `CyclicTraitObligation` として拒否する。
+
+**追修正後の検証（2026-09-08）:**
+
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace -j 2`: 最終コードで 2023 件すべて成功（41 binaries、256.773 秒）。CLI / REPL の process 境界を含む。
+- 事前の対象検証は constructor carrier / session 32 件、language_features / script / module の 47 バケットが成功。独立レビューの 26 ケースで、制約付き view の拒否と fresh な具体値の成功を確認した。
+- `cargo fmt --all -- --check` と `git diff --check` 成功。レビュー 6 指摘と追検証で見つかった循環・pipeline の退行を修正した。上記は Task 9 作業ブランチでの検証結果。main 統合時のテスト再実行はユーザ指示により省略する。
+
+
 - [x] **Step 8: Commit**
 
 ```bash
