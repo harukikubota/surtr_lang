@@ -24,6 +24,7 @@ pub enum TypeDiagnosticReason {
     ReturnTypeArgumentArityMismatch,
     ReturnTypeArgumentMismatch,
     AmbiguousReturnTypeArgument,
+    UnresolvedEnumConstructorTypeArgument,
     InvalidTraitConstraintSubject,
     MissingGenericBound,
     MissingTraitCapability,
@@ -64,6 +65,7 @@ impl TypeDiagnosticReason {
             Self::ReturnTypeArgumentArityMismatch => "ReturnTypeArgumentArityMismatch",
             Self::ReturnTypeArgumentMismatch => "ReturnTypeArgumentMismatch",
             Self::AmbiguousReturnTypeArgument => "AmbiguousReturnTypeArgument",
+            Self::UnresolvedEnumConstructorTypeArgument => "UnresolvedEnumConstructorTypeArgument",
             Self::InvalidTraitConstraintSubject => "InvalidTraitConstraintSubject",
             Self::MissingGenericBound => "MissingGenericBound",
             Self::MissingTraitCapability => "MissingTraitCapability",
@@ -105,6 +107,7 @@ pub enum DiagnosticOrigin {
     Intrinsic,
     Runtime,
     ReturnTypeArgument { ordinal: u32 },
+    EnumConstructor { ordinal: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,6 +278,19 @@ pub struct ReturnTypeArgumentData {
     pub ordinal: Option<u32>,
     pub expected_type: Option<String>,
     pub actual_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EnumConstructorTypeArgumentData {
+    pub enum_name: String,
+    pub constructor: String,
+    pub ordinal: u32,
+    pub constraint_status: EnumConstructorConstraintStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum EnumConstructorConstraintStatus {
+    Insufficient,
 }
 
 /// Stable signature-list roles shared by the checker and diagnostic consumers.
@@ -451,6 +467,7 @@ pub enum DiagnosticData {
     ArgumentContract(ArgumentContractData),
     ArgumentRelation(ArgumentRelationData),
     ReturnTypeArgument(ReturnTypeArgumentData),
+    EnumConstructorTypeArgument(EnumConstructorTypeArgumentData),
     CallableSignature(CallableSignatureData),
     TraitMethodTypeList(TraitMethodTypeListData),
     TraitMethodConstraint(TraitMethodConstraintData),
@@ -479,6 +496,9 @@ impl DiagnosticData {
             Self::ArgumentContract(value) => ("ArgumentContract", serde_json::to_value(value)),
             Self::ArgumentRelation(value) => ("ArgumentRelation", serde_json::to_value(value)),
             Self::ReturnTypeArgument(value) => ("ReturnTypeArgument", serde_json::to_value(value)),
+            Self::EnumConstructorTypeArgument(value) => {
+                ("EnumConstructorTypeArgument", serde_json::to_value(value))
+            }
             Self::CallableSignature(value) => ("CallableSignature", serde_json::to_value(value)),
             Self::TraitMethodTypeList(value) => {
                 ("TraitMethodTypeList", serde_json::to_value(value))

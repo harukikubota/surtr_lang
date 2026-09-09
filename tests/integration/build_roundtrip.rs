@@ -685,9 +685,14 @@ fn check_outputs_machine_readable_json_for_success_and_failure() {
     let temp = unique_temp_dir("surtr_check_json");
     let ok_source_path = temp.join("ok.srt");
     let bad_source_path = temp.join("bad.srt");
+    let unresolved_enum_source_path = temp.join("unresolved_enum.srt");
 
     write_source(&ok_source_path, "print(\"hello\")\n");
     write_source(&bad_source_path, "bad: Int = \"oops\"\n");
+    write_source(
+        &unresolved_enum_source_path,
+        "Option::is_some(Option::None)\n",
+    );
     let ok = surtr_command()
         .args([
             "check",
@@ -737,6 +742,35 @@ fn check_outputs_machine_readable_json_for_success_and_failure() {
     assert_eq!(first["got"], "String");
     assert!(first["hint"].is_string() || first["hint"].is_null());
     assert!(first["line"].as_u64().unwrap_or(0) >= 1);
+
+    let unresolved_enum = surtr_command()
+        .args([
+            "check",
+            unresolved_enum_source_path
+                .to_str()
+                .expect("source path must be utf-8"),
+            "--format",
+            "json",
+        ])
+        .output()
+        .expect("failed to run check command");
+    assert!(
+        !unresolved_enum.status.success(),
+        "check should reject an unresolved enum constructor type argument\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&unresolved_enum.stdout),
+        String::from_utf8_lossy(&unresolved_enum.stderr)
+    );
+    let unresolved_enum_json: Value = serde_json::from_slice(&unresolved_enum.stdout)
+        .expect("enum constructor failure output must be valid json");
+    let first = &unresolved_enum_json["errors"][0];
+    assert_eq!(first["phase"], "typecheck");
+    assert_eq!(first["reason"], "UnresolvedEnumConstructorTypeArgument");
+    assert_eq!(first["origin"]["kind"], "EnumConstructor");
+    assert_eq!(first["origin"]["ordinal"], 0);
+    assert_eq!(first["data"]["kind"], "EnumConstructorTypeArgument");
+    assert_eq!(first["data"]["constructor"], "Option::None");
+    assert_eq!(first["data"]["ordinal"], 0);
+    assert_eq!(first["data"]["constraint_status"], "Insufficient");
 
     let _ = fs::remove_dir_all(temp);
 }

@@ -60,6 +60,14 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
                 actual_type: Some("List".into()),
             })
         }
+        UnresolvedEnumConstructorTypeArgument => {
+            DiagnosticData::EnumConstructorTypeArgument(EnumConstructorTypeArgumentData {
+                enum_name: "Either".into(),
+                constructor: "Either::Left".into(),
+                ordinal: 1,
+                constraint_status: EnumConstructorConstraintStatus::Insufficient,
+            })
+        }
         InvalidTraitConstraintSubject | MissingTypeConstructorConstraint => {
             DiagnosticData::ConstraintSubject(ConstraintSubjectData {
                 subject_origin: None,
@@ -149,6 +157,7 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             form: BranchForm::Cond,
             ordinal: 1,
         },
+        UnresolvedEnumConstructorTypeArgument => DiagnosticOrigin::EnumConstructor { ordinal: 1 },
         _ => DiagnosticOrigin::Call,
     };
     StructuredDiagnostic {
@@ -189,6 +198,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         ReturnTypeArgumentArityMismatch,
         ReturnTypeArgumentMismatch,
         AmbiguousReturnTypeArgument,
+        UnresolvedEnumConstructorTypeArgument,
         InvalidTraitConstraintSubject,
         MissingGenericBound,
         MissingTraitCapability,
@@ -245,6 +255,9 @@ fn every_common_reason_has_a_typed_template_and_schema() {
                 "right_origin",
                 "required_trait",
             ],
+            "EnumConstructorTypeArgument" => {
+                &["enum_name", "constructor", "ordinal", "constraint_status"]
+            }
             "ConstraintSubject" => &[
                 "subject_type",
                 "subject_origin",

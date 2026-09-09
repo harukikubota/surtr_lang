@@ -54,6 +54,7 @@ typecheck 診断は、phase 固有の error 型を維持したまま、次の構
 | argument contract | `ArityMismatch`, `ArgumentModeMismatch`, `UnknownNamedArgument`, `DuplicateArgument`, `MissingArgument` |
 | type relation / callable | `ArgumentTypeMismatch`, `ReturnTypeMismatch`, `AnnotationTypeMismatch`, `NotCallable`, `CallableShapeMismatch`, `CallableSignatureMetadataMismatch` |
 | ReturnTypeArgument | `ReturnTypeArgumentArityMismatch`, `ReturnTypeArgumentMismatch`, `AmbiguousReturnTypeArgument`, `DuplicateReturnTypeArgumentInput`, `MissingReturnTypeArgument`, `UnusedReturnTypeArgument`, `ConcreteReturnTypeArgumentInDefinition`, `InlineReturnTypeArgumentConstraint` |
+| Enum constructor | `UnresolvedEnumConstructorTypeArgument` |
 | constraint / Trait | `InvalidTraitConstraintSubject`, `MissingGenericBound`, `MissingTraitCapability`, `NoApplicableTraitImplementation`, `UnresolvedTraitMethodInstantiation`, `MissingTraitDispatchTarget` |
 | TypeCtorTrait | `MissingTypeConstructorConstraint`, `TypeConstructorFamilyMismatch`, `TypePayloadMismatch`, `MissingTypeConstructorCapability` |
 | Trait method contract | `TraitMethodTypeListMismatch`, `TraitMethodTypeListArityMismatch`, `TraitMethodConstraintMismatch` |
@@ -73,6 +74,7 @@ messageに合わせて変形させない。
 | `CallableShape` / `ArgumentContract` | `callable`, arity/count, parameter name, return shape |
 | `ArgumentRelation` | `callable`, `ordinal`, `expected_type`, `actual_type` |
 | `ReturnTypeArgument` | `callable`, `ordinal`, `declared_origin`, `value_parameter_origin`, `return_origin`, expected/actual typeとcount |
+| `EnumConstructorTypeArgument` | `enum_name`, `constructor`, `ordinal`, `constraint_status` |
 | `CallableSignature` | `callable`, `role`, expected/actual count, `detail` |
 | `TraitMethodTypeList` / `TraitMethodConstraint` | optional `identity`、`method_name`、role/ordinal/nested path、expected/actual type・countまたはconstraints、`impl_declaration` |
 | `TraitDispatch` / `CandidateSelection` | `trait_name`, `trait_arguments`, `subject_type`, method, `impl_declaration`。後者はcandidate failuresも保持する |
@@ -106,6 +108,7 @@ canonical identityと可視なconversion implから一意に裏付けられる�
 - `assert_eq` の LHS/RHS term は比較対象の span を指すため label、失敗の説明は `help` に置く。
 - contextual type syntax では、`Trait<...>` を where RHS に置いた parser diagnostic、`Type<...>` の位置違反、constructor application の位置違反、`Self::...` / `Type::...` の owner-path 違反を parser phase にする。position rule は `notes`、bare bound や許可された位置への書換えは `help` に置く。
 - `Enum<...>::Variant` は Spire で callable の `::<...>` と別の expression として保持する。owner が enum でない、variant が owner に属さない、owner 型引数 arity が一致しない場合は Sigil の resolve diagnostic とする。payload または expected type と明示型引数が一致しない場合は Scar の既存 type relation / argument diagnostic とする。
+- bare または `_` を含む通常 enum constructor の型引数が Scar の finalization まで未確定なら `UnresolvedEnumConstructorTypeArgument` とする。`DiagnosticOrigin::EnumConstructor` と constructor span、未確定 ordinal、`Insufficient` constraint status を保持する。builtin-special `Result` constructor の専用診断・推論経路はこの reason の対象外とする。
 - bare capability の未使用、fresh result witness の未確定、full obligation / pending dispatch の未解決は typecheck phase にする。position rule は `notes`、constraint の削除または必要な式の利用は `help` に置く。
 
 ## 出力契約

@@ -21,10 +21,11 @@ pub use data::{
     ArgumentContractData, ArgumentRelationData, BranchAssertionData, BranchForm,
     CallableReturnShape, CallableShapeData, CallableSignatureData, CandidateFailureData,
     CandidateSelectionData, ConstraintSubjectData, DeclarationIdentity, DiagnosticData,
-    DiagnosticOrigin, Remediation, ReturnTypeArgumentData, RuntimeData, SafeBindRelationData,
-    SourceFact, SourceRole, StructuredDiagnostic, TraitDiagnosticIdentity, TraitDispatchData,
-    TraitMethodConstraintData, TraitMethodTypeListData, TraitObligationData,
-    TypeConstructorCarrierData, TypeDiagnosticReason, TypeListRole,
+    DiagnosticOrigin, EnumConstructorConstraintStatus, EnumConstructorTypeArgumentData,
+    Remediation, ReturnTypeArgumentData, RuntimeData, SafeBindRelationData, SourceFact, SourceRole,
+    StructuredDiagnostic, TraitDiagnosticIdentity, TraitDispatchData, TraitMethodConstraintData,
+    TraitMethodTypeListData, TraitObligationData, TypeConstructorCarrierData, TypeDiagnosticReason,
+    TypeListRole,
 };
 pub use debug_render::{render_debug_report, DebugLabel};
 pub use parse::parse_error_spec;
