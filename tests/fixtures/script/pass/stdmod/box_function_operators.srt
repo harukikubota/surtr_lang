@@ -1,0 +1,94 @@
+defstruct Box<$T> {
+  value: $T,
+}
+
+impl Box {
+  def new(value: $T) -> Box<$T> {
+    Box { value: value }
+  }
+}
+
+impl Functor for Box<$T> {
+  def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> {
+    Box { value: mapper(self.value) }
+  }
+}
+
+impl Applicative for Box<$T> {
+  def pure::<Box<$T>>(value: $A) -> Box<$A> {
+    Box { value: value }
+  }
+
+  def ap(mapper: Box<($A -> $B)>, value: Box<$A>) -> Box<$B> {
+    f = mapper.value
+    Box { value: f(value.value) }
+  }
+}
+
+impl Monad for Box<$T> {
+  def return::<Box<$T>>(value: $A) -> Box<$A> {
+    Box { value: value }
+  }
+
+  def bind(self: Box<$A>, mapper: ($A -> Box<$B>)) -> Box<$B> {
+    mapper(self.value)
+  }
+}
+
+impl LiftComposable<$A, $B, $C, Box<$C>> for ($A -> Box<$B>) {
+  def lift_compose::<$A, Box<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Box<$C>) {
+    {|value| Functor::fmap(self(value), rhs)}
+  }
+}
+
+impl KleisliComposable<$A, $B, Box<$C>> for ($A -> Box<$B>) {
+  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Box<$C>)) -> ($A -> Box<$C>) {
+    {|value| Monad::bind(self(value), rhs)}
+  }
+}
+
+def inc(value: Int) -> Int {
+  value + 1
+}
+
+def render(value: Int) -> String {
+  to_string(value)
+}
+
+def box_inc(value: Int) -> Box<Int> {
+  Box(value + 1)
+}
+
+def box_double(value: Int) -> Box<Int> {
+  Box(value * 2)
+}
+
+def box_render(value: Int) -> Box<String> {
+  Box(to_string(value))
+}
+
+def show_box_int(value: Box<Int>) -> String {
+  to_string(value.value)
+}
+
+def show_box_string(value: Box<String>) -> String {
+  value.value
+}
+
+mapped: Box<Int> = Box(1) |*> &inc
+bound: Box<Int> = Box(1) |>= &box_double
+pure: Box<Int> = Applicative::pure(2)
+mapper_box: Box<(Int -> Int)> = Box(&inc)
+returned: Box<Int> = Monad::return(3)
+value_box: Box<Int> = Box(1)
+applied: Box<Int> = Applicative::ap(mapper_box, value_box)
+lifted = &box_inc >* &render
+kleisli = &box_inc >=> &box_render
+
+print(show_box_int(mapped))
+print(show_box_int(bound))
+print(show_box_int(pure))
+print(show_box_int(applied))
+print(show_box_int(returned))
+print(show_box_string(lifted(1)))
+print(show_box_string(kleisli(1)))

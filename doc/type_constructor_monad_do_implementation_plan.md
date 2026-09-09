@@ -7,17 +7,17 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- N01 は実装済み。以降のTaskは未着手である。
+- N01–N02 は実装済み。N03 以降のTaskは未着手である。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
 本書は作業管理資料であり、言語意味論の唯一の正本ではない。仕様の詳細は下表の担当文書に置く。配置案は従来の引継ぎどおり `/doc` とし、文書種別をimplementation planと明示する。完了後は仕様として `/docs` に全文移動せず、必要な履歴はVCS/作業ログへ残す。
 
-## 2. 入力仕様
+## 2. 入力仕様と実装済み正本
 
 | ファイル | 責務 |
 |---|---|
-| `monad_instances_spec.md` | Identity / Reader / State追加 |
+| `../docs/site/{identity,reader,state}.md` | 実装済み Identity / Reader / State の利用者向け契約 |
 | `monadt_language_extension_spec.md` | nominal constructor parameter・parameterized TypeCtorTrait・MonadT契約 |
 | `monadt_standard_types_spec.md` | OptionT / EitherT / ReaderT / StateTの意味とAPI |
 | `diagnostics_cleanup_spec.md` | 旧Task 10のSafeBind・診断残作業 |
@@ -26,6 +26,7 @@
 
 実装済み共通契約は `/docs/dev/Trait_system_spec.md`、`/docs/dev/diagnostics.md` 等を利用する。削除する旧入力仕様は、必要な内容の移管が完了してから参照を切り替える。
 N01 の旧入力 `type_constructor_trait_extension_spec.md` は実装と正本への移管後に削除した。
+N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け文書への移管後に削除した。
 
 ## 3. 作業分割の原則
 
@@ -42,7 +43,7 @@ N01 の旧入力 `type_constructor_trait_extension_spec.md` は実装と正本�
 | 新Task | 作業 | 主な依存 | 状態 | 旧計画との対応 |
 |---|---|---|---|---|
 | N01 | direct carrier同一性改修 | 旧Task 9までの基盤 | [x] 完了 | 新規 |
-| N02 | Identity / Reader / State | 既存通常型・Trait基盤 | [ ] 未着手 | 新規・独立 |
+| N02 | Identity / Reader / State | 既存通常型・Trait基盤 | [x] 完了 | 新規・独立 |
 | N03 | nominal constructor parameterとbound | N01 | [ ] 未着手 | 新規言語機能 |
 | N04 | parameterized TypeCtorTrait・MonadT契約 | N03 | [ ] 未着手 | 新規言語機能 |
 | N05 | 標準Transformer | N04。Identityを使うテストはN02 | [ ] 未着手 | 新規標準機能 |
@@ -127,6 +128,12 @@ Identity / Reader / State、new/runと固有primitive、Functor/Applicative/Mona
 Readerは関数入力Rを渡すデータ構造。Stateは次状態を返す純粋な状態遷移構造。Processへ接続する専用機能を作らない。
 
 完了条件: MI-01–MI-14、MI-16。MI-15のdo比較はN11。MonadTがなくてもこのTaskを完了できる。
+
+状態: 完了。Identity / Reader / Stateを通常のsource型として追加し、Functor / Applicative / Monad、
+固有helper、標準読込み、利用者向け`@doc`を実装した。関数値fieldの呼出しは
+`Function::apply`を使い、通常のclosure引数・ローカルclosureは通常callのまま扱う。
+成功ケース、有限入力による各法則、Reader / Stateのcarrier不一致診断、REPLの具体化・ambiguity・
+失敗後継続をテストへ固定した。MI-15は予定どおりN11へ残す。
 
 ## 8. N03 — nominal constructor parameter
 

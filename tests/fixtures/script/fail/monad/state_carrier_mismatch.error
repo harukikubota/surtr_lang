@@ -1,0 +1,6 @@
+phase: typecheck
+contains: Type constructor family mismatch
+json: /reason = "TypeConstructorFamilyMismatch"
+json: /origin/kind = "Operator"
+json: /origin/operator = "|>="
+json: /data/required_capability = "Monad"

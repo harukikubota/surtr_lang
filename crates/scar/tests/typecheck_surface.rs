@@ -4182,14 +4182,14 @@ where
   def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
 }
 
-defenum Identity<$T> {
-  Identity($T),
+defenum Box<$T> {
+  Box($T),
 }
 
-impl FunctorShape for Identity<$T> {
-  def fmap(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
+impl FunctorShape for Box<$T> {
+  def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> {
     match self {
-      Identity::Identity(value) => Identity::Identity(mapper(value)),
+      Box::Box(value) => Box::Box(mapper(value)),
     }
   }
 }"#,
@@ -5057,12 +5057,12 @@ where
   def child_keep(self: Self<$A>) -> Self<$A>
 }
 
-defenum Identity<$T> {
-  Identity($T),
+defenum Box<$T> {
+  Box($T),
 }
 "#;
-    let child_impl = r#"impl Child for Identity<$T> {
-  def child_keep(self: Identity<$A>) -> Identity<$A> { self }
+    let child_impl = r#"impl Child for Box<$T> {
+  def child_keep(self: Box<$A>) -> Box<$A> { self }
 }"#;
     let err = typecheck_with_rules(
         &format!("{declarations}\n{child_impl}"),
@@ -5077,8 +5077,8 @@ defenum Identity<$T> {
     typecheck_with_rules(
         &format!(
             r#"{declarations}
-impl Parent for Identity<$T> {{
-  def keep(self: Identity<$A>) -> Identity<$A> {{ self }}
+impl Parent for Box<$T> {{
+  def keep(self: Box<$A>) -> Box<$A> {{ self }}
 }}
 {child_impl}"#
         ),

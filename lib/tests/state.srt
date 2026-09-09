@@ -1,0 +1,208 @@
+import Function::apply;
+import Test;
+
+defstruct StateTestHolder {
+  value: State<Int, Int>,
+}
+
+defstruct StatePayload {
+  value: Int,
+}
+
+impl StatePayload {
+  def new(value: Int) -> StatePayload {
+    StatePayload { value: value }
+  }
+}
+
+impl StateTestHolder {
+  def new(value: State<Int, Int>) -> StateTestHolder {
+    StateTestHolder { value: value }
+  }
+}
+
+def state_pure(value: Int) -> State<Int, Int> {
+  Applicative::pure(value)
+}
+
+def state_inc(value: Int) -> State<Int, Int> {
+  State::new({|state| (value + state, state + 1)})
+}
+
+def state_double(value: Int) -> State<Int, Int> {
+  State::new({|state| (value * 2 + state, state + 2)})
+}
+
+def add_one(value: Int) -> Int {
+  value + 1
+}
+
+def times_two(value: Int) -> Int {
+  value * 2
+}
+
+test("State") {
+  describe("documented API") {
+    it("constructs and runs a transition") {
+      action: State<Int, Int> = State::new({|state| (state + 1, state + 2)})
+      assert_eq((8, 9), State::run(action, 7))
+    }
+
+    it("provides get, gets, put, and modify") {
+      current: State<Int, Int> = State::get()
+      projected: State<Int, Int> = State::gets({|state| state * 2})
+
+      assert_eq((7, 7), State::run(current, 7))
+      assert_eq((14, 7), State::run(projected, 7))
+      assert_eq(((), 11), State::run(State::put(11), 7))
+      assert_eq(((), 8), State::run(State::modify({|state| state + 1}), 7))
+    }
+
+    it("threads bind from the left transition to the right transition") {
+      action: State<Int, Int> = State::new({|state| (state, state + 1)})
+      chained: State<Int, Int> = action |>= {|value|
+        State::new({|state| (value + state, state + 10)})
+      }
+
+      assert_eq((3, 12), State::run(chained, 1))
+    }
+
+    it("threads applicative ap from mapper to value") {
+      mapper: State<Int, (Int -> Int)> = State::new({|state|
+        ({|value: Int| value + state}, state + 1)
+      })
+      value: State<Int, Int> = State::new({|state| (10, state + 10)})
+
+      applied: State<Int, Int> = Applicative::ap(mapper, value)
+      assert_eq((11, 12), State::run(applied, 1))
+    }
+
+    it("gives pure and return the same state-preserving meaning") {
+      pure_value: State<Int, Int> = Applicative::pure(4)
+      returned_value: State<Int, Int> = Monad::return(4)
+
+      assert_eq(State::run(pure_value, 9), State::run(returned_value, 9))
+      assert_eq((4, 9), State::run(pure_value, 9))
+    }
+
+    it("runs eval and exec callbacks once each") {
+      action: State<Int, Int> = State::new({|state|
+        print("state-run")
+        (state + 1, state + 2)
+      })
+
+      capture_stdout()
+      assert_eq(6, State::eval(action, 5))
+      assert_stdout_eq(["state-run"])
+
+      capture_stdout()
+      assert_eq(7, State::exec(action, 5))
+      assert_stdout_eq(["state-run"])
+    }
+
+    it("keeps State as an ordinary property, list, tuple, and Facet value") {
+      original: State<Int, Int> = State::new({|state| (state, state + 1)})
+      holder: StateTestHolder = StateTestHolder::new(original)
+      replacement: State<Int, Int> = State::new({|state| (20, state)})
+      updated: StateTestHolder = Facet::put(StateTestHolder.value, holder, replacement)
+      values: List<State<Int, Int>> = [original, updated.value]
+      first: State<Int, Int> =? List::at(values, 0)
+      pair: (State<Int, Int>, State<Int, Int>) = (first, updated.value)
+
+      assert_eq((3, 4), State::run(holder.value, 3))
+      assert_eq((20, 3), State::run(pair._1, 3))
+    }
+
+    it("changes payload types without Eq or Show bounds") {
+      action: State<Int, StatePayload> = State::new({|state|
+        (StatePayload::new(state), state)
+      })
+      mapped: State<Int, Int> = action |*> {|item| item.value + 1}
+      bound: State<Int, Int> = action |>= {|item|
+        State::new({|state| (item.value + state, state)})
+      }
+
+      assert_eq((8, 7), State::run(mapped, 7))
+      assert_eq((14, 7), State::run(bound, 7))
+    }
+  }
+
+  describe("finite functor laws") {
+    it("satisfies identity") {
+      value: State<Int, Int> = State::new({|state| (state + 1, state + 2)})
+      mapped: State<Int, Int> = value |*> {|item| item}
+
+      assert_eq(State::run(value, 3), State::run(mapped, 3))
+    }
+
+    it("satisfies composition") {
+      value: State<Int, Int> = State::new({|state| (state, state + 1)})
+      left: State<Int, Int> = (value |*> &add_one) |*> &times_two
+      right: State<Int, Int> = value |*> {|item| apply(&times_two, apply(&add_one, item))}
+
+      assert_eq(State::run(left, 3), State::run(right, 3))
+    }
+  }
+
+  describe("finite applicative laws") {
+    it("satisfies identity") {
+      mapper: State<Int, (Int -> Int)> = Applicative::pure({|item| item})
+      value: State<Int, Int> = State::new({|state| (state, state + 1)})
+
+      assert_eq(State::run(value, 3), State::run(Applicative::ap(mapper, value), 3))
+    }
+
+    it("satisfies homomorphism") {
+      mapper: State<Int, (Int -> Int)> = Applicative::pure({|item| item + 1})
+      left: State<Int, Int> = Applicative::ap(mapper, Applicative::pure(3))
+      right: State<Int, Int> = Applicative::pure(4)
+
+      assert_eq(State::run(left, 8), State::run(right, 8))
+    }
+
+    it("satisfies interchange") {
+      mapper: State<Int, (Int -> Int)> = Applicative::pure({|item| item + 1})
+      value: State<Int, Int> = Applicative::pure(3)
+      left: State<Int, Int> = Applicative::ap(mapper, value)
+      apply_to_value: State<Int, ((Int -> Int) -> Int)> = Applicative::pure({|function| apply(function, 3)})
+      right: State<Int, Int> = Applicative::ap(apply_to_value, mapper)
+
+      assert_eq(State::run(left, 8), State::run(right, 8))
+    }
+
+    it("satisfies composition") {
+      u: State<Int, (Int -> Int)> = Applicative::pure({|item| item + 1})
+      v: State<Int, (Int -> Int)> = Applicative::pure({|item| item * 2})
+      w: State<Int, Int> = Applicative::pure(3)
+      compose: State<Int, ((Int -> Int) -> ((Int -> Int) -> (Int -> Int)))> = Applicative::pure({|first| {|second| {|item| apply(first, apply(second, item))}}})
+
+      left: State<Int, Int> = Applicative::ap(Applicative::ap(Applicative::ap(compose, u), v), w)
+      right: State<Int, Int> = Applicative::ap(u, Applicative::ap(v, w))
+      assert_eq(State::run(left, 8), State::run(right, 8))
+    }
+  }
+
+  describe("finite monad laws") {
+    it("satisfies left identity") {
+      left: State<Int, Int> = Monad::return(3) |>= &state_inc
+      right: State<Int, Int> = state_inc(3)
+
+      assert_eq(State::run(left, 4), State::run(right, 4))
+    }
+
+    it("satisfies right identity") {
+      value: State<Int, Int> = State::new({|state| (state + 1, state + 2)})
+      chained: State<Int, Int> = value |>= &state_pure
+
+      assert_eq(State::run(value, 4), State::run(chained, 4))
+    }
+
+    it("satisfies associativity") {
+      value: State<Int, Int> = State::new({|state| (state + 1, state + 2)})
+      left: State<Int, Int> = (value |>= &state_inc) |>= &state_double
+      right: State<Int, Int> = value |>= {|item| state_inc(item) |>= &state_double}
+
+      assert_eq(State::run(left, 4), State::run(right, 4))
+    }
+  }
+}

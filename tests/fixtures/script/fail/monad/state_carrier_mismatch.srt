@@ -1,0 +1,6 @@
+def wrong_state(value: Int) -> State<String, Int> {
+  State::new({|state| (value, state)})
+}
+
+value: State<Int, Int> = State::get()
+bad = value |>= &wrong_state
