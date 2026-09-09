@@ -531,29 +531,26 @@ impl Checker {
                         )? {
                             CandidateApplicability::Applicable(instantiation) => instantiation,
                             CandidateApplicability::Deferred(pending) => {
-                                return Err(Box::new(TypeError {
-                                    structured: None,
-                                    message: format!(
-                                        "AmbiguousReturnTypeArgument: {}::{} remains unresolved at specialization (waiting on {:?}; {} candidates)",
-                                        trait_name,
-                                        method_name,
-                                        pending.waiting_on,
-                                        pending.candidates.len()
-                                    ),
-                                    span: span.clone(),
-                                    hint: None,
-                                }));
+                                let mut error = self.ambiguous_constructor_result(
+                                    &trait_name,
+                                    &method_name,
+                                    &span,
+                                );
+                                error.hint = Some(format!(
+                                    "Add enough type information to choose among {} remaining candidate(s) and resolve {} constructor input(s).",
+                                    pending.candidates.len(),
+                                    pending.waiting_on.len()
+                                ));
+                                return Err(Box::new(error));
                             }
                             CandidateApplicability::Rejected(_) => {
-                                return Err(Box::new(TypeError {
-                                    structured: None,
-                                    message: format!(
-                                        "{}::{} has no applicable implementation at specialization",
-                                        trait_name, method_name
-                                    ),
-                                    span: span.clone(),
-                                    hint: None,
-                                }));
+                                return Err(Box::new(self.trait_dispatch_failure(
+                                    TypeDiagnosticReason::NoApplicableTraitImplementation,
+                                    &trait_name,
+                                    &method_name,
+                                    Some(&obligation.receiver),
+                                    &span,
+                                )));
                             }
                         },
                     )
@@ -1753,10 +1750,20 @@ impl Checker {
             },
             Ty::Struct(name, fields) => CanonicalTyKey::Struct {
                 name: Self::canonical_specialization_name(&name),
+                args: fields
+                    .arguments
+                    .iter()
+                    .map(|argument| self.canonical_ty_key(argument))
+                    .collect(),
                 fields: self.canonical_field_keys(&fields),
             },
             Ty::Record(name, fields) => CanonicalTyKey::Record {
                 name: Self::canonical_specialization_name(&name),
+                args: fields
+                    .arguments
+                    .iter()
+                    .map(|argument| self.canonical_ty_key(argument))
+                    .collect(),
                 fields: self.canonical_field_keys(&fields),
             },
             Ty::Enum(name, args) => CanonicalTyKey::Enum {
@@ -2478,8 +2485,11 @@ impl Checker {
                 self.collect_bound_tyvars_in_ty(&ok, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&err, ordered, seen);
             }
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => {
-                for (_, field_ty) in fields {
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                for argument in &nominal.arguments {
+                    self.collect_bound_tyvars_in_ty(argument, ordered, seen);
+                }
+                for (_, field_ty) in nominal {
                     self.collect_bound_tyvars_in_ty(&field_ty, ordered, seen);
                 }
             }
@@ -3191,10 +3201,12 @@ impl Checker {
                     .map(|item| self.substitute_ty_with_mapping(item, mapping))
                     .collect::<Vec<_>>();
                 if let Some((witness, slots)) = Self::constructor_application_parts(&substituted) {
-                    if let Some(applied) = source_witness.as_ref().and_then(|source| {
-                        self.apply_constructor_application(source, witness, slots)
-                    }) {
-                        return applied;
+                    if let Some(source) = source_witness.as_ref() {
+                        if let ConstructorApplicationOutcome::Applied(applied) =
+                            self.apply_constructor_application(source, witness, slots)
+                        {
+                            return applied;
+                        }
                     }
                 }
                 Ty::SelfApp(substituted)
@@ -3235,27 +3247,11 @@ impl Checker {
             },
             Ty::Struct(name, fields) => Ty::Struct(
                 name.clone(),
-                fields
-                    .iter()
-                    .map(|(field, field_ty)| {
-                        (
-                            field.clone(),
-                            self.substitute_ty_with_mapping(field_ty, mapping),
-                        )
-                    })
-                    .collect(),
+                fields.map_types(|ty| self.substitute_ty_with_mapping(ty, mapping)),
             ),
             Ty::Record(name, fields) => Ty::Record(
                 name.clone(),
-                fields
-                    .iter()
-                    .map(|(field, field_ty)| {
-                        (
-                            field.clone(),
-                            self.substitute_ty_with_mapping(field_ty, mapping),
-                        )
-                    })
-                    .collect(),
+                fields.map_types(|ty| self.substitute_ty_with_mapping(ty, mapping)),
             ),
             Ty::Enum(name, args) => Ty::Enum(
                 name.clone(),
@@ -3457,20 +3453,21 @@ impl Checker {
             CandidateApplicability::Applicable(instantiation) => {
                 self.materialize_trait_method_instantiation(instantiation, span, context)
             }
-            CandidateApplicability::Deferred(pending) => Err(TypeError::new(
-                format!(
-                    "AmbiguousReturnTypeArgument: Eq::eq remains unresolved at pattern specialization (waiting on {:?}; {} candidates)",
-                    pending.waiting_on,
-                    pending.candidates.len()
-                ),
-                span.clone(),
-            )),
-            CandidateApplicability::Rejected(_) => Err(TypeError::new(
-                format!(
-                    "Eq::eq has no applicable implementation for pin pattern {}",
-                    self.ty_name(&receiver)
-                ),
-                span.clone(),
+            CandidateApplicability::Deferred(pending) => {
+                let mut error = self.ambiguous_constructor_result("Eq", "eq", span);
+                error.hint = Some(format!(
+                    "Add enough type information to choose among {} remaining candidate(s) and resolve {} constructor input(s).",
+                    pending.candidates.len(),
+                    pending.waiting_on.len()
+                ));
+                Err(error)
+            }
+            CandidateApplicability::Rejected(_) => Err(self.trait_dispatch_failure(
+                TypeDiagnosticReason::NoApplicableTraitImplementation,
+                &eq_trait,
+                "eq",
+                Some(&receiver),
+                span,
             )),
         }
     }
@@ -4153,11 +4150,11 @@ mod tests {
 
         let box_int = Ty::Struct(
             "Global::Box".to_string(),
-            vec![("value".to_string(), Ty::Int)],
+            NominalType::new(vec![Ty::Int], vec![("value".to_string(), Ty::Int)]),
         );
         let box_string = Ty::Struct(
             "Global::Box".to_string(),
-            vec![("value".to_string(), Ty::Str)],
+            NominalType::new(vec![Ty::Str], vec![("value".to_string(), Ty::Str)]),
         );
         let typed = checker
             .specialize_program(vec![

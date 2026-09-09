@@ -1,5 +1,91 @@
 use serde::{Deserialize, Serialize};
 use spire::ast::Symbol;
+use std::ops::{Deref, DerefMut};
+
+/// Compile-time representation of a nominal struct/record application.
+///
+/// Type arguments are kept independently from runtime fields so phantom
+/// parameters and fixed constructor arguments remain part of type identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NominalType {
+    pub arguments: Vec<Ty>,
+    pub fields: Vec<(Symbol, Ty)>,
+}
+
+impl NominalType {
+    pub fn new(arguments: Vec<Ty>, fields: Vec<(Symbol, Ty)>) -> Self {
+        Self { arguments, fields }
+    }
+
+    pub fn monomorphic(fields: Vec<(Symbol, Ty)>) -> Self {
+        Self::new(Vec::new(), fields)
+    }
+
+    pub fn map_types(&self, mut map: impl FnMut(&Ty) -> Ty) -> Self {
+        Self::new(
+            self.arguments.iter().map(&mut map).collect(),
+            self.fields
+                .iter()
+                .map(|(name, ty)| (name.clone(), map(ty)))
+                .collect(),
+        )
+    }
+
+    pub fn try_map_types<E>(&self, mut map: impl FnMut(&Ty) -> Result<Ty, E>) -> Result<Self, E> {
+        let arguments = self
+            .arguments
+            .iter()
+            .map(&mut map)
+            .collect::<Result<Vec<_>, _>>()?;
+        let fields = self
+            .fields
+            .iter()
+            .map(|(name, ty)| Ok((name.clone(), map(ty)?)))
+            .collect::<Result<Vec<_>, E>>()?;
+        Ok(Self::new(arguments, fields))
+    }
+}
+
+impl Deref for NominalType {
+    type Target = Vec<(Symbol, Ty)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.fields
+    }
+}
+
+impl DerefMut for NominalType {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.fields
+    }
+}
+
+impl<'a> IntoIterator for &'a NominalType {
+    type Item = &'a (Symbol, Ty);
+    type IntoIter = std::slice::Iter<'a, (Symbol, Ty)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.fields.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut NominalType {
+    type Item = &'a mut (Symbol, Ty);
+    type IntoIter = std::slice::IterMut<'a, (Symbol, Ty)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.fields.iter_mut()
+    }
+}
+
+impl IntoIterator for NominalType {
+    type Item = (Symbol, Ty);
+    type IntoIter = std::vec::IntoIter<(Symbol, Ty)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.fields.into_iter()
+    }
+}
 
 /// The compiler-managed eligibility kind of a Facet path.
 ///
@@ -133,10 +219,10 @@ pub enum Ty {
     SelfApp(Vec<Ty>),
 
     /// Named struct: `User { name: String, age: Int }`
-    Struct(Symbol, Vec<(Symbol, Ty)>),
+    Struct(Symbol, NominalType),
 
     /// Named record: `Point(x: Float, y: Float)`
-    Record(Symbol, Vec<(Symbol, Ty)>),
+    Record(Symbol, NominalType),
 
     /// Named enum: `Direction`, `ReduceStep<Int>`
     Enum(Symbol, Vec<Ty>),

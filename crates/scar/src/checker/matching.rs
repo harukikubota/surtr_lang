@@ -135,7 +135,10 @@ impl Checker {
             ResolvedPattern::BoolLit(_, _) => Some(Ty::Bool),
             ResolvedPattern::IntLit(_, _) => Some(Ty::Int),
             ResolvedPattern::StrLit(_, _) => Some(Ty::Str),
-            ResolvedPattern::DurationLit(_, _) => Some(Ty::Struct("Duration".into(), Vec::new())),
+            ResolvedPattern::DurationLit(_, _) => Some(Ty::Struct(
+                "Duration".into(),
+                NominalType::monomorphic(Vec::new()),
+            )),
             ResolvedPattern::Tuple(items) => Some(Ty::Tuple(
                 items
                     .iter()

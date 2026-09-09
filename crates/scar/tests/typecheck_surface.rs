@@ -1177,9 +1177,9 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(plain_inherent_owner_expands_self_applications_to_its_target),
     surface_case!(canonical_builtin_inherent_owners_expand_self_applications_to_their_targets),
     surface_case!(trait_contract_self_substitution_preserves_captured_target_parameters),
-    surface_case!(same_family_constructor_parameters_share_one_witness),
-    surface_case!(constructor_application_result_shares_the_input_witness),
-    surface_case!(constructor_application_result_accepts_the_shared_abstract_input_witness),
+    surface_case!(same_family_constructor_parameters_are_independent),
+    surface_case!(constructor_application_result_is_independent_from_the_input),
+    surface_case!(direct_result_rejects_an_abstract_direct_input_witness),
     surface_case!(constructor_application_result_rejects_mixed_concrete_constructors),
     surface_case!(
         identity_dependent_constructor_applications_are_rejected_outside_direct_signatures
@@ -2504,7 +2504,30 @@ fn facet_put_rebuilds_unique_generic_named_type() {
 impl Box {
   def new(value: $A) -> Box<$A> { Box { value: value } }
 }
-updated = Facet::put(Box.value, Box(1), "one")"#,
+updated: Box<String> = Facet::put(Box.value, Box(1), "one")
+
+defstruct TaggedBox<$Tag, $A> {
+  value: $A,
+}
+impl TaggedBox {
+  def new::<$Tag>(value: $A) -> TaggedBox<$Tag, $A> {
+    TaggedBox { value: value }
+  }
+}
+tagged_source: TaggedBox<Boolean, Int> = TaggedBox::new::<Boolean>(1)
+tagged: TaggedBox<Boolean, String> = Facet::put(TaggedBox.value, tagged_source, "one")
+
+defstruct Pairish<$A, $B> {
+  selected: ($A, $B),
+  other: $B,
+}
+impl Pairish {
+  def new(selected: ($A, $B), other: $B) -> Pairish<$A, $B> {
+    Pairish { selected: selected, other: other }
+  }
+}
+pairish_source: Pairish<Int, Boolean> = Pairish((1, True), False)
+pairish: Pairish<String, Boolean> = Facet::put(Pairish.selected / Tuple._0, pairish_source, "one")"#,
         RuntimeSourcePolicy::script(),
     )
     .expect("Facet::put should rebuild a uniquely parameterized named type");
@@ -4506,8 +4529,8 @@ where
     .expect("trait contract expansion must preserve captured target parameters");
 }
 
-fn same_family_constructor_parameters_share_one_witness() {
-    let err = typecheck_without_std_prelude(
+fn same_family_constructor_parameters_are_independent() {
+    typecheck_without_std_prelude(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -4535,16 +4558,11 @@ def accept(left: Context<Int>, right: Context<String>) -> Unit { () }
 
 accept(Left::Left(1), Right::Right("ok"))"#,
     )
-    .expect_err("same-family direct parameters must share one constructor witness");
-    assert_eq!(
-        err.reason(),
-        Some(diagnostics::TypeDiagnosticReason::TypeConstructorFamilyMismatch),
-        "{err:?}"
-    );
+    .expect("same-family direct parameters own independent constructor witnesses");
 }
 
-fn constructor_application_result_shares_the_input_witness() {
-    let err = typecheck_without_std_prelude(
+fn constructor_application_result_is_independent_from_the_input() {
+    typecheck_without_std_prelude(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -4574,16 +4592,11 @@ def replace(value: Context<Int>) -> Context<String> {
 
 result: Right<String> = replace(Left::Left(1))"#,
     )
-    .expect_err("a direct result must share the same-family input witness");
-    assert!(
-        err.message
-            .contains("Argument type mismatch: expected Right<Int>, got Left<Int>"),
-        "{err:?}"
-    );
+    .expect("a direct result chooses its constructor independently from direct inputs");
 }
 
-fn constructor_application_result_accepts_the_shared_abstract_input_witness() {
-    typecheck_without_std_prelude(
+fn direct_result_rejects_an_abstract_direct_input_witness() {
+    let error = typecheck_without_std_prelude(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -4591,7 +4604,12 @@ where
 
 def preserve(value: Context<Int>) -> Context<Int> { value }"#,
     )
-    .expect("the direct result reuses the abstract input witness");
+    .expect_err("an unnamed direct result cannot promise an input carrier relation");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::AmbiguousReturnTypeArgument),
+        "{error:?}"
+    );
 }
 
 fn constructor_application_result_rejects_mixed_concrete_constructors() {
@@ -4741,9 +4759,9 @@ deftrait Maker {
     )
     .expect_err("a default body cannot return a constructor outside Context");
 
-    assert!(
-        err.message
-            .contains("does not implement constructor trait Context"),
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
         "{err:?}"
     );
 }
@@ -4769,9 +4787,9 @@ impl Maker for Int {
     )
     .expect_err("an impl body cannot return a constructor outside Context");
 
-    assert!(
-        err.message
-            .contains("does not implement constructor trait Context"),
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
         "{err:?}"
     );
 }

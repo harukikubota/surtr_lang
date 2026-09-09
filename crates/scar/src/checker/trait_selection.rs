@@ -11,7 +11,6 @@ pub(super) struct MethodTypeEnvironment {
     pub bindings: HashMap<String, Ty>,
     pub head_bindings: HashMap<String, Ty>,
     pub self_ty: Ty,
-    pub direct_inputs: super::signatures::DirectConstructorInputs,
 }
 
 pub(super) struct CanonicalMethodEnvironment {
@@ -593,8 +592,6 @@ impl Checker {
             &raw.self_ty,
             &mut bindings,
         )?;
-        let ty =
-            super::signatures::coalesce_direct_constructor_inputs(self, ty, &raw.direct_inputs);
         self.canonical_ast_type(ast, &ty, raw, environment)
     }
 
@@ -609,7 +606,6 @@ impl Checker {
             bindings: raw.head_bindings.clone(),
             head_bindings: raw.head_bindings.clone(),
             self_ty: raw.self_ty.clone(),
-            direct_inputs: super::signatures::DirectConstructorInputs::default(),
         };
         let raw = &head_raw;
         let bindings = raw
@@ -681,12 +677,15 @@ impl Checker {
             (
                 TypeListRole::ReturnTypeArgument,
                 rta,
-                rta_sources.iter().map(|arg| &arg.ty).collect::<Vec<_>>(),
+                rta_sources
+                    .iter()
+                    .map(|arg| arg.ty.syntax())
+                    .collect::<Vec<_>>(),
             ),
             (
                 TypeListRole::ValueParameter,
                 params,
-                param_sources.iter().map(|arg| &arg.ty).collect(),
+                param_sources.iter().map(|arg| arg.ty.syntax()).collect(),
             ),
             (
                 TypeListRole::ReturnType,
@@ -1201,7 +1200,7 @@ Default::default::<Wrapped>()
         );
         let receiver = Ty::Struct(
             implementation.target_name.clone(),
-            vec![("value".into(), Ty::Int)],
+            NominalType::monomorphic(vec![("value".into(), Ty::Int)]),
         );
         for _ in 0..2 {
             let CandidateApplicability::Applicable(instantiation) = checker
@@ -1397,6 +1396,160 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
     }
 
     #[test]
+    fn constructor_projection_distinguishes_deferred_from_rejected() {
+        let mut checker = checker(
+            r#"
+deftrait Context where Self: Type<$A> {}
+impl Context for List<$A> {}
+"#,
+        );
+        let unknown = checker.env.fresh_tyvar();
+        let Ty::Var(variable) = unknown else {
+            unreachable!()
+        };
+        let trait_key = checker.trait_key_by_short_name("Context").unwrap();
+
+        assert!(matches!(
+            checker.constructor_projection(&trait_key, &unknown),
+            ConstructorProjectionOutcome::Deferred { waiting_on } if waiting_on == vec![variable]
+        ));
+        assert!(matches!(
+            checker.constructor_projection(&trait_key, &Ty::Int),
+            ConstructorProjectionOutcome::Rejected { failures }
+                if failures.contains(&ConstructorProjectionFailure::NoApplicableImplementation)
+        ));
+    }
+
+    #[test]
+    fn constructor_application_retains_deferred_and_rejected_reasons() {
+        let mut checker = checker(
+            r#"
+deftrait Context where Self: Type<$A> {}
+impl Context for List<$A> {}
+"#,
+        );
+        let source = checker.env.fresh_tyvar();
+        let Ty::Var(source_variable) = source else {
+            unreachable!()
+        };
+        let trait_key = checker.trait_key_by_short_name("Context").unwrap();
+        checker
+            .constructor_witness_traits
+            .insert(source_variable, trait_key);
+        let unknown = checker.env.fresh_tyvar();
+        let Ty::Var(variable) = unknown else {
+            unreachable!()
+        };
+
+        assert!(matches!(
+            checker.apply_constructor_application(&source, &unknown, &[Ty::Int]),
+            ConstructorApplicationOutcome::Deferred { waiting_on } if waiting_on == vec![variable]
+        ));
+        assert!(matches!(
+            checker.apply_constructor_application(&source, &Ty::Int, &[Ty::Int]),
+            ConstructorApplicationOutcome::Rejected { failures }
+                if failures.contains(&ConstructorProjectionFailure::UnsupportedConstructor)
+        ));
+    }
+
+    #[test]
+    fn constructor_projection_reports_each_metadata_contract_failure() {
+        fn context_checker() -> (Checker, String) {
+            let checker = checker(
+                r#"
+deftrait Context where Self: Type<$A> {}
+defenum Box<$A> { Box($A), }
+impl Context for Box<$A> {}
+"#,
+            );
+            let trait_key = checker.trait_key_by_short_name("Context").unwrap();
+            (checker, trait_key)
+        }
+
+        let (mut checker, trait_key) = context_checker();
+        let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
+        checker
+            .trait_impls
+            .get_mut(&implementation_key)
+            .unwrap()
+            .head_type_list
+            .entries
+            .retain(|entry| entry.role != TypeListRole::ImplTarget);
+        assert!(matches!(
+            checker.constructor_projection(&trait_key, &Ty::Enum("Global::Box".into(), vec![Ty::Int])),
+            ConstructorProjectionOutcome::Rejected { failures }
+                if failures == vec![ConstructorProjectionFailure::MissingImplTargetMetadata]
+        ));
+
+        let (mut checker, trait_key) = context_checker();
+        let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
+        checker
+            .trait_impls
+            .get_mut(&implementation_key)
+            .unwrap()
+            .constructor_slot_vars
+            .clear();
+        assert!(matches!(
+            checker.constructor_projection(&trait_key, &Ty::Enum("Global::Box".into(), vec![Ty::Int])),
+            ConstructorProjectionOutcome::Rejected { failures }
+                if failures == vec![ConstructorProjectionFailure::SlotCountMismatch {
+                    expected: 1,
+                    actual: 0,
+                }]
+        ));
+
+        let (mut checker, trait_key) = context_checker();
+        let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
+        checker
+            .trait_impls
+            .get_mut(&implementation_key)
+            .unwrap()
+            .constructor_slot_vars[0] = u32::MAX;
+        assert!(matches!(
+            checker.constructor_application_slots_for_trait(
+                &trait_key,
+                &Ty::Enum("Global::Box".into(), vec![Ty::Int]),
+            ),
+            ConstructorSlotsOutcome::Rejected { failures }
+                if failures == vec![ConstructorProjectionFailure::MissingConstructorSlotMapping {
+                    variable: u32::MAX,
+                }]
+        ));
+
+        let (mut checker, trait_key) = context_checker();
+        let witness_source = checker.env.fresh_tyvar();
+        let Ty::Var(witness_variable) = witness_source else {
+            unreachable!()
+        };
+        checker
+            .constructor_witness_traits
+            .insert(witness_variable, trait_key.clone());
+        let witness = Ty::Enum("Global::Box".into(), vec![Ty::Int]);
+        assert!(matches!(
+            checker.apply_constructor_application(&witness_source, &witness, &[]),
+            ConstructorApplicationOutcome::Rejected { failures }
+                if failures == vec![ConstructorProjectionFailure::SlotCountMismatch {
+                    expected: 1,
+                    actual: 0,
+                }]
+        ));
+
+        let implementation_key = checker.trait_impl_candidate_keys(&trait_key)[0].clone();
+        checker
+            .trait_impls
+            .get_mut(&implementation_key)
+            .unwrap()
+            .constructor_slot_positions[0] = 4;
+        assert!(matches!(
+            checker.apply_constructor_application(&witness_source, &witness, &[Ty::Str]),
+            ConstructorApplicationOutcome::Rejected { failures }
+                if failures == vec![ConstructorProjectionFailure::InvalidSlotPosition {
+                    position: 4,
+                }]
+        ));
+    }
+
+    #[test]
     fn one_visible_impl_does_not_determine_unknown_trait_argument() {
         let mut checker = checker(
             "deftrait Only<$A> { def value(self: Self) -> Int }\nimpl Only<Int> for Int { def value(self: Self) -> Int { self } }\n",
@@ -1453,7 +1606,13 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
             vec![PendingTraitObligation {
                 trait_id: trait_key.clone(),
                 args: vec![Ty::List(Box::new(Ty::Var(source)))],
-                receiver: Ty::Struct(name.clone(), vec![("value".into(), Ty::Var(source))]),
+                receiver: Ty::Struct(
+                    name.clone(),
+                    NominalType::new(
+                        vec![Ty::Var(source)],
+                        vec![("value".into(), Ty::Var(source))],
+                    ),
+                ),
             }],
         );
         assert!(checker.bind_tyvar(source, &Ty::Var(alias)));
@@ -1463,7 +1622,10 @@ impl Pick<Int> for Int { def pick(self: Self, value: Int) -> Int { value } }
             vec![PendingTraitObligation {
                 trait_id: trait_key,
                 args: vec![Ty::List(Box::new(Ty::Var(alias)))],
-                receiver: Ty::Struct(name, vec![("value".into(), Ty::Var(alias))]),
+                receiver: Ty::Struct(
+                    name,
+                    NominalType::new(vec![Ty::Var(alias)], vec![("value".into(), Ty::Var(alias))],),
+                ),
             }]
         );
         assert!(
@@ -1506,7 +1668,10 @@ impl Rel<String,Int> for Box<$T> { def apply(self: Self, a: String, b: Int) -> I
         let b = checker.env.fresh_tyvar();
         let trait_key = checker.trait_key_by_short_name("Rel").unwrap();
         let def = checker.env.lookup_type_def("Box").unwrap();
-        let receiver = Ty::Struct(def.name.clone(), vec![("value".into(), Ty::Bool)]);
+        let receiver = Ty::Struct(
+            def.name.clone(),
+            NominalType::new(vec![Ty::Bool], vec![("value".into(), Ty::Bool)]),
+        );
         let substitutions = checker.substitutions.clone();
         let pending = checker.pending_trait_obligations.clone();
         let witnesses = checker.constructor_witness_traits.clone();
@@ -1576,7 +1741,11 @@ impl Checker {
             ret,
             &method.return_type_arguments,
             &method.value_parameters,
-            method.ret_ty.as_ref().unwrap_or(fallback_ret),
+            method
+                .ret_ty
+                .as_ref()
+                .map(|ty| ty.syntax())
+                .unwrap_or(fallback_ret),
             method.where_clause.as_ref(),
             raw,
             &environment,
@@ -1618,8 +1787,12 @@ impl Checker {
         let nominal = |def: &crate::env::TypeDefInfo| {
             let fields = self.instantiate_type_def_fields(def, &args);
             match def.kind {
-                TypeKind::Struct => Ty::Struct(def.name.clone(), fields),
-                TypeKind::Record | TypeKind::ConcreteError => Ty::Record(def.name.clone(), fields),
+                TypeKind::Struct => {
+                    Ty::Struct(def.name.clone(), NominalType::new(args.clone(), fields))
+                }
+                TypeKind::Record | TypeKind::ConcreteError => {
+                    Ty::Record(def.name.clone(), NominalType::new(args.clone(), fields))
+                }
                 TypeKind::Enum => Ty::Enum(def.name.clone(), args.clone()),
             }
         };
@@ -2548,7 +2721,7 @@ impl Checker {
         &self,
         trait_name: &str,
         container: &Ty,
-    ) -> Option<(TraitImplInfo, HashMap<u32, Ty>)> {
+    ) -> ConstructorProjectionOutcome {
         self.constructor_projection_with_proof(trait_name, container, true)
     }
 
@@ -2559,7 +2732,7 @@ impl Checker {
         &self,
         trait_name: &str,
         container: &Ty,
-    ) -> Option<(TraitImplInfo, HashMap<u32, Ty>)> {
+    ) -> ConstructorProjectionOutcome {
         self.constructor_projection_with_proof(trait_name, container, false)
     }
 
@@ -2568,11 +2741,15 @@ impl Checker {
         trait_name: &str,
         container: &Ty,
         prove_constraints: bool,
-    ) -> Option<(TraitImplInfo, HashMap<u32, Ty>)> {
-        let requested = self.canonical_request(container).ok()?;
-        if matches!(requested.head, CanonicalTypeHead::Variable(_)) {
-            return None;
-        }
+    ) -> ConstructorProjectionOutcome {
+        let requested = match self.canonical_request(container) {
+            Ok(requested) => requested,
+            Err(_) => {
+                return ConstructorProjectionOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::Canonicalization],
+                }
+            }
+        };
         let mut request_variables = Vec::new();
         fn variables(ty: &CanonicalTy, out: &mut Vec<u32>) {
             if let CanonicalTypeHead::Variable(var) = ty.head {
@@ -2583,18 +2760,37 @@ impl Checker {
             }
         }
         variables(&requested, &mut request_variables);
+        request_variables.sort_unstable();
+        request_variables.dedup();
+        if matches!(requested.head, CanonicalTypeHead::Variable(_)) {
+            return ConstructorProjectionOutcome::Deferred {
+                waiting_on: request_variables,
+            };
+        }
         let mut projections = Vec::new();
+        let mut waiting_on = Vec::new();
+        let mut failures = Vec::new();
         for key in self.trait_impl_candidate_keys(trait_name) {
             let info = &self.trait_impls[&key];
             if info.constructor_slot_vars.is_empty() {
-                continue;
+                return ConstructorProjectionOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                        expected: info.constructor_slot_positions.len(),
+                        actual: 0,
+                    }],
+                };
             }
-            let target = &info
+            let Some(target) = info
                 .head_type_list
                 .entries
                 .iter()
-                .find(|entry| entry.role == TypeListRole::ImplTarget)?
-                .ty;
+                .find(|entry| entry.role == TypeListRole::ImplTarget)
+                .map(|entry| &entry.ty)
+            else {
+                return ConstructorProjectionOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::MissingImplTargetMetadata],
+                };
+            };
             let mut fresh = HashMap::new();
             let mut next_variable = self.env.next_tyvar;
             let target = self.fresh_canonical(target, &mut fresh, &mut next_variable);
@@ -2608,36 +2804,71 @@ impl Checker {
             if request_variables.iter().any(|var| {
                 unifier.resolve(&CanonicalTy::variable(*var)) != CanonicalTy::variable(*var)
             }) {
+                waiting_on.extend(request_variables.iter().copied().filter(|var| {
+                    unifier.resolve(&CanonicalTy::variable(*var)) != CanonicalTy::variable(*var)
+                }));
                 continue;
             }
-            if prove_constraints
-                && !matches!(
-                    self.prove_canonical_constraints(
-                        &info.impl_constraints,
-                        &mut fresh,
-                        &unifier,
-                        &mut HashSet::new(),
-                        &mut next_variable,
-                    ),
-                    Ok(ApplicabilityProof::Satisfied(_))
-                )
-            {
-                continue;
+            if prove_constraints {
+                match self.prove_canonical_constraints(
+                    &info.impl_constraints,
+                    &mut fresh,
+                    &unifier,
+                    &mut HashSet::new(),
+                    &mut next_variable,
+                ) {
+                    Ok(ApplicabilityProof::Satisfied(_)) => {}
+                    Ok(ApplicabilityProof::Deferred(waiting)) => {
+                        waiting_on.extend(waiting);
+                        continue;
+                    }
+                    Ok(ApplicabilityProof::Unsatisfied) => {
+                        failures.push(ConstructorProjectionFailure::UnsatisfiedConstraints);
+                        continue;
+                    }
+                    Err(_) => {
+                        return ConstructorProjectionOutcome::Rejected {
+                            failures: vec![ConstructorProjectionFailure::Canonicalization],
+                        };
+                    }
+                }
             }
-            let mapping = fresh
+            let mapping = match fresh
                 .into_iter()
                 .map(|(original, var)| {
                     self.canonical_to_ty(&unifier.resolve(&CanonicalTy::variable(var)))
                         .map(|ty| (original, ty))
                 })
                 .collect::<Result<HashMap<_, _>, _>>()
-                .ok()?;
+            {
+                Ok(mapping) => mapping,
+                Err(_) => {
+                    return ConstructorProjectionOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::Canonicalization],
+                    }
+                }
+            };
             projections.push((info.clone(), mapping));
         }
-        if projections.len() == 1 {
-            projections.pop()
-        } else {
-            None
+        match projections.len() {
+            1 => {
+                let (info, mapping) = projections.pop().expect("one projection");
+                ConstructorProjectionOutcome::Applicable { info, mapping }
+            }
+            count if count > 1 => ConstructorProjectionOutcome::Rejected {
+                failures: vec![ConstructorProjectionFailure::AmbiguousImplementation],
+            },
+            _ if !waiting_on.is_empty() => {
+                waiting_on.sort_unstable();
+                waiting_on.dedup();
+                ConstructorProjectionOutcome::Deferred { waiting_on }
+            }
+            _ => {
+                if failures.is_empty() {
+                    failures.push(ConstructorProjectionFailure::NoApplicableImplementation);
+                }
+                ConstructorProjectionOutcome::Rejected { failures }
+            }
         }
     }
 
@@ -2665,9 +2896,7 @@ impl Checker {
             CandidateApplicability::Applicable(instantiation) => {
                 Ok(Some(TraitDispatch::Selected(Box::new(instantiation))))
             }
-            CandidateApplicability::Deferred(_) => {
-                self.trait_dispatch_target_for_args(trait_name, method_name, receiver, trait_args)
-            }
+            CandidateApplicability::Deferred(_) => Ok(Some(TraitDispatch::Pending)),
             CandidateApplicability::Rejected(_) => Ok(None),
         }
     }

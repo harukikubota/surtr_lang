@@ -1,6 +1,6 @@
 use scar::error::TypeError;
 use scar::typed::{TraitDispatch, TraitDispatchTarget, TypedInner};
-use scar::types::Ty;
+use scar::types::{NominalType, Ty};
 
 fn check(source: &str) -> Vec<scar::typed::TypedNode> {
     let ast = spire::parse_with_context(source, spire::ParserContext::project(0)).expect("parse");
@@ -323,7 +323,10 @@ Echo::echo(Box::new(1))
     };
     assert_eq!(
         params[0].ty,
-        Ty::Struct("Global::Box".into(), vec![("value".into(), Ty::Int)])
+        Ty::Struct(
+            "Global::Box".into(),
+            NominalType::new(vec![Ty::Int], vec![("value".into(), Ty::Int)])
+        )
     );
     assert_eq!(*ret, params[0].ty);
     assert_eq!(body.ty, params[0].ty);

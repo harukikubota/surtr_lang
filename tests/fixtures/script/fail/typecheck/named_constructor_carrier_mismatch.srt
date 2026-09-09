@@ -1,0 +1,9 @@
+def require_same(left: $F<Int>, right: $F<Int>) -> Unit
+where
+  $F: Functor
+{
+  mapped = Functor::fmap(left, {|x| x})
+  ()
+}
+
+require_same(Option::Some(1), [2])

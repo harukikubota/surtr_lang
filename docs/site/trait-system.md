@@ -132,7 +132,7 @@ where
 
 `Self<$A>` は declaration の impl target を置換する型位置 marker です。`Self::f()` と `Type::f()` は value-level owner path としては不正です。
 
-`Applicative<$A>` のような constructor application は、通常関数または trait method signature の direct parameter / return にだけ書けます。parameter ごとに capability は独立し、return は本体が確定する fresh concrete constructor を表します。field、local annotation、tuple / container、closure signature には書けません。
+`Applicative<$A>` のような constructor application は、通常関数または trait method signature の direct parameter / return にだけ書けます。別々の direct parameter は同じ Trait 名でも carrier が独立し、各位置の capability だけを要求します。同じ carrier を要求する場合は `left: $F<$A>, right: $F<$B> where $F: Applicative` のように同じ `$F` を使います。return は本体が確定する fresh concrete constructor を表し、return-only direct ReturnTypeArgumentだけが対応するreturnへ接続します。field、local annotation、tuple / container、closure signature には書けません。
 
 ## impl の一致規則
 

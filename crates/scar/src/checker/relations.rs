@@ -32,12 +32,6 @@ impl Checker {
         while cursor < tracked.len() {
             let variable = tracked[cursor];
             Self::collect_ty_vars(&self.resolve_ty(&Ty::Var(variable)), &mut tracked);
-            if let Some(root) = self.constructor_family_witness_root(variable) {
-                if !tracked.contains(&root) {
-                    tracked.push(root);
-                }
-                Self::collect_ty_vars(&self.resolve_ty(&Ty::Var(root)), &mut tracked);
-            }
             cursor += 1;
         }
         TypeRelationCheckpoint {

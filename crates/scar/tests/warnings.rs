@@ -1,7 +1,7 @@
 use scar::typecheck_with_warnings;
 use sigil::resolved::{
     Resolved, ResolvedDeclAttrs, ResolvedEnumVariant, ResolvedId, ResolvedReturnTypeArgument,
-    ResolvedTraitMethodSig, ResolvedTypeParam,
+    ResolvedSignatureTy, ResolvedTraitMethodSig, ResolvedTypeParam,
 };
 use sindr::primitives::int;
 use sindr::warning::WarningKind;
@@ -45,6 +45,13 @@ fn generic_ty(name: &str, args: Vec<AstTy>, start: usize) -> AstTy {
     )
 }
 
+fn signature_ty(syntax: AstTy) -> ResolvedSignatureTy {
+    ResolvedSignatureTy {
+        syntax,
+        direct_constructor_trait: None,
+    }
+}
+
 fn empty_new_def(struct_name: &str, uid: u32) -> Resolved {
     let method_name = format!("{struct_name}::new");
     Resolved::Def(
@@ -59,15 +66,15 @@ fn empty_new_def(struct_name: &str, uid: u32) -> Resolved {
         },
         vec![ResolvedReturnTypeArgument {
             ordinal: 0,
-            ty: named_ty("$A", 100 + uid as usize),
+            ty: signature_ty(named_ty("$A", 100 + uid as usize)),
             span: span(100 + uid as usize, 102 + uid as usize),
         }],
         Vec::new(),
-        Some(generic_ty(
+        Some(signature_ty(generic_ty(
             struct_name,
             vec![named_ty("$A", 103 + uid as usize)],
             100 + uid as usize,
-        )),
+        ))),
         None,
         Box::new(Resolved::StructLit(
             span(105 + uid as usize, 107 + uid as usize),
@@ -205,7 +212,7 @@ fn trait_head_type_parameter_unused_by_methods_warns_even_with_bound() {
             return_type_arguments: Vec::new(),
             type_params: Vec::new(),
             value_parameters: Vec::new(),
-            ret_ty: named_ty("String", 35),
+            ret_ty: signature_ty(named_ty("String", 35)),
             where_clause: None,
             body: None,
             attrs: ResolvedDeclAttrs::default(),

@@ -8,7 +8,6 @@
 
 | 分類 | 文書 | 状態 |
 |---|---|---|
-| 仕様決定・実装待ち | [TypeCtorTrait carrier](./type_constructor_trait_extension_spec.md) | N01 の入力 |
 | 仕様決定・実装待ち | [Identity / Reader / State](./monad_instances_spec.md) | N02 の入力 |
 | 仕様決定・実装待ち | [MonadT 言語拡張](./monadt_language_extension_spec.md) | N03–N04 の入力 |
 | 仕様決定・実装待ち | [標準 MonadT 型](./monadt_standard_types_spec.md) | N05 の入力。未確定 API は本文の確認ゲートに従う |
@@ -21,6 +20,7 @@
 旧 Type Constructor Signature Unification の実装済み契約は
 [`../docs/dev/Trait_system_spec.md`](../docs/dev/Trait_system_spec.md)、
 [`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md)、および利用者向け Trait 文書へ移管済みである。
+N01 の direct carrier 同一性契約も同じ正本へ移管済みであり、実装入力は削除した。
 旧入力と実装根拠の対応は新しい implementation plan の移管マトリクスに残す。
 
 ## 扱い

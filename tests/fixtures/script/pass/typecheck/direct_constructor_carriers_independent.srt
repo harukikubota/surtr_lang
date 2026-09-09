@@ -7,3 +7,4 @@ impl FamilyFunctor for OtherCarrier<$T> where $T: FamilyFunctor.$A {}
 impl FamilyMonad for OtherCarrier<$T> where $T: FamilyMonad.$A {}
 def accept(first: FamilyFunctor<Int>, second: FamilyMonad<Boolean>) -> Unit { () }
 accept([1], OtherCarrier::Box(True))
+print("ok")

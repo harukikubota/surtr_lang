@@ -3,8 +3,11 @@ include "./schema/option_schema.srt"
 import OptionSchema::{ensure_short_name, maybe_profile};
 import Test;
 
-def preserve_applicative(value: Applicative<$A>) -> Applicative<$A> {
-  value
+def preserve_applicative(value: $F<$A>) -> $F<$A>
+where
+  $F: Applicative
+{
+  Functor::fmap(value, {|item| item})
 }
 
 def audit_applicative(value: Applicative) -> Unit {
@@ -29,19 +32,26 @@ test("Option") {
 
   describe("conversions") {
     it("converts option into result") {
-      assert_eq("Ok(7)", inspect(from::<Result>(Option::Some(7))))
+      converted: Result<Int, NoneError> = from::<Result>(Option::Some(7))
+      assert_eq("Ok(7)", inspect(converted))
     }
 
     it("converts none into none error") {
-      assert_eq("Err(NoneError(\"None Value.\"))", inspect(from::<Result>(Option::None)))
+      source: Option<Int> = Option::None
+      converted: Result<Int, NoneError> = from::<Result>(source)
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(converted))
     }
 
     it("converts result into option") {
-      assert_eq("Option::Some(9)", inspect(from::<Option>(Ok(9))))
+      source: Result<Int, NoneError> = Ok(9)
+      converted: Option<Int> = from::<Option>(source)
+      assert_eq("Option::Some(9)", inspect(converted))
     }
 
     it("drops concrete errors when converting err into option") {
-      assert_eq("Option::None", inspect(from::<Option>(Err(NoneError))))
+      source: Result<Int, NoneError> = Err(NoneError)
+      converted: Option<Int> = from::<Option>(source)
+      assert_eq("Option::None", inspect(converted))
     }
 
     it("traverses Some through a Result mapper") {
@@ -71,7 +81,7 @@ test("Option") {
     }
 
     it("obeys Alternative identity and associativity laws") {
-      empty: Option<Int> = Alternative::empty::<Int>()
+      empty: Option<Int> = Alternative::empty()
       first: Option<Int> = Option::Some(1)
       second: Option<Int> = Option::Some(2)
       third: Option<Int> = Option::Some(3)

@@ -1814,6 +1814,7 @@ impl Resolver {
         child.declaration_uids = self.declaration_uids.clone();
         child.declaration_uid_kinds = self.declaration_uid_kinds.clone();
         child.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+        child.trait_constructor_slots = self.trait_constructor_slots.clone();
         child.declaration_entries = self.declaration_entries.clone();
         child.owner_registry = self.owner_registry.clone();
         child.explicit_module_imports = self.explicit_module_imports.clone();
@@ -2901,6 +2902,7 @@ impl Resolver {
                 body_resolver.declaration_uids = self.declaration_uids.clone();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+                body_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
                 body_resolver.owner_registry = self.owner_registry.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
@@ -2913,10 +2915,7 @@ impl Resolver {
                     .into_iter()
                     .map(|argument| self.resolve_return_type_argument(argument))
                     .collect::<Result<Vec<_>, _>>()?;
-                let resolved_params = params
-                    .into_iter()
-                    .map(|param| body_resolver.resolve_value_parameter(param))
-                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                let resolved_params = body_resolver.resolve_value_parameters(params)?;
                 let resolved_body = body_resolver.resolve_node(*body)?;
 
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
@@ -2943,7 +2942,7 @@ impl Resolver {
                     resolved_return_type_arguments,
                     resolved_params,
                     ret_ty
-                        .map(|ty| self.resolve_type_annotation(ty))
+                        .map(|ty| self.resolve_signature_type(ty))
                         .transpose()?,
                     where_clause
                         .map(|clause| self.resolve_where_clause(clause))
@@ -3092,13 +3091,11 @@ impl Resolver {
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
+                    method_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
                     method_resolver.owner_registry = self.owner_registry.clone();
                     method_resolver.current_module_path = self.current_module_path.clone();
                     method_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
-                    let resolved_params = params
-                        .into_iter()
-                        .map(|param| method_resolver.resolve_value_parameter(param))
-                        .collect::<Result<Vec<_>, ResolveError>>()?;
+                    let resolved_params = method_resolver.resolve_value_parameters(params)?;
                     let resolved_body = body
                         .map(|body| method_resolver.resolve_node(*body).map(Box::new))
                         .transpose()?;
@@ -3124,7 +3121,7 @@ impl Resolver {
                             .collect::<Result<Vec<_>, _>>()?,
                         type_params: self.resolve_type_params(type_params)?,
                         value_parameters: resolved_params,
-                        ret_ty: self.resolve_type_annotation(ret_ty)?,
+                        ret_ty: self.resolve_signature_type(ret_ty)?,
                         where_clause: where_clause
                             .map(|clause| self.resolve_where_clause(clause))
                             .transpose()?,
@@ -3305,13 +3302,21 @@ impl Resolver {
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
+                    method_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
                     method_resolver.owner_registry = self.owner_registry.clone();
                     method_resolver.current_module_path = self.current_module_path.clone();
                     method_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
-                    let resolved_params = params
-                        .into_iter()
-                        .map(|param| method_resolver.resolve_value_parameter(param))
-                        .collect::<Result<Vec<_>, ResolveError>>()?;
+                    // Resolve the entire declaration signature before introducing
+                    // value bindings or walking the executable body. A value or
+                    // local named like a Trait must not affect type-position
+                    // canonical identity.
+                    let resolved_ret_ty = ret_ty
+                        .map(|ty| method_resolver.resolve_signature_type(ty))
+                        .transpose()?;
+                    let resolved_method_where_clause = method_where_clause
+                        .map(|clause| method_resolver.resolve_where_clause(clause))
+                        .transpose()?;
+                    let resolved_params = method_resolver.resolve_value_parameters(params)?;
                     let resolved_body = if let Some(body) = body {
                         method_resolver.resolve_node(*body)?
                     } else {
@@ -3348,12 +3353,8 @@ impl Resolver {
                         return_type_arguments,
                         type_params: self.resolve_type_params(type_params)?,
                         value_parameters: resolved_params,
-                        ret_ty: ret_ty
-                            .map(|ty| self.resolve_type_annotation(ty))
-                            .transpose()?,
-                        where_clause: method_where_clause
-                            .map(|clause| method_resolver.resolve_where_clause(clause))
-                            .transpose()?,
+                        ret_ty: resolved_ret_ty,
+                        where_clause: resolved_method_where_clause,
                         body: Box::new(resolved_body),
                         attrs: resolve_decl_attrs(&attrs),
                         span: method_span,
@@ -3410,13 +3411,11 @@ impl Resolver {
                 decl_resolver.declaration_uids = self.declaration_uids.clone();
                 decl_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 decl_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+                decl_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
                 decl_resolver.owner_registry = self.owner_registry.clone();
                 decl_resolver.current_module_path = self.current_module_path.clone();
                 decl_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
-                let resolved_params = params
-                    .into_iter()
-                    .map(|param| decl_resolver.resolve_value_parameter(param))
-                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                let resolved_params = decl_resolver.resolve_value_parameters(params)?;
                 self.scope.advance_next_id_to(decl_resolver.scope.next_id());
                 self.scope.define_with_id(&name, builtin_uid);
                 let symbol_info = self.symbol_info_for_declaration(
@@ -3442,7 +3441,7 @@ impl Resolver {
                     resolved_return_type_arguments,
                     resolved_params,
                     ret_ty
-                        .map(|ty| self.resolve_type_annotation(ty))
+                        .map(|ty| self.resolve_signature_type(ty))
                         .transpose()?,
                     where_clause
                         .map(|clause| self.resolve_where_clause(clause))
@@ -3836,24 +3835,34 @@ impl Resolver {
         }
     }
 
-    pub(super) fn resolve_value_parameter(
+    pub(super) fn resolve_value_parameters(
         &mut self,
-        param: ValueParameter,
-    ) -> Result<ResolvedValueParameter, ResolveError> {
-        let uid = self.scope.define(&param.name, param.span.clone());
-        Ok(ResolvedValueParameter {
-            id: ResolvedId {
-                name: param.name,
-                qualified_name: None,
-                unique_id: uid,
-                compiler_generated: false,
-                symbol_info: None,
-                span: param.span.clone(),
-            },
-            mode: param.mode,
-            ty: self.resolve_type_annotation(param.ty)?,
-            span: param.span.clone(),
-        })
+        params: Vec<ValueParameter>,
+    ) -> Result<Vec<ResolvedValueParameter>, ResolveError> {
+        let resolved_types = params
+            .iter()
+            .map(|param| self.resolve_signature_type(param.ty.clone()))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(params
+            .into_iter()
+            .zip(resolved_types)
+            .map(|(param, ty)| {
+                let uid = self.scope.define(&param.name, param.span.clone());
+                ResolvedValueParameter {
+                    id: ResolvedId {
+                        name: param.name,
+                        qualified_name: None,
+                        unique_id: uid,
+                        compiler_generated: false,
+                        symbol_info: None,
+                        span: param.span.clone(),
+                    },
+                    mode: param.mode,
+                    ty,
+                    span: param.span,
+                }
+            })
+            .collect())
     }
 
     fn resolve_return_type_argument(
@@ -3862,7 +3871,7 @@ impl Resolver {
     ) -> Result<ResolvedReturnTypeArgument, ResolveError> {
         Ok(ResolvedReturnTypeArgument {
             ordinal: argument.ordinal,
-            ty: self.resolve_type_annotation(argument.ty)?,
+            ty: self.resolve_signature_type(argument.ty)?,
             span: argument.span,
         })
     }
@@ -3942,6 +3951,41 @@ impl Resolver {
                 Box::new(self.resolve_type_annotation(*ret)?),
             )),
         }
+    }
+
+    fn resolve_signature_type(&self, ty: AstTy) -> Result<ResolvedSignatureTy, ResolveError> {
+        let syntax = self.resolve_type_annotation(ty)?;
+        let direct_constructor_trait = self.direct_constructor_trait_for_signature_type(&syntax);
+        Ok(ResolvedSignatureTy {
+            syntax,
+            direct_constructor_trait,
+        })
+    }
+
+    fn direct_constructor_trait_for_signature_type(&self, ty: &AstTy) -> Option<ResolvedId> {
+        let (span, name) = match ty {
+            AstTy::Named(span, name) | AstTy::Generic(span, name, _) => (span, name),
+            AstTy::ImplTrait(_, _) | AstTy::Tuple(_, _) | AstTy::Func(_, _, _) => return None,
+        };
+        let unique_id = self.scope.lookup(name)?;
+        if !matches!(
+            self.declaration_uid_kinds.get(&unique_id),
+            Some(DeclarationKind::Trait)
+        ) || !self.trait_constructor_slots.contains_key(&unique_id)
+        {
+            return None;
+        }
+        let qualified_name = self
+            .declaration_fq_name_for_uid(unique_id)
+            .unwrap_or_else(|| name.clone());
+        Some(ResolvedId {
+            name: name.clone(),
+            qualified_name: Some(qualified_name),
+            unique_id,
+            compiler_generated: false,
+            symbol_info: self.symbol_info_for_declaration(name, &DeclarationKind::Trait, None),
+            span: span.clone(),
+        })
     }
 
     fn resolve_where_clause(

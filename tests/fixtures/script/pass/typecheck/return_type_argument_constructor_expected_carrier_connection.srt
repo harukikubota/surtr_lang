@@ -2,4 +2,5 @@ def ret::<Alternative>(source: Functor) -> Alternative<Unit> {
   Alternative::empty()
 }
 
-x = ret::<Option>([])
+x: Option<Unit> = ret([])
+print("ok")

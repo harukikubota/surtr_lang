@@ -243,10 +243,10 @@ impl Family for Boxed<$T> {
 
 fn generic_constructor_trait_wrappers_specialize_all_method_roles() {
     let source = r#"
-def map_functor(value: Functor<$A>, mapper: ($A -> $B)) -> Functor<$B> {
+def map_functor(value: $F<$A>, mapper: ($A -> $B)) -> $F<$B> where $F: Functor {
     Functor::fmap(value, mapper)
 }
-def map_applicative(value: Applicative<$A>, mapper: ($A -> $B)) -> Applicative<$B> {
+def map_applicative(value: $F<$A>, mapper: ($A -> $B)) -> $F<$B> where $F: Applicative {
     Functor::fmap(value, mapper)
 }
 strings: List<String> = map_functor([1], {|value: Int| "mapped"})

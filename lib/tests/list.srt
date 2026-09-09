@@ -3,7 +3,10 @@ include "./schema/list_schema.srt"
 import ListSchema::{add_one, list_pure, list_step1, list_step2, list_step3};
 import Test;
 
-def map_applicative(value: Applicative<$A>, mapper: ($A -> $B)) -> Applicative<$B> {
+def map_applicative(value: $F<$A>, mapper: ($A -> $B)) -> $F<$B>
+where
+  $F: Applicative
+{
   Functor::fmap(value, mapper)
 }
 

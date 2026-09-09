@@ -12,7 +12,7 @@ use diagnostics::{
     TypeDiagnosticReason,
 };
 use sigil::resolved::{
-    ResolvedReturnTypeArgument, ResolvedValueParameter, ResolvedWhereClause,
+    ResolvedReturnTypeArgument, ResolvedSignatureTy, ResolvedValueParameter, ResolvedWhereClause,
     ResolvedWhereConstraintRhs,
 };
 use sindr::builtin::{
@@ -30,11 +30,15 @@ use spire::ast::{AstTy, Span};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(super) struct TypeInputId(String);
+pub(super) enum TypeInputId {
+    Named(String),
+    ConstructorTrait(u32),
+}
 
 #[derive(Debug, Clone)]
 pub(super) struct SourceOrigin {
     pub(super) span: Span,
+    pub(super) display_name: String,
 }
 
 #[derive(Debug, Default)]
@@ -46,7 +50,10 @@ pub(super) struct SignatureOccurrences {
 
 #[derive(Debug, Default)]
 pub(super) struct DirectConstructorInputs {
-    witnesses: HashMap<crate::typed::TypeCtorTraitFamilyId, Ty>,
+    // Only ReturnTypeArgument declarations establish an anonymous direct
+    // constructor identity that another signature position may reuse. Direct
+    // value parameters and direct returns are independent occurrences.
+    witnesses: HashMap<String, Ty>,
 }
 
 #[derive(Debug, Clone)]
@@ -232,82 +239,99 @@ pub(super) fn return_type_argument_mismatch_error(
     }
 }
 
-fn type_input_id(name: &str, constructor_trait_names: &HashSet<String>) -> Option<TypeInputId> {
-    (name == "Self" || name.starts_with('$') || constructor_trait_names.contains(name))
-        .then(|| TypeInputId(name.to_string()))
+fn type_input_id(name: &str) -> Option<TypeInputId> {
+    (name == "Self" || name.starts_with('$')).then(|| TypeInputId::Named(name.to_string()))
 }
 
-fn collect_type_inputs(
-    ty: &AstTy,
-    constructor_trait_names: &HashSet<String>,
-    inputs: &mut BTreeMap<TypeInputId, Vec<SourceOrigin>>,
-) {
+fn collect_type_inputs(ty: &AstTy, inputs: &mut BTreeMap<TypeInputId, Vec<SourceOrigin>>) {
     match ty {
         AstTy::Named(span, name) => {
-            if let Some(id) = type_input_id(name, constructor_trait_names) {
-                inputs
-                    .entry(id)
-                    .or_default()
-                    .push(SourceOrigin { span: span.clone() });
+            if let Some(id) = type_input_id(name) {
+                inputs.entry(id).or_default().push(SourceOrigin {
+                    span: span.clone(),
+                    display_name: name.clone(),
+                });
             }
         }
         AstTy::Generic(span, name, arguments) => {
-            if let Some(id) = type_input_id(name, constructor_trait_names) {
-                inputs
-                    .entry(id)
-                    .or_default()
-                    .push(SourceOrigin { span: span.clone() });
+            if let Some(id) = type_input_id(name) {
+                inputs.entry(id).or_default().push(SourceOrigin {
+                    span: span.clone(),
+                    display_name: name.clone(),
+                });
             }
             for argument in arguments {
-                collect_type_inputs(argument, constructor_trait_names, inputs);
+                collect_type_inputs(argument, inputs);
             }
         }
         AstTy::Tuple(_, items) => {
             for item in items {
-                collect_type_inputs(item, constructor_trait_names, inputs);
+                collect_type_inputs(item, inputs);
             }
         }
         AstTy::Func(_, parameters, return_type) => {
             for parameter in parameters {
-                collect_type_inputs(parameter, constructor_trait_names, inputs);
+                collect_type_inputs(parameter, inputs);
             }
-            collect_type_inputs(return_type, constructor_trait_names, inputs);
+            collect_type_inputs(return_type, inputs);
         }
         AstTy::ImplTrait(_, _) => {}
     }
 }
 
+fn direct_signature_input(signature_ty: &ResolvedSignatureTy) -> Option<(TypeInputId, String)> {
+    if let Some(trait_id) = &signature_ty.direct_constructor_trait {
+        return Some((
+            TypeInputId::ConstructorTrait(trait_id.unique_id),
+            trait_id.name.clone(),
+        ));
+    }
+    match signature_ty.syntax() {
+        AstTy::Named(_, name) | AstTy::Generic(_, name, _) => {
+            type_input_id(name).map(|id| (id, name.clone()))
+        }
+        AstTy::ImplTrait(_, _) | AstTy::Tuple(_, _) | AstTy::Func(_, _, _) => None,
+    }
+}
+
+fn collect_signature_type_inputs(
+    signature_ty: &ResolvedSignatureTy,
+    inputs: &mut BTreeMap<TypeInputId, Vec<SourceOrigin>>,
+) {
+    if let Some(trait_id) = &signature_ty.direct_constructor_trait {
+        inputs
+            .entry(TypeInputId::ConstructorTrait(trait_id.unique_id))
+            .or_default()
+            .push(SourceOrigin {
+                span: Checker::ast_ty_span(signature_ty.syntax()).clone(),
+                display_name: trait_id.name.clone(),
+            });
+    }
+    // The direct constructor identity is carried separately. Syntax
+    // recursion collects only named `Self` / `$T` inputs from its slots and
+    // nested ordinary types; it never rediscovers Traits by display name.
+    collect_type_inputs(signature_ty.syntax(), inputs);
+}
+
 pub(super) fn signature_occurrences(
     return_type_arguments: &[ResolvedReturnTypeArgument],
     value_parameters: &[ResolvedValueParameter],
-    return_type: Option<&AstTy>,
-    constructor_trait_names: &HashSet<String>,
+    return_type: Option<&ResolvedSignatureTy>,
 ) -> SignatureOccurrences {
     let mut occurrences = SignatureOccurrences::default();
     for parameter in value_parameters {
-        collect_type_inputs(
-            &parameter.ty,
-            constructor_trait_names,
-            &mut occurrences.argument_inputs,
-        );
+        collect_signature_type_inputs(&parameter.ty, &mut occurrences.argument_inputs);
     }
     if let Some(return_type) = return_type {
-        collect_type_inputs(
-            return_type,
-            constructor_trait_names,
-            &mut occurrences.return_inputs,
-        );
+        collect_signature_type_inputs(return_type, &mut occurrences.return_inputs);
     }
     for argument in return_type_arguments {
-        let id = match &argument.ty {
-            AstTy::Named(_, name) => type_input_id(name, constructor_trait_names),
-            _ => None,
-        };
-        if let Some(id) = id {
+        if let Some((id, display_name)) = direct_signature_input(&argument.ty) {
             occurrences.declared_return_type_arguments.insert(
                 id,
                 SourceOrigin {
                     span: argument.span.clone(),
+                    display_name,
                 },
             );
         }
@@ -361,50 +385,97 @@ fn occurrence_error(
     }
 }
 
+fn duplicate_return_type_argument_error(
+    callable: &str,
+    input: &str,
+    ordinal: u32,
+    current: SourceFact,
+    previous: SourceFact,
+) -> crate::error::TypeError {
+    let message = format!("return type argument `{input}` is introduced more than once");
+    let help = format!("remove the duplicate `{input}` return type argument");
+    crate::error::TypeError {
+        message,
+        span: current.span.clone(),
+        hint: Some(help.clone()),
+        structured: Some(StructuredDiagnostic {
+            reason: TypeDiagnosticReason::DuplicateReturnTypeArgumentInput,
+            origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
+            data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+                declared_origin: Some(current.clone()),
+                value_parameter_origin: None,
+                return_origin: None,
+                left_origin: Some(previous.clone()),
+                right_origin: Some(current.clone()),
+                required_trait: None,
+                expected_count: None,
+                actual_count: None,
+                callable: callable.into(),
+                ordinal: Some(ordinal),
+                expected_type: Some(input.into()),
+                actual_type: None,
+            }),
+            primary: current,
+            related: vec![previous],
+            remediation: Some(Remediation::Help { text: help }),
+        }),
+    }
+}
+
 pub(super) fn validate_return_type_argument_definition(
     callable: &str,
     return_type_arguments: &[ResolvedReturnTypeArgument],
     value_parameters: &[ResolvedValueParameter],
-    return_type: Option<&AstTy>,
-    constructor_trait_names: &HashSet<String>,
+    return_type: Option<&ResolvedSignatureTy>,
 ) -> Result<(), crate::error::TypeError> {
-    let occurrences = signature_occurrences(
-        return_type_arguments,
-        value_parameters,
-        return_type,
-        constructor_trait_names,
-    );
+    let occurrences = signature_occurrences(return_type_arguments, value_parameters, return_type);
+    let mut declared_inputs = BTreeMap::new();
 
     for (ordinal, argument) in return_type_arguments.iter().enumerate() {
-        let Some(input) = (match &argument.ty {
-            AstTy::Named(_, name) => type_input_id(name, constructor_trait_names),
-            _ => None,
-        }) else {
+        let Some((input, name)) = direct_signature_input(&argument.ty) else {
             continue;
         };
-        let TypeInputId(name) = &input;
-        if let Some(argument_origins) = occurrences.argument_inputs.get(&input) {
-            let related = argument_origins
-                .first()
-                .map(|origin| source_fact(SourceRole::Value, origin.span.clone(), name));
-            return Err(occurrence_error(
-                TypeDiagnosticReason::DuplicateReturnTypeArgumentInput,
+        let origin = SourceOrigin {
+            span: argument.span.clone(),
+            display_name: name.clone(),
+        };
+        if let Some(previous) = declared_inputs.insert(input.clone(), origin) {
+            return Err(duplicate_return_type_argument_error(
                 callable,
-                name,
+                &name,
                 ordinal as u32,
-                source_fact(SourceRole::ReturnTypeArgument, argument.span.clone(), name),
-                related,
-                format!("type input `{name}` is introduced more than once"),
-                &format!("remove `{name}` from the return type arguments"),
+                source_fact(SourceRole::ReturnTypeArgument, argument.span.clone(), &name),
+                source_fact(
+                    SourceRole::ReturnTypeArgument,
+                    previous.span,
+                    &previous.display_name,
+                ),
             ));
+        }
+        if !matches!(input, TypeInputId::ConstructorTrait(_)) {
+            if let Some(argument_origins) = occurrences.argument_inputs.get(&input) {
+                let related = argument_origins.first().map(|origin| {
+                    source_fact(SourceRole::Value, origin.span.clone(), &origin.display_name)
+                });
+                return Err(occurrence_error(
+                    TypeDiagnosticReason::DuplicateReturnTypeArgumentInput,
+                    callable,
+                    &name,
+                    ordinal as u32,
+                    source_fact(SourceRole::ReturnTypeArgument, argument.span.clone(), &name),
+                    related,
+                    format!("type input `{name}` is introduced more than once"),
+                    &format!("remove `{name}` from the return type arguments"),
+                ));
+            }
         }
         if !occurrences.return_inputs.contains_key(&input) {
             return Err(occurrence_error(
                 TypeDiagnosticReason::UnusedReturnTypeArgument,
                 callable,
-                name,
+                &name,
                 ordinal as u32,
-                source_fact(SourceRole::ReturnTypeArgument, argument.span.clone(), name),
+                source_fact(SourceRole::ReturnTypeArgument, argument.span.clone(), &name),
                 None,
                 format!("return type argument `{name}` does not appear in the return type"),
                 "remove the unused return type argument or use it in the return type",
@@ -413,6 +484,13 @@ pub(super) fn validate_return_type_argument_definition(
     }
 
     for (input, origins) in &occurrences.return_inputs {
+        // A direct TypeCtorTrait return is an anonymous result carrier chosen
+        // by the function body. It is not a named input introduced by a direct
+        // value parameter and therefore needs no ReturnTypeArgument unless the
+        // declaration explicitly exposes one.
+        if matches!(input, TypeInputId::ConstructorTrait(_)) {
+            continue;
+        }
         if occurrences.argument_inputs.contains_key(input)
             || occurrences
                 .declared_return_type_arguments
@@ -420,10 +498,10 @@ pub(super) fn validate_return_type_argument_definition(
         {
             continue;
         }
-        let TypeInputId(name) = input;
         let origin = origins
             .first()
             .expect("a collected type input always has an origin");
+        let name = &origin.display_name;
         return Err(occurrence_error(
             TypeDiagnosticReason::MissingReturnTypeArgument,
             callable,
@@ -558,11 +636,11 @@ pub(super) fn invalid_trait_constraint_subject_error(
 
 pub(super) fn remember_direct_constructor_input(
     checker: &Checker,
-    ast_ty: &AstTy,
+    signature_ty: &ResolvedSignatureTy,
     resolved: &Ty,
     inputs: &mut DirectConstructorInputs,
 ) {
-    let Some(trait_key) = checker.constructor_trait_key_for_ast_ty(ast_ty) else {
+    let Some(trait_key) = checker.constructor_trait_key_for_signature_ty(signature_ty) else {
         return;
     };
     let Ty::SelfApp(items) = resolved else {
@@ -573,7 +651,7 @@ pub(super) fn remember_direct_constructor_input(
     };
     inputs
         .witnesses
-        .entry(checker.constructor_family_key(&trait_key))
+        .entry(trait_key)
         .or_insert_with(|| witness.clone());
 }
 
@@ -586,17 +664,10 @@ pub(super) fn coalesce_direct_constructor_inputs(
         Ty::SelfApp(mut items) => {
             if let Some((Ty::Var(var), _)) = Checker::constructor_application_parts(&items) {
                 if let Some(trait_key) = checker.constructor_witness_traits.get(var) {
-                    let family_key = checker.constructor_family_key(trait_key);
-                    if let Some(shared) = inputs.witnesses.get(&family_key) {
+                    if let Some(shared) = inputs.witnesses.get(trait_key) {
                         if let Ty::Var(shared) = shared {
                             if shared != var {
-                                if checker.constructor_witness_traits.get(shared) == Some(trait_key)
-                                {
-                                    items[1] = Ty::Var(*shared);
-                                } else {
-                                    checker.constructor_family_witnesses.insert(*var, *shared);
-                                    checker.substitutions.insert(*var, Ty::Var(*shared));
-                                }
+                                items[1] = Ty::Var(*shared);
                             }
                         }
                     }
@@ -676,27 +747,11 @@ pub(super) fn coalesce_direct_constructor_inputs(
         },
         Ty::Struct(name, fields) => Ty::Struct(
             name,
-            fields
-                .into_iter()
-                .map(|(name, ty)| {
-                    (
-                        name,
-                        coalesce_direct_constructor_inputs(checker, ty, inputs),
-                    )
-                })
-                .collect(),
+            fields.map_types(|ty| coalesce_direct_constructor_inputs(checker, ty.clone(), inputs)),
         ),
         Ty::Record(name, fields) => Ty::Record(
             name,
-            fields
-                .into_iter()
-                .map(|(name, ty)| {
-                    (
-                        name,
-                        coalesce_direct_constructor_inputs(checker, ty, inputs),
-                    )
-                })
-                .collect(),
+            fields.map_types(|ty| coalesce_direct_constructor_inputs(checker, ty.clone(), inputs)),
         ),
         Ty::Enum(name, arguments) => Ty::Enum(
             name,
@@ -890,6 +945,34 @@ pub(super) fn missing_canonical_callable_signature(
                 detail,
             }),
             primary: SourceFact::untyped(SourceRole::CallTarget, SourceId(0), span.clone()),
+            related: Vec::new(),
+            remediation: None,
+        }),
+    }
+}
+
+pub(super) fn constructor_signature_metadata_error(
+    callable: &str,
+    span: &Span,
+    detail: String,
+) -> TypeError {
+    let message =
+        format!("canonical constructor signature for `{callable}` is inconsistent: {detail}");
+    TypeError {
+        message,
+        span: span.clone(),
+        hint: None,
+        structured: Some(StructuredDiagnostic {
+            reason: TypeDiagnosticReason::CallableSignatureMetadataMismatch,
+            origin: DiagnosticOrigin::Declaration,
+            data: DiagnosticData::CallableSignature(CallableSignatureData {
+                callable: callable.into(),
+                role: "constructor_application".into(),
+                expected_count: None,
+                actual_count: None,
+                detail,
+            }),
+            primary: SourceFact::untyped(SourceRole::Declaration, SourceId(0), span.clone()),
             related: Vec::new(),
             remediation: None,
         }),
@@ -1224,6 +1307,14 @@ fn builtin_runtime_type_matches(
         (Ty::Struct(expected_name, expected_fields), Ty::Struct(actual_name, actual_fields))
         | (Ty::Record(expected_name, expected_fields), Ty::Record(actual_name, actual_fields)) => {
             Checker::surface_name(&expected_name) == Checker::surface_name(&actual_name)
+                && expected_fields.arguments.len() == actual_fields.arguments.len()
+                && expected_fields
+                    .arguments
+                    .iter()
+                    .zip(&actual_fields.arguments)
+                    .all(|(expected, actual)| {
+                        builtin_runtime_type_matches(checker, expected, actual, expected_variables)
+                    })
                 && expected_fields.len() == actual_fields.len()
                 && expected_fields.iter().zip(&actual_fields).all(
                     |((expected_name, expected_ty), (actual_name, actual_ty))| {
@@ -1353,5 +1444,100 @@ mod tests {
             Some(TypeDiagnosticReason::CallableSignatureMetadataMismatch)
         );
         assert!(error.message.contains("ordinal 2 appears at position 1"));
+    }
+
+    #[test]
+    fn return_type_argument_validation_uses_canonical_constructor_trait_identity() {
+        let canonical_trait = sigil::resolved::ResolvedId {
+            name: "VisibleContext".into(),
+            qualified_name: Some("Imported::Context".into()),
+            unique_id: 41,
+            compiler_generated: false,
+            symbol_info: None,
+            span: Span { start: 0, end: 14 },
+        };
+        let return_type_arguments = vec![ResolvedReturnTypeArgument {
+            ordinal: 0,
+            ty: ResolvedSignatureTy {
+                syntax: AstTy::Named(Span { start: 0, end: 14 }, "VisibleContext".into()),
+                direct_constructor_trait: Some(canonical_trait.clone()),
+            },
+            span: Span { start: 0, end: 14 },
+        }];
+        let return_type = ResolvedSignatureTy {
+            syntax: AstTy::Generic(
+                Span { start: 20, end: 39 },
+                "DifferentDisplay".into(),
+                vec![AstTy::Named(Span { start: 37, end: 38 }, "Int".into())],
+            ),
+            direct_constructor_trait: Some(canonical_trait),
+        };
+
+        validate_return_type_argument_definition(
+            "guard",
+            &return_type_arguments,
+            &[],
+            Some(&return_type),
+        )
+        .expect("RTA and return occurrences are matched by resolved Trait identity");
+    }
+
+    #[test]
+    fn duplicate_direct_constructor_return_type_arguments_are_rejected() {
+        let canonical_trait = sigil::resolved::ResolvedId {
+            name: "Alternative".into(),
+            qualified_name: Some("Global::Alternative".into()),
+            unique_id: 73,
+            compiler_generated: false,
+            symbol_info: None,
+            span: Span { start: 0, end: 11 },
+        };
+        let argument = |start, end| ResolvedReturnTypeArgument {
+            ordinal: 0,
+            ty: ResolvedSignatureTy {
+                syntax: AstTy::Named(Span { start, end }, "Alternative".into()),
+                direct_constructor_trait: Some(canonical_trait.clone()),
+            },
+            span: Span { start, end },
+        };
+        let return_type_arguments = vec![argument(0, 11), argument(13, 24)];
+        let return_type = ResolvedSignatureTy {
+            syntax: AstTy::Generic(
+                Span { start: 30, end: 47 },
+                "Alternative".into(),
+                vec![AstTy::Named(Span { start: 42, end: 46 }, "Unit".into())],
+            ),
+            direct_constructor_trait: Some(canonical_trait),
+        };
+
+        let error = validate_return_type_argument_definition(
+            "guard",
+            &return_type_arguments,
+            &[],
+            Some(&return_type),
+        )
+        .expect_err("one return carrier cannot silently select the first duplicate RTA");
+        assert_eq!(
+            error.reason(),
+            Some(TypeDiagnosticReason::DuplicateReturnTypeArgumentInput)
+        );
+        let diagnostic = error.structured.expect("structured duplicate diagnostic");
+        assert_eq!(diagnostic.primary.span, Span { start: 13, end: 24 });
+        assert!(diagnostic
+            .related
+            .iter()
+            .any(|fact| fact.span == Span { start: 0, end: 11 }));
+        let DiagnosticData::ReturnTypeArgument(data) = &diagnostic.data else {
+            panic!("duplicate RTA must use ReturnTypeArgument diagnostic data")
+        };
+        assert!(data.value_parameter_origin.is_none());
+        assert_eq!(
+            data.left_origin.as_ref().map(|fact| fact.role),
+            Some(SourceRole::ReturnTypeArgument)
+        );
+        assert_eq!(
+            data.right_origin.as_ref().map(|fact| fact.role),
+            Some(SourceRole::ReturnTypeArgument)
+        );
     }
 }

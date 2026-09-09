@@ -1,2 +1,2 @@
 phase: typecheck
-contains: AmbiguousReturnTypeArgument
+contains: return type arguments for `Functor::fmap` cannot be inferred

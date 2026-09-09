@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use scar::typed::*;
+#[cfg(test)]
+use scar::types::NominalType;
 use scar::types::{FacetKind, Ty};
 use sigil::resolved::ResolvedId;
 use sindr::builtin::builtin_id_by_name;
@@ -2219,7 +2221,7 @@ mod tests {
         TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern, TypedProcessSpec,
         TypedProgram, TypedReturnTypeArgument, TypedValueParameter,
     };
-    use scar::types::Ty;
+    use scar::types::{NominalType, Ty};
     use sigil::resolved::ResolvedId;
     use sindr::ir::{
         BootEntrySource, CallableTemplate, CallableTemplateComposeFlavor,
@@ -2269,7 +2271,7 @@ mod tests {
 
     #[test]
     fn ty_to_string_uses_surface_names_for_runtime_display_types() {
-        let user_ty = Ty::Struct("Global::User".into(), Vec::new());
+        let user_ty = Ty::Struct("Global::User".into(), NominalType::monomorphic(Vec::new()));
         assert_eq!(ty_to_string(&user_ty), "User");
 
         let option_ty = Ty::Enum("Global::Option".into(), vec![user_ty.clone()]);
@@ -2288,7 +2290,10 @@ mod tests {
         }];
         let range_ty = Ty::Struct(
             "Global::Range".into(),
-            vec![("min".into(), Ty::Var(42)), ("max".into(), Ty::Var(42))],
+            NominalType::new(
+                vec![Ty::Var(42)],
+                vec![("min".into(), Ty::Var(42)), ("max".into(), Ty::Var(42))],
+            ),
         );
         let params = vec![
             typed_value_parameter("min", 1, Ty::Var(42)),
@@ -2297,7 +2302,7 @@ mod tests {
 
         assert_eq!(
             format_function_signature("new", &return_type_arguments, &params, &range_ty),
-            "new<_>(min: _, max: _) -> Range"
+            "new<_>(min: _, max: _) -> Range<_>"
         );
     }
 
@@ -4957,16 +4962,12 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
             ty_to_string_with_type_params(ok, type_params),
             ty_to_string_with_type_params(err, type_params)
         ),
-        Ty::Struct(name, fields) | Ty::Record(name, fields) => {
+        Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
             let name = surface_path_name(name);
-            let args = type_params
+            let args = nominal
+                .arguments
                 .iter()
-                .filter(|param| {
-                    fields
-                        .iter()
-                        .any(|(_, field_ty)| ty_contains_var(field_ty, param.ty_var))
-                })
-                .map(|param| param.name.clone())
+                .map(|argument| ty_to_string_with_type_params(argument, type_params))
                 .collect::<Vec<_>>();
             if args.is_empty() {
                 name.to_string()
@@ -5013,38 +5014,6 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
         }
         Ty::BuiltinFunc { name, .. } => format!("Builtin({})", name),
         Ty::UserFunc { .. } => "UserFunc".into(),
-    }
-}
-
-fn ty_contains_var(ty: &Ty, needle: u32) -> bool {
-    match ty {
-        Ty::Var(var) => *var == needle,
-        Ty::List(inner) | Ty::Lazy(inner) => ty_contains_var(inner, needle),
-        Ty::Tuple(items) | Ty::SelfApp(items) => {
-            items.iter().any(|item| ty_contains_var(item, needle))
-        }
-        Ty::Func(params, ret) => {
-            params.iter().any(|param| ty_contains_var(param, needle))
-                || ty_contains_var(ret, needle)
-        }
-        Ty::Facet(_, source, focus, update_source, update_focus) => {
-            ty_contains_var(source, needle)
-                || ty_contains_var(focus, needle)
-                || ty_contains_var(update_source, needle)
-                || ty_contains_var(update_focus, needle)
-        }
-        Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
-            params.iter().any(|param| ty_contains_var(param, needle))
-                || ty_contains_var(ret, needle)
-        }
-        Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
-            .iter()
-            .any(|(_, field_ty)| ty_contains_var(field_ty, needle)),
-        Ty::Enum(_, args) => args.iter().any(|arg| ty_contains_var(arg, needle)),
-        Ty::Result(ok, err) => ty_contains_var(ok, needle) || ty_contains_var(err, needle),
-        Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Pid(_) | Ty::Hole | Ty::Error => {
-            false
-        }
     }
 }
 
@@ -6663,8 +6632,9 @@ impl Codegen {
                 | Ty::UserFunc { params, ret, .. } => params.iter().any(pending) || pending(ret),
                 Ty::Result(ok, err) => pending(ok) || pending(err),
                 Ty::Facet(_, a, b, c, d) => [a, b, c, d].into_iter().any(|ty| pending(ty)),
-                Ty::Struct(_, fields) | Ty::Record(_, fields) => {
-                    fields.iter().any(|(_, ty)| pending(ty))
+                Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                    nominal.arguments.iter().any(pending)
+                        || nominal.iter().any(|(_, ty)| pending(ty))
                 }
                 _ => false,
             }
@@ -11367,7 +11337,10 @@ mod process_runtime_v2_tests {
 
     fn worker_strategy_value() -> TypedNode {
         TypedNode {
-            ty: Ty::Struct("WorkerStrategy".into(), Vec::new()),
+            ty: Ty::Struct(
+                "WorkerStrategy".into(),
+                NominalType::monomorphic(Vec::new()),
+            ),
             span: span(50, 58),
             node: TypedInner::Var(ResolvedId {
                 name: "strategy".into(),
