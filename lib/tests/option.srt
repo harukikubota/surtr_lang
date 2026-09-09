@@ -19,9 +19,9 @@ test("Option") {
     it("reports some and none states") {
       assert_eq((True, False, False, True), (
         Option::is_some(Option::Some(7)),
-        Option::is_some(Option::None),
+        Option::is_some(Option<Int>::None),
         Option::is_none(Option::Some(7)),
-        Option::is_none(Option::None),
+        Option::is_none(Option<Int>::None),
       ))
     }
 

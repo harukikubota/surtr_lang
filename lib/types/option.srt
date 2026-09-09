@@ -43,7 +43,7 @@ impl Option {
   @doc """
   Return `True` when the option is `None`.
   ## REPL
-  xldr(1)> Option::is_none(Option::None)
+  xldr(1)> Option::is_none(Option<Int>::None)
   True
   """
   def is_none(value: Option<$T>) -> Boolean {

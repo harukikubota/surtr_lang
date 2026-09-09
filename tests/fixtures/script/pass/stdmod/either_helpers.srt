@@ -2,7 +2,7 @@ def inc(value: Int) -> Int {
   value + 1
 }
 
-print(to_string(Either::is_left(Either::Left("x"))))
+print(to_string(Either::is_left(Either<String, Int>::Left("x"))))
 folded: Either<String, Int> = Either::Left("x")
 print(Either::fold(folded, {|value| "left:" ++ value}, {|value| to_string(value)}))
 right: Either<String, Int> = Either::Right(2)

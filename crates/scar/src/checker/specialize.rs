@@ -1,8 +1,24 @@
 use super::*;
 use diagnostics::{
-    DiagnosticData, DiagnosticOrigin, Remediation, ReturnTypeArgumentData, SourceFact, SourceId,
+    DiagnosticData, DiagnosticOrigin, EnumConstructorConstraintStatus,
+    EnumConstructorTypeArgumentData, Remediation, ReturnTypeArgumentData, SourceFact, SourceId,
     SourceRole, StructuredDiagnostic, TypeDiagnosticReason,
 };
+
+enum UnresolvedExecutableTypeArgument {
+    ReturnTypeArgument {
+        callable: String,
+        ordinal: u32,
+        unresolved: String,
+        span: Span,
+    },
+    EnumConstructor {
+        enum_name: String,
+        constructor: String,
+        ordinal: u32,
+        span: Span,
+    },
+}
 
 struct SpecializationContext<'a> {
     defs_by_fun_idx: &'a HashMap<u32, TypedNode>,
@@ -39,10 +55,18 @@ impl Checker {
         let mut rewritten = Vec::new();
         let mut generated_defs = Vec::new();
         let mut specialization_fun_idxs = self.specialization_fun_idxs.clone();
+        let mut unresolved_definition = None;
 
         for stmt in stmts {
             if let Some(fun_idx) = Self::def_fun_idx(&stmt) {
                 if needs_specialization.contains(&fun_idx) {
+                    if unresolved_definition.is_none() {
+                        unresolved_definition = self.first_unresolved_executable_type_argument(
+                            &stmt,
+                            &HashSet::new(),
+                            &HashSet::new(),
+                        );
+                    }
                     self.specializable_defs.insert(fun_idx, stmt);
                     continue;
                 }
@@ -68,58 +92,134 @@ impl Checker {
         {
             return Err(self.pending_trait_helper_error(trait_name, method, subject, span));
         }
-        if let Some((callable, ordinal, unresolved, span)) = rewritten
-            .iter()
-            .find_map(|node| self.first_ambiguous_return_type_argument_call(node, &HashSet::new()))
-        {
-            let message = format!("return type arguments for `{callable}` cannot be inferred");
-            let help = format!("Provide an expected result type for `{callable}`.");
-            return Err(TypeError {
-                message,
-                span: span.clone(),
-                hint: Some(help.clone()),
-                structured: Some(StructuredDiagnostic {
-                    reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument,
-                    origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
-                    data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
-                        declared_origin: None,
-                        value_parameter_origin: None,
-                        return_origin: None,
-                        left_origin: None,
-                        right_origin: Some(SourceFact::typed(
-                            SourceRole::ReturnTypeArgument,
-                            SourceId(0),
-                            span.clone(),
-                            unresolved.clone(),
-                        )),
-                        required_trait: None,
-                        expected_count: None,
-                        actual_count: None,
-                        callable,
-                        ordinal: Some(ordinal),
-                        expected_type: Some("concrete return type argument".into()),
-                        actual_type: Some(unresolved.clone()),
-                    }),
-                    primary: SourceFact::typed(
-                        SourceRole::ReturnTypeArgument,
-                        SourceId(0),
-                        span,
-                        unresolved,
-                    ),
-                    related: Vec::new(),
-                    remediation: Some(Remediation::Help { text: help }),
-                }),
+        if let Some(unresolved) = unresolved_definition.or_else(|| {
+            rewritten.iter().find_map(|node| {
+                self.first_unresolved_executable_type_argument(
+                    node,
+                    &HashSet::new(),
+                    &HashSet::new(),
+                )
+            })
+        }) {
+            return Err(match unresolved {
+                UnresolvedExecutableTypeArgument::ReturnTypeArgument {
+                    callable,
+                    ordinal,
+                    unresolved,
+                    span,
+                } => {
+                    let message =
+                        format!("return type arguments for `{callable}` cannot be inferred");
+                    let help = format!("Provide an expected result type for `{callable}`.");
+                    TypeError {
+                        message,
+                        span: span.clone(),
+                        hint: Some(help.clone()),
+                        structured: Some(StructuredDiagnostic {
+                            reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument,
+                            origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
+                            data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
+                                declared_origin: None,
+                                value_parameter_origin: None,
+                                return_origin: None,
+                                left_origin: None,
+                                right_origin: Some(SourceFact::typed(
+                                    SourceRole::ReturnTypeArgument,
+                                    SourceId(0),
+                                    span.clone(),
+                                    unresolved.clone(),
+                                )),
+                                required_trait: None,
+                                expected_count: None,
+                                actual_count: None,
+                                callable,
+                                ordinal: Some(ordinal),
+                                expected_type: Some("concrete return type argument".into()),
+                                actual_type: Some(unresolved.clone()),
+                            }),
+                            primary: SourceFact::typed(
+                                SourceRole::ReturnTypeArgument,
+                                SourceId(0),
+                                span,
+                                unresolved,
+                            ),
+                            related: Vec::new(),
+                            remediation: Some(Remediation::Help { text: help }),
+                        }),
+                    }
+                }
+                UnresolvedExecutableTypeArgument::EnumConstructor {
+                    enum_name,
+                    constructor,
+                    ordinal,
+                    span,
+                } => {
+                    let message = format!(
+                        "type argument {ordinal} for enum constructor `{constructor}` cannot be inferred"
+                    );
+                    let help = format!(
+                        "Add an expected `{enum_name}<...>` type or specify every constructor type argument."
+                    );
+                    TypeError {
+                        message,
+                        span: span.clone(),
+                        hint: Some(help.clone()),
+                        structured: Some(StructuredDiagnostic {
+                            reason: TypeDiagnosticReason::UnresolvedEnumConstructorTypeArgument,
+                            origin: DiagnosticOrigin::EnumConstructor { ordinal },
+                            data: DiagnosticData::EnumConstructorTypeArgument(
+                                EnumConstructorTypeArgumentData {
+                                    enum_name,
+                                    constructor,
+                                    ordinal,
+                                    constraint_status:
+                                        EnumConstructorConstraintStatus::Insufficient,
+                                },
+                            ),
+                            primary: SourceFact::untyped(SourceRole::Value, SourceId(0), span),
+                            related: Vec::new(),
+                            remediation: Some(Remediation::Help { text: help }),
+                        }),
+                    }
+                }
             });
         }
         self.specialization_fun_idxs = specialization_fun_idxs;
         Ok(rewritten)
     }
 
-    fn first_ambiguous_return_type_argument_call(
+    fn first_unresolved_executable_type_argument(
         &self,
         node: &TypedNode,
         allowed_vars: &HashSet<u32>,
-    ) -> Option<(String, u32, String, Span)> {
+        allowed_enum_constructor_vars: &HashSet<u32>,
+    ) -> Option<UnresolvedExecutableTypeArgument> {
+        if let TypedInner::ConstructorCall(tag, _) = &node.node {
+            let enum_application = match self.resolve_ty(&node.ty) {
+                Ty::Enum(enum_name, arguments) => Some((enum_name, arguments)),
+                _ => None,
+            };
+            if let Some((enum_name, arguments)) = enum_application {
+                if let Some(ordinal) = arguments.iter().position(|argument| {
+                    let mut variables = Vec::new();
+                    Self::collect_ty_vars(&self.resolve_ty(argument), &mut variables);
+                    variables
+                        .iter()
+                        .any(|variable| !allowed_enum_constructor_vars.contains(variable))
+                }) {
+                    let variant = self
+                        .env
+                        .enum_variant_by_tag(*tag)
+                        .expect("typed enum constructor tag has canonical metadata");
+                    return Some(UnresolvedExecutableTypeArgument::EnumConstructor {
+                        enum_name: Self::surface_name(&enum_name).into(),
+                        constructor: Self::surface_name(&variant.constructor_name).into(),
+                        ordinal: ordinal as u32,
+                        span: node.span.clone(),
+                    });
+                }
+            }
+        }
         if let TypedInner::App(func, _) = &node.node {
             if let TypedInner::Var(id) = &func.node {
                 // Compiler-generated process helpers carry synthetic generic
@@ -168,12 +268,14 @@ impl Checker {
                             if !result_can_receive_a_later_call_witness
                                 && unresolved.iter().any(|var| !allowed_vars.contains(var))
                             {
-                                return Some((
-                                    id.name.clone(),
-                                    argument.ordinal,
-                                    self.diagnostic_ty_name(&resolved),
-                                    node.span.clone(),
-                                ));
+                                return Some(
+                                    UnresolvedExecutableTypeArgument::ReturnTypeArgument {
+                                        callable: id.name.clone(),
+                                        ordinal: argument.ordinal,
+                                        unresolved: self.diagnostic_ty_name(&resolved),
+                                        span: node.span.clone(),
+                                    },
+                                );
                             }
                         }
                     }
@@ -181,8 +283,13 @@ impl Checker {
             }
         }
 
-        let visit =
-            |child: &TypedNode| self.first_ambiguous_return_type_argument_call(child, allowed_vars);
+        let visit = |child: &TypedNode| {
+            self.first_unresolved_executable_type_argument(
+                child,
+                allowed_vars,
+                allowed_enum_constructor_vars,
+            )
+        };
         match &node.node {
             TypedInner::App(func, args)
             | TypedInner::InjectCall(func, args)
@@ -242,32 +349,62 @@ impl Checker {
             } => visit(source).or_else(|| visit(update_fun)),
             TypedInner::Def(_, _, return_type_arguments, params, ret_ty, _, body, _) => {
                 let mut allowed = allowed_vars.clone();
+                let mut allowed_enum_constructors = allowed_enum_constructor_vars.clone();
                 for argument in return_type_arguments {
                     self.extend_allowed_vars(&argument.ty, &mut allowed);
+                    self.extend_allowed_vars(&argument.ty, &mut allowed_enum_constructors);
                 }
                 for param in params {
                     self.extend_allowed_vars(&param.ty, &mut allowed);
+                    self.extend_allowed_vars(&param.ty, &mut allowed_enum_constructors);
                 }
                 self.extend_allowed_vars(ret_ty, &mut allowed);
-                self.first_ambiguous_return_type_argument_call(body, &allowed)
+                self.first_unresolved_executable_type_argument(
+                    body,
+                    &allowed,
+                    &allowed_enum_constructors,
+                )
             }
             TypedInner::ExtractorDef(_, _, type_params, param, ret_ty, body, _) => {
                 let mut allowed = allowed_vars.clone();
+                let mut allowed_enum_constructors = allowed_enum_constructor_vars.clone();
                 for type_param in type_params {
                     allowed.insert(type_param.ty_var);
+                    allowed_enum_constructors.insert(type_param.ty_var);
                 }
                 self.extend_allowed_vars(&param.ty, &mut allowed);
+                self.extend_allowed_vars(&param.ty, &mut allowed_enum_constructors);
                 self.extend_allowed_vars(ret_ty, &mut allowed);
-                self.first_ambiguous_return_type_argument_call(body, &allowed)
+                self.first_unresolved_executable_type_argument(
+                    body,
+                    &allowed,
+                    &allowed_enum_constructors,
+                )
             }
             TypedInner::DeferrorDef(_, _, _, params, body) => {
                 let mut allowed = allowed_vars.clone();
+                let mut allowed_enum_constructors = allowed_enum_constructor_vars.clone();
                 for parameter in params {
                     self.extend_allowed_vars(&parameter.ty, &mut allowed);
+                    self.extend_allowed_vars(&parameter.ty, &mut allowed_enum_constructors);
                 }
-                self.first_ambiguous_return_type_argument_call(body, &allowed)
+                self.first_unresolved_executable_type_argument(
+                    body,
+                    &allowed,
+                    &allowed_enum_constructors,
+                )
             }
-            TypedInner::Closure(_, _, body) => visit(body),
+            TypedInner::Closure(params, _, body) => {
+                let mut allowed_enum_constructors = allowed_enum_constructor_vars.clone();
+                for parameter in params {
+                    self.extend_allowed_vars(&parameter.ty, &mut allowed_enum_constructors);
+                }
+                self.first_unresolved_executable_type_argument(
+                    body,
+                    allowed_vars,
+                    &allowed_enum_constructors,
+                )
+            }
             TypedInner::Lit(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil

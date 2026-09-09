@@ -213,6 +213,14 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                 );
             }
         }
+        TypeDiagnosticReason::UnresolvedEnumConstructorTypeArgument => {
+            if let DiagnosticData::EnumConstructorTypeArgument(value) = &input.data {
+                return format!(
+                    "type argument {} for enum constructor `{}` cannot be inferred",
+                    value.ordinal, value.constructor
+                );
+            }
+        }
         TypeDiagnosticReason::CallableSignatureMetadataMismatch => {
             if let DiagnosticData::CallableSignature(value) = &input.data {
                 return format!(
