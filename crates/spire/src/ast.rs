@@ -681,6 +681,9 @@ pub enum Ast {
     /// Constructor call: `Point(1.0, 2.0)` or `Point(x: 1.0, y: 2.0)`
     ConstructorCall(Span, Symbol, Vec<RecordLitArg>),
 
+    /// Enum constructor with owner type arguments: `Either<_, Int>::Left("term")`.
+    EnumConstructorCall(Span, Symbol, Vec<AstTy>, Symbol, Vec<RecordLitArg>),
+
     /// Error type definition: `deferror ParseError(term: String) { "..." }`
     DeferrorDef(Span, Symbol, Vec<RecordField>, Box<Ast>, DeclAttrs),
 

@@ -116,6 +116,20 @@ ReturnTypeArgumentはruntimeの値でも、通常genericを任意指定する型
 対応する`::<...>`を使えます。expected returnから一意に決まる場合はcall-site指定を省略できますが、
 最後まで決まらない場合はambiguityとして拒否されます。
 
+generic enum variant の値生成は別の専用構文です。owner 側に型引数を置き、`_` の位置だけを
+payload と expected type から推論できます。
+
+```surtr
+left: Either<String, Int> = Either<_, Int>::Left("term")
+none: Option<Int> = Option<_>::None
+```
+
+型引数の個数は enum 宣言と一致させ、明示した型は固定します。この `_` は
+`Enum<...>::Variant(...)` の型引数列だけで許可され、通常の型注釈には使えません。
+callable の ReturnTypeArgument を指定する `::<...>` とも別の構文です。
+TypeConstructor trait や abstract `Error` など、通常の値型位置で禁止される型も指定できません。
+`Err(NoneError)` の成功型が外から決まらない場合は、`Result<Int>::Err(NoneError)` のように指定します。
+
 ## 空リスト
 
 空リストは要素型が見えないので、型注釈を付けるのが基本です。

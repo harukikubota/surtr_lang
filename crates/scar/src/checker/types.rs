@@ -2780,7 +2780,7 @@ impl Checker {
         self.instantiate_ty_with_fresh(ty, &mut fresh)
     }
 
-    fn substitute_type_def_ty(&self, ty: &Ty, bindings: &HashMap<u32, Ty>) -> Ty {
+    pub(super) fn substitute_type_def_ty(&self, ty: &Ty, bindings: &HashMap<u32, Ty>) -> Ty {
         match ty {
             Ty::Var(var) => bindings.get(var).cloned().unwrap_or(Ty::Var(*var)),
             Ty::List(inner) => Ty::List(Box::new(self.substitute_type_def_ty(inner, bindings))),

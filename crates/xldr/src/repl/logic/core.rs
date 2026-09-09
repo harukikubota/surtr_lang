@@ -8673,6 +8673,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::StructLit(span, _, _)
         | Ast::InternalStructLit(span, _, _)
         | Ast::ConstructorCall(span, _, _)
+        | Ast::EnumConstructorCall(span, _, _, _, _)
         | Ast::DeferrorDef(span, _, _, _, _)
         | Ast::EnumDef(span, _, _, _, _)
         | Ast::Def(span, ..)

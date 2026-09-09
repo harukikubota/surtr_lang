@@ -595,6 +595,43 @@ impl Parser<'_> {
         self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Lt))
     }
 
+    fn enum_constructor_type_args_start(&self) -> bool {
+        if !matches!(self.peek(), Token::Lt) {
+            return false;
+        }
+        let mut depth = 0usize;
+        let mut offset = 0usize;
+        loop {
+            let Some(token) = self.tokens.get(self.pos + offset).map(|token| &token.token) else {
+                return false;
+            };
+            match token {
+                Token::Lt => depth += 1,
+                Token::Gt => {
+                    depth = depth.saturating_sub(1);
+                }
+                Token::Compose if depth >= 2 => depth -= 2,
+                Token::Eof if depth > 0 => return false,
+                Token::Newline => {}
+                _ => {}
+            }
+            if depth == 0 {
+                return matches!(
+                    (
+                        self.tokens
+                            .get(self.pos + offset + 1)
+                            .map(|token| &token.token),
+                        self.tokens
+                            .get(self.pos + offset + 2)
+                            .map(|token| &token.token),
+                    ),
+                    (Some(Token::Colon), Some(Token::Colon))
+                );
+            }
+            offset += 1;
+        }
+    }
+
     fn parse_explicit_return_type_argument_apply(
         &mut self,
         target: Ast,
@@ -640,6 +677,58 @@ impl Parser<'_> {
                 end: end.end,
             },
             Box::new(target),
+            args,
+        ))
+    }
+
+    fn parse_enum_constructor_call(
+        &mut self,
+        owner_name: Symbol,
+        start: usize,
+    ) -> Result<Ast, ParseError> {
+        self.expect(&Token::Lt)?;
+        self.skip_newlines();
+        if matches!(self.peek(), Token::Gt) {
+            return Err(ParseError::syntax(
+                "Enum constructor type arguments cannot be empty",
+                self.peek_span(),
+            ));
+        }
+        let mut type_args = vec![self.parse_type()?];
+        self.skip_newlines();
+        while matches!(self.peek(), Token::Comma) {
+            self.advance();
+            self.skip_newlines();
+            if matches!(self.peek(), Token::Gt) {
+                return Err(ParseError::syntax(
+                    "Enum constructor type arguments cannot end with a comma",
+                    self.peek_span(),
+                ));
+            }
+            type_args.push(self.parse_type()?);
+            self.skip_newlines();
+        }
+        self.expect_type_gt()?;
+        self.consume_path_separator()?;
+        let (variant_name, variant_span) = self.expect_ident()?;
+
+        let (args, end) = if matches!(self.peek(), Token::LParen) {
+            self.advance();
+            let args = self.parse_call_args()?;
+            self.skip_newlines();
+            let end = self.expect(&Token::RParen)?.end;
+            (args, end)
+        } else if matches!(self.peek(), Token::Unit) {
+            (Vec::new(), self.advance().span.end)
+        } else {
+            (Vec::new(), variant_span.end)
+        };
+        self.reject_constructor_trailing_block()?;
+        Ok(Ast::EnumConstructorCall(
+            Span { start, end },
+            owner_name,
+            type_args,
+            variant_name,
             args,
         ))
     }
@@ -1227,13 +1316,16 @@ impl Parser<'_> {
             None
         };
 
+        let path_last_is_uppercase = path_segments
+            .last()
+            .and_then(|segment| segment.chars().next())
+            .is_some_and(|ch| ch.is_uppercase());
+        if path_last_is_uppercase && self.enum_constructor_type_args_start() {
+            return self.parse_enum_constructor_call(path_segments.join("::"), name_span.start);
+        }
+
         if let Some(mut path_expr) = path_ast {
             let path_name = path_segments.join("::");
-            let path_last_is_uppercase = path_segments
-                .last()
-                .and_then(|segment| segment.chars().next())
-                .map(|ch| ch.is_uppercase())
-                .unwrap_or(false);
             if self.explicit_type_args_start() {
                 if path_last_is_uppercase {
                     return Err(ParseError::syntax(
@@ -2842,11 +2934,13 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
             StructLitField::Explicit(_, expr) => bulk_update_proc_contains_operation_call(expr),
             StructLitField::Shorthand(_) => false,
         }),
-        Ast::ConstructorCall(_, _, args) => args.iter().any(|arg| match arg {
-            RecordLitArg::Positional(inner) | RecordLitArg::Named(_, inner) => {
-                bulk_update_proc_contains_operation_call(inner)
-            }
-        }),
+        Ast::ConstructorCall(_, _, args) | Ast::EnumConstructorCall(_, _, _, _, args) => {
+            args.iter().any(|arg| match arg {
+                RecordLitArg::Positional(inner) | RecordLitArg::Named(_, inner) => {
+                    bulk_update_proc_contains_operation_call(inner)
+                }
+            })
+        }
         Ast::FacetSegmentAccess(_, target, segment) => {
             bulk_update_proc_contains_operation_call(target)
                 || match segment {

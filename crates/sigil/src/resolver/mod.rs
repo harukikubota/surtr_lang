@@ -754,7 +754,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
                 }
             }
         }
-        Resolved::ConstructorCall(_, id, args) => {
+        Resolved::ConstructorCall(_, id, args) | Resolved::EnumConstructorCall(_, id, _, args) => {
             rebase_resolved_id(id, base, offset);
             for arg in args {
                 rebase_record_arg(arg, base, offset);

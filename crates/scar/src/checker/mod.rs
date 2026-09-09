@@ -4111,7 +4111,8 @@ impl Checker {
                     }
                 }
             }
-            Resolved::ConstructorCall(_, _, args) => {
+            Resolved::ConstructorCall(_, _, args)
+            | Resolved::EnumConstructorCall(_, _, _, args) => {
                 for arg in args {
                     match arg {
                         ResolvedRecordLitArg::Positional(expr)

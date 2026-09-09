@@ -6738,6 +6738,58 @@ fn = &TryFrom::try_from::<Int>"#,
 }
 
 #[test]
+fn enum_constructor_type_arguments_parse_separately_from_callable_type_arguments() {
+    let ast = parse(
+        r#"left = Either<_, Int>::Left("term")
+none = Option<Int>::None
+nested = Either<List<Int>, Result<String>>::Left([1])
+multiline = Either<
+  _,
+  Int
+>::Left("line")"#,
+    )
+    .expect("enum constructor type arguments should parse");
+
+    assert!(matches!(
+        &ast[0],
+        Ast::Bind(_, _, rhs)
+            if matches!(rhs.as_ref(), Ast::EnumConstructorCall(_, owner, type_args, variant, args)
+                if owner == "Either"
+                    && variant == "Left"
+                    && type_args.len() == 2
+                    && matches!(&type_args[0], AstTy::Named(_, name) if name == "_")
+                    && args.len() == 1)
+    ));
+    assert!(matches!(
+        &ast[1],
+        Ast::Bind(_, _, rhs)
+            if matches!(rhs.as_ref(), Ast::EnumConstructorCall(_, owner, type_args, variant, args)
+                if owner == "Option"
+                    && variant == "None"
+                    && type_args.len() == 1
+                    && args.is_empty())
+    ));
+    assert!(matches!(
+        &ast[2],
+        Ast::Bind(_, _, rhs)
+            if matches!(rhs.as_ref(), Ast::EnumConstructorCall(_, owner, type_args, variant, _)
+                if owner == "Either"
+                    && variant == "Left"
+                    && matches!(&type_args[0], AstTy::Generic(_, name, _) if name == "List")
+                    && matches!(&type_args[1], AstTy::Generic(_, name, _) if name == "Result"))
+    ));
+    assert!(matches!(
+        &ast[3],
+        Ast::Bind(_, _, rhs)
+            if matches!(rhs.as_ref(), Ast::EnumConstructorCall(_, owner, type_args, variant, _)
+                if owner == "Either"
+                    && variant == "Left"
+                    && type_args.len() == 2
+                    && matches!(&type_args[0], AstTy::Named(_, name) if name == "_"))
+    ));
+}
+
+#[test]
 fn canonical_return_type_arguments_and_value_parameters_are_preserved() {
     let parsed = parse(
         r#"def identity::<$A>(value: $A) -> $A { value }

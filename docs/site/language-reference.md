@@ -90,7 +90,11 @@ match expr {
 ### `Enum`
 
 - `defenum` で定義する
-- 値生成は `Enum::Variant(...)`
+- 値生成は `Enum::Variant(...)` または `Enum<TypeArgument, ...>::Variant(...)`
+- 後者の型引数 arity は enum 宣言と一致させる。各 `_` はその位置だけを payload と expected type から推論し、明示した通常型・scope 内型変数は固定する
+- TypeConstructor trait や abstract `Error` など、既存の値型位置で禁止される型は明示型引数にも使えない
+- `Result<T>::Ok(...)` / `Result<T>::Err(...)` は Result 専用 constructor として lower する。bare `Err(...)` の `T` が外側から決まらない場合は owner 型引数を明示する
+- `Enum<...>::method`、struct constructor、型注釈・signature・pattern・impl target の `_` にはこの規則を適用しない
 - `match` は網羅必須
 - enum 値への field access（例: `.idx`）は不可
 

@@ -1210,6 +1210,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(compare_default_methods_dispatch_to_trait_source_when_impl_omits_override),
     surface_case!(compare_trait_impl_still_requires_compare_method),
     surface_case!(explicit_type_arguments_specialize_functions_trait_calls_and_captures),
+    surface_case!(enum_constructor_partial_type_arguments_constrain_only_their_own_slots),
     surface_case!(regular_callable_rejects_undeclared_return_type_arguments),
     surface_case!(bare_trait_capability_controls_full_parameterized_dispatch),
     surface_case!(trait_heads_and_expression_obligations_retain_nested_arguments),
@@ -9152,6 +9153,117 @@ convert_fn: (String -> Int) = &Convert::convert::<Int>
 again: Int = convert_fn("")"#,
     );
     assert!(!typed.is_empty());
+}
+
+fn enum_constructor_partial_type_arguments_constrain_only_their_own_slots() {
+    typecheck_without_std_prelude(
+        r#"defenum Either<$L, $R> { Left($L), Right($R), Pair($L, $R) }
+defenum Maybe<$T> { Some($T), None }
+def generic_none::<$T>() -> Maybe<$T> { Maybe<$T>::None }
+left_text: Either<String, Int> = Either<_, Int>::Left("term")
+left_int: Either<Int, Int> = Either<_, Int>::Left(1)
+none: Either<Int, String> = Either<Int, _>::Right("none")
+pair: Either<String, Int> = Either<_, _>::Pair("pair", 2)
+generic: Maybe<String> = generic_none::<String>()"#,
+    )
+    .expect("payload and expected type should infer only constructor `_` slots");
+
+    let mismatch = typecheck_without_std_prelude(
+        r#"defenum Either<$L, $R> { Left($L), Right($R) }
+bad = Either<String, Int>::Left(1)"#,
+    )
+    .expect_err("an explicit constructor type argument must remain fixed");
+    assert!(mismatch.message.contains("String"), "{mismatch:?}");
+
+    let rigid = typecheck_without_std_prelude(
+        r#"defenum Maybe<$T> { Some($T), None }
+def bad::<$T>() -> Maybe<$T> { Maybe<$T>::Some(1) }"#,
+    )
+    .expect_err("a scope type variable supplied explicitly must remain rigid");
+    assert!(
+        rigid.message.contains("$T") || rigid.message.contains("Int"),
+        "{rigid:?}"
+    );
+
+    let annotation = typecheck_without_std_prelude(
+        r#"defenum Either<$L, $R> { Left($L), Right($R) }
+bad: Either<_, Int> = Either::Left("term")"#,
+    )
+    .expect_err("`_` must remain unavailable in ordinary annotations");
+    assert!(
+        annotation.message.contains("`_` is only allowed"),
+        "{annotation:?}"
+    );
+
+    let closure_payload = typecheck_with_builtin_prelude(
+        r#"mapper: (Unit -> Option<(Int -> Int)>) = {|_| Option<_>::Some({|x| x + 1})}"#,
+    );
+    assert!(!closure_payload.is_empty());
+
+    let abstract_error =
+        typecheck_with_rules("value = Option<Error>::None", RuntimeSourcePolicy::script())
+            .expect_err("abstract Error must remain unavailable as an ordinary enum type argument");
+    assert!(
+        abstract_error
+            .message
+            .contains("Error cannot be used as an enum constructor type argument"),
+        "{abstract_error:?}"
+    );
+
+    let result_nodes = typecheck_with_rules(
+        r#"ok: Result<Int> = Result<Int>::Ok(1)
+err: Result<Int> = Result<Int>::Err(NoneError)"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect(
+        "qualified Result constructors should retain Result lowering and explicit success type",
+    );
+    for node in result_nodes.iter().rev().take(2) {
+        let TypedInner::Bind(_, rhs) = &node.node else {
+            panic!("expected Result constructor binding, got {:?}", node.node);
+        };
+        let TypedInner::ConstructorCall(_, fields) = &rhs.node else {
+            panic!("expected Result constructor lowering, got {:?}", rhs.node);
+        };
+        assert_eq!(
+            fields.len(),
+            1,
+            "Result runtime representation has one payload"
+        );
+    }
+
+    let bare_err = typecheck_with_rules("err = Err(NoneError)", RuntimeSourcePolicy::script())
+        .expect("a bare Err constructor may leave its success type to surrounding inference");
+    assert!(!bare_err.is_empty());
+
+    let invalid_err =
+        typecheck_with_rules("err = Result<Int>::Err(1)", RuntimeSourcePolicy::script())
+            .expect_err("an explicit Result constructor must retain the concrete Error constraint");
+    assert!(
+        invalid_err
+            .message
+            .contains("requires a concrete deferror value"),
+        "{invalid_err:?}"
+    );
+
+    let constructor_trait = typecheck_with_rules(
+        r#"deftrait FunctorShape
+where
+  Self: Type<$A>
+{
+  def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
+}
+defenum Maybe<$T> { Some($T), None }
+value = Maybe<FunctorShape>::None"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("a TypeConstructor trait must not become an ordinary enum value type");
+    assert!(
+        constructor_trait
+            .message
+            .contains("Unknown type: FunctorShape"),
+        "{constructor_trait:?}"
+    );
 }
 
 fn regular_callable_rejects_undeclared_return_type_arguments() {

@@ -785,6 +785,8 @@ impl From<&OwnerEntry> for OwnerRef {
 pub struct OwnerRegistry {
     entries: BTreeMap<String, OwnerEntry>,
     #[serde(default)]
+    enum_type_parameter_arities: BTreeMap<String, usize>,
+    #[serde(default)]
     constructor_trait_seeds: BTreeSet<String>,
     #[serde(default)]
     trait_parent_edges: BTreeSet<(String, String)>,
@@ -844,6 +846,16 @@ impl OwnerRegistry {
         self.get(key).map(OwnerRef::from)
     }
 
+    pub fn enum_type_parameter_arity(&self, key: &str) -> Option<usize> {
+        self.enum_type_parameter_arities
+            .get(key)
+            .or_else(|| {
+                self.enum_type_parameter_arities
+                    .get(global_surface_name(key))
+            })
+            .copied()
+    }
+
     pub fn entries(&self) -> impl Iterator<Item = &OwnerEntry> {
         self.entries.values()
     }
@@ -868,6 +880,9 @@ impl OwnerRegistry {
         merged
             .trait_parent_edges
             .extend(other.trait_parent_edges.iter().cloned());
+        merged
+            .enum_type_parameter_arities
+            .extend(other.enum_type_parameter_arities.clone());
         merged.promote_constructor_traits();
         *self = merged;
         Ok(())
@@ -1626,6 +1641,27 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 })
                 .collect(),
         ),
+        Ast::EnumConstructorCall(span, owner, type_args, variant, args) => {
+            Ast::EnumConstructorCall(
+                span,
+                owner,
+                type_args
+                    .into_iter()
+                    .map(|ty| rewrite_self_type(ty, target))
+                    .collect(),
+                variant,
+                args.into_iter()
+                    .map(|arg| match arg {
+                        RecordLitArg::Positional(expr) => {
+                            RecordLitArg::Positional(rewrite_self_ast(expr, target))
+                        }
+                        RecordLitArg::Named(name, expr) => {
+                            RecordLitArg::Named(name, rewrite_self_ast(expr, target))
+                        }
+                    })
+                    .collect(),
+            )
+        }
         Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ast::DeferrorDef(
             span,
             name,
@@ -2100,6 +2136,11 @@ pub fn precollect_owner_registry(
             for (statement_index, stmt) in module.ast.iter().enumerate() {
                 reject_reserved_direct_owner_name(stmt)?;
                 if let Some(mut owner) = direct_owner_entry(stmt, module, stage_index) {
+                    if let Ast::EnumDef(_, _, type_params, _, _) = stmt {
+                        owner_registry
+                            .enum_type_parameter_arities
+                            .insert(owner.canonical_key.clone(), type_params.len());
+                    }
                     if owner.kind == OwnerKind::Trait
                         && constructor_trait_declarations.contains(&TraitDeclarationProvenance {
                             stage_index,

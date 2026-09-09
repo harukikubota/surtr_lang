@@ -1598,6 +1598,9 @@ impl Checker {
             Resolved::ConstructorCall(span, id, args) => {
                 self.check_constructor_call(span, id, args, None)
             }
+            Resolved::EnumConstructorCall(span, id, type_args, args) => {
+                self.check_explicit_enum_constructor_call(span, id, type_args, args, None)
+            }
             Resolved::DeferrorDef(span, id, fields, show_expr) => {
                 self.check_deferror_def(span, id, fields, show_expr)
             }
@@ -2601,6 +2604,8 @@ impl Checker {
             (Resolved::ConstructorCall(span, id, args), Some(expected_ty)) => {
                 self.check_constructor_call(span, id, args, Some(expected_ty))
             }
+            (Resolved::EnumConstructorCall(span, id, type_args, args), Some(expected_ty)) => self
+                .check_explicit_enum_constructor_call(span, id, type_args, args, Some(expected_ty)),
             (Resolved::FieldAccess(span, expr, field), expected_ty) => {
                 self.check_field_access_with_expected(span, expr, field, expected_ty)
             }
@@ -3572,6 +3577,7 @@ impl Checker {
             | Resolved::ProcessContextHandler(span, _)
             | Resolved::StructLit(span, _, _)
             | Resolved::ConstructorCall(span, _, _)
+            | Resolved::EnumConstructorCall(span, _, _, _)
             | Resolved::StructDef(span, ..)
             | Resolved::RecordDef(span, _, _, _)
             | Resolved::DeferrorDef(span, _, _, _)
@@ -10181,7 +10187,9 @@ impl Checker {
             }
             let profile = self.profiler.start();
             let body_is_result_constructor = match body {
-                Resolved::ConstructorCall(_, _, _) => true,
+                Resolved::ConstructorCall(_, _, _) | Resolved::EnumConstructorCall(_, _, _, _) => {
+                    true
+                }
                 Resolved::App(_, func, _) => {
                     matches!(func.as_ref(), Resolved::Var(_, id) if id.name == "Ok" || id.name == "Err")
                 }

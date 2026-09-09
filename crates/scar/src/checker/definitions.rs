@@ -3259,6 +3259,170 @@ impl Checker {
         })
     }
 
+    pub(super) fn check_explicit_enum_constructor_call(
+        &mut self,
+        span: &Span,
+        id: &ResolvedId,
+        type_args: &[AstTy],
+        args: &[ResolvedRecordLitArg],
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let variant = self
+            .lookup_enum_variant_by_constructor_id(id.unique_id)
+            .ok_or_else(|| TypeError {
+                structured: None,
+                message: format!("Unknown enum constructor: {}", id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let def = self
+            .env
+            .lookup_type_def(&variant.enum_name)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                structured: None,
+                message: format!("Unknown enum type: {}", variant.enum_name),
+                span: span.clone(),
+                hint: None,
+            })?;
+        if !matches!(def.kind, crate::env::TypeKind::Enum) {
+            return Err(TypeError {
+                structured: None,
+                message: format!("{} is not an enum type", variant.enum_name),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        if type_args.len() != def.type_params.len() {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Enum constructor {} expects {} type argument(s), got {}",
+                    variant.enum_name,
+                    def.type_params.len(),
+                    type_args.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        let supplied = type_args
+            .iter()
+            .map(|ast_ty| {
+                if matches!(ast_ty, AstTy::Named(_, name) if Self::surface_name(name) == "_") {
+                    Ok(self.env.fresh_tyvar())
+                } else {
+                    let ty = self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)?;
+                    if Self::ty_exposes_error_value(&ty) {
+                        return Err(TypeError {
+                            structured: None,
+                            message:
+                                "Error cannot be used as an enum constructor type argument"
+                                    .into(),
+                            span: Self::ast_ty_span(ast_ty).clone(),
+                            hint: Some(
+                                "Keep Error inside Result<..., Error>; enum constructor type arguments describe ordinary values."
+                                    .into(),
+                            ),
+                        });
+                    }
+                    Ok(ty)
+                }
+            })
+            .collect::<Result<Vec<_>, TypeError>>()?;
+        let declared_arguments = match &variant.enum_ty {
+            Ty::Enum(_, arguments) => arguments.clone(),
+            Ty::Result(ok, _) => vec![ok.as_ref().clone()],
+            other => {
+                return Err(TypeError {
+                    structured: None,
+                    message: format!(
+                        "Enum constructor metadata for {} has invalid result type {}",
+                        variant.enum_name,
+                        self.ty_name(other)
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            }
+        };
+        if declared_arguments.len() != supplied.len() {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Enum constructor metadata for {} has {} type slot(s), expected {}",
+                    variant.enum_name,
+                    declared_arguments.len(),
+                    supplied.len()
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+        let mut bindings = HashMap::new();
+        for (declared, supplied) in declared_arguments.into_iter().zip(supplied) {
+            let Ty::Var(variable) = declared else {
+                return Err(TypeError {
+                    structured: None,
+                    message: format!(
+                        "Enum constructor metadata for {} contains a non-variable type slot",
+                        variant.enum_name
+                    ),
+                    span: span.clone(),
+                    hint: None,
+                });
+            };
+            bindings.insert(variable, supplied);
+        }
+        let enum_ty = self.substitute_type_def_ty(&variant.enum_ty, &bindings);
+        let payload = variant
+            .payload
+            .iter()
+            .map(|ty| self.substitute_type_def_ty(ty, &bindings))
+            .collect::<Vec<_>>();
+
+        if let Some(expected) = expected {
+            self.assert_type_relation(
+                expected,
+                &enum_ty,
+                self.type_fact(SourceRole::Expected, span, expected),
+                self.type_fact(SourceRole::Value, span, &enum_ty),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::Call,
+                "enum constructor",
+                0,
+            )?;
+        }
+
+        if Self::surface_name(&variant.enum_name) == "Result" {
+            return self.check_constructor_call(span, id, args, Some(&enum_ty));
+        }
+
+        let payload_values = self.typecheck_positional_call_args(
+            span,
+            &id.name,
+            &payload,
+            args,
+            None,
+            "Enum constructors do not accept named arguments".into(),
+        )?;
+        self.ensure_no_runtime_facet_args(&payload_values, span, "Enum constructor arguments")?;
+
+        let mut fields = Vec::with_capacity(payload_values.len() + 1);
+        fields.push(TypedNode {
+            ty: Ty::Int,
+            span: span.clone(),
+            node: TypedInner::Lit(Lit::Int(variant.discriminant)),
+        });
+        fields.extend(payload_values);
+        Ok(TypedNode {
+            ty: self.resolve_ty(&enum_ty),
+            span: span.clone(),
+            node: TypedInner::ConstructorCall(variant.tag, fields),
+        })
+    }
+
     pub(super) fn check_deferror_def(
         &mut self,
         span: &Span,
