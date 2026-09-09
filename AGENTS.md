@@ -49,6 +49,6 @@ Surtr は Rust で実装する静的型付き関数型の Hobby 言語。
 - 未確定仕様を ignored テストで蓄積しない。文書のみの変更にコンパイラ全体のテストは不要。実行コマンド・結果・未検証範囲を簡潔に報告する。
 
 ## 作業運用
-- 開発プロセスは `surtr-development`（`/Users/haruca/.codex/skills/surtr-development/SKILL.md`）を使う。Superpowers をベースに必要な手順を部分採用し、仕様入力の有無と level1〜4 に応じて進める。
+- 開発プロセスは `surtr-development`（`/Users/haruca/.codex/skills/surtr-development/SKILL.md`）を使う。仕様入力の有無と level1〜4 に応じて、同スキルに記載された手順で進める。
 - ユーザが仕様書を入力・指定していないターンでは調査と仕様書作成までとし、実装しない。検証範囲は同スキルの level 別条件を適用する。
 - 中断時は残作業と次の一手を残す。
