@@ -8,7 +8,8 @@
 - 対象: `OptionT`、`EitherT`、`ReaderT`、`StateT`。
 - 対象外: `IdentityT`、Writer/WriterT、ListT、ResultT、ContT、Transformerそのものを受ける抽象API。
 
-通常 `Identity` / `Reader` / `State` の追加は `monad_instances_spec.md` の別タスク。ここでは再実装・再設計しない。
+通常 `Identity` / `Reader` / `State` は実装済みであり、利用者向け契約は
+`../docs/site/{identity,reader,state}.md` に置く。ここでは再実装・再設計しない。
 
 根拠は本会話と「Surtr Monad Transformer 検討メモ」§2–10、「MonadT / Alternative / do 構文 検討メモ」§2–6。APIの候補一覧を、型関係・責務・RTAが分かる形へ具体化する。会話で未確定だったhelperの細部は§11に分け、共通Traitの契約へ無断で追加しない。
 

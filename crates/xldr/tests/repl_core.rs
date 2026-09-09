@@ -285,7 +285,9 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_stacktrace_full_is_reserved_until_html_viewer_exists),
     repl_core_case!(core_immediate_anonymous_callable_calls_show_binding_hint),
     repl_core_case!(core_doc_and_sig_commands_resolve_aliases_and_typed_queries),
-    repl_core_case!(core_sig_monad_operator_lists_user_defined_identity_impl),
+    repl_core_case!(core_sig_monad_operator_lists_user_defined_box_impl),
+    repl_core_case!(core_standard_monad_instances_construct_and_run),
+    repl_core_case!(core_standard_state_get_rejects_ambiguity_and_keeps_session_alive),
     repl_core_case!(
         core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing
     ),
@@ -4274,73 +4276,117 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     );
 }
 
-fn core_sig_monad_operator_lists_user_defined_identity_impl() {
+fn core_sig_monad_operator_lists_user_defined_box_impl() {
     let mut engine = ReplEngine::from_script_source(
-        "identity_operator_impls.srt",
-        r#"defstruct Identity<$T> {
+        "box_operator_impls.srt",
+        r#"defstruct Box<$T> {
   value: $T,
 }
 
-impl Identity {
-  def new(value: $T) -> Identity<$T> {
-    Identity { value: value }
+impl Box {
+  def new(value: $T) -> Box<$T> {
+    Box { value: value }
   }
 }
 
-impl Functor for Identity<$T> {
-  def fmap(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
-    Identity { value: mapper(self.value) }
+impl Functor for Box<$T> {
+  def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> {
+    Box { value: mapper(self.value) }
   }
 }
 
-impl Applicative for Identity<$T> {
-  def pure::<Identity<$T>>(value: $A) -> Identity<$A> {
-    Identity { value: value }
+impl Applicative for Box<$T> {
+  def pure::<Box<$T>>(value: $A) -> Box<$A> {
+    Box { value: value }
   }
 
-  def ap(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
+  def ap(mapper: Box<($A -> $B)>, value: Box<$A>) -> Box<$B> {
     f = mapper.value
-    Identity { value: f(value.value) }
+    Box { value: f(value.value) }
   }
 }
 
-impl Monad for Identity<$T> {
-  def return::<Identity<$T>>(value: $A) -> Identity<$A> {
-    Identity { value: value }
+impl Monad for Box<$T> {
+  def return::<Box<$T>>(value: $A) -> Box<$A> {
+    Box { value: value }
   }
 
-  def bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
+  def bind(self: Box<$A>, mapper: ($A -> Box<$B>)) -> Box<$B> {
     mapper(self.value)
   }
 }
 
-impl LiftComposable<$A, $B, $C, Identity<$C>> for ($A -> Identity<$B>) {
-  def lift_compose::<$A, Identity<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Identity<$C>) {
+impl LiftComposable<$A, $B, $C, Box<$C>> for ($A -> Box<$B>) {
+  def lift_compose::<$A, Box<$C>>(self: Self, rhs: ($B -> $C)) -> ($A -> Box<$C>) {
     {|value| Functor::fmap(self(value), rhs)}
   }
 }
 
-impl KleisliComposable<$A, $B, Identity<$C>> for ($A -> Identity<$B>) {
-  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Identity<$C>)) -> ($A -> Identity<$C>) {
+impl KleisliComposable<$A, $B, Box<$C>> for ($A -> Box<$B>) {
+  def kleisli_compose::<$A>(self: Self, rhs: ($B -> Box<$C>)) -> ($A -> Box<$C>) {
     {|value| Monad::bind(self(value), rhs)}
   }
 }"#,
     )
-    .expect("identity preload should load");
+    .expect("box preload should load");
 
     let monad_sig = signature_text(&engine.handle_line(":sig |>="));
     assert!(
         monad_sig.contains(
-            "impl Monad for Identity<$T>::bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B>"
+            "impl Monad for Box<$T>::bind(self: Box<$A>, mapper: ($A -> Box<$B>)) -> Box<$B>"
         ),
         "{monad_sig}"
     );
 
-    let identity_bind_sig = signature_text(&engine.handle_line(":sig |>= Identity"));
+    let box_bind_sig = signature_text(&engine.handle_line(":sig |>= Box"));
     assert_eq!(
-        identity_bind_sig.trim(),
-        "impl Monad for Identity<$T>::bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B>"
+        box_bind_sig.trim(),
+        "impl Monad for Box<$T>::bind(self: Box<$A>, mapper: ($A -> Box<$B>)) -> Box<$B>"
     );
+}
+
+fn core_standard_monad_instances_construct_and_run() {
+    let mut engine = engine();
+
+    let identity = engine.handle_line("identity_value = Identity::new(7)");
+    assert!(!identity.should_exit);
+    assert!(rendered_text(&identity).contains("identity_value"));
+    let identity_run = engine.handle_line("Identity::run(identity_value)");
+    assert_eq!(rendered_text(&identity_run).trim(), "7");
+
+    let reader = engine.handle_line("reader_value = Reader::new({|value: Int| value + 1})");
+    assert!(!reader.should_exit);
+    let reader_run = engine.handle_line("Reader::run(reader_value, 10)");
+    assert_eq!(rendered_text(&reader_run).trim(), "11");
+
+    let state_get = engine.handle_line("state_get_value: State<Int, Int> = State::get()");
+    assert!(!state_get.should_exit);
+    assert!(rendered_text(&state_get).contains("state_get_value"));
+    let state_get_run = engine.handle_line("State::run(state_get_value, 10)");
+    assert_eq!(rendered_text(&state_get_run).trim(), "(10, 10)");
+
+    let state = engine.handle_line("state_value = State::new({|value: Int| (value + 1, value)})");
+    assert!(!state.should_exit);
+    let state_run = engine.handle_line("State::run(state_value, 10)");
+    assert_eq!(rendered_text(&state_run).trim(), "(11, 10)");
+}
+
+fn core_standard_state_get_rejects_ambiguity_and_keeps_session_alive() {
+    let mut engine = engine();
+
+    let ambiguous = engine.handle_line("State::get()");
+    assert!(!ambiguous.should_exit);
+    assert!(matches!(ambiguous.output, ReplOutput::EvalError { .. }));
+    let ambiguous_text = rendered_text(&ambiguous);
+    assert!(
+        ambiguous_text.contains("return type arguments for")
+            && ambiguous_text.contains("cannot be inferred"),
+        "{ambiguous_text}"
+    );
+
+    let continued = engine.handle_line("after_state_get_error = 42");
+    assert!(!continued.should_exit);
+    assert!(rendered_text(&continued).contains("after_state_get_error: Int"));
 }
 
 fn core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing() {

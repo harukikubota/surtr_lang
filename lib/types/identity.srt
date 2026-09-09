@@ -1,0 +1,110 @@
+import Function::apply;
+
+@doc """
+Standard `Identity` structure.
+`Identity<$A>` stores one ordinary value without adding effects or changing its
+representation.
+"""
+defstruct Identity<$A> {
+  value: $A,
+}
+
+impl Identity {
+  @doc """
+  Construct an `Identity<$A>` from a value.
+
+  ## REPL
+  xldr(1)> Identity::run(Identity::new(7))
+  7
+  """
+  def new(value: $A) -> Identity<$A> {
+    Identity { value }
+  }
+
+  @doc """
+  Extract the value stored by an `Identity<$A>`.
+
+  ## REPL
+  xldr(1)> Identity::run(Identity::new(7))
+  7
+  """
+  def run(self: Identity<$A>) -> $A {
+    self.value
+  }
+}
+
+@doc """
+`Functor` implementation for `Identity`.
+Mapping applies the mapper to the stored value and keeps the result in an
+`Identity`.
+"""
+impl Functor for Identity<$T> {
+  @doc """
+  Map a function over the stored value.
+
+  ## REPL
+  xldr(1)> Identity::run(Identity::new(7) |*> {|n| n + 1})
+  8
+  """
+  def fmap(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
+    Identity::new(mapper(self.value))
+  }
+}
+
+@doc """
+`Applicative` implementation for `Identity`.
+`pure` stores a plain value, and `ap` applies a stored function to a stored
+value.
+"""
+impl Applicative for Identity<$T> {
+  @doc """
+  Lift a plain value into `Identity`.
+
+  ## REPL
+  xldr(1)> Identity::run(Applicative::pure(7))
+  7
+  """
+  def pure::<Identity<$T>>(value: $A) -> Identity<$A> {
+    Identity::new(value)
+  }
+
+  @doc """
+  Apply a stored function to a stored value.
+
+  ## REPL
+  xldr(1)> Identity::run(Applicative::ap(Identity::new({|n| n + 1}), Identity::new(7)))
+  8
+  """
+  def ap(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
+    Identity::new(apply(mapper.value, value.value))
+  }
+}
+
+@doc """
+`Monad` implementation for `Identity`.
+`return` stores a plain value, and `bind` passes the stored value to the
+mapper without adding another `Identity` layer.
+"""
+impl Monad for Identity<$T> {
+  @doc """
+  Return a plain value as an `Identity`.
+
+  ## REPL
+  xldr(1)> Identity::run(Monad::return(7))
+  7
+  """
+  def return::<Identity<$T>>(value: $A) -> Identity<$A> {
+    Identity::new(value)
+  }
+
+  @doc """
+  Bind an `Identity` to a function returning another `Identity`.
+
+  ## REPL
+  xldr(1)> Identity::run(Identity::new(7) |>= {|n| Identity::new(n + 1)})
+  8
+  """
+  def bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
+    mapper(self.value)
+  }
+}

@@ -1,0 +1,221 @@
+import Function::apply;
+
+@doc """
+Standard `State` structure.
+`State<$S, $A>` stores a pure state transition from `$S` to `($A, $S)`.
+
+## REPL
+xldr(1)> State::run(State::new({|state| (state + 1, state + 2)}), 7)
+(8, 9)
+"""
+defstruct State<$S, $A> {
+  run_state: ($S -> ($A, $S)),
+}
+
+impl State {
+  @doc """
+  Construct a `State<$S, $A>` from a state transition.
+
+  ## REPL
+  xldr(1)> action = State::new({|state| (state + 1, state + 2)})
+  xldr(2)> State::run(action, 7)
+  (8, 9)
+  """
+  def new(run_state: ($S -> ($A, $S))) -> State<$S, $A> {
+    State { run_state }
+  }
+
+  @doc """
+  Run a state transition once and return its value and next state.
+
+  ## REPL
+  xldr(1)> State::run(State::new({|state| (state + 1, state + 2)}), 7)
+  (8, 9)
+  """
+  def run(self: State<$S, $A>, initial: $S) -> ($A, $S) {
+    apply(self.run_state, initial)
+  }
+
+  @doc """
+  Run a state transition once and return only its value.
+
+  ## REPL
+  xldr(1)> State::eval(State::new({|state| (state + 1, state + 2)}), 7)
+  8
+  """
+  def eval(self: State<$S, $A>, initial: $S) -> $A {
+    result = apply(self.run_state, initial)
+    result._0
+  }
+
+  @doc """
+  Run a state transition once and return only its next state.
+
+  ## REPL
+  xldr(1)> State::exec(State::new({|state| (state + 1, state + 2)}), 7)
+  9
+  """
+  def exec(self: State<$S, $A>, initial: $S) -> $S {
+    result = apply(self.run_state, initial)
+    result._1
+  }
+
+  @doc """
+  Read the current state without changing it.
+
+  ## REPL
+  xldr(1)> State::run(State::get(), 7)
+  (7, 7)
+  """
+  def get::<$S>() -> State<$S, $S> {
+    State::new({|state| (state, state)})
+  }
+
+  @doc """
+  Read a projection of the current state without changing it.
+
+  ## REPL
+  xldr(1)> State::run(State::gets({|state| state * 2}), 7)
+  (14, 7)
+  """
+  def gets(mapper: ($S -> $A)) -> State<$S, $A> {
+    State::new({|state| (mapper(state), state)})
+  }
+
+  @doc """
+  Replace the current state.
+
+  ## REPL
+  xldr(1)> State::run(State::put(11), 7)
+  ((), 11)
+  """
+  def put(state: $S) -> State<$S, Unit> {
+    State::new({|_| ((), state)})
+  }
+
+  @doc """
+  Update the current state with a pure function.
+
+  ## REPL
+  xldr(1)> State::run(State::modify({|state| state + 1}), 7)
+  ((), 8)
+  """
+  def modify(mapper: ($S -> $S)) -> State<$S, Unit> {
+    State::new({|state| ((), mapper(state))})
+  }
+}
+
+@doc """
+`Functor` implementation for `State`.
+The mapper changes the value while preserving the next state produced by the
+underlying transition.
+
+## REPL
+xldr(1)> State::run(State::get() |*> &to_string, 7)
+("7", 7)
+"""
+impl Functor for State<$S, $T>
+where
+  $T: Functor.$A
+{
+  @doc """
+  Map a function over the value returned by a state transition while keeping
+  its next state.
+
+  ## REPL
+  xldr(1)> State::run(State::get() |*> &to_string, 7)
+  ("7", 7)
+  """
+  def fmap(self: State<$S, $A>, mapper: ($A -> $B)) -> State<$S, $B> {
+    State::new({|initial|
+      result = apply(self.run_state, initial)
+      (mapper(result._0), result._1)
+    })
+  }
+}
+
+@doc """
+`Applicative` implementation for `State`.
+The mapper transition runs first; its next state is passed to the value
+transition.
+
+## REPL
+xldr(1)> mapper = State::new({|state| ({|value| value + state}, state + 1)})
+xldr(2)> value = State::new({|state| (10, state + 10)})
+xldr(3)> State::run(Applicative::ap(mapper, value), 1)
+(11, 12)
+"""
+impl Applicative for State<$S, $T>
+where
+  $T: Applicative.$A
+{
+  @doc """
+  Lift a plain value into a state-preserving transition.
+
+  ## REPL
+  xldr(1)> State::run(Applicative::pure(4), 9)
+  (4, 9)
+  """
+  def pure::<State<$S, $T>>(value: $A) -> State<$S, $A> {
+    State::new({|state| (value, state)})
+  }
+
+  @doc """
+  Apply the function produced by the mapper transition to the value
+  produced by the value transition, threading state from left to right.
+
+  ## REPL
+  xldr(1)> State::run(Applicative::ap(Applicative::pure({|x| x + 1}), Applicative::pure(2)), 9)
+  (3, 9)
+  """
+  def ap(mapper: State<$S, ($A -> $B)>, value: State<$S, $A>) -> State<$S, $B> {
+    State::new({|initial|
+      mapped = apply(mapper.run_state, initial)
+      applied = apply(value.run_state, mapped._1)
+
+      (apply(mapped._0, applied._0), applied._1)
+    })
+  }
+}
+
+@doc """
+`Monad` implementation for `State`.
+The first transition runs once and its next state is passed to the transition
+returned by the mapper.
+
+## REPL
+xldr(1)> State::run(State::get() |>= {|value| State::put(value + 1)}, 7)
+((), 8)
+"""
+impl Monad for State<$S, $T>
+where
+  $T: Monad.$A
+{
+  @doc """
+  Lift a plain value into a state-preserving transition as `Monad::return`.
+
+  ## REPL
+  xldr(1)> State::run(Monad::return(4), 9)
+  (4, 9)
+  """
+  def return::<State<$S, $T>>(value: $A) -> State<$S, $A> {
+    State::new({|state| (value, state)})
+  }
+
+  @doc """
+  Sequence two state transitions, passing the first value and next state to
+  the transition returned by the mapper.
+
+  ## REPL
+  xldr(1)> State::run(State::put(8) |>= {|_| State::get()}, 3)
+  (8, 8)
+  """
+  def bind(self: State<$S, $A>, mapper: ($A -> State<$S, $B>)) -> State<$S, $B> {
+    State::new({|initial|
+      first = apply(self.run_state, initial)
+      next = mapper(first._0)
+
+      apply(next.run_state, first._1)
+    })
+  }
+}

@@ -1,0 +1,6 @@
+def wrong_reader(value: Int) -> Reader<String, Int> {
+  Reader::new({|environment| String::len(environment) + value})
+}
+
+value: Reader<Int, Int> = Reader::new({|environment| environment + 1})
+bad = value |>= &wrong_reader

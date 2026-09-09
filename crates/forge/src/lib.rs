@@ -76,6 +76,7 @@ mod tests {
 
     const BUILTIN_PRELUDE_SOURCE: &str = include_str!("../../../lib/bootstrap.srt");
     const SPECIAL_TYPES_SOURCE: &str = include_str!("../../../lib/types/special_types.srt");
+    const FUNCTION_PRELUDE_SOURCE: &str = include_str!("../../../lib/function.srt");
     const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
     const ADD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/add.srt");
     const SUB_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/sub.srt");
@@ -94,6 +95,9 @@ mod tests {
     const APPLICATIVE_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/applicative.srt");
     const MONAD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/monad.srt");
+    const IDENTITY_MODULE_SOURCE: &str = include_str!("../../../lib/types/identity.srt");
+    const READER_MODULE_SOURCE: &str = include_str!("../../../lib/types/reader.srt");
+    const STATE_MODULE_SOURCE: &str = include_str!("../../../lib/types/state.srt");
     const ALTERNATIVE_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/alternative.srt");
     const MONOID_MODULE_SOURCE: &str = include_str!("../../../lib/types/monoid.srt");
@@ -276,6 +280,7 @@ mod tests {
             parse_std_module_stage(BUILTIN_PRELUDE_SOURCE, "Bootstrap"),
             [
                 ("SpecialTypes", SPECIAL_TYPES_SOURCE),
+                ("Function", FUNCTION_PRELUDE_SOURCE),
                 ("Kernel", KERNEL_PRELUDE_SOURCE),
                 ("Add", ADD_MODULE_SOURCE),
                 ("Sub", SUB_MODULE_SOURCE),
@@ -294,6 +299,9 @@ mod tests {
                 ("Bifunctor", BIFUNCTOR_MODULE_SOURCE),
                 ("Applicative", APPLICATIVE_MODULE_SOURCE),
                 ("Monad", MONAD_MODULE_SOURCE),
+                ("Identity", IDENTITY_MODULE_SOURCE),
+                ("Reader", READER_MODULE_SOURCE),
+                ("State", STATE_MODULE_SOURCE),
                 ("Alternative", ALTERNATIVE_MODULE_SOURCE),
                 ("Monoid", MONOID_MODULE_SOURCE),
                 ("PipeApply", PIPE_APPLY_MODULE_SOURCE),

@@ -17,7 +17,7 @@ Surtr 全体では、関数は常に何らかの namespace に属します。標
 標準定義ソースの初期ロード順は次で固定されています。
 
 ```text
-Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Neq, Compare, Concat, Show, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Applicative, Monad, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> user source
+Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Compare, Concat, Show, Default, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Bifunctor, Applicative, Monad, Identity, Reader, State, Alternative, Monoid, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Either, Duration, Range, Option, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> user source
 ```
 
 このうち auto import されるのは `Bootstrap`, `Kernel` と、`@autoimport` が付いた標準 `impl Type` owner helper surface および標準 trait です。  
@@ -73,7 +73,10 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 - `Generator`
 - `HashMap`
 - `Result`
+- `Either`
 - `Range`
+- `Option`
+- `Task`
 - `Facet`
 - `Float`
 
@@ -90,6 +93,16 @@ ordered comparison は `compare(left, right)` または `< <= > >=` を使い、
 - `int.srt` の `impl Int` に `safe_div`, `safe_mod`, `abs`, `min`, `max` などを置く
 - `float.srt` の `impl Float` に `safe_div`, `abs`, `min`, `max` などを置く
 - `+`, `-`, `*` は `Add` / `Sub` / `Mul` dispatch を通るが、runtime には trait object を導入しない
+
+### 通常の source 型
+
+`Identity`、`Reader`、`State` は compiler-special な builtin type ではなく、標準定義
+ソースに書かれた通常の構造体です。`Functor`、`Applicative`、`Monad` の後に読み込み、
+それぞれの concrete trait 実装を提供します。
+
+- [`Identity`](./identity.md): 値を一つ保持する
+- [`Reader`](./reader.md): 同じ環境を計算へ渡す
+- [`State`](./state.md): 次状態を左から右へ引き継ぐ
 
 ## 3. `@builtin type` の契約
 

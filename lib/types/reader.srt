@@ -1,0 +1,170 @@
+import Function::apply;
+
+@doc """
+Standard `Reader` structure.
+`Reader<$R, $A>` stores a function from an environment `$R` to a value `$A`.
+The environment is supplied explicitly by `run` and is never stored as mutable
+state.
+
+## REPL
+xldr(1)> Reader::run(Reader::new({|n| n + 1}), 4)
+5
+"""
+defstruct Reader<$R, $A> {
+  run_reader: ($R -> $A),
+}
+
+impl Reader {
+  @doc """
+  Construct a `Reader<$R, $A>` from an environment function.
+
+  ## REPL
+  xldr(1)> Reader::run(Reader::new({|n| n + 1}), 4)
+  5
+  """
+  def new(run_reader: ($R -> $A)) -> Reader<$R, $A> {
+    Reader { run_reader }
+  }
+
+  @doc """
+  Run a Reader with an explicit environment.
+
+  ## REPL
+  xldr(1)> Reader::run(Reader::new({|n| n * 2}), 4)
+  8
+  """
+  def run(self: Reader<$R, $A>, environment: $R) -> $A {
+    apply(self.run_reader, environment)
+  }
+
+  @doc """
+  Read the complete environment as the Reader payload.
+
+  ## REPL
+  xldr(1)> Reader::run(Reader::ask::<Int>(), 4)
+  4
+  """
+  def ask::<$R>() -> Reader<$R, $R> {
+    Reader::new(&id)
+  }
+
+  @doc """
+  Build a Reader by applying `mapper` to the environment.
+
+  ## REPL
+  xldr(1)> Reader::run(Reader::asks({|n| n + 1}), 4)
+  5
+  """
+  def asks(mapper: ($R -> $A)) -> Reader<$R, $A> {
+    Reader::new(mapper)
+  }
+
+  @doc """
+  Run this Reader under a locally mapped environment.
+  The original Reader and the caller's environment are not changed.
+
+  ## REPL
+  xldr(1)> value = Reader::new({|n| n * 2})
+  xldr(2)> Reader::run(Reader::local(value, {|n| n + 10}), 4)
+  28
+  """
+  def local(self: Reader<$R, $A>, mapper: ($R -> $R)) -> Reader<$R, $A> {
+    Reader::new({|environment| apply(self.run_reader, mapper(environment))})
+  }
+}
+
+@doc """
+`Functor` implementation for `Reader`.
+Mapping transforms the payload while preserving the captured environment.
+"""
+impl Functor for Reader<$E, $R>
+where
+  $R: Functor.$A
+{
+  @doc """
+  Apply `mapper` to the result produced by a Reader.
+
+  ## REPL
+  xldr(1)> Reader::run(Reader::new({|n| n + 1}) |*> {|n| n * 2}, 4)
+  10
+  """
+  def fmap(self: Reader<$E, $A>, mapper: ($A -> $B)) -> Reader<$E, $B> {
+    Reader::new({|environment| mapper(apply(self.run_reader, environment))})
+  }
+}
+
+@doc """
+`Applicative` implementation for `Reader`.
+`pure` ignores its environment, and `ap` evaluates both Readers with the
+same environment before applying the resulting function.
+"""
+impl Applicative for Reader<$E, $R>
+where
+  $R: Applicative.$A
+{
+  @doc """
+  Lift a plain value into a Reader that ignores its environment.
+
+  ## REPL
+  xldr(1)> Reader::run(Applicative::pure(7), 99)
+  7
+  """
+  def pure::<Reader<$E, $R>>(value: $A) -> Reader<$E, $A> {
+    Reader::new({|_environment| value})
+  }
+
+  @doc """
+  Apply a Reader-produced function to a Reader-produced value using one
+  shared environment.
+
+  ## REPL
+  xldr(1)> f = Reader::new({|n| {|x| x + n}})
+  xldr(2)> Reader::run(Applicative::ap(f, Reader::new({|n| n * 2})), 3)
+  9
+  """
+  def ap(
+    mapper: Reader<$E, ($A -> $B)>,
+    value: Reader<$E, $A>,
+  ) -> Reader<$E, $B> {
+    Reader::new({|environment|
+      function = apply(mapper.run_reader, environment)
+      function(apply(value.run_reader, environment))
+    })
+  }
+}
+
+@doc """
+`Monad` implementation for `Reader`.
+`return` ignores its environment, and `bind` passes the same environment to
+both the first and the selected second Reader.
+"""
+impl Monad for Reader<$E, $R>
+where
+  $R: Monad.$A
+{
+  @doc """
+  Lift a plain value into a Reader that ignores its environment.
+
+  ## REPL
+  xldr(1)> Reader::run(Monad::return(7), 99)
+  7
+  """
+  def return::<Reader<$E, $R>>(value: $A) -> Reader<$E, $A> {
+    Reader::new({|_environment| value})
+  }
+
+  @doc """
+  Sequence two Readers while reusing the caller's environment.
+
+  ## REPL
+  xldr(1)> first = Reader::new({|n| n + 1})
+  xldr(2)> Reader::run(first |>= {|x| Reader::new({|n| x + n})}, 4)
+  9
+  """
+  def bind(self: Reader<$E, $A>, mapper: ($A -> Reader<$E, $B>)) -> Reader<$E, $B> {
+    Reader::new({|environment|
+      next = mapper(apply(self.run_reader, environment))
+      apply(next.run_reader, environment)
+    })
+  }
+}

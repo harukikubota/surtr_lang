@@ -25,6 +25,15 @@ const FUNCTION_PRELUDE_SOURCE: &str = include_str!("../../../lib/function.srt");
 const KERNEL_PRELUDE_FILE: &str = "kernel.srt";
 const KERNEL_PRELUDE_MODULE_PATH: &str = "Kernel";
 const KERNEL_PRELUDE_SOURCE: &str = include_str!("../../../lib/kernel.srt");
+const IDENTITY_FILE: &str = "types/identity.srt";
+const IDENTITY_MODULE_PATH: &str = "Identity";
+const IDENTITY_SOURCE: &str = include_str!("../../../lib/types/identity.srt");
+const READER_FILE: &str = "types/reader.srt";
+const READER_MODULE_PATH: &str = "Reader";
+const READER_SOURCE: &str = include_str!("../../../lib/types/reader.srt");
+const STATE_FILE: &str = "types/state.srt";
+const STATE_MODULE_PATH: &str = "State";
+const STATE_SOURCE: &str = include_str!("../../../lib/types/state.srt");
 const STYLED_DOC_FILE: &str = "styled_doc.srt";
 const STYLED_DOC_MODULE_PATH: &str = "StyledDoc";
 const STYLED_DOC_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
@@ -200,6 +209,27 @@ const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         file_name: "traits/operator/monad.srt",
         module_path: "Monad",
         source: include_str!("../../../lib/traits/operator/monad.srt"),
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
+        file_name: IDENTITY_FILE,
+        module_path: IDENTITY_MODULE_PATH,
+        source: IDENTITY_SOURCE,
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
+        file_name: READER_FILE,
+        module_path: READER_MODULE_PATH,
+        source: READER_SOURCE,
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
+        file_name: STATE_FILE,
+        module_path: STATE_MODULE_PATH,
+        source: STATE_SOURCE,
         stage: StdlibStage::Main,
         variant: StdlibVariant::Default,
     },
@@ -1362,6 +1392,9 @@ mod tests {
                 "Bifunctor",
                 "Applicative",
                 "Monad",
+                "Identity",
+                "Reader",
+                "State",
                 "Alternative",
                 "Monoid",
                 "PipeApply",
@@ -1549,6 +1582,9 @@ mod tests {
                 "Bifunctor",
                 "Applicative",
                 "Monad",
+                "Identity",
+                "Reader",
+                "State",
                 "Alternative",
                 "Monoid",
                 "PipeApply",
