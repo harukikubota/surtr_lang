@@ -1588,9 +1588,9 @@ impl Checker {
                             hint: Some("Use an explicit application such as `Applicative<$A>` in callable signatures.".into()),
                         });
                         }
-                        // A constructor witness belongs to this direct signature
-                        // position.  Even applications of the same root in two
-                        // parameters must remain independently instantiable.
+                        // Allocate per occurrence here; signature normalization
+                        // later coalesces occurrences of the same direct Trait
+                        // name while leaving different names independent.
                         let witness = self.env.fresh_tyvar();
                         let Ty::Var(witness_var) = witness else {
                             unreachable!("fresh constructor witness must be a type variable")
@@ -1630,9 +1630,9 @@ impl Checker {
                                 hint: None,
                             });
                         }
-                        // Return positions also pass through this path, so they
-                        // receive a fresh witness rather than inheriting an input
-                        // constructor by root identity.
+                        // Return positions also start with a fresh witness here.
+                        // Signature normalization reconnects it only to the same
+                        // direct Trait name, never by family/root identity.
                         let witness = self.env.fresh_tyvar();
                         let Ty::Var(witness_var) = witness else {
                             unreachable!("fresh constructor witness must be a type variable")

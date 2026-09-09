@@ -242,41 +242,64 @@ impl Family for Boxed<$T> {
 }
 
 fn generic_constructor_trait_wrappers_specialize_all_method_roles() {
-    let source = r#"
+    for (map_applicative, keep_applicative) in [
+        (
+            r#"def map_applicative(value: $F<$A>, mapper: ($A -> $B)) -> $F<$B>
+where $F: Applicative {
+    Functor::fmap(value, mapper)
+}"#,
+            r#"
+def keep_applicative(value: $F<$A>) -> $F<$A> where $F: Applicative { value }"#,
+        ),
+        (
+            r#"def map_applicative(value: Applicative<$A>, mapper: ($A -> $B)) -> Applicative<$B> {
+    Functor::fmap(value, mapper)
+}"#,
+            r#"
+def keep_applicative(value: Applicative<$A>) -> Applicative<$A> { value }"#,
+        ),
+    ] {
+        let source = [
+            r#"
 def map_functor(value: $F<$A>, mapper: ($A -> $B)) -> $F<$B> where $F: Functor {
     Functor::fmap(value, mapper)
 }
-def map_applicative(value: $F<$A>, mapper: ($A -> $B)) -> $F<$B> where $F: Applicative {
-    Functor::fmap(value, mapper)
-}
+"#,
+            map_applicative,
+            keep_applicative,
+            r#"
 strings: List<String> = map_functor([1], {|value: Int| "mapped"})
 booleans: List<Boolean> = map_functor([2], {|value: Int| True})
 inherited: List<String> = map_applicative([3], {|value: Int| "mapped"})
-"#;
+kept: List<Int> = keep_applicative([4])
+"#,
+        ]
+        .concat();
 
-    let nodes = support::typecheck(support::resolve_with_builtin_prelude(source))
-        .expect("all trait method roles must share the call-site specialization");
-    let map_functor_specializations = nodes
-        .iter()
-        .filter_map(|node| {
-            let TypedInner::Bind(_, rhs) = &node.node else {
-                return None;
-            };
-            let TypedInner::App(func, _) = &rhs.node else {
-                return None;
-            };
-            let TypedInner::Var(id) = &func.node else {
-                return None;
-            };
-            let scar::types::Ty::UserFunc { fun_idx, .. } = &func.ty else {
-                return None;
-            };
-            (id.name == "map_functor").then_some(*fun_idx)
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(map_functor_specializations.len(), 2);
-    assert_ne!(
-        map_functor_specializations[0], map_functor_specializations[1],
-        "mapped output type must participate in the specialization key"
-    );
+        let nodes = support::typecheck(support::resolve_with_builtin_prelude(&source))
+            .expect("both constructor constraint spellings share the call-site specialization");
+        let map_functor_specializations = nodes
+            .iter()
+            .filter_map(|node| {
+                let TypedInner::Bind(_, rhs) = &node.node else {
+                    return None;
+                };
+                let TypedInner::App(func, _) = &rhs.node else {
+                    return None;
+                };
+                let TypedInner::Var(id) = &func.node else {
+                    return None;
+                };
+                let scar::types::Ty::UserFunc { fun_idx, .. } = &func.ty else {
+                    return None;
+                };
+                (id.name == "map_functor").then_some(*fun_idx)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(map_functor_specializations.len(), 2);
+        assert_ne!(
+            map_functor_specializations[0], map_functor_specializations[1],
+            "mapped output type must participate in the specialization key"
+        );
+    }
 }

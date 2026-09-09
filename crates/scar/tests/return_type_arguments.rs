@@ -41,7 +41,7 @@ fn recursively_finds_missing_return_only_input() {
 
 #[test]
 fn rejects_input_introduced_by_value_and_return_type_argument() {
-    let error = assert_reason(
+    for source in [
         r#"deftrait Functor
 where
   Self: Type<$A>
@@ -51,16 +51,23 @@ def duplicate::<$F>(value: $F<$A>) -> $F<$A>
 where
   $F: Functor
 { value }"#,
-        TypeDiagnosticReason::DuplicateReturnTypeArgumentInput,
-    );
-    assert_eq!(
-        error.message,
-        "type input `$F` is introduced more than once"
-    );
-    let structured = error
-        .structured
-        .expect("diagnostic should retain both origins");
-    assert_eq!(structured.related.len(), 1);
+        r#"deftrait Functor
+where
+  Self: Type<$A>
+{}
+
+def duplicate::<Functor>(value: Functor<$A>) -> Functor<$A> { value }"#,
+    ] {
+        let error = assert_reason(
+            source,
+            TypeDiagnosticReason::DuplicateReturnTypeArgumentInput,
+        );
+        assert!(error.message.contains("is introduced more than once"));
+        let structured = error
+            .structured
+            .expect("diagnostic should retain both origins");
+        assert_eq!(structured.related.len(), 1);
+    }
 }
 
 #[test]

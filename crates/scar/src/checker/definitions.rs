@@ -846,6 +846,68 @@ impl Checker {
         Ok(uses)
     }
 
+    fn collect_constructor_application_names(ty: &AstTy, names: &mut HashSet<String>) {
+        match ty {
+            AstTy::Generic(_, name, arguments) => {
+                names.insert(name.clone());
+                for argument in arguments {
+                    Self::collect_constructor_application_names(argument, names);
+                }
+            }
+            AstTy::Tuple(_, items) => {
+                for item in items {
+                    Self::collect_constructor_application_names(item, names);
+                }
+            }
+            AstTy::Func(_, parameters, return_type) => {
+                for parameter in parameters {
+                    Self::collect_constructor_application_names(parameter, names);
+                }
+                Self::collect_constructor_application_names(return_type, names);
+            }
+            AstTy::Named(_, _) | AstTy::ImplTrait(_, _) => {}
+        }
+    }
+
+    fn consume_signature_constructor_capabilities(
+        &self,
+        capabilities: &mut [CapabilityUse],
+        return_type_arguments: &[ResolvedReturnTypeArgument],
+        value_parameters: &[ResolvedValueParameter],
+        return_type: Option<&sigil::resolved::ResolvedSignatureTy>,
+    ) {
+        let mut constructor_names = HashSet::new();
+        for argument in return_type_arguments {
+            Self::collect_constructor_application_names(
+                argument.ty.syntax(),
+                &mut constructor_names,
+            );
+        }
+        for parameter in value_parameters {
+            Self::collect_constructor_application_names(
+                parameter.ty.syntax(),
+                &mut constructor_names,
+            );
+        }
+        if let Some(return_type) = return_type {
+            Self::collect_constructor_application_names(
+                return_type.syntax(),
+                &mut constructor_names,
+            );
+        }
+
+        for capability in capabilities {
+            if constructor_names.contains(&capability.subject_name)
+                && self
+                    .traits
+                    .get(&capability.trait_id)
+                    .is_some_and(|info| !info.constructor_slots.is_empty())
+            {
+                capability.consumed = true;
+            }
+        }
+    }
+
     fn typed_capability_uses(
         &mut self,
         where_clause: Option<&TypedWhereClause>,
@@ -1335,6 +1397,17 @@ impl Checker {
                 TypeSyntaxContext::General,
                 &mut tyvars,
             )?;
+            super::signatures::remember_direct_constructor_input(
+                self,
+                &param.ty,
+                &param_ty,
+                &mut direct_constructor_inputs,
+            );
+            let param_ty = super::signatures::coalesce_direct_constructor_inputs(
+                self,
+                param_ty,
+                &direct_constructor_inputs,
+            );
             if self.ty_contains_process_init(&param_ty) {
                 return Err(TypeError {
                     structured: None,
@@ -1454,7 +1527,13 @@ impl Checker {
             expected_ret = self.substitute_ty_with_mapping(&expected_ret, &mapping);
         }
         self.apply_resolved_where_trait_bounds(where_clause, &tyvars, None)?;
-        let declaration_capabilities = self.resolved_capability_uses(where_clause, &tyvars)?;
+        let mut declaration_capabilities = self.resolved_capability_uses(where_clause, &tyvars)?;
+        self.consume_signature_constructor_capabilities(
+            &mut declaration_capabilities,
+            return_type_arguments,
+            params,
+            ret_ty.as_ref(),
+        );
         if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
                 structured: None,
@@ -1983,13 +2062,19 @@ impl Checker {
                 &mut method_tyvars,
             );
             self.seed_missing_method_type_params(&method.type_params, &mut method_tyvars);
-            let method_capabilities = match resolved_method {
+            let mut method_capabilities = match resolved_method {
                 Some(resolved_method) => self.resolved_capability_uses(
                     resolved_method.where_clause.as_ref(),
                     &method_tyvars,
                 )?,
                 None => self.typed_capability_uses(method.where_clause.as_ref(), &method_tyvars),
             };
+            self.consume_signature_constructor_capabilities(
+                &mut method_capabilities,
+                &method.return_type_arguments,
+                &method.value_parameters,
+                Some(method.ret_ty.as_ref().unwrap_or(&trait_method.ret_ty)),
+            );
             let mut method_block_capabilities =
                 self.resolved_capability_uses(where_clause, &method_tyvars)?;
             for capability in &mut method_block_capabilities {

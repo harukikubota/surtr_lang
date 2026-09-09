@@ -101,6 +101,28 @@ impl Identity for Int { def identity(self: Self, value: $Z) -> $Z { value } }
 }
 
 #[test]
+fn direct_constructor_constraint_spelling_is_canonical() {
+    let named = r#"def map(value: $F<$A>) -> $F<$A> where $F: Context { value }"#;
+    let direct = r#"def map(value: Context<$A>) -> Context<$A> { value }"#;
+    for (contract, implementation) in [(named, direct), (direct, named)] {
+        let source = format!(
+            r#"
+deftrait Context where Self: Type<$A> {{
+  def keep(self: Self<$A>) -> Self<$A>
+}}
+deftrait Wrapper {{ {contract} }}
+defenum Box<$T> {{ Box($T), }}
+impl Context for Box<$T> {{
+  def keep(self: Self<$A>) -> Self<$A> {{ self }}
+}}
+impl Wrapper for Int {{ {implementation} }}
+"#
+        );
+        check(&source).expect("direct and named constructor constraints are canonical equivalents");
+    }
+}
+
+#[test]
 fn return_type_argument_arity_is_structured() {
     let error = check(
         r#"

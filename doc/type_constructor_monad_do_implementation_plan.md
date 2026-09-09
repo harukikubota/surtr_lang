@@ -111,11 +111,16 @@ dirtyなメインworktreeは変更せず、専用worktreeで文書だけを整�
 
 担当: 通常signatureの正規化、carrier relation、signature/dispatch診断、関連stdlib helperとテスト。
 
-別direct引数を独立化し、同じ `$F` / `Self` と明示契約による共有を維持する。RTAとreturn-only carrierの既存関係を切断しない。
+同じdirect TypeCtorTrait名を単一の`$F` + bare capabilityと同じcarrier関係へ正規化する。
+異なるdirect Trait名は同じfamilyでも独立させ、同じ `$F` / `Self` と明示契約による共有を維持する。
+RTAとreturn-only carrierの既存関係を切断しない。
 
 完了条件: `CI-01`–`CI-12`と`CI-15/16`。CI-13/14のdo確認はN11へ引き継ぐ。実装済み `/docs` とhelperのsignatureを新規則へ同期する。
 
-状態: 完了。別direct引数を独立化し、同じ`$F` / `Self`、return-only RTAの明示関係を維持した。
+状態: 完了。同じdirect TypeCtorTrait名を単一のconstructor variableとして共有し、異なるdirect Trait名は
+同じfamilyでも独立させた。同じ`$F` / `Self`、return-only RTAの明示関係も維持した。
+名前付き`$F<...> where $F: TypeCtorTrait`はsignature内のconstructor application自体でbare capabilityを
+消費し、direct表記と同じ未使用constraint判定にした。
 canonical Trait identity、captured / phantom nominal arguments、構造化診断、probe / REPL rollbackを含む
 CI-01–CI-12・CI-15/16を実装とテストへ固定した。CI-13/14は予定どおりN11へ残す。
 

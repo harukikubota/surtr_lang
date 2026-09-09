@@ -11,6 +11,7 @@ pub(super) struct MethodTypeEnvironment {
     pub bindings: HashMap<String, Ty>,
     pub head_bindings: HashMap<String, Ty>,
     pub self_ty: Ty,
+    pub direct_inputs: super::signatures::DirectConstructorInputs,
 }
 
 pub(super) struct CanonicalMethodEnvironment {
@@ -592,6 +593,8 @@ impl Checker {
             &raw.self_ty,
             &mut bindings,
         )?;
+        let ty =
+            super::signatures::coalesce_direct_constructor_inputs(self, ty, &raw.direct_inputs);
         self.canonical_ast_type(ast, &ty, raw, environment)
     }
 
@@ -606,6 +609,7 @@ impl Checker {
             bindings: raw.head_bindings.clone(),
             head_bindings: raw.head_bindings.clone(),
             self_ty: raw.self_ty.clone(),
+            direct_inputs: super::signatures::DirectConstructorInputs::default(),
         };
         let raw = &head_raw;
         let bindings = raw
@@ -671,6 +675,7 @@ impl Checker {
         raw: &MethodTypeEnvironment,
         environment: &CanonicalMethodEnvironment,
         return_environment: Option<&CanonicalMethodEnvironment>,
+        include_direct_constraints: bool,
     ) -> Result<MethodSignatureTypeList, TypeError> {
         let mut entries = Vec::new();
         for (role, types, sources) in [
@@ -715,6 +720,19 @@ impl Checker {
             }
         }
         let mut where_constraints = CanonicalConstraintSet::default();
+        if include_direct_constraints {
+            for input in raw.direct_inputs.iter() {
+                where_constraints
+                    .constraints
+                    .push(CanonicalMethodConstraint {
+                        subject: self.canonical_resolved_type(&input.witness)?,
+                        bound: CanonicalMethodBound::Trait(input.trait_id.unique_id),
+                        origin: TypeOrigin {
+                            span: input.trait_id.span.clone(),
+                        },
+                    });
+            }
+        }
         if let Some(clause) = clause {
             for constraint in &clause.constraints {
                 let subject =
@@ -1750,6 +1768,7 @@ impl Checker {
             raw,
             &environment,
             return_environment.as_ref(),
+            true,
         )?;
         let impl_constraints = self
             .canonical_method_list(
@@ -1763,6 +1782,7 @@ impl Checker {
                 raw,
                 &environment,
                 None,
+                false,
             )?
             .where_constraints;
         Ok(ImplMethodInstantiationContract {

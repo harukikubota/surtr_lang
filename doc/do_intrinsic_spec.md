@@ -10,7 +10,8 @@
 `message` / `labels` / `notes` / `help` 分類は
 [`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md) とする。ReturnTypeArgument の構文・省略、
 Trait method のrole付き型リスト、Deferred、dispatch、callable instantiationも同じ開発者向け正本に従う。
-通常callableのdirect carrier独立化は開発者向け正本の実装済み契約に従う。
+通常callableで同じdirect TypeCtorTrait名を共有し、異なるdirect Trait名を独立させる規則は
+開発者向け正本の実装済み契約に従う。
 `do`固有の同一性はfamily所属から導出せず、本書のcompiler-owned contractが所有する
 一つのdo-local carrier入力へ明示的に結び付ける。
 
@@ -25,8 +26,9 @@ carrier 指定、自然言語 message の再解析を追加してはならない
 `do` 実装を追加してはならない。
 
 1. すべての callable が定義側と call-site の `::<...>` を ReturnTypeArgument として保持する。
-2. 通常callableでは別々のdirect TypeCtorTrait value parameterを独立carrierとして扱い、同じ名前付き
-   constructor variable、`Self`、ReturnTypeArgumentが宣言した関係だけを共有する。
+2. 通常callableでは同じdirect TypeCtorTrait名を単一のconstructor variableとして共有し、異なるdirect
+   Trait名は同じfamilyでも独立carrierとして扱う。同じ名前付きconstructor variable、`Self`、
+   ReturnTypeArgumentが宣言した関係も共有する。
 3. user function、Trait helper、非 intrinsic builtin が同じ role 付き型リスト、constraint set、
    obligation solver を使う。
 4. 未確定の call-site 入力と Trait obligation が `Deferred` のまま保持され、boundary で
@@ -280,7 +282,7 @@ carrier未確定時にResultまたはAlternative実装一覧から逆決定せ�
 ### 6.1 一つのcarrier変数
 
 Scar は `do` ごとに、宣言側ReturnTypeArgument position 0をinstantiateしたcarrier変数を一つ作る。
-この一意性は通常callableのdirect parameterをfamily所属だけで共有する規則から導かず、
+この一意性は通常callableの同じdirect Trait名を共有する規則やfamily所属だけから導かず、
 `DoIntrinsicContract.return_type_arguments[0]`が所有するsame-carrier関係である。canonical `Monad`のfamilyは
 capabilityとslot mappingを解決するために使い、別々のdo-local carrierを生成する根拠にはしない。
 

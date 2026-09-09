@@ -154,20 +154,23 @@ accept(Left::Left(1), Right::Right("right"))
 }
 
 #[test]
-fn shared_payload_variable_does_not_share_direct_carriers() {
-    check(
+fn repeated_direct_trait_name_shares_carrier() {
+    let error = check(
         r#"
 def yen(value: Int) -> Int { value }
 deftrait Context where Self: Type<$A> {}
-defenum Left<$T> { Left($T), }
-defenum Right<$T> { Right($T), }
-impl Context for Left<$T> where $T: Context.$A {}
-impl Context for Right<$T> where $T: Context.$A {}
+defenum Carrier<$L, $R> { Pair($L, $R), }
+impl Context for Carrier<$L, $R> where $R: Context.$A {}
 def accept(left: Context<$A>, right: Context<$A>) -> Int { yen(1) }
-accept(Left::Left(1), Right::Right(2))
+accept(Carrier::Pair("left", 1), Carrier::Pair(True, 2))
 "#,
     )
-    .expect("a shared payload variable constrains only the payload type");
+    .expect_err("the same direct Trait name must preserve carrier identity");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::TypeConstructorFamilyMismatch),
+        "{error:?}"
+    );
 }
 
 #[test]
@@ -180,7 +183,7 @@ defenum Right<$T> { Right($T), }
 impl Context for Left<$T> where $T: Context.$A {}
 impl Context for Right<$T> where $T: Context.$A {}
 def accept(left: Context<$A>, right: Context<$A>) -> Unit { () }
-accept(Left::Left(1), Right::Right("different"))
+accept(Left::Left(1), Left::Left("different"))
 "#,
     )
     .expect_err("a shared payload variable still requires one payload type");
@@ -577,7 +580,7 @@ accept(Pair::Pair(1, "a"), Pair::Pair(2, "b"))
 }
 
 #[test]
-fn direct_result_is_independent_from_direct_input() {
+fn different_direct_trait_names_keep_result_independent() {
     check(
         r#"
 deftrait Functor where Self: Type<$A> {}
@@ -591,11 +594,11 @@ def replace(value: Functor<Int>) -> Monad<String> { Box::Box("wrong") }
 result: Box<String> = replace([1])
 "#,
     )
-    .expect("a direct return chooses its carrier from the body, not from a direct input");
+    .expect("a different direct Trait name chooses its carrier independently");
 }
 
 #[test]
-fn independent_direct_parameters_do_not_depend_on_registration_order() {
+fn different_direct_trait_parameters_do_not_depend_on_registration_order() {
     for trait_definitions in [
         "deftrait Left where Self: Type<$A> {}\ndeftrait Right where Self: Type<$A> {}",
         "deftrait Right where Self: Type<$A> {}\ndeftrait Left where Self: Type<$A> {}",
@@ -625,7 +628,7 @@ accept({arguments})
 "#
                 );
                 check(&source).expect(
-                    "separate direct parameters are independent of Trait, impl, and argument order",
+                    "different direct Trait names are independent of definition and argument order",
                 );
             }
         }

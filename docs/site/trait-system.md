@@ -89,7 +89,9 @@ where
 または `marker::<Int>(value)` のような式の dispatch target で選びます。where clause 自体が新しい型変数を導入することはありません。
 
 generic receiver で Trait helper を直接呼ぶには、必要な bound を signature に書きます。compiler が呼び出しを見て `$A` に暗黙の capability を追加することはありません。bound がない呼び出しは typecheck error です。
-bare capability は式検査専用であり、対象 scope で一度も消費されなければ `UnusedTraitConstraint` です。
+TypeCtorTrait の bare capability は、対象を型コンストラクタとして signature の ReturnTypeArgument、値引数、
+または戻り値で適用した場合にも消費されます。それ以外の bare capability は式検査で消費され、対象 scope で
+一度も消費されなければ `UnusedTraitConstraint` です。
 
 ## 型コンストラクタ Trait
 
@@ -132,7 +134,7 @@ where
 
 `Self<$A>` は declaration の impl target を置換する型位置 marker です。`Self::f()` と `Type::f()` は value-level owner path としては不正です。
 
-`Applicative<$A>` のような constructor application は、通常関数または trait method signature の direct parameter / return にだけ書けます。別々の direct parameter は同じ Trait 名でも carrier が独立し、各位置の capability だけを要求します。同じ carrier を要求する場合は `left: $F<$A>, right: $F<$B> where $F: Applicative` のように同じ `$F` を使います。return は本体が確定する fresh concrete constructor を表し、return-only direct ReturnTypeArgumentだけが対応するreturnへ接続します。field、local annotation、tuple / container、closure signature には書けません。
+`Applicative<$A>` のような constructor application は、通常関数または trait method signature の direct parameter / return にだけ書けます。同じ direct Trait 名は一つの carrier を共有し、`left: $F<$A>, right: $F<$B> where $F: Applicative` と同じ関係を表します。異なる Trait 名は同じ TypeCtorTrait family でも carrier が独立し、各位置の capability だけを要求します。入力と同名の direct return はその carrier を再利用し、それ以外の return は本体または call-site 制約で concrete constructor を確定します。field、local annotation、tuple / container、closure signature には書けません。
 
 ## impl の一致規則
 

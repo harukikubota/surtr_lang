@@ -168,8 +168,9 @@ where $F: Applicative + Add
 | `Functor` | container内部型を観測しないdirect TypeCtorTrait slot。parameter / returnの直下だけ |
 
 通常Trait名はparameter / returnの型にならない。direct type syntaxを持つのはTypeCtorTraitだけである。
-parameterのdirect TypeCtorTraitは、その位置で利用できるcapabilityを制限する名前付きでないcarrier slotとして扱う。
-returnのdirect TypeCtorTraitは、具象carrierをcall-site制約で選ぶ`impl Trait`相当として扱い、trait objectにはしない。
+parameterのdirect TypeCtorTraitは、そのTrait名を暗黙のconstructor variableとして扱い、利用できるcapabilityを制限する。
+同じsignature内で同じdirect Trait名が再出現すればcarrierを共有する。
+returnのdirect TypeCtorTraitは、同名のdirect parameterがあればそのcarrierを再利用し、なければ具象carrierをcall-site制約で選ぶ`impl Trait`相当として扱う。trait objectにはしない。
 一方、`$F<$A>`は名前付きconstructor variableなので、`where $F: Applicative + Add`のように複数constraintを
 付与できる。この差を型表示やdiagnosticで失ってはならない。
 
@@ -204,16 +205,20 @@ def guard::<$F>(cond: Boolean) -> $F<Unit>
 where $F: Alternative
 ```
 
-別々のdirect TypeCtorTrait value parameterは、同じTrait名または同じTypeCtorTraitFamilyに属していても
-独立したcarrierへ解決する。同じpayload型変数を使っても共有するのはpayloadだけである。carrierを共有する
-契約は、同じ名前付きconstructor variable `$F`、Trait contractの`Self`、またはreturn-only direct
-ReturnTypeArgumentとreturnの接続で明示する。parameter位置で利用できるmethod能力は、そこに書かれた
-Traitまでに制限する。
+同じdirect TypeCtorTrait名は、`$F`と単一のbare capabilityへ正規化した場合と同じく、一つのcarrierへ
+解決する。異なるdirect Trait名は、同じTypeCtorTraitFamilyに属していても独立したcarrierである。
+同じpayload型変数を使っても、異なるTrait名の間で共有するのはpayloadだけである。parameter位置で
+利用できるmethod能力は、そこに書かれたTraitまでに制限する。
 
 ```surtr
 def independent(left: Functor<$A>, right: Monad<$A>) -> Unit {
   # payload Aは同じだが、leftとrightのcarrierは独立
   ()
+}
+
+def shared_direct(left: Applicative<$A>, right: Applicative<$B>) -> Applicative<$A> {
+  # 同じdirect Trait名の再出現は同じcarrierを宣言する
+  left
 }
 
 def shared(left: $F<$A>, right: $F<$B>) -> $F<$A>
@@ -223,9 +228,9 @@ where $F: Monad {
 }
 ```
 
-non-capturing TypeCtorTrait slotはcontainer内部型を公開しない。別direct parameter間にはcarrier relationを
-作らない。同じ`$F`、`Self`、ReturnTypeArgumentとreturnなど宣言済みのrelationに違反した場合だけ、関係する
-二つのspanへactual carrier型と同一carrier要求を表示する。
+non-capturing TypeCtorTrait slotはcontainer内部型を公開しない。同じdirect Trait名、同じ`$F`、`Self`、
+ReturnTypeArgumentとreturnなど宣言済みのrelationに違反した場合だけ、関係する二つのspanへactual carrier型と
+同一carrier要求を表示する。
 
 ### 0.6 呼び出し構文一覧
 
@@ -258,8 +263,8 @@ call-site ReturnTypeArgumentは定義側に対応位置がある場合だけ指�
   `ReturnTypeArgumentApply`、保持fieldは`return_type_arguments`へ揃える。任意generic指定に見える内部名も残さない。
 - source diagnostic、JSON diagnostic、unit test、fixture、rustdoc、公開文書をReturnTypeArgument用語へ揃える。
 - `$F<$A, ...>`を、`$F`にTypeCtorTrait constraintがあるsignature型位置だけで受理する。
-- direct TypeCtorTrait value parameterはpositionごとの独立witnessとし、TypeCtorTraitFamilyを理由に
-  carrier substitutionを共有しない。同じ`$F`、`Self`、direct ReturnTypeArgumentとreturnだけを接続する。
+- 同じdirect TypeCtorTrait名は一つのwitnessを共有する。異なるdirect Trait名はTypeCtorTraitFamilyを理由に
+  carrier substitutionを共有しない。同じ`$F`、`Self`、direct ReturnTypeArgumentとreturnも接続する。
 - user function、Trait helper、builtinのsignatureを同じwell-formedness、型推論、trait obligation routeへ載せる。
 - Forgeへは具体化済みcall/dispatchだけを渡し、ReturnTypeArgument専用metadataを新設しない。
 - `do` 構文intrinsicは、未実装のSafeBind・diagnostics cleanupゲートを完了してから追加する。
@@ -477,14 +482,18 @@ where clause が未知の type variable を導入してはならない。`Type<.
 
 TypeCtorTrait application（例: `Applicative<$A>`）は通常関数またはTrait method signatureのdirect
 parameter / returnだけで受理する。nested type、field、local annotation、closure signatureでは拒否する。
-各direct value parameterとdirect returnは独立したwitnessへ正規化し、TypeCtorTraitFamilyを理由に相互に
-unifyしない。container内部を観測しないdirect slotは型引数を省略できる。同一carrierが必要なら同じ`$F`か
-Trait `Self`で宣言する。return-only direct ReturnTypeArgumentは対応するreturn witnessへ接続する。direct returnは
-本体検査の終了時に単一の具象constructorへ確定しなければならない。
+同じdirect TypeCtorTrait名のvalue parameterとreturnは一つのwitnessへ正規化する。異なるTrait名は
+TypeCtorTraitFamilyを理由に相互にunifyしない。container内部を観測しないdirect slotは型引数を省略できる。
+同一carrierは同じdirect Trait名、同じ`$F`、またはTrait `Self`で宣言する。return-only direct
+ReturnTypeArgumentは対応するreturn witnessへ接続する。入力と共有しないdirect returnは本体検査の終了時に
+単一の具象constructorへ確定しなければならない。
 
-bare capability は expression が trait call、operator lowering、または generic call の proof 引渡しで消費した
-ときだけ full obligation を発行する。full obligation は `(TraitRef, obligation subject)` を構造化して保持する。
-body / impl block の scope 終了時に未消費の bare capability は `UnusedTraitConstraint` TypeError とする。
+TypeCtorTrait の bare capability は、そのsubjectをconstructorとしてsignatureのReturnTypeArgument、value
+parameter、またはreturnで適用した時点でも消費する。これはdirect TypeCtorTrait applicationと名前付き
+`$F where $F: Trait`を同じsignature契約にするためである。それ以外のbare capabilityはexpressionがtrait call、
+operator lowering、またはgeneric callのproof引渡しで消費したときだけfull obligationを発行する。full obligationは
+`(TraitRef, obligation subject)`を構造化して保持する。body / impl blockのscope終了時に未消費のbare capabilityは
+`UnusedTraitConstraint` TypeErrorとする。
 trait parent、shape、slot map はこの判定から除外する。
 
 ### 4.1 ReturnTypeArgumentのwell-formedness
@@ -660,7 +669,7 @@ arity不一致やmetadata不整合をpartial `zip`で隠さない。Forgeへ渡�
 テスト配置・fixture の phase/error assertion・visitor 変更時の配置 matrix は
 [`テスト方針.md`](./テスト方針.md) の 3.6.1 を正本とする。coherence の正逆順、nested pattern、parameterized
 impl-head / expression obligation の argument mismatch、deferred rehome/rollback、finite recursion、bare capability
-consumption、ReturnTypeArgumentの導入規則、direct parameterのcarrier独立性、同じ`$F`/`Self`のcarrier一致、non-capturing slot、
+consumption、ReturnTypeArgumentの導入規則、同じdirect Trait名と同じ`$F`/`Self`のcarrier一致、異なるdirect Trait名のcarrier独立性、non-capturing slot、
 parent `Self` assumption、qualified diamond、call-site scheme と expected propagation を unit と Rune fixture の両方で保持する。
 
 workspace は既定 nextest profile で 2 回連続成功させる。timeout 引上げで性能問題を隠さず、新しい prelude-heavy

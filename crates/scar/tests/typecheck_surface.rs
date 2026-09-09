@@ -1177,9 +1177,9 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(plain_inherent_owner_expands_self_applications_to_its_target),
     surface_case!(canonical_builtin_inherent_owners_expand_self_applications_to_their_targets),
     surface_case!(trait_contract_self_substitution_preserves_captured_target_parameters),
-    surface_case!(same_family_constructor_parameters_are_independent),
-    surface_case!(constructor_application_result_is_independent_from_the_input),
-    surface_case!(direct_result_rejects_an_abstract_direct_input_witness),
+    surface_case!(same_trait_constructor_parameters_share_one_witness),
+    surface_case!(constructor_application_result_shares_the_input_witness),
+    surface_case!(constructor_application_result_accepts_the_shared_abstract_input_witness),
     surface_case!(constructor_application_result_rejects_mixed_concrete_constructors),
     surface_case!(
         identity_dependent_constructor_applications_are_rejected_outside_direct_signatures
@@ -4530,8 +4530,8 @@ where
     .expect("trait contract expansion must preserve captured target parameters");
 }
 
-fn same_family_constructor_parameters_are_independent() {
-    typecheck_without_std_prelude(
+fn same_trait_constructor_parameters_share_one_witness() {
+    let error = typecheck_without_std_prelude(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -4559,11 +4559,16 @@ def accept(left: Context<Int>, right: Context<String>) -> Unit { () }
 
 accept(Left::Left(1), Right::Right("ok"))"#,
     )
-    .expect("same-family direct parameters own independent constructor witnesses");
+    .expect_err("the same direct Trait name must share one constructor witness");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::TypeConstructorFamilyMismatch),
+        "{error:?}"
+    );
 }
 
-fn constructor_application_result_is_independent_from_the_input() {
-    typecheck_without_std_prelude(
+fn constructor_application_result_shares_the_input_witness() {
+    let error = typecheck_without_std_prelude(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -4593,11 +4598,16 @@ def replace(value: Context<Int>) -> Context<String> {
 
 result: Right<String> = replace(Left::Left(1))"#,
     )
-    .expect("a direct result chooses its constructor independently from direct inputs");
+    .expect_err("a direct result with the same Trait name shares the input witness");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ArgumentTypeMismatch),
+        "{error:?}"
+    );
 }
 
-fn direct_result_rejects_an_abstract_direct_input_witness() {
-    let error = typecheck_without_std_prelude(
+fn constructor_application_result_accepts_the_shared_abstract_input_witness() {
+    typecheck_without_std_prelude(
         r#"deftrait Context
 where
   Self: Type<$A>
@@ -4605,12 +4615,7 @@ where
 
 def preserve(value: Context<Int>) -> Context<Int> { value }"#,
     )
-    .expect_err("an unnamed direct result cannot promise an input carrier relation");
-    assert_eq!(
-        error.reason(),
-        Some(diagnostics::TypeDiagnosticReason::AmbiguousReturnTypeArgument),
-        "{error:?}"
-    );
+    .expect("the direct result reuses the abstract input witness");
 }
 
 fn constructor_application_result_rejects_mixed_concrete_constructors() {

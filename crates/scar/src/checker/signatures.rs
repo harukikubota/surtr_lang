@@ -50,10 +50,21 @@ pub(super) struct SignatureOccurrences {
 
 #[derive(Debug, Default)]
 pub(super) struct DirectConstructorInputs {
-    // Only ReturnTypeArgument declarations establish an anonymous direct
-    // constructor identity that another signature position may reuse. Direct
-    // value parameters and direct returns are independent occurrences.
-    witnesses: HashMap<String, Ty>,
+    // A direct Trait name is the anonymous spelling of one constructor
+    // variable with that single capability inside a signature.
+    witnesses: BTreeMap<String, DirectConstructorInput>,
+}
+
+#[derive(Debug)]
+pub(super) struct DirectConstructorInput {
+    pub(super) witness: Ty,
+    pub(super) trait_id: sigil::resolved::ResolvedId,
+}
+
+impl DirectConstructorInputs {
+    pub(super) fn iter(&self) -> impl Iterator<Item = &DirectConstructorInput> {
+        self.witnesses.values()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -452,22 +463,20 @@ pub(super) fn validate_return_type_argument_definition(
                 ),
             ));
         }
-        if !matches!(input, TypeInputId::ConstructorTrait(_)) {
-            if let Some(argument_origins) = occurrences.argument_inputs.get(&input) {
-                let related = argument_origins.first().map(|origin| {
-                    source_fact(SourceRole::Value, origin.span.clone(), &origin.display_name)
-                });
-                return Err(occurrence_error(
-                    TypeDiagnosticReason::DuplicateReturnTypeArgumentInput,
-                    callable,
-                    &name,
-                    ordinal as u32,
-                    source_fact(SourceRole::ReturnTypeArgument, argument.span.clone(), &name),
-                    related,
-                    format!("type input `{name}` is introduced more than once"),
-                    &format!("remove `{name}` from the return type arguments"),
-                ));
-            }
+        if let Some(argument_origins) = occurrences.argument_inputs.get(&input) {
+            let related = argument_origins.first().map(|origin| {
+                source_fact(SourceRole::Value, origin.span.clone(), &origin.display_name)
+            });
+            return Err(occurrence_error(
+                TypeDiagnosticReason::DuplicateReturnTypeArgumentInput,
+                callable,
+                &name,
+                ordinal as u32,
+                source_fact(SourceRole::ReturnTypeArgument, argument.span.clone(), &name),
+                related,
+                format!("type input `{name}` is introduced more than once"),
+                &format!("remove `{name}` from the return type arguments"),
+            ));
         }
         if !occurrences.return_inputs.contains_key(&input) {
             return Err(occurrence_error(
@@ -484,10 +493,9 @@ pub(super) fn validate_return_type_argument_definition(
     }
 
     for (input, origins) in &occurrences.return_inputs {
-        // A direct TypeCtorTrait return is an anonymous result carrier chosen
-        // by the function body. It is not a named input introduced by a direct
-        // value parameter and therefore needs no ReturnTypeArgument unless the
-        // declaration explicitly exposes one.
+        // A direct TypeCtorTrait return reuses the anonymous constructor input
+        // with the same Trait name. Without such an input it is selected by the
+        // body and needs no ReturnTypeArgument unless explicitly exposed.
         if matches!(input, TypeInputId::ConstructorTrait(_)) {
             continue;
         }
@@ -652,7 +660,14 @@ pub(super) fn remember_direct_constructor_input(
     inputs
         .witnesses
         .entry(trait_key)
-        .or_insert_with(|| witness.clone());
+        .or_insert_with(|| DirectConstructorInput {
+            witness: witness.clone(),
+            trait_id: signature_ty
+                .direct_constructor_trait
+                .as_ref()
+                .expect("checked direct constructor Trait")
+                .clone(),
+        });
 }
 
 pub(super) fn coalesce_direct_constructor_inputs(
@@ -664,8 +679,8 @@ pub(super) fn coalesce_direct_constructor_inputs(
         Ty::SelfApp(mut items) => {
             if let Some((Ty::Var(var), _)) = Checker::constructor_application_parts(&items) {
                 if let Some(trait_key) = checker.constructor_witness_traits.get(var) {
-                    if let Some(shared) = inputs.witnesses.get(trait_key) {
-                        if let Ty::Var(shared) = shared {
+                    if let Some(input) = inputs.witnesses.get(trait_key) {
+                        if let Ty::Var(shared) = &input.witness {
                             if shared != var {
                                 items[1] = Ty::Var(*shared);
                             }

@@ -2482,12 +2482,23 @@ impl Checker {
             .value_parameters
             .iter()
             .map(|param| {
-                self.resolve_trait_signature_ty_in_context(
+                let ty = self.resolve_trait_signature_ty_in_context(
                     &param.ty,
                     TypeSyntaxContext::General,
                     self_ty,
                     &mut tyvars,
-                )
+                )?;
+                super::signatures::remember_direct_constructor_input(
+                    self,
+                    &param.ty,
+                    &ty,
+                    &mut direct_constructor_inputs,
+                );
+                Ok(super::signatures::coalesce_direct_constructor_inputs(
+                    self,
+                    ty,
+                    &direct_constructor_inputs,
+                ))
             })
             .collect::<Result<Vec<_>, TypeError>>()?;
         let ret = self.resolve_trait_signature_ty_in_context(
@@ -2522,6 +2533,7 @@ impl Checker {
                 head_bindings: trait_head_bindings,
                 bindings: tyvars,
                 self_ty: self_ty.clone(),
+                direct_inputs: direct_constructor_inputs,
             },
         ))
     }
@@ -2774,12 +2786,23 @@ impl Checker {
             .value_parameters
             .iter()
             .map(|param| {
-                self.resolve_trait_signature_ty_in_context(
+                let ty = self.resolve_trait_signature_ty_in_context(
                     &param.ty,
                     TypeSyntaxContext::General,
                     &self_ty,
                     &mut tyvars,
-                )
+                )?;
+                super::signatures::remember_direct_constructor_input(
+                    self,
+                    &param.ty,
+                    &ty,
+                    &mut direct_constructor_inputs,
+                );
+                Ok(super::signatures::coalesce_direct_constructor_inputs(
+                    self,
+                    ty,
+                    &direct_constructor_inputs,
+                ))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ret_signature_source = method.ret_ty.as_ref().unwrap_or(fallback_ret_ty);
@@ -2854,6 +2877,7 @@ impl Checker {
                 bindings: tyvars,
                 head_bindings,
                 self_ty,
+                direct_inputs: direct_constructor_inputs,
             },
         ))
     }
@@ -3160,6 +3184,7 @@ impl Checker {
                     .map(|(name, var)| (name.clone(), Ty::Var(*var)))
                     .collect(),
                 self_ty: target_ty.clone(),
+                direct_inputs: super::signatures::DirectConstructorInputs::default(),
             };
             let (head_type_list, canonical_environment) =
                 self.canonical_impl_head(trait_args, target_ast_ty, &head_environment, span)?;
@@ -3176,6 +3201,7 @@ impl Checker {
                     &head_environment,
                     &canonical_environment,
                     None,
+                    false,
                 )?
                 .where_constraints;
             let mut method_signature_lists = HashMap::new();
@@ -3288,6 +3314,7 @@ impl Checker {
                     &contract_env,
                     &expected_env,
                     None,
+                    true,
                 )?;
                 let (actual_head, mut actual_env) =
                     self.canonical_impl_head(trait_args, target_ast_ty, &impl_env, span)?;
@@ -3321,6 +3348,7 @@ impl Checker {
                     &impl_env,
                     &actual_env,
                     return_env.as_ref(),
+                    true,
                 )?;
                 let instantiated_impl_constraints = self
                     .canonical_method_list(
@@ -3334,6 +3362,7 @@ impl Checker {
                         &impl_env,
                         &actual_env,
                         None,
+                        false,
                     )?
                     .where_constraints;
                 instantiation_contracts.insert(
@@ -3893,6 +3922,17 @@ impl Checker {
                                 TypeSyntaxContext::General,
                                 &mut tyvars,
                             )?;
+                            super::signatures::remember_direct_constructor_input(
+                                self,
+                                &param.ty,
+                                &param_ty,
+                                &mut direct_constructor_inputs,
+                            );
+                            let param_ty = super::signatures::coalesce_direct_constructor_inputs(
+                                self,
+                                param_ty,
+                                &direct_constructor_inputs,
+                            );
                             if !self.allow_error_function_params
                                 && !Self::allows_std_error_function_param_exception(id)
                                 && Self::ty_exposes_error_value(&param_ty)
