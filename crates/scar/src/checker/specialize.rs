@@ -2027,12 +2027,23 @@ impl Checker {
             TypedInner::TraitCall {
                 dispatch,
                 receiver_ty,
+                obligation,
                 args,
                 ..
             } => {
                 let mut vars = Vec::new();
                 match dispatch {
-                    TraitDispatch::Pending => Self::collect_ty_vars(receiver_ty, &mut vars),
+                    TraitDispatch::Pending => {
+                        Self::collect_ty_vars(receiver_ty, &mut vars);
+                        Self::collect_ty_vars(&obligation.receiver, &mut vars);
+                        for ty in &obligation.trait_args {
+                            Self::collect_ty_vars(ty, &mut vars);
+                        }
+                        for arg in args {
+                            Self::collect_ty_vars(&arg.ty, &mut vars);
+                        }
+                        Self::collect_ty_vars(&node.ty, &mut vars);
+                    }
                     TraitDispatch::Selected(instantiation) => {
                         Self::collect_ty_vars(receiver_ty, &mut vars);
                         for ty in instantiation
