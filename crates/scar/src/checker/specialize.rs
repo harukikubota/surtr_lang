@@ -47,14 +47,17 @@ impl Checker {
                     continue;
                 }
             }
-            let rewritten_stmt = self.rewrite_specializations_in_node(
-                stmt,
-                &defs_by_fun_idx,
-                &bound_tyvars_by_fun_idx,
-                &needs_specialization,
-                &mut specialization_fun_idxs,
-                &mut generated_defs,
-            )?;
+            let rewritten_stmt = self
+                .rewrite_specializations_in_node(
+                    stmt,
+                    &defs_by_fun_idx,
+                    &bound_tyvars_by_fun_idx,
+                    &needs_specialization,
+                    &mut specialization_fun_idxs,
+                    &mut generated_defs,
+                )
+                .map(|node| *node)
+                .map_err(|error| *error)?;
             rewritten.push(rewritten_stmt);
         }
 
@@ -287,6 +290,9 @@ impl Checker {
         allowed.extend(vars);
     }
 
+    // Keep both sides of the recursive result pointer-sized. In an unoptimized
+    // build this match has many `?` sites; returning TypedNode/TypeError by
+    // value makes rustc reserve every large result temporary in one frame.
     fn rewrite_specializations_in_node(
         &mut self,
         node: TypedNode,
@@ -295,7 +301,7 @@ impl Checker {
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
-    ) -> Result<TypedNode, TypeError> {
+    ) -> Result<Box<TypedNode>, Box<TypeError>> {
         let span = node.span.clone();
         let ty = node.ty.clone();
         let node = match node.node {
@@ -308,14 +314,14 @@ impl Checker {
             } => TypedInner::SupervisorSpawn {
                 supervisor_process,
                 worker_process,
-                init: Box::new(self.rewrite_specializations_in_node(
+                init: self.rewrite_specializations_in_node(
                     *init,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             },
             TypedInner::SupervisorAdopt {
                 supervisor_process,
@@ -324,14 +330,14 @@ impl Checker {
             } => TypedInner::SupervisorAdopt {
                 supervisor_process,
                 worker_process,
-                pid: Box::new(self.rewrite_specializations_in_node(
+                pid: self.rewrite_specializations_in_node(
                     *pid,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             },
             TypedInner::SupervisorStatus { supervisor_process } => {
                 TypedInner::SupervisorStatus { supervisor_process }
@@ -344,25 +350,25 @@ impl Checker {
             } => TypedInner::SupervisorWorkers {
                 supervisor_process,
                 worker_process,
-                init: Box::new(self.rewrite_specializations_in_node(
+                init: self.rewrite_specializations_in_node(
                     *init,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                strategy: Box::new(self.rewrite_specializations_in_node(
+                )?,
+                strategy: self.rewrite_specializations_in_node(
                     *strategy,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             },
             TypedInner::App(func, args) => {
-                let func = self.rewrite_specializations_in_node(
+                let func = *self.rewrite_specializations_in_node(
                     *func,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
@@ -381,6 +387,7 @@ impl Checker {
                             specialization_fun_idxs,
                             generated_defs,
                         )
+                        .map(|node| *node)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
 
@@ -489,6 +496,7 @@ impl Checker {
                             specialization_fun_idxs,
                             generated_defs,
                         )
+                        .map(|node| *node)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let receiver_ty = self.resolve_ty(&receiver_ty);
@@ -523,7 +531,7 @@ impl Checker {
                         )? {
                             CandidateApplicability::Applicable(instantiation) => instantiation,
                             CandidateApplicability::Deferred(pending) => {
-                                return Err(TypeError {
+                                return Err(Box::new(TypeError {
                                     structured: None,
                                     message: format!(
                                         "AmbiguousReturnTypeArgument: {}::{} remains unresolved at specialization (waiting on {:?}; {} candidates)",
@@ -534,10 +542,10 @@ impl Checker {
                                     ),
                                     span: span.clone(),
                                     hint: None,
-                                });
+                                }));
                             }
                             CandidateApplicability::Rejected(_) => {
-                                return Err(TypeError {
+                                return Err(Box::new(TypeError {
                                     structured: None,
                                     message: format!(
                                         "{}::{} has no applicable implementation at specialization",
@@ -545,7 +553,7 @@ impl Checker {
                                     ),
                                     span: span.clone(),
                                     hint: None,
-                                });
+                                }));
                             }
                         },
                     )
@@ -578,14 +586,14 @@ impl Checker {
                 }
             }
             TypedInner::InjectCall(func, args) => TypedInner::InjectCall(
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *func,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 args.into_iter()
                     .map(|arg| {
                         self.rewrite_specializations_in_node(
@@ -596,8 +604,9 @@ impl Checker {
                             specialization_fun_idxs,
                             generated_defs,
                         )
+                        .map(|node| *node)
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
             TypedInner::Block(stmts) => TypedInner::Block(
                 stmts
@@ -611,8 +620,9 @@ impl Checker {
                             specialization_fun_idxs,
                             generated_defs,
                         )
+                        .map(|node| *node)
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
             TypedInner::Bind(pattern, rhs) => TypedInner::Bind(
                 self.concretize_specialized_typed_pattern(
@@ -626,14 +636,14 @@ impl Checker {
                         generated_defs,
                     },
                 )?,
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *rhs,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::SafeBind(pattern, rhs) => TypedInner::SafeBind(
                 self.concretize_specialized_typed_pattern(
@@ -647,89 +657,89 @@ impl Checker {
                         generated_defs,
                     },
                 )?,
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *rhs,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *left,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *right,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::Pipe(left, right) => TypedInner::Pipe(
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *left,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *right,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::Compose(flavor, left, right) => TypedInner::Compose(
                 flavor,
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *left,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *right,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::ListNil => TypedInner::ListNil,
             TypedInner::ListCons(head, tail) => TypedInner::ListCons(
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *head,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *tail,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::ListLiteral(items) => TypedInner::ListLiteral(
                 items
@@ -743,8 +753,9 @@ impl Checker {
                             specialization_fun_idxs,
                             generated_defs,
                         )
+                        .map(|node| *node)
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
             TypedInner::HashMapLiteral(entries) => TypedInner::HashMapLiteral(
                 entries
@@ -758,7 +769,8 @@ impl Checker {
                                 needs_specialization,
                                 specialization_fun_idxs,
                                 generated_defs,
-                            )?,
+                            )
+                            .map(|node| *node)?,
                             self.rewrite_specializations_in_node(
                                 value,
                                 defs_by_fun_idx,
@@ -766,10 +778,11 @@ impl Checker {
                                 needs_specialization,
                                 specialization_fun_idxs,
                                 generated_defs,
-                            )?,
+                            )
+                            .map(|node| *node)?,
                         ))
                     })
-                    .collect::<Result<Vec<_>, TypeError>>()?,
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
             TypedInner::TupleLiteral(items) => TypedInner::TupleLiteral(
                 items
@@ -783,6 +796,7 @@ impl Checker {
                             specialization_fun_idxs,
                             generated_defs,
                         )
+                        .map(|node| *node)
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
@@ -792,17 +806,17 @@ impl Checker {
                     .map(|part| match part {
                         TypedInterpolatedPart::Text(text) => Ok(TypedInterpolatedPart::Text(text)),
                         TypedInterpolatedPart::Expr(expr) => Ok(TypedInterpolatedPart::Expr(
-                            Box::new(self.rewrite_specializations_in_node(
+                            self.rewrite_specializations_in_node(
                                 *expr,
                                 defs_by_fun_idx,
                                 bound_tyvars_by_fun_idx,
                                 needs_specialization,
                                 specialization_fun_idxs,
                                 generated_defs,
-                            )?),
+                            )?,
                         )),
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
             TypedInner::Dbg(args) => TypedInner::Dbg(
                 args.into_iter()
@@ -810,7 +824,7 @@ impl Checker {
                         Ok(TypedDbgArg {
                             span: arg.span,
                             ty_name: arg.ty_name,
-                            expr: self.rewrite_specializations_in_node(
+                            expr: *self.rewrite_specializations_in_node(
                                 arg.expr,
                                 defs_by_fun_idx,
                                 bound_tyvars_by_fun_idx,
@@ -820,35 +834,35 @@ impl Checker {
                             )?,
                         })
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
             TypedInner::EagerBoundary(inner) => {
-                TypedInner::EagerBoundary(Box::new(self.rewrite_specializations_in_node(
+                TypedInner::EagerBoundary(self.rewrite_specializations_in_node(
                     *inner,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?))
+                )?)
             }
             TypedInner::If(cond, then_branch, else_branch) => TypedInner::If(
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *cond,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *then_branch,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 else_branch
                     .map(|branch| {
                         self.rewrite_specializations_in_node(
@@ -860,124 +874,123 @@ impl Checker {
                             generated_defs,
                         )
                     })
-                    .transpose()?
-                    .map(Box::new),
+                    .transpose()?,
             ),
             TypedInner::Assert(cond, err) => TypedInner::Assert(
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *cond,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *err,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::Ensure(value, pred, err) => TypedInner::Ensure(
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *value,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *pred,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *err,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::MapErr(value, err) => TypedInner::MapErr(
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *value,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *err,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::Cause(value, err) => TypedInner::Cause(
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *value,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *err,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::RecoverKind(value, marker, handler) => TypedInner::RecoverKind(
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *value,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *marker,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                Box::new(self.rewrite_specializations_in_node(
+                )?,
+                self.rewrite_specializations_in_node(
                     *handler,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::Match(scrutinee, arms) => TypedInner::Match(
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *scrutinee,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 arms.into_iter()
                     .map(|arm| {
                         Ok(TypedMatchArm {
@@ -1004,8 +1017,9 @@ impl Checker {
                                         generated_defs,
                                     )
                                 })
-                                .transpose()?,
-                            body: self.rewrite_specializations_in_node(
+                                .transpose()?
+                                .map(|node| *node),
+                            body: *self.rewrite_specializations_in_node(
                                 arm.body,
                                 defs_by_fun_idx,
                                 bound_tyvars_by_fun_idx,
@@ -1015,17 +1029,17 @@ impl Checker {
                             )?,
                         })
                     })
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
             TypedInner::FieldAccess(expr, index) => TypedInner::FieldAccess(
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *expr,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 index,
             ),
             TypedInner::ProcessContextHandler { process_name, slot } => {
@@ -1056,14 +1070,14 @@ impl Checker {
                 path,
                 source_is_result,
             } => TypedInner::FacetView {
-                source: Box::new(self.rewrite_specializations_in_node(
+                source: self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 path: self.rewrite_specializations_in_facet_path(
                     path,
                     defs_by_fun_idx,
@@ -1081,14 +1095,14 @@ impl Checker {
                 source_is_result,
                 mode,
             } => TypedInner::FacetSet {
-                source: Box::new(self.rewrite_specializations_in_node(
+                source: self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 path: self.rewrite_specializations_in_facet_path(
                     path,
                     defs_by_fun_idx,
@@ -1097,14 +1111,14 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 )?,
-                value: Box::new(self.rewrite_specializations_in_node(
+                value: self.rewrite_specializations_in_node(
                     *value,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 source_is_result,
                 mode,
             },
@@ -1115,14 +1129,14 @@ impl Checker {
                 source_is_result,
                 mode,
             } => TypedInner::FacetOver {
-                source: Box::new(self.rewrite_specializations_in_node(
+                source: self.rewrite_specializations_in_node(
                     *source,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 path: self.rewrite_specializations_in_facet_path(
                     path,
                     defs_by_fun_idx,
@@ -1131,14 +1145,14 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 )?,
-                update_fun: Box::new(self.rewrite_specializations_in_node(
+                update_fun: self.rewrite_specializations_in_node(
                     *update_fun,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 source_is_result,
                 mode,
             },
@@ -1155,6 +1169,7 @@ impl Checker {
                             specialization_fun_idxs,
                             generated_defs,
                         )
+                        .map(|node| *node)
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
@@ -1171,6 +1186,7 @@ impl Checker {
                             specialization_fun_idxs,
                             generated_defs,
                         )
+                        .map(|node| *node)
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             ),
@@ -1179,14 +1195,14 @@ impl Checker {
                 binding,
                 id,
                 params,
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *show,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::Def(
                 fun_idx,
@@ -1204,14 +1220,14 @@ impl Checker {
                 params,
                 ret_ty,
                 where_clause,
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *body,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 visibility,
             ),
             TypedInner::ExtractorDef(fun_idx, id, type_params, param, ret_ty, body, visibility) => {
@@ -1221,14 +1237,14 @@ impl Checker {
                     type_params,
                     param,
                     ret_ty,
-                    Box::new(self.rewrite_specializations_in_node(
+                    self.rewrite_specializations_in_node(
                         *body,
                         defs_by_fun_idx,
                         bound_tyvars_by_fun_idx,
                         needs_specialization,
                         specialization_fun_idxs,
                         generated_defs,
-                    )?),
+                    )?,
                     visibility,
                 )
             }
@@ -1238,17 +1254,17 @@ impl Checker {
             TypedInner::Closure(params, captures, body) => TypedInner::Closure(
                 params,
                 captures,
-                Box::new(self.rewrite_specializations_in_node(
+                self.rewrite_specializations_in_node(
                     *body,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
             ),
             TypedInner::Capture(target, args) => {
-                let mut target = self.rewrite_specializations_in_node(
+                let mut target = *self.rewrite_specializations_in_node(
                     *target,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
@@ -1267,6 +1283,7 @@ impl Checker {
                             specialization_fun_idxs,
                             generated_defs,
                         )
+                        .map(|node| *node)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 if args.is_empty() {
@@ -1351,19 +1368,17 @@ impl Checker {
             TypedInner::TraitImplDef(trait_name, target_name, where_clause) => {
                 TypedInner::TraitImplDef(trait_name, target_name, where_clause)
             }
-            TypedInner::Semi(inner) => {
-                TypedInner::Semi(Box::new(self.rewrite_specializations_in_node(
-                    *inner,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?))
-            }
+            TypedInner::Semi(inner) => TypedInner::Semi(self.rewrite_specializations_in_node(
+                *inner,
+                defs_by_fun_idx,
+                bound_tyvars_by_fun_idx,
+                needs_specialization,
+                specialization_fun_idxs,
+                generated_defs,
+            )?),
         };
 
-        Ok(TypedNode { ty, span, node })
+        Ok(Box::new(TypedNode { ty, span, node }))
     }
 
     fn rewrite_specializations_in_facet_path(
@@ -1374,7 +1389,7 @@ impl Checker {
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
-    ) -> Result<TypedFacetPath, TypeError> {
+    ) -> Result<TypedFacetPath, Box<TypeError>> {
         path.segments = path
             .segments
             .into_iter()
@@ -1400,7 +1415,7 @@ impl Checker {
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
-    ) -> Result<TypedFacetSegment, TypeError> {
+    ) -> Result<TypedFacetSegment, Box<TypeError>> {
         Ok(match segment {
             TypedFacetSegment::ListIndex {
                 index,
@@ -1409,14 +1424,14 @@ impl Checker {
                 focus_readonly_root,
                 focus_type_name,
             } => TypedFacetSegment::ListIndex {
-                index: Box::new(self.rewrite_specializations_in_node(
+                index: self.rewrite_specializations_in_node(
                     *index,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 display,
                 literal_index,
                 focus_readonly_root,
@@ -1431,22 +1446,22 @@ impl Checker {
                 focus_readonly_root,
                 focus_type_name,
             } => TypedFacetSegment::ListRange {
-                start: Box::new(self.rewrite_specializations_in_node(
+                start: self.rewrite_specializations_in_node(
                     *start,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
-                end: Box::new(self.rewrite_specializations_in_node(
+                )?,
+                end: self.rewrite_specializations_in_node(
                     *end,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 display,
                 literal_start,
                 literal_end,
@@ -1460,14 +1475,14 @@ impl Checker {
                 focus_readonly_root,
                 focus_type_name,
             } => TypedFacetSegment::MapKey {
-                key: Box::new(self.rewrite_specializations_in_node(
+                key: self.rewrite_specializations_in_node(
                     *key,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?),
+                )?,
                 display,
                 literal_key,
                 focus_readonly_root,
@@ -1485,7 +1500,7 @@ impl Checker {
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
-    ) -> Result<PendingFacetPath, TypeError> {
+    ) -> Result<PendingFacetPath, Box<TypeError>> {
         path.segments = path
             .segments
             .into_iter()
@@ -1511,20 +1526,23 @@ impl Checker {
         needs_specialization: &HashSet<u32>,
         specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
         generated_defs: &mut Vec<TypedNode>,
-    ) -> Result<PendingFacetSegment, TypeError> {
-        let mut rewrite_expr = |this: &mut Self, expr| match expr {
-            PendingFacetExpr::Resolved(expr) => Ok(PendingFacetExpr::Resolved(expr)),
-            PendingFacetExpr::Typed(expr) => Ok(PendingFacetExpr::Typed(Box::new(
-                this.rewrite_specializations_in_node(
-                    *expr,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ))),
-        };
+    ) -> Result<PendingFacetSegment, Box<TypeError>> {
+        let mut rewrite_expr =
+            |this: &mut Self, expr| -> Result<PendingFacetExpr, Box<TypeError>> {
+                match expr {
+                    PendingFacetExpr::Resolved(expr) => Ok(PendingFacetExpr::Resolved(expr)),
+                    PendingFacetExpr::Typed(expr) => Ok(PendingFacetExpr::Typed(
+                        this.rewrite_specializations_in_node(
+                            *expr,
+                            defs_by_fun_idx,
+                            bound_tyvars_by_fun_idx,
+                            needs_specialization,
+                            specialization_fun_idxs,
+                            generated_defs,
+                        )?,
+                    )),
+                }
+            };
         Ok(match segment {
             PendingFacetSegment::Bracket { expr, display } => PendingFacetSegment::Bracket {
                 expr: rewrite_expr(self, expr)?,
@@ -1592,14 +1610,17 @@ impl Checker {
         // for a stale persistent-session entry and allocates a second index.
         let generated_index = generated_defs.len();
         generated_defs.push(substituted_def.clone());
-        let rewritten_def = self.rewrite_specializations_in_node(
-            substituted_def,
-            defs_by_fun_idx,
-            bound_tyvars_by_fun_idx,
-            needs_specialization,
-            specialization_fun_idxs,
-            generated_defs,
-        )?;
+        let rewritten_def = self
+            .rewrite_specializations_in_node(
+                substituted_def,
+                defs_by_fun_idx,
+                bound_tyvars_by_fun_idx,
+                needs_specialization,
+                specialization_fun_idxs,
+                generated_defs,
+            )
+            .map(|node| *node)
+            .map_err(|error| *error)?;
         self.specializable_defs
             .insert(specialized_fun_idx, rewritten_def.clone());
         generated_defs[generated_index] = rewritten_def;

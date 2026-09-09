@@ -13,6 +13,35 @@ fn check_error(source: &str) -> TypeError {
 }
 
 #[test]
+fn finite_trait_specialization_chain_fits_the_default_test_stack() {
+    const SPECIALIZATION_DEPTH: usize = 16;
+
+    let mut source = String::from(
+        "deftrait Echo { def echo(self: Self, value: $T) -> $T }\n\
+         impl Echo for Int { def echo(self: Self, value: $T) -> $T { value } }\n",
+    );
+    for depth in 0..SPECIALIZATION_DEPTH {
+        let body = if depth + 1 == SPECIALIZATION_DEPTH {
+            "Echo::echo(1, value)".to_owned()
+        } else {
+            format!("Echo::echo(1, chain_{}(value))", depth + 1)
+        };
+        source.push_str(&format!(
+            "def chain_{depth}(value: $T) -> $T {{ {body} }}\n"
+        ));
+    }
+    source.push_str("chain_0(\"left\")\n");
+
+    std::thread::Builder::new()
+        .name("scar-specialization-stack-regression".into())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || check(&source))
+        .expect("specialization stack regression thread should spawn")
+        .join()
+        .expect("finite specialization should fit the normal debug stack");
+}
+
+#[test]
 fn box_field_return_and_body_are_instantiated_together() {
     let nodes = check(
         r#"
