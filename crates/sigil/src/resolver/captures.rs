@@ -202,7 +202,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                 }
             }
         }
-        Resolved::ConstructorCall(_, _, args) => {
+        Resolved::ConstructorCall(_, _, args) | Resolved::EnumConstructorCall(_, _, _, args) => {
             for arg in args {
                 match arg {
                     ResolvedRecordLitArg::Positional(expr) => {

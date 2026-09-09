@@ -1137,6 +1137,20 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
                 .map(|arg| rewrite_process_owner_record_lit_arg(arg, old_name, new_name))
                 .collect(),
         ),
+        Ast::EnumConstructorCall(span, owner, type_args, variant, args) => {
+            Ast::EnumConstructorCall(
+                span,
+                rewrite_process_owner_symbol(owner, old_name, new_name),
+                type_args
+                    .into_iter()
+                    .map(|ty| rewrite_process_owner_ty(ty, old_name, new_name))
+                    .collect(),
+                variant,
+                args.into_iter()
+                    .map(|arg| rewrite_process_owner_record_lit_arg(arg, old_name, new_name))
+                    .collect(),
+            )
+        }
         Ast::DeferrorDef(span, name, fields, show_expr, attrs) => Ast::DeferrorDef(
             span,
             name,
@@ -1868,6 +1882,20 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .map(|arg| shift_return_type_argument(arg, delta))
                 .collect(),
         ),
+        Ast::EnumConstructorCall(span, owner, type_args, variant, args) => {
+            Ast::EnumConstructorCall(
+                shift_span(span, delta),
+                owner,
+                type_args
+                    .into_iter()
+                    .map(|ty| shift_ast_ty(ty, delta))
+                    .collect(),
+                variant,
+                args.into_iter()
+                    .map(|arg| shift_record_lit_arg(arg, delta))
+                    .collect(),
+            )
+        }
         Ast::Block(span, stmts) => Ast::Block(
             shift_span(span, delta),
             stmts
@@ -2513,6 +2541,7 @@ impl Ast {
             | Ast::StructLit(s, _, _)
             | Ast::InternalStructLit(s, _, _)
             | Ast::ConstructorCall(s, _, _)
+            | Ast::EnumConstructorCall(s, _, _, _, _)
             | Ast::DeferrorDef(s, _, _, _, _)
             | Ast::EnumDef(s, _, _, _, _)
             | Ast::Def(s, _, _, _, _, _, _, _)

@@ -7217,6 +7217,37 @@ fn = &identity::<Int>"#,
 }
 
 #[test]
+fn enum_constructor_type_arguments_resolve_only_for_the_declared_variant_owner() {
+    parse_and_resolve(
+        r#"defenum Either<$L, $R> { Left($L), Right($R) }
+left = Either<_, Int>::Left("term")"#,
+    )
+    .expect("an enum owner and its declared variant should resolve");
+
+    let arity = parse_and_resolve(
+        r#"defenum Either<$L, $R> { Left($L), Right($R) }
+left = Either<Int>::Left(1)"#,
+    )
+    .expect_err("enum constructor type arguments must match the owner arity");
+    assert!(arity.message.contains("expects 2 type argument(s), got 1"));
+
+    let non_enum = parse_and_resolve(
+        r#"defstruct Box { value: Int }
+value = Box<Int>::new(1)"#,
+    )
+    .expect_err("struct constructors must not use enum constructor type arguments");
+    assert!(non_enum.message.contains("is not an enum type"));
+
+    let error = parse_and_resolve(
+        r#"defenum Either<$L, $R> { Left($L), Right($R) }
+impl Either { def is_left(value: Either<$L, $R>) -> Boolean { True } }
+value = Either<_, Int>::is_left(Either::Left("term"))"#,
+    )
+    .expect_err("an enum method must not be accepted as a constructor variant");
+    assert!(error.message.contains("enum variant"), "{error:?}");
+}
+
+#[test]
 fn canonical_return_type_arguments_and_value_parameters_resolve() {
     let resolved = parse_and_resolve(
         r#"def identity::<$A>(value: $A) -> $A { value }

@@ -1,0 +1,6 @@
+left_text: Either<String, Int> = Either<_, Int>::Left("term")
+left_int: Either<Int, Int> = Either<_, Int>::Left(1)
+right: Either<String, Int> = Either<String, _>::Right(2)
+none: Option<Int> = Option<_>::None
+
+print("ok")

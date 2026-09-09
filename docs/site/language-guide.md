@@ -404,9 +404,30 @@ print(match key {
 })
 ```
 
+generic enum では、owner の型引数を constructor ごとに明示できます。`_` の位置だけを
+payload や代入先の型から推論し、明示した型は固定します。
+
+```surtr
+defenum Either<$L, $R> {
+  Left($L),
+  Right($R),
+}
+
+left: Either<String, Int> = Either<_, Int>::Left("term")
+right: Either<Int, String> = Either<Int, _>::Right("value")
+```
+
+型引数の個数は enum 宣言と一致させます。この構文は enum variant の値生成専用で、
+`Enum<...>::method`、struct constructor、型注釈中の `_` には広がりません。
+TypeConstructor trait や abstract `Error` など、通常の値型位置で禁止される型も明示できません。
+
+`Err(NoneError)` の成功型が外側から決まらない場合は、
+`Result<Int>::Err(NoneError)` のように明示します。この形も従来の Result constructor と同じ
+runtime 表現と Error 制約を使います。
+
 補足:
 
-- `Enum::Variant(...)` で値を作る
+- `Enum::Variant(...)` または `Enum<TypeArgument, ...>::Variant(...)` で値を作る
 - `match` は網羅必須
 - enum 値への field access（例: `.idx`）はサポートしない
 

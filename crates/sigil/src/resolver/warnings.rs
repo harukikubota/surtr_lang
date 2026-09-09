@@ -230,7 +230,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
                 }
             }
         }
-        Resolved::ConstructorCall(_, _, args) => {
+        Resolved::ConstructorCall(_, _, args) | Resolved::EnumConstructorCall(_, _, _, args) => {
             for arg in args {
                 collect_record_arg_usage(arg, usage);
             }

@@ -434,6 +434,24 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
                 })
                 .collect(),
         ),
+        Ast::EnumConstructorCall(span, owner, type_args, variant, args) => {
+            Ast::EnumConstructorCall(
+                span,
+                owner,
+                type_args,
+                variant,
+                args.into_iter()
+                    .map(|arg| match arg {
+                        RecordLitArg::Positional(expr) => {
+                            RecordLitArg::Positional(rewrite_process_self_refs(expr))
+                        }
+                        RecordLitArg::Named(name, expr) => {
+                            RecordLitArg::Named(name, rewrite_process_self_refs(expr))
+                        }
+                    })
+                    .collect(),
+            )
+        }
         Ast::Closure(span, params, body) => {
             Ast::Closure(span, params, Box::new(rewrite_process_self_refs(*body)))
         }

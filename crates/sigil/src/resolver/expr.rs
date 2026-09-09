@@ -518,6 +518,21 @@ impl Resolver {
                 }
                 Ok(())
             }
+            Ast::EnumConstructorCall(_, _, _, _, args) => {
+                for arg in args {
+                    match arg {
+                        RecordLitArg::Positional(expr) | RecordLitArg::Named(_, expr) => {
+                            self.collect_capture_placeholders(
+                                expr,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                                used,
+                            )?;
+                        }
+                    }
+                }
+                Ok(())
+            }
             Ast::ReturnTypeArgumentApply(_, target, _) => self.collect_capture_placeholders(
                 target,
                 allow_placeholders,
@@ -1214,6 +1229,35 @@ impl Resolver {
                     })
                     .collect::<Result<Vec<_>, _>>()?,
             )),
+            Ast::EnumConstructorCall(span, owner, type_args, variant, args) => {
+                Ok(Ast::EnumConstructorCall(
+                    span,
+                    owner,
+                    type_args,
+                    variant,
+                    args.into_iter()
+                        .map(|arg| match arg {
+                            RecordLitArg::Positional(expr) => Ok(RecordLitArg::Positional(
+                                self.rewrite_capture_placeholders(
+                                    expr,
+                                    capture_span,
+                                    allow_placeholders,
+                                    inside_placeholder_capture,
+                                )?,
+                            )),
+                            RecordLitArg::Named(name, expr) => Ok(RecordLitArg::Named(
+                                name,
+                                self.rewrite_capture_placeholders(
+                                    expr,
+                                    capture_span,
+                                    allow_placeholders,
+                                    inside_placeholder_capture,
+                                )?,
+                            )),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                ))
+            }
             Ast::Closure(span, params, body) => Ok(Ast::Closure(
                 span,
                 params,
@@ -1448,11 +1492,13 @@ impl Resolver {
                     StructLitField::Shorthand(_) => None,
                 })
             }
-            Ast::ConstructorCall(_, _, args) => args.iter().find_map(|arg| match arg {
-                RecordLitArg::Positional(expr) | RecordLitArg::Named(_, expr) => {
-                    Self::pipe_slot_span(expr)
-                }
-            }),
+            Ast::ConstructorCall(_, _, args) | Ast::EnumConstructorCall(_, _, _, _, args) => {
+                args.iter().find_map(|arg| match arg {
+                    RecordLitArg::Positional(expr) | RecordLitArg::Named(_, expr) => {
+                        Self::pipe_slot_span(expr)
+                    }
+                })
+            }
             Ast::Closure(_, _, body) => Self::pipe_slot_span(body),
             Ast::Capture(_, target, args) => {
                 Self::pipe_slot_span(target).or_else(|| args.iter().find_map(Self::pipe_slot_span))
@@ -3800,6 +3846,96 @@ impl Resolver {
                     })
                     .collect::<Result<Vec<_>, ResolveError>>()?;
                 Ok(Resolved::ConstructorCall(span, rid, resolved_args))
+            }
+
+            Ast::EnumConstructorCall(span, owner_name, type_args, variant_name, args) => {
+                let _owner_uid = self.scope.lookup(&owner_name).ok_or_else(|| ResolveError {
+                    message: format!("Undefined enum type: {owner_name}"),
+                    span: span.clone(),
+                    related_labels: Vec::new(),
+                })?;
+                let owner = self
+                    .owner_registry
+                    .get(&owner_name)
+                    .ok_or_else(|| ResolveError {
+                        message: format!("{owner_name} is not a declared enum type"),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    })?;
+                if owner.kind != OwnerKind::Enum {
+                    return Err(ResolveError {
+                        message: format!("{owner_name} is not an enum type"),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                }
+                let expected_arity = self
+                    .owner_registry
+                    .enum_type_parameter_arity(&owner.canonical_key)
+                    .unwrap_or(0);
+                if type_args.len() != expected_arity {
+                    return Err(ResolveError {
+                        message: format!(
+                            "Enum constructor {owner_name} expects {expected_arity} type argument(s), got {}",
+                            type_args.len()
+                        ),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                }
+
+                let constructor_name = format!("{owner_name}::{variant_name}");
+                let constructor_uid =
+                    self.scope
+                        .lookup(&constructor_name)
+                        .ok_or_else(|| ResolveError {
+                            message: format!(
+                                "{variant_name} is not a declared enum variant of {owner_name}"
+                            ),
+                            span: span.clone(),
+                            related_labels: Vec::new(),
+                        })?;
+                if self.declaration_uid_kinds.get(&constructor_uid)
+                    != Some(&DeclarationKind::EnumVariant)
+                {
+                    return Err(ResolveError {
+                        message: format!(
+                            "{variant_name} is not a declared enum variant of {owner_name}"
+                        ),
+                        span: span.clone(),
+                        related_labels: Vec::new(),
+                    });
+                }
+                let symbol_info = self.symbol_info_for_uid(&constructor_name, constructor_uid);
+                let constructor_id = ResolvedId {
+                    name: constructor_name,
+                    qualified_name: None,
+                    unique_id: constructor_uid,
+                    compiler_generated: false,
+                    symbol_info,
+                    span: span.clone(),
+                };
+                let resolved_type_args = type_args
+                    .into_iter()
+                    .map(|ty| self.resolve_type_annotation(ty))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let resolved_args = args
+                    .into_iter()
+                    .map(|arg| match arg {
+                        spire::ast::RecordLitArg::Positional(expr) => {
+                            Ok(ResolvedRecordLitArg::Positional(self.resolve_node(expr)?))
+                        }
+                        spire::ast::RecordLitArg::Named(name, expr) => {
+                            Ok(ResolvedRecordLitArg::Named(name, self.resolve_node(expr)?))
+                        }
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?;
+                Ok(Resolved::EnumConstructorCall(
+                    span,
+                    constructor_id,
+                    resolved_type_args,
+                    resolved_args,
+                ))
             }
 
             Ast::Cond(span, clauses) => Ok(Resolved::Cond(

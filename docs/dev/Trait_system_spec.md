@@ -74,13 +74,18 @@
 | `.` | `Trait.$Slot`でTraitとconstructor slotを結ぶ |
 | `::` | `Trait::method`、`Type::method`などqualified value pathを作る。`::<...>`ではReturnTypeArgument開始記号の一部 |
 | `->` | callableの引数型と戻り値型を分ける |
-| `_` | その位置の型を周囲から推論するhole。新しい名前付きgenericを宣言しない |
+| `_` | 許可された callable hole / Facet slot、または `Enum<_, ...>::Variant` の未指定 owner 型引数。新しい名前付きgenericを宣言しない |
 | `def` / `defp` | public / private method宣言。bodyのないpublic Trait methodは実装必須契約になる |
 | `@autoimport` | Trait helper aliasをfile-local preludeへ入れるTrait単位のopt-in |
 | `@derive` | 対応Trait implをresolverが生成する型宣言側annotator |
 
 `Type`は型形状指定のcompiler-special surface name、`TypeConstructor`はcompiler内部のkind/identity分類、
 `TypeCtorTrait`は`Self: Type<...>`を持つTraitの分類であり、相互に同義ではない。
+
+Enum constructor の `Enum<TypeArgument, ...>::Variant(...)` は value expression の専用構文であり、
+ReturnTypeArgument の `::<...>` や TypeCtorTrait の constructor slot ではない。各 `_` は位置ごとに独立した
+fresh inference variable となり、payload と expected type からだけ制約される。通常型および scope 内の型変数は
+明示入力として固定し、別の型へ再推論しない。
 
 ### 0.3 宣言構文一覧
 

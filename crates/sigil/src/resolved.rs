@@ -203,6 +203,9 @@ pub enum Resolved {
     /// Constructor call: `Point(1.0, 2.0)`
     ConstructorCall(Span, ResolvedId, Vec<ResolvedRecordLitArg>),
 
+    /// Enum constructor whose owner type arguments were supplied explicitly.
+    EnumConstructorCall(Span, ResolvedId, Vec<AstTy>, Vec<ResolvedRecordLitArg>),
+
     /// Struct definition (passed through for Scar)
     StructDef(
         Span,
