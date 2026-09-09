@@ -19,7 +19,7 @@ test("List") {
     }
 
     it("obeys Alternative identity and associativity laws") {
-      empty: List<Int> = Alternative::empty::<Int>()
+      empty: List<Int> = Alternative::empty()
       first: List<Int> = [1]
       second: List<Int> = [2]
       third: List<Int> = [3]

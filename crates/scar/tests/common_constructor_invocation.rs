@@ -2,6 +2,7 @@
 
 #[allow(dead_code)]
 mod support;
+use scar::typed::TypedInner;
 use std::collections::HashSet;
 
 macro_rules! constructor_case {
@@ -18,6 +19,7 @@ const CONSTRUCTOR_CASES: &[(&str, fn())] = &[
     constructor_case!(custom_functor_returns_follow_the_shared_plain_inference_policy),
     constructor_case!(one_registered_carrier_is_not_constructor_inference_evidence),
     constructor_case!(generic_receiverless_family_helpers_use_expected_return),
+    constructor_case!(generic_constructor_trait_wrappers_specialize_all_method_roles),
 ];
 
 #[test]
@@ -219,6 +221,7 @@ deftrait Family where Self: Type<$A> {
     def make::<Self>(value: $A) -> Self<$A>
     def map(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B>
 }
+
 defenum Boxed<$T> { Box($T) }
 impl Family for Boxed<$T> {
     def make::<Boxed<$T>>(value: $A) -> Boxed<$A> { Boxed::Box(value) }
@@ -236,4 +239,44 @@ impl Family for Boxed<$T> {
         scar::typecheck(sigil::resolve(ast).unwrap())
             .expect("receiverless helpers are signature-driven");
     }
+}
+
+fn generic_constructor_trait_wrappers_specialize_all_method_roles() {
+    let source = r#"
+def map_functor(value: Functor<$A>, mapper: ($A -> $B)) -> Functor<$B> {
+    Functor::fmap(value, mapper)
+}
+def map_applicative(value: Applicative<$A>, mapper: ($A -> $B)) -> Applicative<$B> {
+    Functor::fmap(value, mapper)
+}
+strings: List<String> = map_functor([1], {|value: Int| "mapped"})
+booleans: List<Boolean> = map_functor([2], {|value: Int| True})
+inherited: List<String> = map_applicative([3], {|value: Int| "mapped"})
+"#;
+
+    let nodes = support::typecheck(support::resolve_with_builtin_prelude(source))
+        .expect("all trait method roles must share the call-site specialization");
+    let map_functor_specializations = nodes
+        .iter()
+        .filter_map(|node| {
+            let TypedInner::Bind(_, rhs) = &node.node else {
+                return None;
+            };
+            let TypedInner::App(func, _) = &rhs.node else {
+                return None;
+            };
+            let TypedInner::Var(id) = &func.node else {
+                return None;
+            };
+            let scar::types::Ty::UserFunc { fun_idx, .. } = &func.ty else {
+                return None;
+            };
+            (id.name == "map_functor").then_some(*fun_idx)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(map_functor_specializations.len(), 2);
+    assert_ne!(
+        map_functor_specializations[0], map_functor_specializations[1],
+        "mapped output type must participate in the specialization key"
+    );
 }
