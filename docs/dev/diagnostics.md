@@ -24,7 +24,7 @@
 
 source span を必要としない説明や修正案を `labels` に置かない。迷う場合は「その文がコード上のどこを指すか」を基準にし、指さない説明は `notes`、利用者への命令は `help` に置く。
 
-## Task 2: 構造化診断契約
+## 構造化診断契約（実装済み）
 
 typecheck 診断は、phase 固有の error 型を維持したまま、次の構造化入力を正本とする。
 
@@ -34,14 +34,61 @@ typecheck 診断は、phase 固有の error 型を維持したまま、次の構
 - JSON の既存フィールド `kind`、`phase`、`line`、`column`、`span`、`message`、`expected`、`got`、`hint` は意味を変えずに保持し、`reason`、`origin`、`data`、`related` を additive に追加する。
 - 移行中の未移行診断は明示的に不安定な legacy payload として扱い、legacy message から安定した reason を推測したり、偽の reason を付与したりしない。各診断 family の移行完了時に対応する legacy payload を削除する。
 
-## Task 9: 型関係と呼び出しの診断
+## 型関係と呼び出しの診断（実装済み）
 
 - Scar の `assert_type_relation` は、失敗時に部分的な型代入と capability / obligation の変更を rollback する。成功した制約だけを後続へ渡す。両側の source fact は照合対象の型とともに保持する。
 - 呼び出しの arity / mode / named 引数、通常の型関係、Trait obligation / dispatch、constructor family / payload / capability は共通の reason を使う。演算子と対応する helper は同じ検査を通し、文脈の違いを `DiagnosticOrigin` に保持する。入れ子の呼び出し・annotation の失敗を外側の演算子へ付け替えない。
 - `cond` の節と `if_let` の発生文脈は Spire / Sigil から Scar まで保持する。分岐診断には全 body の型・span・ordinal と guard の source fact を含める。`cond` の実行は型検査後に既存の `TypedInner::If` へ lowering する。
 - JSON の `data` は source location の rebase 後に typed projection から生成する。必須 key は省略せず、該当しない値は `null` にする。`related` は primary fact も含み、型は `type`、source role は `left_value` / `right_value` などの snake_case とする。
 - constructor `family_id` は同じ族の canonical Trait ID をソートして構成する。完全な source value の型には captured 引数と `Result` の error 型も含める。登録順や内部 inference ID を表示しない。
-- structured input がある場合、optional field の欠落を理由に message / label / source の解析へ戻らない。未移行の policy / runtime 等の legacy 経路の全撤去は Task 10 で行う。
+- structured input がある場合、optional field の欠落を理由に message / label / source の解析へ戻らない。未移行の policy / runtime 等の legacy 経路、SafeBind是正、heuristic全撤去は未実装であり、[`../../doc/diagnostics_cleanup_spec.md`](../../doc/diagnostics_cleanup_spec.md)を実装入力とする。
+
+## stable reason と typed data
+
+型関係・callable・Trait・TypeCtorTrait・branchの実装済み経路は、次の閉じた`TypeDiagnosticReason`を使う。
+同じ意味の失敗にsurface名別のreasonを増やさず、call、Trait call、operator、annotation、return、branchなどの
+違いは`DiagnosticOrigin`で表す。
+
+| family | stable reason |
+|---|---|
+| argument contract | `ArityMismatch`, `ArgumentModeMismatch`, `UnknownNamedArgument`, `DuplicateArgument`, `MissingArgument` |
+| type relation / callable | `ArgumentTypeMismatch`, `ReturnTypeMismatch`, `AnnotationTypeMismatch`, `NotCallable`, `CallableShapeMismatch`, `CallableSignatureMetadataMismatch` |
+| ReturnTypeArgument | `ReturnTypeArgumentArityMismatch`, `ReturnTypeArgumentMismatch`, `AmbiguousReturnTypeArgument`, `DuplicateReturnTypeArgumentInput`, `MissingReturnTypeArgument`, `UnusedReturnTypeArgument`, `ConcreteReturnTypeArgumentInDefinition`, `InlineReturnTypeArgumentConstraint` |
+| constraint / Trait | `InvalidTraitConstraintSubject`, `MissingGenericBound`, `MissingTraitCapability`, `NoApplicableTraitImplementation`, `UnresolvedTraitMethodInstantiation`, `MissingTraitDispatchTarget` |
+| TypeCtorTrait | `MissingTypeConstructorConstraint`, `TypeConstructorFamilyMismatch`, `TypePayloadMismatch`, `MissingTypeConstructorCapability` |
+| Trait method contract | `TraitMethodTypeListMismatch`, `TraitMethodTypeListArityMismatch`, `TraitMethodConstraintMismatch` |
+| branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
+
+`MissingGenericBound`はrigid genericの宣言済みproof不足、`MissingTraitCapability`は具象subjectの能力不足、
+`MissingTypeConstructorCapability`はconstructor carrier occurrenceの能力不足であり、相互に置換しない。
+未確定inference variableのobligationは`Deferred`として保持し、候補数や登録順からreasonや型を決めない。
+
+`DiagnosticData`はreasonに必要な型付きpayloadを保持する。JSONでは`kind` discriminatorと、次表の
+serialized fieldだけを投影する。source factなど一部の内部fieldはrendererでlabel/noteを構成するための値で、
+`#[serde(skip)]`によりJSON dataには出ない。optionalなserialized値が存在しない場合も、reasonごとのschemaを
+messageに合わせて変形させない。
+
+| data kind | 主なserialized fields |
+|---|---|
+| `CallableShape` / `ArgumentContract` | `callable`, arity/count, parameter name, return shape |
+| `ArgumentRelation` | `callable`, `ordinal`, `expected_type`, `actual_type` |
+| `ReturnTypeArgument` | `callable`, `ordinal`, `declared_origin`, `value_parameter_origin`, `return_origin`, expected/actual typeとcount |
+| `CallableSignature` | `callable`, `role`, expected/actual count, `detail` |
+| `TraitMethodTypeList` / `TraitMethodConstraint` | optional `identity`、`method_name`、role/ordinal/nested path、expected/actual type・countまたはconstraints、`impl_declaration` |
+| `TraitDispatch` / `CandidateSelection` | `trait_name`, `trait_arguments`, `subject_type`, method, `impl_declaration`。後者はcandidate failuresも保持する |
+| `ConstraintSubject` / `TraitObligation` | subject/constraint、またはtrait name/arguments・subject type・position |
+| `TypeConstructorCarrier` | `family`, `family_id`, `expected_carrier`, `actual_carrier` |
+| `BranchAssertion` | `expected_type`, `actual_type`, `branch` |
+| `SafeBindRelation` / `Policy` / `Runtime` | 現行payload。N06でprojectionとfailure targetを拡張する |
+
+constructor-context経路の`CandidateFailureData`は候補ごとの型と失敗detailを保持する。通常のTrait候補選択は
+内部`CandidateFailure`からrelated factsとsummary noteを構築する。どちらも全候補reject時に情報を捨てて
+一般callable経路へfallbackせず、最終診断はrequested obligation全体から作る。一候補のlocal failureを
+そのまま最終reasonにしない。共通のtyped candidate projectionへの統合はN06の残件である。
+
+remediationはbase reason、expected/actual type、primary spanを変更しないoverlayである。具体的な変換案は
+canonical identityと可視なconversion implから一意に裏付けられる場合だけ追加し、rendered type名やmessageの
+文字列一致から選ばない。
 
 ## 実装規則
 

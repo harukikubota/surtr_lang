@@ -34,6 +34,10 @@ impl Describable for Int {
 
 ReturnTypeArguments は、型変数が value parameter の型から導入できない場合に使い、その型変数は戻り値にも現れなければならない。`self: Self` のように型変数が引数位置に現れる method は ReturnTypeArguments を省略する。trait 宣言に ReturnTypeArguments がある場合、impl method は trait head と impl target で置換した同じ構造を宣言し、個数・順序・型構造を一致させる。引数位置で導入済みの型変数を同じ型で重ねて指定するのはエラーである。
 
+型変数名そのものは一致条件ではありません。compilerはReturnTypeArguments、value parameters、returnを
+roleと順序を保った構造として比較し、同じ変数が再出現する関係、tuple・function・nested typeの内側まで
+照合します。項目数が違う場合に末尾を無視したり、owner名だけで一致としたりしません。
+
 ### 型引数を持つ Trait と `where`
 
 Trait 引数は impl head で明示しますが、`where` の capability は bare trait 名で書きます。
@@ -100,6 +104,16 @@ impl coherence は型変数名や宣言順ではなく、Trait 引数と target 
 この判定は method body を実行・生成する前の typecheck で行われます。user code の impl conflict が runtime や codegen error になることはありません。
 
 `From` / `TryFrom` の排他も同じ照合を使うため、generic parameter を `$A` から `$T` へ改名して回避することはできません。
+
+call時もTrait argumentsとimpl targetを同じ構造照合で解き、implの`where`を満たす候補だけを選びます。
+targetだけが一致する候補や、必要な型入力がまだ決まらない候補を成功扱いにはしません。未確定入力は
+expected returnや他の引数を待ち、入力が尽きればambiguityになります。唯一のimplや宣言順を既定値として
+使うことはありません。
+
+Trait impl methodの本体から同じmethod名を非修飾で呼ぶ場合、その呼び出しは現在の具象implへ固定されず、
+元のTrait method contractを参照します。各呼び出しのreceiver、Trait arguments、ReturnTypeArgumentsから
+通常どおりstatic dispatchするため、同じimplへの再帰と別implへの再dispatchを同じ規則で扱います。
+local bindingやparameterによる通常のshadowingは維持されます。
 
 ```text
 xldr(1)> print(match try_from::<Int>("42") { Ok(value) => to_string(value), Err(err) => inspect(err), })

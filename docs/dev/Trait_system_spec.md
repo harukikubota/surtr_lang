@@ -237,10 +237,10 @@ call-site ReturnTypeArgumentは定義側に対応位置がある場合だけ指�
 一意に得られる場合は省略でき、引数位置からも期待型からも得られない場合は`::<Type>`で明示する。
 `::<$F: Monad>`のようなcall-site制約指定は受理しない。
 
-### 0.7 実装移行境界
+### 0.7 実装済みの移行不変条件
 
-0.1–0.6は移行後の正本契約である。実装に旧名称や旧slot規則が残っていても、それをsurface仕様として追認しない。
-修正フェーズは次を一つの移行単位として完了させる。
+0.1–0.6は現行実装の正本契約である。次は Type Constructor Signature Unification で移行済みの
+不変条件であり、今後の変更でも旧名称、旧slot規則、互換fallbackを復活させない。
 
 - 通常関数、Trait method、inherent method、Trait impl methodの定義側`::<...>`を同じReturnTypeArgument parser routeへ載せる。
 - Spire AST、Sigil Resolved IR、Scar metadata、callable instantiation、semantic metadataの対応field/typeを
@@ -255,9 +255,9 @@ call-site ReturnTypeArgumentは定義側に対応位置がある場合だけ指�
   carrier substitutionへ置換する。
 - user function、Trait helper、builtinのsignatureを同じwell-formedness、型推論、trait obligation routeへ載せる。
 - Forgeへは具体化済みcall/dispatchだけを渡し、ReturnTypeArgument専用metadataを新設しない。
-- 上記移行が完了する前にdo構文intrinsicを追加しない。
+- `do` 構文intrinsicは、未実装のSafeBind・diagnostics cleanupゲートを完了してから追加する。
 
-移行中に互換用の二重field、旧用語alias、旧経路fallbackを追加してはならない。serialized cacheやfixture更新が
+互換用の二重field、旧用語alias、旧経路fallbackを追加してはならない。serialized cacheやfixture更新が
 必要な場合も一括更新し、旧形式を読み戻すcompatibility layerは設けない。
 
 ## 1. パイプラインと phase ownership
@@ -318,6 +318,57 @@ CallableSignature {
 tuple、function、constructor application などを再帰的に保持する。同じ source generic の再出現は同じ
 canonical variable を使い、alpha-equivalence は source 名ではなく出現構造で判定する。
 
+### 2.1 role付き型リスト
+
+Trait contract、impl method、call-site invocationは、同じcanonical型を次のrole付き順序リストへ変換して照合する。
+
+```text
+MethodSignatureTypeList = [
+  ReturnTypeArgument(0..r),
+  ValueParameter(0..p),
+  ReturnType(0),
+]
+
+ImplHeadTypeList = [
+  TraitArgument(0..t),
+  ImplTarget(0),
+]
+```
+
+各entryはrole、ordinal、canonical type、source originを持つ。リストの長さは`zip`の前に厳密比較し、
+ReturnTypeArgument、value parameter、returnのどの末尾も黙って切り捨てない。method contractとの不一致は
+role、ordinal、再帰的な型path、contractとimplの両spanを保持する。
+
+invocation側も、call-site ReturnTypeArgument、value argument、expected returnを同じroleへ対応付ける。
+項目不足をpartial mappingとして受理せず、未確定入力は候補の成功ではなく`Deferred`として保持する。
+
+### 2.2 impl patternとmethod identity
+
+implの構造patternと宣言本体のprovenanceは分離する。
+
+```text
+CanonicalTraitImplPatternKey = canonical(TraitRef arguments, impl target)
+TraitImplDeclarationKey      = declaration provenance / body lookup
+```
+
+`TraitId` indexは候補列挙だけに使う。同じpatternをalpha-renamingした宣言は同じpattern keyを持つが、
+別のdeclaration keyを持つ。coherence、applicability、method body lookupを一つの表示文字列keyへ畳み込まない。
+
+具象methodのidentityはcontract identity、選択implのdeclaration identity、method originから作る。
+default method、derive method、builtin methodも同じidentityとrole listを使う。builtin originは
+`BUILTIN_METAS`から解決した`BuiltinId`であり、Trait名・method名・data type名によるdispatch分岐を作らない。
+
+### 2.3 型変数namespaceと置換
+
+Trait宣言、impl head、impl method、call-siteはそれぞれfreshな型変数namespaceを持つ。同じsource名を
+異なるnamespaceの同一性に使わず、同じnamespace内の再出現は同じvariableとして扱う。recursive typeへの
+bindingはoccurs checkで拒否する。
+
+候補を選ぶときは、Trait argumentsとimpl targetを一つのenvironmentでunifyし、そのsubstitutionを
+method signature、impl `where` obligations、expected returnへ適用する。選択後にvalue argumentsだけを
+再度`zip`して別mappingを作らない。bodyへ自由出現する型入力はobligation subject、Trait arguments、
+ReturnTypeArguments、expected return、captured impl-target argumentsを含めてすべて具体化する。
+
 次を identity 判定に使用してはならない。
 
 - `trait_name.contains('<')`、`split_once('<')`
@@ -369,6 +420,21 @@ DeferredObligation {
 `Deferred` を成功へ潰してはならない。candidate の obligation が一つでも `Unsatisfied` なら不適用、
 一つでも `Deferred` なら candidate と依存する variables を保留し、全て `Satisfied` のときだけ dispatch を
 確定する。
+
+候補検査は次の順序を一つのcheckpoint上で行う。
+
+1. requested `TraitRef`の全argumentとcandidateのTrait argumentsを構造照合する。
+2. requested subjectとimpl targetを同じsubstitutionで構造照合する。
+3. method contractとinvocationのrole付き型リストを照合し、method側のsubstitutionを得る。
+4. substitution済みimpl/method `where` obligationsとbodyが要求するobligationsを証明する。
+5. 全入力とconcrete dispatch targetが確定した候補だけを`Applicable`としてcommitする。
+
+候補localの失敗はhead mismatch、unsatisfied `where`、method invocation mismatchを区別する内部
+`CandidateFailure`として保持する。通常のTrait候補選択では、最終diagnostic projection時にrelated factsと
+summary noteへ写す。constructor-context候補経路では`CandidateFailureData`を使うが、全candidate failureの
+共通typed projection化はN06の残件である。全候補reject時にこの情報を捨てて一般callable経路へ降格したり、
+一候補の内部failureをそのまま最終診断へ昇格したりしない。失敗probeはtype substitution、pending
+obligation、constructor carrier、proof assumption、warning、candidate-local instantiation stateをすべてrollbackする。
 
 rigid generic は宣言済み bound（親 Trait closure を含む）からだけ証明する。direct call を理由に checker の
 bound environment を変更してはならず、足りない場合は `MissingGenericBound` とする。inference variable の
@@ -430,6 +496,16 @@ trait parent、shape、slot map はこの判定から除外する。
 - value parameterで導入した型変数は戻り値に現れてもよいが、現れる必要はない。
 - ReturnTypeArgumentにTypeCtorTrait名を直接書いた場合はfreshなconstructor variableと単一のbare capabilityへ
   正規化する。複数constraintが必要なら名前付き型変数と関数`where`を使う。
+
+通常関数、private関数、Trait/default method、inherent methodの定義側ReturnTypeArgumentは、一項目につき
+`$A`、許可されたcontextの`Self`、またはdirect TypeCtorTrait名だけを受理する。`Int`、`List<$T>`、
+`$F<$A>`のような具象・複合型式は新しい抽象入力を複数導入するため受理しない。Trait impl methodだけは、
+抽象contractをTrait arguments、impl target、`Self` applicationで具体化した結果として、対応する具象・複合型式を
+書ける。
+
+call-siteで`::<...>`を明示する場合、項目数は定義側と厳密に一致させる。各`_`はその位置だけを推論へ残す。
+ReturnTypeArgument list全体の省略は、全項目を`_`にした場合と同じ制約を生成するが、末尾項目だけを省略する
+partial listは受理しない。
 
 ```surtr
 deftrait Show {
@@ -556,6 +632,16 @@ call、constructor、Trait helper、Apply/PipeApply、Compose/KleisliCompose は
 expected type が unbound variable なら actual を synthesize して unify し、既知なら closure を check して shape を
 内側へ伝播する。tuple の既知 slot、list element、`if` の全 branch、`match` の全 arm に expected type を伝播する。
 空 collection や引数注釈のない曖昧 closure は、別の制約または expected type を要する。
+
+ReturnTypeArgumentを含むcallとTrait candidateは、`Solved`、`Deferred`、`Failed`を区別する。定義境界、
+callable instantiation境界、program境界で`Deferred`を監査し、入力が尽きた未確定型は
+`AmbiguousReturnTypeArgument`または`UnresolvedTraitMethodInstantiation`として拒否する。唯一のimpl、
+先頭のimpl、builtin既定型から未拘束型を逆決定しない。
+
+選択済みcallableはsolverが確定したsubstitutionを保持し、specializationとbody cloneはそれを直接消費する。
+canonical signatureが欠けたregistered user function / non-intrinsic builtinをlegacy positional checkerへ降格せず、
+arity不一致やmetadata不整合をpartial `zip`で隠さない。Forgeへ渡せるのは全型入力とconcrete dispatch targetが
+確定したcallだけである。
 
 ## 8. テストと非目標
 

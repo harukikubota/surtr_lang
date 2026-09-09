@@ -17,6 +17,7 @@
 - [Rune observability](./Rune_observability.md)
 - [Surtr LSP spec](./Surtr_LSP_spec.md)
 - [Trait system implementation spec](./Trait_system_spec.md)
+- [Diagnostics contract](./diagnostics.md)
 - [Xldr spec](./Xldr_spec.md)
 - [テスト方針](./テスト方針.md)
 

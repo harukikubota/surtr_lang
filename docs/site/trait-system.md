@@ -48,7 +48,10 @@ def id<$A>(value: $A) -> $A
 
 `defmod` 自体も型引数を持たない。
 
-通常 callable の `id::<Int>(1)` や `&id::<Int>` は不正である。`::<...>` は `try_from::<Int>(value)`、`Decode::decode::<Target>(value)` のような Trait helper の target specialization にだけ使う。
+`::<...>` は、通常関数を含むnon-intrinsic callableが定義側で宣言したReturnTypeArgumentsを具体化します。
+`id`の`$A`はvalue parameterから導入され、ReturnTypeArgumentsを宣言していないため、`id::<Int>(1)`や
+`&id::<Int>`は不正です。通常関数でも`def make::<$A>() -> $A`のようにreturn-only入力を宣言していれば、
+`make::<Int>()`または`&make::<Int>`と書けます。
 
 型変数名は宣言ごとのローカル名であり、別の宣言と一致させる必要はない。`$A` と `$T` が同じ出現構造を持てば、同じ型スロットとして扱う。
 
@@ -62,7 +65,8 @@ deftrait TryFrom<$To> {
 }
 ```
 
-`try_from::<Int>(value)` の `::<Int>` は通常関数の generic 指定ではなく、`TryFrom<Int>` の dispatch target 指定である。
+`try_from::<Int>(value)`の`::<Int>`は、定義側ReturnTypeArgument `$To` の具体化です。その結果は
+full obligationの`TryFrom<Int>`というTrait argumentにも使われますが、通常genericを任意指定する構文ではありません。
 
 ## `where` bound と generic 呼び出し
 
