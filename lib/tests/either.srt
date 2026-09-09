@@ -4,23 +4,33 @@ def inc(value: Int) -> Int { value + 1 }
 
 test("Either") {
   it("distinguishes variants") {
-    assert_eq(True, Either::is_left(Either::Left("x")))
-    assert_eq(Either::Right("wrapped"), Either::wrap("wrapped"))
-    assert_eq(Either::Right("x"), Either::swap(Either::Left("x")))
-    assert_eq(Either::Left("x!"), Either::map_left(Either::Left("x"), {|value| value ++ "!"}))
+    left_value: Either<String, String> = Either::Left("x")
+    assert_eq(True, Either::is_left(left_value))
+    expected_wrapped: Either<Int, String> = Either::Right("wrapped")
+    assert_eq(expected_wrapped, Either::wrap("wrapped"))
+    expected_swapped: Either<String, String> = Either::Right("x")
+    assert_eq(expected_swapped, Either::swap(left_value))
+    expected_mapped: Either<String, String> = Either::Left("x!")
+    assert_eq(expected_mapped, Either::map_left(left_value, {|value| value ++ "!"}))
   }
 
   it("maps and binds the right slot") {
-    assert_eq(Either::Right(8), Either::Right(7) |*> &inc)
-    assert_eq(Either::Left("stop"), Either::Left("stop") |*> &inc)
-    assert_eq(Either::Right(8), Either::Right(7) |>= {|value| Either::Right(value + 1)})
-    assert_eq(Either::Left("stop"), Either::Left("stop") |>= {|value| Either::Right(value + 1)})
+    expected_right_map: Either<String, Int> = Either::Right(8)
+    assert_eq(expected_right_map, Either::Right(7) |*> &inc)
+    expected_left_map: Either<String, Int> = Either::Left("stop")
+    assert_eq(expected_left_map, Either::Left("stop") |*> &inc)
+    expected_right_bind: Either<String, Int> = Either::Right(8)
+    assert_eq(expected_right_bind, Either::Right(7) |>= {|value| Either::Right(value + 1)})
+    expected_left_bind: Either<String, Int> = Either::Left("stop")
+    assert_eq(expected_left_bind, Either::Left("stop") |>= {|value| Either::Right(value + 1)})
   }
 
   it("applies within the captured left family") {
     mapper_left: Either<String, (Int -> Int)> = Either::Left("mapper")
-    assert_eq(Either::Right(3), Either::Right(&inc) |*| Either::Right(2))
+    expected_apply: Either<String, Int> = Either::Right(3)
+    assert_eq(expected_apply, Either::Right(&inc) |*| Either::Right(2))
     assert_eq(Either::Left("mapper"), mapper_left |*| Either::Right(2))
-    assert_eq(Either::Left("value"), Either::Right(&inc) |*| Either::Left("value"))
+    expected_left_apply: Either<String, Int> = Either::Left("value")
+    assert_eq(expected_left_apply, Either::Right(&inc) |*| Either::Left("value"))
   }
 }
