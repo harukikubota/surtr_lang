@@ -111,8 +111,8 @@ match expr {
 - 同じ Trait の impl は Trait 引数と target 型を再帰 unification して overlap を判定し、交差する場合は宣言順にかかわらず compile error とする。generic は任意の型 pattern と一致し、V1 は specialization 優先順位を持たない
 - 同じ nominal target でも full pattern が構造的に disjoint なら併存できる。`where` 制約の違いだけでは disjoint とみなさない
 - `defmod` / inherent `impl` / trait `impl` block 内の callable 名は一意であり、signature や `def` / `defp` の違いによる overload はできない
-- 通常 callable は型引数を明示できない。型スロットは signature の引数型・receiver 型から推論する
-- `::<Int>` は `try_from::<Int>(value)` のような Trait helper の target specialization にだけ使える。`Self` は値引数または期待 callable 型から推論する
+- 通常 callable に一般的な型parameter listはなく、value parameter由来の型スロットを`id::<Int>(1)`のように任意指定できない
+- non-intrinsic callableがreturn-only入力を定義側ReturnTypeArgumentsとして宣言した場合は、通常関数・method・Trait helper・captureで対応する`::<Int>`を指定できる。省略時はexpected returnなどから推論し、最後まで決まらなければambiguityになる
 - ReturnTypeArguments は、型変数が value parameter の型から導入できない場合にだけ使い、その型変数は戻り値にも現れなければならない。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で ReturnTypeArguments に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として ReturnTypeArguments に置く
 - trait は method のみを持つ
 - 通常の bound は `$A: Trait` と書く。`Trait<Arg, ...>` は where RHS ではなく trait / impl head または expression dispatch target にだけ書ける

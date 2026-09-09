@@ -8,12 +8,11 @@
 用語、TypeCtorTraitFamily、carrier、Trait obligation の正本は
 [`../docs/dev/Trait_system_spec.md`](../docs/dev/Trait_system_spec.md)、診断の
 `message` / `labels` / `notes` / `help` 分類は
-[`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md) とする。ReturnTypeArgument の構文と
-省略規則は [`return_type_argument_rules.md`](return_type_argument_rules.md)、Trait method の
-role 付き型リスト、Deferred、dispatch、callable instantiation は
-[`trait_method_type_list_dispatch.md`](trait_method_type_list_dispatch.md) に従う。
-シグネチャ共通検査、構造化 reason / origin / typed data、専用診断との境界は
-[`signature_diagnostics_unification.md`](signature_diagnostics_unification.md) を正本とする。
+[`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md) とする。ReturnTypeArgument の構文・省略、
+Trait method のrole付き型リスト、Deferred、dispatch、callable instantiationも同じ開発者向け正本に従う。
+通常callableのdirect carrier独立化は
+[`type_constructor_trait_extension_spec.md`](type_constructor_trait_extension_spec.md)を実装入力とし、
+`do`固有の同一性は本書のcompiler-owned contractが所有する。
 
 本書と正本が衝突する場合は正本を優先し、本書を先に修正してから実装する。ReturnTypeArgument を使わない
 carrier 指定、自然言語 message の再解析を追加してはならない。具象データ型固有の failure route は原則として
@@ -26,8 +25,8 @@ carrier 指定、自然言語 message の再解析を追加してはならない
 `do` 実装を追加してはならない。
 
 1. すべての callable が定義側と call-site の `::<...>` を ReturnTypeArgument として保持する。
-2. direct TypeCtorTrait と名前付き constructor variable が同じ TypeCtorTraitFamily 単位の
-   carrier substitution へ正規化される。
+2. 通常callableでは別々のdirect TypeCtorTrait value parameterを独立carrierとして扱い、同じ名前付き
+   constructor variable、`Self`、ReturnTypeArgumentが宣言した関係だけを共有する。
 3. user function、Trait helper、非 intrinsic builtin が同じ role 付き型リスト、constraint set、
    obligation solver を使う。
 4. 未確定の call-site 入力と Trait obligation が `Deferred` のまま保持され、boundary で
@@ -37,19 +36,20 @@ carrier 指定、自然言語 message の再解析を追加してはならない
 7. source diagnostic、Ariadne、JSON が同じ構造化 failure と source origin を参照する。
 8. Forge 前の監査が pending dispatch、未確定 carrier、未具体化 callable を拒否する。
 
-この順序は互換 fallback を作るためではない。修正フェーズと `do` 追加フェーズを分離し、前者の完了を
-focused test と workspace test で確認してから後者へ進む。
+この条件は[`type_constructor_monad_do_implementation_plan.md`](type_constructor_monad_do_implementation_plan.md)の
+N06ゲートで一度だけ判定する。互換fallbackを作らず、修正フェーズと`do`追加フェーズを分離し、前者の完了を
+focused testとworkspace testで確認してから後者へ進む。
 
 ## 3. 目的と基本契約
 
-`do` は、一つの TypeCtorTraitFamily に属する一つの具象 carrier 上で、`Monad::bind` による
+`do` は、compiler-owned contractが所有する一つのdo-local carrier入力上で、`Monad::bind` による
 値取り出しと逐次実行を記述する intrinsic である。標準の `Option`、`List`、`Result`、`Either` に
 限定せず、同じ Trait 契約を満たす user-defined carrier にも適用する。
 
 一つの `do` block は次を満たす。
 
 - `Monad` capability を常に要求する。
-- block 内の全 monadic origin と block 結果は、同じ `TypeCtorTraitFamilyId` と同じ具象 carrier を使う。
+- block 内の全 monadic origin と block 結果は、同じdo-local carrier入力へ結び付く。
 - mapped payload は文ごとに通常どおり変化できる。
 - captured / fixed arguments を含む carrier identity は厳密に一致する。
 - partial pattern の `<-` が failure branch を必要とする場合だけ、同じ carrier に
@@ -279,9 +279,10 @@ carrier未確定時にResultまたはAlternative実装一覧から逆決定せ�
 
 ### 6.1 一つのcarrier変数
 
-Scar は `do` ごとに、宣言側ReturnTypeArgument position 0をinstantiateしたcarrier変数を一つ作る。この変数の
-familyは、canonical `Monad` Traitが属する `TypeCtorTraitFamilyId` である。family rootが複数あっても、Trait継承graphの
-同じ連結成分なら同じfamilyとして一つに統一する。異なるfamilyを一つの`do`に混在させることはできない。
+Scar は `do` ごとに、宣言側ReturnTypeArgument position 0をinstantiateしたcarrier変数を一つ作る。
+この一意性は通常callableのdirect parameterをfamily所属だけで共有する規則から導かず、
+`DoIntrinsicContract.return_type_arguments[0]`が所有するsame-carrier関係である。canonical `Monad`のfamilyは
+capabilityとslot mappingを解決するために使い、別々のdo-local carrierを生成する根拠にはしない。
 
 次を検査順に依存しないconstraint sourceとして収集する。
 
@@ -383,8 +384,9 @@ total patternは`Monad`だけを要求する。partial patternは、`DoIntrinsic
 failure branchを生成するため、同じcarrierへ`Alternative` obligationを追加する。failure resultのpayloadはblock最終結果`R`であり、
 resolved `Alternative::empty` dispatchをexpected `F<R>` の下で具体化する。
 
-`Monad`と`Alternative`のTrait identityが異なっても、同じ `TypeCtorTraitFamilyId` に属するなら同じcarrierへ
-統一する。異なるfamilyとして解決されるTrait結果をdo全体へ混ぜてはならない。
+`Monad`と`Alternative`のTrait identityが異なっても、contractは両obligationをReturnTypeArgument position 0へ
+明示的に結び付けるため同じcarrierを要求する。family所属だけをこの同一性の根拠にせず、異なるfamilyとして
+解決されるTrait結果もdo全体へ混ぜてはならない。
 
 ### 7.4 SafeBindの条件付き能力
 
@@ -419,6 +421,50 @@ capability errorになる。この規則は`<-`のpartial patternに適用し、
 SafeBindのcanonical `Result`分岐は新しいResult固有failureを作る経路ではない。RHSの既存`Err`値と、通常MatchBlock
 pattern checkerが構築するfailureを、do式の`Result<R, E>`へ保存して返す経路である。これ以外のdata type名を条件に
 例外を追加してはならない。
+
+### 7.6 標準MonadとTransformerの接続
+
+以下は各標準型と`do`の実装後に検証する仕様例であり、現行compilerで実行済みの例ではない。
+Identity、Reader、Stateは通常のMonad carrierとして扱い、型名ごとのloweringを追加しない。
+
+```surtr
+identity_result: Identity<Int> = do {
+  value <- Identity::new(1)
+  pure(value + 1)
+}
+
+reader_result: Reader<Config, Int> = do {
+  value <- Reader::ask()
+  pure(read_port(value))
+}
+
+state_result: State<Int, Int> = do {
+  value <- State::get()
+  State::put(value + 1)
+  pure(value)
+}
+```
+
+Identity、Reader、Stateは標準`Alternative`を持たないため、totalな`<-`は使えるが、partial patternの`<-`と
+non-Result SafeBindは必要capability不足として拒否する。都合のよいemptyやfailure valueをdo checkerが生成しない。
+
+標準Transformerもrepresentationではなく、具体化された外側carrierのMonad/Alternative実装だけを使う。
+base Monadの値は自動liftしない。
+
+```surtr
+source: Result<Int> = Ok(1)
+lifted: OptionT<Result, Int> = MonadT::lift(source)
+
+transformed: OptionT<Result, Int> = do {
+  value <- lifted
+  pure(value + 1)
+}
+```
+
+`OptionT<Result, _>`のdoへ`Result<_>`を直接monadic originとして混ぜる例はcarrier不一致で拒否する。
+明示的な`MonadT::lift`を要求し、`do::<OptionT<Result, _>>`のようなapplied carrier文法は追加しない。
+`StateT<S, Result, _>`のように外側carrierが`Alternative`を持たない構成では、partial `<-`とnon-Result
+SafeBindを同じcapability規則で拒否する。
 
 ## 8. SafeBindとの統合
 
@@ -628,7 +674,7 @@ runtime trait dictionary、runtime candidate selectionを追加しない。
 
 ### 10.3 Scar
 
-- validated `DoIntrinsicContract`のReturnTypeArgument position 0をinstantiateし、一つのMonad family carrierを作る。
+- validated `DoIntrinsicContract`のReturnTypeArgument position 0をinstantiateし、一つのdo-local carrier入力を作る。
 - 明示ReturnTypeArgument、expected type、各monadic origin、最終式を一つのconstraint setへ集める。
 - 通常callには共通`CallableSignature`、role付き型リスト、expected propagationを使う。
 - pattern totalityとSafeBindの有無を判定し、`DoIntrinsicContract.capability_rules`からMonad常時／Alternative条件付きの
@@ -824,9 +870,9 @@ user-facing JSONへ出さない。`safe_bind_failure_kind`はpattern由来など
 `safe_bind_rhs_projection`は`unwrap_result_once`または`pass_through_non_result`のclosed enumとし、後者では
 `pattern_input_type`にRHSの完全な型を保持する。
 
-`family_id`はシグネチャ診断正本と同じcanonical Trait ID集合由来のstable semantic identityを使い、process-local連番や
+`family_id`は診断正本と同じcanonical Trait ID集合由来のstable semantic identityを使い、process-local連番や
 単独family root名をserializeしない。ReturnTypeArgument、carrier、Trait obligationのdata variantと必須fieldは
-[`signature_diagnostics_unification.md`](signature_diagnostics_unification.md)第10節を再利用し、do専用の自由形式mapを作らない。
+[`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md)を再利用し、do専用の自由形式mapを作らない。
 
 `kind`、`phase`、`primary_span`、`expected`、`got`、`hint`の既存意味を変更しない。AriadneとJSONは同じfailure
 objectを参照し、rendererがmessage文字列を解析してtyped fieldを復元してはならない。
@@ -895,7 +941,7 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 
 ### 13.3 familyとpayload
 
-- 同じfamilyのFunctor / Applicative / Monad / Alternative originが一つのcarrierを共有
+- Functor / Applicative / Monad / Alternative originがcontract所有のdo-local carrierを共有
 - 複数rootを持つ同じfamilyでもcarrierを分離しないこと
 - 異なるfamilyを一つのdoへ混ぜた失敗
 - mapped payloadが文ごとに変化する成功
@@ -915,6 +961,10 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 - `guard`名をdo checkerが特別扱いしないこと
 - `pure` / `return`名をdo checkerが特別扱いしないこと
 - 各signature位置のcapability viewを超えないこと
+- Identity / Reader / Stateのtotal bindが通常のMonad dispatchで成功すること
+- Identity / Reader / Stateのpartial `<-`とnon-Result SafeBindが、標準`Alternative`不在により拒否されること
+- OptionT等のTransformerで明示`lift`後の値を扱え、base Monad値の直接混在はcarrier mismatchになること
+- StateT等で外側`Alternative`がない構成のpartial `<-` / non-Result SafeBindを拒否すること
 
 ### 13.5 SafeBind / match / if
 
@@ -992,7 +1042,7 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 6. 明示head、expected type、型注釈、RHS、通常call、最終式からcarrierを推論し、captured / fixed argumentsは
    明示head以外のblock constraintだけから得る。
 7. 未確定carrierをimpl一覧から逆決定せず、Deferredをboundaryのambiguityまで保持する。
-8. 一つのdoは一つのMonad TypeCtorTraitFamilyと一つの具象carrierだけを使う。
+8. 一つのdoはcontractが所有する一つのdo-local carrier入力と一つの具象carrierだけを使う。
 9. mapped payloadは文ごとに変化でき、captured / fixed argumentsは厳密一致する。
 10. Monadは常時、Alternativeはpartial `<-`またはnon-Result SafeBindにだけintrinsic規則として追加される。
 11. `guard`、`pure`、`return`は通常callであり、名前固有のchecker分岐がない。

@@ -85,14 +85,36 @@ where
 
 ## 明示型引数
 
-変換先など、値引数だけでは決まらない型は `::<...>` で指定します。
+値引数だけでは得られず戻り値に現れる型入力は、関数定義のReturnTypeArgumentとして宣言します。
+
+```surtr
+def make::<$A>() -> $A
+def try_from::<$To>(value: $From) -> Result<$To, Error>
+where
+  $From: TryFrom
+```
+
+呼び出し側では、定義側の各ReturnTypeArgumentを同じ順序で`::<...>`へ指定できます。
 
 ```surtr
 text = from::<String>(42)
 number =? try_from::<Int>("42")
 ```
 
-明示型引数は runtime の値ではなく、Trait helper の target specialization にだけ使う型入力です。通常関数の型スロットは signature から導入し、`id::<Int>(1)` や `&id::<Int>` は書けません。
+明示項目の数は定義側と一致させます。推論へ残す位置は`_`で書き、list全体を省略した呼び出しは
+全項目を`_`にした場合と同じです。末尾だけを省略するpartial listは使えません。
+
+```surtr
+convert::<_, Int>(value)
+convert::<_, _>(value)
+convert(value) # 定義側が2項目なら直前の全`_`と同じ制約
+```
+
+ReturnTypeArgumentはruntimeの値でも、通常genericを任意指定する型parameter listでもありません。
+`id(value: $A) -> $A`の`$A`は値引数から得られるため、`id::<Int>(1)`や`&id::<Int>`は書けません。
+一方、定義側にReturnTypeArgumentがある通常関数・Trait helper・methodは、通常callとcaptureの両方で
+対応する`::<...>`を使えます。expected returnから一意に決まる場合はcall-site指定を省略できますが、
+最後まで決まらない場合はambiguityとして拒否されます。
 
 ## 空リスト
 

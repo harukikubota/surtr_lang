@@ -96,8 +96,11 @@ cargo clean
   - [VM spec entry](./docs/dev/EldrVM_spec.md)
   - [REPL spec entry](./docs/dev/Xldr_spec.md)
   - [Observability spec entry](./docs/dev/Rune_observability.md)
+  - [Trait system spec](./docs/dev/Trait_system_spec.md)
+  - [Diagnostics contract](./docs/dev/diagnostics.md)
   - [Test policy entry](./docs/dev/テスト方針.md)
 - Canonical specs and internal design notes in `doc/`
+  - [Working specifications and plans](./doc/README.md)
   - [Requirements (V9, Japanese)](./doc/要件定義v9.md)
   - [Open issues](./doc/open-issues.md)
 - Internal docs index
