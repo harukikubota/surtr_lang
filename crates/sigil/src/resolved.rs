@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use sindr::names::SymbolIdentityInfo;
 use sindr::primitives::SurtrInt;
 use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, ValueParameterMode, Visibility};
+use std::ops::Deref;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedDeclAttrs {
@@ -42,6 +43,42 @@ pub struct ResolvedId {
     #[serde(default)]
     pub symbol_info: Option<SymbolIdentityInfo>,
     pub span: Span,
+}
+
+/// A callable-signature type together with the exact identity of a direct
+/// type-constructor Trait occurrence, when the outermost type names one.
+///
+/// The syntax is preserved for diagnostics and ordinary type resolution.  The
+/// identity is resolved by Sigil so later phases never need to rediscover the
+/// Trait through short or display-name matching.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedSignatureTy {
+    pub syntax: AstTy,
+    pub direct_constructor_trait: Option<ResolvedId>,
+}
+
+impl ResolvedSignatureTy {
+    pub fn syntax(&self) -> &AstTy {
+        &self.syntax
+    }
+
+    pub fn into_syntax(self) -> AstTy {
+        self.syntax
+    }
+}
+
+impl Deref for ResolvedSignatureTy {
+    type Target = AstTy;
+
+    fn deref(&self) -> &Self::Target {
+        &self.syntax
+    }
+}
+
+impl AsRef<AstTy> for ResolvedSignatureTy {
+    fn as_ref(&self) -> &AstTy {
+        &self.syntax
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -233,7 +270,7 @@ pub enum Resolved {
         ResolvedId,
         Vec<ResolvedReturnTypeArgument>,
         Vec<ResolvedValueParameter>,
-        Option<AstTy>,
+        Option<ResolvedSignatureTy>,
         Option<ResolvedWhereClause>,
         Box<Resolved>,
         ResolvedDeclAttrs,
@@ -285,7 +322,7 @@ pub enum Resolved {
         ResolvedId,
         Vec<ResolvedReturnTypeArgument>,
         Vec<ResolvedValueParameter>,
-        Option<AstTy>,
+        Option<ResolvedSignatureTy>,
         Option<ResolvedWhereClause>,
         ResolvedDeclAttrs,
     ),
@@ -392,7 +429,7 @@ pub struct ResolvedField {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResolvedReturnTypeArgument {
     pub ordinal: u32,
-    pub ty: AstTy,
+    pub ty: ResolvedSignatureTy,
     pub span: Span,
 }
 
@@ -401,7 +438,7 @@ pub struct ResolvedReturnTypeArgument {
 pub struct ResolvedValueParameter {
     pub id: ResolvedId,
     pub mode: ValueParameterMode,
-    pub ty: AstTy,
+    pub ty: ResolvedSignatureTy,
     pub span: Span,
 }
 
@@ -432,7 +469,7 @@ pub struct ResolvedTraitMethodSig {
     pub return_type_arguments: Vec<ResolvedReturnTypeArgument>,
     pub type_params: Vec<ResolvedTypeParam>,
     pub value_parameters: Vec<ResolvedValueParameter>,
-    pub ret_ty: AstTy,
+    pub ret_ty: ResolvedSignatureTy,
     pub where_clause: Option<ResolvedWhereClause>,
     pub body: Option<Box<Resolved>>,
     pub attrs: ResolvedDeclAttrs,
@@ -476,7 +513,7 @@ pub struct ResolvedTraitImplMethod {
     pub return_type_arguments: Vec<ResolvedReturnTypeArgument>,
     pub type_params: Vec<ResolvedTypeParam>,
     pub value_parameters: Vec<ResolvedValueParameter>,
-    pub ret_ty: Option<AstTy>,
+    pub ret_ty: Option<ResolvedSignatureTy>,
     pub where_clause: Option<ResolvedWhereClause>,
     pub body: Box<Resolved>,
     pub attrs: ResolvedDeclAttrs,

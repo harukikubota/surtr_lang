@@ -3,8 +3,11 @@ include "./schema/option_schema.srt"
 import OptionSchema::{ensure_short_name, maybe_profile};
 import Test;
 
-def preserve_applicative(value: Applicative<$A>) -> Applicative<$A> {
-  value
+def preserve_applicative(value: $F<$A>) -> $F<$A>
+where
+  $F: Applicative
+{
+  Functor::fmap(value, {|item| item})
 }
 
 def audit_applicative(value: Applicative) -> Unit {
@@ -40,7 +43,8 @@ test("Option") {
     }
 
     it("converts result into option") {
-      converted: Option<Int> = from::<Option>(Ok(9))
+      source: Result<Int> = Ok(9)
+      converted: Option<Int> = from::<Option>(source)
       assert_eq("Option::Some(9)", inspect(converted))
     }
 

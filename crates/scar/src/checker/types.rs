@@ -6,26 +6,75 @@ pub(super) enum SignatureTyMode<'a> {
     Normal,
     Trait { self_ty: &'a Ty },
     Builtin,
+    ResolvedNormal,
+    ResolvedTrait { self_ty: &'a Ty },
+    ResolvedBuiltin,
 }
 
 impl<'a> SignatureTyMode<'a> {
     fn self_ty(self) -> Option<&'a Ty> {
         match self {
-            SignatureTyMode::Trait { self_ty } => Some(self_ty),
-            SignatureTyMode::Normal | SignatureTyMode::Builtin => None,
+            SignatureTyMode::Trait { self_ty } | SignatureTyMode::ResolvedTrait { self_ty } => {
+                Some(self_ty)
+            }
+            SignatureTyMode::Normal
+            | SignatureTyMode::Builtin
+            | SignatureTyMode::ResolvedNormal
+            | SignatureTyMode::ResolvedBuiltin => None,
         }
     }
 
     fn allows_lazy(self) -> bool {
-        matches!(self, SignatureTyMode::Builtin)
+        matches!(
+            self,
+            SignatureTyMode::Builtin | SignatureTyMode::ResolvedBuiltin
+        )
     }
 
     fn allows_user_generic_fallback(self) -> bool {
-        !matches!(self, SignatureTyMode::Builtin)
+        !matches!(
+            self,
+            SignatureTyMode::Builtin | SignatureTyMode::ResolvedBuiltin
+        )
+    }
+
+    fn without_direct_constructor_name_fallback(self) -> Self {
+        match self {
+            SignatureTyMode::Normal | SignatureTyMode::ResolvedNormal => {
+                SignatureTyMode::ResolvedNormal
+            }
+            SignatureTyMode::Trait { self_ty } | SignatureTyMode::ResolvedTrait { self_ty } => {
+                SignatureTyMode::ResolvedTrait { self_ty }
+            }
+            SignatureTyMode::Builtin | SignatureTyMode::ResolvedBuiltin => {
+                SignatureTyMode::ResolvedBuiltin
+            }
+        }
+    }
+
+    fn allows_direct_constructor_name_fallback(self) -> bool {
+        matches!(
+            self,
+            SignatureTyMode::Normal | SignatureTyMode::Trait { .. } | SignatureTyMode::Builtin
+        )
     }
 }
 
 impl Checker {
+    pub(super) fn constructor_trait_key_for_signature_ty(
+        &self,
+        signature_ty: &sigil::resolved::ResolvedSignatureTy,
+    ) -> Option<String> {
+        let trait_id = signature_ty.direct_constructor_trait.as_ref()?;
+        let key = self.trait_key(trait_id);
+        self.traits
+            .get(&key)
+            .filter(|info| {
+                info.id.unique_id == trait_id.unique_id && !info.constructor_slots.is_empty()
+            })
+            .map(|_| key)
+    }
+
     pub(super) fn constructor_trait_key_for_ast_ty(&self, ast_ty: &AstTy) -> Option<String> {
         let name = match ast_ty {
             AstTy::Named(_, name) | AstTy::Generic(_, name, _) => Self::surface_name(name),
@@ -70,28 +119,42 @@ impl Checker {
         }
     }
 
-    pub(super) fn constructor_application_slots(ty: &Ty) -> Option<Vec<Ty>> {
-        match ty {
-            Ty::List(inner) => Some(vec![inner.as_ref().clone()]),
-            Ty::Result(ok, _) => Some(vec![ok.as_ref().clone()]),
-            Ty::Enum(_, args) => Some(args.clone()),
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => {
-                Some(fields.iter().map(|(_, ty)| ty.clone()).collect())
-            }
-            _ => None,
-        }
+    pub(super) fn is_concrete_constructor_shape(ty: &Ty) -> bool {
+        matches!(
+            ty,
+            Ty::List(_) | Ty::Result(_, _) | Ty::Enum(_, _) | Ty::Struct(_, _) | Ty::Record(_, _)
+        )
     }
 
     pub(super) fn constructor_application_slots_for_trait(
         &mut self,
         trait_key: &str,
         concrete_ty: &Ty,
-    ) -> Option<Vec<Ty>> {
-        let (info, mapping) = self.constructor_projection(trait_key, concrete_ty)?;
-        info.constructor_slot_vars
-            .iter()
-            .map(|var| mapping.get(var).cloned())
-            .collect()
+    ) -> ConstructorSlotsOutcome {
+        match self.constructor_projection(trait_key, concrete_ty) {
+            ConstructorProjectionOutcome::Applicable { info, mapping } => {
+                let mut slots = Vec::with_capacity(info.constructor_slot_vars.len());
+                for variable in info.constructor_slot_vars {
+                    let Some(slot) = mapping.get(&variable).cloned() else {
+                        return ConstructorSlotsOutcome::Rejected {
+                            failures: vec![
+                                ConstructorProjectionFailure::MissingConstructorSlotMapping {
+                                    variable,
+                                },
+                            ],
+                        };
+                    };
+                    slots.push(slot);
+                }
+                ConstructorSlotsOutcome::Projected(slots)
+            }
+            ConstructorProjectionOutcome::Deferred { waiting_on } => {
+                ConstructorSlotsOutcome::Deferred { waiting_on }
+            }
+            ConstructorProjectionOutcome::Rejected { failures } => {
+                ConstructorSlotsOutcome::Rejected { failures }
+            }
+        }
     }
 
     pub(super) fn constructor_application_slots_for_witness(
@@ -99,16 +162,18 @@ impl Checker {
         witness: &Ty,
         _expected_slot_count: usize,
         concrete_ty: &Ty,
-    ) -> Option<Vec<Ty>> {
+    ) -> ConstructorSlotsOutcome {
         if let Ty::Var(var) = witness {
             if let Some(trait_key) = self.constructor_witness_traits.get(var).cloned() {
-                if !self.constructor_occurrence_matches_family(*var, concrete_ty) {
-                    return None;
-                }
                 return self.constructor_application_slots_for_trait(&trait_key, concrete_ty);
             }
+            return ConstructorSlotsOutcome::Deferred {
+                waiting_on: vec![*var],
+            };
         }
-        None
+        ConstructorSlotsOutcome::Rejected {
+            failures: vec![ConstructorProjectionFailure::MissingWitnessTrait],
+        }
     }
 
     pub(super) fn apply_constructor_application(
@@ -116,52 +181,128 @@ impl Checker {
         witness_source: &Ty,
         witness: &Ty,
         slots: &[Ty],
-    ) -> Option<Ty> {
-        if let Ty::Var(var) = witness_source {
-            if !self.constructor_occurrence_matches_family(*var, witness) {
-                return None;
-            }
-        }
-        let constructor_positions = match witness_source {
-            Ty::Var(var) => self
-                .constructor_witness_traits
-                .get(var)
-                .and_then(|trait_key| {
-                    self.constructor_projection(trait_key, witness)
-                        .map(|(info, _)| info.constructor_slot_positions)
-                }),
-            _ => None,
-        };
+    ) -> ConstructorApplicationOutcome {
         match witness {
-            Ty::List(_) if slots.len() == 1 => Some(Ty::List(Box::new(slots[0].clone()))),
-            Ty::Result(_, err) if slots.len() == 1 => {
-                Some(Ty::Result(Box::new(slots[0].clone()), err.clone()))
+            Ty::Var(variable) => ConstructorApplicationOutcome::Deferred {
+                waiting_on: vec![*variable],
+            },
+            Ty::List(_) if slots.len() == 1 => {
+                ConstructorApplicationOutcome::Applied(Ty::List(Box::new(slots[0].clone())))
             }
+            Ty::Result(_, err) if slots.len() == 1 => ConstructorApplicationOutcome::Applied(
+                Ty::Result(Box::new(slots[0].clone()), err.clone()),
+            ),
             Ty::Enum(name, args) => {
                 let positions =
-                    constructor_positions.filter(|positions| positions.len() == slots.len())?;
+                    match self.constructor_positions_for_application(witness_source, witness) {
+                        Ok(positions) => positions,
+                        Err(outcome) => return outcome,
+                    };
+                if positions.len() != slots.len() {
+                    return ConstructorApplicationOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                            expected: positions.len(),
+                            actual: slots.len(),
+                        }],
+                    };
+                }
                 let mut applied = args.clone();
                 for (position, slot) in positions.into_iter().zip(slots) {
-                    *applied.get_mut(position)? = slot.clone();
+                    let Some(argument) = applied.get_mut(position) else {
+                        return ConstructorApplicationOutcome::Rejected {
+                            failures: vec![ConstructorProjectionFailure::InvalidSlotPosition {
+                                position,
+                            }],
+                        };
+                    };
+                    *argument = slot.clone();
                 }
-                Some(Ty::Enum(name.clone(), applied))
+                ConstructorApplicationOutcome::Applied(Ty::Enum(name.clone(), applied))
             }
             Ty::Struct(name, _) | Ty::Record(name, _) => {
                 let positions =
-                    constructor_positions.filter(|positions| positions.len() == slots.len())?;
-                let mut args = self.resolved_named_type_args(name, witness)?;
-                for (position, slot) in positions.into_iter().zip(slots) {
-                    *args.get_mut(position)? = slot.clone();
+                    match self.constructor_positions_for_application(witness_source, witness) {
+                        Ok(positions) => positions,
+                        Err(outcome) => return outcome,
+                    };
+                if positions.len() != slots.len() {
+                    return ConstructorApplicationOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                            expected: positions.len(),
+                            actual: slots.len(),
+                        }],
+                    };
                 }
-                let def = self.env.lookup_type_def(name)?;
+                let Some(mut args) = self.resolved_named_type_args(name, witness) else {
+                    return ConstructorApplicationOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::MissingNominalArguments],
+                    };
+                };
+                for (position, slot) in positions.into_iter().zip(slots) {
+                    let Some(argument) = args.get_mut(position) else {
+                        return ConstructorApplicationOutcome::Rejected {
+                            failures: vec![ConstructorProjectionFailure::InvalidSlotPosition {
+                                position,
+                            }],
+                        };
+                    };
+                    *argument = slot.clone();
+                }
+                let Some(def) = self.env.lookup_type_def(name) else {
+                    return ConstructorApplicationOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::MissingNominalArguments],
+                    };
+                };
                 let fields = self.instantiate_type_def_fields(def, &args);
                 match witness {
-                    Ty::Struct(_, _) => Some(Ty::Struct(name.clone(), fields)),
-                    Ty::Record(_, _) => Some(Ty::Record(name.clone(), fields)),
+                    Ty::Struct(_, _) => ConstructorApplicationOutcome::Applied(Ty::Struct(
+                        name.clone(),
+                        NominalType::new(args, fields),
+                    )),
+                    Ty::Record(_, _) => ConstructorApplicationOutcome::Applied(Ty::Record(
+                        name.clone(),
+                        NominalType::new(args, fields),
+                    )),
                     _ => unreachable!("matched nominal record kind"),
                 }
             }
-            _ => None,
+            Ty::List(_) | Ty::Result(_, _) => ConstructorApplicationOutcome::Rejected {
+                failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                    expected: 1,
+                    actual: slots.len(),
+                }],
+            },
+            _ => ConstructorApplicationOutcome::Rejected {
+                failures: vec![ConstructorProjectionFailure::UnsupportedConstructor],
+            },
+        }
+    }
+
+    fn constructor_positions_for_application(
+        &self,
+        witness_source: &Ty,
+        witness: &Ty,
+    ) -> Result<Vec<usize>, ConstructorApplicationOutcome> {
+        let Ty::Var(variable) = witness_source else {
+            return Err(ConstructorApplicationOutcome::Rejected {
+                failures: vec![ConstructorProjectionFailure::MissingWitnessTrait],
+            });
+        };
+        let Some(trait_key) = self.constructor_witness_traits.get(variable) else {
+            return Err(ConstructorApplicationOutcome::Rejected {
+                failures: vec![ConstructorProjectionFailure::MissingWitnessTrait],
+            });
+        };
+        match self.constructor_projection(trait_key, witness) {
+            ConstructorProjectionOutcome::Applicable { info, .. } => {
+                Ok(info.constructor_slot_positions)
+            }
+            ConstructorProjectionOutcome::Deferred { waiting_on } => {
+                Err(ConstructorApplicationOutcome::Deferred { waiting_on })
+            }
+            ConstructorProjectionOutcome::Rejected { failures } => {
+                Err(ConstructorApplicationOutcome::Rejected { failures })
+            }
         }
     }
     fn resolve_signature_alias(
@@ -368,9 +509,12 @@ impl Checker {
             Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
                 params.iter().any(Self::ty_exposes_error_value) || Self::ty_exposes_error_value(ret)
             }
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
-                .iter()
-                .any(|(_, field_ty)| Self::ty_exposes_error_value(field_ty)),
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                nominal.arguments.iter().any(Self::ty_exposes_error_value)
+                    || nominal
+                        .iter()
+                        .any(|(_, field_ty)| Self::ty_exposes_error_value(field_ty))
+            }
             Ty::Int
             | Ty::Float
             | Ty::Str
@@ -758,10 +902,16 @@ impl Checker {
                                             hint: None,
                                         });
                                     }
-                                    return Ok(Ty::Struct(def.name.clone(), def.fields.clone()));
+                                    return Ok(Ty::Struct(
+                                        def.name.clone(),
+                                        NominalType::monomorphic(def.fields.clone()),
+                                    ));
                                 }
                                 crate::env::TypeKind::Record => {
-                                    return Ok(Ty::Record(def.name.clone(), def.fields.clone()));
+                                    return Ok(Ty::Record(
+                                        def.name.clone(),
+                                        NominalType::monomorphic(def.fields.clone()),
+                                    ));
                                 }
                                 crate::env::TypeKind::ConcreteError => return Ok(Ty::Error),
                                 crate::env::TypeKind::Enum => {
@@ -1021,7 +1171,10 @@ impl Checker {
                     match def.kind {
                         crate::env::TypeKind::Struct => Ok(Ty::Struct(
                             def.name.clone(),
-                            self.instantiate_type_def_fields(def, &resolved_args),
+                            NominalType::new(
+                                resolved_args.clone(),
+                                self.instantiate_type_def_fields(def, &resolved_args),
+                            ),
                         )),
                         crate::env::TypeKind::Enum => {
                             if let Some(ty) =
@@ -1169,11 +1322,11 @@ impl Checker {
         let ty = match def.kind {
             crate::env::TypeKind::Struct => Ty::Struct(
                 def.name.clone(),
-                self.instantiate_type_def_fields(&def, &args),
+                NominalType::new(args.clone(), self.instantiate_type_def_fields(&def, &args)),
             ),
             crate::env::TypeKind::Record => Ty::Record(
                 def.name.clone(),
-                self.instantiate_type_def_fields(&def, &args),
+                NominalType::new(args.clone(), self.instantiate_type_def_fields(&def, &args)),
             ),
             crate::env::TypeKind::Enum => Self::builtin_special_enum_ty(&def.name, &args)
                 .unwrap_or_else(|| Ty::Enum(def.name.clone(), args)),
@@ -1211,6 +1364,20 @@ impl Checker {
         )
     }
 
+    pub(super) fn resolve_resolved_signature_ty_in_context(
+        &mut self,
+        signature_ty: &sigil::resolved::ResolvedSignatureTy,
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Ty, TypeError> {
+        self.resolve_resolved_signature_ty_with_mode(
+            signature_ty,
+            context,
+            tyvars,
+            SignatureTyMode::Normal,
+        )
+    }
+
     pub(super) fn seed_signature_type_params(
         &mut self,
         type_params: &[ResolvedTypeParam],
@@ -1242,6 +1409,21 @@ impl Checker {
         )
     }
 
+    pub(super) fn resolve_trait_signature_ty_in_context(
+        &mut self,
+        signature_ty: &sigil::resolved::ResolvedSignatureTy,
+        context: TypeSyntaxContext,
+        self_ty: &Ty,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Ty, TypeError> {
+        self.resolve_resolved_signature_ty_with_mode(
+            signature_ty,
+            context,
+            tyvars,
+            SignatureTyMode::Trait { self_ty },
+        )
+    }
+
     pub(super) fn resolve_builtin_ast_ty_in_context(
         &mut self,
         ast_ty: &AstTy,
@@ -1254,6 +1436,115 @@ impl Checker {
             tyvars,
             SignatureTyMode::Builtin,
         )
+    }
+
+    pub(super) fn resolve_builtin_signature_ty_in_context(
+        &mut self,
+        signature_ty: &sigil::resolved::ResolvedSignatureTy,
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+    ) -> Result<Ty, TypeError> {
+        self.resolve_resolved_signature_ty_with_mode(
+            signature_ty,
+            context,
+            tyvars,
+            SignatureTyMode::Builtin,
+        )
+    }
+
+    fn resolve_resolved_signature_ty_with_mode(
+        &mut self,
+        signature_ty: &sigil::resolved::ResolvedSignatureTy,
+        context: TypeSyntaxContext,
+        tyvars: &mut HashMap<String, Ty>,
+        mode: SignatureTyMode<'_>,
+    ) -> Result<Ty, TypeError> {
+        let Some(trait_id) = signature_ty.direct_constructor_trait.as_ref() else {
+            return self.resolve_signature_like_ast_ty_in_context(
+                signature_ty.syntax(),
+                context,
+                tyvars,
+                mode.without_direct_constructor_name_fallback(),
+            );
+        };
+        let trait_key = self.trait_key(trait_id);
+        let Some(trait_info) = self.traits.get(&trait_key) else {
+            return Err(TypeError::new(
+                format!(
+                    "MissingCanonicalTypeConstructorTrait: resolved Trait id {} ({}) is not registered",
+                    trait_id.unique_id, trait_key
+                ),
+                trait_id.span.clone(),
+            ));
+        };
+        if trait_info.id.unique_id != trait_id.unique_id || trait_info.constructor_slots.is_empty()
+        {
+            return Err(TypeError::new(
+                format!(
+                    "InvalidCanonicalTypeConstructorTrait: resolved Trait id {} does not name a TypeCtorTrait",
+                    trait_id.unique_id
+                ),
+                trait_id.span.clone(),
+            ));
+        }
+        let slot_count = trait_info.constructor_slots.len();
+        match signature_ty.syntax() {
+            AstTy::Named(span, _) => {
+                if !matches!(context, TypeSyntaxContext::General) {
+                    return Err(TypeError {
+                        structured: None,
+                        message: format!(
+                            "`{}` requires constructor slot arguments in this signature position",
+                            Self::surface_ast_ty(signature_ty.syntax())
+                        ),
+                        span: span.clone(),
+                        hint: Some("Write the direct Trait application with all declared constructor slots.".into()),
+                    });
+                }
+                let witness = self.env.fresh_tyvar();
+                let Ty::Var(witness_var) = witness else {
+                    unreachable!("fresh constructor witness")
+                };
+                self.constructor_witness_traits.insert(witness_var, trait_key);
+                Ok(Ty::SelfApp(vec![Ty::Hole, Ty::Var(witness_var)]))
+            }
+            AstTy::Generic(span, _, arguments) => {
+                if arguments.len() != slot_count {
+                    return Err(TypeError {
+                        structured: None,
+                        message: format!(
+                            "Type constructor Trait {} requires {} slot argument(s), got {}",
+                            trait_id.name,
+                            slot_count,
+                            arguments.len()
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                let witness = self.env.fresh_tyvar();
+                let Ty::Var(witness_var) = witness else {
+                    unreachable!("fresh constructor witness")
+                };
+                self.constructor_witness_traits.insert(witness_var, trait_key);
+                let mut application = vec![Ty::Hole, Ty::Var(witness_var)];
+                for argument in arguments {
+                    application.push(self.resolve_signature_like_ast_ty_in_context(
+                        argument,
+                        TypeSyntaxContext::General,
+                        tyvars,
+                        mode.without_direct_constructor_name_fallback(),
+                    )?);
+                }
+                Ok(Ty::SelfApp(application))
+            }
+            AstTy::ImplTrait(_, _) | AstTy::Tuple(_, _) | AstTy::Func(_, _, _) => Err(
+                TypeError::new(
+                    "InvalidCanonicalTypeConstructorTrait: canonical identity is attached to a non-direct type",
+                    trait_id.span.clone(),
+                ),
+            ),
+        }
     }
 
     fn signature_like_param_context(context: TypeSyntaxContext) -> TypeSyntaxContext {
@@ -1279,13 +1570,15 @@ impl Checker {
                 {
                     return Ok(alias);
                 }
-                if let Some(trait_key) = self.unique_constructor_trait_key(Self::surface_name(name))
-                {
-                    if !matches!(
-                        context,
-                        TypeSyntaxContext::General | TypeSyntaxContext::BindingAnnotation
-                    ) {
-                        return Err(TypeError {
+                if mode.allows_direct_constructor_name_fallback() {
+                    if let Some(trait_key) =
+                        self.unique_constructor_trait_key(Self::surface_name(name))
+                    {
+                        if !matches!(
+                            context,
+                            TypeSyntaxContext::General | TypeSyntaxContext::BindingAnnotation
+                        ) {
+                            return Err(TypeError {
                             structured: None,
                             message: format!(
                                 "Bare constructor trait {} is only allowed for a value parameter or local binding",
@@ -1294,17 +1587,18 @@ impl Checker {
                             span: span.clone(),
                             hint: Some("Use an explicit application such as `Applicative<$A>` in callable signatures.".into()),
                         });
+                        }
+                        // A constructor witness belongs to this direct signature
+                        // position.  Even applications of the same root in two
+                        // parameters must remain independently instantiable.
+                        let witness = self.env.fresh_tyvar();
+                        let Ty::Var(witness_var) = witness else {
+                            unreachable!("fresh constructor witness must be a type variable")
+                        };
+                        self.constructor_witness_traits
+                            .insert(witness_var, trait_key);
+                        return Ok(Ty::SelfApp(vec![Ty::Hole, Ty::Var(witness_var)]));
                     }
-                    // A constructor witness belongs to this direct signature
-                    // position.  Even applications of the same root in two
-                    // parameters must remain independently instantiable.
-                    let witness = self.env.fresh_tyvar();
-                    let Ty::Var(witness_var) = witness else {
-                        unreachable!("fresh constructor witness must be a type variable")
-                    };
-                    self.constructor_witness_traits
-                        .insert(witness_var, trait_key);
-                    return Ok(Ty::SelfApp(vec![Ty::Hole, Ty::Var(witness_var)]));
                 }
             }
             AstTy::Generic(span, name, args) => {
@@ -1313,46 +1607,49 @@ impl Checker {
                 {
                     return Ok(alias);
                 }
-                if let Some(trait_key) = self.unique_constructor_trait_key(Self::surface_name(name))
-                {
-                    let constructor_slot_count = self
-                        .traits
-                        .get(&trait_key)
-                        .expect("selected constructor trait must remain registered")
-                        .constructor_slots
-                        .len();
-                    if args.len() != constructor_slot_count {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Constructor trait {} requires {} slot argument(s), got {}",
-                                Self::surface_name(name),
-                                constructor_slot_count,
-                                args.len()
-                            ),
-                            span: span.clone(),
-                            hint: None,
-                        });
+                if mode.allows_direct_constructor_name_fallback() {
+                    if let Some(trait_key) =
+                        self.unique_constructor_trait_key(Self::surface_name(name))
+                    {
+                        let constructor_slot_count = self
+                            .traits
+                            .get(&trait_key)
+                            .expect("selected constructor trait must remain registered")
+                            .constructor_slots
+                            .len();
+                        if args.len() != constructor_slot_count {
+                            return Err(TypeError {
+                                structured: None,
+                                message: format!(
+                                    "Constructor trait {} requires {} slot argument(s), got {}",
+                                    Self::surface_name(name),
+                                    constructor_slot_count,
+                                    args.len()
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            });
+                        }
+                        // Return positions also pass through this path, so they
+                        // receive a fresh witness rather than inheriting an input
+                        // constructor by root identity.
+                        let witness = self.env.fresh_tyvar();
+                        let Ty::Var(witness_var) = witness else {
+                            unreachable!("fresh constructor witness must be a type variable")
+                        };
+                        self.constructor_witness_traits
+                            .insert(witness_var, trait_key);
+                        let mut application = vec![Ty::Hole, Ty::Var(witness_var)];
+                        for arg in args {
+                            application.push(self.resolve_signature_like_ast_ty_in_context(
+                                arg,
+                                TypeSyntaxContext::General,
+                                tyvars,
+                                mode,
+                            )?);
+                        }
+                        return Ok(Ty::SelfApp(application));
                     }
-                    // Return positions also pass through this path, so they
-                    // receive a fresh witness rather than inheriting an input
-                    // constructor by root identity.
-                    let witness = self.env.fresh_tyvar();
-                    let Ty::Var(witness_var) = witness else {
-                        unreachable!("fresh constructor witness must be a type variable")
-                    };
-                    self.constructor_witness_traits
-                        .insert(witness_var, trait_key);
-                    let mut application = vec![Ty::Hole, Ty::Var(witness_var)];
-                    for arg in args {
-                        application.push(self.resolve_signature_like_ast_ty_in_context(
-                            arg,
-                            TypeSyntaxContext::General,
-                            tyvars,
-                            mode,
-                        )?);
-                    }
-                    return Ok(Ty::SelfApp(application));
                 }
             }
             _ => {}
@@ -1570,7 +1867,10 @@ impl Checker {
                     )?;
                     let kind = self.facet_kind_annotation(
                         &args[0],
-                        matches!(mode, SignatureTyMode::Builtin),
+                        matches!(
+                            mode,
+                            SignatureTyMode::Builtin | SignatureTyMode::ResolvedBuiltin
+                        ),
                     )?;
                     // See the surface-type resolver above: K is compile-only.
                     let source = self.resolve_signature_like_ast_ty_in_context(
@@ -1678,7 +1978,16 @@ impl Checker {
                         .cloned()
                         .ok_or_else(|| TypeError {
                             structured: None,
-                            message: format!("Unknown generic type: {}", name),
+                            message: if matches!(
+                                mode,
+                                SignatureTyMode::ResolvedNormal
+                                    | SignatureTyMode::ResolvedTrait { .. }
+                                    | SignatureTyMode::ResolvedBuiltin
+                            ) {
+                                format!("Unknown type: {}", name)
+                            } else {
+                                format!("Unknown generic type: {}", name)
+                            },
                             span: span.clone(),
                             hint: None,
                         })?;
@@ -1709,7 +2018,10 @@ impl Checker {
                     match def.kind {
                         crate::env::TypeKind::Struct => Ok(Ty::Struct(
                             def.name.clone(),
-                            self.instantiate_type_def_fields(&def, &resolved_args),
+                            NominalType::new(
+                                resolved_args.clone(),
+                                self.instantiate_type_def_fields(&def, &resolved_args),
+                            ),
                         )),
                         crate::env::TypeKind::Enum => {
                             if let Some(ty) =
@@ -1830,175 +2142,182 @@ impl Checker {
         let got_bare_occurrence = Self::bare_constructor_occurrence(got);
         let expected = self.resolve_ty(expected);
         let got = self.resolve_ty(got);
-        let result =
-            match (&expected, &got) {
-                (Ty::Hole, Ty::Hole) => true,
-                (Ty::Var(left), Ty::Var(right)) => match (
-                    self.rigid_tyvars.contains(left),
-                    self.rigid_tyvars.contains(right),
-                ) {
-                    (true, true) => {
-                        left == right
-                            || (self.constructor_witness_traits.contains_key(left)
-                                && self.constructor_witness_traits.contains_key(right)
-                                && self.constructor_family_witness_root(*left).is_some_and(
-                                    |root| {
-                                        Some(root) == self.constructor_family_witness_root(*right)
-                                    },
-                                ))
+        let result = match (&expected, &got) {
+            (Ty::Hole, Ty::Hole) => true,
+            (Ty::Var(left), Ty::Var(right)) => match (
+                self.rigid_tyvars.contains(left),
+                self.rigid_tyvars.contains(right),
+            ) {
+                (true, true) => left == right,
+                (true, false) => self.bind_tyvar(*right, &Ty::Var(*left)),
+                (false, true) => self.bind_tyvar(*left, &Ty::Var(*right)),
+                (false, false) => self.bind_tyvar(*left, &Ty::Var(*right)),
+            },
+            (Ty::Var(var), _) if self.rigid_tyvars.contains(var) => false,
+            (_, Ty::Var(var)) if self.rigid_tyvars.contains(var) => false,
+            (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
+            (Ty::Int, Ty::Int)
+            | (Ty::Float, Ty::Float)
+            | (Ty::Str, Ty::Str)
+            | (Ty::Bool, Ty::Bool)
+            | (Ty::Unit, Ty::Unit)
+            | (Ty::Error, Ty::Error) => true,
+            (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
+            (Ty::Lazy(a), Ty::Lazy(b)) => self.types_compatible(a, b),
+            (Ty::Pid(a), Ty::Pid(b)) => {
+                Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
+                    || a.starts_with('$')
+                    || b.starts_with('$')
+            }
+            (Ty::Pid(expected_process), Ty::Enum(name, args))
+                if name == "WorkerLease" && args.len() == 1 =>
+            {
+                match args.first() {
+                    Some(Ty::Pid(actual_process)) => {
+                        Self::canonical_user_type_name(expected_process)
+                            == Self::canonical_user_type_name(actual_process)
+                            || expected_process.starts_with('$')
+                            || actual_process.starts_with('$')
                     }
-                    (true, false) => self.bind_tyvar(*right, &Ty::Var(*left)),
-                    (false, true) => self.bind_tyvar(*left, &Ty::Var(*right)),
-                    (false, false) => self.bind_tyvar(*left, &Ty::Var(*right)),
-                },
-                (Ty::Var(var), _) if self.rigid_tyvars.contains(var) => false,
-                (_, Ty::Var(var)) if self.rigid_tyvars.contains(var) => false,
-                (Ty::Var(var), ty) | (ty, Ty::Var(var)) => self.bind_tyvar(*var, ty),
-                (Ty::Int, Ty::Int)
-                | (Ty::Float, Ty::Float)
-                | (Ty::Str, Ty::Str)
-                | (Ty::Bool, Ty::Bool)
-                | (Ty::Unit, Ty::Unit)
-                | (Ty::Error, Ty::Error) => true,
-                (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
-                (Ty::Lazy(a), Ty::Lazy(b)) => self.types_compatible(a, b),
-                (Ty::Pid(a), Ty::Pid(b)) => {
-                    Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
-                        || a.starts_with('$')
-                        || b.starts_with('$')
+                    _ => false,
                 }
-                (Ty::Pid(expected_process), Ty::Enum(name, args))
-                    if name == "WorkerLease" && args.len() == 1 =>
-                {
-                    match args.first() {
-                        Some(Ty::Pid(actual_process)) => {
-                            Self::canonical_user_type_name(expected_process)
-                                == Self::canonical_user_type_name(actual_process)
-                                || expected_process.starts_with('$')
-                                || actual_process.starts_with('$')
+            }
+            (
+                Ty::Facet(kind_a, src_a, focus_a, update_src_a, update_focus_a),
+                Ty::Facet(kind_b, src_b, focus_b, update_src_b, update_focus_b),
+            ) => {
+                kind_a.accepts(*kind_b)
+                    && self.types_compatible(src_a, src_b)
+                    && self.types_compatible(focus_a, focus_b)
+                    && self.types_compatible(update_src_a, update_src_b)
+                    && self.types_compatible(update_focus_a, update_focus_b)
+            }
+            (Ty::Tuple(a), Ty::Tuple(b)) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|(left, right)| self.types_compatible(left, right))
+            }
+            (Ty::SelfApp(a), Ty::SelfApp(b))
+                if Self::constructor_application_parts(a).is_some()
+                    && Self::constructor_application_parts(b).is_some() =>
+            {
+                let (left_witness, left_slots) =
+                    Self::constructor_application_parts(a).expect("checked above");
+                let (right_witness, right_slots) =
+                    Self::constructor_application_parts(b).expect("checked above");
+                left_slots.len() == right_slots.len()
+                    && self.types_compatible(left_witness, right_witness)
+                    && left_slots
+                        .iter()
+                        .zip(right_slots.iter())
+                        .all(|(left, right)| self.types_compatible(left, right))
+            }
+            (Ty::SelfApp(a), other) if Self::constructor_application_parts(a).is_some() => {
+                let (witness, expected_slots) =
+                    Self::constructor_application_parts(a).expect("checked above");
+                if expected_slots.is_empty() {
+                    match expected_bare_occurrence {
+                        Some(occurrence) => {
+                            self.match_bare_constructor_occurrence(occurrence, other)
                         }
-                        _ => false,
+                        None => self.types_compatible(witness, other),
                     }
-                }
-                (
-                    Ty::Facet(kind_a, src_a, focus_a, update_src_a, update_focus_a),
-                    Ty::Facet(kind_b, src_b, focus_b, update_src_b, update_focus_b),
-                ) => {
-                    kind_a.accepts(*kind_b)
-                        && self.types_compatible(src_a, src_b)
-                        && self.types_compatible(focus_a, focus_b)
-                        && self.types_compatible(update_src_a, update_src_b)
-                        && self.types_compatible(update_focus_a, update_focus_b)
-                }
-                (Ty::Tuple(a), Ty::Tuple(b)) => {
-                    a.len() == b.len()
-                        && a.iter()
-                            .zip(b.iter())
-                            .all(|(left, right)| self.types_compatible(left, right))
-                }
-                (Ty::SelfApp(a), Ty::SelfApp(b))
-                    if Self::constructor_application_parts(a).is_some()
-                        && Self::constructor_application_parts(b).is_some() =>
-                {
-                    let (left_witness, left_slots) =
-                        Self::constructor_application_parts(a).expect("checked above");
-                    let (right_witness, right_slots) =
-                        Self::constructor_application_parts(b).expect("checked above");
-                    left_slots.len() == right_slots.len()
-                        && self.types_compatible(left_witness, right_witness)
-                        && left_slots
-                            .iter()
-                            .zip(right_slots.iter())
-                            .all(|(left, right)| self.types_compatible(left, right))
-                }
-                (Ty::SelfApp(a), other) if Self::constructor_application_parts(a).is_some() => {
-                    let (witness, expected_slots) =
-                        Self::constructor_application_parts(a).expect("checked above");
-                    if expected_slots.is_empty() {
-                        match expected_bare_occurrence {
-                            Some(occurrence) => {
-                                self.match_bare_constructor_occurrence(occurrence, other)
-                            }
-                            None => self.types_compatible(witness, other),
-                        }
-                    } else if !self.types_compatible(witness, other) {
-                        false
-                    } else {
-                        self.constructor_application_slots_for_witness(
-                            witness,
-                            expected_slots.len(),
-                            other,
-                        )
-                        .is_some_and(|actual_slots| {
+                } else if !self.types_compatible(witness, other) {
+                    false
+                } else {
+                    match self.constructor_application_slots_for_witness(
+                        witness,
+                        expected_slots.len(),
+                        other,
+                    ) {
+                        ConstructorSlotsOutcome::Projected(actual_slots) => {
                             actual_slots.len() == expected_slots.len()
                                 && expected_slots.iter().zip(actual_slots.iter()).all(
                                     |(expected, actual)| self.types_compatible(expected, actual),
                                 )
-                        })
-                    }
-                }
-                (other, Ty::SelfApp(b)) if Self::constructor_application_parts(b).is_some() => {
-                    let (_, slots) = Self::constructor_application_parts(b).expect("checked above");
-                    if slots.is_empty() {
-                        match got_bare_occurrence {
-                            Some(occurrence) => {
-                                self.match_bare_constructor_occurrence(occurrence, other)
-                            }
-                            None => self.types_compatible(&Ty::SelfApp(b.clone()), other),
                         }
-                    } else {
-                        self.types_compatible(&Ty::SelfApp(b.clone()), other)
+                        ConstructorSlotsOutcome::Deferred { .. }
+                        | ConstructorSlotsOutcome::Rejected { .. } => false,
                     }
                 }
-                (Ty::SelfApp(a), Ty::SelfApp(b)) => {
-                    a.len() == b.len()
-                        && a.iter()
-                            .zip(b.iter())
-                            .all(|(left, right)| self.types_compatible(left, right))
+            }
+            (other, Ty::SelfApp(b)) if Self::constructor_application_parts(b).is_some() => {
+                let (_, slots) = Self::constructor_application_parts(b).expect("checked above");
+                if slots.is_empty() {
+                    match got_bare_occurrence {
+                        Some(occurrence) => {
+                            self.match_bare_constructor_occurrence(occurrence, other)
+                        }
+                        None => self.types_compatible(&Ty::SelfApp(b.clone()), other),
+                    }
+                } else {
+                    self.types_compatible(&Ty::SelfApp(b.clone()), other)
                 }
-                (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
-                    a_params.len() == b_params.len()
-                        && a_params
-                            .iter()
-                            .zip(b_params.iter())
-                            .all(|(a, b)| self.types_compatible(a, b))
-                        && self.types_compatible(a_ret, b_ret)
-                }
-                (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
-                    self.types_compatible(ok1, ok2) && self.types_compatible(err1, err2)
-                }
-                (Ty::Struct(n1, fields1), Ty::Struct(n2, fields2)) => {
-                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                        && (fields1.is_empty()
-                            || fields2.is_empty()
-                            || (fields1.len() == fields2.len()
-                                && fields1.iter().zip(fields2).all(
-                                    |((name1, ty1), (name2, ty2))| {
-                                        name1 == name2 && self.types_compatible(ty1, ty2)
-                                    },
-                                )))
-                }
-                (Ty::Record(n1, fields1), Ty::Record(n2, fields2)) => {
-                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                        && (fields1.is_empty()
-                            || fields2.is_empty()
-                            || (fields1.len() == fields2.len()
-                                && fields1.iter().zip(fields2).all(
-                                    |((name1, ty1), (name2, ty2))| {
-                                        name1 == name2 && self.types_compatible(ty1, ty2)
-                                    },
-                                )))
-                }
-                (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
-                    Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                        && args1.len() == args2.len()
-                        && args1
-                            .iter()
-                            .zip(args2.iter())
-                            .all(|(left, right)| self.types_compatible(left, right))
-                }
-                _ => false,
-            };
+            }
+            (Ty::SelfApp(a), Ty::SelfApp(b)) => {
+                a.len() == b.len()
+                    && a.iter()
+                        .zip(b.iter())
+                        .all(|(left, right)| self.types_compatible(left, right))
+            }
+            (Ty::Func(a_params, a_ret), Ty::Func(b_params, b_ret)) => {
+                a_params.len() == b_params.len()
+                    && a_params
+                        .iter()
+                        .zip(b_params.iter())
+                        .all(|(a, b)| self.types_compatible(a, b))
+                    && self.types_compatible(a_ret, b_ret)
+            }
+            (Ty::Result(ok1, err1), Ty::Result(ok2, err2)) => {
+                self.types_compatible(ok1, ok2) && self.types_compatible(err1, err2)
+            }
+            (Ty::Struct(n1, fields1), Ty::Struct(n2, fields2)) => {
+                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                    && fields1.arguments.len() == fields2.arguments.len()
+                    && fields1
+                        .arguments
+                        .iter()
+                        .zip(&fields2.arguments)
+                        .all(|(left, right)| self.types_compatible(left, right))
+                    && (fields1.is_empty()
+                        || fields2.is_empty()
+                        || (fields1.len() == fields2.len()
+                            && fields1
+                                .iter()
+                                .zip(fields2)
+                                .all(|((name1, ty1), (name2, ty2))| {
+                                    name1 == name2 && self.types_compatible(ty1, ty2)
+                                })))
+            }
+            (Ty::Record(n1, fields1), Ty::Record(n2, fields2)) => {
+                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                    && fields1.arguments.len() == fields2.arguments.len()
+                    && fields1
+                        .arguments
+                        .iter()
+                        .zip(&fields2.arguments)
+                        .all(|(left, right)| self.types_compatible(left, right))
+                    && (fields1.is_empty()
+                        || fields2.is_empty()
+                        || (fields1.len() == fields2.len()
+                            && fields1
+                                .iter()
+                                .zip(fields2)
+                                .all(|((name1, ty1), (name2, ty2))| {
+                                    name1 == name2 && self.types_compatible(ty1, ty2)
+                                })))
+            }
+            (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
+                Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
+                    && args1.len() == args2.len()
+                    && args1
+                        .iter()
+                        .zip(args2.iter())
+                        .all(|(left, right)| self.types_compatible(left, right))
+            }
+            _ => false,
+        };
         self.profiler.finish(ProfileEvent::TypesCompatible, profile);
         result
     }
@@ -2017,16 +2336,30 @@ impl Checker {
         if self.resolve_ty(subject) == self.resolve_ty(receiver) {
             return true;
         }
-        let Some(canonical_subject) =
-            self.contextual_constructor_carrier(capability_trait, subject)
-        else {
-            return false;
+        let canonical_subject = match self.contextual_constructor_carrier(capability_trait, subject)
+        {
+            ConstructorCarrierOutcome::Projected(carrier) => carrier,
+            ConstructorCarrierOutcome::Deferred { waiting_on } => {
+                debug_assert!(!waiting_on.is_empty());
+                return false;
+            }
+            ConstructorCarrierOutcome::Rejected { failures } => {
+                debug_assert!(!failures.is_empty());
+                return false;
+            }
         };
-        let Some(canonical_receiver) =
-            self.contextual_constructor_carrier(capability_trait, receiver)
-        else {
-            return false;
-        };
+        let canonical_receiver =
+            match self.contextual_constructor_carrier(capability_trait, receiver) {
+                ConstructorCarrierOutcome::Projected(carrier) => carrier,
+                ConstructorCarrierOutcome::Deferred { waiting_on } => {
+                    debug_assert!(!waiting_on.is_empty());
+                    return false;
+                }
+                ConstructorCarrierOutcome::Rejected { failures } => {
+                    debug_assert!(!failures.is_empty());
+                    return false;
+                }
+            };
         canonical_subject == canonical_receiver
     }
 
@@ -2184,9 +2517,15 @@ impl Checker {
             Ty::Result(ok, err) => {
                 self.ty_contains_var(&ok, needle) || self.ty_contains_var(&err, needle)
             }
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
-                .iter()
-                .any(|(_, field_ty)| self.ty_contains_var(field_ty, needle)),
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                nominal
+                    .arguments
+                    .iter()
+                    .any(|argument| self.ty_contains_var(argument, needle))
+                    || nominal
+                        .iter()
+                        .any(|(_, field_ty)| self.ty_contains_var(field_ty, needle))
+            }
             Ty::Enum(_, args) => args.iter().any(|arg| self.ty_contains_var(arg, needle)),
             _ => false,
         }
@@ -2218,10 +2557,12 @@ impl Checker {
                     .map(|item| self.resolve_ty(item))
                     .collect::<Vec<_>>();
                 if let Some((witness, slots)) = Self::constructor_application_parts(&resolved) {
-                    if let Some(applied) = source_witness.as_ref().and_then(|source| {
-                        self.apply_constructor_application(source, witness, slots)
-                    }) {
-                        return self.resolve_ty(&applied);
+                    if let Some(source) = source_witness.as_ref() {
+                        if let ConstructorApplicationOutcome::Applied(applied) =
+                            self.apply_constructor_application(source, witness, slots)
+                        {
+                            return self.resolve_ty(&applied);
+                        }
                     }
                 }
                 // An unresolved application still needs its declaration's
@@ -2258,17 +2599,31 @@ impl Checker {
             },
             Ty::Struct(name, fields) => Ty::Struct(
                 name.clone(),
-                fields
-                    .iter()
-                    .map(|(field, field_ty)| (field.clone(), self.resolve_ty(field_ty)))
-                    .collect(),
+                NominalType::new(
+                    fields
+                        .arguments
+                        .iter()
+                        .map(|argument| self.resolve_ty(argument))
+                        .collect(),
+                    fields
+                        .iter()
+                        .map(|(field, field_ty)| (field.clone(), self.resolve_ty(field_ty)))
+                        .collect(),
+                ),
             ),
             Ty::Record(name, fields) => Ty::Record(
                 name.clone(),
-                fields
-                    .iter()
-                    .map(|(field, field_ty)| (field.clone(), self.resolve_ty(field_ty)))
-                    .collect(),
+                NominalType::new(
+                    fields
+                        .arguments
+                        .iter()
+                        .map(|argument| self.resolve_ty(argument))
+                        .collect(),
+                    fields
+                        .iter()
+                        .map(|(field, field_ty)| (field.clone(), self.resolve_ty(field_ty)))
+                        .collect(),
+                ),
             ),
             Ty::Enum(name, args) => Ty::Enum(
                 name.clone(),
@@ -2302,19 +2657,6 @@ impl Checker {
                         }
                     }
                     fresh.insert(*var, instantiated.clone());
-                    if self.constructor_witness_traits.contains_key(var) {
-                        if let Some(shared) = self.constructor_family_witnesses.get(var).copied() {
-                            let fresh_shared =
-                                self.instantiate_ty_with_fresh(&Ty::Var(shared), fresh);
-                            if let Ty::Var(new_var) = instantiated {
-                                if let Ty::Var(fresh_shared) = fresh_shared {
-                                    self.constructor_family_witnesses
-                                        .insert(new_var, fresh_shared);
-                                }
-                                self.substitutions.insert(new_var, fresh_shared);
-                            }
-                        }
-                    }
                     instantiated
                 }
             }
@@ -2377,27 +2719,41 @@ impl Checker {
             },
             Ty::Struct(name, fields) => Ty::Struct(
                 name.clone(),
-                fields
-                    .iter()
-                    .map(|(field, field_ty)| {
-                        (
-                            field.clone(),
-                            self.instantiate_ty_with_fresh(field_ty, fresh),
-                        )
-                    })
-                    .collect(),
+                NominalType::new(
+                    fields
+                        .arguments
+                        .iter()
+                        .map(|argument| self.instantiate_ty_with_fresh(argument, fresh))
+                        .collect(),
+                    fields
+                        .iter()
+                        .map(|(field, field_ty)| {
+                            (
+                                field.clone(),
+                                self.instantiate_ty_with_fresh(field_ty, fresh),
+                            )
+                        })
+                        .collect(),
+                ),
             ),
             Ty::Record(name, fields) => Ty::Record(
                 name.clone(),
-                fields
-                    .iter()
-                    .map(|(field, field_ty)| {
-                        (
-                            field.clone(),
-                            self.instantiate_ty_with_fresh(field_ty, fresh),
-                        )
-                    })
-                    .collect(),
+                NominalType::new(
+                    fields
+                        .arguments
+                        .iter()
+                        .map(|argument| self.instantiate_ty_with_fresh(argument, fresh))
+                        .collect(),
+                    fields
+                        .iter()
+                        .map(|(field, field_ty)| {
+                            (
+                                field.clone(),
+                                self.instantiate_ty_with_fresh(field_ty, fresh),
+                            )
+                        })
+                        .collect(),
+                ),
             ),
             Ty::Enum(name, args) => Ty::Enum(
                 name.clone(),
@@ -2486,27 +2842,41 @@ impl Checker {
             },
             Ty::Struct(name, fields) => Ty::Struct(
                 name.clone(),
-                fields
-                    .iter()
-                    .map(|(field, field_ty)| {
-                        (
-                            field.clone(),
-                            self.substitute_type_def_ty(field_ty, bindings),
-                        )
-                    })
-                    .collect(),
+                NominalType::new(
+                    fields
+                        .arguments
+                        .iter()
+                        .map(|argument| self.substitute_type_def_ty(argument, bindings))
+                        .collect(),
+                    fields
+                        .iter()
+                        .map(|(field, field_ty)| {
+                            (
+                                field.clone(),
+                                self.substitute_type_def_ty(field_ty, bindings),
+                            )
+                        })
+                        .collect(),
+                ),
             ),
             Ty::Record(name, fields) => Ty::Record(
                 name.clone(),
-                fields
-                    .iter()
-                    .map(|(field, field_ty)| {
-                        (
-                            field.clone(),
-                            self.substitute_type_def_ty(field_ty, bindings),
-                        )
-                    })
-                    .collect(),
+                NominalType::new(
+                    fields
+                        .arguments
+                        .iter()
+                        .map(|argument| self.substitute_type_def_ty(argument, bindings))
+                        .collect(),
+                    fields
+                        .iter()
+                        .map(|(field, field_ty)| {
+                            (
+                                field.clone(),
+                                self.substitute_type_def_ty(field_ty, bindings),
+                            )
+                        })
+                        .collect(),
+                ),
             ),
             Ty::Enum(name, args) => Ty::Enum(
                 name.clone(),
@@ -2838,9 +3208,15 @@ impl Checker {
                 params.iter().any(|param| self.ty_contains_facet(param))
                     || self.ty_contains_facet(ret.as_ref())
             }
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
-                .iter()
-                .any(|(_, field_ty)| self.ty_contains_facet(field_ty)),
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                nominal
+                    .arguments
+                    .iter()
+                    .any(|argument| self.ty_contains_facet(argument))
+                    || nominal
+                        .iter()
+                        .any(|(_, field_ty)| self.ty_contains_facet(field_ty))
+            }
             Ty::Enum(_, args) => args.iter().any(|arg| self.ty_contains_facet(arg)),
             Ty::Result(ok, err) => {
                 self.ty_contains_facet(ok.as_ref()) || self.ty_contains_facet(err.as_ref())
@@ -3584,6 +3960,32 @@ mod tests {
             );
             assert!(checker.trait_key_by_short_name("Functor").is_none());
         }
+    }
+
+    #[test]
+    fn direct_signature_constructor_trait_without_canonical_identity_fails_closed() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        checker.traits.insert(
+            "Global::Context".into(),
+            constructor_trait("Context", "Global::Context", 71_010),
+        );
+        let signature_ty = sigil::resolved::ResolvedSignatureTy {
+            syntax: AstTy::Generic(
+                Span { start: 0, end: 8 },
+                "Context".into(),
+                vec![AstTy::Named(Span { start: 9, end: 12 }, "Int".into())],
+            ),
+            direct_constructor_trait: None,
+        };
+
+        let error = checker
+            .resolve_resolved_signature_ty_in_context(
+                &signature_ty,
+                TypeSyntaxContext::General,
+                &mut HashMap::new(),
+            )
+            .expect_err("Scar must not rediscover a direct signature Trait by display name");
+        assert!(error.message.contains("Unknown type: Context"), "{error:?}");
     }
 
     #[test]

@@ -241,6 +241,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_completion_prefers_trait_surface_for_neq_helper_details),
     repl_core_case!(core_keeps_bindings_and_definitions_between_inputs),
     repl_core_case!(core_rolls_back_failed_input_without_losing_previous_state),
+    repl_core_case!(core_constructor_relation_rolls_back_after_failed_input),
     repl_core_case!(core_rebinding_uses_latest_value_and_grows_snapshot_locals),
     repl_core_case!(core_rejects_top_level_def_capturing_session_value_binding),
     repl_core_case!(core_rejects_repl_forbidden_top_level_declarations),
@@ -2712,6 +2713,42 @@ fn core_rolls_back_failed_input_without_losing_previous_state() {
     let value = engine.handle_line("x");
     assert!(!value.should_exit);
     assert!(rendered_text(&value).contains("1"));
+}
+
+fn core_constructor_relation_rolls_back_after_failed_input() {
+    let mut engine = engine();
+
+    let definition = engine.handle_line(
+        "def require_same(left: $F<Int>, right: $F<Int>) -> Int where $F: Functor { mapped = Functor::fmap(left, {|x| x}); 1 }",
+    );
+    assert!(!definition.should_exit);
+    assert!(
+        !matches!(definition.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&definition)
+    );
+
+    let rejected = engine.handle_line("require_same(Option::Some(1), [2])");
+    assert!(!rejected.should_exit);
+    assert!(matches!(rejected.output, ReplOutput::EvalError { .. }));
+    assert!(
+        rendered_text(&rejected).contains("Type constructor family mismatch"),
+        "{}",
+        rendered_text(&rejected)
+    );
+
+    let opposite = engine.handle_line("require_same([1], [2])");
+    assert!(!opposite.should_exit);
+    assert!(
+        !matches!(opposite.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&opposite)
+    );
+    assert!(
+        rendered_text(&opposite).contains('1'),
+        "{}",
+        rendered_text(&opposite)
+    );
 }
 
 fn core_rebinding_uses_latest_value_and_grows_snapshot_locals() {

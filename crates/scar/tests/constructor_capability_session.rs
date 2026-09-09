@@ -1,12 +1,12 @@
 use scar::{ScarCheckpoint, ScarSession};
 
 const SOURCE: &str = r#"
-deftrait Functor where Self: Type<$A> {}
+deftrait Functor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
 deftrait Monad where Self: Functor {}
 defenum Box<$T> { Box($T), }
-impl Functor for Box<$T> {}
+impl Functor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(value) => Box::Box(mapper(value)), } } }
 impl Monad for Box<$T> {}
-def retain(value: Functor<Int>) -> Functor<Int> { value }
+def retain(value: $F<Int>) -> $F<Int> where $F: Functor { Functor::fmap(value, {|x| x}) }
 def stronger(value: Monad<Int>) -> Int { 1 }
 a = retain(Box::Box(1))
 stronger(a)

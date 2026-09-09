@@ -1936,6 +1936,45 @@ deftrait Show {
 }
 
 #[test]
+fn test_direct_constructor_signature_identity_is_canonical_and_order_independent() {
+    for reverse in [false, true] {
+        let definitions = [
+            "deftrait SelectedContext where Self: Type<$A> {}",
+            "deftrait UnrelatedContext where Self: Type<$A> {}",
+        ];
+        let order = if reverse { [1, 0] } else { [0, 1] };
+        let source = format!(
+            "{}\n{}\ndef accept(value: SelectedContext<Int>) -> Unit {{ () }}",
+            definitions[order[0]], definitions[order[1]]
+        );
+        let resolved = parse_and_resolve(&source)
+            .expect("direct constructor Trait should resolve independently of declaration order");
+
+        let selected_trait = resolved
+            .iter()
+            .find_map(|node| match node {
+                Resolved::TraitDef(_, id, ..) if id.name == "SelectedContext" => Some(id),
+                _ => None,
+            })
+            .expect("SelectedContext definition");
+        let parameter_trait = resolved
+            .iter()
+            .find_map(|node| match node {
+                Resolved::Def(_, id, _, parameters, ..) if id.name == "accept" => parameters
+                    .first()
+                    .and_then(|parameter| parameter.ty.direct_constructor_trait.as_ref()),
+                _ => None,
+            })
+            .expect("accept direct constructor identity");
+        assert_eq!(parameter_trait.unique_id, selected_trait.unique_id);
+        assert_eq!(
+            parameter_trait.qualified_name,
+            selected_trait.qualified_name
+        );
+    }
+}
+
+#[test]
 fn test_resolved_type_alias_carries_sig_identity_across_ir_boundary() {
     let resolved = parse_and_resolve("type Mapper<$A, $B> = ($A -> $B)")
         .expect("signature alias should resolve");
@@ -2510,7 +2549,7 @@ value = Convert::convert::<String>(1)"#,
         Resolved::Bind(_, _, rhs)
             if matches!(rhs.as_ref(), Resolved::App(_, callee, _)
                 if matches!(callee.as_ref(), Resolved::ReturnTypeArgumentApply(_, _, args)
-                    if matches!(args.as_slice(), [argument] if matches!(argument.ty, AstTy::Named(_, ref name) if name == "String"))))
+                    if matches!(args.as_slice(), [argument] if matches!(argument.ty.syntax, AstTy::Named(_, ref name) if name == "String"))))
     ));
 }
 
@@ -2687,7 +2726,7 @@ fn test_builtin_decl_resolution() {
             );
             assert!(matches!(
                 ret_ty,
-                Some(spire::ast::AstTy::Named(_, ty)) if ty == "Unit"
+                Some(ty) if matches!(&ty.syntax, spire::ast::AstTy::Named(_, name) if name == "Unit")
             ));
         }
         _ => panic!("Expected BuiltinDecl"),
@@ -3108,7 +3147,9 @@ print(to_string(1))"#,
             assert!(type_params.is_empty());
             assert_eq!(params.len(), 2);
             assert_eq!(*attrs, ResolvedDeclAttrs::default());
-            assert!(matches!(ret_ty, Some(spire::ast::AstTy::Named(_, ty)) if ty == "Int"));
+            assert!(
+                matches!(ret_ty, Some(ty) if matches!(&ty.syntax, spire::ast::AstTy::Named(_, name) if name == "Int"))
+            );
             assert!(
                 matches!(body.as_ref(), Resolved::Block(_, stmts) if matches!(stmts.as_slice(), [Resolved::BinOp(_, _, _, _)]))
             );
@@ -7211,7 +7252,7 @@ fn = &identity::<Int>"#,
             applied,
             Resolved::ReturnTypeArgumentApply(_, target, args)
                 if matches!(target.as_ref(), Resolved::Var(_, id) if id.unique_id == def_id)
-                    && matches!(args.as_slice(), [argument] if matches!(argument.ty, AstTy::Named(_, ref name) if name == "Int"))
+                    && matches!(args.as_slice(), [argument] if matches!(argument.ty.syntax, AstTy::Named(_, ref name) if name == "Int"))
         ));
     }
 }
@@ -7269,6 +7310,10 @@ where
 
 def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> {
   ()
+}
+
+def accept_context(value: Alternative<Int>) -> Unit {
+  ()
 }"#,
     )
     .expect("a direct TypeConstructor trait RTA should resolve");
@@ -7277,29 +7322,162 @@ def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> {
         .iter()
         .find(|node| matches!(node, Resolved::Def(_, id, ..) if id.name == "guard"))
         .expect("guard definition");
-    let Resolved::Def(
-        _,
-        _,
-        return_type_arguments,
-        _,
-        Some(AstTy::Generic(_, return_head, _)),
-        None,
-        _,
-        _,
-    ) = definition
+    let Resolved::Def(_, _, return_type_arguments, _, Some(return_type), None, _, _) = definition
     else {
         panic!("expected resolved guard signature, got {definition:?}");
     };
     let [return_type_argument] = return_type_arguments.as_slice() else {
         panic!("expected one return type argument");
     };
-    let AstTy::Named(type_span, direct_trait_name) = &return_type_argument.ty else {
+    let AstTy::Generic(_, return_head, _) = &return_type.syntax else {
+        panic!("expected direct constructor Trait return");
+    };
+    let AstTy::Named(type_span, direct_trait_name) = &return_type_argument.ty.syntax else {
         panic!("expected a direct constructor trait name");
     };
     assert_eq!(direct_trait_name, "Alternative");
     assert_eq!(return_head, "Alternative");
     assert_eq!(return_type_argument.ordinal, 0);
     assert_eq!(return_type_argument.span, *type_span);
+    let rta_trait = return_type_argument
+        .ty
+        .direct_constructor_trait
+        .as_ref()
+        .expect("RTA keeps canonical Trait identity");
+    let return_trait = return_type
+        .direct_constructor_trait
+        .as_ref()
+        .expect("return keeps canonical Trait identity");
+    assert_eq!(rta_trait.unique_id, return_trait.unique_id);
+    assert_eq!(rta_trait.qualified_name, return_trait.qualified_name);
+    let trait_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, ..) if id.name == "Alternative" => Some(id),
+            _ => None,
+        })
+        .expect("Alternative Trait definition");
+    assert_eq!(rta_trait.unique_id, trait_id.unique_id);
+
+    let parameter_trait = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, parameters, ..) if id.name == "accept_context" => parameters
+                .first()
+                .and_then(|parameter| parameter.ty.direct_constructor_trait.as_ref()),
+            _ => None,
+        })
+        .expect("direct value parameter keeps canonical Trait identity");
+    assert_eq!(parameter_trait.unique_id, trait_id.unique_id);
+    assert_eq!(parameter_trait.qualified_name, trait_id.qualified_name);
+}
+
+#[test]
+fn value_parameter_names_do_not_shadow_constructor_trait_signature_identity() {
+    let resolved = parse_and_resolve(
+        r#"deftrait Functor
+where
+  Self: Type<$A>
+{}
+
+def accept_context(
+  Functor: Functor<Int>,
+  later: Functor<String>,
+) -> Unit {
+  ()
+}"#,
+    )
+    .expect("value bindings must not affect signature type resolution");
+
+    let trait_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, ..) if id.name == "Functor" => Some(id),
+            _ => None,
+        })
+        .expect("Functor Trait definition");
+    let parameters = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Def(_, id, _, parameters, ..) if id.name == "accept_context" => {
+                Some(parameters)
+            }
+            _ => None,
+        })
+        .expect("accept_context definition");
+    assert_eq!(parameters.len(), 2);
+    for parameter in parameters {
+        let direct_trait = parameter
+            .ty
+            .direct_constructor_trait
+            .as_ref()
+            .expect("parameter type keeps canonical Trait identity");
+        assert_eq!(direct_trait.unique_id, trait_id.unique_id);
+        assert_eq!(direct_trait.qualified_name, trait_id.qualified_name);
+    }
+}
+
+#[test]
+fn impl_method_value_scope_does_not_shadow_constructor_trait_signature_identity() {
+    let resolved = parse_and_resolve(
+        r#"deftrait Functor
+where
+  Self: Type<$A>
+{}
+
+deftrait Convert {
+  def convert(value: Int) -> Int
+}
+
+impl Convert for Int {
+  def convert(Functor: Functor<Int>) -> Functor<String>
+  where
+    $F: Functor
+  {
+    shadow = Functor
+    shadow
+  }
+}"#,
+    )
+    .expect("impl method value scope must not affect its declaration signature");
+
+    let trait_id = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, ..) if id.name == "Functor" => Some(id),
+            _ => None,
+        })
+        .expect("Functor Trait definition");
+    let method = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitImplDef(_, _, _, _, _, _, methods) => methods.first(),
+            _ => None,
+        })
+        .expect("Convert implementation method");
+    let parameter_trait = method.value_parameters[0]
+        .ty
+        .direct_constructor_trait
+        .as_ref()
+        .expect("impl parameter keeps canonical Trait identity");
+    let return_trait = method
+        .ret_ty
+        .as_ref()
+        .and_then(|ty| ty.direct_constructor_trait.as_ref())
+        .expect("impl return keeps canonical Trait identity");
+    assert_eq!(parameter_trait.unique_id, trait_id.unique_id);
+    assert_eq!(return_trait.unique_id, trait_id.unique_id);
+    let where_trait = method
+        .where_clause
+        .as_ref()
+        .and_then(|clause| clause.constraints.first())
+        .and_then(|constraint| constraint.bounds.first())
+        .and_then(|bound| match bound {
+            ResolvedWhereConstraintRhs::Trait { trait_id } => Some(trait_id),
+            _ => None,
+        })
+        .expect("impl method where clause keeps canonical Trait identity");
+    assert_eq!(where_trait.unique_id, trait_id.unique_id);
 }
 
 fn trait_impl_self_call_id(body: &Resolved) -> &ResolvedId {

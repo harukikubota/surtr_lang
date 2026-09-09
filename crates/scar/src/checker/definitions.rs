@@ -203,7 +203,7 @@ impl Checker {
         id: &ResolvedId,
         return_type_arguments: &[ResolvedReturnTypeArgument],
         params: &[ResolvedValueParameter],
-        ret_ty: &Option<AstTy>,
+        ret_ty: &Option<sigil::resolved::ResolvedSignatureTy>,
         where_clause: Option<&ResolvedWhereClause>,
     ) -> Result<TypedNode, TypeError> {
         let is_kernel_is_match = id.name == "is_match"
@@ -215,7 +215,8 @@ impl Checker {
             Self::is_special_form_builtin_decl_name(&id.name)
         };
         if is_special_form {
-            return self.check_special_form_builtin_decl(span, id, params, ret_ty);
+            let syntax_ret_ty = ret_ty.as_ref().map(|ty| ty.syntax.clone());
+            return self.check_special_form_builtin_decl(span, id, params, &syntax_ret_ty);
         }
 
         let builtin_name =
@@ -240,7 +241,11 @@ impl Checker {
             });
         }
 
-        if !super::signatures::builtin_surface_matches(id, params, ret_ty.as_ref()) {
+        if !super::signatures::builtin_surface_matches(
+            id,
+            params,
+            ret_ty.as_ref().map(|ty| ty.syntax()),
+        ) {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -259,7 +264,7 @@ impl Checker {
         let return_type_argument_tys = return_type_arguments
             .iter()
             .map(|argument| {
-                self.resolve_builtin_ast_ty_in_context(
+                self.resolve_builtin_signature_ty_in_context(
                     &argument.ty,
                     TypeSyntaxContext::General,
                     &mut tyvars,
@@ -268,10 +273,16 @@ impl Checker {
             .collect::<Result<Vec<_>, _>>()?;
         let param_tys = params
             .iter()
-            .map(|param| self.resolve_builtin_ast_ty(&param.ty, &mut tyvars))
+            .map(|param| {
+                self.resolve_builtin_signature_ty_in_context(
+                    &param.ty,
+                    TypeSyntaxContext::General,
+                    &mut tyvars,
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let ret = match ret_ty {
-            Some(ty) => self.resolve_builtin_ast_ty_in_context(
+            Some(ty) => self.resolve_builtin_signature_ty_in_context(
                 ty,
                 TypeSyntaxContext::FunctionReturn,
                 &mut tyvars,
@@ -881,105 +892,17 @@ impl Checker {
         self.seed_signature_type_params(&missing, tyvars);
     }
 
-    fn collect_declared_type_var_instances(
-        pattern: &Ty,
-        actual: &Ty,
-        declared_vars: &HashSet<u32>,
-        instances: &mut HashMap<u32, Ty>,
-    ) {
-        match (pattern, actual) {
-            (Ty::Var(var), actual) if declared_vars.contains(var) => {
-                instances.entry(*var).or_insert_with(|| actual.clone());
-            }
-            (Ty::List(pattern), Ty::List(actual)) | (Ty::Lazy(pattern), Ty::Lazy(actual)) => {
-                Self::collect_declared_type_var_instances(
-                    pattern,
-                    actual,
-                    declared_vars,
-                    instances,
-                );
-            }
-            (Ty::Result(pattern_ok, pattern_err), Ty::Result(actual_ok, actual_err)) => {
-                Self::collect_declared_type_var_instances(
-                    pattern_ok,
-                    actual_ok,
-                    declared_vars,
-                    instances,
-                );
-                Self::collect_declared_type_var_instances(
-                    pattern_err,
-                    actual_err,
-                    declared_vars,
-                    instances,
-                );
-            }
-            (Ty::Tuple(patterns), Ty::Tuple(actuals))
-            | (Ty::SelfApp(patterns), Ty::SelfApp(actuals))
-            | (Ty::Enum(_, patterns), Ty::Enum(_, actuals)) => {
-                for (pattern, actual) in patterns.iter().zip(actuals.iter()) {
-                    Self::collect_declared_type_var_instances(
-                        pattern,
-                        actual,
-                        declared_vars,
-                        instances,
-                    );
-                }
-            }
-            (Ty::Struct(_, patterns), Ty::Struct(_, actuals))
-            | (Ty::Record(_, patterns), Ty::Record(_, actuals)) => {
-                for ((_, pattern), (_, actual)) in patterns.iter().zip(actuals.iter()) {
-                    Self::collect_declared_type_var_instances(
-                        pattern,
-                        actual,
-                        declared_vars,
-                        instances,
-                    );
-                }
-            }
-            (Ty::Func(pattern_params, pattern_ret), Ty::Func(actual_params, actual_ret)) => {
-                for (pattern, actual) in pattern_params.iter().zip(actual_params.iter()) {
-                    Self::collect_declared_type_var_instances(
-                        pattern,
-                        actual,
-                        declared_vars,
-                        instances,
-                    );
-                }
-                Self::collect_declared_type_var_instances(
-                    pattern_ret,
-                    actual_ret,
-                    declared_vars,
-                    instances,
-                );
-            }
-            _ => {}
-        }
-    }
-
     pub(super) fn resolved_named_type_args(
         &self,
         type_name: &str,
         resolved_ty: &Ty,
     ) -> Option<Vec<Ty>> {
         let def = self.env.lookup_type_def(type_name)?;
-        let resolved_fields = match resolved_ty {
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields,
+        let nominal = match resolved_ty {
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => nominal,
             _ => return None,
         };
-        let declared_vars = def.type_param_vars.iter().copied().collect::<HashSet<_>>();
-        let mut instances = HashMap::new();
-        for ((_, pattern), (_, actual)) in def.fields.iter().zip(resolved_fields.iter()) {
-            Self::collect_declared_type_var_instances(
-                pattern,
-                actual,
-                &declared_vars,
-                &mut instances,
-            );
-        }
-        def.type_param_vars
-            .iter()
-            .map(|var| instances.get(var).cloned())
-            .collect()
+        (nominal.arguments.len() == def.type_params.len()).then(|| nominal.arguments.clone())
     }
 
     pub(super) fn collect_signature_ty_bindings(
@@ -1040,16 +963,16 @@ impl Checker {
 
     pub(super) fn resolve_contextual_return_body(
         &mut self,
-        return_ast: &AstTy,
+        return_ast: &sigil::resolved::ResolvedSignatureTy,
         expected_ret: &Ty,
         typed_body: &TypedNode,
         rigid_tyvars: &HashSet<u32>,
     ) -> Result<Option<Ty>, TypeError> {
-        let Some(trait_key) = self.constructor_trait_key_for_ast_ty(return_ast) else {
+        let Some(trait_key) = self.constructor_trait_key_for_signature_ty(return_ast) else {
             return Ok(None);
         };
         let actual = self.resolve_ty(&typed_body.ty);
-        let has_concrete_constructor_shape = Self::constructor_application_slots(&actual).is_some();
+        let has_concrete_constructor_shape = Self::is_concrete_constructor_shape(&actual);
         let expected_parts = match expected_ret {
             Ty::SelfApp(items) => Self::constructor_application_parts(items),
             _ => None,
@@ -1070,35 +993,56 @@ impl Checker {
                 }
             }
         }
-        if matches!(actual, Ty::Var(_) | Ty::SelfApp(_)) || !has_concrete_constructor_shape {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "UnresolvedConstructorResult: {} must resolve to one concrete constructor",
-                    Self::surface_ast_ty(return_ast)
-                ),
-                span: self.return_mismatch_span(typed_body),
-                hint: Some(
-                    "Return a concrete constructor value from every branch of this function."
-                        .into(),
-                ),
-            });
+        if matches!(actual, Ty::Var(_) | Ty::SelfApp(_)) {
+            return Err(self.ambiguous_constructor_result(
+                Self::surface_name(&trait_key),
+                "return",
+                &self.return_mismatch_span(typed_body),
+            ));
         }
-        if self.constructor_projection(&trait_key, &actual).is_none() {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "{} does not implement constructor trait {}",
-                    self.ty_name(&actual),
-                    Self::surface_name(&trait_key)
-                ),
-                span: self.return_mismatch_span(typed_body),
-                hint: None,
-            });
+        if !has_concrete_constructor_shape {
+            return Err(self.trait_failure(
+                TypeDiagnosticReason::NoApplicableTraitImplementation,
+                &trait_key,
+                &actual,
+                &self.return_mismatch_span(typed_body),
+                DiagnosticOrigin::Return,
+            ));
         }
-        let concrete_slots = self
-            .constructor_application_slots_for_trait(&trait_key, &actual)
-            .expect("a validated constructor-trait impl must expose its declared slots");
+        let concrete_slots = match self.constructor_application_slots_for_trait(&trait_key, &actual)
+        {
+            ConstructorSlotsOutcome::Projected(slots) => slots,
+            ConstructorSlotsOutcome::Deferred { waiting_on } => {
+                let mut error = self.ambiguous_constructor_result(
+                    Self::surface_name(&trait_key),
+                    "return",
+                    &self.return_mismatch_span(typed_body),
+                );
+                error.hint = Some(format!(
+                    "Resolve all {} constructor input(s) before returning this value.",
+                    waiting_on.len()
+                ));
+                return Err(error);
+            }
+            ConstructorSlotsOutcome::Rejected { failures } => {
+                let span = self.return_mismatch_span(typed_body);
+                return if Self::constructor_projection_failures_are_metadata(&failures) {
+                    Err(signatures::constructor_signature_metadata_error(
+                        &Self::surface_ast_ty(return_ast),
+                        &span,
+                        Self::constructor_projection_failure_detail(&failures),
+                    ))
+                } else {
+                    Err(self.trait_failure(
+                        TypeDiagnosticReason::NoApplicableTraitImplementation,
+                        &trait_key,
+                        &actual,
+                        &span,
+                        DiagnosticOrigin::Return,
+                    ))
+                };
+            }
+        };
         if expected_slots.len() != concrete_slots.len()
             || !expected_slots
                 .iter()
@@ -1178,9 +1122,6 @@ impl Checker {
             for variable in variables {
                 if self.constructor_witness_traits.contains_key(&variable) {
                     self.rigid_tyvars.insert(variable);
-                    if let Some(root) = self.constructor_family_witness_root(variable) {
-                        self.rigid_tyvars.insert(root);
-                    }
                 }
             }
         }
@@ -1356,7 +1297,7 @@ impl Checker {
         id: &ResolvedId,
         return_type_arguments: &[ResolvedReturnTypeArgument],
         params: &[ResolvedValueParameter],
-        ret_ty: &Option<AstTy>,
+        ret_ty: &Option<sigil::resolved::ResolvedSignatureTy>,
         where_clause: Option<&ResolvedWhereClause>,
         body: &Resolved,
         attrs: &ResolvedDeclAttrs,
@@ -1394,17 +1335,6 @@ impl Checker {
                 TypeSyntaxContext::General,
                 &mut tyvars,
             )?;
-            super::signatures::remember_direct_constructor_input(
-                self,
-                &param.ty,
-                &param_ty,
-                &mut direct_constructor_inputs,
-            );
-            let param_ty = super::signatures::coalesce_direct_constructor_inputs(
-                self,
-                param_ty,
-                &direct_constructor_inputs,
-            );
             if self.ty_contains_process_init(&param_ty) {
                 return Err(TypeError {
                     structured: None,
@@ -1432,7 +1362,7 @@ impl Checker {
                 });
             }
             local_bindings.push((param.id.unique_id, param_ty.clone()));
-            if let Some(capability) = self.constructor_trait_key_for_ast_ty(&param.ty) {
+            if let Some(capability) = self.constructor_trait_key_for_signature_ty(&param.ty) {
                 local_capabilities.push((param.id.unique_id, capability));
             }
             typed_params.push(TypedValueParameter {
@@ -1636,7 +1566,7 @@ impl Checker {
         let rigid_tyvars = Self::signature_tyvar_ids(&tyvars);
         let return_constructor_coercion = ret_ty
             .as_ref()
-            .and_then(|ast_ty| self.constructor_trait_key_for_ast_ty(ast_ty))
+            .and_then(|ty| self.constructor_trait_key_for_signature_ty(ty))
             .is_some_and(|trait_key| {
                 self.constructor_annotation_compatible(&trait_key, &expected_ret, &typed_body.ty)
             });
@@ -1646,7 +1576,10 @@ impl Checker {
             &typed_body.ty,
             self.type_fact(
                 SourceRole::Expected,
-                ret_ty.as_ref().map(Self::ast_ty_span).unwrap_or(span),
+                ret_ty
+                    .as_ref()
+                    .map(|ty| Self::ast_ty_span(ty.syntax()))
+                    .unwrap_or(span),
                 &expected_ret,
             ),
             self.type_fact(
@@ -2028,7 +1961,7 @@ impl Checker {
             method_tyvars.insert("Self".into(), raw_environment.self_ty.clone());
             for (param, param_ty) in method.value_parameters.iter().zip(param_tys.iter()) {
                 local_bindings.push((param.id.unique_id, param_ty.clone()));
-                let binding_source = match &param.ty {
+                let binding_source = match &*param.ty {
                     AstTy::Named(_, name) if name == "Self" => target_ast_ty,
                     _ => &param.ty,
                 };
@@ -2315,7 +2248,7 @@ impl Checker {
             .resolve_type_def_signature(
                 &id.name,
                 ty_fields.clone(),
-                type_param_vars,
+                type_param_vars.clone(),
                 private_fields,
                 readonly_fields,
                 readonly_root,
@@ -2327,8 +2260,16 @@ impl Checker {
                 hint: None,
             })?;
 
-        self.env
-            .bind_var(id.unique_id, Ty::Struct(id.name.clone(), ty_fields.clone()));
+        self.env.bind_var(
+            id.unique_id,
+            Ty::Struct(
+                id.name.clone(),
+                NominalType::new(
+                    type_param_vars.iter().copied().map(Ty::Var).collect(),
+                    ty_fields.clone(),
+                ),
+            ),
+        );
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
         let field_policies = fields
@@ -2489,8 +2430,10 @@ impl Checker {
                 hint: None,
             })?;
 
-        self.env
-            .bind_var(id.unique_id, Ty::Record(id.name.clone(), ty_fields.clone()));
+        self.env.bind_var(
+            id.unique_id,
+            Ty::Record(id.name.clone(), NominalType::monomorphic(ty_fields.clone())),
+        );
 
         let field_names: Vec<String> = ty_fields.iter().map(|(n, _)| n.clone()).collect();
         let field_policies = fields
@@ -2575,7 +2518,12 @@ impl Checker {
             }
         }
 
-        let mut fresh = HashMap::new();
+        let mut fresh = def
+            .type_param_vars
+            .iter()
+            .copied()
+            .map(|variable| (variable, self.env.fresh_tyvar()))
+            .collect::<HashMap<_, _>>();
         let fields = def
             .fields
             .iter()
@@ -2627,7 +2575,18 @@ impl Checker {
             typed_fields.push(typed_val);
         }
 
-        let result_ty = Ty::Struct(id.name.clone(), fields);
+        let arguments = def
+            .type_param_vars
+            .iter()
+            .map(|variable| {
+                self.resolve_ty(
+                    fresh
+                        .get(variable)
+                        .expect("every nominal type parameter is instantiated"),
+                )
+            })
+            .collect();
+        let result_ty = Ty::Struct(id.name.clone(), NominalType::new(arguments, fields));
         Ok(TypedNode {
             ty: result_ty,
             span: span.clone(),
@@ -3084,7 +3043,13 @@ impl Checker {
             let typed_args = self.typecheck_user_function_args(
                 span, new_uid, "function", &params, args, None, false, false,
             )?;
-            let expected_self_ty = Ty::Struct(id.name.clone(), def.fields.clone());
+            let expected_self_ty = Ty::Struct(
+                id.name.clone(),
+                NominalType::new(
+                    def.type_param_vars.iter().copied().map(Ty::Var).collect(),
+                    def.fields.clone(),
+                ),
+            );
             let returns_self = self.types_compatible(&expected_self_ty, &ret_ty);
             let returns_result_self = match self.resolve_ty(&ret_ty) {
                 Ty::Result(ok, _) => self.types_compatible(&expected_self_ty, ok.as_ref()),
@@ -3278,7 +3243,10 @@ impl Checker {
             .collect::<Result<Vec<_>, _>>()?;
 
         let result_ty = match def.kind {
-            crate::env::TypeKind::Record => Ty::Record(id.name.clone(), def.fields.clone()),
+            crate::env::TypeKind::Record => Ty::Record(
+                id.name.clone(),
+                NominalType::monomorphic(def.fields.clone()),
+            ),
             crate::env::TypeKind::ConcreteError => Ty::Error,
             crate::env::TypeKind::Struct | crate::env::TypeKind::Enum => {
                 unreachable!("validated above")

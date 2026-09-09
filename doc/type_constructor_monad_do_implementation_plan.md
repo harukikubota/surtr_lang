@@ -7,7 +7,7 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- この配布時点では、新Taskのローカル実装・テストは行っていない。全Taskを未着手で初期化する。
+- N01 は実装済み。以降のTaskは未着手である。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
@@ -17,7 +17,6 @@
 
 | ファイル | 責務 |
 |---|---|
-| `type_constructor_trait_extension_spec.md` | 通常callableのcarrier同一性変更 |
 | `monad_instances_spec.md` | Identity / Reader / State追加 |
 | `monadt_language_extension_spec.md` | nominal constructor parameter・parameterized TypeCtorTrait・MonadT契約 |
 | `monadt_standard_types_spec.md` | OptionT / EitherT / ReaderT / StateTの意味とAPI |
@@ -26,6 +25,7 @@
 | `generator_spec.md` | 遅延・persistent GeneratorとAPI移行 |
 
 実装済み共通契約は `/docs/dev/Trait_system_spec.md`、`/docs/dev/diagnostics.md` 等を利用する。削除する旧入力仕様は、必要な内容の移管が完了してから参照を切り替える。
+N01 の旧入力 `type_constructor_trait_extension_spec.md` は実装と正本への移管後に削除した。
 
 ## 3. 作業分割の原則
 
@@ -41,7 +41,7 @@
 
 | 新Task | 作業 | 主な依存 | 状態 | 旧計画との対応 |
 |---|---|---|---|---|
-| N01 | direct carrier同一性改修 | 旧Task 9までの基盤 | [ ] 未着手 | 新規 |
+| N01 | direct carrier同一性改修 | 旧Task 9までの基盤 | [x] 完了 | 新規 |
 | N02 | Identity / Reader / State | 既存通常型・Trait基盤 | [ ] 未着手 | 新規・独立 |
 | N03 | nominal constructor parameterとbound | N01 | [ ] 未着手 | 新規言語機能 |
 | N04 | parameterized TypeCtorTrait・MonadT契約 | N03 | [ ] 未着手 | 新規言語機能 |
@@ -98,7 +98,7 @@ dirtyなメインworktreeは変更せず、専用worktreeで文書だけを整�
 | 同 §§10–11 | 実装済み範囲と未移行family | JSON typed projectionとphase ownershipは実装済み。全phase producer移行は未完 | `docs/dev/diagnostics.md`。残るproducer/adapterは`diagnostics_cleanup_spec.md` §§6–8 |
 | 同 §§12–15 | 作業履歴と未実装契約 | Task 9 commits/testsを祖先確認。SafeBind・全heuristic撤去・doは未実装 | N06、`do_intrinsic_spec.md`、N07–N11 |
 | `type_constructor_signature_unification_task4_fallback_remediation_scope.md`の完了部分 | 実装済み | arity事前検査、canonical signature必須化、candidate rollback、RTA ambiguity tests | `docs/dev/Trait_system_spec.md` §§2.1, 3.2, 7、`docs/dev/diagnostics.md` |
-| 同 canonical Trait / constructor application残件 | 確定未実装 | unique-only short-name lookup、理由を捨てる`Option`、未解決`SelfApp`保持が現存 | `type_constructor_trait_extension_spec.md` CI-15/16を含むN01 |
+| 同 canonical Trait / constructor application残件 | 実装済み | Sigilのcanonical Trait identityを保持し、constructor projectionは`Deferred`/`Rejected`の理由を保持。実行可能な未解決`SelfApp`はScar境界で構造化診断として拒否 | `docs/dev/Trait_system_spec.md` §§0.5–0.7, 2–3, 7–8 |
 | 同 builtin / diagnostic残件 | 確定未実装 | qualified builtin allowlist合成とmessage heuristicが現存 | `diagnostics_cleanup_spec.md` §8.1・DC-14を含むN06 |
 | `type_constructor_signature_unification_implementation_plan.md` Task 1–9 | 完了履歴 | commits `b1805d75`, `6221dffd`, `d134c95a`, `256c4b79`, `65ba6172`, `25c53c4e`, `dfe4a2e1`, `c28d185c`, `f2c0affd`と各review fixがHEAD祖先 | 恒久契約は担当`/docs`、実装手順・検証ログはVCS |
 | 同 Task 10 | 確定未実装 | SafeBind旧制限とdiagnostic heuristicが現存 | `diagnostics_cleanup_spec.md` / N06 |
@@ -113,6 +113,10 @@ dirtyなメインworktreeは変更せず、専用worktreeで文書だけを整�
 別direct引数を独立化し、同じ `$F` / `Self` と明示契約による共有を維持する。RTAとreturn-only carrierの既存関係を切断しない。
 
 完了条件: `CI-01`–`CI-12`と`CI-15/16`。CI-13/14のdo確認はN11へ引き継ぐ。実装済み `/docs` とhelperのsignatureを新規則へ同期する。
+
+状態: 完了。別direct引数を独立化し、同じ`$F` / `Self`、return-only RTAの明示関係を維持した。
+canonical Trait identity、captured / phantom nominal arguments、構造化診断、probe / REPL rollbackを含む
+CI-01–CI-12・CI-15/16を実装とテストへ固定した。CI-13/14は予定どおりN11へ残す。
 
 ## 7. N02 — 通常Monadインスタンス
 

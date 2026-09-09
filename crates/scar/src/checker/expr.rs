@@ -43,11 +43,262 @@ pub(super) struct CandidateProbeCheckpoint {
     active_capabilities: Vec<CapabilityUse>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     constructor_witness_traits: HashMap<u32, String>,
-    constructor_family_witnesses: HashMap<u32, u32>,
     warnings: WarningBuffer,
 }
 
 impl Checker {
+    fn type_contains_constructor_application(ty: &Ty) -> bool {
+        match ty {
+            Ty::SelfApp(items) => Self::constructor_application_parts(items).is_some(),
+            Ty::List(inner) | Ty::Lazy(inner) => Self::type_contains_constructor_application(inner),
+            Ty::Tuple(items) => items
+                .iter()
+                .any(Self::type_contains_constructor_application),
+            Ty::Func(parameters, ret)
+            | Ty::BuiltinFunc {
+                params: parameters,
+                ret,
+                ..
+            }
+            | Ty::UserFunc {
+                params: parameters,
+                ret,
+                ..
+            } => {
+                parameters
+                    .iter()
+                    .any(Self::type_contains_constructor_application)
+                    || Self::type_contains_constructor_application(ret)
+            }
+            Ty::Facet(_, source, focus, update_source, update_focus) => [
+                source.as_ref(),
+                focus.as_ref(),
+                update_source.as_ref(),
+                update_focus.as_ref(),
+            ]
+            .into_iter()
+            .any(Self::type_contains_constructor_application),
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                nominal
+                    .arguments
+                    .iter()
+                    .any(Self::type_contains_constructor_application)
+                    || nominal
+                        .iter()
+                        .any(|(_, field)| Self::type_contains_constructor_application(field))
+            }
+            Ty::Enum(_, arguments) => arguments
+                .iter()
+                .any(Self::type_contains_constructor_application),
+            Ty::Result(ok, error) => {
+                Self::type_contains_constructor_application(ok)
+                    || Self::type_contains_constructor_application(error)
+            }
+            Ty::Var(_)
+            | Ty::Hole
+            | Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Error
+            | Ty::Pid(_) => false,
+        }
+    }
+
+    fn unresolved_constructor_application_in_type(
+        &self,
+        ty: &Ty,
+    ) -> Option<ConstructorApplicationOutcome> {
+        match ty {
+            Ty::SelfApp(items) => {
+                let Some((source, slots)) = Self::constructor_application_parts(items) else {
+                    return Some(ConstructorApplicationOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::UnsupportedConstructor],
+                    });
+                };
+                let resolved_witness = self.resolve_ty(source);
+                let resolved_slots = slots
+                    .iter()
+                    .map(|slot| self.resolve_ty(slot))
+                    .collect::<Vec<_>>();
+                match self.apply_constructor_application(source, &resolved_witness, &resolved_slots)
+                {
+                    ConstructorApplicationOutcome::Applied(applied) => {
+                        self.unresolved_constructor_application_in_type(&applied)
+                    }
+                    outcome => Some(outcome),
+                }
+            }
+            Ty::List(inner) | Ty::Lazy(inner) => {
+                self.unresolved_constructor_application_in_type(inner)
+            }
+            Ty::Tuple(items) => items
+                .iter()
+                .find_map(|item| self.unresolved_constructor_application_in_type(item)),
+            Ty::Func(parameters, ret) => parameters
+                .iter()
+                .find_map(|parameter| self.unresolved_constructor_application_in_type(parameter))
+                .or_else(|| self.unresolved_constructor_application_in_type(ret)),
+            // User and builtin callable signatures are declaration schemes. Their
+            // constructor applications are instantiated at each executable call
+            // site, so they are not unresolved runtime values by themselves.
+            Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => None,
+            Ty::Facet(_, source, focus, update_source, update_focus) => [
+                source.as_ref(),
+                focus.as_ref(),
+                update_source.as_ref(),
+                update_focus.as_ref(),
+            ]
+            .into_iter()
+            .find_map(|part| self.unresolved_constructor_application_in_type(part)),
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => nominal
+                .arguments
+                .iter()
+                .find_map(|argument| self.unresolved_constructor_application_in_type(argument))
+                .or_else(|| {
+                    nominal.iter().find_map(|(_, field)| {
+                        self.unresolved_constructor_application_in_type(field)
+                    })
+                }),
+            Ty::Enum(_, arguments) => arguments
+                .iter()
+                .find_map(|argument| self.unresolved_constructor_application_in_type(argument)),
+            Ty::Result(ok, error) => self
+                .unresolved_constructor_application_in_type(ok)
+                .or_else(|| self.unresolved_constructor_application_in_type(error)),
+            Ty::Var(_)
+            | Ty::Hole
+            | Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Error
+            | Ty::Pid(_) => None,
+        }
+    }
+
+    pub(super) fn unresolved_executable_constructor_application(
+        &self,
+        node: &TypedNode,
+    ) -> Option<(ConstructorApplicationOutcome, Span)> {
+        let declaration_scheme_has_constructor_application =
+            match &node.node {
+                TypedInner::TraitDef(..)
+                | TypedInner::TraitImplDef(..)
+                | TypedInner::PendingFacetPath(_)
+                | TypedInner::StructDef(..)
+                | TypedInner::RecordDef(..)
+                | TypedInner::EnumDef(..) => return None,
+                TypedInner::Def(_, _, return_arguments, parameters, ret, _, _, _)
+                    if return_arguments.iter().any(|argument| {
+                        Self::type_contains_constructor_application(&argument.ty)
+                    }) || parameters.iter().any(|parameter| {
+                        Self::type_contains_constructor_application(&parameter.ty)
+                    }) || Self::type_contains_constructor_application(ret) =>
+                {
+                    true
+                }
+                _ => false,
+            };
+        // A generic declaration scheme may retain abstract constructor
+        // applications, but its specialized executable body may not.  Skip
+        // only the declaration node's own type and continue into the body.
+        if !declaration_scheme_has_constructor_application {
+            if let Some(outcome) = self.unresolved_constructor_application_in_type(&node.ty) {
+                return Some((outcome, node.span.clone()));
+            }
+        }
+        let recurse = |child: &TypedNode| self.unresolved_executable_constructor_application(child);
+        match &node.node {
+            TypedInner::TraitCall {
+                receiver_ty, args, ..
+            } => self
+                .unresolved_constructor_application_in_type(receiver_ty)
+                .map(|outcome| (outcome, node.span.clone()))
+                .or_else(|| args.iter().find_map(recurse)),
+            TypedInner::App(function, arguments)
+            | TypedInner::InjectCall(function, arguments)
+            | TypedInner::Capture(function, arguments) => {
+                recurse(function).or_else(|| arguments.iter().find_map(recurse))
+            }
+            TypedInner::Block(items)
+            | TypedInner::TupleLiteral(items)
+            | TypedInner::ListLiteral(items)
+            | TypedInner::ConstructorCall(_, items)
+            | TypedInner::StructLit(_, items) => items.iter().find_map(recurse),
+            TypedInner::HashMapLiteral(entries) => entries
+                .iter()
+                .find_map(|(key, value)| recurse(key).or_else(|| recurse(value))),
+            TypedInner::Bind(_, rhs)
+            | TypedInner::SafeBind(_, rhs)
+            | TypedInner::Semi(rhs)
+            | TypedInner::FieldAccess(rhs, _)
+            | TypedInner::EagerBoundary(rhs) => recurse(rhs),
+            TypedInner::BinOp(_, left, right)
+            | TypedInner::Pipe(left, right)
+            | TypedInner::Compose(_, left, right)
+            | TypedInner::ListCons(left, right)
+            | TypedInner::Assert(left, right)
+            | TypedInner::MapErr(left, right)
+            | TypedInner::Cause(left, right) => recurse(left).or_else(|| recurse(right)),
+            TypedInner::If(condition, then_branch, else_branch) => recurse(condition)
+                .or_else(|| recurse(then_branch))
+                .or_else(|| else_branch.as_deref().and_then(recurse)),
+            TypedInner::Ensure(value, predicate, error) => recurse(value)
+                .or_else(|| recurse(predicate))
+                .or_else(|| recurse(error)),
+            TypedInner::RecoverKind(value, marker, handler) => recurse(value)
+                .or_else(|| recurse(marker))
+                .or_else(|| recurse(handler)),
+            TypedInner::Match(scrutinee, arms) => recurse(scrutinee).or_else(|| {
+                arms.iter().find_map(|arm| {
+                    arm.guard
+                        .as_ref()
+                        .and_then(recurse)
+                        .or_else(|| recurse(&arm.body))
+                })
+            }),
+            TypedInner::InterpolatedStr(parts) => parts.iter().find_map(|part| match part {
+                TypedInterpolatedPart::Text(_) => None,
+                TypedInterpolatedPart::Expr(expr) => recurse(expr),
+            }),
+            TypedInner::Dbg(arguments) => arguments
+                .iter()
+                .find_map(|argument| recurse(&argument.expr)),
+            TypedInner::DeferrorDef(_, _, _, _, body)
+            | TypedInner::Def(_, _, _, _, _, _, body, _)
+            | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
+            | TypedInner::Closure(_, _, body) => recurse(body),
+            TypedInner::SupervisorSpawn { init, .. } => recurse(init),
+            TypedInner::SupervisorAdopt { pid, .. } => recurse(pid),
+            TypedInner::SupervisorWorkers { init, strategy, .. } => {
+                recurse(init).or_else(|| recurse(strategy))
+            }
+            TypedInner::FacetView { source, .. } => recurse(source),
+            TypedInner::FacetSet { source, value, .. } => {
+                recurse(source).or_else(|| recurse(value))
+            }
+            TypedInner::FacetOver {
+                source, update_fun, ..
+            } => recurse(source).or_else(|| recurse(update_fun)),
+            TypedInner::Lit(_)
+            | TypedInner::Var(_)
+            | TypedInner::ListNil
+            | TypedInner::ProcessContextHandler { .. }
+            | TypedInner::SupervisorStatus { .. }
+            | TypedInner::FacetPath(_)
+            | TypedInner::PendingFacetPath(_)
+            | TypedInner::EnumDef(..)
+            | TypedInner::TraitDef(..)
+            | TypedInner::TraitImplDef(..)
+            | TypedInner::BuiltinExtractorDecl(..)
+            | TypedInner::StructDef(..)
+            | TypedInner::RecordDef(..) => None,
+        }
+    }
+
     pub(super) fn candidate_probe_checkpoint(&self) -> CandidateProbeCheckpoint {
         #[cfg(test)]
         self.candidate_probe_checkpoint_count
@@ -60,7 +311,6 @@ impl Checker {
             active_capabilities: self.active_capabilities.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
-            constructor_family_witnesses: self.constructor_family_witnesses.clone(),
             warnings: self.warnings.clone(),
         }
     }
@@ -73,7 +323,6 @@ impl Checker {
         self.active_capabilities = checkpoint.active_capabilities;
         self.constructor_capabilities = checkpoint.constructor_capabilities;
         self.constructor_witness_traits = checkpoint.constructor_witness_traits;
-        self.constructor_family_witnesses = checkpoint.constructor_family_witnesses;
         self.warnings = checkpoint.warnings;
     }
 
@@ -213,7 +462,7 @@ impl Checker {
     fn check_constructor_capability(
         &self,
         required_trait: &str,
-        _method_name: &str,
+        method_name: &str,
         arg: &TypedNode,
     ) -> Result<(), TypeError> {
         let actual = self.constructor_capability_for_node(arg);
@@ -222,6 +471,15 @@ impl Checker {
         };
         if required_info.constructor_slots.is_empty() {
             return Ok(());
+        }
+        if let Some(outcome) = self.constructor_provenance_application_outcome(&actual) {
+            self.require_constructor_projection_type(
+                outcome,
+                required_trait,
+                &arg.ty,
+                &arg.span,
+                method_name,
+            )?;
         }
         if self.constructor_provenance_allows(&actual, required_trait, &arg.ty) {
             return Ok(());
@@ -251,10 +509,12 @@ impl Checker {
         let Some((_, abstract_slots)) = Self::constructor_application_parts(items) else {
             return false;
         };
-        let Some(concrete_slots) = self.constructor_application_slots_for_trait(trait_key, &actual)
-        else {
-            return false;
-        };
+        let concrete_slots =
+            match self.constructor_application_slots_for_trait(trait_key, &actual) {
+                ConstructorSlotsOutcome::Projected(slots) => slots,
+                ConstructorSlotsOutcome::Deferred { .. }
+                | ConstructorSlotsOutcome::Rejected { .. } => return false,
+            };
         if abstract_slots.len() != concrete_slots.len() {
             return false;
         }
@@ -271,13 +531,22 @@ impl Checker {
     fn check_expected_constructor_capability(
         &self,
         expected: &Ty,
-        _callee_label: &str,
+        callee_label: &str,
         arg: &TypedNode,
     ) -> Result<(), TypeError> {
         let Some(required_trait) = self.constructor_capability_for_type(expected) else {
             return Ok(());
         };
         let actual = self.constructor_capability_for_node(arg);
+        if let Some(outcome) = self.constructor_provenance_application_outcome(&actual) {
+            self.require_constructor_projection_type(
+                outcome,
+                &required_trait,
+                &arg.ty,
+                &arg.span,
+                callee_label,
+            )?;
+        }
         if self.constructor_provenance_allows(&actual, &required_trait, &arg.ty) {
             return Ok(());
         }
@@ -1114,7 +1383,10 @@ impl Checker {
                 self.check_explicit_return_type_argument_apply(
                     span,
                     target,
-                    &args.iter().map(|argument| argument.ty.clone()).collect::<Vec<_>>(),
+                    &args
+                        .iter()
+                        .map(|argument| argument.ty.syntax.clone())
+                        .collect::<Vec<_>>(),
                 )
             }
 
@@ -1841,51 +2113,55 @@ impl Checker {
                 if explicit.is_none() {
                     if let Ty::SelfApp(items) = &argument.expected {
                         if let Some((witness, _)) = Self::constructor_application_parts(items) {
+                            let shared_witness_argument = match witness {
+                                Ty::Var(witness_var) => constraints
+                                    .value_arguments
+                                    .iter()
+                                    .take(argument.ordinal as usize)
+                                    .find(|previous| {
+                                        let Ty::SelfApp(previous_items) = &previous.expected else {
+                                            return false;
+                                        };
+                                        matches!(
+                                            Self::constructor_application_parts(previous_items),
+                                            Some((Ty::Var(previous_var), _)) if previous_var == witness_var
+                                        )
+                                    }),
+                                _ => None,
+                            };
                             let family_trait = self
                                 .constructor_capability_for_type(&argument.expected)
                                 .expect(
                                     "constructor occurrence retains canonical capability metadata",
                                 );
-                            let expected_carrier = self.resolve_ty(witness);
+                            let expected_carrier = shared_witness_argument
+                                .map(|previous| self.resolve_ty(&previous.actual))
+                                .unwrap_or_else(|| self.resolve_ty(witness));
                             let actual_carrier = self.resolve_ty(&argument.actual);
-                            let previous = constraints
-                                .value_arguments
-                                .iter()
-                                .take(argument.ordinal as usize)
-                                .find(|previous| {
-                                    self.constructor_capability_for_type(&previous.expected)
-                                        .is_some_and(|capability| {
-                                            self.constructor_family_key(&capability)
-                                                == self.constructor_family_key(&family_trait)
-                                        })
-                                });
-                            let expected_identity = previous
-                                .and_then(|previous| {
-                                    let capability =
-                                        self.constructor_capability_for_type(&previous.expected)?;
-                                    self.canonical_constructor_carrier(
-                                        &capability,
-                                        &self.resolve_ty(&previous.actual),
-                                    )
-                                })
-                                .or_else(|| {
-                                    self.canonical_constructor_carrier(
-                                        &family_trait,
-                                        &expected_carrier,
-                                    )
-                                });
+                            let expected_identity = self
+                                .canonical_constructor_carrier(&family_trait, &expected_carrier);
                             let actual_identity =
                                 self.canonical_constructor_carrier(&family_trait, &actual_carrier);
-                            let reason = if actual_identity.is_some()
-                                && (expected_identity.is_none()
-                                    || expected_identity == actual_identity)
-                            {
-                                TypeDiagnosticReason::TypePayloadMismatch
-                            } else {
-                                TypeDiagnosticReason::TypeConstructorFamilyMismatch
+                            let reason = match (&expected_identity, &actual_identity) {
+                                (
+                                    ConstructorCarrierOutcome::Projected(expected),
+                                    ConstructorCarrierOutcome::Projected(actual),
+                                ) if expected == actual => {
+                                    TypeDiagnosticReason::TypePayloadMismatch
+                                }
+                                (
+                                    ConstructorCarrierOutcome::Deferred { .. }
+                                    | ConstructorCarrierOutcome::Rejected { .. },
+                                    ConstructorCarrierOutcome::Projected(_),
+                                ) => TypeDiagnosticReason::TypePayloadMismatch,
+                                _ => TypeDiagnosticReason::TypeConstructorFamilyMismatch,
                             };
-                            let left_ty = previous.map_or(&argument.expected, |arg| &arg.actual);
-                            let left_span = previous.map_or(span, |arg| &arg.span);
+                            let left_ty = shared_witness_argument
+                                .map(|previous| &previous.actual)
+                                .unwrap_or(&argument.expected);
+                            let left_span = shared_witness_argument
+                                .map(|previous| &previous.span)
+                                .unwrap_or(span);
                             return super::signatures::SolveState::Failed(
                                 TypeError::from_structured(StructuredDiagnostic {
                                     reason,
@@ -2067,7 +2343,6 @@ impl Checker {
         constraints: &[super::signatures::TypeConstraint],
     ) -> Option<u32> {
         let explicit_slot_for_var = |var| {
-            let family_root = self.constructor_family_witness_root(var);
             signature
                 .return_type_arguments
                 .iter()
@@ -2077,11 +2352,7 @@ impl Checker {
                     let mut vars = Vec::new();
                     Self::collect_ty_vars(&slot.ty, &mut vars);
                     vars.into_iter()
-                        .any(|slot_var| {
-                            slot_var == var
-                                || family_root.is_some()
-                                    && self.constructor_family_witness_root(slot_var) == family_root
-                        })
+                        .any(|slot_var| slot_var == var)
                         .then_some(slot.ordinal)
                 })
         };
@@ -2129,9 +2400,18 @@ impl Checker {
                     .or_else(|| find(checker, left_ret, right_ret, explicit_slot_for_var)),
                 (Ty::Struct(_, left), Ty::Struct(_, right))
                 | (Ty::Record(_, left), Ty::Record(_, right)) => {
-                    left.iter().zip(right).find_map(|((_, left), (_, right))| {
-                        find(checker, left, right, explicit_slot_for_var)
-                    })
+                    if !left.arguments.is_empty() || !right.arguments.is_empty() {
+                        left.arguments
+                            .iter()
+                            .zip(&right.arguments)
+                            .find_map(|(left, right)| {
+                                find(checker, left, right, explicit_slot_for_var)
+                            })
+                    } else {
+                        left.iter().zip(right).find_map(|((_, left), (_, right))| {
+                            find(checker, left, right, explicit_slot_for_var)
+                        })
+                    }
                 }
                 _ => None,
             }
@@ -3523,9 +3803,11 @@ impl Checker {
 
     fn explicit_type_args(func: &Resolved) -> Option<Vec<AstTy>> {
         match func {
-            Resolved::ReturnTypeArgumentApply(_, _, args) => {
-                Some(args.iter().map(|argument| argument.ty.clone()).collect())
-            }
+            Resolved::ReturnTypeArgumentApply(_, _, args) => Some(
+                args.iter()
+                    .map(|argument| argument.ty.syntax.clone())
+                    .collect(),
+            ),
             _ => None,
         }
     }
@@ -3650,19 +3932,60 @@ impl Checker {
         self.constructor_capability_allows(&source_trait, trait_name, &mut HashSet::new())
     }
 
-    fn constructor_slot_type_for(&mut self, trait_name: &str, container_ty: &Ty) -> Option<Ty> {
+    fn constructor_slot_type_for(
+        &mut self,
+        trait_name: &str,
+        container_ty: &Ty,
+    ) -> ConstructorApplicationOutcome {
         if let Ty::SelfApp(items) = self.resolve_ty(container_ty) {
-            if let Some((witness, [slot])) = Self::constructor_application_parts(&items) {
-                return self
-                    .constructor_witness_supports_trait(witness, trait_name)
-                    .then(|| slot.clone());
+            return match Self::constructor_application_parts(&items) {
+                Some((witness, [slot]))
+                    if self.constructor_witness_supports_trait(witness, trait_name) =>
+                {
+                    ConstructorApplicationOutcome::Applied(slot.clone())
+                }
+                Some((_, slots)) if slots.len() != 1 => ConstructorApplicationOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                        expected: 1,
+                        actual: slots.len(),
+                    }],
+                },
+                Some(_) => ConstructorApplicationOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::NoApplicableImplementation],
+                },
+                None => ConstructorApplicationOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::UnsupportedConstructor],
+                },
+            };
+        }
+        match self.constructor_projection(trait_name, container_ty) {
+            ConstructorProjectionOutcome::Applicable { info, mapping } => {
+                let [slot] = info.constructor_slot_vars.as_slice() else {
+                    return ConstructorApplicationOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                            expected: 1,
+                            actual: info.constructor_slot_vars.len(),
+                        }],
+                    };
+                };
+                match mapping.get(slot).cloned() {
+                    Some(slot) => ConstructorApplicationOutcome::Applied(slot),
+                    None => ConstructorApplicationOutcome::Rejected {
+                        failures: vec![
+                            ConstructorProjectionFailure::MissingConstructorSlotMapping {
+                                variable: *slot,
+                            },
+                        ],
+                    },
+                }
+            }
+            ConstructorProjectionOutcome::Deferred { waiting_on } => {
+                ConstructorApplicationOutcome::Deferred { waiting_on }
+            }
+            ConstructorProjectionOutcome::Rejected { failures } => {
+                ConstructorApplicationOutcome::Rejected { failures }
             }
         }
-        let (info, mapping) = self.constructor_projection(trait_name, container_ty)?;
-        let [slot] = info.constructor_slot_vars.as_slice() else {
-            return None;
-        };
-        mapping.get(slot).cloned()
     }
 
     fn constructor_context_type_for(
@@ -3670,20 +3993,91 @@ impl Checker {
         trait_name: &str,
         container_ty: &Ty,
         slot_ty: &Ty,
-    ) -> Option<Ty> {
+    ) -> ConstructorApplicationOutcome {
         if let Ty::SelfApp(items) = self.resolve_ty(container_ty) {
-            if let Some((witness, [_])) = Self::constructor_application_parts(&items) {
-                return self
-                    .constructor_witness_supports_trait(witness, trait_name)
-                    .then(|| Ty::SelfApp(vec![Ty::Hole, witness.clone(), slot_ty.clone()]));
+            return match Self::constructor_application_parts(&items) {
+                Some((witness, [_]))
+                    if self.constructor_witness_supports_trait(witness, trait_name) =>
+                {
+                    ConstructorApplicationOutcome::Applied(Ty::SelfApp(vec![
+                        Ty::Hole,
+                        witness.clone(),
+                        slot_ty.clone(),
+                    ]))
+                }
+                Some((_, slots)) if slots.len() != 1 => ConstructorApplicationOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                        expected: 1,
+                        actual: slots.len(),
+                    }],
+                },
+                Some(_) => ConstructorApplicationOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::NoApplicableImplementation],
+                },
+                None => ConstructorApplicationOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::UnsupportedConstructor],
+                },
+            };
+        }
+        match self.constructor_projection(trait_name, container_ty) {
+            ConstructorProjectionOutcome::Applicable { info, mut mapping } => {
+                let [slot] = info.constructor_slot_vars.as_slice() else {
+                    return ConstructorApplicationOutcome::Rejected {
+                        failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                            expected: 1,
+                            actual: info.constructor_slot_vars.len(),
+                        }],
+                    };
+                };
+                mapping.insert(*slot, slot_ty.clone());
+                ConstructorApplicationOutcome::Applied(
+                    self.resolve_ty(&self.substitute_ty_with_mapping(&info.target_ty, &mapping)),
+                )
+            }
+            ConstructorProjectionOutcome::Deferred { waiting_on } => {
+                ConstructorApplicationOutcome::Deferred { waiting_on }
+            }
+            ConstructorProjectionOutcome::Rejected { failures } => {
+                ConstructorApplicationOutcome::Rejected { failures }
             }
         }
-        let (info, mut mapping) = self.constructor_projection(trait_name, container_ty)?;
-        let [slot] = info.constructor_slot_vars.as_slice() else {
-            return None;
-        };
-        mapping.insert(*slot, slot_ty.clone());
-        Some(self.resolve_ty(&self.substitute_ty_with_mapping(&info.target_ty, &mapping)))
+    }
+
+    fn require_constructor_projection_type(
+        &self,
+        outcome: ConstructorApplicationOutcome,
+        trait_name: &str,
+        subject: &Ty,
+        span: &Span,
+        operation: &str,
+    ) -> Result<Ty, TypeError> {
+        match outcome {
+            ConstructorApplicationOutcome::Applied(ty) => Ok(ty),
+            ConstructorApplicationOutcome::Deferred { waiting_on } => {
+                let mut error = self.ambiguous_constructor_result(trait_name, operation, span);
+                error.hint = Some(format!(
+                    "Resolve all {} constructor input(s) before using this operation.",
+                    waiting_on.len()
+                ));
+                Err(error)
+            }
+            ConstructorApplicationOutcome::Rejected { failures }
+                if Self::constructor_projection_failures_are_metadata(&failures) =>
+            {
+                Err(signatures::constructor_signature_metadata_error(
+                    operation,
+                    span,
+                    Self::constructor_projection_failure_detail(&failures),
+                ))
+            }
+            ConstructorApplicationOutcome::Rejected { .. } => Err(self.trait_failure(
+                TypeDiagnosticReason::NoApplicableTraitImplementation,
+                trait_name,
+                subject,
+                span,
+                DiagnosticOrigin::TraitCall,
+            )),
+        }
     }
 
     /// Enumerate the concrete constructor contexts which can carry `slot_ty`.
@@ -3922,8 +4316,10 @@ impl Checker {
                     })?;
                 if !self.trait_matches_short_name(trait_name, "Default") {
                     if let Some(arguments) = explicit_type_args {
-                        if let Some((implementation, mapping)) =
-                            self.constructor_projection(trait_name, expected)
+                        if let ConstructorProjectionOutcome::Applicable {
+                            info: implementation,
+                            mapping,
+                        } = self.constructor_projection(trait_name, expected)
                         {
                             let expanded = self.expand_trait_self_apps(
                                 probe_ret.clone(),
@@ -4237,17 +4633,30 @@ impl Checker {
                     }
                     (Ty::SelfApp(target), slots, HashMap::new())
                 } else {
-                    let (implementation, mut captured) = self
-                        .constructor_projection(trait_name, &receiver_ty)
-                        .ok_or_else(|| {
-                            self.trait_dispatch_failure(
-                                TypeDiagnosticReason::NoApplicableTraitImplementation,
-                                trait_name,
-                                method_name,
-                                Some(&receiver_ty),
-                                receiver_span,
-                            )
-                        })?;
+                    let (implementation, mut captured) =
+                        match self.constructor_projection(trait_name, &receiver_ty) {
+                            ConstructorProjectionOutcome::Applicable { info, mapping } => {
+                                (info, mapping)
+                            }
+                            ConstructorProjectionOutcome::Deferred { .. } => {
+                                return Err(self.trait_dispatch_failure(
+                                    TypeDiagnosticReason::UnresolvedTraitMethodInstantiation,
+                                    trait_name,
+                                    method_name,
+                                    Some(&receiver_ty),
+                                    receiver_span,
+                                ));
+                            }
+                            ConstructorProjectionOutcome::Rejected { .. } => {
+                                return Err(self.trait_dispatch_failure(
+                                    TypeDiagnosticReason::NoApplicableTraitImplementation,
+                                    trait_name,
+                                    method_name,
+                                    Some(&receiver_ty),
+                                    receiver_span,
+                                ));
+                            }
+                        };
                     for slot in &implementation.constructor_slot_vars {
                         captured.remove(slot);
                     }
@@ -4807,8 +5216,10 @@ impl Checker {
             || self
                 .trait_key_by_short_name("Functor")
                 .is_some_and(|trait_name| {
-                    self.constructor_projection(&trait_name, output_ty)
-                        .is_some()
+                    matches!(
+                        self.constructor_projection(&trait_name, output_ty),
+                        ConstructorProjectionOutcome::Applicable { .. }
+                    )
                 });
         if contextual {
             let mut error = self.callable_shape_error(
@@ -5316,14 +5727,24 @@ impl Checker {
         }
         let typed_value = self.check_node(value)?;
         let value_ty = self.resolve_ty(&typed_value.ty);
-        let mut carrier_evidence =
-            expected.and_then(|ty| self.constructor_context_type_for(trait_name, ty, &value_ty));
+        let mut carrier_evidence = expected.and_then(|ty| {
+            match self.constructor_context_type_for(trait_name, ty, &value_ty) {
+                ConstructorApplicationOutcome::Applied(context) => Some(context),
+                ConstructorApplicationOutcome::Deferred { .. }
+                | ConstructorApplicationOutcome::Rejected { .. } => None,
+            }
+        });
         if carrier_evidence.is_none() && Self::explicit_type_args(helper).is_some() {
             let ResolvedRecordLitArg::Positional(receiver) = &args[receiver_index] else {
                 unreachable!()
             };
             let typed = self.check_node(receiver)?;
-            carrier_evidence = self.constructor_context_type_for(trait_name, &typed.ty, &value_ty);
+            carrier_evidence =
+                match self.constructor_context_type_for(trait_name, &typed.ty, &value_ty) {
+                    ConstructorApplicationOutcome::Applied(context) => Some(context),
+                    ConstructorApplicationOutcome::Deferred { .. }
+                    | ConstructorApplicationOutcome::Rejected { .. } => None,
+                };
         }
         if carrier_evidence.is_none() {
             for (index, (argument, parameter)) in args.iter().zip(declared_params).enumerate() {
@@ -5352,7 +5773,11 @@ impl Checker {
                 };
                 if let Some(observed) = observed {
                     carrier_evidence =
-                        self.constructor_context_type_for(trait_name, &observed, &value_ty);
+                        match self.constructor_context_type_for(trait_name, &observed, &value_ty) {
+                            ConstructorApplicationOutcome::Applied(context) => Some(context),
+                            ConstructorApplicationOutcome::Deferred { .. }
+                            | ConstructorApplicationOutcome::Rejected { .. } => None,
+                        };
                 }
                 self.rollback_candidate_probe(checkpoint);
                 if carrier_evidence.is_some() {
@@ -5463,7 +5888,11 @@ impl Checker {
         let typed_left = if let Some((input, output)) = &expected_parts {
             let output_hint = if let Some(capability) = capability {
                 let payload = self.env.fresh_tyvar();
-                self.constructor_context_type_for(capability, output, &payload)
+                match self.constructor_context_type_for(capability, output, &payload) {
+                    ConstructorApplicationOutcome::Applied(context) => Some(context),
+                    ConstructorApplicationOutcome::Deferred { .. }
+                    | ConstructorApplicationOutcome::Rejected { .. } => None,
+                }
             } else {
                 None
             };
@@ -5476,44 +5905,50 @@ impl Checker {
         let (left_input, left_output) =
             self.unary_function_parts(&typed_left.ty, label, &typed_left.span)?;
         let input = if let Some(capability) = capability {
-            self.constructor_slot_type_for(capability, &left_output)
-                .ok_or_else(|| {
-                    let mut error = self.trait_failure(
-                        TypeDiagnosticReason::NoApplicableTraitImplementation,
-                        capability,
-                        &left_output,
-                        &typed_left.span,
-                        DiagnosticOrigin::TraitCall,
-                    );
-                    if let Some(diagnostic) = &mut error.structured {
-                        diagnostic.map_source_facts(|fact| {
-                            if fact.span == typed_left.span {
-                                fact.ty = Some(self.diagnostic_ty_name(&typed_left.ty));
-                                fact.role = SourceRole::LeftValue;
-                            }
-                        });
-                    }
-                    error
-                })?
+            let outcome = self.constructor_slot_type_for(capability, &left_output);
+            self.require_constructor_projection_type(
+                outcome,
+                capability,
+                &left_output,
+                &typed_left.span,
+                label,
+            )
+            .map_err(|mut error| {
+                if let Some(diagnostic) = &mut error.structured {
+                    diagnostic.map_source_facts(|fact| {
+                        if fact.span == typed_left.span {
+                            fact.ty = Some(self.diagnostic_ty_name(&typed_left.ty));
+                            fact.role = SourceRole::LeftValue;
+                        }
+                    });
+                }
+                error
+            })?
         } else {
             left_output.clone()
         };
         let result_payload = self.env.fresh_tyvar();
         let result_context = if matches!(kind, OperatorTraitOp::KleisliCompose) {
-            Some(
-                self.constructor_context_type_for("Monad", &left_output, &result_payload)
-                    .ok_or_else(|| {
-                        TypeError::new("Monad result projection is unavailable", span.clone())
-                    })?,
-            )
+            let outcome = self.constructor_context_type_for("Monad", &left_output, &result_payload);
+            Some(self.require_constructor_projection_type(
+                outcome,
+                "Monad",
+                &left_output,
+                span,
+                label,
+            )?)
         } else {
             None
         };
         let output_hint = match kind {
             OperatorTraitOp::Compose => expected_output.clone(),
-            OperatorTraitOp::LiftCompose => expected_output
-                .as_ref()
-                .and_then(|ty| self.constructor_slot_type_for("Functor", ty)),
+            OperatorTraitOp::LiftCompose => expected_output.as_ref().and_then(|ty| {
+                match self.constructor_slot_type_for("Functor", ty) {
+                    ConstructorApplicationOutcome::Applied(slot) => Some(slot),
+                    ConstructorApplicationOutcome::Deferred { .. }
+                    | ConstructorApplicationOutcome::Rejected { .. } => None,
+                }
+            }),
             OperatorTraitOp::KleisliCompose => {
                 expected_output.clone().or_else(|| result_context.clone())
             }
@@ -5530,11 +5965,15 @@ impl Checker {
                 if expected_output.is_none() {
                     self.ensure_plain_map_output(&right_output, label, &typed_right)?;
                 }
-                let mapped = self
-                    .constructor_context_type_for("Functor", &left_output, &right_output)
-                    .ok_or_else(|| {
-                        TypeError::new("Functor result projection is unavailable", span.clone())
-                    })?;
+                let outcome =
+                    self.constructor_context_type_for("Functor", &left_output, &right_output);
+                let mapped = self.require_constructor_projection_type(
+                    outcome,
+                    "Functor",
+                    &left_output,
+                    span,
+                    label,
+                )?;
                 vec![left_input, input, right_output, mapped]
             }
             OperatorTraitOp::KleisliCompose => vec![
@@ -6888,7 +7327,15 @@ impl Checker {
                 self.ensure_named_facet_rebuild_is_unique(
                     &name,
                     index,
+                    &fields.arguments,
                     &field_ty,
+                    &rebuilt_field,
+                    span,
+                )?;
+                fields.arguments = self.rebuild_named_facet_arguments(
+                    &name,
+                    index,
+                    &fields.arguments,
                     &rebuilt_field,
                     span,
                 )?;
@@ -6910,7 +7357,15 @@ impl Checker {
                 self.ensure_named_facet_rebuild_is_unique(
                     &name,
                     index,
+                    &fields.arguments,
                     &field_ty,
+                    &rebuilt_field,
+                    span,
+                )?;
+                fields.arguments = self.rebuild_named_facet_arguments(
+                    &name,
+                    index,
+                    &fields.arguments,
                     &rebuilt_field,
                     span,
                 )?;
@@ -7054,9 +7509,10 @@ impl Checker {
                 .iter()
                 .map(|arg| self.count_tyvar_occurrences(arg, needle))
                 .sum(),
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => nominal
+                .arguments
                 .iter()
-                .map(|(_, field)| self.count_tyvar_occurrences(field, needle))
+                .map(|argument| self.count_tyvar_occurrences(argument, needle))
                 .sum(),
             Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
                 params
@@ -7134,14 +7590,13 @@ impl Checker {
                 Ty::Record(template_name, template_fields),
                 Ty::Record(replacement_name, replacement_fields),
             ) if template_name == replacement_name
-                && template_fields.len() == replacement_fields.len() =>
+                && template_fields.arguments.len() == replacement_fields.arguments.len() =>
             {
-                for ((template_name, template), (replacement_name, replacement)) in
-                    template_fields.iter().zip(replacement_fields)
+                for (template, replacement) in template_fields
+                    .arguments
+                    .iter()
+                    .zip(&replacement_fields.arguments)
                 {
-                    if template_name != replacement_name {
-                        return self.facet_rebuild_not_generic_error(span);
-                    }
                     self.collect_facet_rebuild_tyvar_replacements(
                         template,
                         replacement,
@@ -7170,6 +7625,70 @@ impl Checker {
             }
             _ => self.facet_rebuild_not_generic_error(span),
         }
+    }
+
+    fn rebuild_named_facet_arguments(
+        &self,
+        type_name: &str,
+        field_index: usize,
+        arguments: &[Ty],
+        rebuilt_field: &Ty,
+        span: &Span,
+    ) -> Result<Vec<Ty>, TypeError> {
+        let Some(def) = self.env.lookup_type_def(type_name) else {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Facet cannot derive a rebuilt type for {}",
+                    Self::surface_name(type_name)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        if def.type_param_vars.is_empty() {
+            return Ok(arguments.to_vec());
+        }
+        if arguments.len() != def.type_param_vars.len() {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Facet found inconsistent generic metadata for {}",
+                    Self::surface_name(type_name)
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "The nominal type argument list must match its declaration parameters.".into(),
+                ),
+            });
+        }
+        let Some((_, field_template)) = def.fields.get(field_index) else {
+            return Err(TypeError {
+                structured: None,
+                message: "Facet field path is inconsistent with its source type".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        let type_param_vars = def.type_param_vars.clone();
+        let field_template = field_template.clone();
+        let mut replacements = HashMap::new();
+        self.collect_facet_rebuild_tyvar_replacements(
+            &field_template,
+            rebuilt_field,
+            &mut replacements,
+            span,
+        )?;
+        Ok(type_param_vars
+            .iter()
+            .zip(arguments)
+            .map(|(variable, argument)| {
+                replacements
+                    .get(variable)
+                    .cloned()
+                    .unwrap_or_else(|| argument.clone())
+            })
+            .collect())
     }
 
     fn facet_rebuild_not_generic_error(&self, span: &Span) -> Result<(), TypeError> {
@@ -7292,27 +7811,11 @@ impl Checker {
             ),
             Ty::Struct(name, fields) => Ty::Struct(
                 name.clone(),
-                fields
-                    .iter()
-                    .map(|(field, ty)| {
-                        (
-                            field.clone(),
-                            self.replace_facet_rebuild_tyvars(ty, replacements),
-                        )
-                    })
-                    .collect(),
+                fields.map_types(|ty| self.replace_facet_rebuild_tyvars(ty, replacements)),
             ),
             Ty::Record(name, fields) => Ty::Record(
                 name.clone(),
-                fields
-                    .iter()
-                    .map(|(field, ty)| {
-                        (
-                            field.clone(),
-                            self.replace_facet_rebuild_tyvars(ty, replacements),
-                        )
-                    })
-                    .collect(),
+                fields.map_types(|ty| self.replace_facet_rebuild_tyvars(ty, replacements)),
             ),
             Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
                 name: name.clone(),
@@ -7349,6 +7852,7 @@ impl Checker {
         &self,
         type_name: &str,
         field_index: usize,
+        arguments: &[Ty],
         before: &Ty,
         after: &Ty,
         span: &Span,
@@ -7373,8 +7877,45 @@ impl Checker {
         if def.type_param_vars.is_empty() {
             return Ok(());
         }
+        if arguments.len() != def.type_param_vars.len() {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Facet found inconsistent generic metadata for {}",
+                    Self::surface_name(type_name)
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "The nominal type argument list must match its declaration parameters.".into(),
+                ),
+            });
+        }
+        let Some((_, selected_template)) = def.fields.get(field_index) else {
+            return Err(TypeError {
+                structured: None,
+                message: "Facet field path is inconsistent with its source type".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        let mut after_replacements = HashMap::new();
+        self.collect_facet_rebuild_tyvar_replacements(
+            selected_template,
+            after,
+            &mut after_replacements,
+            span,
+        )?;
+        let changed_vars = def
+            .type_param_vars
+            .iter()
+            .zip(arguments)
+            .filter_map(|(var, current)| match after_replacements.get(var) {
+                Some(after) if self.resolve_ty(current) != self.resolve_ty(after) => Some(*var),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let mut rebuildable = false;
-        for var in &def.type_param_vars {
+        for var in &changed_vars {
             let selected_count = def
                 .fields
                 .get(field_index)
@@ -8993,7 +9534,15 @@ impl Checker {
         let status_ty = self
             .env
             .lookup_type_def("SupervisorStatus")
-            .map(|def| Ty::Struct(def.name.clone(), def.fields.clone()))
+            .map(|def| {
+                Ty::Struct(
+                    def.name.clone(),
+                    NominalType::new(
+                        def.type_param_vars.iter().copied().map(Ty::Var).collect(),
+                        def.fields.clone(),
+                    ),
+                )
+            })
             .ok_or_else(|| TypeError {
                 structured: None,
                 message: "SupervisorStatus type is not available".into(),
@@ -9082,7 +9631,15 @@ impl Checker {
         let strategy_ty = self
             .env
             .lookup_type_def("WorkerStrategy")
-            .map(|def| Ty::Struct(def.name.clone(), def.fields.clone()))
+            .map(|def| {
+                Ty::Struct(
+                    def.name.clone(),
+                    NominalType::new(
+                        def.type_param_vars.iter().copied().map(Ty::Var).collect(),
+                        def.fields.clone(),
+                    ),
+                )
+            })
             .ok_or_else(|| TypeError {
                 structured: None,
                 message: "WorkerStrategy type is not available".into(),
@@ -9988,23 +10545,28 @@ impl Checker {
                         let resolved_witness = self.resolve_ty(witness);
                         let carrier = match witness {
                             Ty::Var(var) => {
-                                self.constructor_witness_traits
-                                    .get(var)
-                                    .and_then(|trait_key| {
-                                        self.canonical_constructor_carrier(
-                                            trait_key,
-                                            &resolved_witness,
-                                        )
-                                    })
+                                self.constructor_witness_traits.get(var).map(|trait_key| {
+                                    self.canonical_constructor_carrier(trait_key, &resolved_witness)
+                                })
                             }
                             _ => None,
                         };
-                        if let Some(carrier) = carrier {
-                            for captured in carrier.captured_arguments {
-                                self.canonical_waiting_variables(&captured.ty, &mut variables);
+                        match carrier {
+                            Some(ConstructorCarrierOutcome::Projected(carrier)) => {
+                                for captured in carrier.captured_arguments {
+                                    self.canonical_waiting_variables(&captured.ty, &mut variables);
+                                }
                             }
-                        } else {
-                            Self::collect_ty_vars(&resolved_witness, &mut variables);
+                            Some(ConstructorCarrierOutcome::Deferred { waiting_on }) => {
+                                variables.extend(waiting_on);
+                            }
+                            Some(ConstructorCarrierOutcome::Rejected { failures }) => {
+                                debug_assert!(!failures.is_empty());
+                                Self::collect_ty_vars(&resolved_witness, &mut variables);
+                            }
+                            None => {
+                                Self::collect_ty_vars(&resolved_witness, &mut variables);
+                            }
                         }
                     }
                     _ => Self::collect_ty_vars(&self.resolve_ty(&slot.ty), &mut variables),
@@ -12074,6 +12636,68 @@ mod tests {
     }
 
     #[test]
+    fn executable_constructor_audit_enters_generic_declaration_bodies() {
+        let checker = Checker::new(TypecheckContext::default());
+        let witness_variable = 91_050;
+        let constructor_application =
+            Ty::SelfApp(vec![Ty::Hole, Ty::Var(witness_variable), Ty::Int]);
+        let definition = TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Def(
+                0,
+                registered_callable_id("generic", 91_051),
+                Vec::new(),
+                Vec::new(),
+                constructor_application.clone(),
+                None,
+                Box::new(TypedNode {
+                    ty: constructor_application,
+                    span: test_span(),
+                    node: TypedInner::Lit(Lit::Unit),
+                }),
+                spire::ast::Visibility::Private,
+            ),
+        };
+
+        assert!(matches!(
+            checker.unresolved_executable_constructor_application(&definition),
+            Some((ConstructorApplicationOutcome::Deferred { waiting_on }, _))
+                if waiting_on == vec![witness_variable]
+        ));
+    }
+
+    #[test]
+    fn executable_constructor_audit_rejects_malformed_self_application() {
+        let checker = Checker::new(TypecheckContext::default());
+        let node = TypedNode {
+            ty: Ty::SelfApp(vec![Ty::Int]),
+            span: test_span(),
+            node: TypedInner::Lit(Lit::Unit),
+        };
+
+        let Some((ConstructorApplicationOutcome::Rejected { failures }, span)) =
+            checker.unresolved_executable_constructor_application(&node)
+        else {
+            panic!("malformed executable SelfApp must be rejected")
+        };
+        assert_eq!(
+            failures,
+            vec![ConstructorProjectionFailure::UnsupportedConstructor]
+        );
+        let error = signatures::constructor_signature_metadata_error(
+            "constructor application",
+            &span,
+            Checker::constructor_projection_failure_detail(&failures),
+        );
+        assert_eq!(
+            error.reason(),
+            Some(TypeDiagnosticReason::CallableSignatureMetadataMismatch)
+        );
+        assert!(!error.message.contains("UnsupportedConstructor"));
+    }
+
+    #[test]
     fn registered_builtin_without_canonical_signature_fails_closed() {
         let mut checker = Checker::new(TypecheckContext::default());
         let id = registered_callable_id("runtime_target", 91_002);
@@ -12202,7 +12826,10 @@ mod tests {
             "User",
             vec![(
                 "profile",
-                Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+                Ty::Struct(
+                    "Profile".into(),
+                    NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
+                ),
             )],
             &["profile"],
             false,
@@ -12212,10 +12839,13 @@ mod tests {
         let path = TypedFacetPath {
             source_ty: Ty::Struct(
                 "User".into(),
-                vec![(
+                NominalType::monomorphic(vec![(
                     "profile".into(),
-                    Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
-                )],
+                    Ty::Struct(
+                        "Profile".into(),
+                        NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
+                    ),
+                )]),
             ),
             focus_ty: Ty::Str,
             update_source_ty: Ty::Hole,
@@ -12245,7 +12875,10 @@ mod tests {
             "User",
             vec![(
                 "profile",
-                Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+                Ty::Struct(
+                    "Profile".into(),
+                    NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
+                ),
             )],
             &["profile"],
             false,
@@ -12255,12 +12888,18 @@ mod tests {
         let path = TypedFacetPath {
             source_ty: Ty::Struct(
                 "User".into(),
-                vec![(
+                NominalType::monomorphic(vec![(
                     "profile".into(),
-                    Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
-                )],
+                    Ty::Struct(
+                        "Profile".into(),
+                        NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
+                    ),
+                )]),
             ),
-            focus_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            focus_ty: Ty::Struct(
+                "Profile".into(),
+                NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
+            ),
             update_source_ty: Ty::Hole,
             update_focus_ty: Ty::Hole,
             path_kind: TypedFacetPathKind::InfallibleStructural,
@@ -12290,7 +12929,10 @@ mod tests {
             "User",
             vec![(
                 "profile",
-                Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+                Ty::Struct(
+                    "Profile".into(),
+                    NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
+                ),
             )],
             &[],
             false,
@@ -12298,7 +12940,10 @@ mod tests {
         checker.current_impl_struct_target = Some("Profile".into());
 
         let readonly_root_path = TypedFacetPath {
-            source_ty: Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
+            source_ty: Ty::Struct(
+                "Profile".into(),
+                NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
+            ),
             focus_ty: Ty::Str,
             update_source_ty: Ty::Hole,
             update_focus_ty: Ty::Hole,
@@ -12322,10 +12967,13 @@ mod tests {
         let nested_readonly_path = TypedFacetPath {
             source_ty: Ty::Struct(
                 "User".into(),
-                vec![(
+                NominalType::monomorphic(vec![(
                     "profile".into(),
-                    Ty::Struct("Profile".into(), vec![("name".into(), Ty::Str)]),
-                )],
+                    Ty::Struct(
+                        "Profile".into(),
+                        NominalType::monomorphic(vec![("name".into(), Ty::Str)]),
+                    ),
+                )]),
             ),
             focus_ty: Ty::Str,
             update_source_ty: Ty::Hole,

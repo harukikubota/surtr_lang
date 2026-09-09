@@ -40,7 +40,7 @@ typecheck 診断は、phase 固有の error 型を維持したまま、次の構
 - 呼び出しの arity / mode / named 引数、通常の型関係、Trait obligation / dispatch、constructor family / payload / capability は共通の reason を使う。演算子と対応する helper は同じ検査を通し、文脈の違いを `DiagnosticOrigin` に保持する。入れ子の呼び出し・annotation の失敗を外側の演算子へ付け替えない。
 - `cond` の節と `if_let` の発生文脈は Spire / Sigil から Scar まで保持する。分岐診断には全 body の型・span・ordinal と guard の source fact を含める。`cond` の実行は型検査後に既存の `TypedInner::If` へ lowering する。
 - JSON の `data` は source location の rebase 後に typed projection から生成する。必須 key は省略せず、該当しない値は `null` にする。`related` は primary fact も含み、型は `type`、source role は `left_value` / `right_value` などの snake_case とする。
-- constructor `family_id` は同じ族の canonical Trait ID をソートして構成する。完全な source value の型には captured 引数と `Result` の error 型も含める。登録順や内部 inference ID を表示しない。
+- constructor `family_id` は同じ族の canonical Trait ID をソートして構成する。familyはcapability継承を表し、別direct parameterのcarrier同一性を暗黙に作らない。完全な source value の型には captured 引数と `Result` の error 型も含める。登録順や内部 inference ID を表示しない。
 - structured input がある場合、optional field の欠落を理由に message / label / source の解析へ戻らない。未移行の policy / runtime 等の legacy 経路、SafeBind是正、heuristic全撤去は未実装であり、[`../../doc/diagnostics_cleanup_spec.md`](../../doc/diagnostics_cleanup_spec.md)を実装入力とする。
 
 ## stable reason と typed data

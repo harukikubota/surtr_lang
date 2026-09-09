@@ -10,9 +10,9 @@
 `message` / `labels` / `notes` / `help` 分類は
 [`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md) とする。ReturnTypeArgument の構文・省略、
 Trait method のrole付き型リスト、Deferred、dispatch、callable instantiationも同じ開発者向け正本に従う。
-通常callableのdirect carrier独立化は
-[`type_constructor_trait_extension_spec.md`](type_constructor_trait_extension_spec.md)を実装入力とし、
-`do`固有の同一性は本書のcompiler-owned contractが所有する。
+通常callableのdirect carrier独立化は開発者向け正本の実装済み契約に従う。
+`do`固有の同一性はfamily所属から導出せず、本書のcompiler-owned contractが所有する
+一つのdo-local carrier入力へ明示的に結び付ける。
 
 本書と正本が衝突する場合は正本を優先し、本書を先に修正してから実装する。ReturnTypeArgument を使わない
 carrier 指定、自然言語 message の再解析を追加してはならない。具象データ型固有の failure route は原則として

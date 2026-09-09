@@ -115,6 +115,10 @@ Trait impl methodの本体から同じmethod名を非修飾で呼ぶ場合、そ
 通常どおりstatic dispatchするため、同じimplへの再帰と別implへの再dispatchを同じ規則で扱います。
 local bindingやparameterによる通常のshadowingは維持されます。
 
+callable signature直下のTypeConstructor trait名は名前文字列ではなく、名前解決で選ばれたTrait定義のidentityを
+後続phaseへ渡します。別々のdirect parameterは同じfamilyでも独立し、同じcarrierが必要なmethod contractは
+`Self`または同じ名前付きconstructor variable `$F`で関係を明示します。
+
 ```text
 xldr(1)> print(match try_from::<Int>("42") { Ok(value) => to_string(value), Err(err) => inspect(err), })
 42

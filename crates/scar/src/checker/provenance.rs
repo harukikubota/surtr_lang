@@ -229,11 +229,13 @@ impl Checker {
                                 return Provenance::Intersection(Vec::new());
                             };
                             let mut variables = HashMap::new();
-                            self.collect_callable_provenance_variables(
+                            if let Some(outcome) = self.collect_callable_provenance_variables(
                                 &parameters,
                                 &arguments,
                                 &mut variables,
-                            );
+                            ) {
+                                return Provenance::ConstructorApplication(outcome);
+                            }
                             return self
                                 .template_provenance(
                                     &result,
@@ -298,41 +300,46 @@ impl Checker {
         }
     }
 
-    fn trait_provenance_template(&self, ty: &Ty, context: Option<(&str, &Ty)>) -> Ty {
+    fn trait_provenance_template(
+        &self,
+        ty: &Ty,
+        context: Option<(&str, &Ty)>,
+    ) -> Result<Ty, ConstructorApplicationOutcome> {
         let Some((capability, actual)) = context else {
-            return ty.clone();
+            return Ok(ty.clone());
         };
         let recurse = |ty: &Ty| self.trait_provenance_template(ty, context);
         match ty {
             Ty::SelfApp(arguments) if Self::constructor_application_parts(arguments).is_none() => {
-                self.expand_constructor_template(capability, actual, arguments)
-                    .unwrap_or_else(|| ty.clone())
+                match self.expand_constructor_template(capability, actual, arguments) {
+                    ConstructorApplicationOutcome::Applied(expanded) => Ok(expanded),
+                    outcome @ (ConstructorApplicationOutcome::Deferred { .. }
+                    | ConstructorApplicationOutcome::Rejected { .. }) => Err(outcome),
+                }
             }
-            Ty::Func(parameters, result) => Ty::Func(
-                parameters.iter().map(recurse).collect(),
-                Box::new(recurse(result)),
-            ),
-            Ty::List(element) => Ty::List(Box::new(recurse(element))),
-            Ty::Tuple(items) => Ty::Tuple(items.iter().map(recurse).collect()),
-            Ty::Result(ok, error) => Ty::Result(Box::new(recurse(ok)), Box::new(recurse(error))),
-            Ty::Enum(name, arguments) => {
-                Ty::Enum(name.clone(), arguments.iter().map(recurse).collect())
+            Ty::Func(parameters, result) => Ok(Ty::Func(
+                parameters.iter().map(recurse).collect::<Result<_, _>>()?,
+                Box::new(recurse(result)?),
+            )),
+            Ty::List(element) => Ok(Ty::List(Box::new(recurse(element)?))),
+            Ty::Tuple(items) => Ok(Ty::Tuple(
+                items.iter().map(recurse).collect::<Result<_, _>>()?,
+            )),
+            Ty::Result(ok, error) => Ok(Ty::Result(
+                Box::new(recurse(ok)?),
+                Box::new(recurse(error)?),
+            )),
+            Ty::Enum(name, arguments) => Ok(Ty::Enum(
+                name.clone(),
+                arguments.iter().map(recurse).collect::<Result<_, _>>()?,
+            )),
+            Ty::Struct(name, fields) => {
+                Ok(Ty::Struct(name.clone(), fields.try_map_types(recurse)?))
             }
-            Ty::Struct(name, fields) => Ty::Struct(
-                name.clone(),
-                fields
-                    .iter()
-                    .map(|(name, ty)| (name.clone(), recurse(ty)))
-                    .collect(),
-            ),
-            Ty::Record(name, fields) => Ty::Record(
-                name.clone(),
-                fields
-                    .iter()
-                    .map(|(name, ty)| (name.clone(), recurse(ty)))
-                    .collect(),
-            ),
-            _ => ty.clone(),
+            Ty::Record(name, fields) => {
+                Ok(Ty::Record(name.clone(), fields.try_map_types(recurse)?))
+            }
+            _ => Ok(ty.clone()),
         }
     }
 
@@ -359,10 +366,14 @@ impl Checker {
         parameters: &[Ty],
         arguments: &[Source],
         variables: &mut HashMap<u32, Vec<Source>>,
-    ) {
+    ) -> Option<ConstructorApplicationOutcome> {
         for (parameter, argument) in parameters.iter().zip(arguments) {
             if !matches!(parameter, Ty::Func(..)) {
-                self.collect_provenance_variables(parameter, argument, variables);
+                if let Some(outcome) =
+                    self.collect_provenance_variables(parameter, argument, variables)
+                {
+                    return Some(outcome);
+                }
             }
         }
         for (parameter, argument) in parameters.iter().zip(arguments) {
@@ -373,9 +384,13 @@ impl Checker {
                     .map(|ty| self.template_provenance(ty, ty, &known))
                     .collect::<Vec<_>>();
                 let output = self.invoke_provenance(argument, &inputs, result);
-                self.collect_provenance_variables(result, &output, variables);
+                if let Some(outcome) = self.collect_provenance_variables(result, &output, variables)
+                {
+                    return Some(outcome);
+                }
             }
         }
+        None
     }
 
     fn invoke_provenance(&self, function: &Source, arguments: &[Source], actual: &Ty) -> Source {
@@ -435,11 +450,28 @@ impl Checker {
                     .value_parameters
                     .iter()
                     .map(|parameter| self.trait_provenance_template(&parameter.ty, context))
-                    .collect::<Vec<_>>();
+                    .collect::<Result<Vec<_>, _>>();
+                let parameters = match parameters {
+                    Ok(parameters) => parameters,
+                    Err(outcome) => {
+                        return (Provenance::ConstructorApplication(outcome), actual.clone());
+                    }
+                };
                 let return_type =
-                    self.trait_provenance_template(&signature.return_type.ty, context);
+                    match self.trait_provenance_template(&signature.return_type.ty, context) {
+                        Ok(return_type) => return_type,
+                        Err(outcome) => {
+                            return (Provenance::ConstructorApplication(outcome), actual.clone());
+                        }
+                    };
                 let mut variables = HashMap::<u32, Vec<Source>>::new();
-                self.collect_callable_provenance_variables(&parameters, arguments, &mut variables);
+                if let Some(outcome) = self.collect_callable_provenance_variables(
+                    &parameters,
+                    arguments,
+                    &mut variables,
+                ) {
+                    return (Provenance::ConstructorApplication(outcome), actual.clone());
+                }
                 self.template_provenance(
                     &return_type,
                     actual,
@@ -457,7 +489,11 @@ impl Checker {
                     .iter()
                     .map(|(variable, source)| (*variable, vec![source.clone()]))
                     .collect::<HashMap<_, _>>();
-                self.collect_callable_provenance_variables(parameters, arguments, &mut sources);
+                if let Some(outcome) =
+                    self.collect_callable_provenance_variables(parameters, arguments, &mut sources)
+                {
+                    return (Provenance::ConstructorApplication(outcome), actual.clone());
+                }
                 self.template_provenance(
                     result,
                     actual,
@@ -505,6 +541,39 @@ impl Checker {
         Provenance::Intersection(sources)
     }
 
+    pub(super) fn constructor_provenance_application_outcome(
+        &self,
+        provenance: &Provenance,
+    ) -> Option<ConstructorApplicationOutcome> {
+        let from_source =
+            |source: &Source| self.constructor_provenance_application_outcome(&source.0);
+        match provenance {
+            Provenance::ConstructorApplication(outcome) => Some(outcome.clone()),
+            Provenance::Intersection(sources)
+            | Provenance::Fields(sources)
+            | Provenance::Sequence(sources) => sources.iter().find_map(from_source),
+            Provenance::Variants(variants) => variants
+                .iter()
+                .flat_map(|(_, sources)| sources)
+                .find_map(from_source),
+            Provenance::Callable { result, .. } => from_source(result),
+            Provenance::Injected {
+                function,
+                arguments,
+            }
+            | Provenance::Call {
+                function,
+                arguments,
+            } => from_source(function).or_else(|| arguments.iter().find_map(from_source)),
+            Provenance::Projection { source, .. } => from_source(source),
+            Provenance::Template { variables, .. } => variables.values().find_map(from_source),
+            Provenance::RequiresProof
+            | Provenance::Constrained(_)
+            | Provenance::Parameter(_)
+            | Provenance::DeclaredCallable(_) => None,
+        }
+    }
+
     pub(super) fn constructor_provenance_allows(
         &self,
         provenance: &Provenance,
@@ -535,16 +604,23 @@ impl Checker {
                     .map(|(variable, source)| (*variable, source.1.clone()))
                     .collect();
                 let declared = self.substitute_ty_with_mapping(ty, &mapping);
-                self.constructor_projection(required, &declared).is_some()
+                matches!(
+                    self.constructor_projection(required, &declared),
+                    ConstructorProjectionOutcome::Applicable { .. }
+                )
             }
             Provenance::Parameter(_) | Provenance::Projection { .. } | Provenance::Call { .. } => {
                 false
             }
+            Provenance::ConstructorApplication(_) => false,
             _ => {
                 if let Some(capability) = self.constructor_capability_for_type(actual_ty) {
                     self.constructor_capability_allows(&capability, required, &mut HashSet::new())
                 } else {
-                    self.constructor_projection(required, actual_ty).is_some()
+                    matches!(
+                        self.constructor_projection(required, actual_ty),
+                        ConstructorProjectionOutcome::Applicable { .. }
+                    )
                 }
             }
         }
@@ -683,7 +759,11 @@ impl Checker {
                             continue;
                         };
                         for (template, field) in variant.payload.iter().zip(fields.iter().skip(1)) {
-                            self.collect_provenance_variables(template, field, &mut collected);
+                            if let Some(outcome) =
+                                self.collect_provenance_variables(template, field, &mut collected)
+                            {
+                                return (Provenance::ConstructorApplication(outcome), actual);
+                            }
                         }
                         if let Some(found) = collected.remove(variable) {
                             sources.extend(found);
@@ -710,10 +790,19 @@ impl Checker {
                 }
             }
             Provenance::Template { ty, variables } => {
-                let concrete = self.concrete_template(ty, &source.1);
-                if let Some(template) =
-                    self.projection_type(concrete.as_ref().unwrap_or(ty), projection)
-                {
+                let concrete = match ty {
+                    Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some() => {
+                        match self.concrete_template(ty, &source.1) {
+                            ConstructorApplicationOutcome::Applied(concrete) => concrete,
+                            outcome @ (ConstructorApplicationOutcome::Deferred { .. }
+                            | ConstructorApplicationOutcome::Rejected { .. }) => {
+                                return (Provenance::ConstructorApplication(outcome), actual);
+                            }
+                        }
+                    }
+                    _ => ty.clone(),
+                };
+                if let Some(template) = self.projection_type(&concrete, projection) {
                     self.template_provenance(&template, &actual, variables)
                 } else {
                     (Provenance::RequiresProof, actual)
@@ -735,6 +824,9 @@ impl Checker {
             (Ty::Tuple(items), Projection::Field { index, .. }) => items.get(*index).cloned(),
             (Ty::Struct(_, fields) | Ty::Record(_, fields), Projection::Field { index, .. }) => {
                 fields.get(*index).map(|(_, ty)| ty.clone())
+            }
+            (Ty::Struct(_, nominal) | Ty::Record(_, nominal), Projection::TypeArgument(index)) => {
+                nominal.arguments.get(*index).cloned()
             }
             (Ty::List(element), Projection::Element) => Some(element.as_ref().clone()),
             (Ty::Result(ok, error), Projection::Field { index: 0, tag }) => {
@@ -781,12 +873,22 @@ impl Checker {
         }
     }
 
-    fn concrete_template(&self, template: &Ty, actual: &Ty) -> Option<Ty> {
+    fn concrete_template(&self, template: &Ty, actual: &Ty) -> ConstructorApplicationOutcome {
         let Ty::SelfApp(items) = template else {
-            return None;
+            return ConstructorApplicationOutcome::Rejected {
+                failures: vec![ConstructorProjectionFailure::UnsupportedConstructor],
+            };
         };
-        let (_, arguments) = Self::constructor_application_parts(items)?;
-        let capability = self.constructor_capability_for_type(template)?;
+        let Some((_, arguments)) = Self::constructor_application_parts(items) else {
+            return ConstructorApplicationOutcome::Rejected {
+                failures: vec![ConstructorProjectionFailure::UnsupportedConstructor],
+            };
+        };
+        let Some(capability) = self.constructor_capability_for_type(template) else {
+            return ConstructorApplicationOutcome::Rejected {
+                failures: vec![ConstructorProjectionFailure::MissingWitnessTrait],
+            };
+        };
         self.expand_constructor_template(&capability, actual, arguments)
     }
 
@@ -795,22 +897,47 @@ impl Checker {
         capability: &str,
         actual: &Ty,
         arguments: &[Ty],
-    ) -> Option<Ty> {
+    ) -> ConstructorApplicationOutcome {
         let (implementation, mut mapping) =
-            self.constructor_projection(capability, &self.resolve_ty(actual))?;
+            match self.constructor_projection(capability, &self.resolve_ty(actual)) {
+                ConstructorProjectionOutcome::Applicable { info, mapping } => (info, mapping),
+                ConstructorProjectionOutcome::Deferred { waiting_on } => {
+                    return ConstructorApplicationOutcome::Deferred { waiting_on };
+                }
+                ConstructorProjectionOutcome::Rejected { failures } => {
+                    return ConstructorApplicationOutcome::Rejected { failures };
+                }
+            };
         if implementation.constructor_slot_vars.len() != arguments.len() {
-            return None;
-        }
+            return ConstructorApplicationOutcome::Rejected {
+                failures: vec![ConstructorProjectionFailure::SlotCountMismatch {
+                    expected: implementation.constructor_slot_vars.len(),
+                    actual: arguments.len(),
+                }],
+            };
+        };
         for (variable, argument) in implementation.constructor_slot_vars.iter().zip(arguments) {
             mapping.insert(*variable, argument.clone());
         }
-        let target = implementation
+        let Some(target) = implementation
             .head_type_list
             .entries
             .iter()
-            .find(|entry| entry.role == TypeListRole::ImplTarget)?;
-        let target = self.canonical_to_ty(&target.ty).ok()?;
-        Some(self.substitute_ty_with_mapping(&target, &mapping))
+            .find(|entry| entry.role == TypeListRole::ImplTarget)
+        else {
+            return ConstructorApplicationOutcome::Rejected {
+                failures: vec![ConstructorProjectionFailure::MissingImplTargetMetadata],
+            };
+        };
+        let target = match self.canonical_to_ty(&target.ty) {
+            Ok(target) => target,
+            Err(_) => {
+                return ConstructorApplicationOutcome::Rejected {
+                    failures: vec![ConstructorProjectionFailure::Canonicalization],
+                };
+            }
+        };
+        ConstructorApplicationOutcome::Applied(self.substitute_ty_with_mapping(&target, &mapping))
     }
 
     fn collect_provenance_variables(
@@ -818,15 +945,21 @@ impl Checker {
         template: &Ty,
         source: &Source,
         variables: &mut HashMap<u32, Vec<Source>>,
-    ) {
+    ) -> Option<ConstructorApplicationOutcome> {
         match template {
-            Ty::SelfApp(_) => {
-                if let Some(concrete) = self.concrete_template(template, &source.1) {
-                    self.collect_provenance_variables(&concrete, source, variables);
+            Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some() => {
+                match self.concrete_template(template, &source.1) {
+                    ConstructorApplicationOutcome::Applied(concrete) => {
+                        self.collect_provenance_variables(&concrete, source, variables)
+                    }
+                    outcome @ (ConstructorApplicationOutcome::Deferred { .. }
+                    | ConstructorApplicationOutcome::Rejected { .. }) => Some(outcome),
                 }
             }
+            Ty::SelfApp(_) => None,
             Ty::Var(variable) => {
                 variables.entry(*variable).or_default().push(source.clone());
+                None
             }
             Ty::List(element) => self.collect_provenance_variables(
                 element,
@@ -835,7 +968,7 @@ impl Checker {
             ),
             Ty::Tuple(items) => {
                 for (index, item) in items.iter().enumerate() {
-                    self.collect_provenance_variables(
+                    if let Some(outcome) = self.collect_provenance_variables(
                         item,
                         &self.project_provenance(
                             source,
@@ -843,12 +976,28 @@ impl Checker {
                             item,
                         ),
                         variables,
-                    );
+                    ) {
+                        return Some(outcome);
+                    }
                 }
+                None
             }
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => {
-                for (index, (_, item)) in fields.iter().enumerate() {
-                    self.collect_provenance_variables(
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                for (index, argument) in nominal.arguments.iter().enumerate() {
+                    if let Some(outcome) = self.collect_provenance_variables(
+                        argument,
+                        &self.project_provenance(
+                            source,
+                            &Projection::TypeArgument(index),
+                            argument,
+                        ),
+                        variables,
+                    ) {
+                        return Some(outcome);
+                    }
+                }
+                for (index, (_, item)) in nominal.iter().enumerate() {
+                    if let Some(outcome) = self.collect_provenance_variables(
                         item,
                         &self.project_provenance(
                             source,
@@ -856,12 +1005,15 @@ impl Checker {
                             item,
                         ),
                         variables,
-                    );
+                    ) {
+                        return Some(outcome);
+                    }
                 }
+                None
             }
             Ty::Result(ok, error) => {
                 for (tag, item) in [(0, ok.as_ref()), (1, error.as_ref())] {
-                    self.collect_provenance_variables(
+                    if let Some(outcome) = self.collect_provenance_variables(
                         item,
                         &self.project_provenance(
                             source,
@@ -872,12 +1024,15 @@ impl Checker {
                             item,
                         ),
                         variables,
-                    );
+                    ) {
+                        return Some(outcome);
+                    }
                 }
+                None
             }
             Ty::Enum(_, arguments) => {
                 for (index, argument) in arguments.iter().enumerate() {
-                    self.collect_provenance_variables(
+                    if let Some(outcome) = self.collect_provenance_variables(
                         argument,
                         &self.project_provenance(
                             source,
@@ -885,10 +1040,13 @@ impl Checker {
                             argument,
                         ),
                         variables,
-                    );
+                    ) {
+                        return Some(outcome);
+                    }
                 }
+                None
             }
-            _ => {}
+            _ => None,
         }
     }
 

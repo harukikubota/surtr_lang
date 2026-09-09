@@ -24,11 +24,11 @@
 | Trait method implementation identity | contract identityとimpl identityを組み合わせた具象callable識別子 |
 | TypeConstructor | `List<_>`、`Option<_>`のように、型引数を受け取って具象型を作る型レベルのconstructor |
 | TypeCtorTrait | `Self: Type<$A, ...>`でconstructor slotを宣言するTrait。`Functor`、`Applicative`、`Monad`など |
-| TypeCtorTraitFamily | TypeCtorTrait間の継承関係が作る連結成分。同じfamily内のTrait slotは一つの具象carrierを共有する |
+| TypeCtorTraitFamily | TypeCtorTrait間の継承関係が作る連結成分。能力継承とconstructor slot対応を表すが、別value parameterのcarrier同一性は表さない |
 | family root | TypeCtorTraitFamily内で上位のTypeCtorTrait parentを持たないTrait。rootが複数あっても、継承で連結されるなら同じfamily |
 | constructor slot | `Self: Type<$A, ...>`の`$A`。TypeCtorTraitが観測・置換するcontainer内部の型位置 |
 | capturing TypeCtorTrait slot | `Functor<$A>`のようにcontainer内部型を型変数へ束縛して観測するdirect signature位置 |
-| non-capturing TypeCtorTrait slot | bare `Functor`のようにcontainer内部型を束縛しないdirect signature位置。carrier同一性の検査には参加する |
+| non-capturing TypeCtorTrait slot | bare `Functor`のようにcontainer内部型を束縛しないdirect signature位置。その位置のcarrierとcapabilityだけを表す |
 | captured impl-target type parameter | impl targetの型引数のうちconstructor slotへmapされず、`Self<$...>`で保持される型位置 |
 | carrier | TypeCtorTrait slotを満たす具象または部分適用済みTypeConstructor。`Either<String, _>`ではcaptureされた`String`もidentityに含む |
 | generic | 型変数を含み複数の具象型へinstantiateできる性質。個々の入力を指す名詞には「型変数」を使う |
@@ -199,25 +199,27 @@ def guard::<$F>(cond: Boolean) -> $F<Unit>
 where $F: Alternative
 ```
 
-同じ関数定義内で同じTypeCtorTraitFamilyに属するdirect TypeCtorTrait slotは、一つの具象carrierへ解決する。
-`Monad`から`Functor`へ継承pathがあるなら異なるcarrierを渡せない。異なるfamilyなら別のcarrierを渡せる。
-container内部の型変数は通常どおり識別子単位で分離し、parameter位置で利用できるmethod能力は、そこに書かれた
+別々のdirect TypeCtorTrait value parameterは、同じTrait名または同じTypeCtorTraitFamilyに属していても
+独立したcarrierへ解決する。同じpayload型変数を使っても共有するのはpayloadだけである。carrierを共有する
+契約は、同じ名前付きconstructor variable `$F`、Trait contractの`Self`、またはreturn-only direct
+ReturnTypeArgumentとreturnの接続で明示する。parameter位置で利用できるmethod能力は、そこに書かれた
 Traitまでに制限する。
 
 ```surtr
-def same_family(left: Functor, right: Monad) -> Unit {
-  # leftとrightは同じcarrier。leftにはFunctor能力、rightにはMonad能力だけを認める
+def independent(left: Functor<$A>, right: Monad<$A>) -> Unit {
+  # payload Aは同じだが、leftとrightのcarrierは独立
   ()
 }
 
-def different_family(left: Monad, right: Monad2) -> Unit {
-  # MonadとMonad2が異なるTypeCtorTraitFamilyなら異なるcarrierを渡せる
-  ()
+def shared(left: $F<$A>, right: $F<$B>) -> $F<$A>
+where $F: Monad {
+  # 同じFの再出現がcarrier同一性を宣言する
+  left
 }
 ```
 
-non-capturing TypeCtorTrait slotはcontainer内部型を公開しないが、二つの引数span、または引数と戻り値spanを
-関連labelとしてcarrier不一致を診断できる。call-site ReturnTypeArgumentのlabelは型名だけでよく、値側の
+non-capturing TypeCtorTrait slotはcontainer内部型を公開しない。別direct parameter間にはcarrier relationを
+作らない。同じ`$F`、`Self`、ReturnTypeArgumentとreturnなど宣言済みのrelationに違反した場合だけ、関係する
 二つのspanへactual carrier型と同一carrier要求を表示する。
 
 ### 0.6 呼び出し構文一覧
@@ -251,8 +253,8 @@ call-site ReturnTypeArgumentは定義側に対応位置がある場合だけ指�
   `ReturnTypeArgumentApply`、保持fieldは`return_type_arguments`へ揃える。任意generic指定に見える内部名も残さない。
 - source diagnostic、JSON diagnostic、unit test、fixture、rustdoc、公開文書をReturnTypeArgument用語へ揃える。
 - `$F<$A, ...>`を、`$F`にTypeCtorTrait constraintがあるsignature型位置だけで受理する。
-- direct TypeCtorTrait slotをpositionごとの独立witnessとして扱う経路を廃止し、TypeCtorTraitFamily単位の
-  carrier substitutionへ置換する。
+- direct TypeCtorTrait value parameterはpositionごとの独立witnessとし、TypeCtorTraitFamilyを理由に
+  carrier substitutionを共有しない。同じ`$F`、`Self`、direct ReturnTypeArgumentとreturnだけを接続する。
 - user function、Trait helper、builtinのsignatureを同じwell-formedness、型推論、trait obligation routeへ載せる。
 - Forgeへは具体化済みcall/dispatchだけを渡し、ReturnTypeArgument専用metadataを新設しない。
 - `do` 構文intrinsicは、未実装のSafeBind・diagnostics cleanupゲートを完了してから追加する。
@@ -470,11 +472,10 @@ where clause が未知の type variable を導入してはならない。`Type<.
 
 TypeCtorTrait application（例: `Applicative<$A>`）は通常関数またはTrait method signatureのdirect
 parameter / returnだけで受理する。nested type、field、local annotation、closure signatureでは拒否する。
-direct Trait syntaxは名前付きconstructor variableとbare capabilityへ正規化し、同じTypeCtorTraitFamilyに属する
-全parameterとreturnを一つの具象carrierへunifyする。異なるfamilyだけが同じ関数定義内で異なるcarrierを
-取れる。container内部を観測しないdirect slotは型引数を省略できるが、carrier同一性の検査には参加する。
-returnだけに現れるcarrierはReturnTypeArgumentから導入し、本体検査の終了時に単一の具象constructorへ
-確定しなければならない。
+各direct value parameterとdirect returnは独立したwitnessへ正規化し、TypeCtorTraitFamilyを理由に相互に
+unifyしない。container内部を観測しないdirect slotは型引数を省略できる。同一carrierが必要なら同じ`$F`か
+Trait `Self`で宣言する。return-only direct ReturnTypeArgumentは対応するreturn witnessへ接続する。direct returnは
+本体検査の終了時に単一の具象constructorへ確定しなければならない。
 
 bare capability は expression が trait call、operator lowering、または generic call の proof 引渡しで消費した
 ときだけ full obligation を発行する。full obligation は `(TraitRef, obligation subject)` を構造化して保持する。
@@ -638,6 +639,12 @@ callable instantiation境界、program境界で`Deferred`を監査し、入力�
 `AmbiguousReturnTypeArgument`または`UnresolvedTraitMethodInstantiation`として拒否する。唯一のimpl、
 先頭のimpl、builtin既定型から未拘束型を逆決定しない。
 
+constructor projection/applicationも`Applicable`、`Deferred`、`Rejected`を区別する。未確定request variableは
+`Deferred`、具象head不一致・適用implなし・where不成立・slot metadata不整合は理由付き`Rejected`とする。
+Sigilはcallable signature直下のdirect TypeCtorTraitをcanonical `ResolvedId`へ解決し、ScarはそのIDを使う。
+short/display nameの再検索を正しさの経路にしない。specialization後はgeneric callableの宣言schemeを除く
+実行可能typed treeを監査し、未解決constructor applicationをForgeへ渡さない。
+
 選択済みcallableはsolverが確定したsubstitutionを保持し、specializationとbody cloneはそれを直接消費する。
 canonical signatureが欠けたregistered user function / non-intrinsic builtinをlegacy positional checkerへ降格せず、
 arity不一致やmetadata不整合をpartial `zip`で隠さない。Forgeへ渡せるのは全型入力とconcrete dispatch targetが
@@ -648,7 +655,7 @@ arity不一致やmetadata不整合をpartial `zip`で隠さない。Forgeへ渡�
 テスト配置・fixture の phase/error assertion・visitor 変更時の配置 matrix は
 [`テスト方針.md`](./テスト方針.md) の 3.6.1 を正本とする。coherence の正逆順、nested pattern、parameterized
 impl-head / expression obligation の argument mismatch、deferred rehome/rollback、finite recursion、bare capability
-consumption、ReturnTypeArgumentの導入規則、same-family carrier一致、different-family carrier分離、non-capturing slot、
+consumption、ReturnTypeArgumentの導入規則、direct parameterのcarrier独立性、同じ`$F`/`Self`のcarrier一致、non-capturing slot、
 parent `Self` assumption、qualified diamond、call-site scheme と expected propagation を unit と Rune fixture の両方で保持する。
 
 workspace は既定 nextest profile で 2 回連続成功させる。timeout 引上げで性能問題を隠さず、新しい prelude-heavy

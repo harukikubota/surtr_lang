@@ -21,7 +21,7 @@ use spire::ast::{AstTy, BinOp, Lit, Span};
 use crate::env::{TypeEnv, TypeKind};
 use crate::error::TypeError;
 use crate::typed::*;
-use crate::types::Ty;
+use crate::types::{NominalType, Ty};
 
 mod carriers;
 mod definitions;
@@ -419,7 +419,7 @@ struct TraitMethodInfo {
     return_type_arguments: Vec<ResolvedReturnTypeArgument>,
     type_params: Vec<ResolvedTypeParam>,
     value_parameters: Vec<ResolvedValueParameter>,
-    ret_ty: AstTy,
+    ret_ty: sigil::resolved::ResolvedSignatureTy,
     where_clause: Option<TypedWhereClause>,
     attrs: ResolvedDeclAttrs,
     body: Option<Box<Resolved>>,
@@ -450,7 +450,7 @@ struct TraitImplMethodInfo {
     return_type_arguments: Vec<ResolvedReturnTypeArgument>,
     type_params: Vec<ResolvedTypeParam>,
     value_parameters: Vec<ResolvedValueParameter>,
-    ret_ty: Option<AstTy>,
+    ret_ty: Option<sigil::resolved::ResolvedSignatureTy>,
     where_clause: Option<TypedWhereClause>,
     body: Box<Resolved>,
     attrs: ResolvedDeclAttrs,
@@ -515,6 +515,68 @@ pub(super) enum CandidateApplicability {
     Applicable(TraitMethodInstantiation),
     Deferred(PendingTraitCandidate),
     Rejected(CandidateRejection),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum ConstructorProjectionFailure {
+    Canonicalization,
+    MissingImplTargetMetadata,
+    UnsatisfiedConstraints,
+    NoApplicableImplementation,
+    AmbiguousImplementation,
+    MissingConstructorSlotMapping { variable: u32 },
+    MissingWitnessTrait,
+    SlotCountMismatch { expected: usize, actual: usize },
+    InvalidSlotPosition { position: usize },
+    MissingNominalArguments,
+    UnsupportedConstructor,
+}
+
+#[derive(Debug, Clone)]
+enum ConstructorProjectionOutcome {
+    Applicable {
+        info: TraitImplInfo,
+        mapping: HashMap<u32, Ty>,
+    },
+    Deferred {
+        waiting_on: Vec<u32>,
+    },
+    Rejected {
+        failures: Vec<ConstructorProjectionFailure>,
+    },
+}
+
+#[derive(Debug, Clone)]
+enum ConstructorCarrierOutcome {
+    Projected(CanonicalConstructorCarrier),
+    Deferred {
+        waiting_on: Vec<u32>,
+    },
+    Rejected {
+        failures: Vec<ConstructorProjectionFailure>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+enum ConstructorApplicationOutcome {
+    Applied(Ty),
+    Deferred {
+        waiting_on: Vec<u32>,
+    },
+    Rejected {
+        failures: Vec<ConstructorProjectionFailure>,
+    },
+}
+
+#[derive(Debug, Clone)]
+enum ConstructorSlotsOutcome {
+    Projected(Vec<Ty>),
+    Deferred {
+        waiting_on: Vec<u32>,
+    },
+    Rejected {
+        failures: Vec<ConstructorProjectionFailure>,
+    },
 }
 
 /// A trait requirement kept in inference state.  Keep the trait identity and
@@ -663,9 +725,12 @@ pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
         Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
             params.iter().any(type_contains_unresolved_vars) || type_contains_unresolved_vars(ret)
         }
-        Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
-            .iter()
-            .any(|(_, field_ty)| type_contains_unresolved_vars(field_ty)),
+        Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+            nominal.arguments.iter().any(type_contains_unresolved_vars)
+                || nominal
+                    .iter()
+                    .any(|(_, field_ty)| type_contains_unresolved_vars(field_ty))
+        }
         Ty::Int | Ty::Float | Ty::Str | Ty::Bool | Ty::Unit | Ty::Pid(_) | Ty::Hole | Ty::Error => {
             false
         }
@@ -898,8 +963,20 @@ impl<'a, 'env> BuiltinSignatureParser<'a, 'env> {
     fn build_named_type(&mut self, ident: &str) -> Result<Ty, String> {
         if let Some(def) = self.env.lookup_type_def(ident) {
             return Ok(match &def.kind {
-                crate::env::TypeKind::Struct => Ty::Struct(def.name.clone(), def.fields.clone()),
-                crate::env::TypeKind::Record => Ty::Record(def.name.clone(), def.fields.clone()),
+                crate::env::TypeKind::Struct => Ty::Struct(
+                    def.name.clone(),
+                    NominalType::new(
+                        def.type_param_vars.iter().copied().map(Ty::Var).collect(),
+                        def.fields.clone(),
+                    ),
+                ),
+                crate::env::TypeKind::Record => Ty::Record(
+                    def.name.clone(),
+                    NominalType::new(
+                        def.type_param_vars.iter().copied().map(Ty::Var).collect(),
+                        def.fields.clone(),
+                    ),
+                ),
                 crate::env::TypeKind::ConcreteError => Ty::Error,
                 crate::env::TypeKind::Enum => Self::builtin_special_enum_ty_for_query(
                     def.name.strip_prefix("Global::").unwrap_or(&def.name),
@@ -1126,10 +1203,12 @@ enum CanonicalTyKey {
     },
     Struct {
         name: String,
+        args: Vec<CanonicalTyKey>,
         fields: Vec<(String, CanonicalTyKey)>,
     },
     Record {
         name: String,
+        args: Vec<CanonicalTyKey>,
         fields: Vec<(String, CanonicalTyKey)>,
     },
     Enum {
@@ -1171,7 +1250,6 @@ struct PersistentCheckerState {
     trait_methods_by_qualified_name: HashMap<String, (String, String)>,
     tyvar_bounds: HashMap<u32, Vec<String>>,
     constructor_witness_traits: HashMap<u32, String>,
-    constructor_family_witnesses: HashMap<u32, u32>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
 }
@@ -1195,7 +1273,6 @@ impl PersistentCheckerState {
             trait_methods_by_qualified_name: HashMap::new(),
             tyvar_bounds: HashMap::new(),
             constructor_witness_traits: HashMap::new(),
-            constructor_family_witnesses: HashMap::new(),
             constructor_capabilities: HashMap::new(),
             signature_aliases: HashMap::new(),
         }
@@ -1219,7 +1296,6 @@ impl PersistentCheckerState {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
-            constructor_family_witnesses: self.constructor_family_witnesses.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             signature_aliases: self.signature_aliases.clone(),
             process_specs,
@@ -1246,7 +1322,6 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             trait_methods_by_qualified_name: checkpoint.trait_methods_by_qualified_name,
             tyvar_bounds: checkpoint.tyvar_bounds,
             constructor_witness_traits: checkpoint.constructor_witness_traits,
-            constructor_family_witnesses: checkpoint.constructor_family_witnesses,
             constructor_capabilities: checkpoint.constructor_capabilities,
             signature_aliases: checkpoint.signature_aliases,
         }
@@ -1275,7 +1350,6 @@ pub struct ScarCheckpoint {
     tyvar_bounds: HashMap<u32, Vec<String>>,
     #[serde(default)]
     constructor_witness_traits: HashMap<u32, String>,
-    constructor_family_witnesses: HashMap<u32, u32>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     process_specs: Vec<TypedProcessSpec>,
@@ -1675,8 +1749,11 @@ impl ScarSession {
                 }
                 Self::rewrite_fun_indices_in_ty(ret, rewrites);
             }
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => {
-                for (_, field_ty) in fields {
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                for argument in &mut nominal.arguments {
+                    Self::rewrite_fun_indices_in_ty(argument, rewrites);
+                }
+                for (_, field_ty) in nominal {
                     Self::rewrite_fun_indices_in_ty(field_ty, rewrites);
                 }
             }
@@ -2344,7 +2421,6 @@ struct Checker {
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     /// Constructor-trait identity for each signature-position witness.
     constructor_witness_traits: HashMap<u32, String>,
-    constructor_family_witnesses: HashMap<u32, u32>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
     alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
@@ -2399,6 +2475,7 @@ enum ConstructorCapabilityProvenance {
         ty: Ty,
         variables: HashMap<u32, (ConstructorCapabilityProvenance, Ty)>,
     },
+    ConstructorApplication(ConstructorApplicationOutcome),
 }
 
 impl ConstructorCapabilityProvenance {
@@ -2476,7 +2553,6 @@ impl Checker {
             active_capabilities: Vec::new(),
             constructor_capabilities: state.constructor_capabilities,
             constructor_witness_traits: state.constructor_witness_traits,
-            constructor_family_witnesses: state.constructor_family_witnesses,
             signature_aliases: state.signature_aliases,
             alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
@@ -2527,7 +2603,6 @@ impl Checker {
         checker.active_capabilities = self.active_capabilities.clone();
         checker.constructor_capabilities = self.constructor_capabilities.clone();
         checker.constructor_witness_traits = self.constructor_witness_traits.clone();
-        checker.constructor_family_witnesses = self.constructor_family_witnesses.clone();
         checker.seen_builtin_type_decls = self.seen_builtin_type_decls.clone();
         checker.facet_path_kind_decls = self.facet_path_kind_decls.clone();
         checker.process_handler_dependencies = self.process_handler_dependencies.clone();
@@ -2601,7 +2676,10 @@ impl Checker {
                     self.warn_unused_type_params(type_params, &used, &id.name);
                 }
                 Resolved::Def(_, id, _return_type_arguments, params, ret_ty, _, _, _) => {
-                    let used = Self::signature_type_param_uses(params, ret_ty.as_ref());
+                    let used = Self::signature_type_param_uses(
+                        params,
+                        ret_ty.as_ref().map(|ty| ty.syntax()),
+                    );
                     self.warn_unused_type_params(&[], &used, &id.name);
                 }
                 Resolved::ExtractorDef(_, id, type_params, param, ret_ty, _, _) => {
@@ -2664,7 +2742,7 @@ impl Checker {
                         if id.name == "Default"
                             && method.id.name == "default"
                             && !method.return_type_arguments.iter().any(
-                                |param| matches!(&param.ty, AstTy::Named(_, name) if name == "Self"),
+                                |param| matches!(&*param.ty, AstTy::Named(_, name) if name == "Self"),
                             )
                             {
                             return Err(TypeError {
@@ -2687,7 +2765,7 @@ impl Checker {
                     for method in methods {
                         let used = Self::signature_type_param_uses(
                             &method.value_parameters,
-                            method.ret_ty.as_ref(),
+                            method.ret_ty.as_ref().map(|ty| ty.syntax()),
                         );
                         self.warn_unused_type_params(
                             &method.type_params,
@@ -3063,9 +3141,15 @@ impl Checker {
                     .any(|param| self.ty_contains_process_init(param))
                     || self.ty_contains_process_init(&ret)
             }
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
-                .iter()
-                .any(|(_, field_ty)| self.ty_contains_process_init(field_ty)),
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                nominal
+                    .arguments
+                    .iter()
+                    .any(|argument| self.ty_contains_process_init(argument))
+                    || nominal
+                        .iter()
+                        .any(|(_, field_ty)| self.ty_contains_process_init(field_ty))
+            }
             Ty::BuiltinFunc { params, ret, .. } | Ty::UserFunc { params, ret, .. } => {
                 params
                     .iter()
@@ -3482,9 +3566,15 @@ impl Checker {
                     .any(|param| self.ty_contains_handler_capability_pid(param, slots))
                     || self.ty_contains_handler_capability_pid(&ret, slots)
             }
-            Ty::Struct(_, fields) | Ty::Record(_, fields) => fields
-                .iter()
-                .any(|(_, field_ty)| self.ty_contains_handler_capability_pid(field_ty, slots)),
+            Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                nominal
+                    .arguments
+                    .iter()
+                    .any(|argument| self.ty_contains_handler_capability_pid(argument, slots))
+                    || nominal.iter().any(|(_, field_ty)| {
+                        self.ty_contains_handler_capability_pid(field_ty, slots)
+                    })
+            }
             Ty::Enum(_, args) => args
                 .iter()
                 .any(|arg| self.ty_contains_handler_capability_pid(arg, slots)),
@@ -3605,7 +3695,6 @@ impl Checker {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name.clone(),
             tyvar_bounds: self.tyvar_bounds.clone(),
             constructor_witness_traits: self.constructor_witness_traits.clone(),
-            constructor_family_witnesses: self.constructor_family_witnesses.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             signature_aliases: self.signature_aliases.clone(),
         }
@@ -3629,7 +3718,6 @@ impl Checker {
             trait_methods_by_qualified_name: self.trait_methods_by_qualified_name,
             tyvar_bounds: self.tyvar_bounds,
             constructor_witness_traits: self.constructor_witness_traits,
-            constructor_family_witnesses: self.constructor_family_witnesses,
             constructor_capabilities: self.constructor_capabilities,
             signature_aliases: self.signature_aliases,
         }
@@ -4316,6 +4404,32 @@ impl Checker {
                     subject,
                     span,
                 ));
+            }
+            if let Some((outcome, span)) = specialized
+                .iter()
+                .find_map(|node| self.unresolved_executable_constructor_application(node))
+            {
+                return match outcome {
+                    ConstructorApplicationOutcome::Deferred { waiting_on } => {
+                        let mut error =
+                            self.ambiguous_constructor_result("constructor", "application", &span);
+                        error.hint = Some(format!(
+                            "Resolve all {} constructor input(s) before this value is executed.",
+                            waiting_on.len()
+                        ));
+                        Err(error)
+                    }
+                    ConstructorApplicationOutcome::Rejected { failures } => {
+                        Err(signatures::constructor_signature_metadata_error(
+                            "constructor application",
+                            &span,
+                            Self::constructor_projection_failure_detail(&failures),
+                        ))
+                    }
+                    ConstructorApplicationOutcome::Applied(_) => unreachable!(
+                        "an applied constructor cannot remain in executable typed output"
+                    ),
+                };
             }
             self.collect_unused_value_warnings_in_sequence(&specialized);
             Ok(specialized)
