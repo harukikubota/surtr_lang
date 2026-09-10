@@ -162,7 +162,7 @@ rigid genericのproof、使用済みboundを区別し、部分適用・型lambda
 - `rtk cargo nextest run -p xldr --test repl_core repl_core_bucket_3`: 1 passed、8 skipped。
 - `cargo fmt --all -- --check`、`git diff --check`: 成功。
 
-実装commitは未作成。N04以降、Rune integration、workspace / CI全体はN03の対象外として未実行。
+実装commit: `b0c180cd`。N04以降、Rune integration、workspace / CI全体はN03の対象外として未実行。
 入力仕様のN03状態は`doc/monadt_language_extension_spec.md`、実装済み仕様は`doc/要件定義v9.md`、`docs/dev/Trait_system_spec.md`、
 `docs/site/{language-reference,structs,type-annotations,facet}.md`へ反映した。
 
