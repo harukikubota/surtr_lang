@@ -52,6 +52,16 @@ where
 }
 ```
 
+TypeCtorTrait boundを持つnominal parameterへはbare constructor headを渡せます。
+
+```surtr
+value: OptionT<Result, Int> = OptionT(Ok(Option::Some(1)))
+```
+
+この`Result`は通常値の型ではなく、`OptionT`宣言が要求するunary constructor入力です。
+`Result<Int>`のような適用済み型や`Either<String, _>`のような部分適用をconstructor headの代わりには
+使えません。genericな`OptionT<$M, $A>`では、宣言側と同じTypeCtorTrait boundを`where`へ明示します。
+
 ## `Result<T>`
 
 Result 系の戻り値注釈は日常的によく使います。

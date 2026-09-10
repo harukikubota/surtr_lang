@@ -21,6 +21,21 @@ impl User {
 `defstruct` は名前付きフィールドを持つデータ型です。  
 `impl User` は `User` 専用の namespace で、構築 helper や分解 helper を置きます。
 
+型parameterには単一のdeclaration boundを付けられます。boundが`Monad`のような
+TypeCtorTraitなら、そのparameterをfield型のconstructorとして適用できます。
+
+```surtr
+defstruct OptionT<$M: Monad, $A> {
+  inner: $M<Option<$A>>,
+}
+```
+
+`OptionT<Result, Int>`の`Result`はcompile-timeのbare constructor headです。runtimeには
+`Result<Option<Int>>`のfield値だけが入り、Trait objectやdictionaryは保持しません。受理するのは
+`Result` / `Option` / `List`と、要求されたTypeCtorTrait implを持つuser-defined headです。
+部分適用や型lambdaは使えません。generic関数から`OptionT<$M, $A>`を使う場合は、`where $M: Monad`
+のように同じboundを明示します。
+
 欠損可能 field を持たせるときは、`T?` または `Option<T>` を使います。
 `T?` は `Option<T>` に下がる sugar です。
 `Result` を返す helper 関数とつなぐときは、必要に応じて

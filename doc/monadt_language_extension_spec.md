@@ -2,7 +2,7 @@
 
 ## 1. 状態・読み方
 
-- 配置: `/doc`。未実装の言語拡張の実装入力。
+- 配置: `/doc`。N03 の nominal constructor parameter は実装済み。N04 の parameterized TypeCtorTrait / MonadT 契約は未実装の入力。
 - 基準 commit: `f1986a27d84728e1e7a88de457a1d6b55cfe5ab8`。
 - 通常 Monad インスタンス追加とは別タスクで実装する。
 - 本書では「確定要件」「初回実装で採用する最小インターフェース」「実装前の確認項目」を区別する。
@@ -405,3 +405,7 @@ MT-I01 は、以下の確定内容により **CLOSED** とする。
 ## 13. 実装後の移管
 
 実装開始前に、§1で列挙した置換対象を `docs/dev/Trait_system_spec.md`、`doc/do_intrinsic_spec.md`、関連する実装計画へ反映し、相反する旧契約を削除する。実装後は言語機能の確定契約を利用者向け型注釈・Trait・struct文書へ移管する。標準TransformerのAPIは `monadt_standard_types_spec.md` と個別 `@doc` の担当であり、本書に複製しない。
+
+N03 の MT-I01/03 と MT-L01–06・MT-L13–15 該当部分は、2026-09-09 に
+`docs/dev/Trait_system_spec.md`、`docs/site/{language-reference,structs,type-annotations,facet}.md`へ移管した。
+MT-I02/04 と MT-L07–12・MT-L16 は N04 以降の入力として本書に残す。

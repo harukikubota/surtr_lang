@@ -38,6 +38,10 @@ defstruct Name {
   field: Ty,
 }
 
+defstruct Wrapped<$M: Monad, $A> {
+  value: $M<$A>,
+}
+
 defrecord Name(field: Ty, ...)
 
 deferror Name(field: Ty, ...) { "message" }
@@ -92,7 +96,7 @@ match expr {
 - `defenum` で定義する
 - 値生成は `Enum::Variant(...)` または `Enum<TypeArgument, ...>::Variant(...)`
 - 後者の型引数 arity は enum 宣言と一致させる。各 `_` はその位置だけを payload と expected type から推論し、明示した通常型・scope 内型変数は固定する
-- TypeConstructor trait や abstract `Error` など、既存の値型位置で禁止される型は明示型引数にも使えない
+- 通常の型引数位置ではTypeConstructor traitやabstract `Error`を使えない。declaration parameterがTypeCtorTrait boundを持つ位置だけは、対応する具象constructorのbare headを指定できる
 - `Result<T>::Ok(...)` / `Result<T>::Err(...)` は Result 専用 constructor として lower する。bare `Err(...)` の `T` が外側から決まらない場合は owner 型引数を明示する
 - `Enum<...>::method`、struct constructor、型注釈・signature・pattern・impl target の `_` にはこの規則を適用しない
 - `match` は網羅必須
@@ -126,7 +130,7 @@ match expr {
 - 匿名 `impl Trait` 型は使えず、名前付き型変数と `where` clause で制約する
 - `where` clause は宣言・trait・impl に制約を追加する
 - `Self: Type<...>` は trait definition where の `Self` だけ、`Trait.$Slot` は TypeConstructor trait impl の slot map だけで受理する
-- constructor application は通常関数／trait method signature の direct parameter・return に限り、`Self::...` / `Type::...` は value owner path として不正
+- constructor application は通常関数／trait method signature の direct parameter・return、またはTypeCtorTrait declaration boundを持つnominal field/payloadに限る。`Self::...` / `Type::...` は value owner path として不正
 - `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
 - 数値 helper は `Int::abs` / `Float::safe_div` のような concrete type owner surface として提供する
 - `Compare` が三値比較の正本で、`< <= > >=` も `Compare` を前提に動く

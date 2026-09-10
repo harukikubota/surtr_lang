@@ -6908,12 +6908,34 @@ fn type_constructor_variable_applications_remain_rejected_outside_callable_signa
             parse(source).expect_err("constructor variable applications are signature-only syntax");
         assert!(
             error.message().contains(
-                "type constructor variables may only be applied in callable signature types"
+                "type constructor variables may only be applied in callable signatures or nominal fields with an explicit declaration bound"
             ),
             "{source}: {}",
             error.message()
         );
     }
+}
+
+#[test]
+fn bounded_nominal_constructor_parameters_apply_in_declared_fields_and_payloads() {
+    parse(
+        r#"defstruct Wrapped<$M: Monad, $A> { value: $M<$A> }
+defenum Layer<$M: Monad, $A> { Layer($M<Option<$A>>), }"#,
+    )
+    .expect("a bounded declaration parameter should apply in its own nominal definition");
+}
+
+#[test]
+fn unbounded_nominal_parameters_do_not_gain_constructor_application_syntax() {
+    let error = parse("defstruct Invalid<$M, $A> { value: $M<$A> }")
+        .expect_err("a nominal parameter needs an explicit declaration bound");
+    assert!(
+        error
+            .message()
+            .contains("type constructor variables may only be applied in callable signatures or nominal fields with an explicit declaration bound"),
+        "{}",
+        error.message()
+    );
 }
 
 #[test]

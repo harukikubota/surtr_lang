@@ -23,6 +23,7 @@ pub(super) enum TypePosition {
 pub(super) struct TypeParseContext {
     impl_target: Option<String>,
     position: TypePosition,
+    declaration_constructor_variables: Vec<String>,
 }
 
 impl TypeParseContext {
@@ -30,6 +31,7 @@ impl TypeParseContext {
         Self {
             impl_target,
             position: TypePosition::General,
+            declaration_constructor_variables: Vec::new(),
         }
     }
 
@@ -37,6 +39,7 @@ impl TypeParseContext {
         Self {
             impl_target,
             position: TypePosition::DirectSignatureParameter,
+            declaration_constructor_variables: Vec::new(),
         }
     }
 
@@ -44,6 +47,19 @@ impl TypeParseContext {
         Self {
             impl_target,
             position: TypePosition::DirectSignatureReturn,
+            declaration_constructor_variables: Vec::new(),
+        }
+    }
+
+    pub(super) fn nominal_declaration(type_params: &[TypeParam]) -> Self {
+        Self {
+            impl_target: None,
+            position: TypePosition::General,
+            declaration_constructor_variables: type_params
+                .iter()
+                .filter(|param| param.bound.is_some())
+                .map(|param| param.name.clone())
+                .collect(),
         }
     }
 
@@ -51,6 +67,7 @@ impl TypeParseContext {
         Self {
             impl_target: self.impl_target.clone(),
             position: self.position,
+            declaration_constructor_variables: self.declaration_constructor_variables.clone(),
         }
     }
 
@@ -61,11 +78,14 @@ impl TypeParseContext {
         )
     }
 
-    fn permits_constructor_variable_application(&self) -> bool {
+    fn permits_constructor_variable_application(&self, name: &str) -> bool {
         matches!(
             self.position,
             TypePosition::DirectSignatureParameter | TypePosition::DirectSignatureReturn
-        )
+        ) || self
+            .declaration_constructor_variables
+            .iter()
+            .any(|allowed| allowed == name)
     }
 }
 
@@ -207,9 +227,9 @@ impl Parser<'_> {
                 return Err(ParseError::syntax("Invalid type variable name: $Self", sp));
             }
             if matches!(self.peek(), Token::Lt) {
-                if !context.permits_constructor_variable_application() {
+                if !context.permits_constructor_variable_application(&name) {
                     return Err(ParseError::syntax(
-                        "type constructor variables may only be applied in callable signature types",
+                        "type constructor variables may only be applied in callable signatures or nominal fields with an explicit declaration bound",
                         sp,
                     ));
                 }

@@ -1534,6 +1534,19 @@ impl Checker {
             params,
             ret_ty.as_ref(),
         );
+        let signature_types = typed_return_type_arguments
+            .iter()
+            .map(|argument| &argument.ty)
+            .chain(typed_params.iter().map(|parameter| &parameter.ty))
+            .chain(std::iter::once(&expected_ret))
+            .collect::<Vec<_>>();
+        for capability in &mut declaration_capabilities {
+            if signature_types.iter().any(|ty| {
+                self.nominal_type_uses_capability(ty, &capability.subject_ty, &capability.trait_id)
+            }) {
+                capability.consumed = true;
+            }
+        }
         if self.ty_contains_facet(&expected_ret) {
             return Err(TypeError {
                 structured: None,
@@ -2603,12 +2616,10 @@ impl Checker {
             }
         }
 
-        let mut fresh = def
-            .type_param_vars
-            .iter()
-            .copied()
-            .map(|variable| (variable, self.env.fresh_tyvar()))
-            .collect::<HashMap<_, _>>();
+        let mut fresh = HashMap::new();
+        for variable in &def.type_param_vars {
+            self.instantiate_ty_with_fresh(&Ty::Var(*variable), &mut fresh);
+        }
         let fields = def
             .fields
             .iter()
@@ -2660,7 +2671,7 @@ impl Checker {
             typed_fields.push(typed_val);
         }
 
-        let arguments = def
+        let arguments: Vec<Ty> = def
             .type_param_vars
             .iter()
             .map(|variable| {
@@ -2671,7 +2682,8 @@ impl Checker {
                 )
             })
             .collect();
-        let result_ty = Ty::Struct(id.name.clone(), NominalType::new(arguments, fields));
+        let result_fields = self.instantiate_type_def_fields(&def, &arguments);
+        let result_ty = Ty::Struct(id.name.clone(), NominalType::new(arguments, result_fields));
         Ok(TypedNode {
             ty: result_ty,
             span: span.clone(),
@@ -3009,6 +3021,11 @@ impl Checker {
                         ),
                     });
                 }
+                Ty::UserFunc { params, ret, .. }
+                    if self.callable_signatures.contains_key(&id.unique_id) =>
+                {
+                    return self.check_registered_callable_application(span, id, args, None);
+                }
                 Ty::UserFunc { params, ret, .. } => {
                     let callable_hint = self.call_target_signature_hint_for_id(id, params, ret);
                     let typed_args = self.typecheck_user_function_args(
@@ -3091,43 +3108,17 @@ impl Checker {
                     )),
                 });
             };
-            let new_ty = self
-                .env
-                .lookup_var(new_uid)
-                .cloned()
-                .ok_or_else(|| TypeError {
-                    structured: None,
-                    message: format!("Undefined function: {}", new_name),
-                    span: span.clone(),
-                    hint: None,
-                })?;
-            let new_ty = match new_ty {
-                Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => {
-                    self.instantiate_callable_ty(&new_ty)
-                }
-                other => other,
+            let new_id = ResolvedId {
+                name: new_name.clone(),
+                qualified_name: None,
+                symbol_info: None,
+                unique_id: new_uid,
+                compiler_generated: false,
+                span: id.span.clone(),
             };
-            let (params, ret_ty) = match new_ty.clone() {
-                Ty::UserFunc { params, ret, .. }
-                | Ty::BuiltinFunc { params, ret, .. }
-                | Ty::Func(params, ret) => (params, *ret),
-                other => {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`{}` is not callable (got {})",
-                            new_name,
-                            self.ty_name(&other)
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
-                }
-            };
-
-            let typed_args = self.typecheck_user_function_args(
-                span, new_uid, "function", &params, args, None, false, false,
-            )?;
+            let typed_call =
+                self.check_registered_callable_application(span, &new_id, args, None)?;
+            let ret_ty = typed_call.ty.clone();
             let expected_self_ty = Ty::Struct(
                 id.name.clone(),
                 NominalType::new(
@@ -3154,25 +3145,7 @@ impl Checker {
                 });
             }
 
-            return Ok(TypedNode {
-                ty: ret_ty.clone(),
-                span: span.clone(),
-                node: TypedInner::App(
-                    Box::new(TypedNode {
-                        ty: new_ty,
-                        span: id.span.clone(),
-                        node: TypedInner::Var(ResolvedId {
-                            name: new_name,
-                            qualified_name: None,
-                            symbol_info: None,
-                            unique_id: new_uid,
-                            compiler_generated: false,
-                            span: id.span.clone(),
-                        }),
-                    }),
-                    typed_args,
-                ),
-            });
+            return Ok(typed_call);
         }
 
         if !matches!(

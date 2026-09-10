@@ -337,6 +337,7 @@ impl Checker {
         let quantified = (0..self.env.next_tyvar)
             .filter(|var| {
                 !self.rigid_tyvars.contains(var)
+                    && !self.pending_trait_obligations.contains_key(var)
                     && self.ty_contains_var(&ty, *var)
                     && !self.env.vars.iter().any(|(other_id, other_ty)| {
                         *other_id != id.unique_id && self.ty_contains_var(other_ty, *var)
@@ -1839,6 +1840,53 @@ impl Checker {
         }
         typed.ty = self.callable_ty_from_signature(&typed.ty, &signature);
         Ok((typed, signature, return_type_arguments))
+    }
+
+    pub(super) fn check_registered_callable_application(
+        &mut self,
+        span: &Span,
+        id: &ResolvedId,
+        args: &[ResolvedRecordLitArg],
+        expected_return: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let target = Resolved::Var(id.span.clone(), id.clone());
+        let (mut typed_func, signature, return_type_arguments) =
+            self.instantiate_named_callable_signature(span, &target, None)?;
+        let mut constraints = self.call_constraint_set(
+            signature,
+            return_type_arguments,
+            expected_return,
+            span,
+            &typed_func.ty,
+        );
+        self.apply_return_type_argument_constraints(&constraints)?;
+        let typed_args = self.check_callable_application(
+            id.unique_id,
+            &id.name,
+            &constraints.signature,
+            args,
+            span,
+            None,
+            false,
+        )?;
+        let substitution =
+            match self.complete_call_constraint_set(&mut constraints, &typed_args, span, None) {
+                super::signatures::SolveState::Solved(substitution) => substitution,
+                super::signatures::SolveState::Deferred(pending) => pending.substitution,
+                super::signatures::SolveState::Failed(error) => return Err(error),
+            };
+        if let Ty::UserFunc {
+            call_substitution, ..
+        } = &mut typed_func.ty
+        {
+            *call_substitution = substitution;
+        }
+        typed_func.ty = self.callable_ty_from_signature(&typed_func.ty, &constraints.signature);
+        Ok(TypedNode {
+            ty: self.resolve_ty(&constraints.signature.return_type.ty),
+            span: span.clone(),
+            node: TypedInner::App(Box::new(typed_func), typed_args),
+        })
     }
 
     fn apply_call_site_return_type_arguments(
@@ -7539,7 +7587,7 @@ impl Checker {
     }
 
     fn collect_facet_rebuild_tyvar_replacements(
-        &self,
+        &mut self,
         template: &Ty,
         replacement: &Ty,
         replacements: &mut HashMap<u32, Ty>,
@@ -7629,19 +7677,66 @@ impl Checker {
                     span,
                 )
             }
+            (Ty::SelfApp(template_items), replacement) => {
+                let Some((template_witness, template_slots)) =
+                    Self::constructor_application_parts(template_items)
+                else {
+                    return self.facet_rebuild_not_generic_error(span);
+                };
+                let resolved_replacement = self.resolve_ty(replacement);
+                let replacement_slots = match &resolved_replacement {
+                    Ty::SelfApp(replacement_items) => {
+                        let Some((replacement_witness, replacement_slots)) =
+                            Self::constructor_application_parts(replacement_items)
+                        else {
+                            return self.facet_rebuild_not_generic_error(span);
+                        };
+                        if self.resolve_ty(template_witness) != self.resolve_ty(replacement_witness)
+                        {
+                            return self.facet_rebuild_not_generic_error(span);
+                        }
+                        replacement_slots.to_vec()
+                    }
+                    _ => match self.constructor_application_slots_for_witness(
+                        template_witness,
+                        template_slots.len(),
+                        &resolved_replacement,
+                    ) {
+                        ConstructorSlotsOutcome::Projected(slots) => slots,
+                        ConstructorSlotsOutcome::Deferred { .. }
+                        | ConstructorSlotsOutcome::Rejected { .. } => {
+                            return self.facet_rebuild_not_generic_error(span);
+                        }
+                    },
+                };
+                if template_slots.len() != replacement_slots.len() {
+                    return self.facet_rebuild_not_generic_error(span);
+                }
+                for (template_slot, replacement_slot) in
+                    template_slots.iter().zip(&replacement_slots)
+                {
+                    self.collect_facet_rebuild_tyvar_replacements(
+                        template_slot,
+                        replacement_slot,
+                        replacements,
+                        span,
+                    )?;
+                }
+                Ok(())
+            }
             _ => self.facet_rebuild_not_generic_error(span),
         }
     }
 
     fn rebuild_named_facet_arguments(
-        &self,
+        &mut self,
         type_name: &str,
         field_index: usize,
         arguments: &[Ty],
         rebuilt_field: &Ty,
         span: &Span,
     ) -> Result<Vec<Ty>, TypeError> {
-        let Some(def) = self.env.lookup_type_def(type_name) else {
+        let Some(def) = self.env.lookup_type_def(type_name).cloned() else {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -7685,7 +7780,7 @@ impl Checker {
             &mut replacements,
             span,
         )?;
-        Ok(type_param_vars
+        let rebuilt_arguments = type_param_vars
             .iter()
             .zip(arguments)
             .map(|(variable, argument)| {
@@ -7694,7 +7789,31 @@ impl Checker {
                     .cloned()
                     .unwrap_or_else(|| argument.clone())
             })
-            .collect())
+            .collect::<Vec<_>>();
+        let rebuilt_fields = self.instantiate_type_def_fields(&def, &rebuilt_arguments);
+        let Some((_, expected_field)) = rebuilt_fields.get(field_index) else {
+            return Err(TypeError {
+                structured: None,
+                message: "Facet field path is inconsistent with its rebuilt source type".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        if !self.types_compatible(expected_field, rebuilt_field) {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Facet replacement changes the constructor family of {}",
+                    Self::surface_name(type_name)
+                ),
+                span: span.clone(),
+                hint: Some(
+                    "A type-changing Facet update must preserve constructor parameters and may only rebuild uniquely determined payload parameters."
+                        .into(),
+                ),
+            });
+        }
+        Ok(rebuilt_arguments)
     }
 
     fn facet_rebuild_not_generic_error(&self, span: &Span) -> Result<(), TypeError> {
@@ -7855,7 +7974,7 @@ impl Checker {
     }
 
     fn ensure_named_facet_rebuild_is_unique(
-        &self,
+        &mut self,
         type_name: &str,
         field_index: usize,
         arguments: &[Ty],
@@ -7866,7 +7985,7 @@ impl Checker {
         if self.resolve_ty(before) == self.resolve_ty(after) {
             return Ok(());
         }
-        let Some(def) = self.env.lookup_type_def(type_name) else {
+        let Some(def) = self.env.lookup_type_def(type_name).cloned() else {
             return Err(TypeError {
                 structured: None,
                 message: format!(
@@ -7975,6 +8094,7 @@ impl Checker {
         let replacement_ty = self.resolve_ty(replacement_ty);
         let update_source_ty =
             self.rebuild_facet_source_type(&path.source_ty, &path.segments, &replacement_ty, span)?;
+        self.validate_nominal_type_well_formed(&update_source_ty, span, false)?;
 
         if !matches!(path.update_focus_ty, Ty::Hole)
             && !self.types_compatible(&path.update_focus_ty, &replacement_ty)
@@ -12788,7 +12908,7 @@ mod tests {
     ) {
         checker
             .env
-            .predeclare_type_def(name.into(), TypeKind::Struct, Vec::new());
+            .predeclare_type_def(name.into(), TypeKind::Struct, Vec::new(), Vec::new());
         checker.env.resolve_type_def_signature(
             name,
             fields

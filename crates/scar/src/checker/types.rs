@@ -99,6 +99,13 @@ impl Checker {
         (candidates.len() == 1).then(|| candidates.remove(0))
     }
 
+    pub(super) fn declaration_constructor_trait_key(&self, bound: &str) -> Option<String> {
+        if let Some(info) = self.traits.get(bound) {
+            return (!info.constructor_slots.is_empty()).then(|| bound.to_string());
+        }
+        self.unique_constructor_trait_key(Self::surface_name(bound))
+    }
+
     // A constructor-trait application is encoded as `SelfApp(Hole, witness,
     // slots...)`.  Plain `SelfApp(slots...)` remains the trait-metadata form.
     // Keeping both in the existing type variant avoids leaking a runtime type.
@@ -607,7 +614,11 @@ impl Checker {
         ))
     }
 
-    fn resolve_task_handle_surface_ty(&self, span: &Span, args: &[AstTy]) -> Result<Ty, TypeError> {
+    fn resolve_task_handle_surface_ty(
+        &mut self,
+        span: &Span,
+        args: &[AstTy],
+    ) -> Result<Ty, TypeError> {
         if args.len() != 1 {
             return Err(TypeError {
                 structured: None,
@@ -853,7 +864,7 @@ impl Checker {
     }
 
     pub(super) fn resolve_ast_ty_in_context(
-        &self,
+        &mut self,
         ast_ty: &AstTy,
         context: TypeSyntaxContext,
     ) -> Result<Ty, TypeError> {
@@ -1145,7 +1156,7 @@ impl Checker {
                     if Self::surface_name(name) == "TaskHandle" {
                         return self.resolve_task_handle_surface_ty(span, args);
                     }
-                    let def = self.env.lookup_type_def(name).ok_or_else(|| TypeError {
+                    let def = self.env.lookup_type_def(name).cloned().ok_or_else(|| TypeError {
                         structured: None,
                         message: format!("Unknown generic type: {}", name),
                         span: span.clone(),
@@ -1164,16 +1175,30 @@ impl Checker {
                             hint: None,
                         });
                     }
-                    let resolved_args = args
-                        .iter()
-                        .map(|arg| self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General))
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let mut resolved_args = Vec::with_capacity(args.len());
+                    for (argument, bound) in args.iter().zip(&def.type_param_bounds) {
+                        let resolved = if bound
+                            .as_deref()
+                            .and_then(|bound| self.declaration_constructor_trait_key(bound))
+                            .is_some()
+                            && !matches!(argument, AstTy::Named(_, variable) if variable.starts_with('$'))
+                        {
+                            self.resolve_type_constructor_head(argument)?
+                        } else {
+                            self.resolve_ast_ty_in_context(
+                                argument,
+                                TypeSyntaxContext::General,
+                            )?
+                        };
+                        resolved_args.push(resolved);
+                    }
+                    self.validate_nominal_type_arguments(&def, &resolved_args, span, false)?;
                     match def.kind {
                         crate::env::TypeKind::Struct => Ok(Ty::Struct(
                             def.name.clone(),
                             NominalType::new(
                                 resolved_args.clone(),
-                                self.instantiate_type_def_fields(def, &resolved_args),
+                                self.instantiate_type_def_fields(&def, &resolved_args),
                             ),
                         )),
                         crate::env::TypeKind::Enum => {
@@ -1388,6 +1413,9 @@ impl Checker {
             if let Ty::Var(var) = fresh {
                 if let Some(bound) = &param.bound {
                     self.register_tyvar_bound(var, bound);
+                    if let Some(trait_key) = self.declaration_constructor_trait_key(bound) {
+                        self.constructor_witness_traits.insert(var, trait_key);
+                    }
                 }
             }
             tyvars.insert(param.name.clone(), fresh);
@@ -1708,7 +1736,7 @@ impl Checker {
                 span: Self::ast_ty_span(ast_ty).clone(),
                 hint: Some("Use a named `$T` type slot and add `$T: Trait` to the `where` clause.".into()),
             }),
-            AstTy::Generic(_, name, args) if name.starts_with('$') => {
+            AstTy::Generic(span, name, args) if name.starts_with('$') => {
                 let witness = if let Some(existing) = tyvars.get(name) {
                     existing.clone()
                 } else {
@@ -1716,6 +1744,29 @@ impl Checker {
                     tyvars.insert(name.clone(), fresh.clone());
                     fresh
                 };
+                if let Ty::Var(variable) = &witness {
+                    if let Some(trait_key) = self.constructor_witness_traits.get(variable) {
+                        let expected = self
+                            .traits
+                            .get(trait_key)
+                            .expect("constructor witness Trait must remain registered")
+                            .constructor_slots
+                            .len();
+                        if args.len() != expected {
+                            return Err(TypeError {
+                                structured: None,
+                                message: format!(
+                                    "Type constructor parameter {} requires {} slot argument(s), got {}",
+                                    name,
+                                    expected,
+                                    args.len()
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            });
+                        }
+                    }
+                }
                 let mut application = vec![Ty::Hole, witness];
                 application.extend(
                     args.iter()
@@ -2004,17 +2055,26 @@ impl Checker {
                             hint: None,
                         });
                     }
-                    let resolved_args = args
-                        .iter()
-                        .map(|arg| {
+                    let mut resolved_args = Vec::with_capacity(args.len());
+                    for (argument, bound) in args.iter().zip(&def.type_param_bounds) {
+                        let resolved = if bound
+                            .as_deref()
+                            .and_then(|bound| self.declaration_constructor_trait_key(bound))
+                            .is_some()
+                            && !matches!(argument, AstTy::Named(_, variable) if variable.starts_with('$'))
+                        {
+                            self.resolve_type_constructor_head(argument)?
+                        } else {
                             self.resolve_signature_like_ast_ty_in_context(
-                                arg,
+                                argument,
                                 TypeSyntaxContext::General,
                                 tyvars,
                                 mode,
-                            )
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
+                            )?
+                        };
+                        resolved_args.push(resolved);
+                    }
+                    self.validate_nominal_type_arguments(&def, &resolved_args, span, true)?;
                     match def.kind {
                         crate::env::TypeKind::Struct => Ok(Ty::Struct(
                             def.name.clone(),
@@ -2486,6 +2546,235 @@ impl Checker {
         }
     }
 
+    pub(super) fn validate_nominal_type_arguments(
+        &mut self,
+        def: &crate::env::TypeDefInfo,
+        arguments: &[Ty],
+        span: &Span,
+        defer_unresolved: bool,
+    ) -> Result<(), TypeError> {
+        if def.type_params.len() != arguments.len()
+            || def.type_param_bounds.len() != arguments.len()
+        {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Internal consistency error: type {} has incomplete declaration-bound metadata",
+                    Self::surface_name(&def.name)
+                ),
+                span: span.clone(),
+                hint: None,
+            });
+        }
+
+        for ((parameter, bound), argument) in def
+            .type_params
+            .iter()
+            .zip(&def.type_param_bounds)
+            .zip(arguments)
+        {
+            let Some(bound) = bound else {
+                continue;
+            };
+            let resolved = self.resolve_ty(argument);
+            if defer_unresolved && matches!(resolved, Ty::Var(_)) {
+                continue;
+            }
+            let satisfied = if let Ty::Var(var) = &resolved {
+                self.tyvar_has_bound(*var, bound)
+            } else if let Some(trait_key) = self.declaration_constructor_trait_key(bound) {
+                matches!(
+                    self.constructor_projection(&trait_key, &resolved),
+                    ConstructorProjectionOutcome::Applicable { .. }
+                )
+            } else {
+                self.ty_satisfies_bounds(&resolved, std::slice::from_ref(bound))
+            };
+            if !satisfied {
+                return Err(TypeError {
+                    structured: None,
+                    message: format!(
+                        "Type argument {} for {} does not satisfy declaration bound {} on {}",
+                        self.ty_name(&resolved),
+                        parameter,
+                        self.trait_display_name(bound),
+                        Self::surface_name(&def.name)
+                    ),
+                    span: span.clone(),
+                    hint: Some(
+                        "Use a constructor head with the declared capability, or add the same explicit bound to the rigid type variable."
+                            .into(),
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn validate_nominal_type_well_formed(
+        &mut self,
+        ty: &Ty,
+        span: &Span,
+        defer_unresolved: bool,
+    ) -> Result<(), TypeError> {
+        let resolved = self.resolve_ty(ty);
+        match &resolved {
+            Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                let def = self
+                    .env
+                    .lookup_type_def(name)
+                    .cloned()
+                    .ok_or_else(|| TypeError {
+                        structured: None,
+                        message: format!("Unknown nominal type: {}", Self::surface_name(name)),
+                        span: span.clone(),
+                        hint: None,
+                    })?;
+                self.validate_nominal_type_arguments(
+                    &def,
+                    &nominal.arguments,
+                    span,
+                    defer_unresolved,
+                )?;
+                for argument in &nominal.arguments {
+                    self.validate_nominal_type_well_formed(argument, span, defer_unresolved)?;
+                }
+                for (_, field_ty) in nominal.iter() {
+                    self.validate_nominal_type_well_formed(field_ty, span, defer_unresolved)?;
+                }
+            }
+            Ty::Enum(name, arguments) => {
+                if let Some(def) = self.env.lookup_type_def(name).cloned() {
+                    self.validate_nominal_type_arguments(&def, arguments, span, defer_unresolved)?;
+                }
+                for argument in arguments {
+                    self.validate_nominal_type_well_formed(argument, span, defer_unresolved)?;
+                }
+            }
+            Ty::List(inner) | Ty::Lazy(inner) => {
+                self.validate_nominal_type_well_formed(inner, span, defer_unresolved)?;
+            }
+            Ty::Result(ok, err) => {
+                self.validate_nominal_type_well_formed(ok, span, defer_unresolved)?;
+                self.validate_nominal_type_well_formed(err, span, defer_unresolved)?;
+            }
+            Ty::Tuple(items) | Ty::SelfApp(items) => {
+                for item in items {
+                    self.validate_nominal_type_well_formed(item, span, defer_unresolved)?;
+                }
+            }
+            Ty::Func(params, ret) | Ty::BuiltinFunc { params, ret, .. } => {
+                for param in params {
+                    self.validate_nominal_type_well_formed(param, span, defer_unresolved)?;
+                }
+                self.validate_nominal_type_well_formed(ret, span, defer_unresolved)?;
+            }
+            Ty::UserFunc { params, ret, .. } => {
+                for param in params {
+                    self.validate_nominal_type_well_formed(param, span, defer_unresolved)?;
+                }
+                self.validate_nominal_type_well_formed(ret, span, defer_unresolved)?;
+            }
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
+                self.validate_nominal_type_well_formed(source, span, defer_unresolved)?;
+                self.validate_nominal_type_well_formed(focus, span, defer_unresolved)?;
+                self.validate_nominal_type_well_formed(update_source, span, defer_unresolved)?;
+                self.validate_nominal_type_well_formed(update_focus, span, defer_unresolved)?;
+            }
+            Ty::Var(_)
+            | Ty::Hole
+            | Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Error
+            | Ty::Pid(_) => {}
+        }
+        Ok(())
+    }
+
+    pub(super) fn nominal_type_uses_capability(
+        &self,
+        ty: &Ty,
+        subject: &Ty,
+        capability: &str,
+    ) -> bool {
+        let ty = self.resolve_ty(ty);
+        let subject = self.resolve_ty(subject);
+        let argument_uses = |checker: &Self, name: &str, arguments: &[Ty]| {
+            checker.env.lookup_type_def(name).is_some_and(|def| {
+                def.type_param_bounds
+                    .iter()
+                    .zip(arguments)
+                    .any(|(required, argument)| {
+                        required.as_ref().is_some_and(|required| {
+                            checker.resolve_ty(argument) == subject
+                                && checker.trait_bound_entails(
+                                    capability,
+                                    required,
+                                    &mut HashSet::new(),
+                                )
+                        })
+                    })
+            })
+        };
+        match &ty {
+            Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                argument_uses(self, name, &nominal.arguments)
+                    || nominal.arguments.iter().any(|argument| {
+                        self.nominal_type_uses_capability(argument, &subject, capability)
+                    })
+                    || nominal.iter().any(|(_, field_ty)| {
+                        self.nominal_type_uses_capability(field_ty, &subject, capability)
+                    })
+            }
+            Ty::Enum(name, arguments) => {
+                argument_uses(self, name, arguments)
+                    || arguments.iter().any(|argument| {
+                        self.nominal_type_uses_capability(argument, &subject, capability)
+                    })
+            }
+            Ty::List(inner) | Ty::Lazy(inner) => {
+                self.nominal_type_uses_capability(inner, &subject, capability)
+            }
+            Ty::Result(ok, err) => {
+                self.nominal_type_uses_capability(ok, &subject, capability)
+                    || self.nominal_type_uses_capability(err, &subject, capability)
+            }
+            Ty::Tuple(items) | Ty::SelfApp(items) => items
+                .iter()
+                .any(|item| self.nominal_type_uses_capability(item, &subject, capability)),
+            Ty::Func(params, ret) | Ty::BuiltinFunc { params, ret, .. } => {
+                params
+                    .iter()
+                    .any(|param| self.nominal_type_uses_capability(param, &subject, capability))
+                    || self.nominal_type_uses_capability(ret, &subject, capability)
+            }
+            Ty::UserFunc { params, ret, .. } => {
+                params
+                    .iter()
+                    .any(|param| self.nominal_type_uses_capability(param, &subject, capability))
+                    || self.nominal_type_uses_capability(ret, &subject, capability)
+            }
+            Ty::Facet(_, source, focus, update_source, update_focus) => {
+                self.nominal_type_uses_capability(source, &subject, capability)
+                    || self.nominal_type_uses_capability(focus, &subject, capability)
+                    || self.nominal_type_uses_capability(update_source, &subject, capability)
+                    || self.nominal_type_uses_capability(update_focus, &subject, capability)
+            }
+            Ty::Var(_)
+            | Ty::Hole
+            | Ty::Int
+            | Ty::Float
+            | Ty::Str
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Error
+            | Ty::Pid(_) => false,
+        }
+    }
+
     pub(super) fn ty_contains_var(&self, ty: &Ty, needle: u32) -> bool {
         match self.resolve_ty(ty) {
             Ty::Var(var) => var == needle,
@@ -2800,12 +3089,24 @@ impl Checker {
                     .map(|item| self.substitute_type_def_ty(item, bindings))
                     .collect(),
             ),
-            Ty::SelfApp(items) => Ty::SelfApp(
-                items
+            Ty::SelfApp(items) => {
+                let source_witness =
+                    Self::constructor_application_parts(items).map(|(witness, _)| witness.clone());
+                let substituted = items
                     .iter()
                     .map(|item| self.substitute_type_def_ty(item, bindings))
-                    .collect(),
-            ),
+                    .collect::<Vec<_>>();
+                if let Some((witness, slots)) = Self::constructor_application_parts(&substituted) {
+                    if let Some(source) = source_witness.as_ref() {
+                        if let ConstructorApplicationOutcome::Applied(applied) =
+                            self.apply_constructor_application(source, witness, slots)
+                        {
+                            return applied;
+                        }
+                    }
+                }
+                Ty::SelfApp(substituted)
+            }
             Ty::Func(params, ret) => Ty::Func(
                 params
                     .iter()
@@ -3960,6 +4261,27 @@ mod tests {
             );
             assert!(checker.trait_key_by_short_name("Functor").is_none());
         }
+    }
+
+    #[test]
+    fn exact_ordinary_trait_bound_does_not_fall_back_to_same_surface_constructor_trait() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let mut ordinary = constructor_trait("Context", "Left::Context", 71_003);
+        ordinary.constructor_slots.clear();
+        checker.traits.insert("Left::Context".into(), ordinary);
+        checker.traits.insert(
+            "Right::Context".into(),
+            constructor_trait("Context", "Right::Context", 71_004),
+        );
+
+        assert_eq!(
+            checker.declaration_constructor_trait_key("Left::Context"),
+            None
+        );
+        assert_eq!(
+            checker.declaration_constructor_trait_key("Right::Context"),
+            Some("Right::Context".into())
+        );
     }
 
     #[test]
