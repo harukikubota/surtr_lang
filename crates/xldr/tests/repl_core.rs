@@ -243,6 +243,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_rolls_back_failed_input_without_losing_previous_state),
     repl_core_case!(core_constructor_relation_rolls_back_after_failed_input),
     repl_core_case!(core_nominal_constructor_value_survives_failed_bound_check),
+    repl_core_case!(core_parameterized_monad_t_value_survives_failed_inference),
     repl_core_case!(core_rebinding_uses_latest_value_and_grows_snapshot_locals),
     repl_core_case!(core_rejects_top_level_def_capturing_session_value_binding),
     repl_core_case!(core_rejects_repl_forbidden_top_level_declarations),
@@ -2758,7 +2759,10 @@ fn core_nominal_constructor_value_survives_failed_bound_check() {
     let mut engine = ReplEngine::from_script_source(
         "nominal_constructor_parameter.srt",
         r#"
-defstruct OptionT<$M: Monad, $A> {
+defstruct OptionT<$M, $A>
+where
+  $M: Monad
+{
   inner: $M<Option<$A>>,
 }
 impl OptionT {
@@ -2789,7 +2793,7 @@ defenum Plain<$A> {
     assert!(!rejected.should_exit);
     assert!(matches!(rejected.output, ReplOutput::EvalError { .. }));
     assert!(
-        rendered_text(&rejected).contains("does not satisfy declaration bound Monad"),
+        rendered_text(&rejected).contains("does not satisfy declaration constraint Monad"),
         "{}",
         rendered_text(&rejected)
     );
@@ -2828,6 +2832,44 @@ defenum Plain<$A> {
         rendered_text(&viewed)
     );
     assert!(rendered_text(&viewed).contains("Some(1)"));
+}
+
+fn core_parameterized_monad_t_value_survives_failed_inference() {
+    let mut engine = ReplEngine::from_script_source(
+        "parameterized_monad_t.srt",
+        r#"
+impl MonadT<Identity> for Identity<$T>
+where
+  $T: MonadT.$A
+{
+  def lift::<Identity<$T>>(value: Identity<$A>) -> Identity<$A> {
+    value
+  }
+}
+"#,
+    )
+    .expect("parameterized MonadT preload should load");
+
+    let stored = engine.handle_line("lifted: Identity<Int> = MonadT::lift(Identity::new(41))");
+    assert!(!stored.should_exit);
+    assert!(
+        !matches!(stored.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&stored)
+    );
+
+    let rejected = engine.handle_line("bad: Identity<String> = MonadT::lift(Identity::new(1))");
+    assert!(!rejected.should_exit);
+    assert!(matches!(rejected.output, ReplOutput::EvalError { .. }));
+
+    let viewed = engine.handle_line("Identity::run(lifted)");
+    assert!(!viewed.should_exit);
+    assert!(
+        !matches!(viewed.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&viewed)
+    );
+    assert!(rendered_text(&viewed).contains("41"));
 }
 
 fn core_rebinding_uses_latest_value_and_grows_snapshot_locals() {

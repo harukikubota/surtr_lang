@@ -440,7 +440,7 @@ impl Checker {
         generated_defs: &mut Vec<TypedNode>,
     ) -> Result<Box<TypedNode>, Box<TypeError>> {
         let span = node.span.clone();
-        let ty = node.ty.clone();
+        let mut ty = node.ty.clone();
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
             TypedInner::Var(id) => TypedInner::Var(id),
@@ -584,19 +584,74 @@ impl Checker {
                                     params,
                                     ret,
                                     ..
-                                } => Ty::UserFunc {
-                                    fun_idx: specialized_fun_idx,
-                                    type_params,
-                                    call_substitution: if fully_concrete {
-                                        Vec::new()
+                                } => {
+                                    let call_site_mapping = call_substitution
+                                        .iter()
+                                        .map(|(variable, ty)| (*variable, self.resolve_ty(ty)))
+                                        .collect::<HashMap<_, _>>();
+                                    let (params, ret) = if fully_concrete {
+                                        match &original_def.node {
+                                            TypedInner::Def(
+                                                _,
+                                                _,
+                                                _,
+                                                declared_params,
+                                                declared_ret,
+                                                ..,
+                                            ) => (
+                                                declared_params
+                                                    .iter()
+                                                    .map(|parameter| {
+                                                        self.substitute_ty_with_mapping(
+                                                            &parameter.ty,
+                                                            &call_site_mapping,
+                                                        )
+                                                    })
+                                                    .collect(),
+                                                Box::new(self.substitute_ty_with_mapping(
+                                                    declared_ret,
+                                                    &call_site_mapping,
+                                                )),
+                                            ),
+                                            TypedInner::ExtractorDef(
+                                                _,
+                                                _,
+                                                _,
+                                                declared_param,
+                                                declared_ret,
+                                                ..,
+                                            ) => (
+                                                vec![self.substitute_ty_with_mapping(
+                                                    &declared_param.ty,
+                                                    &call_site_mapping,
+                                                )],
+                                                Box::new(self.substitute_ty_with_mapping(
+                                                    declared_ret,
+                                                    &call_site_mapping,
+                                                )),
+                                            ),
+                                            _ => (params, ret),
+                                        }
                                     } else {
-                                        call_substitution
-                                    },
-                                    params,
-                                    ret,
-                                },
+                                        (params, ret)
+                                    };
+                                    Ty::UserFunc {
+                                        fun_idx: specialized_fun_idx,
+                                        type_params,
+                                        call_substitution: if fully_concrete {
+                                            Vec::new()
+                                        } else {
+                                            call_substitution
+                                        },
+                                        params,
+                                        ret,
+                                    }
+                                }
                                 other => other,
                             };
+                            if let Ty::UserFunc { ret, .. } = &specialized_func_ty {
+                                ty = ret.as_ref().clone();
+                            }
                             let specialized_func = TypedNode {
                                 ty: specialized_func_ty,
                                 span: func.span.clone(),
@@ -742,8 +797,8 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, Box<TypeError>>>()?,
             ),
-            TypedInner::Block(stmts) => TypedInner::Block(
-                stmts
+            TypedInner::Block(stmts) => {
+                let stmts = stmts
                     .into_iter()
                     .map(|stmt| {
                         self.rewrite_specializations_in_node(
@@ -756,8 +811,12 @@ impl Checker {
                         )
                         .map(|node| *node)
                     })
-                    .collect::<Result<Vec<_>, Box<TypeError>>>()?,
-            ),
+                    .collect::<Result<Vec<_>, Box<TypeError>>>()?;
+                if let Some(last) = stmts.last() {
+                    ty = last.ty.clone();
+                }
+                TypedInner::Block(stmts)
+            }
             TypedInner::Bind(pattern, rhs) => TypedInner::Bind(
                 self.concretize_specialized_typed_pattern(
                     pattern,
@@ -1797,13 +1856,18 @@ impl Checker {
                     &def.span,
                 )
             })?;
+            let constructor_bounds = self.constructor_bounds_for_contract(contract);
             for entry in contract
                 .head
                 .entries
                 .iter()
                 .chain(&contract.signature.entries)
             {
-                let ty = self.substitute_canonical_type(&entry.ty, substitution)?;
+                let ty = self.instantiate_contract_canonical_type(
+                    &entry.ty,
+                    substitution,
+                    &constructor_bounds,
+                )?;
                 if ty.has_pending_instantiation() {
                     return Err(self.trait_dispatch_failure(
                         TypeDiagnosticReason::UnresolvedTraitMethodInstantiation,

@@ -1271,13 +1271,16 @@ impl Checker {
 
     /// Resolve a call-site ReturnTypeArgument according to its declared slot.
     /// Ordinary type slots use the normal complete-type grammar. A direct
-    /// TypeCtorTrait slot accepts a bare constructor head and gives its
-    /// implementation-controlled slots fresh placeholders.
+    /// TypeCtorTrait slot accepts a bare head, a complete carrier, or a carrier
+    /// application containing RTA-local inference holes.
     pub(super) fn resolve_call_site_return_type_argument(
         &mut self,
         slot_ty: &Ty,
         ast_ty: &AstTy,
     ) -> Result<Ty, TypeError> {
+        if matches!(ast_ty, AstTy::Named(_, name) if Self::surface_name(name) == "_") {
+            return Ok(self.env.fresh_tyvar());
+        }
         let is_constructor_slot = matches!(
             slot_ty,
             Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some()
@@ -1286,7 +1289,212 @@ impl Checker {
             return self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General);
         }
 
-        self.resolve_type_constructor_head(ast_ty)
+        self.resolve_type_constructor_return_type_argument(ast_ty)
+    }
+
+    /// Trait implementations can relate an ordinary return-only type input to
+    /// the receiver and value parameters.  A bare generic head constrains that
+    /// input's declaration identity while the canonical impl solver determines
+    /// its arguments from those shared variables.
+    pub(super) fn resolve_trait_call_site_return_type_argument(
+        &mut self,
+        slot_ty: &Ty,
+        ast_ty: &AstTy,
+    ) -> Result<Ty, TypeError> {
+        let is_constructor_slot = matches!(
+            slot_ty,
+            Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some()
+        );
+        if !is_constructor_slot
+            && matches!(ast_ty, AstTy::Named(_, name) if self.type_constructor_arity(name).is_some())
+        {
+            return self.resolve_type_constructor_head(ast_ty);
+        }
+        self.resolve_call_site_return_type_argument(slot_ty, ast_ty)
+    }
+
+    pub(super) fn resolve_type_constructor_return_type_argument(
+        &mut self,
+        ast_ty: &AstTy,
+    ) -> Result<Ty, TypeError> {
+        let outer_name = match ast_ty {
+            AstTy::Named(_, name) | AstTy::Generic(_, name, _) if name.starts_with('$') => {
+                Some(name)
+            }
+            _ => None,
+        };
+        if let Some(name) = outer_name {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Return type argument cannot use constructor variable `{name}` as its carrier"
+                ),
+                span: Self::ast_ty_span(ast_ty).clone(),
+                hint: Some(
+                    "Use a concrete carrier head, a complete carrier application, or `_`.".into(),
+                ),
+            });
+        }
+        self.resolve_type_constructor_return_type_argument_part(ast_ty)
+    }
+
+    fn resolve_type_constructor_return_type_argument_part(
+        &mut self,
+        ast_ty: &AstTy,
+    ) -> Result<Ty, TypeError> {
+        match ast_ty {
+            AstTy::Named(_, name) if Self::surface_name(name) == "_" => Ok(self.env.fresh_tyvar()),
+            AstTy::Named(_, name) if name.starts_with('$') => {
+                self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)
+            }
+            AstTy::Named(_, name) if self.type_constructor_arity(name).is_some() => {
+                self.resolve_type_constructor_head(ast_ty)
+            }
+            AstTy::Named(_, _) => {
+                self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General)
+            }
+            AstTy::Generic(span, name, arguments) => {
+                let resolved_arguments = arguments
+                    .iter()
+                    .map(|argument| {
+                        self.resolve_type_constructor_return_type_argument_part(argument)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                match Self::surface_name(name) {
+                    "List" => {
+                        let [inner] = resolved_arguments.as_slice() else {
+                            return Err(TypeError::new(
+                                "List<T> requires exactly 1 type argument",
+                                span.clone(),
+                            ));
+                        };
+                        Ok(Ty::List(Box::new(inner.clone())))
+                    }
+                    "HashMap" => {
+                        let [value] = resolved_arguments.as_slice() else {
+                            return Err(TypeError::new(
+                                "HashMap<V> requires exactly 1 type argument",
+                                span.clone(),
+                            ));
+                        };
+                        Ok(Ty::Enum("HashMap".into(), vec![value.clone()]))
+                    }
+                    "Generator" => {
+                        let [state, item] = resolved_arguments.as_slice() else {
+                            return Err(TypeError::new(
+                                "Generator<State, Item> requires exactly 2 type arguments",
+                                span.clone(),
+                            ));
+                        };
+                        Ok(Ty::Enum(
+                            "Generator".into(),
+                            vec![state.clone(), item.clone()],
+                        ))
+                    }
+                    "Result" => match resolved_arguments.as_slice() {
+                        [ok] => Ok(Ty::Result(Box::new(ok.clone()), Box::new(Ty::Error))),
+                        [ok, error] => {
+                            Ok(Ty::Result(Box::new(ok.clone()), Box::new(error.clone())))
+                        }
+                        _ => Err(TypeError::new(
+                            "Result<T, E> requires 1 or 2 type arguments",
+                            span.clone(),
+                        )),
+                    },
+                    "Lazy" => {
+                        let [inner] = resolved_arguments.as_slice() else {
+                            return Err(TypeError::new(
+                                "Lazy<T> requires exactly 1 type argument",
+                                span.clone(),
+                            ));
+                        };
+                        Ok(Ty::Lazy(Box::new(inner.clone())))
+                    }
+                    _ => {
+                        let definition =
+                            self.env
+                                .lookup_type_def(name)
+                                .cloned()
+                                .ok_or_else(|| TypeError {
+                                    structured: None,
+                                    message: format!("Unknown generic type: {name}"),
+                                    span: span.clone(),
+                                    hint: None,
+                                })?;
+                        if definition.type_params.len() != resolved_arguments.len() {
+                            return Err(TypeError {
+                                structured: None,
+                                message: format!(
+                                    "Type {} requires {} type argument(s), got {}",
+                                    name,
+                                    definition.type_params.len(),
+                                    resolved_arguments.len()
+                                ),
+                                span: span.clone(),
+                                hint: None,
+                            });
+                        }
+                        self.constrain_rta_nominal_arguments(
+                            &definition,
+                            &resolved_arguments,
+                            span,
+                        )?;
+                        match definition.kind {
+                            crate::env::TypeKind::Struct => Ok(Ty::Struct(
+                                definition.name.clone(),
+                                NominalType::new(
+                                    resolved_arguments.clone(),
+                                    self.instantiate_type_def_fields(
+                                        &definition,
+                                        &resolved_arguments,
+                                    ),
+                                ),
+                            )),
+                            crate::env::TypeKind::Record => Ok(Ty::Record(
+                                definition.name.clone(),
+                                NominalType::new(
+                                    resolved_arguments.clone(),
+                                    self.instantiate_type_def_fields(
+                                        &definition,
+                                        &resolved_arguments,
+                                    ),
+                                ),
+                            )),
+                            crate::env::TypeKind::Enum => Ok(Self::builtin_special_enum_ty(
+                                &definition.name,
+                                &resolved_arguments,
+                            )
+                            .unwrap_or_else(|| {
+                                Ty::Enum(definition.name.clone(), resolved_arguments)
+                            })),
+                            crate::env::TypeKind::ConcreteError => Err(TypeError::new(
+                                format!("Error type {name} is not a carrier"),
+                                span.clone(),
+                            )),
+                        }
+                    }
+                }
+            }
+            AstTy::Tuple(_, items) => Ok(Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.resolve_type_constructor_return_type_argument_part(item))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            AstTy::Func(_, parameters, return_type) => Ok(Ty::Func(
+                parameters
+                    .iter()
+                    .map(|parameter| {
+                        self.resolve_type_constructor_return_type_argument_part(parameter)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+                Box::new(self.resolve_type_constructor_return_type_argument_part(return_type)?),
+            )),
+            AstTy::ImplTrait(span, name) => Err(TypeError::new(
+                format!("`impl {name}` is not a carrier ReturnTypeArgument"),
+                span.clone(),
+            )),
+        }
     }
 
     pub(super) fn resolve_type_constructor_head(
@@ -1305,7 +1513,7 @@ impl Checker {
             });
         };
         if Self::surface_name(name) == "_" {
-            return Ok(self.env.fresh_tyvar());
+            return Err(self.hole_not_allowed_error(span));
         }
 
         // A bare head constrains only the declaration identity. Every
@@ -1344,6 +1552,7 @@ impl Checker {
         let args = (0..def.type_params.len())
             .map(|_| self.env.fresh_tyvar())
             .collect::<Vec<_>>();
+        self.constrain_rta_nominal_arguments(&def, &args, span)?;
         let ty = match def.kind {
             crate::env::TypeKind::Struct => Ty::Struct(
                 def.name.clone(),
@@ -1365,6 +1574,41 @@ impl Checker {
             }
         };
         Ok(ty)
+    }
+
+    fn type_constructor_arity(&self, name: &str) -> Option<usize> {
+        if let Some(definition) = self.env.lookup_type_def(name) {
+            return (!definition.type_params.is_empty()).then_some(definition.type_params.len());
+        }
+        match builtin_type_name(Self::surface_name(name)) {
+            Some(
+                TypeName::List
+                | TypeName::HashMap
+                | TypeName::StandbyInit
+                | TypeName::Lazy
+                | TypeName::TaskHandle,
+            ) => Some(1),
+            Some(TypeName::Generator | TypeName::Result) => Some(2),
+            _ => None,
+        }
+    }
+
+    fn constrain_rta_nominal_arguments(
+        &mut self,
+        definition: &crate::env::TypeDefInfo,
+        arguments: &[Ty],
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        for (argument, bound) in arguments.iter().zip(&definition.type_param_bounds) {
+            let (Ty::Var(variable), Some(bound)) = (self.resolve_ty(argument), bound) else {
+                continue;
+            };
+            self.register_tyvar_bound(variable, bound);
+            if let Some(trait_key) = self.declaration_constructor_trait_key(bound) {
+                self.constructor_witness_traits.insert(variable, trait_key);
+            }
+        }
+        self.validate_nominal_type_arguments(definition, arguments, span, true)
     }
 
     pub(super) fn resolve_builtin_ast_ty(
@@ -1515,6 +1759,20 @@ impl Checker {
                 trait_id.span.clone(),
             ));
         }
+        if !trait_info.type_params.is_empty() {
+            return Err(TypeError {
+                structured: None,
+                message: format!(
+                    "Direct signature use of parameterized constructor trait {} is not supported",
+                    trait_id.name
+                ),
+                span: trait_id.span.clone(),
+                hint: Some(
+                    "Introduce a named constructor parameter and constrain it in a where clause."
+                        .into(),
+                ),
+            });
+        }
         let slot_count = trait_info.constructor_slots.len();
         match signature_ty.syntax() {
             AstTy::Named(span, _) => {
@@ -1536,7 +1794,7 @@ impl Checker {
                 self.constructor_witness_traits.insert(witness_var, trait_key);
                 Ok(Ty::SelfApp(vec![Ty::Hole, Ty::Var(witness_var)]))
             }
-            AstTy::Generic(span, _, arguments) => {
+            AstTy::Generic(span, name, arguments) => {
                 if arguments.len() != slot_count {
                     return Err(TypeError {
                         structured: None,
@@ -1550,7 +1808,14 @@ impl Checker {
                         hint: None,
                     });
                 }
-                let witness = self.env.fresh_tyvar();
+                let witness = if name.starts_with('$') {
+                    tyvars
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| self.env.fresh_tyvar())
+                } else {
+                    self.env.fresh_tyvar()
+                };
                 let Ty::Var(witness_var) = witness else {
                     unreachable!("fresh constructor witness")
                 };
@@ -2559,7 +2824,7 @@ impl Checker {
             return Err(TypeError {
                 structured: None,
                 message: format!(
-                    "Internal consistency error: type {} has incomplete declaration-bound metadata",
+                    "Internal consistency error: type {} has incomplete declaration constraint metadata",
                     Self::surface_name(&def.name)
                 ),
                 span: span.clone(),
@@ -2594,7 +2859,7 @@ impl Checker {
                 return Err(TypeError {
                     structured: None,
                     message: format!(
-                        "Type argument {} for {} does not satisfy declaration bound {} on {}",
+                        "Type argument {} for {} does not satisfy declaration constraint {} on {}",
                         self.ty_name(&resolved),
                         parameter,
                         self.trait_display_name(bound),

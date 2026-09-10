@@ -229,7 +229,7 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::Lt) {
                 if !context.permits_constructor_variable_application(&name) {
                     return Err(ParseError::syntax(
-                        "type constructor variables may only be applied in callable signatures or nominal fields with an explicit declaration bound",
+                        "type constructor variables may only be applied in callable signatures or nominal fields with an explicit declaration constraint",
                         sp,
                     ));
                 }

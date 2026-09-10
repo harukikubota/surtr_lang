@@ -29,6 +29,7 @@ const BIFUNCTOR_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/bifun
 const APPLICATIVE_MODULE_SOURCE: &str =
     include_str!("../../../../lib/traits/operator/applicative.srt");
 const MONAD_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/monad.srt");
+const MONAD_T_MODULE_SOURCE: &str = include_str!("../../../../lib/traits/operator/monad_t.srt");
 const IDENTITY_MODULE_SOURCE: &str = include_str!("../../../../lib/types/identity.srt");
 const READER_MODULE_SOURCE: &str = include_str!("../../../../lib/types/reader.srt");
 const STATE_MODULE_SOURCE: &str = include_str!("../../../../lib/types/state.srt");
@@ -545,6 +546,10 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             (
                 "Monad",
                 pick_override("Monad", MONAD_MODULE_SOURCE, overrides),
+            ),
+            (
+                "MonadT",
+                pick_override("MonadT", MONAD_T_MODULE_SOURCE, overrides),
             ),
             (
                 "Identity",

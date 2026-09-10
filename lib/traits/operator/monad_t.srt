@@ -1,0 +1,14 @@
+@doc """
+Standard `MonadT` trait declaration.
+
+`MonadT<$M>` connects a transformed Monad carrier `Self` to its independent
+base Monad carrier `$M`. `lift` embeds one base computation without inspecting
+the transformer's representation.
+"""
+deftrait MonadT<$M>
+where
+  $M: Monad
+  Self: Monad
+{
+  def lift::<Self>(value: $M<$A>) -> Self<$A>
+}

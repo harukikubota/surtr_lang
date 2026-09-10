@@ -7,7 +7,7 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- N01–N03 は実装済み。N04 以降のTaskは未着手である。
+- N01–N04 は実装済み。N05 以降のTaskは未着手である。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
@@ -44,8 +44,8 @@ N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け
 |---|---|---|---|---|
 | N01 | direct carrier同一性改修 | 旧Task 9までの基盤 | [x] 完了 | 新規 |
 | N02 | Identity / Reader / State | 既存通常型・Trait基盤 | [x] 完了 | 新規・独立 |
-| N03 | nominal constructor parameterとbound | N01 | [x] 完了 | 新規言語機能 |
-| N04 | parameterized TypeCtorTrait・MonadT契約 | N03 | [ ] 未着手 | 新規言語機能 |
+| N03 | nominal constructor parameterとdeclaration constraint | N01 | [x] 完了 | 新規言語機能 |
+| N04 | parameterized TypeCtorTrait・MonadT契約 | N03 | [x] 完了 | 新規言語機能 |
 | N05 | 標準Transformer | N04。Identityを使うテストはN02 | [ ] 未着手 | 新規標準機能 |
 | N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision | [ ] 未着手 | 旧Task 10を再編 |
 | N07 | do compiler-owned contract | N06 | [ ] 未着手 | 旧Task 11 |
@@ -142,27 +142,28 @@ Readerは関数入力Rを渡すデータ構造。Stateは次状態を返す純�
 
 ## 8. N03 — nominal constructor parameter
 
-担当: declaration boundの構文metadata、型式の適用、nominal well-formedness、型変更可能な再構築、REPL具体化。
+担当: declaration `where` constraintの構文metadata、型式の適用、nominal well-formedness、型変更可能な再構築、REPL具体化。
 
-`defstruct OptionT<$M: Monad,$A>` と `$M<Option<$A>>` を最小ユーザ型で検証する。constructor slotと通常型parameterを明確に扱い、無制約の一般HKT推論を追加しない。
+`defstruct OptionT<$M, $A> where $M: Monad { inner: $M<Option<$A>> }` を最小ユーザ型で検証する。constructor slotと通常型parameterを明確に扱い、無制約の一般HKT推論を追加しない。
 
-MT-I01の初回範囲は、`Result` / `Option` / `List` と、既存のTypeCtorTrait implで
-constructor slotが一意に定まるユーザ定義のbare nominal headに限定する。
-`Either<String, _>`のような部分適用構文、associated type、型lambdaは追加しない。
+N03の初回範囲は、`Result` / `Option` / `List` と、既存のTypeCtorTrait implで
+constructor slotが一意に定まるユーザ定義のbare nominal headに限定した。nominal型注釈の
+`Either<String, _>`のような部分適用構文、associated type、型lambdaは追加しない。call-site RTAの
+完全・部分型applicationと`_`はN04のMT-L18–MT-L21で扱い、`do`での実使用（MT-L22）はN07–N11で扱う。
 
-MT-I03では、nominal headのdeclaration boundをScarの型定義metadataへ保持する。
-field宣言ではそのboundから`$M<T>`のshapeを検査し、nominal適用、callable signature、
-constructor、型変更可能なFacet再構築の各destinationで同じboundを既存solverへ渡す。
-rigid genericは明示された`where`またはdeclaration boundだけをproofとし、型の利用箇所から
-boundを暗黙導入しない。nominal well-formednessに使った明示`where` boundは使用済みとして扱う。
+MT-I03では、nominal headのdeclaration `where` constraintをScarの型定義metadataへ保持する。
+field宣言ではそのconstraintから`$M<T>`のshapeを検査し、nominal適用、callable signature、
+constructor、型変更可能なFacet再構築の各destinationで同じconstraintを既存solverへ渡す。
+rigid genericは明示された`where` constraintだけをproofとし、型の利用箇所からconstraintを暗黙導入しない。
+nominal well-formednessに使った明示`where` constraintは使用済みとして扱う。
 
-完了条件: MT-L01–06、MT-L13/14/15の該当部分。field/return/annotation/Facetでdestinationのboundを検査する。
+完了条件: MT-L01–06、MT-L13/14/15の該当部分。field/return/annotation/Facetでdestinationのconstraintを検査する。
 
-状態: 完了。`defstruct` / `defenum` の明示bound付きconstructor parameterを導入し、
+状態: 完了。`defstruct` / `defenum` の`where` constraint付きconstructor parameterを導入し、
 field / payload のconstructor application、bare nominal head、nominal well-formedness、
 constructor / callable / return / annotation、型変更可能なFacet destination、REPLの失敗後継続を
-同じdeclaration boundと既存solverで検査するようにした。constructor slot以外の通常parameter、
-rigid genericのproof、使用済みboundを区別し、部分適用・型lambda・runtime dictionaryは追加していない。
+同じdeclaration `where` constraintと既存solverで検査するようにした。constructor slot以外の通常parameter、
+rigid genericのproof、使用済みconstraintを区別し、部分適用・型lambda・runtime dictionaryは追加していない。
 
 対応する受け入れ条件ID: MT-L01–06、MT-L13、MT-L14、MT-L15のN03該当部分。
 
@@ -182,11 +183,51 @@ rigid genericのproof、使用済みboundを区別し、部分適用・型lambda
 
 担当: captured Trait parameter、parent shapeの継承、TraitRef、method type list、applicability、static instantiation。
 
-MonadTの最小contractを追加し、Selfとbaseの独立したcarrierを保持する。field layoutを発見する機能や、標準型の第1引数をbaseとする位置規則を作らない。
+MonadTの最小contractを追加し、Selfとbaseの独立したcarrierを保持する。Trait-head binderと`where` constraintを分離し、field layoutを発見する機能や、標準型の第1引数をbaseとする位置規則を作らない。
 
-MT-I02/04を記録した上で、ユーザ定義の最小MonadT実装を用いて、ordinary call/RTA/expected typeだけでliftを解決する。
+MT-I02/04を記録した上で、ユーザ定義の最小MonadT実装を用いて、ordinary call/RTA/expected typeだけで`lift`を解決する。TypeCtorTrait RTAの完全・部分型applicationと`_`はN04で確定するが、`do`での実使用確認（MT-L22）はN07–N11の後続受入へ残す。
 
-完了条件: MT-L07–12、MT-L14–16、およびN03からの残り。N05の標準4型完成をこのTaskの唯一の検証方法にしない。
+完了条件: MT-L07–12、MT-L14–21、MT-L23–24、およびN03からの残り。MT-L22は`do`後続受入（N07–N11）で完了し、N05の標準4型完成をN04の唯一の検証方法にしない。
+
+状態: 完了。Trait-head parameterとconstructor mapped slotを別metadataとして保持し、
+parameterized TypeCtorTraitのparent shape、TraitRef、method role list、impl coherence / applicability、
+static instantiationを既存のcanonical solverへ統合した。標準contractとして
+`MonadT<$M> where $M: Monad, Self: Monad` と `lift::<Self>(value: $M<$A>) -> Self<$A>` を追加した。
+base carrierと出力carrierは独立して解決し、impl数、登録順、標準型名、field構造から不足型を補完しない。
+
+call-site TypeCtorTrait RTAでは完全なcarrier型、`_`を含む型application、bare constructor headを受理し、
+mapped / captured argumentをvalue argument、expected return、型注釈、既存signature constraintだけから具体化する。
+通常Trait methodのordinary RTAでも、generic targetのbare headとimpl source/targetが共有する型変数を
+value argument / expected returnから完全に解ける場合は受理する。user-defined targetにも同じcanonical solverを使い、
+標準型名、impl数、登録順による補完は行わない。通常関数のordinary RTAは完全型のままとする。
+Trait methodを含むトップレベルRTAの`_`は省略と同じ推論入力とし、RTA内nominal applicationの`_`に付く
+declaration constraintは後続constraintで具体化してから検査する。
+通常型注釈の`_`はconstructor inferenceに流用せず、`Alternative::empty::<Self>() -> Self` は
+具象carrier全体を単一RTAとして扱う。Trait-head / nominal binderのinline constraintは拒否し、
+`where`だけを正規surfaceとした。
+
+対応する受け入れ条件ID: MT-L07–12、MT-L14–21、MT-L23–24。MT-L22は予定どおりN07–N11へ残す。
+
+検証（2026-09-10）:
+
+- `rtk cargo nextest run -p spire`: 414 passed。
+- `rtk cargo nextest run -p sigil`: 245 passed。
+- `rtk cargo nextest run -p scar --test return_type_arguments`: 41 passed。
+- `rtk cargo nextest run -p scar`: 267 passed。
+- `rtk cargo nextest run -p forge`: 72 passed。
+- `rtk cargo nextest run -p diagnostics`: 79 passed。
+- `rtk cargo nextest run -p xldr`: 79 passed、78 skipped。
+- `rtk cargo nextest run -p rune --test integration run_srt`: 11 passed、120 skipped。
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace`: 1893 passedを同一差分で2回連続成功。
+- `cargo run -- test --quiet --all`: 成功（quietのため件数表示なし）。
+- `cargo run -- test --all`: 476 passed（quiet実行と同じ標準test集合の件数確認）。
+- `cargo fmt --all -- --check`、`git diff --check`: 成功。
+
+実装commit: 未作成。専用worktree `.worktrees/n04-type-constructor-monad-do` の未コミット差分として保持する。
+実装済み契約は`doc/要件定義v9.md`、`docs/dev/{Trait_system_spec,diagnostics,テスト方針}.md`、
+`docs/site/`の関連利用者文書、標準`MonadT`の`@doc`へ移管した。
+N05へは標準OptionT / EitherT / ReaderT / StateT本体とAPI・法則テストだけを引き継ぎ、
+N04のcompiler特例を追加しない。
 
 ## 10. N05 — 標準MonadT実装型
 

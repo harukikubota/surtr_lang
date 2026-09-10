@@ -197,6 +197,26 @@ impl Checker {
                     .iter()
                     .map(|argument| self.source_provenance(argument, bindings))
                     .collect::<Vec<_>>();
+                // A TypeCtorTrait method that returns its declared `Self` RTA
+                // carries the selected capability even without a value input.
+                // Keep that proof on a later binding instead of attempting to
+                // reconstruct it from the result representation.
+                let returns_declared_self = !self.traits[&obligation.trait_id]
+                    .constructor_slots
+                    .is_empty()
+                    && matches!(
+                        method.ret_ty.syntax(),
+                        AstTy::Named(_, name) if Self::surface_name(name) == "Self"
+                    )
+                    && method.return_type_arguments.iter().any(|argument| {
+                        matches!(
+                            argument.ty.syntax(),
+                            AstTy::Named(_, name) if Self::surface_name(name) == "Self"
+                        )
+                    });
+                if returns_declared_self {
+                    return Provenance::constrained(obligation.trait_id.clone());
+                }
                 if self.traits[&obligation.trait_id]
                     .constructor_slots
                     .is_empty()

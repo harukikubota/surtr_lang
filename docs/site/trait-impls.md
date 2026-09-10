@@ -34,6 +34,10 @@ impl Describable for Int {
 
 ReturnTypeArguments は、型変数が value parameter の型から導入できない場合に使い、その型変数は戻り値にも現れなければならない。`self: Self` のように型変数が引数位置に現れる method は ReturnTypeArguments を省略する。trait 宣言に ReturnTypeArguments がある場合、impl method は trait head と impl target で置換した同じ構造を宣言し、個数・順序・型構造を一致させる。引数位置で導入済みの型変数を同じ型で重ねて指定するのはエラーである。
 
+Trait-head binderは型変数を導入し、capability constraintは`where`へ分離します。`deftrait T<$P: Bound>`は使わず、
+`deftrait T<$P> where $P: Bound { ... }`と書きます。TypeCtorTraitではTrait argumentとconstructor mapped slotを別々の
+metadataとして保持します。
+
 型変数名そのものは一致条件ではありません。compilerはReturnTypeArguments、value parameters、returnを
 roleと順序を保った構造として比較し、同じ変数が再出現する関係、tuple・function・nested typeの内側まで
 照合します。項目数が違う場合に末尾を無視したり、owner名だけで一致としたりしません。
@@ -53,6 +57,20 @@ impl Encode<String> for List<$A> { # ... }
 実装本体が `$A` の値に `Encode::encode::<String>(value)` のような式を使う場合だけ、impl の `where` に `$A: Encode` を宣言する。この bare capability は注釈ではなく、その式が消費する proof である。消費しない impl に bound を置くと `UnusedTraitConstraint` になる。`Encode<String>` のような完全な identity は impl head と expression dispatch が保持し、`$A: Encode<String>` は where RHS として不正である。candidate が target に一致しても、式が発行する完全 obligation を満たさなければ dispatch されない。
 
 親 Trait は bare capability として継承します。child impl の `where` が親 capability を包含していれば利用できます。
+
+Parameterized TypeCtorTraitのimplも通常のTrait implです。
+
+```surtr
+impl MonadT<$M> for OptionT<$M, $A>
+where
+  $M: Monad
+{
+  # lift の実装
+}
+```
+
+`$M`はcaptured Trait argument、`$A`は`Self`のmapped payloadとして構造的に照合します。field名やrepresentationから
+base carrierを推測せず、`lift`のReturnTypeArgument・引数・戻り値を元Trait contractと同じrole順で比較します。
 
 ### default method と同名 method
 
@@ -110,6 +128,11 @@ targetだけが一致する候補や、必要な型入力がまだ決まらな�
 expected returnや他の引数を待ち、入力が尽きればambiguityになります。唯一のimplや宣言順を既定値として
 使うことはありません。
 
+この構造照合により、`impl From<Result<$T>> for Option<$T>`へ`Option<Int>`を渡す
+`from::<Result>(value)`は、bare target headとreceiverが共有する`$T`を`Int`へ具体化できます。
+`from::<Result<Int>>(value)`も有効です。同じ仕組みはuser-defined generic targetにも適用され、
+標準変換型のallowlistとしては実装しません。共有されないcaptured引数が残るbare headはambiguityです。
+
 Trait impl methodの本体から同じmethod名を非修飾で呼ぶ場合、その呼び出しは現在の具象implへ固定されず、
 元のTrait method contractを参照します。各呼び出しのreceiver、Trait arguments、ReturnTypeArgumentsから
 通常どおりstatic dispatchするため、同じimplへの再帰と別implへの再dispatchを同じ規則で扱います。
@@ -118,6 +141,10 @@ local bindingやparameterによる通常のshadowingは維持されます。
 callable signature直下のTypeConstructor trait名は名前文字列ではなく、名前解決で選ばれたTrait定義のidentityを
 後続phaseへ渡します。別々のdirect parameterは同じfamilyでも独立し、同じcarrierが必要なmethod contractは
 `Self`または同じ名前付きconstructor variable `$F`で関係を明示します。
+
+TypeCtorTraitを要求するcall-site RTAでは、constructor headだけでなく完全・部分型applicationと`_`を指定できます。
+例えば`pure::<Either<String, _>>(10)`は`Either<String, Int>`へ解決されます。通常の型注釈にある`_`はこの推論へ
+流用しません。
 
 ```text
 xldr(1)> print(match try_from::<Int>("42") { Ok(value) => to_string(value), Err(err) => inspect(err), })

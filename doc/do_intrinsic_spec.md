@@ -10,6 +10,8 @@
 `message` / `labels` / `notes` / `help` 分類は
 [`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md) とする。ReturnTypeArgument の構文・省略、
 Trait method のrole付き型リスト、Deferred、dispatch、callable instantiationも同じ開発者向け正本に従う。
+TypeCtorTraitのcall-site ReturnTypeArgumentにおける完全・部分型applicationと`_`も同じ規則に従い、
+`do`固有のcarrier表記として別実装しない。
 通常callableで同じdirect TypeCtorTrait名を共有し、異なるdirect Trait名を独立させる規則は
 開発者向け正本の実装済み契約に従う。
 `do`固有の同一性はfamily所属から導出せず、本書のcompiler-owned contractが所有する
@@ -232,21 +234,23 @@ parser はその範囲をlabelし、`do::<Container> { ... }` へ書き換える
 call-site ReturnTypeArgument は次を受理する。
 
 - `Option`、`Either` のような具象 TypeConstructor head
+- `Either<String, Int>` のような完全なcarrier型application
+- `Either<String, _>` のような`_`を含む部分carrier型application
 - `_`
 
 head だけの `do::<Either>` は constructor head だけを固定する。mapped slot と captured / fixed arguments は
 RHS、通常call、block expected type、型注釈、最終式から取得する。`Either` impl が一つしかなくても、
 未確定の captured argument を impl 一覧から埋めてはならない。
 
-`do::<Either<String, _>>` のようなpartial applied carrier、`do::<Either<String, Int>>` のようなfull applied carrier、
-`do::<$F>` のような外側constructor variableの明示は受理しない。Spire は項目spanをlabelし、
-`InvalidDoCarrierReturnTypeArgument` と次のhelpを出す。
+`do::<$F>` のような外側constructor variableだけの明示は受理しない。applied carrierの型applicationは
+通常のTypeCtorTrait RTA入力として扱い、captured / fixed argumentを含むcarrier identityを他のconstraintと照合する。
+Spireは外側constructor variableの項目spanをlabelし、`InvalidDoCarrierReturnTypeArgument` と次のhelpを出す。
 
 ```text
-message: `do` return type argument must be a constructor head or `_`
-label: this is an applied or variable carrier, not a concrete constructor head
-note: captured and fixed arguments are inferred from do block constraints
-help: write `do::<Either> { ... }`, `do::<_> { ... }`, or add an expected result type
+message: `do` return type argument must be a constructor head, applied carrier, or `_`
+label: this is an outer constructor variable, not a valid carrier type input
+note: captured and fixed arguments in an applied carrier are checked against do block constraints
+help: write `do::<Either> { ... }`, `do::<Either<String, _>> { ... }`, or add an expected result type
 ```
 
 外側constructor variableを使うgeneric contextでは、`do { ... }` または `do::<_> { ... }` と書き、
@@ -464,7 +468,8 @@ transformed: OptionT<Result, Int> = do {
 ```
 
 `OptionT<Result, _>`のdoへ`Result<_>`を直接monadic originとして混ぜる例はcarrier不一致で拒否する。
-明示的な`MonadT::lift`を要求し、`do::<OptionT<Result, _>>`のようなapplied carrier文法は追加しない。
+明示的な`MonadT::lift`を要求するが、`do::<OptionT<Result, _>>`は通常のTypeCtorTrait RTAとして受理し、
+applied carrier専用のdo文法は追加しない。
 `StateT<S, Result, _>`のように外側carrierが`Alternative`を持たない構成では、partial `<-`とnon-Result
 SafeBindを同じcapability規則で拒否する。
 
@@ -728,7 +733,7 @@ do固有の自然言語から原因を復元せず、既存の構造化failure�
 | `MissingGenericBound` | typecheck / `TypeError` | rigid carrierにMonad、partial `<-`またはnon-Result SafeBindにAlternative boundがない | do、partial pattern、またはSafeBind |
 | `NoApplicableTraitImplementation` | typecheck / `TypeError` | concrete carrierに必要Trait implがない | do、RHS、partial pattern、またはSafeBind |
 | `UnresolvedTraitMethodInstantiation` | typecheck / `TypeError` | bind / empty dispatchの型入力がboundaryまで未確定 | call origin |
-| `InvalidDoCarrierReturnTypeArgument` | parse / `ParseError` | call-site項目がapplied carrierまたはconstructor variableである | 不正な項目 |
+| `InvalidDoCarrierReturnTypeArgument` | parse / `ParseError` | call-site項目が外側constructor variableである（applied carrierは合法） | 不正な項目 |
 | `InvalidIntrinsicSurfaceContract` | resolve / `ResolveError` | stdlibの`Bootstrap::do` surfaceがSindr contractと一致しない | intrinsic declaration |
 | `ReservedIntrinsicMarkerDeclaration` | resolve / `ResolveError` | user sourceが`DoBlock`を宣言した | declaration head |
 | `ReservedIntrinsicMarkerImpl` | resolve / `ResolveError` | `DoBlock`をimpl targetまたはinherent impl receiverにした | impl target |
@@ -902,8 +907,8 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 - `do { ... }`、`do::<_> { ... }`、`do::<Option> { ... }`
 - `do<Container> { ... }`の拒否と`do::<Container>`へのrewrite help
 - ReturnTypeArgumentの空list、一項、過剰項目
-- `do::<Either<String, _>>`、`do::<Either<String, Int>>`、`do::<$F>`の
-  `InvalidDoCarrierReturnTypeArgument`と全source span保持
+- `do::<Either<String, _>>`、`do::<Either<String, Int>>`のapplied carrierが通常のRTAとして受理され、
+  `do::<$F>`だけが`InvalidDoCarrierReturnTypeArgument`となり全source spanを保持すること
 - 空block、最終monadic expressionなし、block外`<-`の拒否
 - do blockの先頭／中間とnested doに現れる`=?`をSafeBind statementとして保持すること
 - SafeBindの後続がなく最終monadic expressionを欠く場合は、SafeBind拒否ではなくdo block終端の診断になること
@@ -934,7 +939,7 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 - 推論origin同士のsame-family carrier衝突が`TypeConstructorFamilyMismatch`になること
 - headは明示されたがcaptured argumentが未確定のambiguity
 - `do::<Either>`のcaptured / fixed argumentをRHS、expected result、block型注釈、最終式、通常callから決定
-- partial / full applied carrierと外側constructor variableを明示したdo ReturnTypeArgumentの拒否
+- partial / full applied carrierを明示したdo ReturnTypeArgumentの成功と、外側constructor variableだけを明示した場合の拒否
 - generic contextの`do { ... }` / `do::<_> { ... }`がRHSまたはexpected typeのrigid constructor variableへ統一
 - implが一つだけでも未確定carrierを逆決定しないこと
 - impl登録順を反転しても結果と診断が同じこと
@@ -1039,8 +1044,8 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
    non-Result pass-through input policy、SafeBind failure policy、`Monad::bind` / `Alternative::empty` lowering identityを
    canonical identityと構造で保持し、stdlib surfaceをそのcontractに対して検証する。
 4. `do { ... }`と`do::<_> { ... }`が同じconstraintを生成し、明示constructor headはposition 0を固定する。
-5. call-siteの明示項目は具象constructor headまたは`_`だけを受理し、applied carrierと外側constructor variableを拒否する。
-   明示headと他constraintは厳密一致し、衝突時は`ReturnTypeArgumentMismatch`にする。
+5. call-siteの明示項目は具象constructor head、完全・部分型application、または`_`を受理し、外側constructor variableだけを拒否する。
+   applied carrierのcaptured / fixed argumentsと他constraintは厳密一致させ、明示headまたは型applicationとの衝突時は`ReturnTypeArgumentMismatch`にする。
 6. 明示head、expected type、型注釈、RHS、通常call、最終式からcarrierを推論し、captured / fixed argumentsは
    明示head以外のblock constraintだけから得る。
 7. 未確定carrierをimpl一覧から逆決定せず、Deferredをboundaryのambiguityまで保持する。

@@ -137,7 +137,7 @@ impl Monad for Option<$T> {
 `None`.
 """
 impl Alternative for Option<$T> {
-  def empty::<Option<$T>, $A>() -> Option<$A> {
+  def empty::<Option<$T>>() -> Option<$T> {
     Option::None
   }
 

@@ -1,0 +1,11 @@
+impl MonadT<Identity> for Identity<$T>
+where
+  $T: MonadT.$A
+{
+  def lift::<Identity<$T>>(value: Identity<$A>) -> Identity<$A> {
+    value
+  }
+}
+
+lifted: Identity<Int> = MonadT::lift(Identity::new(41))
+print(to_string(Identity::run(lifted)))

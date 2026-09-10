@@ -244,6 +244,7 @@ impl Checker {
                         &rewritten_value_parameters,
                         rewritten_return_type.as_ref().map(|ty| ty.syntax()),
                         clause.as_ref(),
+                        None,
                         &constructor_trait_ids,
                     )?;
                 }
@@ -279,6 +280,7 @@ impl Checker {
                             &method.value_parameters,
                             Some(method.ret_ty.syntax()),
                             method.where_clause.as_ref(),
+                            clause.as_ref(),
                             &constructor_trait_ids,
                         )?;
                     }
@@ -474,6 +476,30 @@ impl Checker {
             for bound in &constraint.bounds {
                 if let TypedWhereConstraintRhs::Trait { trait_id } = bound {
                     self.apply_where_trait_bound(&subject, trait_id)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn apply_trait_head_where_bounds(
+        &mut self,
+        where_clause: Option<&TypedWhereClause>,
+        trait_head_bindings: &HashMap<String, Ty>,
+    ) -> Result<(), TypeError> {
+        let Some(where_clause) = where_clause else {
+            return Ok(());
+        };
+        for constraint in &where_clause.constraints {
+            let AstTy::Named(_, subject) = &constraint.subject else {
+                continue;
+            };
+            let Some(subject_ty) = trait_head_bindings.get(subject) else {
+                continue;
+            };
+            for bound in &constraint.bounds {
+                if let TypedWhereConstraintRhs::Trait { trait_id } = bound {
+                    self.apply_where_trait_bound(subject_ty, trait_id)?;
                 }
             }
         }
@@ -1895,22 +1921,6 @@ impl Checker {
                 info.constructor_slots = slots;
             }
         }
-        for info in self.traits.values() {
-            if !info.constructor_slots.is_empty() && !info.type_params.is_empty() {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Constructor trait {} cannot declare trait type parameter(s)",
-                        info.id.name
-                    ),
-                    span: info.id.span.clone(),
-                    hint: Some(
-                        "Put element slots in `Self: Type<$A, ...>` and introduce them through method inputs."
-                            .into(),
-                    ),
-                });
-            }
-        }
         Ok(())
     }
 
@@ -2045,8 +2055,37 @@ impl Checker {
         Ok((vars, positions))
     }
 
+    fn trait_head_parameter_constructor_bound(
+        &self,
+        trait_info: &TraitInfo,
+        parameter_name: &str,
+    ) -> Option<String> {
+        trait_info
+            .where_clause
+            .as_ref()?
+            .constraints
+            .iter()
+            .find_map(|constraint| {
+                matches!(&constraint.subject, AstTy::Named(_, name) if name == parameter_name)
+                    .then(|| {
+                        constraint.bounds.iter().find_map(|bound| match bound {
+                            TypedWhereConstraintRhs::Trait { trait_id }
+                                if self.traits.get(&self.trait_key(trait_id)).is_some_and(
+                                    |bound_info| !bound_info.constructor_slots.is_empty(),
+                                ) =>
+                            {
+                                Some(self.trait_key(trait_id))
+                            }
+                            _ => None,
+                        })
+                    })
+                    .flatten()
+            })
+    }
+
     pub(super) fn resolve_trait_impl_head_tys(
         &mut self,
+        trait_info: &TraitInfo,
         trait_args: &[AstTy],
         target_ast_ty: &AstTy,
     ) -> Result<(Vec<Ty>, Ty, Vec<u32>, HashMap<String, u32>), TypeError> {
@@ -2056,15 +2095,25 @@ impl Checker {
             TypeSyntaxContext::General,
             &mut tyvars,
         )?;
-        let trait_arg_tys = trait_args
+        let trait_arg_tys = trait_info
+            .type_params
             .iter()
-            .map(|arg| {
-                self.resolve_trait_signature_ast_ty_in_context(
-                    arg,
-                    TypeSyntaxContext::General,
-                    &target_ty,
-                    &mut tyvars,
-                )
+            .zip(trait_args)
+            .map(|(parameter, arg)| {
+                if self
+                    .trait_head_parameter_constructor_bound(trait_info, &parameter.name)
+                    .is_some()
+                    && !matches!(arg, AstTy::Named(_, name) if name.starts_with('$'))
+                {
+                    self.resolve_type_constructor_head(arg)
+                } else {
+                    self.resolve_trait_signature_ast_ty_in_context(
+                        arg,
+                        TypeSyntaxContext::General,
+                        &target_ty,
+                        &mut tyvars,
+                    )
+                }
             })
             .collect::<Result<Vec<_>, _>>()?;
         let mut type_param_vars = Vec::new();
@@ -2491,6 +2540,7 @@ impl Checker {
             }
             trait_head_bindings.insert(param.name.clone(), fresh);
         }
+        self.apply_trait_head_where_bounds(trait_info.where_clause.as_ref(), &trait_head_bindings)?;
         let mut tyvars = trait_head_bindings.clone();
         self.seed_signature_type_params(&method.type_params, &mut tyvars);
         let mut direct_constructor_inputs = super::signatures::DirectConstructorInputs::default();
@@ -2566,11 +2616,12 @@ impl Checker {
         Ok((
             params,
             ret,
-            trait_args,
+            trait_args.clone(),
             return_type_arguments,
             MethodTypeEnvironment {
                 head_bindings: trait_head_bindings,
                 bindings: tyvars,
+                trait_arguments: trait_args,
                 self_ty: self_ty.clone(),
                 direct_inputs: direct_constructor_inputs,
             },
@@ -2788,14 +2839,24 @@ impl Checker {
             &mut tyvars,
         )?;
         for (param, arg) in trait_info.type_params.iter().zip(trait_args.iter()) {
-            let resolved = self.resolve_trait_signature_ast_ty_in_context(
-                arg,
-                TypeSyntaxContext::General,
-                &self_ty,
-                &mut tyvars,
-            )?;
+            let resolved = if self
+                .trait_head_parameter_constructor_bound(trait_info, &param.name)
+                .is_some()
+                && !matches!(arg, AstTy::Named(_, name) if name.starts_with('$'))
+            {
+                self.resolve_type_constructor_head(arg)?
+            } else {
+                self.resolve_trait_signature_ast_ty_in_context(
+                    arg,
+                    TypeSyntaxContext::General,
+                    &self_ty,
+                    &mut tyvars,
+                )?
+            };
             trait_head_bindings.insert(param.name.clone(), resolved);
         }
+        self.apply_trait_head_where_bounds(trait_info.where_clause.as_ref(), &trait_head_bindings)?;
+        self.apply_typed_where_trait_bounds(impl_where_clause, &tyvars, Some(&self_ty))?;
 
         let head_bindings = tyvars.clone();
         // User impl source has its own namespace. Only synthesized default
@@ -2923,6 +2984,11 @@ impl Checker {
             MethodTypeEnvironment {
                 bindings: tyvars,
                 head_bindings,
+                trait_arguments: trait_info
+                    .type_params
+                    .iter()
+                    .filter_map(|param| trait_head_bindings.get(&param.name).cloned())
+                    .collect(),
                 self_ty,
                 direct_inputs: direct_constructor_inputs,
             },
@@ -2965,14 +3031,14 @@ impl Checker {
                         return Err(TypeError {
                             structured: None,
                             message: format!(
-                                "Type constructor parameter {} on {} requires a TypeCtorTrait declaration bound; {} is not a constructor trait",
+                                "Type constructor parameter {} on {} requires a TypeCtorTrait declaration constraint; {} is not a constructor trait",
                                 parameter,
                                 Self::surface_name(owner),
                                 self.trait_display_name(bound)
                             ),
                             span: span.clone(),
                             hint: Some(
-                                "Use a declaration bound whose Trait defines `Self: Type<...>`."
+                                "Use a declaration constraint whose Trait defines `Self: Type<...>`."
                                     .into(),
                             ),
                         });
@@ -3323,7 +3389,17 @@ impl Checker {
                 });
             }
             let (trait_arg_tys, target_ty, type_param_vars, target_param_vars) =
-                self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
+                self.resolve_trait_impl_head_tys(&trait_info, trait_args, target_ast_ty)?;
+            let typed_impl_clause = where_clause.as_ref().map(TypedWhereClause::from);
+            let impl_head_bindings = target_param_vars
+                .iter()
+                .map(|(name, var)| (name.clone(), Ty::Var(*var)))
+                .collect::<HashMap<_, _>>();
+            self.apply_typed_where_trait_bounds(
+                typed_impl_clause.as_ref(),
+                &impl_head_bindings,
+                Some(&target_ty),
+            )?;
             let target_name = self.trait_target_name(&target_ty).ok_or_else(|| TypeError {
                 structured: None,
                 message: "trait impl target must be a concrete named type, tuple type, or function type".into(),
@@ -3439,12 +3515,12 @@ impl Checker {
                     .iter()
                     .map(|(name, var)| (name.clone(), Ty::Var(*var)))
                     .collect(),
+                trait_arguments: trait_arg_tys.clone(),
                 self_ty: target_ty.clone(),
                 direct_inputs: super::signatures::DirectConstructorInputs::default(),
             };
             let (head_type_list, canonical_environment) =
                 self.canonical_impl_head(trait_args, target_ast_ty, &head_environment, span)?;
-            let typed_impl_clause = where_clause.as_ref().map(TypedWhereClause::from);
             let impl_constraints = self
                 .canonical_method_list(
                     &[],
@@ -3893,7 +3969,7 @@ impl Checker {
         // declaration environment.
         let mut fresh = HashMap::new();
         let parent_target = self.instantiate_ty_with_fresh(&parent_impl.target_ty, &mut fresh);
-        // A declaration bound `Self: Parent` names the Parent capability
+        // A declaration constraint `Self: Parent` names the Parent capability
         // family, not a zero-argument Parent instance. Instantiate the full
         // parent head so its variables remain available to its where clause,
         // but coverage is determined by the target and declared obligations.
@@ -3989,13 +4065,31 @@ impl Checker {
         let mut trait_impl_keys_in_stmts = HashSet::new();
 
         for stmt in stmts {
-            let Resolved::TraitImplDef(_, declaration_id, _, trait_args, target_ast_ty, _, _) =
-                stmt
+            let Resolved::TraitImplDef(
+                span,
+                declaration_id,
+                trait_id,
+                trait_args,
+                target_ast_ty,
+                _,
+                _,
+            ) = stmt
             else {
                 continue;
             };
+            let trait_key = self.trait_key(trait_id);
+            let trait_info = self
+                .traits
+                .get(&trait_key)
+                .cloned()
+                .ok_or_else(|| TypeError {
+                    structured: None,
+                    message: format!("Unknown trait: {}", trait_id.name),
+                    span: span.clone(),
+                    hint: None,
+                })?;
             let (_, target_ty, _, _) =
-                self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
+                self.resolve_trait_impl_head_tys(&trait_info, trait_args, target_ast_ty)?;
             self.trait_target_name(&target_ty)
                 .ok_or_else(|| {
                     TypeError {

@@ -6908,7 +6908,7 @@ fn type_constructor_variable_applications_remain_rejected_outside_callable_signa
             parse(source).expect_err("constructor variable applications are signature-only syntax");
         assert!(
             error.message().contains(
-                "type constructor variables may only be applied in callable signatures or nominal fields with an explicit declaration bound"
+                "type constructor variables may only be applied in callable signatures or nominal fields with an explicit declaration constraint"
             ),
             "{source}: {}",
             error.message()
@@ -6919,20 +6919,58 @@ fn type_constructor_variable_applications_remain_rejected_outside_callable_signa
 #[test]
 fn bounded_nominal_constructor_parameters_apply_in_declared_fields_and_payloads() {
     parse(
-        r#"defstruct Wrapped<$M: Monad, $A> { value: $M<$A> }
-defenum Layer<$M: Monad, $A> { Layer($M<Option<$A>>), }"#,
+        r#"defstruct Wrapped<$M, $A> where $M: Monad { value: $M<$A> }
+defenum Layer<$M, $A> where $M: Monad { Layer($M<Option<$A>>), }"#,
     )
-    .expect("a bounded declaration parameter should apply in its own nominal definition");
+    .expect("a constrained declaration parameter should apply in its own nominal definition");
+}
+
+#[test]
+fn declaration_constraints_use_where_instead_of_inline_bounds() {
+    for source in [
+        "deftrait MonadT<$M: Monad> {}",
+        "deftrait MonadT<Monad> {}",
+        "defstruct OptionT<$M: Monad, $A> { inner: $A }",
+        "defenum Layer<$M: Monad, $A> { Layer($A), }",
+    ] {
+        let error = parse(source).expect_err("inline declaration constraints must be rejected");
+        assert!(
+            error.message().contains("where $M: Monad"),
+            "unexpected error for {source}: {error}"
+        );
+    }
+
+    parse(
+        r#"deftrait MonadT<$M>
+where
+  $M: Monad
+{}
+
+defstruct OptionT<$M, $A>
+where
+  $M: Monad
+{
+  inner: $M<$A>
+}
+
+defenum Layer<$M, $A>
+where
+  $M: Monad
+{
+  Layer($M<$A>),
+}"#,
+    )
+    .expect("declaration binders and constraints should be separate");
 }
 
 #[test]
 fn unbounded_nominal_parameters_do_not_gain_constructor_application_syntax() {
     let error = parse("defstruct Invalid<$M, $A> { value: $M<$A> }")
-        .expect_err("a nominal parameter needs an explicit declaration bound");
+        .expect_err("a nominal parameter needs an explicit declaration constraint");
     assert!(
         error
             .message()
-            .contains("type constructor variables may only be applied in callable signatures or nominal fields with an explicit declaration bound"),
+            .contains("type constructor variables may only be applied in callable signatures or nominal fields with an explicit declaration constraint"),
         "{}",
         error.message()
     );

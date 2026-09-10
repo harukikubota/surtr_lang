@@ -8308,7 +8308,11 @@ fn compile_repl_preload_from_module_stages(
     )
     .map_err(|e| preload_resolve_error(&compile_sources, &e))?;
     scope.advance_next_id_to(staged_program.resume_state.next_local_id);
-    sigil_session.replace_scope_with_precollected_declarations(scope, &precollected);
+    sigil_session.replace_scope_with_precollected_declarations(
+        scope,
+        &precollected,
+        &module_stage_asts,
+    );
 
     let mut preload_imported = Vec::new();
     if !user_ast.is_empty() {
