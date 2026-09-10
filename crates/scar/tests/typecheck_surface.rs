@@ -1172,7 +1172,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(malformed_resolved_type_shape_requires_self_lhs),
     surface_case!(malformed_resolved_type_shape_is_rejected_outside_trait_definition_where),
     surface_case!(type_constructor_shape_must_be_unique_in_a_trait_definition),
-    surface_case!(inherited_constructor_trait_rejects_trait_head_parameters_after_closure),
+    surface_case!(inherited_constructor_trait_accepts_captured_head_parameters),
     surface_case!(constructor_slot_maps_require_top_level_target_parameters_and_completeness),
     surface_case!(plain_inherent_owner_expands_self_applications_to_its_target),
     surface_case!(canonical_builtin_inherent_owners_expand_self_applications_to_their_targets),
@@ -4385,37 +4385,30 @@ where
     assert!(err.message.contains("more than one"), "{err:?}");
 }
 
-fn inherited_constructor_trait_rejects_trait_head_parameters_after_closure() {
-    let err = typecheck_without_std_prelude(
-        r#"deftrait InvalidDirect<$Tag>
+fn inherited_constructor_trait_accepts_captured_head_parameters() {
+    typecheck_without_std_prelude(
+        r#"deftrait Direct<$Tag>
 where
   Self: Type<$A>
 {}"#,
     )
-    .expect_err("a direct constructor trait cannot retain trait head parameters");
-    assert!(
-        err.message.contains("InvalidDirect")
-            && err.message.contains("cannot declare trait type parameter"),
-        "{err:?}"
-    );
+    .expect("a direct constructor trait may capture a distinct trait-head parameter");
 
-    let err = typecheck_without_std_prelude(
+    typecheck_without_std_prelude(
         r#"deftrait RootShape
 where
   Self: Type<$A>
 {}
 
-deftrait InvalidChild<$Tag>
+deftrait Child<$Base>
 where
+  $Base: RootShape
   Self: RootShape
-{}"#,
+{
+  def lift::<Self>(value: $Base<$A>) -> Self<$A>
+}"#,
     )
-    .expect_err("an inherited constructor trait cannot retain trait head parameters");
-    assert!(
-        err.message.contains("InvalidChild")
-            && err.message.contains("cannot declare trait type parameter"),
-        "{err:?}"
-    );
+    .expect("an inherited constructor trait should keep captured and mapped inputs separate");
 }
 
 fn constructor_slot_maps_require_top_level_target_parameters_and_completeness() {

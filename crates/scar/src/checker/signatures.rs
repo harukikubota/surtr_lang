@@ -558,10 +558,12 @@ pub(super) fn validate_constructor_variable_constraints(
     value_parameters: &[ResolvedValueParameter],
     return_type: Option<&AstTy>,
     where_clause: Option<&ResolvedWhereClause>,
+    enclosing_where_clause: Option<&ResolvedWhereClause>,
     constructor_trait_ids: &HashSet<u32>,
 ) -> Result<(), crate::error::TypeError> {
     let constrained = where_clause
         .into_iter()
+        .chain(enclosing_where_clause)
         .flat_map(|clause| clause.constraints.iter())
         .filter_map(|constraint| match &constraint.subject {
             AstTy::Named(_, name)

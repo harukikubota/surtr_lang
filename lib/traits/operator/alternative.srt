@@ -8,9 +8,9 @@ deftrait Alternative
 where
   Self: Applicative
 {
-  # Construct the identity value for choice. `Self` is selected from the
-  # expected result type and `$A` selects its element type.
-  def empty::<Self, $A>() -> Self<$A>
+  # Construct the identity value for choice. The full `Self` carrier is
+  # selected explicitly or from the expected result type.
+  def empty::<Self>() -> Self
 
   # Choose between two values in the same contextual family.
   def choose(left: Self<$A>, right: Self<$A>) -> Self<$A>

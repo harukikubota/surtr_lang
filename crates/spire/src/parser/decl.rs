@@ -19,6 +19,7 @@ fn where_constraint_rhs_span(rhs: &WhereConstraintRhs) -> &Span {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WhereClauseBlock {
     Function,
+    NominalDefinition,
     TraitDefinition,
     TraitMethod,
     TraitImplementation,
@@ -43,6 +44,13 @@ impl WhereClauseContext {
         Self {
             block: WhereClauseBlock::TraitDefinition,
             self_context: Some("Self".to_string()),
+        }
+    }
+
+    fn nominal_definition() -> Self {
+        Self {
+            block: WhereClauseBlock::NominalDefinition,
+            self_context: None,
         }
     }
 
@@ -2819,7 +2827,7 @@ impl Parser<'_> {
         let sp = self.peek_span();
         self.expect(&Token::Defstruct)?;
         let (name, _) = self.expect_qualified_ident(2, "type")?;
-        let type_params = self.parse_decl_type_params()?;
+        let type_params = self.parse_nominal_decl_type_params()?;
         let field_type_context = TypeParseContext::nominal_declaration(&type_params);
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -2937,7 +2945,7 @@ impl Parser<'_> {
         let sp = self.peek_span();
         self.expect(&Token::Defenum)?;
         let (name, _name_span) = self.expect_qualified_ident(2, "type")?;
-        let type_params = self.parse_decl_type_params()?;
+        let type_params = self.parse_nominal_decl_type_params()?;
         let payload_type_context = TypeParseContext::nominal_declaration(&type_params);
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
@@ -3058,19 +3066,33 @@ impl Parser<'_> {
         let mut params = Vec::new();
         loop {
             let param_span = self.peek_span();
+            if let Token::Ident(bound_name) = self.peek().clone() {
+                return Err(ParseError::syntax(
+                    format!(
+                        "Declaration type parameters must be `$` binders; write `<$M> where $M: {bound_name}`"
+                    ),
+                    param_span,
+                ));
+            }
             self.expect(&Token::Dollar)?;
             let (param_name, _) = self.expect_ident()?;
-            let bound = if matches!(self.peek(), Token::Colon) {
+            if matches!(self.peek(), Token::Colon) {
                 self.advance();
                 self.skip_newlines();
-                let (bound_name, _) = self.expect_ident()?;
-                Some(bound_name)
-            } else {
-                None
-            };
+                let (bound_name, bound_span) = self.expect_ident()?;
+                return Err(ParseError::syntax(
+                    format!(
+                        "Inline declaration constraints are not allowed; write `<${param_name}> where ${param_name}: {bound_name}`"
+                    ),
+                    Span {
+                        start: param_span.start,
+                        end: bound_span.end,
+                    },
+                ));
+            }
             params.push(TypeParam {
                 name: format!("${}", param_name),
-                bound,
+                bound: None,
                 span: param_span,
             });
             self.skip_newlines();
@@ -3096,6 +3118,46 @@ impl Parser<'_> {
             ));
         }
 
+        Ok(params)
+    }
+
+    fn parse_nominal_decl_type_params(&mut self) -> Result<Vec<TypeParam>, ParseError> {
+        let mut params = self.parse_decl_type_params()?;
+        let Some(where_clause) =
+            self.parse_optional_where_clause(WhereClauseContext::nominal_definition())?
+        else {
+            return Ok(params);
+        };
+
+        for constraint in where_clause.constraints {
+            let AstTy::Named(subject_span, subject) = constraint.subject else {
+                return Err(ParseError::syntax(
+                    "A nominal declaration constraint subject must be a declared type parameter",
+                    constraint.span,
+                ));
+            };
+            let Some(param) = params.iter_mut().find(|param| param.name == subject) else {
+                return Err(ParseError::syntax(
+                    format!(
+                        "Nominal declaration constraint subject `{subject}` is not declared in the type parameter list"
+                    ),
+                    subject_span,
+                ));
+            };
+            if param.bound.is_some() {
+                return Err(ParseError::syntax(
+                    format!("Nominal type parameter `{subject}` has more than one constraint"),
+                    constraint.span,
+                ));
+            }
+            let [WhereConstraintRhs::Trait(_, bound)] = constraint.bounds.as_slice() else {
+                return Err(ParseError::syntax(
+                    "A nominal type parameter requires exactly one bare trait constraint",
+                    constraint.span,
+                ));
+            };
+            param.bound = Some(bound.clone());
+        }
         Ok(params)
     }
 

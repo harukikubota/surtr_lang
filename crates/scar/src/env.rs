@@ -68,7 +68,7 @@ pub struct TypeDefInfo {
     pub kind: TypeKind,
     pub name: Symbol,
     pub type_params: Vec<Symbol>,
-    /// Declaration bounds aligned with `type_params`.
+    /// Declaration constraints aligned with `type_params`.
     pub type_param_bounds: Vec<Option<Symbol>>,
     pub type_param_vars: Vec<u32>,
     pub fields: Vec<(Symbol, Ty)>,

@@ -38,7 +38,7 @@ test("Option") {
 
     it("converts none into none error") {
       source: Option<Int> = Option::None
-      converted: Result<Int> = from::<Result>(source)
+      converted: Result<Int> = from::<Result<Int>>(source)
       assert_eq("Err(NoneError(\"None Value.\"))", inspect(converted))
     }
 
@@ -50,7 +50,7 @@ test("Option") {
 
     it("drops concrete errors when converting err into option") {
       source: Result<Int> = Err(NoneError)
-      converted: Option<Int> = from::<Option>(source)
+      converted: Option<Int> = from::<Option<Int>>(source)
       assert_eq("Option::None", inspect(converted))
     }
 
@@ -82,10 +82,14 @@ test("Option") {
 
     it("obeys Alternative identity and associativity laws") {
       empty: Option<Int> = Alternative::empty()
+      explicit_empty: Option<Int> = Alternative::empty::<Option<Int>>()
+      inferred_empty: Option<Int> = Alternative::empty::<_>()
       first: Option<Int> = Option::Some(1)
       second: Option<Int> = Option::Some(2)
       third: Option<Int> = Option::Some(3)
       assert_eq(first, empty <|> first)
+      assert_eq(explicit_empty, empty)
+      assert_eq(inferred_empty, empty)
       assert_eq(first, first <|> empty)
       assert_eq((first <|> second) <|> third, first <|> (second <|> third))
     }

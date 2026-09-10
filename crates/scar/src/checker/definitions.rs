@@ -1368,6 +1368,22 @@ impl Checker {
         let mut local_bindings = Vec::new();
         let mut local_capabilities = Vec::new();
         let mut tyvars = HashMap::new();
+        // Where-clause variables are part of the signature namespace. Seed
+        // them before resolving `$M<$A>` applications so a constructor bound
+        // can register `$M` as the application witness rather than creating a
+        // disconnected fresh witness for each occurrence.
+        if let Some(clause) = where_clause {
+            for constraint in &clause.constraints {
+                if let AstTy::Named(_, name) = &constraint.subject {
+                    if name.starts_with('$') {
+                        tyvars
+                            .entry(name.clone())
+                            .or_insert_with(|| self.env.fresh_tyvar());
+                    }
+                }
+            }
+            self.apply_resolved_where_trait_bounds(Some(clause), &tyvars, None)?;
+        }
         let mut direct_constructor_inputs = super::signatures::DirectConstructorInputs::default();
         let mut typed_return_type_arguments = Vec::new();
         for argument in return_type_arguments {
@@ -1934,17 +1950,6 @@ impl Checker {
         where_clause: Option<&ResolvedWhereClause>,
         resolved_methods: &[ResolvedTraitImplMethod],
     ) -> Result<Vec<TypedNode>, TypeError> {
-        let (_, target_ty, _, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
-        let target_name = self
-            .trait_target_name(&target_ty)
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message:
-                    "trait impl target must be a concrete named type, tuple type, or function type"
-                        .into(),
-                span: Self::ast_ty_span(target_ast_ty).clone(),
-                hint: None,
-            })?;
         let trait_key = self.trait_key(trait_id);
         let trait_info = self
             .traits
@@ -1956,6 +1961,18 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
+        let (_, target_ty, _, _) =
+            self.resolve_trait_impl_head_tys(&trait_info, trait_args, target_ast_ty)?;
+        let target_name = self
+            .trait_target_name(&target_ty)
+            .ok_or_else(|| TypeError {
+                structured: None,
+                message:
+                    "trait impl target must be a concrete named type, tuple type, or function type"
+                        .into(),
+                span: Self::ast_ty_span(target_ast_ty).clone(),
+                hint: None,
+            })?;
         let impl_info = self
             .trait_impl_for_declaration(declaration_id)
             .ok_or_else(|| TypeError {
@@ -1964,6 +1981,7 @@ impl Checker {
                 span: span.clone(),
                 hint: None,
             })?;
+        let target_ty = impl_info.target_ty.clone();
         let mut impl_tyvars = impl_info
             .type_param_vars_by_name
             .iter()
@@ -1971,6 +1989,15 @@ impl Checker {
             .collect::<HashMap<_, _>>();
         impl_tyvars.insert("Self".into(), target_ty.clone());
         let mut block_capabilities = self.resolved_capability_uses(where_clause, &impl_tyvars)?;
+        for capability in &mut block_capabilities {
+            if self.nominal_type_uses_capability(
+                &target_ty,
+                &capability.subject_ty,
+                &capability.trait_id,
+            ) {
+                capability.consumed = true;
+            }
+        }
         let mut typed_nodes = vec![TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
@@ -2090,6 +2117,28 @@ impl Checker {
             );
             let mut method_block_capabilities =
                 self.resolved_capability_uses(where_clause, &method_tyvars)?;
+            self.consume_signature_constructor_capabilities(
+                &mut method_block_capabilities,
+                &method.return_type_arguments,
+                &method.value_parameters,
+                Some(method.ret_ty.as_ref().unwrap_or(&trait_method.ret_ty)),
+            );
+            let signature_types = return_type_argument_tys
+                .iter()
+                .chain(param_tys.iter())
+                .chain(std::iter::once(&expected_ret))
+                .collect::<Vec<_>>();
+            for capability in &mut method_block_capabilities {
+                if signature_types.iter().any(|ty| {
+                    self.nominal_type_uses_capability(
+                        ty,
+                        &capability.subject_ty,
+                        &capability.trait_id,
+                    )
+                }) {
+                    capability.consumed = true;
+                }
+            }
             for capability in &mut method_block_capabilities {
                 capability.consumed = block_capabilities.iter().any(|existing| {
                     existing.consumed
@@ -2266,7 +2315,19 @@ impl Checker {
         where_clause: Option<&ResolvedWhereClause>,
         _methods: &[ResolvedTraitImplMethod],
     ) -> Result<TypedNode, TypeError> {
-        let (_, target_ty, _, _) = self.resolve_trait_impl_head_tys(trait_args, target_ast_ty)?;
+        let trait_key = self.trait_key(trait_id);
+        let trait_info = self
+            .traits
+            .get(&trait_key)
+            .cloned()
+            .ok_or_else(|| TypeError {
+                structured: None,
+                message: format!("Unknown trait: {}", trait_id.name),
+                span: span.clone(),
+                hint: None,
+            })?;
+        let (_, target_ty, _, _) =
+            self.resolve_trait_impl_head_tys(&trait_info, trait_args, target_ast_ty)?;
         let target_name = self
             .trait_target_name(&target_ty)
             .ok_or_else(|| TypeError {

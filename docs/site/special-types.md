@@ -93,7 +93,8 @@ always: (_ -> Int)
 
 ### 許可される場所
 
-`Hole` / `_` は unrestricted wildcard type ではありません。  
+通常型注釈の`Hole` / `_` は unrestricted wildcard type ではありません。call-site ReturnTypeArgumentの`_`は
+別の推論穴であり、`Hole`型を表しません。
 許可はかなり限定されています。
 
 - 変数の callable type annotation
@@ -102,6 +103,9 @@ always: (_ -> Int)
   - `def make() -> (_ -> Int) { always(1) }`
 - ignored parameter を持つ closure literal の surface / 表示
   - `{|_| 10}`
+
+call-siteのReturnTypeArgumentでは、`_`をその位置だけ推論へ残す記法として使えます。これは上記の
+ignored-input callable用`Hole`とは別の構文です。
 
 ### 許可されない場所
 
@@ -149,7 +153,8 @@ compiler-special type contract の一部だからです。
 
 直接書く必要があるときは、次の感覚で十分です。
 
-- `_` を書くのは ignored-input callable annotation を表したいとき
+- 通常型注釈で`_`を書くのは ignored-input callable annotation を表したいとき
+- call-site ReturnTypeArgumentで`_`を書くのは、その型入力を推論へ委ねたいとき
 
 ## 関連ページ
 

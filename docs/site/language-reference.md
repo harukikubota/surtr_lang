@@ -38,7 +38,10 @@ defstruct Name {
   field: Ty,
 }
 
-defstruct Wrapped<$M: Monad, $A> {
+defstruct Wrapped<$M, $A>
+where
+  $M: Monad
+{
   value: $M<$A>,
 }
 
@@ -96,7 +99,7 @@ match expr {
 - `defenum` で定義する
 - 値生成は `Enum::Variant(...)` または `Enum<TypeArgument, ...>::Variant(...)`
 - 後者の型引数 arity は enum 宣言と一致させる。各 `_` はその位置だけを payload と expected type から推論し、明示した通常型・scope 内型変数は固定する
-- 通常の型引数位置ではTypeConstructor traitやabstract `Error`を使えない。declaration parameterがTypeCtorTrait boundを持つ位置だけは、対応する具象constructorのbare headを指定できる
+- 通常の型引数位置ではTypeConstructor traitやabstract `Error`を使えない。nominal declaration parameterがTypeCtorTrait constraintを持つ位置だけは、対応する具象constructorのbare headを指定できる。call-site ReturnTypeArgumentでは完全・部分型applicationと`_`もcarrier入力として指定できる
 - `Result<T>::Ok(...)` / `Result<T>::Err(...)` は Result 専用 constructor として lower する。bare `Err(...)` の `T` が外側から決まらない場合は owner 型引数を明示する
 - `Enum<...>::method`、struct constructor、型注釈・signature・pattern・impl target の `_` にはこの規則を適用しない
 - `match` は網羅必須
@@ -121,22 +124,22 @@ match expr {
 - `defmod` / inherent `impl` / trait `impl` block 内の callable 名は一意であり、signature や `def` / `defp` の違いによる overload はできない
 - 通常 callable に一般的な型parameter listはなく、value parameter由来の型スロットを`id::<Int>(1)`のように任意指定できない
 - non-intrinsic callableがreturn-only入力を定義側ReturnTypeArgumentsとして宣言した場合は、通常関数・method・Trait helper・captureで対応する`::<Int>`を指定できる。省略時はexpected returnなどから推論し、最後まで決まらなければambiguityになる
-- ReturnTypeArguments は、型変数が value parameter の型から導入できない場合にだけ使い、その型変数は戻り値にも現れなければならない。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で ReturnTypeArguments に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として ReturnTypeArguments に置く
+- ReturnTypeArguments は、型変数が value parameter の型から導入できない場合にだけ使い、その型変数は戻り値にも現れなければならない。`Eq` の `Self` のように引数位置で導入済みの型変数を同じ型で ReturnTypeArguments に重ねることはエラーであり、`TryFrom<$To>` の `$To` は変換先指定として ReturnTypeArguments に置く。TypeCtorTraitのcall-site RTAでは、constructor head、完全・部分型application、`_`を一項の型入力として扱う。Trait methodの通常RTAも、`from::<Result>(option)`のようにimplのsource/targetが共有する型変数から全引数を解けるgeneric targetだけはbare headで指定できる。通常関数では完全型を使う
 - trait は method のみを持つ
 - 通常の bound は `$A: Trait` と書く。`Trait<Arg, ...>` は where RHS ではなく trait / impl head または expression dispatch target にだけ書ける
 - generic receiver の Trait 呼び出しには、signature 上で宣言した `where` bound が必要である。呼び出しから implicit bound は追加されない
 - body を持つ Trait method は default method として override でき、`where Self: Parent` は parent Trait を要求する
 - Trait の詳細な利用規則は [`trait-system.md`](./trait-system.md)、実装例は [`trait-impls.md`](./trait-impls.md) を参照する
 - 匿名 `impl Trait` 型は使えず、名前付き型変数と `where` clause で制約する
-- `where` clause は宣言・trait・impl に制約を追加する
+- `where` clause は宣言・trait・impl に制約を追加し、Trait-head / nominal binderとは分離する
 - `Self: Type<...>` は trait definition where の `Self` だけ、`Trait.$Slot` は TypeConstructor trait impl の slot map だけで受理する
-- constructor application は通常関数／trait method signature の direct parameter・return、またはTypeCtorTrait declaration boundを持つnominal field/payloadに限る。`Self::...` / `Type::...` は value owner path として不正
+- constructor application は通常関数／trait method signature の direct parameter・return、またはTypeCtorTrait constraintを持つnominal field/payloadに限る。通常型注釈での部分適用は拒否するが、call-site RTAのcarrier型applicationは許可する。`Self::...` / `Type::...` は value owner path として不正
 - `+`, `-`, `*` はそれぞれ `Add::add`, `Sub::sub`, `Mul::mul` へ resolve される
 - 数値 helper は `Int::abs` / `Float::safe_div` のような concrete type owner surface として提供する
 - `Compare` が三値比較の正本で、`< <= > >=` も `Compare` を前提に動く
 - `Hole` は compiler-reserved な ignored-input callable marker
-- `_` は `Hole` の surface 表記
-- `Hole` / `_` は data type wildcard ではなく、限定された callable surface にだけ現れる
+- 通常型注釈の `_` は `Hole` の surface 表記だが、call-site ReturnTypeArgumentの`_`は別の推論穴である
+- `Hole` / 通常型注釈の`_`は data type wildcard ではなく、限定された callable surface にだけ現れる
 
 ### `from` / `try_from`
 

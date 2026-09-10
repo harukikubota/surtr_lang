@@ -2,9 +2,9 @@
 
 ## 1. 状態・対象・前提
 
-- 配置: `/doc`。標準 Transformer の未実装仕様。
+- 配置: `/doc`。共通 `MonadT` Traitと言語機能はN04で実装済み。標準 Transformer 4型はN05の未実装仕様。
 - 基準 commit: `f1986a27d84728e1e7a88de457a1d6b55cfe5ab8`。
-- 前提: `monadt_language_extension_spec.md` の最小言語機能とインターフェース確定ゲート。
+- 前提: `monadt_language_extension_spec.md` の実装済み言語機能と確定インターフェース。
 - 対象: `OptionT`、`EitherT`、`ReaderT`、`StateT`。
 - 対象外: `IdentityT`、Writer/WriterT、ListT、ResultT、ContT、Transformerそのものを受ける抽象API。
 
@@ -13,7 +13,8 @@
 
 根拠は本会話と「Surtr Monad Transformer 検討メモ」§2–10、「MonadT / Alternative / do 構文 検討メモ」§2–6。APIの候補一覧を、型関係・責務・RTAが分かる形へ具体化する。会話で未確定だったhelperの細部は§11に分け、共通Traitの契約へ無断で追加しない。
 
-本書のSurtr例は実装後の目標であり、本書作成時のcompilerで実行済みのコードではない。
+§4の共通`MonadT` Traitは実装済みである。OptionT / EitherT / ReaderT / StateTと各impl・helperの
+Surtr例はN05の目標であり、現時点で標準実装済みのコードではない。
 
 ## 2. 共通の意図
 
@@ -33,19 +34,31 @@ do: bindを用いて同じcarrierの値を合成
 ## 3. 型定義
 
 ```surtr
-defstruct OptionT<$M: Monad, $A> {
+defstruct OptionT<$M, $A>
+where
+  $M: Monad
+{
   inner: $M<Option<$A>>
 }
 
-defstruct EitherT<$L, $M: Monad, $A> {
+defstruct EitherT<$L, $M, $A>
+where
+  $M: Monad
+{
   inner: $M<Either<$L, $A>>
 }
 
-defstruct ReaderT<$R, $M: Monad, $A> {
+defstruct ReaderT<$R, $M, $A>
+where
+  $M: Monad
+{
   run_reader: ($R -> $M<$A>)
 }
 
-defstruct StateT<$S, $M: Monad, $A> {
+defstruct StateT<$S, $M, $A>
+where
+  $M: Monad
+{
   run_state: ($S -> $M<($A, $S)>)
 }
 ```
@@ -68,8 +81,9 @@ fieldはpublic。標準のTrait implがrepresentationを直接読む方針とし
 全対象に Functor / Applicative / Monad / `MonadT<M>` を実装する。baseには初期仕様としてMonadを要求し、型ごとにFunctorだけの弱い部分実装まで分割しない。
 
 ```surtr
-deftrait MonadT<$M: Monad>
+deftrait MonadT<$M>
 where
+  $M: Monad
   Self: Monad
 {
   def lift::<Self>(value: $M<$A>) -> Self<$A>
@@ -297,7 +311,8 @@ y: OptionT<Result, Int> = do {
 }
 ```
 
-期待型と既存のbare headによる指定を用いる。`do::<OptionT<Result,_>>` の新文法は追加しない。
+期待型と既存のbare headによる指定を用いる。`do::<OptionT<Result,_>>` は、applied carrier専用のdo文法ではなく、
+通常のTypeCtorTrait ReturnTypeArgumentとして扱う。captured baseとmapped payloadは他の型制約から解決する。
 
 ### 10.3 SafeBindとliftは別
 
@@ -326,7 +341,7 @@ OptionT<Result,_> のdo:
 | MT-SI01 | OptionT/EitherTのmap_inner・map_left・map_tの標準採用 | 操作面を明示し、元container APIの全面複製をしない |
 | MT-SI02 | ReaderT/StateTのmap_tのmapper型 | run結果へpointwiseに適用するか、保持関数全体を置換するかを同名overloadにしない |
 | MT-SI03 | helper名・引数順・RTA順 | 本書の最小API案を基準とし、既存関数の引数導入規則から外れない |
-| MT-SI04 | captured baseとTransformer stackのsource表記 | 言語拡張仕様のMT-I01に従う。表示例を受理文法と取り違えない |
+| MT-SI04 | captured baseとTransformer stackのsource表記 | 言語拡張仕様のMT-I01の確定規則に従う。nominal型注釈のbare headと、RTA内の完全・部分型applicationを区別する |
 
 MT-SI02の判断材料:
 

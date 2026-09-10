@@ -728,7 +728,7 @@ impl Monad for List<$T> {
 `<|>` concatenates its operands from left to right.
 """
 impl Alternative for List<$T> {
-  def empty::<List<$T>, $A>() -> List<$A> {
+  def empty::<List<$T>>() -> List<$T> {
     []
   }
 

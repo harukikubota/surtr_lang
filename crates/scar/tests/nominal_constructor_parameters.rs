@@ -9,7 +9,10 @@ fn check(source: &str) -> Result<Vec<TypedNode>, TypeError> {
 }
 
 const OPTION_T: &str = r#"
-defstruct OptionT<$M: Monad, $A> {
+defstruct OptionT<$M, $A>
+where
+  $M: Monad
+{
   inner: $M<Option<$A>>,
 }
 
@@ -40,7 +43,7 @@ listed: OptionT<List, Int> = OptionT([Option::Some(3)])
 fn nominal_enum_constructor_parameter_uses_the_same_bound_metadata() {
     check(
         r#"
-defenum Layer<$M: Monad, $A> {
+defenum Layer<$M, $A> where $M: Monad {
   Layer($M<Option<$A>>),
 }
 
@@ -58,7 +61,7 @@ deftrait Context where Self: Type<$A> {}
 defenum Local<$A> { Local($A), }
 impl Context for Local<$T> where $T: Context.$A {}
 
-defenum Layer<$M: Context, $A> {
+defenum Layer<$M, $A> where $M: Context {
   Layer($M<$A>),
 }
 
@@ -79,7 +82,7 @@ impl Local {
 }
 impl Context for Local<$T> where $T: Context.$A {}
 
-defstruct Layer<$M: Context, $A> { value: $M<$A> }
+defstruct Layer<$M, $A> where $M: Context { value: $M<$A> }
 impl Layer {
   def new(value: $M<$A>) -> Layer<$M, $A>
   where
@@ -99,7 +102,7 @@ value: Layer<Local, Int> = Layer(Local(1))
 fn nominal_enum_constructor_parameter_rejects_wrong_slot_arity() {
     let error = check(
         r#"
-defenum InvalidLayer<$M: Monad, $A, $B> {
+defenum InvalidLayer<$M, $A, $B> where $M: Monad {
   InvalidLayer($M<$A, $B>),
 }
 "#,
@@ -116,17 +119,17 @@ defenum InvalidLayer<$M: Monad, $A, $B> {
 fn nominal_enum_constructor_parameter_rejects_head_without_capability() {
     let error = check(
         r#"
-defenum Layer<$M: Monad, $A> { Layer($M<$A>), }
+defenum Layer<$M, $A> where $M: Monad { Layer($M<$A>), }
 defenum Plain<$A> { Plain($A), }
 def reject(value: Layer<Plain, Int>) -> Unit { () }
 "#,
     )
-    .expect_err("enum nominal arguments must satisfy the declaration constructor bound");
+    .expect_err("enum nominal arguments must satisfy the declaration constructor constraint");
 
     assert!(
         error
             .message
-            .contains("does not satisfy declaration bound Monad"),
+            .contains("does not satisfy declaration constraint Monad"),
         "{error:?}"
     );
 }
@@ -135,7 +138,7 @@ def reject(value: Layer<Plain, Int>) -> Unit { () }
 fn nominal_constructor_parameter_rejects_wrong_slot_arity() {
     let error = check(
         r#"
-defstruct Invalid<$M: Monad, $A, $B> {
+defstruct Invalid<$M, $A, $B> where $M: Monad {
   inner: $M<$A, $B>,
 }
 "#,
@@ -149,16 +152,29 @@ defstruct Invalid<$M: Monad, $A, $B> {
 }
 
 #[test]
+fn nominal_constructor_parameter_does_not_treat_underscore_as_constructor_inference() {
+    let error = check(&format!(
+        r#"{OPTION_T}
+def reject(value: OptionT<_, Int>) -> Unit {{ () }}"#
+    ))
+    .expect_err("a normal type annotation must not infer a constructor parameter from `_`");
+    assert!(
+        error.message.contains("`_` is only allowed"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn nominal_constructor_application_requires_constructor_trait_bound() {
     let error = check(
         r#"
 deftrait Marker {}
-defstruct Invalid<$M: Marker, $A> {
+defstruct Invalid<$M, $A> where $M: Marker {
   value: $M<$A>,
 }
 "#,
     )
-    .expect_err("an ordinary declaration bound cannot authorize constructor application");
+    .expect_err("an ordinary declaration constraint cannot authorize constructor application");
 
     assert!(
         error.message.contains("Marker is not a constructor trait"),
@@ -178,7 +194,7 @@ def keep(value: OptionT<$M, $A>) -> OptionT<$M, $A> {{ value }}
     assert!(
         error
             .message
-            .contains("does not satisfy declaration bound Monad"),
+            .contains("does not satisfy declaration constraint Monad"),
         "{error:?}"
     );
 }
@@ -187,7 +203,7 @@ def keep(value: OptionT<$M, $A>) -> OptionT<$M, $A> {{ value }}
 fn nested_nominal_declaration_requires_forwarded_constructor_bound() {
     let error = check(
         r#"
-defstruct RequiresMonad<$M: Monad, $A> {
+defstruct RequiresMonad<$M, $A> where $M: Monad {
   value: $A,
 }
 
@@ -196,12 +212,12 @@ defstruct Invalid<$M> {
 }
 "#,
     )
-    .expect_err("a nested nominal type must not infer its declaration bound from use");
+    .expect_err("a nested nominal type must not infer its declaration constraint from use");
 
     assert!(
         error
             .message
-            .contains("does not satisfy declaration bound Monad"),
+            .contains("does not satisfy declaration constraint Monad"),
         "{error:?}"
     );
 }
@@ -210,7 +226,7 @@ defstruct Invalid<$M> {
 fn nested_nominal_declaration_accepts_forwarded_constructor_bound() {
     check(&format!(
         r#"{OPTION_T}
-defstruct Wrapped<$M: Monad> {{
+defstruct Wrapped<$M> where $M: Monad {{
   value: OptionT<$M, Int>,
 }}
 impl Wrapped {{
@@ -235,12 +251,12 @@ deftrait Invalid {{
 }}
 "#
     ))
-    .expect_err("a Trait method signature must not infer a nominal declaration bound");
+    .expect_err("a Trait method signature must not infer a nominal declaration constraint");
 
     assert!(
         error
             .message
-            .contains("does not satisfy declaration bound Monad"),
+            .contains("does not satisfy declaration constraint Monad"),
         "{error:?}"
     );
 }
@@ -255,12 +271,12 @@ impl Keep for OptionT<$M, Int> {{
 }}
 "#
     ))
-    .expect_err("a Trait impl target must not infer a nominal declaration bound");
+    .expect_err("a Trait impl target must not infer a nominal declaration constraint");
 
     assert!(
         error
             .message
-            .contains("does not satisfy declaration bound Monad"),
+            .contains("does not satisfy declaration constraint Monad"),
         "{error:?}"
     );
 }
@@ -281,7 +297,7 @@ impl Matchers {{
     assert!(
         error
             .message
-            .contains("does not satisfy declaration bound Monad"),
+            .contains("does not satisfy declaration constraint Monad"),
         "{error:?}"
     );
 
@@ -294,7 +310,7 @@ impl ConcreteMatchers {{
 }}
 "#
     ))
-    .expect("an extractor may use a concrete constructor satisfying the declaration bound");
+    .expect("an extractor may use a concrete constructor satisfying the declaration constraint");
 }
 
 #[test]
@@ -309,7 +325,7 @@ def invalid::<$M, $A>() -> OptionT<$M, $A> {{ () }}
     assert!(
         error
             .message
-            .contains("does not satisfy declaration bound Monad"),
+            .contains("does not satisfy declaration constraint Monad"),
         "{error:?}"
     );
 }
@@ -337,12 +353,12 @@ defenum Plain<$A> {{ Plain($A), }}
 def reject(value: OptionT<Plain, Int>) -> Unit {{ () }}
 "#
     ))
-    .expect_err("a concrete constructor head must satisfy the nominal declaration bound");
+    .expect_err("a concrete constructor head must satisfy the nominal declaration constraint");
 
     assert!(
         error
             .message
-            .contains("does not satisfy declaration bound Monad"),
+            .contains("does not satisfy declaration constraint Monad"),
         "{error:?}"
     );
 }
@@ -377,13 +393,13 @@ Facet::put(OptionT.inner, source, Option::Some(Option::Some("one")))
 }
 
 #[test]
-fn facet_rebuild_rejects_destination_that_violates_declaration_bound() {
+fn facet_rebuild_rejects_destination_that_violates_declaration_constraint() {
     let error = check(
         r#"
 deftrait Marker {}
 impl Marker for Int {}
 
-defstruct Checked<$A: Marker> {
+defstruct Checked<$A> where $A: Marker {
   value: $A,
 }
 impl Checked {
@@ -394,12 +410,12 @@ source: Checked<Int> = Checked(1)
 Facet::put(Checked.value, source, "one")
 "#,
     )
-    .expect_err("the rebuilt nominal destination must satisfy its declaration bound");
+    .expect_err("the rebuilt nominal destination must satisfy its declaration constraint");
 
     assert!(
         error
             .message
-            .contains("does not satisfy declaration bound Marker"),
+            .contains("does not satisfy declaration constraint Marker"),
         "{error:?}"
     );
 }

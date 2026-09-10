@@ -861,9 +861,26 @@ impl Checker {
                     .into_iter()
                     .map(|arg| self.concretize_pending_trait_calls(arg))
                     .collect::<Result<Vec<_>, _>>()?;
+                let abstract_constructor_receiver = match &obligation.receiver {
+                    Ty::SelfApp(items) => Self::constructor_application_parts(items)
+                        .map(|(witness, _)| {
+                            self.constructor_witness_supports_trait(witness, &obligation.trait_id)
+                        })
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                let mut unresolved_obligation_variables = Vec::new();
+                for ty in obligation
+                    .trait_args
+                    .iter()
+                    .chain(std::iter::once(&obligation.receiver))
+                {
+                    Self::collect_ty_vars(ty, &mut unresolved_obligation_variables);
+                }
                 let dispatch = match dispatch {
                     crate::typed::TraitDispatch::Pending
-                        if !matches!(obligation.receiver, Ty::Var(_)) =>
+                        if unresolved_obligation_variables.is_empty()
+                            && !abstract_constructor_receiver =>
                     {
                         let argument_tys = args
                             .iter()
@@ -3976,6 +3993,11 @@ impl Checker {
                     _ => None,
                 });
             }
+            // A plain Self application is the declaration-owned abstract
+            // carrier used while checking a generic constructor helper body.
+            // Its dispatch must remain pending until the enclosing call site
+            // supplies a concrete carrier.
+            return Ok(Some(TraitDispatch::Pending));
         }
         self.select_method_dispatch(
             trait_name,
@@ -4353,43 +4375,62 @@ impl Checker {
                     ));
                 }
             }
-            if matches!(probe_ret, Ty::SelfApp(_))
+            if self.resolve_ty(&probe_ret) == self.resolve_ty(&probe_self)
+                || matches!(probe_ret, Ty::SelfApp(_))
                 || (self.trait_matches_short_name(trait_name, "Default")
                     && method_name == "default"
                     && (explicit_type_args.is_some() || expected_ret_ty.is_some()))
             {
-                let explicit_target = if self.trait_matches_short_name(trait_name, "Default")
-                    && method_name == "default"
-                {
-                    match explicit_type_args {
-                        Some([arg]) => {
-                            Some(self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?)
-                        }
-                        Some(args) => {
-                            return Err(super::signatures::return_type_argument_arity_error(
-                                &format!("{trait_name}::{method_name}"),
-                                1,
-                                args.len(),
-                                span,
-                            ));
-                        }
-                        None => None,
+                let explicit_target = match explicit_type_args.and_then(|arguments| {
+                    probe_slots
+                        .iter()
+                        .position(|slot| slot == &probe_self)
+                        .map(|position| &arguments[position])
+                }) {
+                    Some(argument) if !trait_info.constructor_slots.is_empty() => {
+                        Some(self.resolve_type_constructor_return_type_argument(argument)?)
                     }
-                } else {
-                    None
+                    Some(argument) => Some(
+                        self.resolve_trait_call_site_return_type_argument(&probe_self, argument)?,
+                    ),
+                    None => None,
                 };
                 let expected = explicit_target
                     .as_ref()
                     .or(expected_ret_ty)
                     .ok_or_else(|| {
                         self.ambiguous_constructor_result(trait_name, method_name, span)
-                    })?;
+                    })?
+                    .clone();
+                if let Some(expected_ret_ty) = expected_ret_ty {
+                    self.assert_type_relation(
+                        expected_ret_ty,
+                        &expected,
+                        self.type_fact(SourceRole::Expected, span, expected_ret_ty),
+                        self.type_fact(SourceRole::ReturnTypeArgument, span, &expected),
+                        TypeDiagnosticReason::ReturnTypeMismatch,
+                        DiagnosticOrigin::Return,
+                        &format!("{trait_name}::{method_name}"),
+                        0,
+                    )?;
+                }
+                let expected = self.resolve_ty(&expected);
+                let mut unresolved = Vec::new();
+                Self::collect_ty_vars(&expected, &mut unresolved);
+                if explicit_target.is_some()
+                    && expected_ret_ty.is_none()
+                    && unresolved
+                        .iter()
+                        .any(|variable| !self.rigid_tyvars.contains(variable))
+                {
+                    return Err(self.ambiguous_constructor_result(trait_name, method_name, span));
+                }
                 if !self.trait_matches_short_name(trait_name, "Default") {
                     if let Some(arguments) = explicit_type_args {
                         if let ConstructorProjectionOutcome::Applicable {
                             info: implementation,
                             mapping,
-                        } = self.constructor_projection(trait_name, expected)
+                        } = self.constructor_projection(trait_name, &expected)
                         {
                             let expanded = self.expand_trait_self_apps(
                                 probe_ret.clone(),
@@ -4398,9 +4439,9 @@ impl Checker {
                             )?;
                             let return_type = self.substitute_ty_with_mapping(&expanded, &mapping);
                             self.assert_type_relation(
-                                expected,
+                                &expected,
                                 &return_type,
-                                self.type_fact(SourceRole::Expected, span, expected),
+                                self.type_fact(SourceRole::Expected, span, &expected),
                                 self.type_fact(SourceRole::Value, span, &return_type),
                                 TypeDiagnosticReason::ReturnTypeMismatch,
                                 DiagnosticOrigin::Return,
@@ -4414,11 +4455,11 @@ impl Checker {
                             let explicit = if slot == &probe_self
                                 && !trait_info.constructor_slots.is_empty()
                             {
-                                self.resolve_type_constructor_head(argument)?
+                                self.resolve_type_constructor_return_type_argument(argument)?
                             } else {
-                                self.resolve_call_site_return_type_argument(slot, argument)?
+                                self.resolve_trait_call_site_return_type_argument(slot, argument)?
                             };
-                            let target = if slot == &probe_self { expected } else { slot };
+                            let target = if slot == &probe_self { &expected } else { slot };
                             if self
                                 .assert_type_relation(
                                     target,
@@ -4452,45 +4493,33 @@ impl Checker {
                     }
                 }
                 let dispatch = self
-                    .constructor_target_dispatch(trait_name, method_name, expected)?
+                    .constructor_target_dispatch(trait_name, method_name, &expected)?
                     .ok_or_else(|| {
                         self.trait_dispatch_failure(
                             TypeDiagnosticReason::NoApplicableTraitImplementation,
                             trait_name,
                             method_name,
-                            Some(expected),
+                            Some(&expected),
                             span,
                         )
                     })?;
                 let typed = TypedNode {
-                    ty: self.resolve_ty(expected),
+                    ty: expected.clone(),
                     span: span.clone(),
                     node: TypedInner::TraitCall {
                         trait_name: trait_name.to_string(),
                         method_name: method_name.to_string(),
-                        receiver_ty: self.resolve_ty(expected),
+                        receiver_ty: expected.clone(),
                         obligation: TraitObligation {
                             trait_id: trait_name.to_string(),
                             trait_args: Vec::new(),
-                            receiver: self.resolve_ty(expected),
+                            receiver: expected.clone(),
                         },
                         dispatch,
                         origin: TraitCallOrigin::Explicit,
                         args: Vec::new(),
                     },
                 };
-                if let Some(expected_ret_ty) = expected_ret_ty {
-                    self.assert_type_relation(
-                        expected_ret_ty,
-                        &typed.ty,
-                        self.type_fact(SourceRole::Expected, span, expected_ret_ty),
-                        self.type_fact(SourceRole::Value, span, &typed.ty),
-                        TypeDiagnosticReason::ReturnTypeMismatch,
-                        DiagnosticOrigin::Return,
-                        &format!("{trait_name}::{method_name}"),
-                        0,
-                    )?;
-                }
                 return Ok(typed);
             }
         }
@@ -4522,24 +4551,9 @@ impl Checker {
         if let Some(explicit_args) = explicit_type_args {
             for (ordinal, (slot, arg)) in explicit_slots.iter().zip(explicit_args).enumerate() {
                 let explicit_ty = if slot == &self_ty && !trait_info.constructor_slots.is_empty() {
-                    self.resolve_type_constructor_head(arg)?
+                    self.resolve_type_constructor_return_type_argument(arg)?
                 } else {
-                    match arg {
-                        // Conversion traits use a bare constructor name to select
-                        // the destination family (`from::<Result>(...)`).  Keep
-                        // its element slot inferable rather than treating it as
-                        // an invalid un-applied concrete type.
-                        AstTy::Named(_, name) if Self::surface_name(name) == "Result" => {
-                            Ty::Result(Box::new(self.env.fresh_tyvar()), Box::new(Ty::Error))
-                        }
-                        AstTy::Named(_, name) if Self::surface_name(name) == "Option" => {
-                            Ty::Enum("Option".into(), vec![self.env.fresh_tyvar()])
-                        }
-                        AstTy::Named(_, name) if Self::surface_name(name) == "List" => {
-                            Ty::List(Box::new(self.env.fresh_tyvar()))
-                        }
-                        _ => self.resolve_ast_ty_in_context(arg, TypeSyntaxContext::General)?,
-                    }
+                    self.resolve_trait_call_site_return_type_argument(slot, arg)?
                 };
                 if self
                     .assert_type_relation(
@@ -4645,7 +4659,10 @@ impl Checker {
                 .iter()
                 .enumerate()
                 .rev()
-                .find_map(|(index, ty)| matches!(ty, Ty::SelfApp(_)).then_some(index));
+                .find_map(|(index, ty)| {
+                    matches!(ty, Ty::SelfApp(items) if Self::constructor_application_parts(items).is_none())
+                        .then_some(index)
+                });
             let typed_receiver = if let Some(index) = receiver_index {
                 constructor_receiver_index = Some(index);
                 if receiver_hint.is_none() {
@@ -4704,7 +4721,7 @@ impl Checker {
                     (Ty::SelfApp(target), slots, HashMap::new())
                 } else {
                     let (implementation, mut captured) =
-                        match self.constructor_projection(trait_name, &receiver_ty) {
+                        match self.constructor_capability_projection(trait_name, &receiver_ty) {
                             ConstructorProjectionOutcome::Applicable { info, mapping } => {
                                 (info, mapping)
                             }

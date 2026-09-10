@@ -198,8 +198,11 @@ impl SigilSession {
         &mut self,
         scope: Scope,
         precollected: &PrecollectedDeclarations,
+        module_stages: &[Vec<StagedModuleAst>],
     ) {
         self.replace_scope_with_declarations(scope, &precollected.declaration_index);
+        self.trait_constructor_slots =
+            super::collect_staged_trait_constructor_slots(module_stages, &self.declaration_uids);
         self.owner_registry = precollected.owner_registry.clone();
     }
 

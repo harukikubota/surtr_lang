@@ -10,6 +10,7 @@ use sindr::names::TypeName;
 pub(super) struct MethodTypeEnvironment {
     pub bindings: HashMap<String, Ty>,
     pub head_bindings: HashMap<String, Ty>,
+    pub trait_arguments: Vec<Ty>,
     pub self_ty: Ty,
     pub direct_inputs: super::signatures::DirectConstructorInputs,
 }
@@ -175,6 +176,99 @@ impl Checker {
         })
     }
 
+    pub(super) fn constructor_bounds_for_contract(
+        &self,
+        contract: &ImplMethodInstantiationContract,
+    ) -> HashMap<u32, String> {
+        contract
+            .impl_constraints
+            .constraints
+            .iter()
+            .chain(contract.signature.where_constraints.constraints.iter())
+            .filter_map(|constraint| {
+                let CanonicalTypeHead::Variable(subject) = constraint.subject.head else {
+                    return None;
+                };
+                let CanonicalMethodBound::Trait(trait_id) = constraint.bound else {
+                    return None;
+                };
+                self.traits
+                    .values()
+                    .find(|info| {
+                        info.id.unique_id == trait_id && !info.constructor_slots.is_empty()
+                    })
+                    .map(|info| (subject, self.trait_key(&info.id)))
+            })
+            .collect()
+    }
+
+    pub(super) fn instantiate_contract_canonical_type(
+        &self,
+        declared: &CanonicalTy,
+        substitution: &CanonicalSubstitution,
+        constructor_bounds: &HashMap<u32, String>,
+    ) -> Result<CanonicalTy, TypeError> {
+        if let CanonicalTypeHead::Variable(var) = declared.head {
+            if let Some(actual) = substitution.get(&var) {
+                return self.canonical_request(actual);
+            }
+        }
+        if declared.head == CanonicalTypeHead::SelfApplication
+            && declared.arguments.len() >= 2
+            && declared.arguments[0].head == CanonicalTypeHead::Hole
+        {
+            let Some(CanonicalTypeHead::Variable(witness_var)) =
+                declared.arguments.get(1).map(|argument| &argument.head)
+            else {
+                return self.substitute_canonical_type(declared, substitution);
+            };
+            let trait_key = self
+                .constructor_witness_traits
+                .get(witness_var)
+                .or_else(|| constructor_bounds.get(witness_var));
+            let Some(trait_key) = trait_key else {
+                return self.substitute_canonical_type(declared, substitution);
+            };
+            let witness = self.instantiate_contract_canonical_type(
+                &declared.arguments[1],
+                substitution,
+                constructor_bounds,
+            )?;
+            let witness_ty = self.canonical_to_ty(&witness)?;
+            let ConstructorProjectionOutcome::Applicable { info, .. } =
+                self.constructor_capability_projection(trait_key, &witness_ty)
+            else {
+                return self.substitute_canonical_type(declared, substitution);
+            };
+            if info.constructor_slot_positions.len() + 2 != declared.arguments.len() {
+                return self.substitute_canonical_type(declared, substitution);
+            }
+            let mut application = witness;
+            for (ordinal, position) in info.constructor_slot_positions.iter().enumerate() {
+                application.arguments[*position] = self.instantiate_contract_canonical_type(
+                    &declared.arguments[ordinal + 2],
+                    substitution,
+                    constructor_bounds,
+                )?;
+            }
+            return Ok(application);
+        }
+        Ok(CanonicalTy {
+            head: declared.head.clone(),
+            arguments: declared
+                .arguments
+                .iter()
+                .map(|argument| {
+                    self.instantiate_contract_canonical_type(
+                        argument,
+                        substitution,
+                        constructor_bounds,
+                    )
+                })
+                .collect::<Result<_, _>>()?,
+        })
+    }
+
     pub(super) fn trait_implementation_identity(
         &self,
         info: &TraitImplInfo,
@@ -212,6 +306,7 @@ impl Checker {
         parameters: &[ResolvedValueParameter],
         signature: &MethodSignatureTypeList,
         substitution: &CanonicalSubstitution,
+        constructor_bounds: &HashMap<u32, String>,
         dispatch: &TraitDispatchTarget,
     ) -> Result<sindr::signature::CallableSignature<CanonicalTy>, TypeError> {
         use sindr::signature::{
@@ -225,7 +320,11 @@ impl Checker {
         let mut values = Vec::new();
         let mut result = None;
         for entry in &signature.entries {
-            let ty = self.substitute_canonical_type(&entry.ty, substitution)?;
+            let ty = self.instantiate_contract_canonical_type(
+                &entry.ty,
+                substitution,
+                constructor_bounds,
+            )?;
             match entry.role {
                 TypeListRole::ReturnTypeArgument => rtas.push(CanonicalReturnTypeArgument {
                     ordinal: entry.ordinal,
@@ -608,6 +707,7 @@ impl Checker {
         let head_raw = MethodTypeEnvironment {
             bindings: raw.head_bindings.clone(),
             head_bindings: raw.head_bindings.clone(),
+            trait_arguments: raw.trait_arguments.clone(),
             self_ty: raw.self_ty.clone(),
             direct_inputs: super::signatures::DirectConstructorInputs::default(),
         };
@@ -627,9 +727,16 @@ impl Checker {
         };
         let self_ty = self.canonical_ast_type(target, &raw.self_ty, raw, &environment)?;
         environment.self_ty = self_ty.clone();
+        if trait_args.len() != raw.trait_arguments.len() {
+            return Err(TypeError::new(
+                "Internal error: resolved Trait arguments do not match the impl head",
+                span.clone(),
+            ));
+        }
         let arguments = trait_args
             .iter()
-            .map(|arg| self.resolve_canonical_ast_type(arg, raw, &environment))
+            .zip(&raw.trait_arguments)
+            .map(|(arg, resolved)| self.canonical_ast_type(arg, resolved, raw, &environment))
             .collect::<Result<_, _>>()?;
         Ok((
             ImplHeadTypeList::new(arguments, self_ty, span.clone()),
@@ -1928,6 +2035,79 @@ impl Checker {
         }
     }
 
+    fn expand_fresh_constructor_applications(
+        &self,
+        declared: &CanonicalTy,
+        fresh: &CanonicalTy,
+        unifier: &CanonicalUnifier,
+        constructor_bounds: &HashMap<u32, String>,
+    ) -> Result<CanonicalTy, TypeError> {
+        if matches!(declared.head, CanonicalTypeHead::Variable(_)) {
+            return Ok(unifier.resolve(fresh));
+        }
+        if declared.head == CanonicalTypeHead::SelfApplication
+            && declared.arguments.len() >= 2
+            && declared.arguments[0].head == CanonicalTypeHead::Hole
+        {
+            let Some(CanonicalTypeHead::Variable(witness_var)) =
+                declared.arguments.get(1).map(|argument| &argument.head)
+            else {
+                return Ok(unifier.resolve(fresh));
+            };
+            let trait_key = self
+                .constructor_witness_traits
+                .get(witness_var)
+                .or_else(|| constructor_bounds.get(witness_var));
+            let Some(trait_key) = trait_key else {
+                return Ok(unifier.resolve(fresh));
+            };
+            let resolved = unifier.resolve(fresh);
+            let witness = unifier.resolve(&fresh.arguments[1]);
+            let witness_ty = self.canonical_to_ty(&witness)?;
+            let ConstructorProjectionOutcome::Applicable { info, .. } =
+                self.constructor_capability_projection(trait_key, &witness_ty)
+            else {
+                return Ok(resolved);
+            };
+            if info.constructor_slot_positions.len() + 2 != fresh.arguments.len() {
+                return Ok(resolved);
+            }
+            let mut application = witness;
+            for (ordinal, position) in info.constructor_slot_positions.iter().enumerate() {
+                let slot_declared = &declared.arguments[ordinal + 2];
+                let slot_fresh = &fresh.arguments[ordinal + 2];
+                application.arguments[*position] = self.expand_fresh_constructor_applications(
+                    slot_declared,
+                    slot_fresh,
+                    unifier,
+                    constructor_bounds,
+                )?;
+            }
+            return Ok(application);
+        }
+
+        if matches!(declared.head, CanonicalTypeHead::Variable(_)) {
+            return Ok(unifier.resolve(fresh));
+        }
+
+        Ok(CanonicalTy {
+            head: unifier.resolve(fresh).head,
+            arguments: declared
+                .arguments
+                .iter()
+                .zip(&fresh.arguments)
+                .map(|(declared, fresh)| {
+                    self.expand_fresh_constructor_applications(
+                        declared,
+                        fresh,
+                        unifier,
+                        constructor_bounds,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+
     pub(super) fn canonical_waiting_variables(&self, ty: &CanonicalTy, waiting: &mut Vec<u32>) {
         if let CanonicalTypeHead::Variable(var) = ty.head {
             if !self.rigid_tyvars.contains(&var) && !waiting.contains(&var) {
@@ -2106,16 +2286,111 @@ impl Checker {
         )
     }
 
+    fn canonical_constructor_identity_request(
+        &self,
+        trait_key: &str,
+        ty: &Ty,
+    ) -> Result<CanonicalTy, TypeError> {
+        let ConstructorCarrierOutcome::Projected(carrier) =
+            self.contextual_constructor_carrier(trait_key, ty)
+        else {
+            return self.canonical_request(ty);
+        };
+        let head = match carrier.constructor {
+            ConstructorHead::Concrete(head) => head,
+            ConstructorHead::DeclarationVariable(var) | ConstructorHead::InferenceVariable(var) => {
+                CanonicalTypeHead::Variable(var)
+            }
+        };
+        // Keep the source's mapped constructor slots as inference variables.
+        // They are erased for identity matching only conceptually; retaining
+        // them lets a concrete method input bind the carrier's representative
+        // slot before specialization (e.g. Base<$X> against Base<Int>).
+        let mut arguments = self.canonical_request(ty)?.arguments;
+        if arguments.len() != carrier.arity as usize {
+            arguments =
+                vec![CanonicalTy::new(CanonicalTypeHead::Hole, Vec::new()); carrier.arity as usize];
+        }
+        for captured in carrier.captured_arguments {
+            let Some(slot) = arguments.get_mut(captured.position as usize) else {
+                return self.canonical_request(ty);
+            };
+            *slot = captured.ty;
+        }
+        Ok(CanonicalTy::new(head, arguments))
+    }
+
+    fn canonical_request_with_nominal_constructor_arguments(
+        &self,
+        ty: &Ty,
+    ) -> Result<CanonicalTy, TypeError> {
+        let resolved = self.resolve_ty(ty);
+        let mut canonical = self.canonical_request(&resolved)?;
+        let (name, arguments) = match &resolved {
+            Ty::Struct(name, nominal) | Ty::Record(name, nominal) => {
+                (name, nominal.arguments.as_slice())
+            }
+            Ty::Enum(name, arguments) => (name, arguments.as_slice()),
+            _ => return Ok(canonical),
+        };
+        let Some(definition) = self.env.lookup_type_def(name) else {
+            return Ok(canonical);
+        };
+        for (ordinal, (argument, bound)) in arguments
+            .iter()
+            .zip(&definition.type_param_bounds)
+            .enumerate()
+        {
+            canonical.arguments[ordinal] = if let Some(trait_key) = bound
+                .as_deref()
+                .and_then(|bound| self.declaration_constructor_trait_key(bound))
+            {
+                self.canonical_constructor_identity_request(&trait_key, argument)?
+            } else {
+                self.canonical_request_with_nominal_constructor_arguments(argument)?
+            };
+        }
+        Ok(canonical)
+    }
+
     fn requested_head_type_list(
         &self,
+        trait_name: &str,
         trait_args: &[Ty],
         receiver: &Ty,
     ) -> Result<RequestedHeadTypeList, TypeError> {
+        let trait_info = self.traits.get(trait_name);
         let arguments = trait_args
             .iter()
-            .map(|ty| self.canonical_request(ty))
+            .enumerate()
+            .map(|(ordinal, ty)| {
+                let constructor_bound = trait_info.and_then(|info| {
+                    let parameter = info.type_params.get(ordinal)?;
+                    info.where_clause.as_ref()?.constraints.iter().find_map(|constraint| {
+                        matches!(&constraint.subject, AstTy::Named(_, name) if name == &parameter.name)
+                            .then(|| {
+                                constraint.bounds.iter().find_map(|bound| match bound {
+                                    TypedWhereConstraintRhs::Trait { trait_id }
+                                        if self
+                                            .traits
+                                            .get(&self.trait_key(trait_id))
+                                            .is_some_and(|bound_info| {
+                                                !bound_info.constructor_slots.is_empty()
+                                            }) => Some(self.trait_key(trait_id)),
+                                    _ => None,
+                                })
+                            })
+                            .flatten()
+                    })
+                });
+                if let Some(bound) = constructor_bound {
+                    self.canonical_constructor_identity_request(&bound, ty)
+                } else {
+                    self.canonical_request_with_nominal_constructor_arguments(ty)
+                }
+            })
             .collect::<Result<Vec<_>, _>>()?;
-        let target = self.canonical_request(receiver)?;
+        let target = self.canonical_request_with_nominal_constructor_arguments(receiver)?;
         Ok(RequestedHeadTypeList {
             entries: ImplHeadTypeList::new(arguments, target, Span { start: 0, end: 0 }).entries,
         })
@@ -2168,7 +2443,7 @@ impl Checker {
         argument_tys: &[Ty],
         result_ty: &Ty,
     ) -> Result<CandidateApplicability, TypeError> {
-        let requested_head = self.requested_head_type_list(trait_args, receiver)?;
+        let requested_head = self.requested_head_type_list(trait_name, trait_args, receiver)?;
         let receiver = requested_head
             .entries
             .iter()
@@ -2184,9 +2459,9 @@ impl Checker {
             .collect::<Vec<_>>();
         let invocation = argument_tys
             .iter()
-            .map(|ty| self.canonical_request(ty))
+            .map(|ty| self.canonical_request_with_nominal_constructor_arguments(ty))
             .collect::<Result<Vec<_>, _>>()?;
-        let result = self.canonical_request(result_ty)?;
+        let result = self.canonical_request_with_nominal_constructor_arguments(result_ty)?;
         let candidate_keys = self.trait_impl_candidate_keys(trait_name);
         let declarations = candidate_keys
             .iter()
@@ -2206,11 +2481,19 @@ impl Checker {
         for ty in requested_args.iter().chain(std::iter::once(&receiver)) {
             method_variables(ty, &mut waiting);
         }
-        if !waiting.is_empty() {
-            waiting.sort_unstable();
-            waiting.dedup();
+        let mut root_waiting = requested_args
+            .iter()
+            .chain(std::iter::once(&receiver))
+            .filter_map(|ty| match ty.head {
+                CanonicalTypeHead::Variable(var) => Some(var),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !root_waiting.is_empty() {
+            root_waiting.sort_unstable();
+            root_waiting.dedup();
             return Ok(CandidateApplicability::Deferred(PendingTraitCandidate {
-                waiting_on: waiting,
+                waiting_on: root_waiting,
                 candidates: declarations,
             }));
         }
@@ -2286,8 +2569,27 @@ impl Checker {
                 failures.push(reject(CandidateFailureKind::TraitMethodInvocationMismatch));
                 continue;
             }
+            let constructor_bounds = candidate.constructor_bounds_for_contract(&contract);
             for (entry, requested) in parameters.iter().zip(&invocation) {
-                let expected = candidate.fresh_canonical(&entry.ty, &mut fresh, &mut next_variable);
+                let fresh_expected =
+                    candidate.fresh_canonical(&entry.ty, &mut fresh, &mut next_variable);
+                // Before replacing an abstract constructor application with
+                // its concrete slot application, match the witness itself
+                // against the invocation. This binds representative slots
+                // retained by constructor-identity requests.
+                if fresh_expected.head == CanonicalTypeHead::SelfApplication
+                    && fresh_expected.arguments.len() >= 2
+                    && fresh_expected.arguments[0].head == CanonicalTypeHead::Hole
+                {
+                    let witness = unifier.resolve(&fresh_expected.arguments[1]);
+                    matches &= unifier.unify(&witness, requested);
+                }
+                let expected = candidate.expand_fresh_constructor_applications(
+                    &entry.ty,
+                    &fresh_expected,
+                    &unifier,
+                    &constructor_bounds,
+                )?;
                 matches &= unifier.unify(&expected, requested);
             }
             let return_ty = &contract
@@ -2297,7 +2599,14 @@ impl Checker {
                 .find(|entry| entry.role == TypeListRole::ReturnType)
                 .expect("return type")
                 .ty;
-            let return_ty = candidate.fresh_canonical(return_ty, &mut fresh, &mut next_variable);
+            let fresh_return_ty =
+                candidate.fresh_canonical(return_ty, &mut fresh, &mut next_variable);
+            let return_ty = candidate.expand_fresh_constructor_applications(
+                return_ty,
+                &fresh_return_ty,
+                &unifier,
+                &constructor_bounds,
+            )?;
             matches &= unifier.unify(&return_ty, &result);
             if !matches {
                 failures.push(reject(CandidateFailureKind::TraitMethodInvocationMismatch));
@@ -2420,6 +2729,7 @@ impl Checker {
                 &method.value_parameters,
                 &contract.signature,
                 &substitution,
+                &constructor_bounds,
                 &dispatch,
             )?;
             selected = Some(TraitMethodInstantiation {
@@ -2489,6 +2799,7 @@ impl Checker {
                         &method.id,
                         &method.value_parameters,
                         &signature,
+                        &HashMap::new(),
                         &HashMap::new(),
                         &dispatch,
                     )?,
@@ -2589,7 +2900,7 @@ impl Checker {
         trait_args: &[Ty],
         ty: &Ty,
     ) -> Result<ApplicabilityProof, TypeError> {
-        let requested_head = self.requested_head_type_list(trait_args, ty)?;
+        let requested_head = self.requested_head_type_list(trait_name, trait_args, ty)?;
         let receiver = requested_head
             .entries
             .iter()

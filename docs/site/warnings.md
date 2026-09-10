@@ -125,10 +125,13 @@ def id(value: $A) -> $A {
 
 `$A` は引数型と戻り値型で使われています。通常の関数に未使用の明示型引数を置く構文はありません。
 
-型引数の bound だけでは使用とはみなしません。
+型引数の constraint だけでは使用とはみなしません。Trait-head binderと`where` constraintは分離して書きます。
 
 ```surtr
-deftrait Describe<$A: Show> {
+deftrait Describe<$A>
+where
+  $A: Show
+{
   def describe() -> String
 }
 ```

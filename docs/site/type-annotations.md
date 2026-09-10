@@ -52,15 +52,24 @@ where
 }
 ```
 
-TypeCtorTrait boundを持つnominal parameterへはbare constructor headを渡せます。
+TypeCtorTrait constraintを持つnominal parameterへはbare constructor headを渡せます。
 
 ```surtr
 value: OptionT<Result, Int> = OptionT(Ok(Option::Some(1)))
 ```
 
 この`Result`は通常値の型ではなく、`OptionT`宣言が要求するunary constructor入力です。
-`Result<Int>`のような適用済み型や`Either<String, _>`のような部分適用をconstructor headの代わりには
-使えません。genericな`OptionT<$M, $A>`では、宣言側と同じTypeCtorTrait boundを`where`へ明示します。
+通常の型注釈では`Result<Int>`のような適用済み型や`Either<String, _>`のような部分適用をconstructor headの代わりには
+使えません。genericな`OptionT<$M, $A>`では、宣言側と同じTypeCtorTrait constraintを`where`へ明示します。
+
+一方、call-site ReturnTypeArgumentの一項では、TypeCtorTraitのcarrierを完全・部分型applicationで指定できます。
+この位置の`_`はその型引数だけを推論へ残すもので、通常型注釈の`Hole`とは別です。
+
+```surtr
+v = pure::<Either<String, _>>(10)       # Either<String, Int>
+v: Either<String, Int> = pure::<Either>(10)
+v = pure::<Option>(10)                  # Option<Int>
+```
 
 ## `Result<T>`
 
@@ -113,6 +122,10 @@ number =? try_from::<Int>("42")
 
 明示項目の数は定義側と一致させます。推論へ残す位置は`_`で書き、list全体を省略した呼び出しは
 全項目を`_`にした場合と同じです。末尾だけを省略するpartial listは使えません。
+
+TypeCtorTraitを要求するReturnTypeArgumentでは、constructor headだけを指定した場合も、mapped slotとcaptured
+argumentをvalue argument、expected return、型注釈、その他のsignature制約から導出します。根拠が不足したままなら
+ambiguityとし、implの個数や登録順から補完しません。
 
 ```surtr
 convert::<_, Int>(value)
@@ -185,6 +198,7 @@ keep_one: (_ -> Int) = always(1)
 ```
 
 この `_` は wildcard ではなく、internal な `Hole` marker の surface 表記です。
+ただし、call-site ReturnTypeArgument内の`_`は推論変数であり、`Hole` markerではありません。
 
 - callable input を 1 つ受ける
 - その入力値は観測しない

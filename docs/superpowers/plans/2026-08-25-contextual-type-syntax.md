@@ -1,5 +1,15 @@
 # Contextual Type Syntax Implementation Plan
 
+> **Superseded contract note (2026-09-10):** This historical plan's statement that a
+> TypeConstructor trait cannot have head parameters was replaced by N04.
+> The current language permits `deftrait T<$P> where ...`, keeps Trait-head
+> parameters separate from constructor slots, and rejects inline
+> `<$P: Bound>` constraints. See
+> [Trait_system_spec.md](../../dev/Trait_system_spec.md) and
+> [monadt_language_extension_spec.md](../../../doc/monadt_language_extension_spec.md).
+> The task steps below remain as implementation history rather than the current
+> semantic authority.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make type-related syntax context-sensitive: `where` trait bounds are bare family capabilities, constructor-shape and slot-map forms stay distinct, and constructor applications have the specified signature-only witness lifecycle.

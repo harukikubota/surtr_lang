@@ -2,7 +2,7 @@
 
 ## 1. 状態・読み方
 
-- 配置: `/doc`。N03 の nominal constructor parameter は実装済み。N04 の parameterized TypeCtorTrait / MonadT 契約は未実装の入力。
+- 配置: `/doc`。N03 の nominal constructor parameter と N04 の parameterized TypeCtorTrait / MonadT 契約は実装済み。
 - 基準 commit: `f1986a27d84728e1e7a88de457a1d6b55cfe5ab8`。
 - 通常 Monad インスタンス追加とは別タスクで実装する。
 - 本書では「確定要件」「初回実装で採用する最小インターフェース」「実装前の確認項目」を区別する。
@@ -12,13 +12,13 @@
 
 既存契約は[`../docs/dev/Trait_system_spec.md`](../docs/dev/Trait_system_spec.md)のReturnTypeArgument、role付き型リスト、Trait applicability、dispatch規則である。旧入力の実装済み部分は同正本へ移管済みであり、旧ドラフトは現行仕様に書き換えない。
 
-ただし、本書で確定する次の未実装契約については、本書が既存の計画・正本にある反対の記述を置き換える実装入力となる。
+本書で確定した次の契約は N04 で実装され、既存の計画・正本にあった反対の記述を置き換えた。
 
 - Trait-head と nominal declaration の `$P: Bound` を受理せず、binder と `where` constraint を分離する。
 - TypeCtorTrait に Trait-head type parameter を許可し、constructor slot とは別metadataとして保持する。
 - TypeCtorTrait の call-site ReturnTypeArgument に完全な型applicationと `_` を含む型applicationを許可し、`do` も同じ規則を使う。
 
-実装開始前に `docs/dev/Trait_system_spec.md`、`doc/do_intrinsic_spec.md`、関連する実装計画をこの契約へ整合させる。衝突したまま旧規則と新規則を併存させたり、いずれかへfallbackしたりしない。
+`docs/dev/Trait_system_spec.md`、`doc/do_intrinsic_spec.md`、関連する実装計画はこの契約へ整合済みである。旧規則との併存やfallbackは設けない。
 
 ## 2. 確定要件
 
@@ -184,7 +184,7 @@ deftrait MonadT<$M: Monad>  # NG
 deftrait MonadT<Monad>      # NG
 ```
 
-これらの禁止構文に対する diagnostic の help は `where $M: Monad` に一意化し、declaration bound や direct TypeCtorTrait binder という別surfaceを提案しない。
+これらの禁止構文に対する diagnostic の help は `where $M: Monad` に一意化し、binder内constraintや direct TypeCtorTrait binder という別surfaceを提案しない。
 
 direct TypeCtorTrait 名を callable signature に書く既存表記は、fresh constructor variable と単一の capability constraint へ一意に正規化できる限定 shorthand である。
 
@@ -254,6 +254,13 @@ converted: Result<Int> = try_from("1")
 ```
 
 上の三例では、1行目は `TryFrom::try_from` のRTA slotを明示し、2・3行目は同じslotの解決をexpected returnの `Int` へ委ねる。`_` は TypeCtorTrait 専用ではなく、RTAを宣言する通常Trait methodにも同じ意味で適用する。
+
+Trait methodの通常RTAでは、generic targetのbare headを型identityのconstraintとして指定できる。
+`from::<Result>(option)`の不足payloadは、`impl From<Result<$T>> for Option<$T>`のsource/targetが共有する
+`$T`とvalue argumentから解決する。完全な`from::<Result<Int>>(option)`も同じ候補へ解決する。
+この規則はuser-defined generic targetにも共通であり、標準型名や唯一のimplから不足引数を推測しない。
+共有変数、他の引数、expected returnを使っても未確定ならambiguityとする。通常関数のordinary RTAは引き続き
+完全型を要求する。
 
 TypeCtorTrait を要求する call-site ReturnTypeArgument は、完全な carrier 型、constructor head、または `_` を含む型applicationを受理する。
 
@@ -365,13 +372,13 @@ MT-I01 は、以下の確定内容により **CLOSED** とする。
 8. 通常型注釈の `_` は対象外であり、`Hole` 型の既存意味を維持する。
 9. `do` も独自carrier表記を持たず、同じ TypeCtorTrait RTA 規則を使う。
 
-残る確認項目は次のとおり。初回の最小対応を超える部分を自動実装しない。
+確認項目は次のとおり確定した。初回の最小対応を超えるsurfaceは追加していない。
 
-| ID | 確認事項 | 初回の扱い |
+| ID | 確認事項 | 確定結果 |
 |---|---|---|
-| MT-I02 | specialized `lift` のRTA表示と型リストの対応 | 抽象contractから構造置換し、既存impl signature検査で固定。表示のための型解決fallbackは作らない |
-| MT-I03 | nominal宣言boundがProofEnvironmentと未使用制約検査へ渡る位置 | declaration/body/instantiation境界のテストで固定し、利用箇所からの暗黙bound導入はしない |
-| MT-I04 | parameterized TypeCtorTraitのdirect signature表記 | 今回は追加しない。通常型の引数とqualified method呼出しに限定 |
+| MT-I02 | specialized `lift` のRTA表示と型リストの対応 | **CLOSED**。抽象contractから構造置換し、既存impl signature検査で固定。表示のための型解決fallbackは作らない |
+| MT-I03 | nominal declaration constraintがProofEnvironmentと未使用制約検査へ渡る位置 | **CLOSED**。declaration/body/instantiation境界で固定し、利用箇所からの暗黙constraint導入はしない |
+| MT-I04 | parameterized TypeCtorTraitのdirect signature表記 | **CLOSED**。追加しない。通常型の引数とqualified method呼出しに限定する |
 
 ## 12. 受け入れ条件
 
@@ -404,8 +411,10 @@ MT-I01 は、以下の確定内容により **CLOSED** とする。
 
 ## 13. 実装後の移管
 
-実装開始前に、§1で列挙した置換対象を `docs/dev/Trait_system_spec.md`、`doc/do_intrinsic_spec.md`、関連する実装計画へ反映し、相反する旧契約を削除する。実装後は言語機能の確定契約を利用者向け型注釈・Trait・struct文書へ移管する。標準TransformerのAPIは `monadt_standard_types_spec.md` と個別 `@doc` の担当であり、本書に複製しない。
+§1で列挙した置換対象は実装開始前に `docs/dev/Trait_system_spec.md`、`doc/do_intrinsic_spec.md`、関連する実装計画へ反映し、相反する旧契約を削除した。実装済みの言語機能契約は利用者向け型注釈・Trait・struct文書へ移管済みである。標準TransformerのAPIは `monadt_standard_types_spec.md` と個別 `@doc` の担当であり、本書に複製しない。
 
 N03 の MT-I01/03 と MT-L01–06・MT-L13–15 該当部分は、2026-09-09 に
 `docs/dev/Trait_system_spec.md`、`docs/site/{language-reference,structs,type-annotations,facet}.md`へ移管した。
-MT-I02/04 と MT-L07–12・MT-L16 は N04 以降の入力として本書に残す。
+N04 の MT-I02/04 と MT-L07–12・MT-L16–21・MT-L23–24 は、2026-09-10 に
+`docs/dev/{Trait_system_spec,diagnostics,テスト方針}.md`、`doc/do_intrinsic_spec.md`、
+`docs/site/`の関連利用者文書へ移管した。MT-L22だけはdo実装後のN07–N11受入として残す。

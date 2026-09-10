@@ -68,6 +68,15 @@ deftrait TryFrom<$To> {
 `try_from::<Int>(value)`の`::<Int>`は、定義側ReturnTypeArgument `$To` の具体化です。その結果は
 full obligationの`TryFrom<Int>`というTrait argumentにも使われますが、通常genericを任意指定する構文ではありません。
 
+Trait methodの通常ReturnTypeArgumentがgeneric targetの場合、`from::<Result>(option)`のようにbare headを
+型identityとして指定できます。不足する型引数は、candidate implのsource/targetが共有する変数、value argument、
+expected returnからすべて解ける場合だけ確定します。`from::<Result<Int>>(option)`の完全型も有効です。
+user-defined generic targetにも同じ規則を使い、標準型名、唯一のimpl、登録順による補完は行いません。
+通常関数のordinary ReturnTypeArgumentではbare headを完全型の代わりに使えません。
+
+Trait-head binderは型変数を導入し、capability constraintは`where`へ分離します。`deftrait T<$P: Bound>`のように
+binderへconstraintを併記せず、`deftrait T<$P> where $P: Bound { ... }`と書きます。
+
 ## `where` bound と generic 呼び出し
 
 通常の `where` bound は、型引数を付けない bare capability です。
@@ -134,7 +143,23 @@ where
 
 `Self<$A>` は declaration の impl target を置換する型位置 marker です。`Self::f()` と `Type::f()` は value-level owner path としては不正です。
 
-`Applicative<$A>` のような constructor application は、通常関数または trait method signature の direct parameter / return にだけ書けます。同じ direct Trait 名は一つの carrier を共有し、`left: $F<$A>, right: $F<$B> where $F: Applicative` と同じ関係を表します。異なる Trait 名は同じ TypeCtorTrait family でも carrier が独立し、各位置の capability だけを要求します。入力と同名の direct return はその carrier を再利用し、それ以外の return は本体または call-site 制約で concrete constructor を確定します。field、local annotation、tuple / container、closure signature には書けません。
+`Applicative<$A>` のような direct TypeCtorTrait application は、通常関数または trait method signature の direct parameter / return にだけ書けます。同じ direct Trait 名は一つの carrier を共有し、`left: $F<$A>, right: $F<$B> where $F: Applicative` と同じ関係を表します。異なる Trait 名は同じ TypeCtorTrait family でも carrier が独立し、各位置の capability だけを要求します。入力と同名の direct return はその carrier を再利用し、それ以外の return は本体または call-site 制約で concrete constructor を確定します。direct TypeCtorTrait application は field、local annotation、tuple / container、closure signature には書けません。名前付き constructor variable `$F<$A>` は、対応する `where` constraint を持つ nominal field / payload で許可します。
+
+TypeCtorTraitはTrait-head type parameterを持てます。例えばMonadTの最小形は次のとおりです。
+
+```surtr
+deftrait MonadT<$M>
+where
+  $M: Monad
+  Self: Monad
+{
+  def lift::<Self>(value: $M<$A>) -> Self<$A>
+}
+```
+
+`$M`はTrait identityに含まれるcaptured argumentで、`Self`のconstructor mapped slotとは別に保持します。
+`impl MonadT<$M> for OptionT<$M, $A>`のようなimplは、Trait argument、target、親Traitのslot mapping、method contractを
+構造的に照合します。call-siteのRTAでは`pure::<Either<String, _>>(10)`のような完全・部分型applicationも使えます。
 
 ## impl の一致規則
 

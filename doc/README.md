@@ -1,15 +1,16 @@
 # Working specifications and plans
 
-`doc/` は、未実装仕様、実装計画、draft、調査記録を置く。実装済みの恒久契約は
-`../docs/dev/` または `../docs/site/`、標準 API の一次情報は `../lib/*.srt` の
-`@doc` に置く。
+`doc/` は、未実装仕様、実装計画、draft、調査記録を置く。実装済み部分と後続Taskの入力を
+同じ文書が持つ場合は、実装済み契約の移管先と残る入力境界を本文に明記して後続完了まで保持する。
+実装済みの恒久契約は `../docs/dev/` または `../docs/site/`、標準 API の一次情報は
+`../lib/*.srt` の `@doc` に置く。
 
 ## TypeCtorTrait / Monad / do / Generator
 
 | 分類 | 文書 | 状態 |
 |---|---|---|
 | 実装済み API | [Identity](../docs/site/identity.md) / [Reader](../docs/site/reader.md) / [State](../docs/site/state.md) | N02 の利用者向け文書 |
-| 仕様決定・実装待ち | [MonadT 言語拡張](./monadt_language_extension_spec.md) | N03–N04 の入力 |
+| 実装履歴・後続入力 | [MonadT 言語拡張](./monadt_language_extension_spec.md) | N03–N04 の恒久契約は担当文書へ移管済み。N05以降の入力境界を保持 |
 | 仕様決定・実装待ち | [標準 MonadT 型](./monadt_standard_types_spec.md) | N05 の入力。未確定 API は本文の確認ゲートに従う |
 | 仕様決定・実装待ち | [SafeBind / diagnostics cleanup](./diagnostics_cleanup_spec.md) | N06 の入力 |
 | 仕様決定・実装待ち | [`do` intrinsic](./do_intrinsic_spec.md) | N07–N11 の入力 |

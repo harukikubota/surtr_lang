@@ -301,7 +301,95 @@ value = make::<List>()"#,
 }
 
 #[test]
-fn constructor_return_type_argument_accepts_only_a_bare_head() {
+fn trait_method_return_type_argument_accepts_a_structural_bare_target_head() {
+    typecheck_without_std_prelude(
+        r#"defenum Source<$A> { Source($A), }
+defenum Target<$A> { Target($A), }
+
+deftrait Convert<$To> {
+  def convert::<$To>(self: Self) -> $To
+}
+
+impl Convert<Target<$A>> for Source<$A> {
+  def convert::<Target<$A>>(self: Self) -> Target<$A> {
+    match self {
+      Source::Source(value) => Target::Target(value),
+    }
+  }
+}
+
+source: Source<Int> = Source::Source(1)
+bare: Target<Int> = Convert::convert::<Target>(source)
+full: Target<Int> = Convert::convert::<Target<Int>>(source)"#,
+    )
+    .expect("the matching impl must share its payload variable from source to target");
+}
+
+#[test]
+fn trait_method_bare_target_head_rejects_an_unshared_argument() {
+    let error = typecheck_without_std_prelude(
+        r#"defenum Source<$A> { Source($A), }
+defenum Target<$L, $A> { Target($A), }
+
+deftrait Convert<$To> {
+  def convert::<$To>(self: Self) -> $To
+}
+
+impl Convert<Target<$L, $A>> for Source<$A> {
+  def convert::<Target<$L, $A>>(self: Self) -> Target<$L, $A> {
+    match self {
+      Source::Source(value) => Target::Target(value),
+    }
+  }
+}
+
+source: Source<Int> = Source::Source(1)
+value = Convert::convert::<Target>(source)"#,
+    )
+    .expect_err("a bare head must not infer a captured argument from impl count or order");
+    assert!(
+        matches!(
+            error.reason(),
+            Some(
+                TypeDiagnosticReason::AmbiguousReturnTypeArgument
+                    | TypeDiagnosticReason::UnresolvedTraitMethodInstantiation
+            )
+        ),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn trait_method_top_level_underscore_uses_expected_return_inference() {
+    typecheck_without_std_prelude(
+        r#"deftrait Default {
+  def default::<Self>() -> Self
+}
+
+impl Default for Int {
+  def default::<Int>() -> Int { 0 }
+}
+
+value: Int = Default::default::<_>()"#,
+    )
+    .expect("a zero-argument Trait method's `_` RTA should defer to the expected result");
+
+    typecheck_without_std_prelude(
+        r#"deftrait Maker {
+  def make::<$A>(self: Self) -> List<$A>
+}
+
+impl Maker for Unit {
+  def make::<$A>(self: Self) -> List<$A> { [] }
+}
+
+value: List<Int> = Maker::make::<_>(())"#,
+    )
+    .expect("the regular Trait-call path should use the same `_` inference rule");
+}
+
+#[test]
+fn constructor_return_type_argument_accepts_bare_full_and_partial_carriers() {
     typecheck_without_std_prelude(
         r#"deftrait Alternative
 where
@@ -318,7 +406,7 @@ value: List<Unit> = guard::<List>(True)"#,
     )
     .expect("a direct constructor input should accept its bare constructor head");
 
-    let error = typecheck_without_std_prelude(
+    typecheck_without_std_prelude(
         r#"deftrait Alternative
 where
   Self: Type<$A>
@@ -332,9 +420,129 @@ where
 def guard::<Alternative>(condition: Boolean) -> Alternative<Unit> { [] }
 value: List<Unit> = guard::<List<Unit>>(True)"#,
     )
-    .expect_err("a constructor input must not accept a fully applied type");
+    .expect("a constructor input should accept a fully applied carrier");
+
+    typecheck_without_std_prelude(
+        r#"deftrait Applicative
+where
+  Self: Type<$A>
+{}
+
+defenum Either<$L, $R> {
+  Left($L),
+  Right($R),
+}
+
+impl Applicative for Either<$L, $R>
+where
+  $R: Applicative.$A
+{}
+
+def pure::<Applicative>(value: $A) -> Applicative<$A> { Either::Right(value) }
+value: Either<String, Int> = pure::<Either<String, _>>(10)"#,
+    )
+    .expect("a constructor input should infer only the underscore position");
+}
+
+#[test]
+fn applied_constructor_return_type_argument_accepts_enclosing_fixed_type_variable() {
+    typecheck_without_std_prelude(
+        r#"deftrait Applicative
+where
+  Self: Type<$A>
+{
+  def pure::<Self>(value: $A) -> Self<$A>
+}
+
+defenum Either<$L, $R> {
+  Left($L),
+  Right($R),
+}
+
+impl Applicative for Either<$L, $R>
+where
+  $R: Applicative.$A
+{
+  def pure::<Either<$L, $R>>(value: $A) -> Either<$L, $A> {
+    Either::Right(value)
+  }
+}
+
+def wrap(value: $L) -> Either<$L, Int> {
+  Applicative::pure::<Either<$L, _>>(1)
+}
+
+value: Either<String, Int> = wrap("tag")"#,
+    )
+    .expect("an applied carrier may use an enclosing ordinary type variable as a fixed argument");
+}
+
+#[test]
+fn constructor_return_type_argument_rejects_an_outer_constructor_variable() {
+    let error = typecheck_without_std_prelude(
+        r#"deftrait Applicative
+where
+  Self: Type<$A>
+{
+  def pure::<Self>(value: $A) -> Self<$A>
+}
+
+def invalid(value: $F<Int>) -> $F<Int>
+where
+  $F: Applicative
+{
+  Applicative::pure::<$F>(1)
+}"#,
+    )
+    .expect_err("the carrier identity cannot be supplied by an outer constructor variable");
     assert!(
-        error.message.contains("bare type constructor head"),
+        error
+            .message
+            .contains("cannot use constructor variable `$F` as its carrier"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn constructor_return_type_argument_defers_nominal_constraints_on_underscores() {
+    let source = r#"deftrait Marker {}
+impl Marker for Int {}
+
+deftrait Maker
+where
+  Self: Type<$A>
+{
+  def make::<Self>() -> Self
+}
+
+defenum Bounded<$M, $A>
+where
+  $M: Marker
+  $A: Marker
+{
+  Value,
+}
+
+impl Maker for Bounded<Int, $T>
+where
+  $T: Maker.$A
+  $T: Marker
+{
+  def make::<Bounded<Int, $T>>() -> Bounded<Int, $T> {
+    Bounded<Int, $T>::Value
+  }
+}
+
+value: Bounded<Int, EXPECTED> = Maker::make::<Bounded<Int, _>>()"#;
+    typecheck_without_std_prelude(&source.replace("EXPECTED", "Int"))
+        .expect("an RTA-local `_` should be checked after expected-result inference");
+
+    let error = typecheck_without_std_prelude(&source.replace("EXPECTED", "String"))
+        .expect_err("the deferred declaration constraint must reject an invalid inferred type");
+    assert!(
+        error
+            .message
+            .contains("does not satisfy declaration constraint Marker"),
         "unexpected error: {error}"
     );
 }
@@ -359,6 +567,85 @@ where
 
 def choose::<Alternative>() -> Alternative<Unit> { Either::Right(()) }
 value = choose::<Either>()"#,
+        TypeDiagnosticReason::AmbiguousReturnTypeArgument,
+    );
+}
+
+#[test]
+fn alternative_empty_allows_a_user_defined_captured_carrier_representation() {
+    typecheck_without_std_prelude(
+        r#"deftrait Applicative
+where
+  Self: Type<$A>
+{}
+
+deftrait Alternative
+where
+  Self: Applicative
+{
+  def empty::<Self>() -> Self
+  def choose(left: Self<$A>, right: Self<$A>) -> Self<$A>
+}
+
+defenum Choice<$L, $A> {
+  Empty($L),
+  Value($A),
+}
+
+impl Applicative for Choice<$L, $T>
+where
+  $T: Applicative.$A
+{}
+
+impl Alternative for Choice<String, $T> {
+  def empty::<Choice<String, $T>>() -> Choice<String, $T> {
+    Choice::Empty("missing")
+  }
+
+  def choose(left: Choice<String, $A>, right: Choice<String, $A>) -> Choice<String, $A> {
+    left
+  }
+}
+
+empty: Choice<String, Int> = Alternative::empty::<Choice<String, Int>>()
+first: Choice<String, Int> = Choice::Value(1)
+value: Choice<String, Int> = Alternative::choose(empty, first)"#,
+    )
+    .expect("Alternative::empty must use the user impl rather than a representation allowlist");
+}
+
+#[test]
+fn alternative_empty_rejects_an_unresolved_mapped_slot_inside_a_carrier_rta() {
+    assert_reason(
+        r#"deftrait Applicative
+where
+  Self: Type<$A>
+{}
+
+deftrait Alternative
+where
+  Self: Applicative
+{
+  def empty::<Self>() -> Self
+}
+
+defenum Choice<$L, $A> {
+  Empty($L),
+  Value($A),
+}
+
+impl Applicative for Choice<$L, $T>
+where
+  $T: Applicative.$A
+{}
+
+impl Alternative for Choice<String, $T> {
+  def empty::<Choice<String, $T>>() -> Choice<String, $T> {
+    Choice::Empty("missing")
+  }
+}
+
+value = Alternative::empty::<Choice<String, _>>()"#,
         TypeDiagnosticReason::AmbiguousReturnTypeArgument,
     );
 }

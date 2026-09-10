@@ -106,10 +106,11 @@ canonical identityと可視なconversion implから一意に裏付けられる�
 - extractor の `input source` は `notes`、extractor 定義は関連 source label に置く。
 - runtime の失敗値・pattern・`call target` は label、`expected rule`・`runtime rule`・`opcode`・入力分類は `notes` に置く。
 - `assert_eq` の LHS/RHS term は比較対象の span を指すため label、失敗の説明は `help` に置く。
-- contextual type syntax では、`Trait<...>` を where RHS に置いた parser diagnostic、`Type<...>` の位置違反、constructor application の位置違反、`Self::...` / `Type::...` の owner-path 違反を parser phase にする。position rule は `notes`、bare bound や許可された位置への書換えは `help` に置く。
+- contextual type syntax では、`Trait<...>` を where RHS に置いた parser diagnostic、Trait-head / nominal binderへ constraint を併記した位置違反、通常型注釈などでの constructor application の位置違反、`Self::...` / `Type::...` の owner-path 違反を parser phase にする。TypeCtorTrait の call-site ReturnTypeArgument 内の完全・部分型applicationと`_`は合法な型入力として扱う。position rule は `notes`、bare constraint や許可された位置への書換えは `help` に置く。
 - `Enum<...>::Variant` は Spire で callable の `::<...>` と別の expression として保持する。owner が enum でない、variant が owner に属さない、owner 型引数 arity が一致しない場合は Sigil の resolve diagnostic とする。payload または expected type と明示型引数が一致しない場合は Scar の既存 type relation / argument diagnostic とする。
 - bare または `_` を含む通常 enum constructor の型引数が Scar の finalization まで未確定なら `UnresolvedEnumConstructorTypeArgument` とする。`DiagnosticOrigin::EnumConstructor` と constructor span、未確定 ordinal、`Insufficient` constraint status を保持する。builtin-special `Result` constructor の専用診断・推論経路はこの reason の対象外とする。
 - bare capability の未使用、fresh result witness の未確定、full obligation / pending dispatch の未解決は typecheck phase にする。position rule は `notes`、constraint の削除または必要な式の利用は `help` に置く。
+- Trait-head / nominal declaration binder の inline constraint 違反では、`where $P: Bound` への help を一意に提示し、binder内constraintや direct TypeCtorTrait binder という別の書換え候補を併記しない。通常型注釈の`_`は`Hole`、RTA内の`_`は推論変数として別々に診断する。
 
 ## 出力契約
 
