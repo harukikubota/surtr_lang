@@ -1852,6 +1852,16 @@ impl Checker {
         let target = Resolved::Var(id.span.clone(), id.clone());
         let (mut typed_func, signature, return_type_arguments) =
             self.instantiate_named_callable_signature(span, &target, None)?;
+        let signature_params = signature
+            .value_parameters
+            .iter()
+            .map(|parameter| parameter.ty.clone())
+            .collect::<Vec<_>>();
+        let callable_hint = self.call_target_signature_hint_for_id(
+            id,
+            &signature_params,
+            &signature.return_type.ty,
+        );
         let mut constraints = self.call_constraint_set(
             signature,
             return_type_arguments,
@@ -1866,14 +1876,20 @@ impl Checker {
             &constraints.signature,
             args,
             span,
-            None,
+            Some(&callable_hint),
             false,
         )?;
         let substitution =
             match self.complete_call_constraint_set(&mut constraints, &typed_args, span, None) {
                 super::signatures::SolveState::Solved(substitution) => substitution,
                 super::signatures::SolveState::Deferred(pending) => pending.substitution,
-                super::signatures::SolveState::Failed(error) => return Err(error),
+                super::signatures::SolveState::Failed(error) => {
+                    return Err(if error.hint.is_some() {
+                        error
+                    } else {
+                        error.with_hint(callable_hint)
+                    });
+                }
             };
         if let Ty::UserFunc {
             call_substitution, ..
