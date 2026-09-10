@@ -5,12 +5,20 @@
 - 配置: `/doc`。未実装の言語拡張の実装入力。
 - 基準 commit: `f1986a27d84728e1e7a88de457a1d6b55cfe5ab8`。
 - 通常 Monad インスタンス追加とは別タスクで実装する。
-- 本書では「確定要件」「採用する最小インターフェース案」「実装前の確認項目」を区別する。
+- 本書では「確定要件」「初回実装で採用する最小インターフェース」「実装前の確認項目」を区別する。
 - 確認項目を実装担当が暗黙に拡張・一般化して埋めない。
 
 入力は本会話、および「Surtr Monad Transformer 検討メモ」§1–3・§7・§11–12。「MonadT / Alternative / do 構文 検討メモ」の実装型固有意味論は別紙 `monadt_standard_types_spec.md` に置く。
 
 既存契約は[`../docs/dev/Trait_system_spec.md`](../docs/dev/Trait_system_spec.md)のReturnTypeArgument、role付き型リスト、Trait applicability、dispatch規則である。旧入力の実装済み部分は同正本へ移管済みであり、旧ドラフトは現行仕様に書き換えない。
+
+ただし、本書で確定する次の未実装契約については、本書が既存の計画・正本にある反対の記述を置き換える実装入力となる。
+
+- Trait-head と nominal declaration の `$P: Bound` を受理せず、binder と `where` constraint を分離する。
+- TypeCtorTrait に Trait-head type parameter を許可し、constructor slot とは別metadataとして保持する。
+- TypeCtorTrait の call-site ReturnTypeArgument に完全な型applicationと `_` を含む型applicationを許可し、`do` も同じ規則を使う。
+
+実装開始前に `docs/dev/Trait_system_spec.md`、`doc/do_intrinsic_spec.md`、関連する実装計画をこの契約へ整合させる。衝突したまま旧規則と新規則を併存させたり、いずれかへfallbackしたりしない。
 
 ## 2. 確定要件
 
@@ -28,7 +36,7 @@
 
 | 区分 | 内容 |
 |---|---|
-| 追加 | nominal declaration の型parameterに既存形式の declaration bound を付ける |
+| 追加 | nominal declaration の型parameterと、`where` に置く declaration constraintを分離する |
 | 追加 | TypeCtorTrait で形状が判明した constructor parameter を nominal field の型式で適用する |
 | 追加 | TypeCtorTrait の Trait-head parameter を captured parameter として保持する |
 | 再利用 | 型変数導入元、既存 constructor slot、canonical type、role付き型リスト、substitution、solver |
@@ -41,21 +49,24 @@
 
 ## 4. nominal 型定義の最小表記
 
-採用案は declaration bound を型parameterへ置く形式とする。
+Trait-head type parameter と Trait constraint を分離する方針を nominal declaration にも適用し、正規形は次とする。
 
 ```surtr
-defstruct OptionT<$M: Monad, $A> {
+defstruct OptionT<$M, $A>
+where
+  $M: Monad
+{
   inner: $M<Option<$A>>
 }
 ```
 
-`$M` / `$A` は nominal head で導入される。bound は導入済み `$M` の能力を宣言する。`where` を未知の型変数の導入元にしない。
+`$M` / `$A` は nominal head で導入される。`where $M: Monad` は導入済み `$M` の能力を宣言する。`where` を未知の型変数の導入元にしない。
 
 `$M` は、この宣言で TypeCtorTrait の constructor shape を要求され、`$M<T>` として適用される parameter。`$A` は通常の payload 型parameter。大文字の綴りや `$M` という名前で分類しない。
 
 `Monad` の unary shape は親の Functor から得る。`$M<Option<$A>>` は「`M` の mapped slot に `Option<A>` を入れて得られる通常型」であり、Monad 値を runtime に持ち上げる操作ではない。
 
-`defstruct ... where` という別の surface をこの案と併設しない。初回は既存の単一 declaration bound 構文の再利用を優先する。通常関数と impl の複数制約は従来の `where` に置く。
+型parameterに constraint を併記する `defstruct OptionT<$M: Monad, $A>` は受理しない。同一意味の複数surfaceを作らず、capability constraint は `where` に統一する。
 
 `defrecord` / `defenum` の同等な generic parameter を扱う場合も、同じ metadata と well-formedness 検査を使う。`deferror` / Error の運搬制限を、この拡張に便乗して変更しない。
 
@@ -72,7 +83,10 @@ OptionT<Result, Int>
 型引数として渡された `Result` は compile-time の constructor であり、runtime field は `Result<Option<Int>>` の通常値を持つ。runtime に `$M` オブジェクトや Trait dictionary を格納しない。
 
 ```surtr
-defstruct Cache<$M: Monad, $A> {
+defstruct Cache<$M, $A>
+where
+  $M: Monad
+{
   current: OptionT<$M, $A>
   history: List<OptionT<$M, $A>>
 }
@@ -91,11 +105,26 @@ defstruct Cache<$M: Monad, $A> {
 | `$M` 単独を runtime field 型にする | 未適用constructorは値型ではないため拒否 |
 | 新たな `$M` を式中の注釈だけで導入 | 拒否。既存の型変数scope規則を維持 |
 
-`OptionT<Result, _>` の `_` を新しい型lambdaの穴と解釈しない。説明上の carrier 表記と、既存の inference-hole surface を区別する。式の型注釈で既存の `_` 推論を使う場合も、実行境界ではすべて解決済みでなければならない。
+通常の型注釈位置にある `_` は constructor parameter の inference hole にしない。既存どおり `Hole` 型として扱い、その型に関する通常の型操作を行わない。したがって、次の表記を constructor inference として受理しない。
+
+```surtr
+value: OptionT<_, Int>                  # NG
+arg: OptionT<_, Int>                    # NG
+def f() -> OptionT<_, Int>              # NG
+value: OptionT<Either<String, _>, Int>  # NG
+```
+
+通常型注釈で `OptionT` の `$M` を指定する場合、carrier は明示的かつ完全に型形成可能でなければならない。
+
+```surtr
+value: OptionT<Result, Int>
+```
+
+call-site ReturnTypeArgument 内の `_` は、そのRTA位置の推論を他の型制約へ委ねる既存の inference hole であり、通常型注釈の `Hole` とは別の構文意味を持つ。この一般則は通常関数や `TryFrom` などのTrait methodにも適用する。`Enum<_, ...>::Variant` の既存 inference hole は別の専用surfaceとして維持し、相互fallbackを作らない。
 
 ## 6. well-formedness と型変更
 
-nominal 型の declaration bound は、その型の適用が合法であるための条件である。型の runtime component や refinement payload にはしない。
+nominal 型の明示された `where` constraint は、その型の適用が合法であるための条件である。型の runtime component や refinement payload にはしない。
 
 型を使用・具体化・再構築するとき、宣言parameterを実際の型引数へ置換し、必要な obligation を既存 solver で検査する。
 
@@ -114,7 +143,7 @@ WF(OptionT<M,A>) requires:
 
 ### 6.1 generic な宣言境界
 
-rigid generic の能力は明示された declaration bound / `where` / parent closure から証明する。型を使った事実だけで、新しい generic bound を周囲へ暗黙導入しない。
+rigid generic の能力は明示された `where` constraint / parent closure から証明する。型を使った事実だけで、新しい generic bound を周囲へ暗黙導入しない。
 
 ```surtr
 # 有効な形。
@@ -137,15 +166,33 @@ Functor の mapper が返せる `$B` を、impl 側だけの追加制約で狭�
 ## 7. MonadT の最小契約
 
 ```surtr
-deftrait MonadT<$M: Monad>
+deftrait MonadT<$M>
 where
+  $M: Monad
   Self: Monad
 {
   def lift::<Self>(value: $M<$A>) -> Self<$A>
 }
 ```
 
-これは採用する最小インターフェース案である。
+これは初回実装で採用する最小インターフェースである。
+
+`$M` は Trait-head type parameter であり、Trait identity の一部として導入する。`$M: Monad` は既存 `where` による Trait constraint とする。Trait-head は型変数の導入だけを担当し、次の表記は受理しない。
+
+```surtr
+deftrait MonadT<$M: Monad>  # NG
+deftrait MonadT<Monad>      # NG
+```
+
+これらの禁止構文に対する diagnostic の help は `where $M: Monad` に一意化し、declaration bound や direct TypeCtorTrait binder という別surfaceを提案しない。
+
+direct TypeCtorTrait 名を callable signature に書く既存表記は、fresh constructor variable と単一の capability constraint へ一意に正規化できる限定 shorthand である。
+
+```surtr
+def pure::<Applicative>(value: $A) -> Applicative<$A>
+```
+
+これは概念上の `$F: Applicative` と同じ制約へ正規化するが、Trait-head type parameter、nominal declaration binder、impl Trait argument の generic binder へこの shorthand を拡張しない。
 
 | 型入力 | 役割 |
 |---|---|
@@ -198,6 +245,39 @@ MonadT impl の検査では、field 名 `inner` / `run_state`、field 数、body
 
 ## 9. 呼び出し・推論・ReturnTypeArgument
 
+call-site ReturnTypeArgument の各項目は、具象型を明示するか、`_` によってその位置の推論をvalue argument、expected return、型注釈、その他のsignature制約へ委ねるかをユーザが選択する。ReturnTypeArgument list全体の省略は、全項目を `_` にした場合と同じ制約を生成する。この規則は通常関数、Trait method、inherent methodに共通である。
+
+```surtr
+converted = try_from::<Int>("1")
+converted: Result<Int> = try_from::<_>("1")
+converted: Result<Int> = try_from("1")
+```
+
+上の三例では、1行目は `TryFrom::try_from` のRTA slotを明示し、2・3行目は同じslotの解決をexpected returnの `Int` へ委ねる。`_` は TypeCtorTrait 専用ではなく、RTAを宣言する通常Trait methodにも同じ意味で適用する。
+
+TypeCtorTrait を要求する call-site ReturnTypeArgument は、完全な carrier 型、constructor head、または `_` を含む型applicationを受理する。
+
+| 表記 | 意味 |
+|---|---|
+| 完全な型application | 全型引数を固定constraintとする |
+| `_` を含む型application | `_` の位置だけ fresh inference variable とする |
+| constructor head のみ | 不足する constructor argumentをすべて推論対象にする |
+
+最終的には mapped slot と captured argument を含む完全な carrier identity が確定しなければならない。推論源は TypeCtorTrait の slot mapping、callable signature、value argument、expected return、その他既存の型制約に限定し、impl 数、登録順、標準型名、field 構造から不足型を補完しない。
+
+`Either<L, R>` で `R` が mapped slot、`L` が captured argument の場合は次のように解決する。
+
+```surtr
+v = pure::<Either<String, _>>(10)       # OK: Either<String, Int>
+pure::<Either<String, Int>>(10)         # OK
+pure::<Either<String, String>>(10)      # NG
+v = pure::<Option>(10)                  # OK: Option<Int>
+v = pure::<Either>(10)                  # NG: Either<?, Int>
+v: Either<String, Int> = pure::<Either>(10) # OK
+```
+
+この位置の `_` も通常のRTA inference holeであり、`Hole` 型ではない。推論終了時に解決できなければ ambiguity とする。TypeCtorTrait に固有なのは、完全なcarrier型やconstructor head、`_` を内包する型applicationをRTA slotの入力として扱い、mapped slotとcaptured argumentを解決する規則である。
+
 ```surtr
 source: Result<Int> = Ok(1)
 value: OptionT<Result, Int> = MonadT::lift(source)
@@ -206,6 +286,36 @@ value: OptionT<Result, Int> = MonadT::lift(source)
 base と payload は引数の具体型から、出力carrierは期待型から得る。`lift` に対応しない第2・第3のRTAを追加して base/payload を重複指定させない。
 
 結果carrierを `OptionT`、`ReaderT`、`StateT` の登録順や impl 数から選ばない。期待型も他の型入力もなく出力が曖昧なら、既存 ambiguity 診断を出す。
+
+`pure` / `return` は値引数から mapped payload を導出できる。`guard` が `Alternative<Unit>` を返す場合は signature 自身から mapped payload が `Unit` と確定する。`do` の carrier ReturnTypeArgument も独自surfaceを持たず、同じ resolver を使う。
+
+```surtr
+do::<Option> { ... }
+do::<Either<String, _>> { ... }
+do::<_> { ... }
+do { ... }
+```
+
+applied carrier を `do` だけで禁止しない。captured argument を含む完全な carrier identity が確定しなければ ambiguity とする。
+
+### 9.1 `Alternative::empty`
+
+`empty` は完全な carrier application から mapped slot を取得できるため、carrier と payload を別々の ReturnTypeArgument として要求しない。
+
+```surtr
+deftrait Alternative
+where
+  Self: Applicative
+{
+  def empty::<Self>() -> Self
+}
+
+r = Alternative::empty::<Option<Int>>()
+r: Option<Int> = Alternative::empty()
+r = Alternative::empty::<Option<_>>() # NG: 他の推論源がない
+```
+
+`Alternative` は通常のユーザ実装可能 Trait である。コンパイラは `empty` の生成方法を標準型や runtime representation から構築できる型に限定しない。例えば captured 型 `$L: Default` を持つ `Either<$L, $A>` が `Default::default()` から Left 値を生成する実装も、通常の型検査、coherence、Trait contract を満たす限り許可する。標準ライブラリが `Either` / `Result` に実装を提供するかは標準APIの意味論判断であり、言語機能上の実装可能性とは分離する。
 
 通常helperの例:
 
@@ -243,16 +353,25 @@ REPL の成功入力では、出力carrier・base・captured型・payload型・�
 
 ## 11. インターフェース確定ゲート
 
-以下は会話だけで完全な surface が確定していない。初回の最小対応を超える部分を自動実装しない。
+MT-I01 は、以下の確定内容により **CLOSED** とする。
+
+1. captured argument を持つ carrier は TypeCtorTrait RTA 内の型applicationで明示できる。
+2. RTA 内の `_` は inference variable として受理する。
+3. constructor head だけの指定では、全constructor argumentを推論対象にする。
+4. mapped slot と captured argument を含む完全な carrier identity が最終的に必要である。
+5. 推論根拠が不足すれば ambiguity とする。
+6. 型lambdaは導入しない。
+7. impl一覧、登録順、field探索から不足型を推測しない。
+8. 通常型注釈の `_` は対象外であり、`Hole` 型の既存意味を維持する。
+9. `do` も独自carrier表記を持たず、同じ TypeCtorTrait RTA 規則を使う。
+
+残る確認項目は次のとおり。初回の最小対応を超える部分を自動実装しない。
 
 | ID | 確認事項 | 初回の扱い |
 |---|---|---|
-| MT-I01 | captured引数を持つbaseや入れ子Transformerを、型引数位置でどう明記するか | `OptionT<Result,Int>` 等の既知unary headから開始。`Either<String,_>` 等を新しい型lambda構文として勝手に追加しない |
 | MT-I02 | specialized `lift` のRTA表示と型リストの対応 | 抽象contractから構造置換し、既存impl signature検査で固定。表示のための型解決fallbackは作らない |
 | MT-I03 | nominal宣言boundがProofEnvironmentと未使用制約検査へ渡る位置 | declaration/body/instantiation境界のテストで固定し、利用箇所からの暗黙bound導入はしない |
 | MT-I04 | parameterized TypeCtorTraitのdirect signature表記 | 今回は追加しない。通常型の引数とqualified method呼出しに限定 |
-
-MT-I01の初回制限は、将来のTransformer stackを型理論上否定するものではない。未定のsource表記を、すでに受理する文法として仕様例へ混ぜないための境界である。
 
 ## 12. 受け入れ条件
 
@@ -274,7 +393,15 @@ MT-I01の初回制限は、将来のTransformer stackを型理論上否定する
 | MT-L14 | REPLに具象データ値だけを保存し、エラー後の継続とcheckpointを保つ |
 | MT-L15 | dyn値・runtime dictionary・新しいtype lambda・field探索を導入しない |
 | MT-L16 | 標準Transformerとは別に、最小ユーザ定義型で言語機能の完了を検証する |
+| MT-L17 | Trait-head binder と Trait constraint を分離し、`deftrait MonadT<$M: Monad>` / `deftrait MonadT<Monad>` を拒否して、diagnostic の help を `where $M: Monad` に一意化する |
+| MT-L18 | `pure::<Either<String, _>>(10)` を `Either<String, Int>` に解決する |
+| MT-L19 | 通常関数・Trait methodを含むRTA内の `_` をそのslotの推論委譲として扱い、通常型注釈の `Hole` と区別する |
+| MT-L20 | `OptionT<_, Int>` を constructor inference として受理しない |
+| MT-L21 | constructor headのみのRTAは全captured/mapped argumentが導出可能な場合だけ成功する |
+| MT-L22 | `do::<Either<String, _>>` が通常のTypeCtorTrait RTA解決経路を使用する |
+| MT-L23 | `Alternative::empty::<Option<Int>>()` からmapped slotを取得し、payload用の追加RTAを要求しない |
+| MT-L24 | user-defined `Alternative` impl の `empty` 生成方法を標準型・representationで制限しない |
 
 ## 13. 実装後の移管
 
-言語機能の契約は `docs/dev/Trait_system_spec.md` と利用者向け型注釈・Trait・struct文書へ移管する。標準TransformerのAPIは `monadt_standard_types_spec.md` と個別 `@doc` の担当であり、本書に複製しない。
+実装開始前に、§1で列挙した置換対象を `docs/dev/Trait_system_spec.md`、`doc/do_intrinsic_spec.md`、関連する実装計画へ反映し、相反する旧契約を削除する。実装後は言語機能の確定契約を利用者向け型注釈・Trait・struct文書へ移管する。標準TransformerのAPIは `monadt_standard_types_spec.md` と個別 `@doc` の担当であり、本書に複製しない。
