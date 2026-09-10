@@ -7,7 +7,7 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- N01 は実装済み。以降のTaskは未着手である。
+- N01 と N03 は実装済み。N02 と N04 以降は未着手である。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
@@ -43,7 +43,7 @@ N01 の旧入力 `type_constructor_trait_extension_spec.md` は実装と正本�
 |---|---|---|---|---|
 | N01 | direct carrier同一性改修 | 旧Task 9までの基盤 | [x] 完了 | 新規 |
 | N02 | Identity / Reader / State | 既存通常型・Trait基盤 | [ ] 未着手 | 新規・独立 |
-| N03 | nominal constructor parameterとbound | N01 | [ ] 未着手 | 新規言語機能 |
+| N03 | nominal constructor parameterとbound | N01 | [x] 完了 | 新規言語機能 |
 | N04 | parameterized TypeCtorTrait・MonadT契約 | N03 | [ ] 未着手 | 新規言語機能 |
 | N05 | 標準Transformer | N04。Identityを使うテストはN02 | [ ] 未着手 | 新規標準機能 |
 | N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision | [ ] 未着手 | 旧Task 10を再編 |
@@ -134,9 +134,37 @@ Readerは関数入力Rを渡すデータ構造。Stateは次状態を返す純�
 
 `defstruct OptionT<$M: Monad,$A>` と `$M<Option<$A>>` を最小ユーザ型で検証する。constructor slotと通常型parameterを明確に扱い、無制約の一般HKT推論を追加しない。
 
-実装前にMT-I01/03の初回範囲を明記する。新しい部分適用構文・associated type・型lambdaを勝手に導入しない。
+MT-I01の初回範囲は、`Result` / `Option` / `List` と、既存のTypeCtorTrait implで
+constructor slotが一意に定まるユーザ定義のbare nominal headに限定する。
+`Either<String, _>`のような部分適用構文、associated type、型lambdaは追加しない。
+
+MT-I03では、nominal headのdeclaration boundをScarの型定義metadataへ保持する。
+field宣言ではそのboundから`$M<T>`のshapeを検査し、nominal適用、callable signature、
+constructor、型変更可能なFacet再構築の各destinationで同じboundを既存solverへ渡す。
+rigid genericは明示された`where`またはdeclaration boundだけをproofとし、型の利用箇所から
+boundを暗黙導入しない。nominal well-formednessに使った明示`where` boundは使用済みとして扱う。
 
 完了条件: MT-L01–06、MT-L13/14/15の該当部分。field/return/annotation/Facetでdestinationのboundを検査する。
+
+状態: 完了。`defstruct` / `defenum` の明示bound付きconstructor parameterを導入し、
+field / payload のconstructor application、bare nominal head、nominal well-formedness、
+constructor / callable / return / annotation、型変更可能なFacet destination、REPLの失敗後継続を
+同じdeclaration boundと既存solverで検査するようにした。constructor slot以外の通常parameter、
+rigid genericのproof、使用済みboundを区別し、部分適用・型lambda・runtime dictionaryは追加していない。
+
+対応する受け入れ条件ID: MT-L01–06、MT-L13、MT-L14、MT-L15のN03該当部分。
+
+検証（2026-09-09）:
+
+- `rtk cargo nextest run -p scar --test nominal_constructor_parameters`: 20 passed。
+- `rtk cargo nextest run -p spire`: 413 passed。
+- `rtk cargo nextest run -p scar`: 251 passed。
+- `rtk cargo nextest run -p xldr --test repl_core repl_core_bucket_3`: 1 passed、8 skipped。
+- `cargo fmt --all -- --check`、`git diff --check`: 成功。
+
+実装commitは未作成。N04以降、Rune integration、workspace / CI全体はN03の対象外として未実行。
+入力仕様のN03状態は`doc/monadt_language_extension_spec.md`、実装済み仕様は`doc/要件定義v9.md`、`docs/dev/Trait_system_spec.md`、
+`docs/site/{language-reference,structs,type-annotations,facet}.md`へ反映した。
 
 ## 9. N04 — parameterized TypeCtorTrait / MonadT契約
 

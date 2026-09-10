@@ -161,6 +161,12 @@ name_facet = User.name
 `nickname: Result<String, NoneError>` のような field を `Facet::set` で置換する場合は
 `Ok("bob")` のような Result 値を渡します。plain payload の暗黙 `Ok` wrap はありません。
 
+generic nominal型を型変更しながら再構築する場合、更新fieldだけから一意に決まるpayload parameterだけを
+変更できます。constructor parameterのfamilyは保持し、再構築後の全declaration boundを再検査します。
+たとえば`OptionT<Result, Int>`の`inner`を`Result<Option<String>>`へ置換すると
+`OptionT<Result, String>`になりますが、同じpathへ`Option<Option<String>>`を入れてconstructor familyを
+すり替えることはできません。
+
 ## container path
 
 List と HashMap の bracket segment は、通常の Facet path では runtime 式を受けられます。

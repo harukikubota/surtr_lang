@@ -68,6 +68,8 @@ pub struct TypeDefInfo {
     pub kind: TypeKind,
     pub name: Symbol,
     pub type_params: Vec<Symbol>,
+    /// Declaration bounds aligned with `type_params`.
+    pub type_param_bounds: Vec<Option<Symbol>>,
     pub type_param_vars: Vec<u32>,
     pub fields: Vec<(Symbol, Ty)>,
     pub private_fields: HashSet<Symbol>,
@@ -232,7 +234,9 @@ impl TypeEnv {
         name: Symbol,
         kind: TypeKind,
         type_params: Vec<Symbol>,
+        type_param_bounds: Vec<Option<Symbol>>,
     ) -> u32 {
+        debug_assert_eq!(type_params.len(), type_param_bounds.len());
         let key = canonical_type_key(&name);
         if let Some(existing) = self.type_defs.get(&key) {
             debug_assert!(
@@ -243,6 +247,11 @@ impl TypeEnv {
             debug_assert!(
                 existing.type_params == type_params,
                 "Type predeclared with different type params: {}",
+                name
+            );
+            debug_assert!(
+                existing.type_param_bounds == type_param_bounds,
+                "Type predeclared with different type parameter bounds: {}",
                 name
             );
             return existing.tag;
@@ -257,6 +266,7 @@ impl TypeEnv {
                 kind,
                 name,
                 type_params,
+                type_param_bounds,
                 type_param_vars: Vec::new(),
                 fields: Vec::new(),
                 private_fields: HashSet::new(),
@@ -416,9 +426,12 @@ mod tests {
     fn predeclare_type_def_assigns_deterministic_tags() {
         let mut env = TypeEnv::new();
 
-        let user_tag = env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new());
-        let point_tag = env.predeclare_type_def("Point".into(), TypeKind::Record, Vec::new());
-        let user_tag_again = env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new());
+        let user_tag =
+            env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new(), Vec::new());
+        let point_tag =
+            env.predeclare_type_def("Point".into(), TypeKind::Record, Vec::new(), Vec::new());
+        let user_tag_again =
+            env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new(), Vec::new());
 
         assert_eq!(user_tag, 2);
         assert_eq!(point_tag, 3);
@@ -429,7 +442,12 @@ mod tests {
     #[test]
     fn resolve_type_def_signature_finalizes_predeclared_entry() {
         let mut env = TypeEnv::new();
-        let tag = env.predeclare_type_def("ApiError".into(), TypeKind::ConcreteError, Vec::new());
+        let tag = env.predeclare_type_def(
+            "ApiError".into(),
+            TypeKind::ConcreteError,
+            Vec::new(),
+            Vec::new(),
+        );
 
         let before = env.lookup_type_def("ApiError").expect("must exist");
         assert_eq!(before.state, TypeDefState::Declared);
@@ -457,7 +475,7 @@ mod tests {
     #[test]
     fn predeclare_and_resolve_replace_legacy_single_step_registration() {
         let mut env = TypeEnv::new();
-        let tag = env.predeclare_type_def("Pair".into(), TypeKind::Record, Vec::new());
+        let tag = env.predeclare_type_def("Pair".into(), TypeKind::Record, Vec::new(), Vec::new());
         let resolved = env.resolve_type_def_signature(
             "Pair",
             vec![("first".into(), Ty::Int), ("second".into(), Ty::Str)],
@@ -481,7 +499,7 @@ mod tests {
     #[test]
     fn private_field_lookup_accepts_global_and_module_prefixed_names() {
         let mut env = TypeEnv::new();
-        env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new());
+        env.predeclare_type_def("User".into(), TypeKind::Struct, Vec::new(), Vec::new());
         env.resolve_type_def_signature(
             "User",
             vec![("name".into(), Ty::Str), ("password".into(), Ty::Str)],
@@ -501,7 +519,7 @@ mod tests {
     #[test]
     fn readonly_metadata_lookup_accepts_global_and_module_prefixed_names() {
         let mut env = TypeEnv::new();
-        env.predeclare_type_def("Profile".into(), TypeKind::Struct, Vec::new());
+        env.predeclare_type_def("Profile".into(), TypeKind::Struct, Vec::new(), Vec::new());
         env.resolve_type_def_signature(
             "Profile",
             vec![("name".into(), Ty::Str), ("score".into(), Ty::Int)],

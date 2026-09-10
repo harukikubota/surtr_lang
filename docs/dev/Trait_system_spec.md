@@ -96,7 +96,9 @@ fresh inference variable となり、payload と expected type からだけ制�
 | `deftrait T<$P: Bound> { ... }` | top level | Trait-head type parameterへ単一のdeclaration boundを付ける。複数constraintはTrait `where`へ置く |
 | `deftrait T<$P> where Self: Type<$A> { ... }` | なし | directまたは継承でTypeCtorTraitに分類されるTraitはTrait-head type parameterを持たない |
 | `defstruct S<$P, ...> { ... }` | top level | field型で使うtype parameterを持つnominal structを宣言する |
+| `defstruct S<$F: C, $P> { value: $F<$P> }` | top level | `C`がTypeCtorTraitなら`$F`を宣言内のconstructor parameterとして使う |
 | `defenum E<$P, ...> { ... }` | top level | variant payload型で使うtype parameterを持つnominal enumを宣言する |
+| `defenum E<$F: C, $P> { Item($F<$P>) }` | top level | structと同じdeclaration bound・constructor slot規則をpayloadへ適用する |
 | `type F<$P, ...> = (Args -> Return)` | top level | type parameterを持つ関数型aliasを宣言する。任意のdata type aliasではない |
 | `@builtin type T<$P, ...>` | 標準定義source | builtin TypeConstructorのsurface headを宣言する。追加・変更の実装正本ではない |
 | `deftrait T where Self: Parent { ... }` | Trait定義where | bare parent capabilityを宣言する |
@@ -161,7 +163,7 @@ where $F: Applicative + Add
 |---|---|
 | `$A` | その宣言で導入済みの通常型変数 |
 | `List<$A>` | named TypeConstructorへの通常の型application |
-| `$F<$A>` | `$F`に対する`where $F: TypeCtorTrait`がある場合だけ。`TypeCtorTrait`は実際のTrait名を表す |
+| `$F<$A>` | callable signatureでは`where $F: TypeCtorTrait`、nominal field/payloadではheadの`$F: TypeCtorTrait` declaration boundがある場合だけ |
 | `Self` | Trait signatureまたはimpl methodの型位置 |
 | `Self<$A>` | Trait/impl methodの型位置。TypeCtorTraitではconstructor slotを、generic inherent implでは既知owner targetの型引数位置を置換する |
 | `Functor<$A>` | TypeCtorTrait名を直接使えるparameter / returnの直下だけ。field、local、nested type、closure signatureでは不正 |
@@ -172,6 +174,23 @@ parameterのdirect TypeCtorTraitは、その位置で利用できるcapability�
 returnのdirect TypeCtorTraitは、具象carrierをcall-site制約で選ぶ`impl Trait`相当として扱い、trait objectにはしない。
 一方、`$F<$A>`は名前付きconstructor variableなので、`where $F: Applicative + Add`のように複数constraintを
 付与できる。この差を型表示やdiagnosticで失ってはならない。
+
+nominal declaration の constructor parameter は、型利用時には通常の nominal type argument として
+bare constructor headを受け取る。
+
+```surtr
+defstruct OptionT<$M: Monad, $A> {
+  inner: $M<Option<$A>>
+}
+
+value: OptionT<Result, Int>
+```
+
+初回範囲は既知の`Result` / `Option` / `List`と、要求されたTypeCtorTrait implからconstructor slotが
+一意に定まるuser-defined bare headである。`Either<String, _>`のような部分適用、型lambda、associated typeは
+追加しない。declaration boundはfield/payloadだけでなく、parameter、return、local annotation、constructor、
+callable instantiation、型変更可能なFacetの再構築destinationで検査する。rigid constructor variableは明示した
+`where` boundを必要とし、このwell-formedness検査に使ったboundは未使用制約とは扱わない。
 
 値引数の型に現れる型変数はvalue parameterから導入され、ReturnTypeArgumentへ重ねて宣言してはならない。
 戻り値にだけ現れる型変数はReturnTypeArgumentで宣言しなければならない。値引数から導入された型変数は
@@ -257,7 +276,7 @@ call-site ReturnTypeArgumentは定義側に対応位置がある場合だけ指�
 - call-siteの`::<...>`をgenericなtype applicationとして命名せず、expression nodeは
   `ReturnTypeArgumentApply`、保持fieldは`return_type_arguments`へ揃える。任意generic指定に見える内部名も残さない。
 - source diagnostic、JSON diagnostic、unit test、fixture、rustdoc、公開文書をReturnTypeArgument用語へ揃える。
-- `$F<$A, ...>`を、`$F`にTypeCtorTrait constraintがあるsignature型位置だけで受理する。
+- `$F<$A, ...>`を、`$F`にTypeCtorTrait constraintがあるsignature型位置、または同じdeclaration boundを持つnominal field/payloadだけで受理する。
 - direct TypeCtorTrait value parameterはpositionごとの独立witnessとし、TypeCtorTraitFamilyを理由に
   carrier substitutionを共有しない。同じ`$F`、`Self`、direct ReturnTypeArgumentとreturnだけを接続する。
 - user function、Trait helper、builtinのsignatureを同じwell-formedness、型推論、trait obligation routeへ載せる。

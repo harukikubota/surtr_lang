@@ -778,10 +778,12 @@ fn initialize_env() -> TypeEnv {
         "Global::Duration".into(),
         crate::env::TypeKind::Struct,
         Vec::new(),
+        Vec::new(),
     );
     env.predeclare_type_def(
         "Global::SupervisorStatus".into(),
         crate::env::TypeKind::Struct,
+        Vec::new(),
         Vec::new(),
     );
     for name in [
@@ -790,7 +792,12 @@ fn initialize_env() -> TypeEnv {
         "Global::FileSystemSnapshot",
         "Global::CommandResult",
     ] {
-        env.predeclare_type_def(name.into(), crate::env::TypeKind::Struct, Vec::new());
+        env.predeclare_type_def(
+            name.into(),
+            crate::env::TypeKind::Struct,
+            Vec::new(),
+            Vec::new(),
+        );
     }
 
     // Ok constructor: ($A) -> Result<$A, $E>
@@ -3340,8 +3347,9 @@ impl Checker {
         })
     }
 
-    fn validate_process_state_contracts(&self) -> Result<(), TypeError> {
-        for process in &self.process_specs {
+    fn validate_process_state_contracts(&mut self) -> Result<(), TypeError> {
+        let process_specs = self.process_specs.clone();
+        for process in &process_specs {
             if !matches!(
                 process.spec.kind,
                 spire::ast::ProcessKind::Agent | spire::ast::ProcessKind::GenServer
@@ -4298,6 +4306,7 @@ impl Checker {
 
             let t = profile_enabled.then(Instant::now);
             self.predeclare_traits(&stmts)?;
+            self.activate_nominal_declaration_bounds(&stmts)?;
             if let Some(start) = t {
                 predeclare_traits_dur = start.elapsed();
             }

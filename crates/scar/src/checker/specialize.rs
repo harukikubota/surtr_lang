@@ -3174,10 +3174,18 @@ impl Checker {
 
     pub(super) fn substitute_ty_with_mapping(&self, ty: &Ty, mapping: &HashMap<u32, Ty>) -> Ty {
         match ty {
-            Ty::Var(var) => mapping
-                .get(var)
-                .cloned()
-                .unwrap_or_else(|| self.resolve_ty(ty)),
+            Ty::Var(var) => {
+                if let Some(mapped) = mapping.get(var) {
+                    self.resolve_ty(mapped)
+                } else {
+                    let resolved = self.resolve_ty(ty);
+                    if resolved == *ty {
+                        resolved
+                    } else {
+                        self.substitute_ty_with_mapping(&resolved, mapping)
+                    }
+                }
+            }
             Ty::List(inner) => Ty::List(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
             Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(

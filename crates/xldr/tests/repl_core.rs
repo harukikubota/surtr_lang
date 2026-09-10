@@ -242,6 +242,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_keeps_bindings_and_definitions_between_inputs),
     repl_core_case!(core_rolls_back_failed_input_without_losing_previous_state),
     repl_core_case!(core_constructor_relation_rolls_back_after_failed_input),
+    repl_core_case!(core_nominal_constructor_value_survives_failed_bound_check),
     repl_core_case!(core_rebinding_uses_latest_value_and_grows_snapshot_locals),
     repl_core_case!(core_rejects_top_level_def_capturing_session_value_binding),
     repl_core_case!(core_rejects_repl_forbidden_top_level_declarations),
@@ -2749,6 +2750,82 @@ fn core_constructor_relation_rolls_back_after_failed_input() {
         "{}",
         rendered_text(&opposite)
     );
+}
+
+fn core_nominal_constructor_value_survives_failed_bound_check() {
+    let mut engine = ReplEngine::from_script_source(
+        "nominal_constructor_parameter.srt",
+        r#"
+defstruct OptionT<$M: Monad, $A> {
+  inner: $M<Option<$A>>,
+}
+impl OptionT {
+  def new(inner: $M<Option<$A>>) -> OptionT<$M, $A>
+  where
+    $M: Monad
+  {
+    OptionT { inner: inner }
+  }
+}
+
+defenum Plain<$A> {
+  Plain($A),
+}
+"#,
+    )
+    .expect("nominal constructor parameter preload should load");
+
+    let stored = engine.handle_line("value: OptionT<Result, Int> = OptionT(Ok(Option::Some(1)))");
+    assert!(!stored.should_exit);
+    assert!(
+        !matches!(stored.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&stored)
+    );
+
+    let rejected = engine.handle_line("bad: OptionT<Plain, Int> = value");
+    assert!(!rejected.should_exit);
+    assert!(matches!(rejected.output, ReplOutput::EvalError { .. }));
+    assert!(
+        rendered_text(&rejected).contains("does not satisfy declaration bound Monad"),
+        "{}",
+        rendered_text(&rejected)
+    );
+
+    let inference_rejected =
+        engine.handle_line("bad: OptionT<Result, String> = OptionT(Ok(Option::Some(1)))");
+    assert!(!inference_rejected.should_exit);
+    assert!(matches!(
+        inference_rejected.output,
+        ReplOutput::EvalError { .. }
+    ));
+
+    let rebound = engine
+        .handle_line("bad: OptionT<Option, String> = OptionT(Option::Some(Option::Some(\"ok\")))");
+    assert!(!rebound.should_exit);
+    assert!(
+        !matches!(rebound.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&rebound)
+    );
+
+    let rebound_viewed = engine.handle_line("Facet::view(OptionT.inner, bad)");
+    assert!(!rebound_viewed.should_exit);
+    assert!(
+        !matches!(rebound_viewed.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&rebound_viewed)
+    );
+    assert!(rendered_text(&rebound_viewed).contains("Some(\"ok\")"));
+
+    let viewed = engine.handle_line("Facet::view(OptionT.inner, value)");
+    assert!(!viewed.should_exit);
+    assert!(
+        !matches!(viewed.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&viewed)
+    );
+    assert!(rendered_text(&viewed).contains("Some(1)"));
 }
 
 fn core_rebinding_uses_latest_value_and_grows_snapshot_locals() {

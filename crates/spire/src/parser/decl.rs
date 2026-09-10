@@ -5,6 +5,7 @@ use sindr::names::reserved_owner_surface_name_constraint;
 
 use super::ast_ty_span;
 use super::context::{DeclLevel, TopLevelDeclKind};
+use super::ty::TypeParseContext;
 use super::Parser;
 
 fn where_constraint_rhs_span(rhs: &WhereConstraintRhs) -> &Span {
@@ -2819,6 +2820,7 @@ impl Parser<'_> {
         self.expect(&Token::Defstruct)?;
         let (name, _) = self.expect_qualified_ident(2, "type")?;
         let type_params = self.parse_decl_type_params()?;
+        let field_type_context = TypeParseContext::nominal_declaration(&type_params);
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -2832,7 +2834,7 @@ impl Parser<'_> {
             let (visibility, readonly) = self.parse_field_modifiers()?;
             let (fname, fspan) = self.expect_ident()?;
             self.expect(&Token::Colon)?;
-            let fty = self.parse_type()?;
+            let fty = self.parse_type_in_context(field_type_context.clone())?;
             fields.push(StructField {
                 name: fname,
                 ty: fty,
@@ -2936,6 +2938,7 @@ impl Parser<'_> {
         self.expect(&Token::Defenum)?;
         let (name, _name_span) = self.expect_qualified_ident(2, "type")?;
         let type_params = self.parse_decl_type_params()?;
+        let payload_type_context = TypeParseContext::nominal_declaration(&type_params);
         self.skip_newlines();
         self.expect(&Token::LBrace)?;
         self.skip_newlines();
@@ -2968,7 +2971,7 @@ impl Parser<'_> {
                 self.advance();
                 self.skip_newlines();
                 if !matches!(self.peek(), Token::RParen) {
-                    payload.push(self.parse_type()?);
+                    payload.push(self.parse_type_in_context(payload_type_context.clone())?);
                     self.skip_newlines();
                     while matches!(self.peek(), Token::Comma) {
                         self.advance();
@@ -2976,7 +2979,7 @@ impl Parser<'_> {
                         if matches!(self.peek(), Token::RParen) {
                             break;
                         }
-                        payload.push(self.parse_type()?);
+                        payload.push(self.parse_type_in_context(payload_type_context.clone())?);
                         self.skip_newlines();
                     }
                 }
