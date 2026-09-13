@@ -194,6 +194,8 @@ pub enum ParseDiagnosticReason {
     PositionRule,
     SourcePolicy,
     InterpolationSyntax,
+    ReturnTypeArgumentArityMismatch,
+    InvalidDoCarrierReturnTypeArgument,
     CompilerInvariant,
 }
 
@@ -211,6 +213,8 @@ impl ParseDiagnosticReason {
             Self::PositionRule => "PositionRule",
             Self::SourcePolicy => "SourcePolicy",
             Self::InterpolationSyntax => "InterpolationSyntax",
+            Self::ReturnTypeArgumentArityMismatch => "ReturnTypeArgumentArityMismatch",
+            Self::InvalidDoCarrierReturnTypeArgument => "InvalidDoCarrierReturnTypeArgument",
             Self::CompilerInvariant => "CompilerInvariant",
         }
     }
@@ -400,6 +404,7 @@ pub enum ParseDiagnosticGuidance {
     AnonymousCaptureIdentity,
     AnonymousCaptureRequiresHelper,
     ImmediateAnonymousCall,
+    DoCarrierReturnTypeArgument,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

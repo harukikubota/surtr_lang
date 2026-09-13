@@ -287,6 +287,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "impl" => Token::Impl,
                 "for" => Token::For,
                 "match" => Token::Match,
+                "do" => Token::Do,
                 "when" => Token::When,
                 "cond" => Token::Cond,
                 "private" => Token::Private,
@@ -809,6 +810,13 @@ mod tests {
     fn test_unit() {
         let tokens = tokenize("()").unwrap();
         assert!(matches!(tokens[0].token, Token::Unit));
+    }
+
+    #[test]
+    fn test_do_is_reserved_keyword() {
+        let tokens = tokenize("do do_work").unwrap();
+        assert!(matches!(tokens[0].token, Token::Do));
+        assert!(matches!(tokens[1].token, Token::Ident(ref name) if name == "do_work"));
     }
 
     #[test]

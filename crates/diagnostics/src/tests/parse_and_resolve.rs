@@ -15,6 +15,60 @@ fn parse_error_spec_adds_unexpected_token_help() {
 }
 
 #[test]
+fn do_carrier_parser_errors_keep_typed_reasons_and_rewrite_help() {
+    let arity = parser_error_spec("do::<Option, List> { finish() }", None);
+    assert_eq!(
+        arity
+            .structured
+            .as_ref()
+            .map(|structured| structured.reason),
+        Some(DiagnosticReason::Parse(
+            ParseDiagnosticReason::ReturnTypeArgumentArityMismatch
+        ))
+    );
+
+    for source in ["do<Option> { finish() }", "do::<$F> { finish() }"] {
+        let spec = parser_error_spec(source, None);
+        assert_eq!(
+            spec.structured.as_ref().map(|structured| structured.reason),
+            Some(DiagnosticReason::Parse(
+                ParseDiagnosticReason::InvalidDoCarrierReturnTypeArgument
+            )),
+            "{source}"
+        );
+        let help = spec.help.as_deref().unwrap_or_default();
+        if source.starts_with("do<") {
+            assert!(help.contains("do::<Option>"), "{source}: {spec:?}");
+            assert_eq!(
+                &source[spec.primary_span.start..spec.primary_span.end],
+                "<Option>"
+            );
+        } else {
+            assert!(help.contains("do::<Either>"), "{source}: {spec:?}");
+            assert!(spec
+                .labels
+                .iter()
+                .any(|label| label.message.contains("outer constructor variable")));
+            assert!(spec
+                .notes
+                .iter()
+                .any(|note| note.contains("captured and fixed arguments")));
+        }
+    }
+
+    let utf8_source = "prefix = \"日本語\"\ndo<Option> { finish() }";
+    let utf8 = parser_error_spec(utf8_source, None);
+    assert_eq!(
+        slice_chars(utf8_source, utf8.primary_span.start, utf8.primary_span.end),
+        "<Option>"
+    );
+    assert!(utf8
+        .help
+        .as_deref()
+        .is_some_and(|help| help.contains("do::<Option>")));
+}
+
+#[test]
 fn resolve_error_spec_projects_explicit_reason_and_related_source_facts() {
     let primary = Span { start: 12, end: 20 };
     let related_span = Span { start: 0, end: 8 };

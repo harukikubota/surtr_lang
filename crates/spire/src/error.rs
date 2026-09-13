@@ -13,6 +13,8 @@ pub enum ParseErrorReason {
     PositionRule,
     SourcePolicy,
     InterpolationSyntax,
+    ReturnTypeArgumentArityMismatch,
+    InvalidDoCarrierReturnTypeArgument,
     CompilerInvariant,
 }
 
@@ -33,6 +35,7 @@ pub enum ParseErrorGuidance {
     AnonymousCaptureIdentity,
     AnonymousCaptureRequiresHelper,
     ImmediateAnonymousCall,
+    DoCarrierReturnTypeArgument,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -306,6 +306,40 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
             span,
             stmts.into_iter().map(rewrite_process_self_refs).collect(),
         ),
+        Ast::Do(span, return_type_arguments, statements) => Ast::Do(
+            span,
+            return_type_arguments,
+            statements
+                .into_iter()
+                .map(|statement| match statement {
+                    AstDoStatement::Extract {
+                        span,
+                        operator_span,
+                        pattern,
+                        rhs,
+                    } => AstDoStatement::Extract {
+                        span,
+                        operator_span,
+                        pattern,
+                        rhs: rewrite_process_self_refs(rhs),
+                    },
+                    AstDoStatement::SafeBind {
+                        span,
+                        operator_span,
+                        pattern,
+                        rhs,
+                    } => AstDoStatement::SafeBind {
+                        span,
+                        operator_span,
+                        pattern,
+                        rhs: rewrite_process_self_refs(rhs),
+                    },
+                    AstDoStatement::Statement(statement) => {
+                        AstDoStatement::Statement(rewrite_process_self_refs(statement))
+                    }
+                })
+                .collect(),
+        ),
         Ast::Bind(span, pat, rhs) => {
             Ast::Bind(span, pat, Box::new(rewrite_process_self_refs(*rhs)))
         }
@@ -5574,6 +5608,10 @@ impl Parser<'_> {
             Token::Cond => {
                 self.advance();
                 "cond".to_string()
+            }
+            Token::Do => {
+                self.advance();
+                "do".to_string()
             }
             Token::Bind => {
                 self.advance();

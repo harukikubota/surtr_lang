@@ -464,6 +464,27 @@ pub struct ReturnTypeArgument {
     pub span: Span,
 }
 
+/// A source statement retained inside a compiler-owned `do` expression.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AstDoStatement {
+    /// `pattern <- rhs`
+    Extract {
+        span: Span,
+        operator_span: Span,
+        pattern: AstPattern,
+        rhs: Ast,
+    },
+    /// `pattern =? rhs`
+    SafeBind {
+        span: Span,
+        operator_span: Span,
+        pattern: AstPattern,
+        rhs: Ast,
+    },
+    /// An ordinary statement or the final expression.
+    Statement(Ast),
+}
+
 /// Declaration-side value parameter mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ValueParameterMode {
@@ -612,6 +633,9 @@ pub enum Ast {
 
     /// Safe bind: `x =? expr` — unwrap `Ok(x)`, propagate `Err` early
     SafeBind(Span, AstPattern, Box<Ast>),
+
+    /// Compiler-owned monadic sequencing expression.
+    Do(Span, Vec<ReturnTypeArgument>, Vec<AstDoStatement>),
 
     /// Binary operation: `a + b`, `x == y`
     BinOp(Span, BinOp, Box<Ast>, Box<Ast>),

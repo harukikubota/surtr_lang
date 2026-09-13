@@ -992,6 +992,47 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             span,
             rewrite_process_owner_refs_in_body(body, old_name, new_name),
         ),
+        Ast::Do(span, return_type_arguments, statements) => Ast::Do(
+            span,
+            return_type_arguments
+                .into_iter()
+                .map(|argument| ReturnTypeArgument {
+                    ordinal: argument.ordinal,
+                    ty: rewrite_process_owner_ty(argument.ty, old_name, new_name),
+                    span: argument.span,
+                })
+                .collect(),
+            statements
+                .into_iter()
+                .map(|statement| match statement {
+                    AstDoStatement::Extract {
+                        span,
+                        operator_span,
+                        pattern,
+                        rhs,
+                    } => AstDoStatement::Extract {
+                        span,
+                        operator_span,
+                        pattern: rewrite_process_owner_pattern(pattern, old_name, new_name),
+                        rhs: rewrite_process_owner_refs(rhs, old_name, new_name),
+                    },
+                    AstDoStatement::SafeBind {
+                        span,
+                        operator_span,
+                        pattern,
+                        rhs,
+                    } => AstDoStatement::SafeBind {
+                        span,
+                        operator_span,
+                        pattern: rewrite_process_owner_pattern(pattern, old_name, new_name),
+                        rhs: rewrite_process_owner_refs(rhs, old_name, new_name),
+                    },
+                    AstDoStatement::Statement(statement) => AstDoStatement::Statement(
+                        rewrite_process_owner_refs(statement, old_name, new_name),
+                    ),
+                })
+                .collect(),
+        ),
         Ast::Bind(span, pattern, expr) => Ast::Bind(
             span,
             rewrite_process_owner_pattern(pattern, old_name, new_name),
@@ -1892,6 +1933,39 @@ fn shift_bulk_update_entries(entries: Vec<BulkUpdateEntry>, delta: usize) -> Vec
         .collect()
 }
 
+fn shift_do_statements(statements: Vec<AstDoStatement>, delta: usize) -> Vec<AstDoStatement> {
+    statements
+        .into_iter()
+        .map(|statement| match statement {
+            AstDoStatement::Extract {
+                span,
+                operator_span,
+                pattern,
+                rhs,
+            } => AstDoStatement::Extract {
+                span: shift_span(span, delta),
+                operator_span: shift_span(operator_span, delta),
+                pattern: shift_pattern(pattern, delta),
+                rhs: shift_ast_span(rhs, delta),
+            },
+            AstDoStatement::SafeBind {
+                span,
+                operator_span,
+                pattern,
+                rhs,
+            } => AstDoStatement::SafeBind {
+                span: shift_span(span, delta),
+                operator_span: shift_span(operator_span, delta),
+                pattern: shift_pattern(pattern, delta),
+                rhs: shift_ast_span(rhs, delta),
+            },
+            AstDoStatement::Statement(statement) => {
+                AstDoStatement::Statement(shift_ast_span(statement, delta))
+            }
+        })
+        .collect()
+}
+
 fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
     match ast {
         Ast::Lit(span, lit) => Ast::Lit(shift_span(span, delta), lit),
@@ -1942,6 +2016,14 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             shift_span(span, delta),
             shift_pattern(pat, delta),
             Box::new(shift_ast_span(*rhs, delta)),
+        ),
+        Ast::Do(span, return_type_arguments, statements) => Ast::Do(
+            shift_span(span, delta),
+            return_type_arguments
+                .into_iter()
+                .map(|argument| shift_return_type_argument(argument, delta))
+                .collect(),
+            shift_do_statements(statements, delta),
         ),
         Ast::BinOp(span, op, left, right) => Ast::BinOp(
             shift_span(span, delta),
@@ -2560,6 +2642,7 @@ impl Ast {
             | Ast::Block(s, _)
             | Ast::Bind(s, _, _)
             | Ast::SafeBind(s, _, _)
+            | Ast::Do(s, _, _)
             | Ast::BinOp(s, _, _, _)
             | Ast::Pipe(s, _, _)
             | Ast::ContextMap(s, _, _)

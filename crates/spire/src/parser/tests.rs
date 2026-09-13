@@ -1,5 +1,6 @@
 use super::context::ParseUnitKind;
 use super::*;
+use crate::error::ParseErrorReason;
 use sindr::primitives::int;
 
 fn bulk_path_segments(path: &BulkUpdatePath) -> &[FacetPathSegment] {
@@ -7067,4 +7068,187 @@ fn test_function_signature_type_alias_parses() {
         [Ast::TypeAlias(_, name, params, AstTy::Func(_, _, _))]
             if name == "Mapper" && params.len() == 2
     ));
+}
+
+#[test]
+fn do_expression_preserves_carrier_and_statement_kinds() {
+    let source = r#"result = do::<Either<String, _>> {
+  value <- source
+  parsed =? parse(value)
+  cached = source
+  finish(parsed, cached)
+}"#;
+    let ast = parse(source).expect("do expression should parse");
+
+    let Ast::Bind(_, _, rhs) = &ast[0] else {
+        panic!("expected outer binding");
+    };
+    let Ast::Do(_, return_type_arguments, statements) = rhs.as_ref() else {
+        panic!("expected do expression, got {rhs:?}");
+    };
+    assert!(matches!(
+        return_type_arguments.as_slice(),
+        [ReturnTypeArgument {
+            ordinal: 0,
+            ty: AstTy::Generic(_, name, args),
+            ..
+        }] if name == "Either"
+            && matches!(args.as_slice(), [AstTy::Named(_, left), AstTy::Named(_, hole)] if left == "String" && hole == "_")
+    ));
+    assert!(matches!(
+        statements.as_slice(),
+        [
+            AstDoStatement::Extract { .. },
+            AstDoStatement::SafeBind { .. },
+            AstDoStatement::Statement(Ast::Bind(..)),
+            AstDoStatement::Statement(Ast::App(..)),
+        ]
+    ));
+    let AstDoStatement::Extract { operator_span, .. } = &statements[0] else {
+        unreachable!()
+    };
+    assert_eq!(&source[operator_span.start..operator_span.end], "<-");
+    let AstDoStatement::SafeBind { operator_span, .. } = &statements[1] else {
+        unreachable!()
+    };
+    assert_eq!(&source[operator_span.start..operator_span.end], "=?");
+}
+
+#[test]
+fn do_expression_accepts_omitted_hole_head_and_full_carriers() {
+    for source in [
+        "do { finish() }",
+        "do::<_> { finish() }",
+        "do::<Option> { finish() }",
+        "do::<Either<String, Int>> { finish() }",
+    ] {
+        let ast = parse(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+        assert!(matches!(ast.as_slice(), [Ast::Do(..)]), "{source}: {ast:?}");
+    }
+}
+
+#[test]
+fn do_expression_rejects_noncanonical_carrier_syntax_and_arity() {
+    let cases = [
+        (
+            "do<Option> { finish() }",
+            "not valid carrier syntax",
+            ParseErrorReason::InvalidDoCarrierReturnTypeArgument,
+            "<Option>",
+        ),
+        (
+            "do::<> { finish() }",
+            "cannot be empty",
+            ParseErrorReason::ReturnTypeArgumentArityMismatch,
+            "::<>",
+        ),
+        (
+            "do::<Option, List> { finish() }",
+            "exactly one",
+            ParseErrorReason::ReturnTypeArgumentArityMismatch,
+            "::<Option, List>",
+        ),
+        (
+            "do::<$F> { finish() }",
+            "outer constructor variable",
+            ParseErrorReason::InvalidDoCarrierReturnTypeArgument,
+            "$F",
+        ),
+        (
+            "do::<(Int, Int)> { finish() }",
+            "constructor head, applied carrier",
+            ParseErrorReason::InvalidDoCarrierReturnTypeArgument,
+            "(Int, Int)",
+        ),
+        (
+            "do::<(Int -> Int)> { finish() }",
+            "constructor head, applied carrier",
+            ParseErrorReason::InvalidDoCarrierReturnTypeArgument,
+            "(Int -> Int)",
+        ),
+    ];
+    for (source, expected, reason, expected_span) in cases {
+        let error = parse(source).expect_err(source);
+        assert!(
+            error.message().contains(expected),
+            "source={source:?}, error={error}"
+        );
+        assert_eq!(error.reason(), reason, "source={source:?}");
+        assert_eq!(
+            &source[error.span().start..error.span().end],
+            expected_span,
+            "source={source:?}"
+        );
+    }
+}
+
+#[test]
+fn do_pattern_statements_accept_semicolon_separators_and_nested_do() {
+    parse("do { value <- source; finish(value) }")
+        .expect("extract should accept an explicit separator");
+    parse("do { value =? source; do { nested =? value; finish(nested) } }")
+        .expect("SafeBind should stay owned by each enclosing do block");
+}
+
+#[test]
+fn do_keyword_is_reserved_except_for_the_compiler_owned_intrinsic_surface() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    parse_with_context(
+        "@intrinsic def do::<Monad>(block: DoBlock<$Result>) -> Monad<$Result>",
+        context,
+    )
+    .expect("canonical compiler-owned intrinsic declaration should parse");
+    parse("def do() -> Unit { () }").expect_err("ordinary callable name must stay reserved");
+    parse("do = 1").expect_err("ordinary variable name must stay reserved");
+}
+
+#[test]
+fn tolerant_parser_classifies_do_as_a_keyword_and_keeps_the_do_ast() {
+    let source = "do { finish() }";
+    let result = parse_tolerant_with_context(source, ParserContext::default(), None);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    assert!(matches!(result.ast.as_slice(), [Ast::Do(..)]));
+    assert!(matches!(
+        result.tokens.first(),
+        Some(SyntaxToken {
+            kind: SyntaxTokenKind::Keyword,
+            span: Span { start: 0, end: 2 },
+        })
+    ));
+}
+
+#[test]
+fn do_expression_requires_final_value_expression() {
+    for source in [
+        "do {}",
+        "do { value <- source }",
+        "do { value =? source }",
+        "do { value = source }",
+        "do { source; }",
+    ] {
+        let error = parse(source).expect_err(source);
+        assert!(
+            error.message().contains("final monadic expression"),
+            "source={source:?}, error={error}"
+        );
+    }
+}
+
+#[test]
+fn left_arrow_remains_owned_by_enclosing_syntax() {
+    parse("do { value <- source\nfinish(value) }").expect("do owns extract arrow");
+    parse(
+        r#"Facet::bulk_update(user) {
+  name <- set("new")
+}"#,
+    )
+    .expect("Facet bulk_update keeps owning update arrows");
+    parse(
+        r#"Facet::bulk_update(user) {
+  name <- set(do { set("new") })
+}"#,
+    )
+    .expect_err("a nested operation call inside do must still be rejected by bulk_update");
+    parse("value <- source").expect_err("left arrow outside an owner must be rejected");
 }

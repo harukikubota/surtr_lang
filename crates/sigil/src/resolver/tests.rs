@@ -7960,3 +7960,203 @@ impl Apply for String {
         id.unique_id
     );
 }
+
+#[test]
+fn do_resolver_exposes_extract_and_safebind_bindings_only_to_following_statements() {
+    let source = r#"
+source = 1
+parse = {|value| value}
+result = do::<Option> {
+  value <- source
+  parsed =? parse(value)
+  value = parsed
+  value
+}
+"#;
+    let resolved = parse_and_resolve(source).expect("do scopes should resolve");
+
+    let Resolved::Bind(_, _, rhs) = &resolved[2] else {
+        panic!("expected result binding");
+    };
+    let Resolved::Do(_, intrinsic_id, return_type_arguments, statements) = rhs.as_ref() else {
+        panic!("expected resolved do expression");
+    };
+    assert_eq!(*intrinsic_id, sindr::intrinsic::IntrinsicId::Do);
+    assert_eq!(return_type_arguments.len(), 1);
+    let [ResolvedDoStatement::Extract {
+        operator_span: extract_operator_span,
+        pattern: ResolvedPattern::Var(extracted),
+        rhs: extract_rhs,
+        ..
+    }, ResolvedDoStatement::SafeBind {
+        operator_span: safe_bind_operator_span,
+        pattern: ResolvedPattern::Var(parsed),
+        rhs: safe_rhs,
+        ..
+    }, ResolvedDoStatement::Statement(Resolved::Bind(_, ResolvedPattern::Var(shadowed), bind_rhs)), ResolvedDoStatement::Statement(Resolved::Var(_, final_id))] =
+        statements.as_slice()
+    else {
+        panic!("unexpected resolved do statements: {statements:?}");
+    };
+
+    let Resolved::Var(_, extract_rhs_id) = extract_rhs else {
+        panic!("extract RHS should resolve to the outer source");
+    };
+    assert_eq!(extract_rhs_id.name, "source");
+    assert_ne!(extract_rhs_id.unique_id, extracted.unique_id);
+    assert_eq!(
+        &source[extract_operator_span.start..extract_operator_span.end],
+        "<-"
+    );
+    assert_eq!(
+        &source[safe_bind_operator_span.start..safe_bind_operator_span.end],
+        "=?"
+    );
+    let Resolved::App(_, _, safe_args) = safe_rhs else {
+        panic!("safe-bind RHS should be a resolved call");
+    };
+    assert!(
+        matches!(safe_args.as_slice(), [ResolvedRecordLitArg::Positional(Resolved::Var(_, id))] if id.unique_id == extracted.unique_id)
+    );
+    assert!(matches!(bind_rhs.as_ref(), Resolved::Var(_, id) if id.unique_id == parsed.unique_id));
+    assert_eq!(final_id.unique_id, shadowed.unique_id);
+}
+
+#[test]
+fn do_resolver_does_not_leak_pattern_bindings_outside_the_block() {
+    let error = parse_and_resolve(
+        r#"
+source = 1
+result = do { value <- source
+  source }
+value
+"#,
+    )
+    .expect_err("do-local binding must not escape");
+    assert!(
+        error.message.contains("Undefined variable: value"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn do_resolver_does_not_expose_a_pattern_to_its_own_rhs() {
+    let error = parse_and_resolve("do { value <- value\nfinish() }")
+        .expect_err("the new pattern binding must not be visible in its own RHS");
+    assert!(
+        error.message.contains("Undefined variable: value"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn do_resolver_rewrites_capture_placeholders_inside_do_items() {
+    let resolved = parse_and_resolve(
+        r#"
+wrap = {|value| value}
+finish = {|value| value}
+captured = &wrap(do { finish(&1) })
+"#,
+    )
+    .expect("capture placeholders inside do should be collected and rewritten");
+    assert!(matches!(
+        &resolved[2],
+        Resolved::Bind(_, _, rhs) if matches!(rhs.as_ref(), Resolved::CaptureClosure(..))
+    ));
+}
+
+#[test]
+fn do_resolver_captures_outer_values_referenced_by_pin_patterns() {
+    let resolved = parse_and_resolve(
+        r#"
+expected = 1
+run = {|source| do { ^expected <- source
+  source }}
+"#,
+    )
+    .expect("a do pin should capture its referenced outer value");
+    let Resolved::Bind(_, _, rhs) = &resolved[1] else {
+        panic!("expected run binding");
+    };
+    let Resolved::Closure(_, _, captures, _) = rhs.as_ref() else {
+        panic!("expected run closure, got {rhs:?}");
+    };
+    assert!(
+        matches!(captures.as_slice(), [id] if id.name == "expected"),
+        "{captures:?}"
+    );
+}
+
+#[test]
+fn do_resolver_finds_misplaced_pipe_slots_inside_do_items() {
+    let error = parse_and_resolve(
+        r#"
+consume = {|value| value}
+finish = {|value| value}
+bad = 1 |> consume(do { finish(_1) })
+"#,
+    )
+    .expect_err("nested pipe slot inside do must not bypass the direct-argument rule");
+    assert!(
+        error.message.contains("pipe placeholder `_1`")
+            && !error.message.contains("Undefined variable"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn do_resolver_preserves_pattern_identities_and_nested_scope() {
+    let module_stages = vec![vec![staged_module(
+        "Matchers",
+        parse_module_ast("defextractor never(term: Int) -> Int { term }", "Matchers"),
+    )]];
+    let resolved = resolve_user_with_modules(
+        r#"
+import Matchers::never
+source = Ok(1)
+result = do::<Result> {
+  Ok(value) @ whole <- source
+  never(extracted) <- value
+  ^whole =? source
+  extracted
+}
+"#,
+        &module_stages,
+    )
+    .expect("constructor, Extractor, as-pattern, and pin identities should resolve");
+
+    let Resolved::Bind(_, _, rhs) = resolved.last().expect("result binding") else {
+        panic!("expected result binding");
+    };
+    let Resolved::Do(_, _, _, statements) = rhs.as_ref() else {
+        panic!("expected resolved do");
+    };
+    let [ResolvedDoStatement::Extract {
+        pattern: ResolvedPattern::As(constructor, whole, None),
+        ..
+    }, ResolvedDoStatement::Extract {
+        pattern: ResolvedPattern::Extractor(extractor, extracted_items),
+        ..
+    }, ResolvedDoStatement::SafeBind {
+        pattern: ResolvedPattern::Pin(pinned),
+        ..
+    }, ResolvedDoStatement::Statement(Resolved::Var(_, final_id))] = statements.as_slice()
+    else {
+        panic!("unexpected do patterns: {statements:?}");
+    };
+    let ResolvedPattern::Constructor(constructor_id, constructor_items) = constructor.as_ref()
+    else {
+        panic!("expected constructor inside as-pattern: {constructor:?}");
+    };
+    let [ResolvedPattern::Var(value)] = constructor_items.as_slice() else {
+        panic!("expected constructor payload binding: {constructor_items:?}");
+    };
+    let [ResolvedPattern::Var(extracted)] = extracted_items.as_slice() else {
+        panic!("expected extractor payload binding: {extracted_items:?}");
+    };
+    assert_eq!(constructor_id.name, "Ok");
+    assert_eq!(extractor.name, "never");
+    assert_eq!(pinned.unique_id, whole.unique_id);
+    assert_eq!(final_id.unique_id, extracted.unique_id);
+    assert_ne!(value.unique_id, extracted.unique_id);
+}
