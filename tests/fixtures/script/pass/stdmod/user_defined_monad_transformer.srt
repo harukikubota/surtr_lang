@@ -1,0 +1,110 @@
+defstruct UserBase<$A> {
+  value: $A,
+}
+
+impl UserBase {
+  def new(value: $A) -> UserBase<$A> { UserBase { value } }
+  def run(self: UserBase<$A>) -> $A { self.value }
+}
+
+impl Functor for UserBase<$T> {
+  def fmap(self: UserBase<$A>, mapper: ($A -> $B)) -> UserBase<$B> {
+    UserBase::new(mapper(self.value))
+  }
+}
+
+impl Applicative for UserBase<$T> {
+  def pure::<UserBase<$T>>(value: $A) -> UserBase<$A> { UserBase::new(value) }
+  def ap(mapper: UserBase<($A -> $B)>, value: UserBase<$A>) -> UserBase<$B> {
+    UserBase::new(Function::apply(mapper.value, value.value))
+  }
+}
+
+impl Monad for UserBase<$T> {
+  def return::<UserBase<$T>>(value: $A) -> UserBase<$A> { UserBase::new(value) }
+  def bind(self: UserBase<$A>, mapper: ($A -> UserBase<$B>)) -> UserBase<$B> {
+    mapper(self.value)
+  }
+}
+
+defstruct UserWrap<$M, $A>
+where
+  $M: Monad
+{
+  inner: $M<$A>,
+}
+
+impl UserWrap {
+  def new(inner: $M<$A>) -> UserWrap<$M, $A>
+  where
+    $M: Monad
+  {
+    UserWrap { inner }
+  }
+
+  def run(self: UserWrap<$M, $A>) -> $M<$A>
+  where
+    $M: Monad
+  {
+    self.inner
+  }
+}
+
+impl Functor for UserWrap<$M, $T>
+where
+  $M: Monad
+  $T: Functor.$A
+{
+  def fmap(self: UserWrap<$M, $A>, mapper: ($A -> $B)) -> UserWrap<$M, $B> {
+    UserWrap::new(Functor::fmap(self.inner, mapper))
+  }
+}
+
+impl Applicative for UserWrap<$M, $T>
+where
+  $M: Monad
+  $T: Applicative.$A
+{
+  def pure::<UserWrap<$M, $T>>(value: $A) -> UserWrap<$M, $A> {
+    UserWrap::new(Monad::return(value))
+  }
+
+  def ap(
+    mapper: UserWrap<$M, ($A -> $B)>,
+    value: UserWrap<$M, $A>,
+  ) -> UserWrap<$M, $B> {
+    UserWrap::new(Applicative::ap(mapper.inner, value.inner))
+  }
+}
+
+impl Monad for UserWrap<$M, $T>
+where
+  $M: Monad
+  $T: Monad.$A
+{
+  def return::<UserWrap<$M, $T>>(value: $A) -> UserWrap<$M, $A> {
+    UserWrap::new(Monad::return(value))
+  }
+
+  def bind(
+    self: UserWrap<$M, $A>,
+    mapper: ($A -> UserWrap<$M, $B>),
+  ) -> UserWrap<$M, $B> {
+    UserWrap::new(Monad::bind(self.inner, {|item| mapper(item).inner}))
+  }
+}
+
+impl MonadT<$M> for UserWrap<$M, $T>
+where
+  $M: Monad
+  $T: MonadT.$A
+{
+  def lift::<UserWrap<$M, $T>>(value: $M<$A>) -> UserWrap<$M, $A> {
+    UserWrap::new(value)
+  }
+}
+
+base: UserBase<Int> = UserBase::new(41)
+lifted: UserWrap<UserBase, Int> = MonadT::lift(base)
+mapped: UserWrap<UserBase, Int> = Functor::fmap(lifted, {|item| item + 1})
+print(to_string(UserBase::run(UserWrap::run(mapped))))

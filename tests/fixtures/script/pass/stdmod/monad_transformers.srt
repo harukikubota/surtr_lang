@@ -1,0 +1,9 @@
+option: OptionT<Result, Int> = MonadT::lift::<OptionT<Result, _>>(Ok(1))
+either: EitherT<String, Identity, Int> = MonadT::lift(Identity::new(2))
+reader: ReaderT<String, Identity, Int> = MonadT::lift(Identity::new(3))
+state: StateT<Int, Identity, Int> = MonadT::lift(Identity::new(4))
+
+print(inspect(OptionT::run(option)))
+print(inspect(Identity::run(EitherT::run(either))))
+print(inspect(Identity::run(ReaderT::run(reader, "environment"))))
+print(inspect(Identity::run(StateT::run(state, 9))))

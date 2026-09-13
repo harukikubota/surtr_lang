@@ -1,0 +1,5 @@
+defenum Plain<$A> {
+  Plain($A),
+}
+
+def invalid(value: OptionT<Plain, Int>) -> Unit { () }

@@ -1,0 +1,297 @@
+@doc """
+Standard `EitherT<$L, $M, $A>` transformer.
+The representation is a base computation producing `Either<$L, $A>`.
+"""
+defstruct EitherT<$L, $M, $A>
+where
+  $M: Monad
+{
+  inner: $M<Either<$L, $A>>,
+}
+
+impl EitherT {
+  @doc """
+  Wrap a base computation that produces an Either.
+
+  ## REPL
+  xldr(1)> left = Identity::new(Either<String, Int>::Left("stop"))
+  xldr(2)> EitherT::new(left)
+  EitherT(inner: Identity(value: Either::Left("stop")))
+  xldr(3)> right = Identity::new(Either<String, Int>::Right(2))
+  xldr(4)> EitherT::new(right)
+  EitherT(inner: Identity(value: Either::Right(2)))
+  """
+  def new(inner: $M<Either<$L, $A>>) -> EitherT<$L, $M, $A>
+  where
+    $M: Monad
+  {
+    EitherT { inner }
+  }
+
+  @doc """
+  Extract and run the base computation.
+
+  ## REPL
+  xldr(1)> left: EitherT<String, Identity, Int> = EitherT::left("stop")
+  xldr(2)> EitherT::run(left)
+  Identity(value: Either::Left("stop"))
+  xldr(3)> right: EitherT<String, Identity, Int> = EitherT::right(2)
+  xldr(4)> EitherT::run(right)
+  Identity(value: Either::Right(2))
+  """
+  def run(self: EitherT<$L, $M, $A>) -> $M<Either<$L, $A>>
+  where
+    $M: Monad
+  {
+    self.inner
+  }
+
+  @doc """
+  Lift a Left value with the base Applicative's pure.
+
+  ## REPL
+  xldr(1)> EitherT::left::<Identity, Int>("stop")
+  EitherT(inner: Identity(value: Either::Left("stop")))
+  """
+  def left::<$M, $A>(value: $L) -> EitherT<$L, $M, $A>
+  where
+    $M: Monad
+  {
+    EitherT::new(Applicative::pure(Either<$L, $A>::Left(value)))
+  }
+
+  @doc """
+  Lift a Right payload with the base Applicative's pure.
+
+  ## REPL
+  xldr(1)> EitherT::right::<String, Identity>(2)
+  EitherT(inner: Identity(value: Either::Right(2)))
+  """
+  def right::<$L, $M>(value: $A) -> EitherT<$L, $M, $A>
+  where
+    $M: Monad
+  {
+    EitherT::new(Applicative::pure(Either<$L, $A>::Right(value)))
+  }
+
+  @doc """
+  Lift an existing Either with the base Applicative's pure.
+
+  ## REPL
+  xldr(1)> EitherT::from_either::<Identity>(Either<String, Int>::Left("stop"))
+  EitherT(inner: Identity(value: Either::Left("stop")))
+  xldr(2)> EitherT::from_either::<Identity>(Either<String, Int>::Right(2))
+  EitherT(inner: Identity(value: Either::Right(2)))
+  """
+  def from_either::<$M>(value: Either<$L, $A>) -> EitherT<$L, $M, $A>
+  where
+    $M: Monad
+  {
+    EitherT::new(Applicative::pure(value))
+  }
+
+  @doc """
+  Map only the Left payload through the base Functor.
+
+  ## REPL
+  xldr(1)> left: EitherT<String, Identity, Int> = EitherT::left("stop")
+  xldr(2)> EitherT::map_left(left, &String::len)
+  EitherT(inner: Identity(value: Either::Left(4)))
+  xldr(3)> right: EitherT<String, Identity, Int> = EitherT::right(2)
+  xldr(4)> EitherT::map_left(right, &String::len)
+  EitherT(inner: Identity(value: Either::Right(2)))
+  """
+  def map_left(
+    self: EitherT<$L, $M, $A>,
+    mapper: ($L -> $B),
+  ) -> EitherT<$B, $M, $A>
+  where
+    $M: Monad
+  {
+    EitherT::new(Functor::fmap(self.inner, &Either::map_left(&1, mapper)))
+  }
+
+  @doc """
+  Map only the Right payload through the base Functor.
+
+  ## REPL
+  xldr(1)> left: EitherT<String, Identity, Int> = EitherT::left("stop")
+  xldr(2)> EitherT::map_right(left, &to_string)
+  EitherT(inner: Identity(value: Either::Left("stop")))
+  xldr(3)> right: EitherT<String, Identity, Int> = EitherT::right(2)
+  xldr(4)> EitherT::map_right(right, &to_string)
+  EitherT(inner: Identity(value: Either::Right("2")))
+  """
+  def map_right(
+    self: EitherT<$L, $M, $A>,
+    mapper: ($A -> $B),
+  ) -> EitherT<$L, $M, $B>
+  where
+    $M: Monad
+  {
+    EitherT::new(Functor::fmap(self.inner, &Either::map_right(&1, mapper)))
+  }
+
+  @doc """
+  Map the Left and Right payloads through the base Functor.
+
+  ## REPL
+  xldr(1)> left: EitherT<String, Identity, Int> = EitherT::left("stop")
+  xldr(2)> EitherT::bimap(left, &String::len, &to_string)
+  EitherT(inner: Identity(value: Either::Left(4)))
+  xldr(3)> right: EitherT<String, Identity, Int> = EitherT::right(2)
+  xldr(4)> EitherT::bimap(right, &String::len, &to_string)
+  EitherT(inner: Identity(value: Either::Right("2")))
+  """
+  def bimap(
+    self: EitherT<$L, $M, $A>,
+    on_left: ($L -> $B),
+    on_right: ($A -> $C),
+  ) -> EitherT<$B, $M, $C>
+  where
+    $M: Monad
+  {
+    EitherT::new(Functor::fmap(self.inner, &Either::bimap(&1, on_left, on_right)))
+  }
+}
+
+@doc """Map only the `Right` payload while preserving `Left` and the base carrier."""
+impl Functor for EitherT<$L, $M, $T>
+where
+  $M: Monad
+  $T: Functor.$A
+{
+  @doc """
+  Map only Right payloads and preserve Left values.
+
+  ## REPL
+  xldr(1)> left: EitherT<String, Identity, Int> = EitherT::left("stop")
+  xldr(2)> Functor::fmap(left, &to_string)
+  EitherT(inner: Identity(value: Either::Left("stop")))
+  xldr(3)> right: EitherT<String, Identity, Int> = EitherT::right(2)
+  xldr(4)> Functor::fmap(right, &to_string)
+  EitherT(inner: Identity(value: Either::Right("2")))
+  """
+  def fmap(self: EitherT<$L, $M, $A>, mapper: ($A -> $B)) -> EitherT<$L, $M, $B> {
+    EitherT::map_right(self, mapper)
+  }
+}
+
+@doc """Apply transformed functions in base-Monad order and preserve `Left`."""
+impl Applicative for EitherT<$L, $M, $T>
+where
+  $M: Monad
+  $T: Applicative.$A
+{
+  @doc """
+  Inject a payload through the base Applicative as Right.
+
+  ## REPL
+  xldr(1)> value: EitherT<String, Identity, Int> = Applicative::pure(2)
+  xldr(2)> value
+  EitherT(inner: Identity(value: Either::Right(2)))
+  """
+  def pure::<EitherT<$L, $M, $T>>(value: $A) -> EitherT<$L, $M, $A> {
+    EitherT::new(Applicative::pure(Either<$L, $A>::Right(value)))
+  }
+
+  @doc """
+  Apply a transformed Right function before the transformed value.
+
+  Evaluation order within the base Monad:
+
+  1. `mapper.inner` is sequenced first.
+  2. If it produces `Either::Left`, `value.inner` is not sequenced.
+  3. If it produces `Either::Right(function)`, `value.inner` is mapped by `function`.
+
+  The `mapper` and `value` arguments themselves still use normal eager argument
+  evaluation.
+
+  ## REPL
+  xldr(1)> left_mapper: EitherT<String, Identity, (Int -> Int)> = EitherT::left("mapper")
+  xldr(2)> left_value: EitherT<String, Identity, Int> = EitherT::left("value")
+  xldr(3)> Applicative::ap(left_mapper, left_value)
+  EitherT(inner: Identity(value: Either::Left("mapper")))
+  xldr(4)> mapper: EitherT<String, Identity, (Int -> Int)> = Applicative::pure({|item| item + 1})
+  xldr(5)> Applicative::ap(mapper, left_value)
+  EitherT(inner: Identity(value: Either::Left("value")))
+  xldr(6)> value: EitherT<String, Identity, Int> = EitherT::right(2)
+  xldr(7)> Applicative::ap(mapper, value)
+  EitherT(inner: Identity(value: Either::Right(3)))
+  """
+  def ap(
+    mapper: EitherT<$L, $M, ($A -> $B)>,
+    value: EitherT<$L, $M, $A>,
+  ) -> EitherT<$L, $M, $B> {
+    EitherT::new(Monad::bind(mapper.inner, {|inner_mapper|
+      match inner_mapper {
+        Either::Right(function) => Functor::fmap(value.inner, &Functor::fmap(&1, function)),
+        Either::Left(left) => Applicative::pure(Either<$L, $B>::Left(left)),
+      }
+    }))
+  }
+}
+
+@doc """Sequence `Right` payloads and short-circuit the inner `Either::Left`."""
+impl Monad for EitherT<$L, $M, $T>
+where
+  $M: Monad
+  $T: Monad.$A
+{
+  @doc """
+  Return a payload as a Right value.
+
+  ## REPL
+  xldr(1)> value: EitherT<String, Identity, Int> = Monad::return(2)
+  xldr(2)> value
+  EitherT(inner: Identity(value: Either::Right(2)))
+  """
+  def return::<EitherT<$L, $M, $T>>(value: $A) -> EitherT<$L, $M, $A> {
+    EitherT::new(Monad::return(Either<$L, $A>::Right(value)))
+  }
+
+  @doc """
+  Continue Right payloads and preserve Left values.
+
+  ## REPL
+  xldr(1)> left: EitherT<String, Identity, Int> = EitherT::left("stop")
+  xldr(2)> Monad::bind(left, {|item| EitherT::right(item + 1)})
+  EitherT(inner: Identity(value: Either::Left("stop")))
+  xldr(3)> right: EitherT<String, Identity, Int> = EitherT::right(2)
+  xldr(4)> Monad::bind(right, {|item| EitherT::right(item + 1)})
+  EitherT(inner: Identity(value: Either::Right(3)))
+  """
+  def bind(
+    self: EitherT<$L, $M, $A>,
+    mapper: ($A -> EitherT<$L, $M, $B>),
+  ) -> EitherT<$L, $M, $B> {
+    EitherT::new(Monad::bind(self.inner, {|either|
+      match either {
+        Either::Right(value) => mapper(value).inner,
+        Either::Left(left) => Applicative::pure(Either<$L, $B>::Left(left)),
+      }
+    }))
+  }
+}
+
+@doc """
+`MonadT<$M>` implementation for `EitherT`.
+Lifting maps each base payload to `Either::Right` and preserves base failures.
+"""
+impl MonadT<$M> for EitherT<$L, $M, $T>
+where
+  $M: Monad
+  $T: MonadT.$A
+{
+  @doc """
+  Lift a base computation by mapping each payload to Either::Right.
+
+  ## REPL
+  xldr(1)> lifted: EitherT<String, Identity, Int> = MonadT::lift(Identity::new(7))
+  xldr(2)> lifted
+  EitherT(inner: Identity(value: Either::Right(7)))
+  """
+  def lift::<EitherT<$L, $M, $T>>(value: $M<$A>) -> EitherT<$L, $M, $A> {
+    EitherT::new(Functor::fmap(value, {|item| Either::Right(item)}))
+  }
+}

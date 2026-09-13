@@ -95,7 +95,7 @@ mod tests {
     const APPLICATIVE_MODULE_SOURCE: &str =
         include_str!("../../../lib/traits/operator/applicative.srt");
     const MONAD_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/monad.srt");
-    const MONAD_T_MODULE_SOURCE: &str = include_str!("../../../lib/traits/operator/monad_t.srt");
+    const MONAD_T_MODULE_SOURCE: &str = include_str!("../../../lib/traits/monad_t.srt");
     const IDENTITY_MODULE_SOURCE: &str = include_str!("../../../lib/types/identity.srt");
     const READER_MODULE_SOURCE: &str = include_str!("../../../lib/types/reader.srt");
     const STATE_MODULE_SOURCE: &str = include_str!("../../../lib/types/state.srt");
