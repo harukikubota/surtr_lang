@@ -7358,7 +7358,10 @@ impl Codegen {
         path: &TypedFacetPath,
         source_is_result: bool,
     ) -> Result<(), CodegenError> {
-        let returns_result = matches!(node.ty, Ty::Result(_, _));
+        // Whether a view introduces Result is fixed by the path contract, not
+        // by the focus value's type. An infallible field may itself contain a
+        // Result; treating that payload as an effect would add an extra Ok.
+        let returns_result = path.may_fail;
         let segment_slots = self.precompute_facet_segment_slots(path)?;
 
         if source_is_result {

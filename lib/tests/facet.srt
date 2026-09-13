@@ -18,6 +18,10 @@ test("Facet") {
       fixture = demo_fixture()
       assert_eq("Main::main", fixture._0._0.entrypoint)
       assert_eq("Ok(\"ally\")", inspect(fixture._0._1))
+      assert_eq(
+        "Ok(\"ally\")",
+        inspect(Facet::view(Tuple._0 / Tuple._1, fixture)),
+      )
       assert_eq(7, fixture._1._1)
     }
 
@@ -38,7 +42,7 @@ test("Facet") {
       fixture = demo_fixture()
       updated =? Facet::set(Tuple._0 / Tuple._0 / Config.entrypoint, fixture, "App::main")
       assert_eq("App::main", updated._0._0.entrypoint)
-      assert_eq("Ok(Ok(\"ally\"))", inspect(updated._0._1))
+      assert_eq("Ok(\"ally\")", inspect(updated._0._1))
     }
 
     it("updates nested tuple fields with over") {
@@ -50,7 +54,7 @@ test("Facet") {
     it("stores plain values into Result-backed fields") {
       fixture = demo_fixture()
       updated =? Facet::set(Tuple._0 / Tuple._1, fixture, Ok("captain"))
-      assert_eq("Ok(Ok(\"captain\"))", inspect(updated._0._1))
+      assert_eq("Ok(\"captain\")", inspect(updated._0._1))
     }
 
     it("supports shorthand source/path expansion for mutations") {
@@ -72,7 +76,7 @@ test("Facet") {
 
     it("over_result can rewrite the whole Result focus") {
       updated =? Facet::over_result(Tuple._0 / Tuple._1, pending_fixture(), {|_| Ok(Ok("fallback"))})
-      assert_eq("Ok(Ok(\"fallback\"))", inspect(updated._0._1))
+      assert_eq("Ok(\"fallback\")", inspect(updated._0._1))
     }
 
     it("replace works through shorthand on plain structural paths") {
@@ -148,6 +152,11 @@ test("Facet") {
   describe("variant paths") {
     it("views matching variants") {
       assert_eq("Ok(5)", inspect(Facet::view(BitWidth.Any, demo_fixture()._2)))
+      nested: Option<Result<String>> = Option::Some(Err(NoneError))
+      assert_eq(
+        "Ok(Err(NoneError(\"None Value.\")))",
+        inspect(Facet::view(Option.Some, nested)),
+      )
     }
 
     it("previews variant facets explicitly") {
