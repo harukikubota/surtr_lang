@@ -50,6 +50,16 @@ use self::expr::validate_trait_impl_pairs_in_nodes;
 use self::imports::{build_global_scope, build_module_scope, build_module_scope_with_imports};
 use self::warnings::collect_resolution_warnings;
 
+/// Compute the lexical captures required by a compiler-generated closure over
+/// an already resolved body. Later phases use this when lowering syntax-owned
+/// forms into ordinary closure IR without rediscovering identifier scope.
+pub fn collect_resolved_closure_captures(
+    body: &Resolved,
+    params: &[ResolvedClosureParam],
+) -> Vec<ResolvedId> {
+    captures::collect_captures(body, params)
+}
+
 const STAGE_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn surface_module_name(module_path: &str) -> String {

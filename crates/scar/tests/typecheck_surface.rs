@@ -555,6 +555,15 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         cond_clauses_type_is_forbidden_in_return_types as fn(),
     ),
     surface_case!(do_block_type_is_reserved_in_ordinary_type_positions),
+    surface_case!(do_explicit_and_expected_carriers_typecheck),
+    surface_case!(do_infers_carrier_from_each_monadic_origin),
+    surface_case!(do_rejects_ambiguous_and_conflicting_carriers),
+    surface_case!(do_uses_generic_monad_capability_without_binding_rigid_carrier),
+    surface_case!(do_extract_lowers_to_concrete_monad_dispatch),
+    surface_case!(do_total_extract_allows_mapped_payload_changes),
+    surface_case!(do_partial_extract_requires_alternative),
+    surface_case!(do_ordinary_binding_is_not_a_monadic_origin),
+    surface_case!(do_final_expression_still_requires_monad),
     (
         "trailing_block_calls_typecheck_inside_script_module_scope",
         trailing_block_calls_typecheck_inside_script_module_scope as fn(),
@@ -5568,6 +5577,293 @@ fn do_block_type_is_reserved_in_ordinary_type_positions() {
             "primary span must point to the reserved marker"
         );
     }
+}
+
+fn do_explicit_and_expected_carriers_typecheck() {
+    for source in [
+        "result = do::<Option> { Monad::return(1) }",
+        "result: Option<Int> = do { Monad::return(1) }",
+        "result: Option<Int> = do::<_> { Monad::return(1) }",
+    ] {
+        let typed = typecheck_with_builtin_prelude_in_script_module(source);
+        let rhs = typed
+            .iter()
+            .rev()
+            .find_map(|node| match &node.node {
+                TypedInner::Bind(TypedPattern::Var(_, id), rhs) if id.name == "result" => Some(rhs),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("expected result binding for {source}"));
+        assert_eq!(
+            rhs.ty,
+            Ty::Enum("Global::Option".into(), vec![Ty::Int]),
+            "{source}"
+        );
+    }
+}
+
+fn do_infers_carrier_from_each_monadic_origin() {
+    for source in [
+        // The final expression is the only monadic origin.
+        "result = do { Option::Some(1) }",
+        // The first `<-` RHS fixes the carrier before the final expression.
+        r#"result = do {
+  value <- Option::Some(1)
+  Option::Some(value)
+}"#,
+        // A bare monadic statement fixes the carrier and is sequenced through bind.
+        r#"result = do {
+  Option::Some(1)
+  Option::Some(2)
+}"#,
+        // Normal call-site RTA inference fixes the first call before do-local unification.
+        r#"result = do {
+  value <- Monad::return::<Option>(1)
+  Monad::return(value)
+}"#,
+    ] {
+        let typed = typecheck_with_builtin_prelude_in_script_module(source);
+        let rhs = typed
+            .iter()
+            .rev()
+            .find_map(|node| match &node.node {
+                TypedInner::Bind(TypedPattern::Var(_, id), rhs) if id.name == "result" => Some(rhs),
+                _ => None,
+            })
+            .expect("expected result binding");
+        assert_eq!(
+            rhs.ty,
+            Ty::Enum("Global::Option".into(), vec![Ty::Int]),
+            "{source}"
+        );
+    }
+}
+
+fn do_rejects_ambiguous_and_conflicting_carriers() {
+    let ambiguous = typecheck_with_rules(
+        "result = do { Monad::return(1) }",
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("an unconstrained constructor-producing call must remain ambiguous");
+    assert_eq!(
+        ambiguous.reason(),
+        Some(diagnostics::TypeDiagnosticReason::AmbiguousReturnTypeArgument),
+        "{ambiguous:?}"
+    );
+
+    let explicit_expected_mismatch = typecheck_with_rules(
+        "result: Identity<Int> = do::<Option> { Option::Some(1) }",
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("explicit and expected do carriers must agree");
+    assert_eq!(
+        explicit_expected_mismatch.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ReturnTypeArgumentMismatch),
+        "{explicit_expected_mismatch:?}"
+    );
+
+    let captured_mismatch = typecheck(resolve_with_builtin_prelude(
+        r#"result: Either<String, Int> = do::<Either<String, _>> {
+  value <- Either<Int, Int>::Right(1)
+  Either<String, Int>::Right(value)
+}"#,
+    ))
+    .expect_err("captured carrier arguments must remain fixed inside do");
+    assert_eq!(
+        captured_mismatch.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ReturnTypeMismatch),
+        "{captured_mismatch:?}"
+    );
+
+    let order_reasons = [
+        r#"result = do {
+  left <- Option::Some(1)
+  right <- Identity::new(2)
+  Option::Some(left + right)
+}"#,
+        r#"result = do {
+  right <- Identity::new(2)
+  left <- Option::Some(1)
+  Option::Some(left + right)
+}"#,
+    ]
+    .map(|source| {
+        typecheck_with_rules(source, RuntimeSourcePolicy::script())
+            .expect_err("mixed carrier families must be rejected independent of source order")
+            .reason()
+    });
+    assert_eq!(order_reasons[0], order_reasons[1]);
+}
+
+fn do_uses_generic_monad_capability_without_binding_rigid_carrier() {
+    typecheck_with_builtin_prelude_in_script_module(
+        r#"def retain(value: $M<Int>) -> $M<Int> where $M: Monad {
+  do {
+    item <- value
+    Monad::return(item)
+  }
+}
+
+result = retain(Identity::new(1))"#,
+    );
+
+    let error = typecheck_with_rules(
+        r#"def retain(value: $M<Int>) -> $M<Int> where $M: Applicative {
+  do {
+    item <- value
+    Applicative::pure(item)
+  }
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("do must require Monad rather than accepting only Applicative");
+    assert!(
+        matches!(
+            error.reason(),
+            Some(
+                diagnostics::TypeDiagnosticReason::MissingGenericBound
+                    | diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability
+                    | diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation
+            )
+        ),
+        "{error:?}"
+    );
+}
+
+fn do_extract_lowers_to_concrete_monad_dispatch() {
+    let typed = typecheck_with_builtin_prelude_in_script_module(
+        r#"offset = 1
+result: Option<Int> = do::<Option> {
+  value <- Option::Some(1)
+  Option::Some(value + offset)
+}"#,
+    );
+    let rhs = typed
+        .iter()
+        .rev()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(TypedPattern::Var(_, id), rhs) if id.name == "result" => Some(rhs),
+            _ => None,
+        })
+        .expect("expected result binding");
+    let TypedInner::TraitCall {
+        method_name,
+        dispatch,
+        args,
+        ..
+    } = &rhs.node
+    else {
+        panic!("do extract must lower to a TraitCall, got {rhs:?}")
+    };
+    assert_eq!(method_name, "bind");
+    assert!(!matches!(dispatch, scar::typed::TraitDispatch::Pending));
+    let [_, mapper] = args.as_slice() else {
+        panic!("Monad::bind must receive source and mapper: {args:?}")
+    };
+    let TypedInner::Closure(_, captures, _) = &mapper.node else {
+        panic!("Monad::bind mapper must be a closure: {mapper:?}")
+    };
+    assert!(captures.iter().any(|capture| capture.name == "offset"));
+}
+
+fn do_total_extract_allows_mapped_payload_changes() {
+    typecheck_with_builtin_prelude_in_script_module(
+        r#"result: Identity<String> = do::<Identity> {
+  number <- Identity::new(1)
+  flag <- Identity::new(True)
+  Identity::new(if(flag, to_string(number), "no"))
+}"#,
+    );
+
+    typecheck(resolve_with_builtin_prelude(
+        r#"result: Either<String, String> = do::<Either<String, _>> {
+  number <- Either<String, Int>::Right(1)
+  flag <- Either<String, Boolean>::Right(True)
+  Either<String, String>::Right(if(flag, to_string(number), "no"))
+}"#,
+    ))
+    .expect("captured Either argument stays fixed while mapped payloads change");
+}
+
+fn do_partial_extract_requires_alternative() {
+    let typed = typecheck_with_builtin_prelude_in_script_module(
+        r#"result: Option<Int> = do::<Option> {
+  Option::Some(value) <- Option::Some(Option::Some(1))
+  Option::Some(value)
+}"#,
+    );
+    let rhs = typed
+        .iter()
+        .rev()
+        .find_map(|node| match &node.node {
+            TypedInner::Bind(TypedPattern::Var(_, id), rhs) if id.name == "result" => Some(rhs),
+            _ => None,
+        })
+        .expect("expected result binding");
+    let TypedInner::TraitCall { args, .. } = &rhs.node else {
+        panic!("partial extract must lower through Monad::bind: {rhs:?}")
+    };
+    let TypedInner::Closure(_, _, body) = &args[1].node else {
+        panic!("bind mapper must be a closure: {:?}", args[1])
+    };
+    let TypedInner::Match(_, arms) = &body.node else {
+        panic!("partial extract mapper must match the payload: {body:?}")
+    };
+    assert!(arms.iter().any(|arm| matches!(
+        &arm.body.node,
+        TypedInner::TraitCall {
+            trait_name,
+            method_name,
+            dispatch,
+            ..
+        } if trait_name == "Alternative"
+            && method_name == "empty"
+            && !matches!(dispatch, scar::typed::TraitDispatch::Pending)
+    )));
+
+    let error = typecheck_with_rules(
+        r#"result: Identity<Int> = do::<Identity> {
+  1 <- Identity::new(1)
+  Identity::new(1)
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("partial extract must require Alternative on the same carrier");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
+        "{error:?}"
+    );
+}
+
+fn do_ordinary_binding_is_not_a_monadic_origin() {
+    for source in [
+        r#"result: Option<Option<Int>> = do::<Option> {
+  saved = Option::Some(1)
+  Option::Some(saved)
+}"#,
+        r#"result: Identity<Option<Int>> = do {
+  saved = Option::Some(1)
+  Identity::new(saved)
+}"#,
+    ] {
+        typecheck_with_builtin_prelude_in_script_module(source);
+    }
+}
+
+fn do_final_expression_still_requires_monad() {
+    let error = typecheck_with_rules("result: Int = do { 1 }", RuntimeSourcePolicy::script())
+        .expect_err("a final-expression-only do still requires Monad");
+    assert!(
+        matches!(
+            error.reason(),
+            Some(
+                diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability
+                    | diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation
+            )
+        ),
+        "{error:?}"
+    );
 }
 
 fn trailing_block_calls_typecheck_inside_script_module_scope() {
