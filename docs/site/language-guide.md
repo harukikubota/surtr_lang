@@ -608,7 +608,7 @@ bare capture を値として観察したいときは `inspect(...)` を使いま
 
 ```surtr
 print(inspect(&Boolean::xor))
-# => FnCapture(module: Boolean, name: xor, signature: xor(left: Boolean, right: Boolean) -> Boolean)
+# => FnCapture(module: Boolean, name: xor, sig: xor(left: Boolean, right: Boolean) -> Boolean)
 ```
 
 method path も同じです。

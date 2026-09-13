@@ -181,11 +181,18 @@ Eldr が扱う値の概念カテゴリ:
 - 言語エラー値: `Error(RichError)`
 - process capability: `PID`（runtime が発行する opaque handle）
 
-`inspect` / `to_string` における `Callable` 表示は、bare callable
-（`lexical_captures == 0`）かつ runtime metadata から
-`module` / `name` / `signature` を復元できる場合、
-`FnCapture(module: M, name: f, signature: sig)` を返す。
-それ以外の callable は実装定義の fallback 表示を使う。
+`inspect` / `to_string` における `Callable` 表示は runtime metadata に従い、closure は
+`Closure(sig)`、capture は `FnCapture(module: M, name: f, sig: sig)` を返す。
+部分適用した capture とそれを変数経由で再 capture した callable は capture の由来を保ち、
+残りの引数 signature を表示する。signature は共有関数宣言ではなく、callable value の生成位置で
+解決済みの callable 型から得る。closure literal で包んだ callable は `Closure(sig)` とする。
+List / HashMap / tuple / tagged value の payload と field でも同じ callable 表示を再帰適用する。
+Callable 自身の runtime metadata を origin と signature の正本とし、closure body、parameter 名、lexical
+capture から Capture / Closure origin を推測しない。metadata を復元できない user-facing callable は汎用表示とし、
+内部の function / template / builtin ID を出力しない。詳細な callable 生成契約と受入 inventory は
+[`callable-display-origin-spec.md`](../../doc/callable-display-origin-spec.md) を参照。
+直接 binding と nested value は同一の runtime metadata を使い、REPL binding metadata が表示 origin を上書きしない。
+`to_string` は文字列値を引用せず、`inspect` は文字列 literal として引用する。
 
 ### 4.1 RichError（V9確定）
 
@@ -238,6 +245,7 @@ Opcode は以下のカテゴリを持つ。
 - 文字列分解
 - リスト/タグ付き値操作
 - 呼び出し（`Call`, `CallClosure`, `CallBuiltin`）
+- callable metadata 操作（`SetCallableSignature`, `SetCallableOriginSource`, `SetCallableDelegateFunction`）
 - 制御フロー（`Jump`, `JumpIf*`）
 - スタック操作（`Pop`）
 - 関数復帰（`Return`）
@@ -257,6 +265,9 @@ Opcode は以下のカテゴリを持つ。
 - `JumpIfLocalTagEq { local_idx, tag_const_idx, target_pc }` と `JumpIfLocalTagNe { local_idx, tag_const_idx, target_pc }` は `EqLocalTag` の直後に続く `JumpIfTrue` / `JumpIfFalse` を 1 opcode に畳み込む branch-fused fast-path とする。どちらも判定後の operand stack に Bool 中間値を残さない
 - `JumpIfLocalTagEq` / `JumpIfLocalTagNe` の `tag_const_idx` は `Constant::Tag` を指し、`LoadConst` と同じ relocation / verifier 規則に従う。`target_pc` は `Jump*` と同じ jump-target verifier / relocation 規則に従う
 - `TailCallClosure { arity, span_start, span_end }` は tail position の `CallClosure { arity, span_start, span_end }; Return` と同じ意味の圧縮 opcode とする。callable / argument / lexical capture の評価規約は `CallClosure` と同じで、結果は現在フレームの呼び出し元へ直接返る。target が user function の場合だけ user-function TCO として `tail_calls_optimized` を増やす。builtin / template target は圧縮実行として現在 frame の caller へ返るが、user-function TCO 観測値には含めない
+- `SetCallableSignature(signature)` は stack top の `Callable` に capture site で解決済みの signature を設定し、既存 origin と canonical identity を保つ。stack top が `Callable` でなければ runtime error とする
+- `SetCallableOriginSource(capture_index)` は stack top の `Callable` に、Callable 値である lexical capture の index を明示する。renderer はこの link がある場合だけ origin / identity を参照し、単に lexical capture が存在することから origin を推測しない。index が範囲外、または Callable でなければ runtime error とする
+- `SetCallableDelegateFunction(function_index)` は stack top の生成 Callable に直接委譲する user function index を記録し、process initializer の実体を追跡する。Callable の display origin は変えず、stack top が `Callable` でなければ runtime error とする
 
 実 opcode 一覧とオペランドは `crates/sindr/src/ir.rs` の `Opcode` を正とする。
 `crates/forge/src/opcode.rs` は Forge 側の再エクスポート層であり、定義の正本ではない。
@@ -345,8 +356,8 @@ Opcode は以下のカテゴリを持つ。
 
 - マジック: `ELDR`
 - ヘッダ: `magic/version/debug_level/num_chunks`
-- ヘッダ `version` は現行 `2` とする
-- 意味的 bytecode 版は `CInf.bytecode_version` に保持し、現行は `2`
+- ヘッダ `version` は現行 `3` とする
+- 意味的 bytecode 版は `CInf.bytecode_version` に保持し、現行は `3`
 - `.eldr` は単一バイナリ実行物であり、チャンク分割の主目的は実行時ロード都合ではなく viewer / disasm / 診断 / 比較の観測性にある
 - 必須チャンク:
   - `Code`

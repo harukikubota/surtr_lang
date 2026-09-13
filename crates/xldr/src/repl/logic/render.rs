@@ -1,6 +1,6 @@
 use eldr::builtin::inspect_value;
 use eldr::value::Value;
-use forge::{ChunkMeta, ReplCallableDisplay};
+use forge::ChunkMeta;
 
 fn rendered_binding_type(binding_ty: &str, value: &Value) -> String {
     match value {
@@ -43,20 +43,7 @@ pub fn format_result_lines(
 
                     let val = vm.get_local(b.slot_id)?;
                     let rendered_ty = rendered_binding_type(&b.ty, &val);
-                    let displayed = b.callable_display.as_ref().map_or_else(
-                        || inspect_value(vm, &val),
-                        |display| match display {
-                            ReplCallableDisplay::FnCapture { module, name, sig } => format!(
-                                "FnCapture(module: {}, name: {}, sig: {})",
-                                crate::surface_rendered_name(module),
-                                name,
-                                crate::surface_rendered_name(sig)
-                            ),
-                            ReplCallableDisplay::Closure { sig } => {
-                                format!("Closure{}", crate::surface_rendered_name(sig))
-                            }
-                        },
-                    );
+                    let displayed = inspect_value(vm, &val);
 
                     Some(format!("{}: {} = {}", b.name, rendered_ty, displayed))
                 })

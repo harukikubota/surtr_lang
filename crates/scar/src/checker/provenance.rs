@@ -129,7 +129,8 @@ impl Checker {
                 }
                 source.0
             }
-            TypedInner::Closure(parameters, _, body) => {
+            TypedInner::Closure(parameters, _, body)
+            | TypedInner::CaptureClosure(parameters, _, body) => {
                 let mut local = bindings.clone();
                 for parameter in parameters {
                     local.insert(

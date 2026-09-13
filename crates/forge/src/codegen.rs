@@ -523,6 +523,7 @@ fn collect_missing_singleton_calls(
         }
         TypedInner::DeferrorDef(_, _, _, _, body)
         | TypedInner::Closure(_, _, body)
+        | TypedInner::CaptureClosure(_, _, body)
         | TypedInner::Def(_, _, _, _, _, _, body, _)
         | TypedInner::ExtractorDef(_, _, _, _, _, body, _) => collect_missing_singleton_calls(
             body,
@@ -788,7 +789,9 @@ fn rebase_chunk_function_ids(
 
     for opcode in opcodes.iter_mut() {
         match opcode {
-            Opcode::LoadFunctionRef(fun_idx) | Opcode::Call { fun_idx, .. } => {
+            Opcode::LoadFunctionRef(fun_idx)
+            | Opcode::Call { fun_idx, .. }
+            | Opcode::SetCallableDelegateFunction(fun_idx) => {
                 rebase_fun_idx(fun_idx)?;
             }
             _ => {}
@@ -2210,8 +2213,8 @@ fn localize_chunk_indices(
 mod tests {
     use super::{
         compose_bytecode_with_chunk, format_function_signature, localize_chunk_indices,
-        ty_to_string, Codegen, ForgeSession, MatchPatternDecomp, MatchPatternDecompChild,
-        PatternDecomp, PatternDecompChild,
+        rebase_chunk_function_ids, ty_to_string, Codegen, ForgeSession, MatchPatternDecomp,
+        MatchPatternDecompChild, PatternDecomp, PatternDecompChild,
     };
     use crate::bytecode::{Bytecode, BytecodeChunk, CompileInfo, Constant, ErrTemplate};
     use crate::opcode::Opcode;
@@ -3838,6 +3841,47 @@ mod tests {
     }
 
     #[test]
+    fn rebase_chunk_function_ids_rebases_callable_delegate_function_index() {
+        let mut opcodes = vec![
+            Opcode::LoadFunctionRef(10),
+            Opcode::Call {
+                fun_idx: 11,
+                arity: 0,
+                span_start: 0,
+                span_end: 0,
+            },
+            Opcode::SetCallableDelegateFunction(12),
+        ];
+        let mut functions = vec![
+            function_entry(10, 0, 0),
+            function_entry(11, 0, 0),
+            function_entry(12, 0, 0),
+        ];
+
+        rebase_chunk_function_ids(&mut opcodes, &mut [], &mut functions, &mut [], 4)
+            .expect("function ids should rebase");
+
+        assert_eq!(opcodes[0], Opcode::LoadFunctionRef(4));
+        assert_eq!(
+            opcodes[1],
+            Opcode::Call {
+                fun_idx: 5,
+                arity: 0,
+                span_start: 0,
+                span_end: 0,
+            }
+        );
+        assert_eq!(opcodes[2], Opcode::SetCallableDelegateFunction(6));
+        assert_eq!(
+            functions
+                .iter()
+                .map(|entry| entry.fun_idx)
+                .collect::<Vec<_>>(),
+            vec![4, 5, 6]
+        );
+    }
+
+    #[test]
     fn localize_chunk_indices_rebases_all_chunk_local_indices() {
         let mut opcodes = vec![
             Opcode::LoadConst(3),
@@ -4836,13 +4880,7 @@ fn flatten_typed_list_pattern<'a>(pattern: &'a TypedPattern, out: &mut Vec<&'a T
 
 fn callable_kind_for_node(node: &TypedNode) -> Option<ReplCallableKind> {
     match &node.node {
-        TypedInner::Closure(params, _, _)
-            if params
-                .iter()
-                .all(|param| param.id.name.starts_with("__cap_")) =>
-        {
-            Some(ReplCallableKind::Capture)
-        }
+        TypedInner::CaptureClosure(..) => Some(ReplCallableKind::Capture),
         TypedInner::Closure(..) => Some(ReplCallableKind::Closure),
         TypedInner::Capture(..) | TypedInner::InjectCall(..) => Some(ReplCallableKind::Capture),
         TypedInner::Semi(inner) => callable_kind_for_node(inner),
@@ -4860,11 +4898,15 @@ fn callable_display_for_node(node: &TypedNode) -> Option<ReplCallableDisplay> {
                 sig: ty_to_string(&node.ty),
             })
         }
-        TypedInner::Closure(params, _, body)
-            if params
-                .iter()
-                .all(|param| param.id.name.starts_with("__cap_")) =>
-        {
+        TypedInner::Capture(target, args) if args.is_empty() => {
+            let (module, name) = callable_head_for_node(target.as_ref())?;
+            Some(ReplCallableDisplay::FnCapture {
+                module,
+                name,
+                sig: ty_to_string(&node.ty),
+            })
+        }
+        TypedInner::CaptureClosure(_, _, body) => {
             let (module, name) = callable_head_for_invocation(body.as_ref())?;
             Some(ReplCallableDisplay::FnCapture {
                 module,
@@ -4882,13 +4924,37 @@ fn callable_display_for_node(node: &TypedNode) -> Option<ReplCallableDisplay> {
 
 fn callable_capture_names(node: &TypedNode) -> Vec<String> {
     match &node.node {
-        TypedInner::Closure(_, captures, _) => captures
-            .iter()
-            .map(|capture| capture.name.to_string())
-            .collect(),
+        TypedInner::Closure(_, captures, _) | TypedInner::CaptureClosure(_, captures, _) => {
+            captures
+                .iter()
+                .map(|capture| capture.name.to_string())
+                .collect()
+        }
         TypedInner::Semi(inner) => callable_capture_names(inner),
         _ => Vec::new(),
     }
+}
+
+fn callable_value_id(node: &TypedNode) -> Option<u32> {
+    match &node.node {
+        TypedInner::Var(id) => Some(id.unique_id),
+        TypedInner::Capture(target, _)
+        | TypedInner::InjectCall(target, _)
+        | TypedInner::Semi(target)
+        | TypedInner::EagerBoundary(target) => callable_value_id(target),
+        _ => None,
+    }
+}
+
+fn callable_origin_source_index(body: &TypedNode, captures: &[ResolvedId]) -> Option<u8> {
+    let TypedInner::App(function, _) = &body.node else {
+        return None;
+    };
+    let unique_id = callable_value_id(function)?;
+    captures
+        .iter()
+        .position(|capture| capture.unique_id == unique_id)
+        .and_then(|index| u8::try_from(index).ok())
 }
 
 fn callable_head_for_node(node: &TypedNode) -> Option<(String, String)> {
@@ -5571,6 +5637,7 @@ impl Codegen {
     fn callable_template_metadata(
         display: Option<&ReplCallableDisplay>,
         fallback_signature: Option<&str>,
+        fallback_origin: CallableOrigin,
     ) -> CallableTemplateMetadata {
         match display {
             Some(ReplCallableDisplay::FnCapture { module, name, sig }) => {
@@ -5588,11 +5655,7 @@ impl Codegen {
                 full_signature: Some(sig.clone()),
             },
             None => CallableTemplateMetadata {
-                origin: if fallback_signature.is_some() {
-                    CallableOrigin::Closure
-                } else {
-                    CallableOrigin::Unknown
-                },
+                origin: fallback_origin,
                 module: None,
                 name: None,
                 full_signature: fallback_signature.map(str::to_string),
@@ -5637,7 +5700,7 @@ impl Codegen {
                 target: Self::callable_template_target(target),
                 bound_arg_count,
             },
-            Self::callable_template_metadata(display, Some(signature)),
+            Self::callable_template_metadata(display, Some(signature), CallableOrigin::Closure),
         )))
     }
 
@@ -5703,6 +5766,19 @@ impl Codegen {
         }))
     }
 
+    fn direct_delegate_function_for_closure(
+        &self,
+        body: &TypedNode,
+    ) -> Result<Option<u32>, CodegenError> {
+        let TypedInner::App(func, _) = &body.node else {
+            return Ok(None);
+        };
+        Ok(match self.direct_callable_target_for_ref(func)? {
+            Some(DirectCallableTarget::User(fun_idx)) => Some(fun_idx),
+            Some(DirectCallableTarget::Builtin(_)) | None => None,
+        })
+    }
+
     fn template_compatible_callable(&self, node: &TypedNode) -> Result<bool, CodegenError> {
         if self.direct_callable_target_for_capture(node)?.is_some() {
             return Ok(true);
@@ -5711,7 +5787,8 @@ impl Codegen {
             TypedInner::InjectCall(func, _) => {
                 Ok(self.direct_callable_target_for_ref(func)?.is_some())
             }
-            TypedInner::Closure(params, captures, body) => {
+            TypedInner::Closure(params, captures, body)
+            | TypedInner::CaptureClosure(params, captures, body) => {
                 let filtered_captures: Vec<ResolvedId> = captures
                     .iter()
                     .filter(|id| self.state.slot_map.contains_key(&id.unique_id))
@@ -6943,6 +7020,9 @@ impl Codegen {
                     self.emit_node(arg)?;
                 }
                 self.emit(Opcode::CaptureClosure(capture_count as u8));
+                if capture_count == args.len() + 1 {
+                    self.emit(Opcode::SetCallableOriginSource(0));
+                }
             }
 
             TypedInner::BinOp(op, left, right) => {
@@ -7229,7 +7309,8 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::Closure(params, captures, body) => {
+            TypedInner::Closure(params, captures, body)
+            | TypedInner::CaptureClosure(params, captures, body) => {
                 let filtered_captures: Vec<ResolvedId> = captures
                     .iter()
                     .filter(|id| self.state.slot_map.contains_key(&id.unique_id))
@@ -7242,7 +7323,15 @@ impl Codegen {
                 {
                     let template_id = self.add_callable_template(
                         kind,
-                        Self::callable_template_metadata(display.as_ref(), Some(&signature)),
+                        Self::callable_template_metadata(
+                            display.as_ref(),
+                            Some(&signature),
+                            if matches!(&node.node, TypedInner::CaptureClosure(..)) {
+                                CallableOrigin::Unknown
+                            } else {
+                                CallableOrigin::Closure
+                            },
+                        ),
                     );
                     self.emit_callable_template_ref(template_id);
                     for capture in &filtered_captures {
@@ -7251,6 +7340,12 @@ impl Codegen {
                     }
                     if !filtered_captures.is_empty() {
                         self.emit(Opcode::CaptureClosure(filtered_captures.len() as u8));
+                    }
+                    if matches!(&node.node, TypedInner::CaptureClosure(..)) {
+                        if let Some(index) = callable_origin_source_index(body, &filtered_captures)
+                        {
+                            self.emit(Opcode::SetCallableOriginSource(index));
+                        }
                     }
                     return Ok(());
                 }
@@ -7264,12 +7359,20 @@ impl Codegen {
                     signature,
                 });
                 self.emit(Opcode::LoadFunctionRef(fun_idx));
+                if let Some(delegate_function) = self.direct_delegate_function_for_closure(body)? {
+                    self.emit(Opcode::SetCallableDelegateFunction(delegate_function));
+                }
                 for capture in &filtered_captures {
                     let slot = self.alloc_slot(capture.unique_id);
                     self.emit(Opcode::LoadLocal(slot));
                 }
                 if !filtered_captures.is_empty() {
                     self.emit(Opcode::CaptureClosure(filtered_captures.len() as u8));
+                }
+                if matches!(&node.node, TypedInner::CaptureClosure(..)) {
+                    if let Some(index) = callable_origin_source_index(body, &filtered_captures) {
+                        self.emit(Opcode::SetCallableOriginSource(index));
+                    }
                 }
             }
 
@@ -7282,6 +7385,7 @@ impl Codegen {
                     });
                 }
                 self.emit_callable_ref(target)?;
+                self.emit(Opcode::SetCallableSignature(ty_to_string(&node.ty)));
             }
 
             TypedInner::StructDef(tag, name, field_names, field_policies, _) => {
@@ -9954,7 +10058,12 @@ impl Codegen {
         }
 
         for ir in &mut self.ir {
-            if let IrOp::Op(Opcode::LoadFunctionRef(fun_idx) | Opcode::Call { fun_idx, .. }) = ir {
+            if let IrOp::Op(
+                Opcode::LoadFunctionRef(fun_idx)
+                | Opcode::Call { fun_idx, .. }
+                | Opcode::SetCallableDelegateFunction(fun_idx),
+            ) = ir
+            {
                 if let Some(new_idx) = remap.get(fun_idx) {
                     *fun_idx = *new_idx;
                 }

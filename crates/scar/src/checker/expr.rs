@@ -270,7 +270,8 @@ impl Checker {
             TypedInner::DeferrorDef(_, _, _, _, body)
             | TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
-            | TypedInner::Closure(_, _, body) => recurse(body),
+            | TypedInner::Closure(_, _, body)
+            | TypedInner::CaptureClosure(_, _, body) => recurse(body),
             TypedInner::SupervisorSpawn { init, .. } => recurse(init),
             TypedInner::SupervisorAdopt { pid, .. } => recurse(pid),
             TypedInner::SupervisorWorkers { init, strategy, .. } => {
@@ -358,7 +359,10 @@ impl Checker {
             return false;
         }
         match &node.node {
-            TypedInner::Closure(..) | TypedInner::Capture(..) | TypedInner::Var(_) => true,
+            TypedInner::Closure(..)
+            | TypedInner::CaptureClosure(..)
+            | TypedInner::Capture(..)
+            | TypedInner::Var(_) => true,
             TypedInner::If(_, then_branch, Some(else_branch)) => {
                 self.is_non_expansive_callable_value(then_branch)
                     && self.is_non_expansive_callable_value(else_branch)
@@ -684,7 +688,8 @@ impl Checker {
             TypedInner::EagerBoundary(inner) => self.first_pending_trait_helper(inner),
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
-            | TypedInner::Closure(_, _, body) => self.first_pending_trait_helper(body),
+            | TypedInner::Closure(_, _, body)
+            | TypedInner::CaptureClosure(_, _, body) => self.first_pending_trait_helper(body),
             TypedInner::SupervisorSpawn { init, .. } => self.first_pending_trait_helper(init),
             TypedInner::SupervisorAdopt { pid, .. } => self.first_pending_trait_helper(pid),
             TypedInner::SupervisorWorkers { init, strategy, .. } => self
@@ -806,7 +811,8 @@ impl Checker {
                 TypedInner::DeferrorDef(_, _, _, _, body)
                 | TypedInner::Def(_, _, _, _, _, _, body, _)
                 | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
-                | TypedInner::Closure(_, _, body) => collect(body, obligations),
+                | TypedInner::Closure(_, _, body)
+                | TypedInner::CaptureClosure(_, _, body) => collect(body, obligations),
                 TypedInner::SupervisorSpawn { init, .. } => collect(init, obligations),
                 TypedInner::SupervisorAdopt { pid, .. } => collect(pid, obligations),
                 TypedInner::SupervisorWorkers { init, strategy, .. } => {
@@ -1158,6 +1164,11 @@ impl Checker {
                     .collect::<Result<Vec<_>, _>>()?,
             ),
             TypedInner::Closure(params, captures, body) => TypedInner::Closure(
+                params,
+                captures,
+                Box::new(self.concretize_pending_trait_calls(*body)?),
+            ),
+            TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
                 params,
                 captures,
                 Box::new(self.concretize_pending_trait_calls(*body)?),
@@ -1791,6 +1802,9 @@ impl Checker {
             }
             Resolved::Closure(span, params, captures, body) => {
                 self.check_closure(span, params, captures, body, None)
+            }
+            Resolved::CaptureClosure(span, params, captures, body) => {
+                self.check_capture_closure(span, params, captures, body, None)
             }
             Resolved::Capture(span, target, args) => self.check_capture(span, target, args, None),
         }
@@ -2663,6 +2677,25 @@ impl Checker {
                     self.check_closure(span, params, captures, body, Some(&expected_ty))
                 }
             }
+            (Resolved::CaptureClosure(span, params, captures, body), Some(expected_ty)) => {
+                let expected_ty = self.resolve_ty(expected_ty);
+                if matches!(expected_ty, Ty::Var(var) if !self.rigid_tyvars.contains(&var)) {
+                    let typed = self.check_capture_closure(span, params, captures, body, None)?;
+                    self.assert_type_relation(
+                        &expected_ty,
+                        &typed.ty,
+                        self.type_fact(SourceRole::Expected, span, &expected_ty),
+                        self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::Call,
+                        "closure",
+                        0,
+                    )?;
+                    Ok(typed)
+                } else {
+                    self.check_capture_closure(span, params, captures, body, Some(&expected_ty))
+                }
+            }
             (Resolved::Capture(span, target, args), Some(expected_ty)) => {
                 self.check_capture(span, target, args, Some(expected_ty))
             }
@@ -3206,6 +3239,7 @@ impl Checker {
         match node {
             Resolved::Capture(_, _, _)
             | Resolved::Closure(_, _, _, _)
+            | Resolved::CaptureClosure(_, _, _, _)
             | Resolved::Compose(_, _, _)
             | Resolved::LiftedCompose(_, _, _)
             | Resolved::KleisliCompose(_, _, _) => self.check_node(node),
@@ -3240,7 +3274,9 @@ impl Checker {
         op_name: &str,
     ) -> Result<TypedNode, TypeError> {
         match node {
-            Resolved::Capture(_, _, _) | Resolved::Closure(_, _, _, _) => self.check_node(node),
+            Resolved::Capture(_, _, _)
+            | Resolved::Closure(_, _, _, _)
+            | Resolved::CaptureClosure(_, _, _, _) => self.check_node(node),
             Resolved::Var(_, _) | Resolved::Grouped(_, _) | Resolved::ReturnTypeArgumentApply(_, _, _) => {
                 self.check_function_value_operand(node, op_name)
             }
@@ -3275,6 +3311,7 @@ impl Checker {
             Resolved::InferredFacetCapture(_, _)
                 | Resolved::Capture(_, _, _)
                 | Resolved::Closure(_, _, _, _)
+                | Resolved::CaptureClosure(_, _, _, _)
                 | Resolved::Grouped(_, _)
                 | Resolved::ReturnTypeArgumentApply(_, _, _)
         )
@@ -3534,7 +3571,9 @@ impl Checker {
         match &node.node {
             TypedInner::Var(id) => add(id),
             TypedInner::Capture(target, _) => Self::curry_source_captures(target, out),
-            TypedInner::Closure(_, captures, _) => captures.iter().for_each(&mut add),
+            TypedInner::Closure(_, captures, _) | TypedInner::CaptureClosure(_, captures, _) => {
+                captures.iter().for_each(&mut add)
+            }
             _ => {}
         }
     }
@@ -3879,6 +3918,7 @@ impl Checker {
             | Resolved::TraitDef(span, _, _, _, _, _)
             | Resolved::TraitImplDef(span, _, _, _, _, _, _)
             | Resolved::Closure(span, _, _, _)
+            | Resolved::CaptureClosure(span, _, _, _)
             | Resolved::Capture(span, _, _)
             | Resolved::Semi(span, _) => span,
         }
@@ -6090,6 +6130,7 @@ impl Checker {
                 Resolved::InferredFacetCapture(_, _)
                 | Resolved::Capture(_, _, _)
                 | Resolved::Closure(_, _, _, _)
+                | Resolved::CaptureClosure(_, _, _, _)
                 | Resolved::Grouped(_, _) => {
                     let contract = self.callable_contract(
                         &typed_left.ty,
@@ -10831,7 +10872,9 @@ impl Checker {
         worker_init: &Resolved,
     ) -> Result<(String, TypedNode), TypeError> {
         let span = self.resolved_span(worker_init).clone();
-        if let Resolved::Closure(_, params, _, body) = worker_init {
+        if let Resolved::Closure(_, params, _, body)
+        | Resolved::CaptureClosure(_, params, _, body) = worker_init
+        {
             if params.is_empty() {
                 if let Resolved::App(_, func, _) = body.as_ref() {
                     if let Resolved::Var(_, id) = func.as_ref() {
@@ -11142,6 +11185,27 @@ impl Checker {
         result
     }
 
+    fn check_capture_closure(
+        &mut self,
+        span: &Span,
+        params: &[ResolvedClosureParam],
+        captures: &[ResolvedId],
+        body: &Resolved,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let mut typed = self.check_closure(span, params, captures, body, expected)?;
+        let TypedInner::Closure(params, captures, body) = typed.node else {
+            return Err(TypeError {
+                structured: None,
+                message: "Capture closure did not produce a closure node".into(),
+                span: span.clone(),
+                hint: None,
+            });
+        };
+        typed.node = TypedInner::CaptureClosure(params, captures, body);
+        Ok(typed)
+    }
+
     pub(super) fn check_capture(
         &mut self,
         span: &Span,
@@ -11217,7 +11281,7 @@ impl Checker {
                     ty: None,
                 });
             }
-            let synthetic = Resolved::Closure(
+            let synthetic = Resolved::CaptureClosure(
                 span.clone(),
                 closure_params,
                 Vec::new(),
@@ -12180,7 +12244,10 @@ impl Checker {
         call_span: &Span,
     ) -> Result<TypedNode, TypeError> {
         match arg {
-            Resolved::Closure(span, params, captures, body) if params.is_empty() => {
+            Resolved::Closure(span, params, captures, body)
+            | Resolved::CaptureClosure(span, params, captures, body)
+                if params.is_empty() =>
+            {
                 let thunk_type = Ty::Func(Vec::new(), Box::new(expected.clone()));
                 let raw = self.check_closure(span, params, captures, body, Some(&thunk_type))?;
                 Ok(self.maybe_call_zero_arg_function(raw, call_span.clone()))

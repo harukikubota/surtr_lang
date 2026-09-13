@@ -394,7 +394,7 @@ impl Checker {
                     &allowed_enum_constructors,
                 )
             }
-            TypedInner::Closure(params, _, body) => {
+            TypedInner::Closure(params, _, body) | TypedInner::CaptureClosure(params, _, body) => {
                 let mut allowed_enum_constructors = allowed_enum_constructor_vars.clone();
                 for parameter in params {
                     self.extend_allowed_vars(&parameter.ty, &mut allowed_enum_constructors);
@@ -1482,6 +1482,18 @@ impl Checker {
                     generated_defs,
                 )?,
             ),
+            TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
+                params,
+                captures,
+                self.rewrite_specializations_in_node(
+                    *body,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+            ),
             TypedInner::Capture(target, args) => {
                 let mut target = *self.rewrite_specializations_in_node(
                     *target,
@@ -2456,7 +2468,8 @@ impl Checker {
             }
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
-            | TypedInner::Closure(_, _, body) => {
+            | TypedInner::Closure(_, _, body)
+            | TypedInner::CaptureClosure(_, _, body) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
             }
             TypedInner::Lit(_)
@@ -2647,7 +2660,8 @@ impl Checker {
             }
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
-            | TypedInner::Closure(_, _, body) => {
+            | TypedInner::Closure(_, _, body)
+            | TypedInner::CaptureClosure(_, _, body) => {
                 self.collect_bound_tyvars_in_node(body, ordered, seen);
             }
             TypedInner::Lit(_)
@@ -3107,6 +3121,17 @@ impl Checker {
                 )
             }
             TypedInner::Closure(params, captures, body) => TypedInner::Closure(
+                params
+                    .into_iter()
+                    .map(|param| TypedClosureParam {
+                        id: param.id,
+                        ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                    })
+                    .collect(),
+                captures,
+                Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
+            ),
+            TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
                 params
                     .into_iter()
                     .map(|param| TypedClosureParam {
@@ -4189,7 +4214,10 @@ impl Checker {
             }
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
-            | TypedInner::Closure(_, _, body) => Self::typed_node_has_pending_trait_call(body),
+            | TypedInner::Closure(_, _, body)
+            | TypedInner::CaptureClosure(_, _, body) => {
+                Self::typed_node_has_pending_trait_call(body)
+            }
             TypedInner::Lit(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil

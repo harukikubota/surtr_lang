@@ -4317,6 +4317,17 @@ impl Checker {
                 captures,
                 Box::new(self.resolve_typed_node(*body)),
             ),
+            TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
+                params
+                    .into_iter()
+                    .map(|param| TypedClosureParam {
+                        id: param.id,
+                        ty: self.resolve_ty(&param.ty),
+                    })
+                    .collect(),
+                captures,
+                Box::new(self.resolve_typed_node(*body)),
+            ),
             TypedInner::Capture(target, args) => TypedInner::Capture(
                 Box::new(self.resolve_typed_node(*target)),
                 args.into_iter()

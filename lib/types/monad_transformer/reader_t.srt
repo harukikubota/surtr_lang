@@ -20,7 +20,7 @@ impl ReaderT {
 
   ## REPL
   xldr(1)> ReaderT::new({|environment| Identity::new(environment + 1)})
-  ReaderT(run_reader: <function:489; lexical_captures=0>)
+  ReaderT(run_reader: Closure(Int -> Identity<Int>))
 
   """
   def new(run_reader: ($R -> $M<$A>)) -> ReaderT<$R, $M, $A>
@@ -138,7 +138,7 @@ where
   ## REPL
   xldr(1)> reader: ReaderT<Int, Identity, Int> = Applicative::pure(2)
   xldr(2)> reader
-  ReaderT(run_reader: <template:6; lexical_captures=1>)
+  ReaderT(run_reader: Closure(Int -> Identity<Int>))
 
   """
   def pure::<ReaderT<$E, $M, $T>>(value: $A) -> ReaderT<$E, $M, $A> {
@@ -193,7 +193,7 @@ where
   ## REPL
   xldr(1)> reader: ReaderT<Int, Identity, Int> = Monad::return(2)
   xldr(2)> reader
-  ReaderT(run_reader: <template:6; lexical_captures=1>)
+  ReaderT(run_reader: Closure(Int -> Identity<Int>))
 
   """
   def return::<ReaderT<$E, $M, $T>>(value: $A) -> ReaderT<$E, $M, $A> {
@@ -237,7 +237,7 @@ where
   xldr(1)> base: Result<Int> = Ok(7)
   xldr(2)> lifted: ReaderT<String, Result, Int> = MonadT::lift(base)
   xldr(3)> lifted
-  ReaderT(run_reader: <function:490; lexical_captures=1>)
+  ReaderT(run_reader: Closure(String -> Result<Int, Error>))
 
   """
   def lift::<ReaderT<$R, $M, $T>>(value: $M<$A>) -> ReaderT<$R, $M, $A> {
@@ -263,7 +263,7 @@ where
   ## REPL
   xldr(1)> empty: ReaderT<Int, Option, Int> = Alternative::empty()
   xldr(2)> empty
-  ReaderT(run_reader: <template:6; lexical_captures=0>)
+  ReaderT(run_reader: Closure(Int -> Option<Int>))
 
   """
   def empty::<ReaderT<$E, $M, $T>>() -> ReaderT<$E, $M, $T> {

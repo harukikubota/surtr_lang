@@ -2052,7 +2052,7 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_ty(ret_ty, rewrites);
                 Self::rewrite_fun_indices_in_node(body, rewrites);
             }
-            TypedInner::Closure(params, _, body) => {
+            TypedInner::Closure(params, _, body) | TypedInner::CaptureClosure(params, _, body) => {
                 for param in params {
                     Self::rewrite_fun_indices_in_closure_param(param, rewrites);
                 }
@@ -3101,7 +3101,8 @@ impl Checker {
             TypedInner::DeferrorDef(_, _, _, _, show)
             | TypedInner::Def(_, _, _, _, _, _, show, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, show, _)
-            | TypedInner::Closure(_, _, show) => {
+            | TypedInner::Closure(_, _, show)
+            | TypedInner::CaptureClosure(_, _, show) => {
                 self.collect_unused_value_warnings_in_node(show);
             }
             TypedInner::HashMapLiteral(entries) => {
@@ -4024,7 +4025,8 @@ impl Checker {
                 self.validate_constructor_pattern(pattern, constructor_traits)?;
                 self.validate_constructor_body_positions(rhs, constructor_traits)?;
             }
-            Resolved::Closure(_, params, _, body) => {
+            Resolved::Closure(_, params, _, body)
+            | Resolved::CaptureClosure(_, params, _, body) => {
                 for param in params {
                     if let Some(ty) = &param.ty {
                         self.validate_constructor_ast_ty(ty, false, constructor_traits)?;

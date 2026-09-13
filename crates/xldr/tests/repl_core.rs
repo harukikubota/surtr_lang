@@ -319,6 +319,8 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(
         core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_appears
     ),
+    repl_core_case!(core_generic_callable_capture_uses_site_signature_inside_nested_values),
+    repl_core_case!(core_repl_displays_curry_callable_inside_result_without_internal_id),
     repl_core_case!(core_duplicate_defs_and_runtime_result_errors_keep_the_session_alive),
     repl_core_case!(core_pattern_bindings_are_displayed_in_preorder),
     repl_core_case!(core_pattern_binding_order_defers_pattern_match_as_aliases),
@@ -3560,7 +3562,7 @@ fn core_type_command_looks_up_visible_bindings_only() {
     let builtin_capture_text = rendered_text(&builtin_capture);
     assert!(
         builtin_capture_text
-            .contains("FnCapture(module: Kernel, name: print, sig: print(a: String) -> Unit)"),
+            .contains("FnCapture(module: Kernel, name: print, sig: (String -> Unit))"),
         "{builtin_capture_text}"
     );
 
@@ -4481,8 +4483,25 @@ fn core_standard_monad_instances_construct_and_run() {
 
     let reader = engine.handle_line("reader_value = Reader::new({|value: Int| value + 1})");
     assert!(!reader.should_exit);
+    assert!(
+        rendered_text(&reader).contains("Reader(run_reader: Closure(Int -> Int))"),
+        "{}",
+        rendered_text(&reader)
+    );
     let reader_run = engine.handle_line("Reader::run(reader_value, 10)");
     assert_eq!(rendered_text(&reader_run).trim(), "11");
+
+    for source in [
+        "reader_pure: Reader<Int, Int> = Applicative::pure(7)",
+        "reader_return: Reader<Int, Int> = Monad::return(7)",
+    ] {
+        let result = engine.handle_line(source);
+        let rendered = rendered_text(&result);
+        assert!(
+            rendered.contains("Reader(run_reader: Closure(Int -> Int))"),
+            "source: {source}\n{rendered}"
+        );
+    }
 
     let state_get = engine.handle_line("state_get_value: State<Int, Int> = State::get()");
     assert!(!state_get.should_exit);
@@ -4490,14 +4509,130 @@ fn core_standard_monad_instances_construct_and_run() {
     let state_get_run = engine.handle_line("State::run(state_get_value, 10)");
     assert_eq!(rendered_text(&state_get_run).trim(), "(10, 10)");
 
+    let monoid_capture = engine.handle_line("Monoid(1, &Add::add)");
+    let monoid_capture_text = rendered_text(&monoid_capture);
+    assert!(
+        monoid_capture_text.contains(
+            "Monoid(empty: 1, combine: FnCapture(module: Add, name: add, sig: (Int, Int -> Int)))"
+        ),
+        "{monoid_capture_text}"
+    );
+
     let state = engine.handle_line("state_value = State::new({|value: Int| (value + 1, value)})");
     assert!(!state.should_exit);
+    assert!(
+        rendered_text(&state).contains("State(run_state: Closure(Int -> (Int, Int)))"),
+        "{}",
+        rendered_text(&state)
+    );
     let state_run = engine.handle_line("State::run(state_value, 10)");
     assert_eq!(rendered_text(&state_run).trim(), "(11, 10)");
+
+    for source in [
+        "state_pure: State<Int, Int> = Applicative::pure(4)",
+        "state_return: State<Int, Int> = Monad::return(4)",
+    ] {
+        let result = engine.handle_line(source);
+        let rendered = rendered_text(&result);
+        assert!(
+            rendered.contains("State(run_state: Closure(Int -> (Int, Int)))"),
+            "source: {source}\n{rendered}"
+        );
+    }
 }
 
 fn core_standard_monad_transformer_smoke() {
     let mut engine = engine();
+
+    let reader_t =
+        engine.handle_line("ReaderT::new({|environment: Int| Identity::new(environment + 1)})");
+    assert!(
+        rendered_text(&reader_t).contains("ReaderT(run_reader: Closure(Int -> Identity<Int>))"),
+        "{}",
+        rendered_text(&reader_t)
+    );
+
+    let state_t =
+        engine.handle_line("StateT::new({|state: Int| Identity::new((state + 1, state + 2))})");
+    assert!(
+        rendered_text(&state_t).contains("StateT(run_state: Closure(Int -> Identity<(Int, Int)>))"),
+        "{}",
+        rendered_text(&state_t)
+    );
+
+    let reader_t_pure =
+        engine.handle_line("reader_t_pure: ReaderT<Int, Identity, Int> = Applicative::pure(2)");
+    assert!(
+        rendered_text(&reader_t_pure)
+            .contains("ReaderT(run_reader: Closure(Int -> Identity<Int>))"),
+        "{}",
+        rendered_text(&reader_t_pure)
+    );
+
+    let reader_t_return =
+        engine.handle_line("reader_t_return: ReaderT<Int, Identity, Int> = Monad::return(2)");
+    assert!(
+        rendered_text(&reader_t_return)
+            .contains("ReaderT(run_reader: Closure(Int -> Identity<Int>))"),
+        "{}",
+        rendered_text(&reader_t_return)
+    );
+
+    let base = engine.handle_line("base_value: Result<Int> = Ok(7)");
+    assert!(!matches!(base.output, ReplOutput::EvalError { .. }));
+
+    let reader_t_lift = engine
+        .handle_line("reader_t_lifted: ReaderT<String, Result, Int> = MonadT::lift(base_value)");
+    assert!(
+        rendered_text(&reader_t_lift)
+            .contains("ReaderT(run_reader: Closure(String -> Result<Int, Error>))"),
+        "{}",
+        rendered_text(&reader_t_lift)
+    );
+
+    let reader_t_empty =
+        engine.handle_line("empty_reader_t: ReaderT<Int, Option, Int> = Alternative::empty()");
+    assert!(
+        rendered_text(&reader_t_empty).contains("ReaderT(run_reader: Closure(Int -> Option<Int>))"),
+        "{}",
+        rendered_text(&reader_t_empty)
+    );
+
+    let state_t_pure =
+        engine.handle_line("state_t_pure: StateT<Int, Identity, Int> = Applicative::pure(2)");
+    assert!(
+        rendered_text(&state_t_pure)
+            .contains("StateT(run_state: Closure(Int -> Identity<(Int, Int)>))"),
+        "{}",
+        rendered_text(&state_t_pure)
+    );
+
+    let state_t_return =
+        engine.handle_line("state_t_return: StateT<Int, Identity, Int> = Monad::return(2)");
+    assert!(
+        rendered_text(&state_t_return)
+            .contains("StateT(run_state: Closure(Int -> Identity<(Int, Int)>))"),
+        "{}",
+        rendered_text(&state_t_return)
+    );
+
+    let state_t_lift =
+        engine.handle_line("state_t_lifted: StateT<Int, Result, Int> = MonadT::lift(base_value)");
+    assert!(
+        rendered_text(&state_t_lift)
+            .contains("StateT(run_state: Closure(Int -> Result<(Int, Int), Error>))"),
+        "{}",
+        rendered_text(&state_t_lift)
+    );
+
+    let state_t_empty =
+        engine.handle_line("state_t_empty: StateT<Int, Option, Int> = Alternative::empty()");
+    assert!(
+        rendered_text(&state_t_empty)
+            .contains("StateT(run_state: Closure(Int -> Option<(Int, Int)>))"),
+        "{}",
+        rendered_text(&state_t_empty)
+    );
 
     let lifted = engine.handle_line("value: OptionT<Result, Int> = MonadT::lift(Ok(1))");
     assert!(
@@ -5249,7 +5384,12 @@ fn core_sig_supports_closure_bindings_recapture_and_application() {
     let recaptured_sig = engine.handle_line(":sig b");
     assert_eq!(
         signature_text(&recaptured_sig),
-        "b: (Int -> Int) :: Capture"
+        "b: (Int -> Int) :: Closure"
+    );
+    let recaptured_type = rendered_text(&engine.handle_line(":type b"));
+    assert!(
+        recaptured_type.contains("identity: TypeIdentity::Closure"),
+        "{recaptured_type}"
     );
 
     let recapture_query = engine.handle_line(":sig &a(Int, &1)");
@@ -5283,13 +5423,25 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
     let mut engine = engine();
 
     let builtin_ref = engine.handle_line("&Int::shr");
-    assert!(rendered_text(&builtin_ref).contains(
-        "FnCapture(module: Int, name: shr, sig: Int::shr(value: Int, bits: Int) -> Result<Int, NegativeShiftCount>)"
-    ));
+    let builtin_ref_text = rendered_text(&builtin_ref);
+    assert!(
+        builtin_ref_text
+            .contains("FnCapture(module: Int, name: shr, sig: (Int, Int -> Result<Int, Error>))"),
+        "{builtin_ref_text}"
+    );
 
     let partial_capture_ref = engine.handle_line("&Add::add(&1, 1)");
     assert!(rendered_text(&partial_capture_ref)
         .contains("FnCapture(module: Add, name: add, sig: (Int -> Int))"));
+
+    let typed_capture_ref = engine.handle_line("f: (Int, Int -> Int) = &Add::add");
+    let typed_capture_ref_text = rendered_text(&typed_capture_ref);
+    assert!(
+        typed_capture_ref_text.contains(
+            "f: (Int, Int -> Int) = FnCapture(module: Add, name: add, sig: (Int, Int -> Int))"
+        ),
+        "{typed_capture_ref_text}"
+    );
 
     let closure_ref = engine.handle_line("{|x: Int, y: Int| x + y}");
     assert!(rendered_text(&closure_ref).contains("Closure(Int, Int -> Int)"));
@@ -5309,6 +5461,46 @@ fn core_callable_refs_and_signature_errors_are_ui_independent() {
     assert!(!add_call.should_exit);
     let add_text = rendered_text(&add_call);
     assert!(add_text.contains("No implementation satisfies Add for Boolean"));
+}
+
+fn core_generic_callable_capture_uses_site_signature_inside_nested_values() {
+    let mut engine = engine();
+
+    let generic = engine.handle_line("def keep(value: $A) -> $A { value }");
+    assert!(!generic.should_exit);
+
+    let inferred_capture = engine.handle_line("inferred_capture = keep(&Add::add(&1, 1))");
+    let inferred_capture_text = rendered_text(&inferred_capture);
+    assert!(
+        inferred_capture_text.contains("FnCapture(module: Add, name: add, sig: (Int -> Int))"),
+        "{inferred_capture_text}"
+    );
+
+    let identity_int = engine.handle_line("identity_int: (Int -> Int) = &id");
+    let identity_int_text = rendered_text(&identity_int);
+    assert!(
+        identity_int_text.contains(
+            "identity_int: (Int -> Int) = FnCapture(module: Global::Function, name: id, sig: (Int -> Int))"
+        ),
+        "{identity_int_text}"
+    );
+
+    let identity_string = engine.handle_line("identity_string: (String -> String) = &id");
+    let identity_string_text = rendered_text(&identity_string);
+    assert!(
+        identity_string_text.contains(
+            "identity_string: (String -> String) = FnCapture(module: Global::Function, name: id, sig: (String -> String))"
+        ),
+        "{identity_string_text}"
+    );
+
+    let identity_result = engine.handle_line("identity_result: Result<(Int -> Int)> = Ok(&id)");
+    let identity_result_text = rendered_text(&identity_result);
+    assert!(
+        identity_result_text
+            .contains("Ok(FnCapture(module: Global::Function, name: id, sig: (Int -> Int)))"),
+        "{identity_result_text}"
+    );
 }
 
 fn core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_appears() {
@@ -5348,6 +5540,55 @@ fn core_partial_capture_chains_preserve_capture_origin_until_a_closure_literal_a
             || g2_text.contains("FnCapture(") && g2_text.contains("sig: (Int, Int -> Int)"),
         "{g2_text}"
     );
+
+    let closure_wrapping_capture =
+        engine.handle_line("wrapped_capture: (Int -> Int) = {|value: Int| f1(value)}");
+    let closure_wrapping_capture_text = rendered_text(&closure_wrapping_capture);
+    assert!(
+        closure_wrapping_capture_text
+            .contains("wrapped_capture: (Int -> Int) = Closure(Int -> Int)"),
+        "{closure_wrapping_capture_text}"
+    );
+
+    let zero_arg_closure = engine.handle_line("zero_arg: (-> Int) = {|| f1(10)}");
+    let zero_arg_closure_text = rendered_text(&zero_arg_closure);
+    assert!(
+        zero_arg_closure_text.contains("zero_arg: (-> Int) = Closure(-> Int)"),
+        "{zero_arg_closure_text}"
+    );
+}
+
+fn core_repl_displays_curry_callable_inside_result_without_internal_id() {
+    let mut engine = engine();
+
+    let pair = engine.handle_line("pair: (String -> (Int -> (String, Int))) = curry(&`(,)`)");
+    let pair_text = rendered_text(&pair);
+    assert!(
+        pair_text.contains("= Closure(String -> (Int -> (String, Int)))"),
+        "{pair_text}"
+    );
+
+    let result = engine.handle_line("p = Ok(pair)");
+    let result_text = rendered_text(&result);
+    assert!(
+        result_text.contains("Ok(Closure(String -> (Int -> (String, Int))))"),
+        "{result_text}"
+    );
+    assert!(!result_text.contains("<function:"), "{result_text}");
+
+    let applied_once = engine.handle_line("p |*| Ok(\"hoge\")");
+    let applied_once_text = rendered_text(&applied_once);
+    assert!(
+        applied_once_text.contains("Ok(Closure(Int -> (String, Int)))"),
+        "{applied_once_text}"
+    );
+    assert!(
+        !applied_once_text.contains("<function:"),
+        "{applied_once_text}"
+    );
+
+    let applied_twice = engine.handle_line("p |*| Ok(\"hoge\") |*| Ok(1)");
+    assert_eq!(rendered_text(&applied_twice), "Ok((\"hoge\", 1))");
 }
 
 fn core_duplicate_defs_and_runtime_result_errors_keep_the_session_alive() {
