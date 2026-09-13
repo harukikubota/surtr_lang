@@ -1,7 +1,5 @@
 use super::*;
 use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_impl};
-use sindr::names::builtin_type_usage_policy;
-use std::collections::BTreeSet;
 
 const SYNTHETIC_DEFAULT_METHOD_UID_BASE: u32 = 0x6000_0000;
 
@@ -2134,46 +2132,6 @@ impl Checker {
         Ok((trait_arg_tys, target_ty, type_param_vars, target_param_vars))
     }
 
-    fn compiler_trait_target_names(&self, trait_name: &str) -> &'static [&'static str] {
-        if self.trait_matches_short_name(trait_name, "Add")
-            || self.trait_matches_short_name(trait_name, "Compare")
-        {
-            return &["Float", "Int"];
-        }
-        if self.trait_matches_short_name(trait_name, "Sub")
-            || self.trait_matches_short_name(trait_name, "Mul")
-        {
-            return &["Float", "Int"];
-        }
-        if self.trait_matches_short_name(trait_name, "Concat") {
-            return &["String"];
-        }
-        if self.trait_matches_short_name(trait_name, "Eq") {
-            return &["Boolean", "Float", "Int", "String"];
-        }
-        if self.trait_matches_short_name(trait_name, "Show") {
-            return &["Boolean", "Error", "Float", "Int", "String", "Unit"];
-        }
-        &[]
-    }
-
-    fn public_trait_target_display(info: &TraitImplInfo) -> Option<String> {
-        let display = Self::surface_ast_ty_key(&info.target_ast_ty);
-        let base = display.split('<').next().unwrap_or(display.as_str());
-        if Self::builtin_type_has_public_trait_target_surface(base) {
-            Some(display)
-        } else {
-            None
-        }
-    }
-
-    fn builtin_type_has_public_trait_target_surface(base: &str) -> bool {
-        if base == "Self" {
-            return false;
-        }
-        builtin_type_usage_policy(base).map_or(true, |policy| policy.type_annotation_allowed)
-    }
-
     fn surface_ast_ty_key(ty: &AstTy) -> String {
         match ty {
             AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => Self::surface_name(name).into(),
@@ -2203,147 +2161,6 @@ impl Checker {
                 Self::surface_ast_ty_key(ret)
             ),
         }
-    }
-
-    pub(super) fn trait_implementation_targets(&self, trait_name: &str) -> Vec<String> {
-        let mut targets = std::collections::BTreeSet::new();
-        for target in self.compiler_trait_target_names(trait_name) {
-            targets.insert((*target).to_string());
-        }
-        let match_exact = trait_name.contains('<');
-        for info in self.trait_impls.values() {
-            let matches = if match_exact {
-                self.trait_instance_key(&info.trait_id, &info.trait_args) == trait_name
-            } else {
-                self.trait_matches_short_name(&self.trait_key(&info.trait_id), trait_name)
-            };
-            if matches {
-                if let Some(display) = Self::public_trait_target_display(info) {
-                    targets.insert(display);
-                }
-            }
-        }
-        targets.into_iter().collect()
-    }
-
-    pub(super) fn trait_implementation_summary(&self, trait_name: &str) -> String {
-        let display_name = self.trait_display_name(trait_name);
-        let targets = self.trait_implementation_targets(trait_name);
-        if targets.is_empty() {
-            format!("{} has no visible implementations", display_name)
-        } else {
-            format!(
-                "{} is implemented for: {}",
-                display_name,
-                Self::format_trait_implementation_targets(&targets)
-            )
-        }
-    }
-
-    fn format_trait_implementation_targets(targets: &[String]) -> String {
-        let tuple_arities = targets
-            .iter()
-            .map(|target| Self::generic_tuple_arity(target))
-            .collect::<Vec<_>>();
-        let Some(first_tuple_index) = tuple_arities.iter().position(Option::is_some) else {
-            return targets.join(", ");
-        };
-
-        let arities = tuple_arities
-            .iter()
-            .flatten()
-            .copied()
-            .collect::<BTreeSet<_>>();
-        let ranges = Self::format_generic_tuple_arity_ranges(&arities);
-        let tuple_summary = format!("Tuple(len={ranges})");
-        let mut formatted = Vec::with_capacity(targets.len());
-        for (index, target) in targets.iter().enumerate() {
-            if index == first_tuple_index {
-                formatted.push(tuple_summary.clone());
-            }
-            if tuple_arities[index].is_none() {
-                formatted.push(target.clone());
-            }
-        }
-
-        formatted.join(", ")
-    }
-
-    fn format_generic_tuple_arity_ranges(arities: &BTreeSet<usize>) -> String {
-        let mut ranges = Vec::new();
-        let mut iter = arities.iter().copied();
-        let Some(first) = iter.next() else {
-            return String::new();
-        };
-
-        let mut start = first;
-        let mut end = first;
-        for arity in iter {
-            if arity == end.saturating_add(1) {
-                end = arity;
-            } else {
-                ranges.push(Self::format_generic_tuple_arity_range(start, end));
-                start = arity;
-                end = arity;
-            }
-        }
-        ranges.push(Self::format_generic_tuple_arity_range(start, end));
-        ranges.join(", ")
-    }
-
-    fn format_generic_tuple_arity_range(start: usize, end: usize) -> String {
-        if start == end {
-            start.to_string()
-        } else {
-            format!("[{start}..{end}]")
-        }
-    }
-
-    fn generic_tuple_arity(target: &str) -> Option<usize> {
-        let target = target.trim();
-        let inner = target.strip_prefix('(')?.strip_suffix(')')?;
-        let elements = Self::split_type_list(inner)?;
-        if elements.len() < 2
-            || elements.iter().any(|element| {
-                let element = element.trim();
-                let Some(name) = element.strip_prefix('$') else {
-                    return true;
-                };
-                name.is_empty()
-                    || !name
-                        .chars()
-                        .all(|character| character.is_ascii_alphanumeric() || character == '_')
-            })
-        {
-            return None;
-        }
-        Some(elements.len())
-    }
-
-    fn split_type_list(source: &str) -> Option<Vec<&str>> {
-        let mut elements = Vec::new();
-        let mut start = 0;
-        let mut depth = 0usize;
-
-        for (index, character) in source.char_indices() {
-            match character {
-                '(' | '[' | '{' | '<' => depth += 1,
-                ')' | ']' | '}' | '>' => {
-                    depth = depth.checked_sub(1)?;
-                }
-                ',' if depth == 0 => {
-                    elements.push(source.get(start..index)?.trim());
-                    start = index + character.len_utf8();
-                }
-                _ => {}
-            }
-        }
-
-        if depth != 0 {
-            return None;
-        }
-        elements.push(source.get(start..)?.trim());
-        Some(elements)
     }
 
     pub(super) fn tyvar_satisfies_compiler_trait(&self, _var: u32, _trait_name: &str) -> bool {
@@ -4132,23 +3949,23 @@ impl Checker {
                     where_clause,
                     _,
                 ) => {
+                    let declared_name = id.name.rsplit("::").next().unwrap_or(&id.name);
                     let runtime_name = sindr::builtin::builtin_runtime_name(
-                        &id.name,
+                        declared_name,
                         id.qualified_name.as_deref(),
                     );
                     let meta = sindr::builtin::builtin_meta_by_runtime_name(runtime_name);
-                    let is_kernel_is_match = id.name == "is_match"
+                    let is_kernel_is_match = declared_name == "is_match"
                         && Self::surface_qualified_name(id.qualified_name.as_deref())
                             == Some("Kernel::is_match");
-                    let is_special_form = if id.name == "is_match" {
+                    let is_special_form = if declared_name == "is_match" {
                         is_kernel_is_match
                     } else {
-                        Self::is_special_form_builtin_decl_name(&id.name)
+                        Self::is_special_form_builtin_decl_name(declared_name)
                     };
                     if !is_special_form
                         && (meta.is_none()
-                            || (!runtime_name.starts_with("__")
-                                && super::signatures::builtin_surface_signature(id).is_none()))
+                            || super::signatures::builtin_surface_signature(id).is_none())
                     {
                         return Err(TypeError {
                             structured: None,
@@ -4216,7 +4033,7 @@ impl Checker {
                         id.unique_id,
                         Ty::BuiltinFunc {
                             name: sindr::builtin::builtin_runtime_name(
-                                &id.name,
+                                declared_name,
                                 id.qualified_name.as_deref(),
                             )
                             .into(),
@@ -4580,98 +4397,5 @@ impl Checker {
 
         self.env.next_fun_idx = fun_idx;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod policy_tests {
-    use super::*;
-
-    #[test]
-    fn generic_tuple_targets_are_compressed_into_an_arity_range() {
-        let targets = (2..=8)
-            .map(|arity| {
-                let elements = (0..arity)
-                    .map(|index| format!("$A{index}"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("({elements})")
-            })
-            .chain(["Duration".into(), "Float".into(), "Int".into()])
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            Checker::format_trait_implementation_targets(&targets),
-            "Tuple(len=[2..8]), Duration, Float, Int"
-        );
-    }
-
-    #[test]
-    fn concrete_and_mixed_tuple_targets_are_not_compressed() {
-        let targets = vec![
-            "(String, Int)".into(),
-            "($A0, Int)".into(),
-            "($A0, $A1)".into(),
-            "($A0, $A1, $A2)".into(),
-        ];
-
-        assert_eq!(
-            Checker::format_trait_implementation_targets(&targets),
-            "(String, Int), ($A0, Int), Tuple(len=[2..3])"
-        );
-    }
-
-    #[test]
-    fn generic_tuple_ranges_are_derived_from_the_full_arity_set() {
-        let targets = vec![
-            "Duration".into(),
-            "($A0, $A1)".into(),
-            "Int".into(),
-            "($A0, $A1, $A2, $A3)".into(),
-            "($A0, $A1, $A2)".into(),
-            "($A0, $A1, $A2, $A3, $A4, $A5)".into(),
-            "($A0, $A1, $A2, $A3, $A4, $A5, $A6)".into(),
-            "($A0, $A1, $A2, $A3, $A4, $A5, $A6, $A7)".into(),
-        ];
-
-        assert_eq!(
-            Checker::format_trait_implementation_targets(&targets),
-            "Duration, Tuple(len=[2..4], [6..8]), Int"
-        );
-    }
-
-    #[test]
-    fn singleton_generic_tuple_arities_share_one_summary_entry() {
-        let targets = vec![
-            "Int".into(),
-            "($A0, $A1)".into(),
-            "Duration".into(),
-            "($A0, $A1, $A2, $A3)".into(),
-            "($A0, $A1, $A2, $A3, $A4)".into(),
-            "($A0, $A1, $A2, $A3, $A4, $A5)".into(),
-            "($A0, $A1, $A2, $A3, $A4, $A5, $A6)".into(),
-            "($A0, $A1, $A2, $A3, $A4, $A5, $A6, $A7)".into(),
-        ];
-
-        assert_eq!(
-            Checker::format_trait_implementation_targets(&targets),
-            "Int, Tuple(len=2, [4..8]), Duration"
-        );
-    }
-
-    #[test]
-    fn public_trait_target_surface_uses_builtin_type_usage_policy() {
-        assert!(Checker::builtin_type_has_public_trait_target_surface(
-            "String"
-        ));
-        assert!(Checker::builtin_type_has_public_trait_target_surface(
-            "User"
-        ));
-        assert!(!Checker::builtin_type_has_public_trait_target_surface(
-            "Self"
-        ));
-        assert!(!Checker::builtin_type_has_public_trait_target_surface(
-            "StandbyInit"
-        ));
     }
 }

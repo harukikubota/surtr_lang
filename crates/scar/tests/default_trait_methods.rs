@@ -162,40 +162,70 @@ result = Use::use(value)"#,
 #[test]
 fn canonical_builtin_signature_forwards_the_callers_bare_capability() {
     typecheck_std_surface_without_prelude(
-        r#"deftrait Equal {
+        r#"deftrait Eq {
   def equal(self: Self, rhs: Self) -> Int
 }
 
+@builtin type List<$A>
+impl List {
 @builtin def group_count(values: List<$A>) -> List<($A, Int)>
 where
-  $A: Equal"#,
+  $A: Eq
+}"#,
         r#"def count(values: List<$A>) -> List<($A, Int)>
 where
-  $A: Equal
+  $A: Eq
 {
-  group_count(values)
+  List::group_count(values)
 }
 "#,
     )
-    .expect("the builtin's Equal proof forwarding must consume the caller capability");
+    .expect("the builtin's Eq proof forwarding must consume the caller capability");
 }
 
 #[test]
-fn canonical_builtin_signature_still_rejects_a_missing_capability() {
+fn canonical_builtin_signature_rejects_a_noncanonical_constraint() {
     let err = typecheck_std_surface_without_prelude(
         r#"deftrait Equal {
   def equal(self: Self, rhs: Self) -> Int
 }
 
+@builtin type List<$A>
+impl List {
 @builtin def group_count(values: List<$A>) -> List<($A, Int)>
 where
-  $A: Equal"#,
+  $A: Equal
+}"#,
+        "",
+    )
+    .expect_err("a custom Equal bound must not replace group_count's canonical Eq bound");
+
+    assert!(
+        err.message
+            .contains("does not match its canonical surface signature"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn canonical_builtin_signature_still_rejects_a_missing_capability() {
+    let err = typecheck_std_surface_without_prelude(
+        r#"deftrait Eq {
+  def equal(self: Self, rhs: Self) -> Int
+}
+
+@builtin type List<$A>
+impl List {
+@builtin def group_count(values: List<$A>) -> List<($A, Int)>
+where
+  $A: Eq
+}"#,
         r#"def count(values: List<$A>) -> List<($A, Int)> {
-  group_count(values)
+  List::group_count(values)
 }
 "#,
     )
-    .expect_err("builtin proof forwarding without Equal must be rejected");
+    .expect_err("builtin proof forwarding without Eq must be rejected");
 
     assert!(
         err.reason() == Some(diagnostics::TypeDiagnosticReason::MissingGenericBound),
@@ -206,9 +236,13 @@ where
 #[test]
 fn canonical_builtin_signature_preserves_parameter_names_for_named_calls() {
     typecheck_std_surface_without_prelude(
-        r#"@builtin def print(a: String) -> Unit"#,
+        r#"defstruct Kernel {}
+impl Kernel {
+  def new() -> Kernel { Kernel {} }
+  @builtin def print(a: String) -> Unit
+}"#,
         r#"def emit() -> Unit {
-  print(a: "ok")
+  Kernel::print(a: "ok")
 }"#,
     )
     .expect("builtin calls must use the same canonical named-argument route as user functions");
@@ -216,9 +250,33 @@ fn canonical_builtin_signature_preserves_parameter_names_for_named_calls() {
 
 #[test]
 fn canonical_builtin_signature_rejects_parameter_name_drift() {
-    let err =
-        typecheck_std_surface_without_prelude(r#"@builtin def print(value: String) -> Unit"#, "")
-            .expect_err("builtin declaration parameter names are part of the canonical signature");
+    let err = typecheck_std_surface_without_prelude(
+        r#"defstruct Kernel {}
+impl Kernel {
+  def new() -> Kernel { Kernel {} }
+  @builtin def print(value: String) -> Unit
+}"#,
+        "",
+    )
+    .expect_err("builtin declaration parameter names are part of the canonical signature");
+    assert!(
+        err.message
+            .contains("does not match its canonical surface signature"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn canonical_builtin_signature_rejects_return_type_argument_drift() {
+    let err = typecheck_std_surface_without_prelude(
+        r#"defstruct Function {}
+impl Function {
+  def new() -> Function { Function {} }
+  @builtin def curry::<$Curried, $Other>(fun: $Fun) -> ($Curried, $Other)
+}"#,
+        "",
+    )
+    .expect_err("builtin return type arguments are part of the canonical surface signature");
     assert!(
         err.message
             .contains("does not match its canonical surface signature"),
@@ -239,6 +297,44 @@ impl String {
     .expect("standard surface should parse");
     let err = sigil::resolve(ast)
         .expect_err("a runtime builtin name must not authorize an arbitrary owner");
+    assert!(
+        err.message.contains("Unknown builtin declaration"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn internal_runtime_name_does_not_bypass_builtin_surface_signature_validation() {
+    let err = typecheck_std_surface_without_prelude(
+        r#"defstruct Task {}
+impl Task {
+  def new() -> Task { Task {} }
+  @builtin def call(body: (-> Result<$A>)) -> Int
+}"#,
+        "",
+    )
+    .expect_err("a public builtin backed by an internal runtime name must match metadata");
+
+    assert!(
+        err.message
+            .contains("does not match its canonical surface signature"),
+        "{err:?}"
+    );
+}
+
+#[test]
+fn internal_runtime_name_does_not_authorize_an_unknown_owner() {
+    let source = r#"@builtin type String
+impl String {
+  @builtin def __test_pop() -> Unit
+}"#;
+    let ast = spire::parse_with_context(
+        source,
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .expect("standard surface should parse");
+    let err = sigil::resolve(ast)
+        .expect_err("an internal runtime name must not authorize an arbitrary owner");
     assert!(
         err.message.contains("Unknown builtin declaration"),
         "{err:?}"

@@ -1,12 +1,4 @@
-use crate::heuristics::{
-    char_span_to_byte_range, extract_expected_got, has_annotation_assignment_labels,
-    has_duplicate_definition_labels, has_duplicate_pattern_binding_labels,
-    has_missing_trait_method_labels, has_parse_focus_labels, has_runtime_error_focus_labels,
-    has_runtime_safebind_labels, has_total_bind_pattern_labels,
-    has_trait_impl_signature_mismatch_labels, is_flow_operator_message, line_column_for_offset,
-    line_index_for_span, line_spans, normalized_char_span, parse_binary_operator_error,
-    serializable_callable_hint_from_labels, should_render_related_label_with_own_source,
-};
+use crate::source::{char_span_to_byte_range, line_column_for_offset, normalized_char_span};
 use crate::{
     Color, DiagnosticData, DiagnosticSpec, SerializableDiagnostic, SerializableDiagnosticReport,
     SerializableSourceFact, SourceId, SourceRegistry,
@@ -17,16 +9,10 @@ use std::io::{self, Write};
 
 pub fn report_error(file_name: &str, source: &str, spec: DiagnosticSpec) {
     let report = build_report(file_name, source, &spec);
-    let cache = ariadne::sources([
-        (
-            RenderSourceId::Primary(file_name.to_string()),
-            source.to_string(),
-        ),
-        (
-            RenderSourceId::Related(file_name.to_string()),
-            source.to_string(),
-        ),
-    ]);
+    let cache = ariadne::sources([(
+        RenderSourceId::Primary(file_name.to_string()),
+        source.to_string(),
+    )]);
 
     if let Err(err) = report.eprint(cache) {
         let mut stderr = io::stderr().lock();
@@ -37,16 +23,10 @@ pub fn report_error(file_name: &str, source: &str, spec: DiagnosticSpec) {
 pub fn render_error(file_name: &str, source: &str, spec: &DiagnosticSpec) -> String {
     let report = build_report(file_name, source, spec);
     let mut buf = Vec::new();
-    let cache = ariadne::sources([
-        (
-            RenderSourceId::Primary(file_name.to_string()),
-            source.to_string(),
-        ),
-        (
-            RenderSourceId::Related(file_name.to_string()),
-            source.to_string(),
-        ),
-    ]);
+    let cache = ariadne::sources([(
+        RenderSourceId::Primary(file_name.to_string()),
+        source.to_string(),
+    )]);
 
     if let Err(err) = report.write(cache, &mut buf) {
         let _ = write_fallback_diagnostic(&mut buf, file_name, spec, &err);
@@ -93,23 +73,8 @@ fn build_report(
 ) -> Report<'static, (RenderSourceId, std::ops::Range<usize>)> {
     let primary = normalized_char_span(source, &spec.primary_span);
     let primary_range = char_span_to_byte_range(source, &primary);
-    let lines = line_spans(source);
-    let primary_line = line_index_for_span(&lines, primary.start);
-    let suppress_primary_label = spec.structured.is_some()
-        || (spec.kind == "TypeError"
-            && (is_flow_operator_message(&spec.message)
-                || parse_binary_operator_error(&spec.message).is_some()
-                || has_annotation_assignment_labels(spec))
-            || has_duplicate_definition_labels(spec)
-            || has_duplicate_pattern_binding_labels(spec)
-            || has_missing_trait_method_labels(spec)
-            || has_trait_impl_signature_mismatch_labels(spec)
-            || has_total_bind_pattern_labels(spec)
-            || has_parse_focus_labels(spec)
-            || has_runtime_safebind_labels(spec)
-            || has_runtime_error_focus_labels(spec));
+    let suppress_primary_label = spec.structured.is_some() && !spec.labels.is_empty();
     let primary_source = RenderSourceId::Primary(file_name.to_string());
-    let related_source = RenderSourceId::Related(file_name.to_string());
     let mut builder = Report::build(
         ReportKind::Error,
         (primary_source.clone(), primary_range.clone()),
@@ -127,18 +92,11 @@ fn build_report(
     for label in &spec.labels {
         let span = normalized_char_span(source, &label.span);
         let range = char_span_to_byte_range(source, &span);
-        let label_source = if spec.structured.is_none()
-            && should_render_related_label_with_own_source(spec, primary_line, &lines, &span)
-        {
-            related_source.clone()
-        } else {
-            primary_source.clone()
-        };
         builder = builder.with_label(match label.color {
-            Some(color) => Label::new((label_source, range))
+            Some(color) => Label::new((primary_source.clone(), range))
                 .with_message(label.message.clone())
                 .with_color(color),
-            None => Label::new((label_source, range)).with_message(label.message.clone()),
+            None => Label::new((primary_source.clone(), range)).with_message(label.message.clone()),
         });
     }
 
@@ -156,16 +114,15 @@ fn build_report(
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum RenderSourceId {
     Primary(String),
-    Related(String),
     Auxiliary(SourceId, usize, String),
 }
 
 impl fmt::Display for RenderSourceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RenderSourceId::Primary(file_name)
-            | RenderSourceId::Related(file_name)
-            | RenderSourceId::Auxiliary(_, _, file_name) => f.write_str(file_name),
+            RenderSourceId::Primary(file_name) | RenderSourceId::Auxiliary(_, _, file_name) => {
+                f.write_str(file_name)
+            }
         }
     }
 }
@@ -183,23 +140,8 @@ fn build_report_with_registry(
     let primary_file_name = primary_entry.file_name.clone();
     let primary = normalized_char_span(primary_source, &spec.primary_span);
     let primary_range = char_span_to_byte_range(primary_source, &primary);
-    let lines = line_spans(primary_source);
-    let primary_line = line_index_for_span(&lines, primary.start);
-    let suppress_primary_label = spec.structured.is_some()
-        || (spec.kind == "TypeError"
-            && (is_flow_operator_message(&spec.message)
-                || parse_binary_operator_error(&spec.message).is_some()
-                || has_annotation_assignment_labels(spec))
-            || has_duplicate_definition_labels(spec)
-            || has_duplicate_pattern_binding_labels(spec)
-            || has_missing_trait_method_labels(spec)
-            || has_trait_impl_signature_mismatch_labels(spec)
-            || has_total_bind_pattern_labels(spec)
-            || has_parse_focus_labels(spec)
-            || has_runtime_safebind_labels(spec)
-            || has_runtime_error_focus_labels(spec));
+    let suppress_primary_label = spec.structured.is_some() && !spec.labels.is_empty();
     let primary_render_source = RenderSourceId::Primary(primary_file_name.clone());
-    let related_render_source = RenderSourceId::Related(primary_file_name.clone());
     let mut builder = Report::build(
         ReportKind::Error,
         (primary_render_source.clone(), primary_range.clone()),
@@ -214,10 +156,7 @@ fn build_report_with_registry(
         );
     }
 
-    let mut cache = vec![
-        (primary_render_source.clone(), primary_source.to_string()),
-        (related_render_source.clone(), primary_source.to_string()),
-    ];
+    let mut cache = vec![(primary_render_source.clone(), primary_source.to_string())];
 
     for (label_index, label) in spec.labels.iter().enumerate() {
         let label_source_id = label.source_id.unwrap_or(source_id);
@@ -227,18 +166,7 @@ fn build_report_with_registry(
         let label_span = normalized_char_span(&label_entry.source, &label.span);
         let label_range = char_span_to_byte_range(&label_entry.source, &label_span);
         let label_render_source = if label.source_id.is_none() && label_source_id == source_id {
-            if spec.structured.is_none()
-                && should_render_related_label_with_own_source(
-                    spec,
-                    primary_line,
-                    &lines,
-                    &label_span,
-                )
-            {
-                related_render_source.clone()
-            } else {
-                primary_render_source.clone()
-            }
+            primary_render_source.clone()
         } else {
             let render_id = RenderSourceId::Auxiliary(
                 label_source_id,
@@ -323,17 +251,8 @@ pub fn serializable_diagnostic_by_id(
     let phase = phase.into();
     let source = sources.source(source_id).unwrap_or("");
     let (line, column) = line_column_for_offset(source, spec.primary_span.start);
-    let (expected, got) = if spec.structured.is_some() {
-        structured_expected_got(spec).unwrap_or((None, None))
-    } else {
-        extract_expected_got(&spec.message)
-    };
-    let hint = spec.help.clone().or_else(|| {
-        spec.structured
-            .is_none()
-            .then(|| serializable_callable_hint_from_labels(spec))
-            .flatten()
-    });
+    let (expected, got) = structured_expected_got(spec).unwrap_or((None, None));
+    let hint = spec.help.clone();
     let (reason, origin, data, related) = match spec.structured.as_ref() {
         Some(structured) => (
             Some(structured.reason.as_str().to_string()),
@@ -387,6 +306,8 @@ fn structured_expected_got(spec: &DiagnosticSpec) -> Option<(Option<String>, Opt
         DiagnosticData::BranchAssertion(value) => {
             (Some(value.expected_type), Some(value.actual_type))
         }
+        DiagnosticData::Pattern(value) => (value.expected_type, value.actual_type),
+        DiagnosticData::Policy(value) => (value.expected_type, value.actual_type),
         _ => (None, None),
     })
 }

@@ -1006,7 +1006,7 @@ impl Checker {
                 impl_span.clone(),
             )
             .with_structured(StructuredDiagnostic {
-                reason: TypeDiagnosticReason::TraitMethodConstraintMismatch,
+                reason: TypeDiagnosticReason::TraitMethodConstraintMismatch.into(),
                 origin: DiagnosticOrigin::Declaration,
                 data: DiagnosticData::TraitMethodConstraint(TraitMethodConstraintData {
                     impl_declaration: Some(SourceFact::untyped(
@@ -1118,7 +1118,7 @@ impl Checker {
             impl_span.clone(),
         )
         .with_structured(StructuredDiagnostic {
-            reason,
+            reason: reason.into(),
             origin: DiagnosticOrigin::Declaration,
             primary: source_fact(SourceRole::Impl, impl_span.clone(), actual_type.clone()),
             related: vec![source_fact(

@@ -79,6 +79,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 let name: String = chars[name_start..i].iter().collect();
                 if name.is_empty() {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::LiteralSyntax,
                         "Expected annotator name after '@'",
                         Span { start, end: i },
                     ));
@@ -193,6 +194,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             let body: String = chars[body_start..i].iter().collect();
             if body.is_empty() {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::LiteralSyntax,
                     "FuncLiteral body must not be empty",
                     Span { start, end: i + 1 },
                 ));
@@ -200,6 +202,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
 
             if !crate::func_literal::is_valid_func_literal_body(&body) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::LiteralSyntax,
                     format!("Unsupported FuncLiteral body: `{}`", body),
                     Span { start, end: i + 1 },
                 ));
@@ -226,10 +229,15 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 }
                 let text: String = chars[start..i].iter().collect();
                 let val: f64 = text.parse().map_err(|_| {
-                    ParseError::syntax(format!("Invalid float: {}", text), Span { start, end: i })
+                    ParseError::syntax(
+                        crate::error::ParseErrorReason::LiteralSyntax,
+                        format!("Invalid float: {}", text),
+                        Span { start, end: i },
+                    )
                 })?;
                 if !val.is_finite() {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::LiteralSyntax,
                         format!("Float literal must be finite: {}", text),
                         Span { start, end: i },
                     ));
@@ -411,6 +419,7 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
             '^' => Token::Caret,
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::LiteralSyntax,
                     format!("Unexpected character: '{}'", c),
                     Span {
                         start: i,
@@ -453,6 +462,7 @@ fn lex_integer_literal(
                 }
                 let text: String = chars[start..end].iter().collect();
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::LiteralSyntax,
                     format!("Invalid integer: {}", text),
                     Span { start, end },
                 ));
@@ -465,6 +475,7 @@ fn lex_integer_literal(
             if body_start >= len || !chars[body_start].is_ascii_alphanumeric() {
                 let prefix_text = format!("0{}", prefix);
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::LiteralSyntax,
                     format!("missing digits after integer base prefix: {}", prefix_text),
                     Span {
                         start,
@@ -481,6 +492,7 @@ fn lex_integer_literal(
             for ch in &chars[body_start..end] {
                 if !is_valid_int_digit(*ch, base) {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::LiteralSyntax,
                         format!("invalid digit for {} integer literal: {}", base.label(), ch),
                         Span {
                             start,
@@ -493,6 +505,7 @@ fn lex_integer_literal(
             let body: String = chars[body_start..end].iter().collect();
             let val = SurtrInt::parse_bytes(body.as_bytes(), base.radix()).ok_or_else(|| {
                 ParseError::syntax(
+                    crate::error::ParseErrorReason::LiteralSyntax,
                     format!("Invalid integer: 0{}{}", prefix, body),
                     Span { start, end },
                 )
@@ -504,6 +517,7 @@ fn lex_integer_literal(
     let text: String = chars[start..decimal_end].iter().collect();
     let val: SurtrInt = text.parse().map_err(|_| {
         ParseError::syntax(
+            crate::error::ParseErrorReason::LiteralSyntax,
             format!("Invalid integer: {}", text),
             Span {
                 start,
@@ -602,6 +616,7 @@ fn normalize_triple_quoted_string(
                 _ => {
                     if columns < base_indent {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::LiteralSyntax,
                             "Triple-quoted string content must be indented at least as far as the starting line",
                             Span {
                                 start: i,
@@ -764,8 +779,9 @@ mod tests {
         let err = tokenize("\t@doc \"\"\"\nabcde\n    5\n\t\"\"\"")
             .expect_err("expected doc indentation error");
         assert!(
-            err.message()
-                .contains("Triple-quoted string content must be indented at least as far as the starting line"),
+            err.message().contains(
+                "Triple-quoted string content must be indented at least as far as the starting line"
+            ),
             "unexpected error: {}",
             err.message()
         );

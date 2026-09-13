@@ -280,6 +280,10 @@ impl Resolver {
                     "quoted pair constructor pipeline call expects exactly one positional argument"
                         .into(),
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::SpecialForm,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             })?;
             let [RecordLitArg::Positional(right)] = args else {
@@ -287,6 +291,7 @@ impl Resolver {
                     message: "quoted pair constructor pipeline call expects exactly one positional argument"
                         .into(),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::SpecialForm, subject: None },
                     related_labels: Vec::new(),
                 });
             };
@@ -396,6 +401,10 @@ impl Resolver {
                 return Err(ResolveError {
                     message: format!("unsupported operator capture target `{}`", body),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Capture,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 });
             }
@@ -421,6 +430,10 @@ impl Resolver {
             return Err(ResolveError {
                 message: "capture call is missing placeholder arguments".into(),
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Capture,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -429,6 +442,10 @@ impl Resolver {
             return Err(ResolveError {
                 message: "capture call is missing placeholder arguments".into(),
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Capture,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             });
         };
@@ -437,6 +454,10 @@ impl Resolver {
                 return Err(ResolveError {
                     message: format!("capture placeholder &{} is missing", index),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Capture,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 });
             }
@@ -491,6 +512,10 @@ impl Resolver {
                         message: "capture placeholders are only valid in the outer capture body"
                             .into(),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::Capture,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     });
                 }
@@ -733,6 +758,7 @@ impl Resolver {
                     return Err(ResolveError {
                         message: "outer capture placeholders are only valid in the outer capture body; nested capture argument blocks are not allowed".into(),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::Capture, subject: None },
                         related_labels: Vec::new(),
                     });
                 }
@@ -800,6 +826,10 @@ impl Resolver {
                         message: "capture placeholders are only valid in the outer capture body"
                             .into(),
                         span,
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::Capture,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     });
                 }
@@ -1268,6 +1298,7 @@ impl Resolver {
                     return Err(ResolveError {
                         message: "outer capture placeholders are only valid in the outer capture body; nested capture argument blocks are not allowed".into(),
                         span,
+                        diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::Capture, subject: None },
                         related_labels: Vec::new(),
                     });
                 }
@@ -1336,6 +1367,10 @@ impl Resolver {
                         func.body
                     ),
                     span,
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Capture,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 });
             }
@@ -1351,6 +1386,10 @@ impl Resolver {
                     func.body
                 ),
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Capture,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             })?;
             let body = self.make_operator_capture_body(&span, &func.body, left, right)?;
@@ -1514,6 +1553,7 @@ impl Resolver {
                 return Err(ResolveError {
                     message: "pipe placeholder `_1` is only allowed as a direct argument of the outermost call on the right-hand side".into(),
                     span: slot_span,
+                    diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::SpecialForm, subject: None },
                     related_labels: Vec::new(),
                 });
             }
@@ -1536,6 +1576,10 @@ impl Resolver {
                         return Err(ResolveError {
                             message: "pipe placeholder `_1` cannot be used as an expression".into(),
                             span: slot_span,
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::SpecialForm,
+                                subject: None,
+                            },
                             related_labels: Vec::new(),
                         });
                     }
@@ -1547,6 +1591,10 @@ impl Resolver {
                         return Err(ResolveError {
                             message: "pipe placeholder `_1` cannot be used as an expression".into(),
                             span: slot_span,
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::SpecialForm,
+                                subject: None,
+                            },
                             related_labels: Vec::new(),
                         });
                     }
@@ -1555,6 +1603,10 @@ impl Resolver {
                             message: "pipe placeholder `_1` does not support named arguments"
                                 .into(),
                             span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::SpecialForm,
+                                subject: None,
+                            },
                             related_labels: Vec::new(),
                         });
                     }
@@ -1570,6 +1622,10 @@ impl Resolver {
             return Err(ResolveError {
                 message: "pipe placeholder `_1` can only be used once".into(),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::SpecialForm,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -1663,6 +1719,10 @@ impl Resolver {
         Err(ResolveError {
             message: self.restricted_callable_error_message(&entry.fq_name, arity),
             span: span.clone(),
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Visibility,
+                subject: Some(entry.fq_name.clone()),
+            },
             related_labels: Vec::new(),
         })
     }
@@ -1695,6 +1755,10 @@ impl Resolver {
                 return ResolveError {
                     message,
                     span: err.span,
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Visibility,
+                        subject: Some(name.clone()),
+                    },
                     related_labels: Vec::new(),
                 };
             }
@@ -1705,6 +1769,10 @@ impl Resolver {
                 return ResolveError {
                     message,
                     span: err.span,
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Visibility,
+                        subject: Some(fq_name),
+                    },
                     related_labels: Vec::new(),
                 };
             }
@@ -1719,6 +1787,10 @@ impl Resolver {
                         None => message,
                     },
                     span: err.span,
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::NameResolution,
+                        subject: Some(name.clone()),
+                    },
                     related_labels: Vec::new(),
                 }
             }
@@ -1735,6 +1807,10 @@ impl Resolver {
                         },
                     ),
                     span: err.span,
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::NameResolution,
+                        subject: Some(path.segments.join("::")),
+                    },
                     related_labels: Vec::new(),
                 }
             }
@@ -1954,39 +2030,39 @@ impl Resolver {
                 "This Supervisor module surface is compiler-managed; use a generated `SupName::workers(...)` wrapper or the public Workers API instead."
             }
             _ => match display_name {
-            "__process_self" => "Use `Process::self()` instead.",
-            "__process_sleep" => "Use `Process::sleep(...)` instead.",
-            "__task_call" => "Use `Task::call(...)` instead.",
-            "__task_async" => "Use `Task::async(...)` instead.",
-            "__task_await" => "Use `Task::await(...)` instead.",
-            "__task_launch" => "Use `Task::launch(...)` instead.",
-            "__task_cast" => "Use `Task::cast(...)` instead.",
-            "__task_call_timeout"
-            | "__task_async_timeout"
-            | "__task_await_timeout"
-            | "__task_launch_timeout"
-            | "__task_cast_timeout"
-            | "__workers_submit_timeout"
-            | "__workers_broadcast_timeout" => {
-                "Use the public Task/Workers API with `@timeout(...)` instead."
-            }
-            "__process_pid" | "__process_spawn" | "__process_state" | "__process_store" => {
-                "This helper is compiler-managed; use `defagent`, `defgenserver`, or the public process surface instead."
-            }
-            "__supervisor_spawn" => {
-                "Use `DynamicSupervisor::spawn(...)` or a generated Supervisor `spawn` wrapper instead."
-            }
-            "__supervisor_adopt" => {
-                "Use `DynamicSupervisor::adopt(...)` or a generated Supervisor `adopt` wrapper instead."
-            }
-            "__supervisor_status" => {
-                "Use `DynamicSupervisor::status()` or a generated Supervisor `status` wrapper instead."
-            }
-            "__supervisor_workers" => {
-                "Use a generated Supervisor `workers` wrapper or the public Workers surface instead."
-            }
-            _ => "Use the public standard-library surface instead.",
-        },
+                "__process_self" => "Use `Process::self()` instead.",
+                "__process_sleep" => "Use `Process::sleep(...)` instead.",
+                "__task_call" => "Use `Task::call(...)` instead.",
+                "__task_async" => "Use `Task::async(...)` instead.",
+                "__task_await" => "Use `Task::await(...)` instead.",
+                "__task_launch" => "Use `Task::launch(...)` instead.",
+                "__task_cast" => "Use `Task::cast(...)` instead.",
+                "__task_call_timeout"
+                | "__task_async_timeout"
+                | "__task_await_timeout"
+                | "__task_launch_timeout"
+                | "__task_cast_timeout"
+                | "__workers_submit_timeout"
+                | "__workers_broadcast_timeout" => {
+                    "Use the public Task/Workers API with `@timeout(...)` instead."
+                }
+                "__process_pid" | "__process_spawn" | "__process_state" | "__process_store" => {
+                    "This helper is compiler-managed; use `defagent`, `defgenserver`, or the public process surface instead."
+                }
+                "__supervisor_spawn" => {
+                    "Use `DynamicSupervisor::spawn(...)` or a generated Supervisor `spawn` wrapper instead."
+                }
+                "__supervisor_adopt" => {
+                    "Use `DynamicSupervisor::adopt(...)` or a generated Supervisor `adopt` wrapper instead."
+                }
+                "__supervisor_status" => {
+                    "Use `DynamicSupervisor::status()` or a generated Supervisor `status` wrapper instead."
+                }
+                "__supervisor_workers" => {
+                    "Use a generated Supervisor `workers` wrapper or the public Workers surface instead."
+                }
+                _ => "Use the public standard-library surface instead.",
+            },
         };
         format!("hidden builtin `{display_name}` is compiler-internal. {guidance}")
     }
@@ -1995,6 +2071,10 @@ impl Resolver {
         ResolveError {
             message: Self::hidden_builtin_message(name),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Visibility,
+                subject: Some(name.to_string()),
+            },
             related_labels: Vec::new(),
         }
     }
@@ -2022,6 +2102,10 @@ impl Resolver {
             .ok_or_else(|| ResolveError {
                 message: format!("Undefined variable: {}", name),
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::NameResolution,
+                    subject: Some(name.clone()),
+                },
                 related_labels: Vec::new(),
             })?;
         let qualified_name = (!is_synthetic_builtin_symbol_uid(uid))
@@ -2039,6 +2123,10 @@ impl Resolver {
                     name
                 ),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::SpecialForm,
+                    subject: Some(name.clone()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -2052,6 +2140,10 @@ impl Resolver {
                     "Top-level definition `{def_name}` cannot reference value binding `{binding_name}`"
                 ),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::SourcePolicy,
+                    subject: Some(binding_name.clone()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -2238,6 +2330,10 @@ impl Resolver {
                             "bulk_update path strip operations require a concrete DSL path fragment"
                                 .into(),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::SpecialForm,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     });
                 };
@@ -2245,6 +2341,10 @@ impl Resolver {
                     return Err(ResolveError {
                         message: "bulk_update target path cannot be empty".into(),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::SpecialForm,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     });
                 }
@@ -2257,6 +2357,10 @@ impl Resolver {
                             "bulk_update path strip operations require a concrete DSL path fragment"
                                 .into(),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::SpecialForm,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     });
                 };
@@ -2264,6 +2368,10 @@ impl Resolver {
                     return Err(ResolveError {
                         message: "bulk_update target path cannot be empty".into(),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::SpecialForm,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     });
                 }
@@ -2284,6 +2392,10 @@ impl Resolver {
                 return Err(ResolveError {
                     message: "bulk_update target path cannot be empty".into(),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::SpecialForm,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 });
             }
@@ -2315,6 +2427,10 @@ impl Resolver {
             | BulkUpdatePath::StripRight(path_span, _, _) => Err(ResolveError {
                 message: "bulk_update static path could not be lowered".into(),
                 span: path_span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::SpecialForm,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
         }
@@ -2409,6 +2525,10 @@ impl Resolver {
                         message: "nested bulk_update entries must be flattened before lowering"
                             .into(),
                         span: entry_span,
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     });
                 }
@@ -2451,6 +2571,10 @@ impl Resolver {
                     func.body
                 ),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
 
@@ -3291,6 +3415,7 @@ impl Resolver {
                                     "trait impl body may only contain `def` / `@builtin def` declarations"
                                         .to_string(),
                                 span: span.clone(),
+                                diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::Declaration, subject: None },
                                 related_labels: Vec::new(),
                             });
                         }
@@ -3434,15 +3559,28 @@ impl Resolver {
                 attrs,
             ) => {
                 let qualified_name = self.qualify_current_declaration_name(&name);
-                let is_io_builtin =
-                    sindr::builtin::builtin_meta_for_decl(&name, Some(&qualified_name)).is_some();
+                let declared_name = name.rsplit("::").next().unwrap_or(&name);
+                let is_surface_builtin =
+                    sindr::builtin::builtin_meta_for_decl(declared_name, Some(&qualified_name))
+                        .is_some();
+                let is_generated_runtime_builtin = attrs.compiler_generated
+                    && sindr::builtin::builtin_meta_for_compiler_generated_decl(
+                        declared_name,
+                        &qualified_name,
+                    )
+                    .is_some();
                 if !is_runtime_builtin_decl(&name)
                     && !is_special_form_builtin_decl(&name)
-                    && !is_io_builtin
+                    && !is_surface_builtin
+                    && !is_generated_runtime_builtin
                 {
                     return Err(ResolveError {
                         message: format!("Unknown builtin declaration: {}", name),
                         span,
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::Declaration,
+                            subject: Some(name.clone()),
+                        },
                         related_labels: Vec::new(),
                     });
                 }
@@ -3464,6 +3602,7 @@ impl Resolver {
                 let resolved_params = decl_resolver.resolve_value_parameters(params)?;
                 self.scope.advance_next_id_to(decl_resolver.scope.next_id());
                 self.scope.define_with_id(&name, builtin_uid);
+                define_global_surface_alias(&mut self.scope, &qualified_name, builtin_uid);
                 let symbol_info = self.symbol_info_for_declaration(
                     &name,
                     &DeclarationKind::Def,
@@ -3500,6 +3639,10 @@ impl Resolver {
                     "Intrinsic declaration `{name}` is docs-only and should not reach resolution"
                 ),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
             Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => {
@@ -3617,6 +3760,10 @@ impl Resolver {
             Ast::Defmod(span, name, _, _) => Err(ResolveError {
                 message: format!("Module resolution is not implemented yet: {}", name),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
             Ast::Defagent(span, name, _, _, _)
@@ -3625,21 +3772,37 @@ impl Resolver {
             | Ast::DefdynamicSupervisor(span, name, _, _, _) => Err(ResolveError {
                 message: format!("Process module resolution is not implemented yet: {}", name),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
             Ast::Import(span, _, _) => Err(ResolveError {
                 message: "Import resolution is not implemented yet".to_string(),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
             Ast::Include(span, _) => Err(ResolveError {
                 message: "include directives must be resolved before name resolution".to_string(),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
             Ast::ImplDef(span, target, _, _) => Err(ResolveError {
                 message: format!("impl lowering failed for target `{}`", target),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
 
@@ -3705,6 +3868,10 @@ impl Resolver {
                     index
                 ),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Capture,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
 
@@ -3712,6 +3879,10 @@ impl Resolver {
                 let uid = self.scope.lookup(&type_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined type: {}", type_name),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::NameResolution,
+                        subject: Some(type_name.clone()),
+                    },
                     related_labels: Vec::new(),
                 })?;
                 let symbol_info = self.symbol_info_for_uid(&type_name, uid);
@@ -3742,6 +3913,10 @@ impl Resolver {
                 let uid = self.scope.lookup(&type_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined type: {}", type_name),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::NameResolution,
+                        subject: Some(type_name.clone()),
+                    },
                     related_labels: Vec::new(),
                 })?;
                 let symbol_info = self.symbol_info_for_uid(&type_name, uid);
@@ -3822,6 +3997,10 @@ impl Resolver {
                     .ok_or_else(|| ResolveError {
                         message: format!("Undefined type: {}", normalized_name),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::NameResolution,
+                            subject: Some(normalized_name.clone()),
+                        },
                         related_labels: Vec::new(),
                     })?;
                 let symbol_info = self.symbol_info_for_uid(&normalized_name, uid);
@@ -3851,6 +4030,10 @@ impl Resolver {
                 let _owner_uid = self.scope.lookup(&owner_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined enum type: {owner_name}"),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::NameResolution,
+                        subject: Some(owner_name.clone()),
+                    },
                     related_labels: Vec::new(),
                 })?;
                 let owner = self
@@ -3859,12 +4042,20 @@ impl Resolver {
                     .ok_or_else(|| ResolveError {
                         message: format!("{owner_name} is not a declared enum type"),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::NameResolution,
+                            subject: Some(owner_name.clone()),
+                        },
                         related_labels: Vec::new(),
                     })?;
                 if owner.kind != OwnerKind::Enum {
                     return Err(ResolveError {
                         message: format!("{owner_name} is not an enum type"),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::NameResolution,
+                            subject: Some(owner_name.clone()),
+                        },
                         related_labels: Vec::new(),
                     });
                 }
@@ -3879,6 +4070,10 @@ impl Resolver {
                             type_args.len()
                         ),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::NameResolution,
+                            subject: Some(owner_name.clone()),
+                        },
                         related_labels: Vec::new(),
                     });
                 }
@@ -3892,6 +4087,10 @@ impl Resolver {
                                 "{variant_name} is not a declared enum variant of {owner_name}"
                             ),
                             span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::NameResolution,
+                                subject: Some(constructor_name.clone()),
+                            },
                             related_labels: Vec::new(),
                         })?;
                 if self.declaration_uid_kinds.get(&constructor_uid)
@@ -3902,6 +4101,10 @@ impl Resolver {
                             "{variant_name} is not a declared enum variant of {owner_name}"
                         ),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::NameResolution,
+                            subject: Some(constructor_name.clone()),
+                        },
                         related_labels: Vec::new(),
                     });
                 }
@@ -3961,11 +4164,19 @@ impl Resolver {
             Ast::Namespace(span, _, _) => Err(ResolveError {
                 message: "namespace declarations must be lowered before name resolution".into(),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
             Ast::SupervisorInit(span, _) => Err(ResolveError {
                 message: "supervisor_init must be collected before name resolution".into(),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
         }
@@ -4182,6 +4393,10 @@ impl Resolver {
                                         owner
                                     ),
                                     span,
+                                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                                        reason: crate::error::ResolveErrorReason::NameResolution,
+                                        subject: None,
+                                    },
                                     related_labels: Vec::new(),
                                 });
                             }
@@ -4195,6 +4410,10 @@ impl Resolver {
                                         owner, slot_name
                                     ),
                                     span: span.clone(),
+                                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                                        reason: crate::error::ResolveErrorReason::NameResolution,
+                                        subject: None,
+                                    },
                                     related_labels: Vec::new(),
                                 })? as u32;
                             Ok(ResolvedWhereConstraintRhs::TraitSlot {
@@ -4234,6 +4453,10 @@ impl Resolver {
         let trait_uid = self.scope.lookup(trait_name).ok_or_else(|| ResolveError {
             message: format!("Undefined trait: {}", trait_name),
             span: span.clone(),
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::NameResolution,
+                subject: None,
+            },
             related_labels: Vec::new(),
         })?;
         match self.declaration_uid_kinds.get(&trait_uid) {
@@ -4242,6 +4465,10 @@ impl Resolver {
                 return Err(ResolveError {
                     message: format!("{} is not a trait", trait_name),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::NameResolution,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 });
             }
@@ -4283,6 +4510,10 @@ pub(super) fn validate_trait_impl_pairs_in_nodes(
                     format!("Multiple trait impl blocks for `{pair_key}` are not allowed")
                 },
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Declaration,
+                    subject: None,
+                },
                 related_labels: vec![
                     ResolveErrorLabel {
                         span: first_span.clone(),

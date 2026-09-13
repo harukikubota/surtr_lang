@@ -187,8 +187,7 @@ pub fn collect_signature_entries_with_base(
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModuleStageParseErrorKind {
     Parse {
-        message: String,
-        span: spire::ast::Span,
+        error: spire::error::ParseError,
     },
     DuplicateModulePath {
         module_path: String,
@@ -207,7 +206,7 @@ pub struct ModuleStageParseError {
 impl ModuleStageParseError {
     pub fn message(&self) -> String {
         match &self.kind {
-            ModuleStageParseErrorKind::Parse { message, .. } => message.clone(),
+            ModuleStageParseErrorKind::Parse { error } => error.message(),
             ModuleStageParseErrorKind::DuplicateModulePath {
                 module_path,
                 first_file_name,
@@ -222,7 +221,7 @@ impl ModuleStageParseError {
 
     pub fn span(&self) -> spire::ast::Span {
         match &self.kind {
-            ModuleStageParseErrorKind::Parse { span, .. } => span.clone(),
+            ModuleStageParseErrorKind::Parse { error } => error.span().clone(),
             ModuleStageParseErrorKind::DuplicateModulePath { span, .. } => span.clone(),
         }
     }

@@ -1,6 +1,26 @@
 use spire::ast::Span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolveErrorReason {
+    NameResolution,
+    Namespace,
+    Visibility,
+    Import,
+    Capture,
+    Pattern,
+    Declaration,
+    SpecialForm,
+    SourcePolicy,
+    CompilerInvariant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveErrorDiagnostic {
+    pub reason: ResolveErrorReason,
+    pub subject: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolveSourceProvenance {
     pub stage_index: usize,
     pub source_index: usize,
@@ -18,6 +38,7 @@ pub struct ResolveError {
     pub message: String,
     pub span: Span,
     pub related_labels: Vec<ResolveErrorLabel>,
+    pub diagnostic: ResolveErrorDiagnostic,
 }
 
 impl std::fmt::Display for ResolveError {

@@ -46,6 +46,7 @@ pub fn parse_incomplete_stmt(
     let tokens = tokenize(source)?;
     match chumsky_program::parse_program_with_chumsky_diagnostic(source, &tokens, context) {
         Ok(_) => Err(ParseError::syntax(
+            crate::error::ParseErrorReason::ExpressionSyntax,
             "input is already complete",
             completion_span(&tokens),
         )),
@@ -90,6 +91,7 @@ pub fn parse_incomplete_expr(
     let mut parser = Parser::new(source, &tokens, context);
     match parser.parse_expr() {
         Ok(_) => Err(ParseError::syntax(
+            crate::error::ParseErrorReason::ExpressionSyntax,
             "input is already complete",
             parser.peek_span(),
         )),

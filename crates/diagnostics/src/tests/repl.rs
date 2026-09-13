@@ -6,6 +6,7 @@ fn repl_query_parse_error_spec_renders_precise_query_span() {
         "compare(Int, )",
         "Invalid typed call query: empty argument.",
         Span { start: 13, end: 13 },
+        ReplDiagnosticReason::TypedCallEmptyArgument,
     );
 
     assert_eq!(spec.kind, "ReplQueryParseError");
@@ -26,6 +27,7 @@ fn repl_command_parse_error_spec_suggests_help_for_unknown_commands() {
         ":wat",
         "Unknown REPL command `:wat`.",
         Span { start: 0, end: 4 },
+        ReplDiagnosticReason::CommandUnknown,
     );
 
     assert_eq!(spec.kind, "ReplCommandError");
@@ -37,4 +39,7 @@ fn repl_command_parse_error_spec_suggests_help_for_unknown_commands() {
     let rendered = strip_ansi(&render_error("repl", ":wat", &spec));
     assert!(rendered.contains("ReplCommandError: Unknown REPL command `:wat`."));
     assert!(rendered.contains("unknown REPL command"));
+
+    let structured = spec.structured.expect("REPL diagnostic must be structured");
+    assert_eq!(structured.reason.as_str(), "CommandUnknown");
 }

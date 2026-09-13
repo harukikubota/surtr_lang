@@ -2348,6 +2348,7 @@ mod tests {
             column: 0,
             format: "{message}".into(),
             num_params: 0,
+            diagnostic: None,
         }
     }
 
@@ -3687,6 +3688,39 @@ mod tests {
         assert!(opcodes
             .iter()
             .any(|opcode| matches!(opcode, Opcode::ListLen)));
+    }
+
+    #[test]
+    fn literal_safebind_carries_runtime_diagnostic_without_message_markers() {
+        let mut gene = Codegen::new();
+        gene.state.slot_map.insert(82, 0);
+        gene.state.next_slot = 1;
+
+        let node = TypedNode {
+            ty: Ty::Unit,
+            span: span(1, 8),
+            node: TypedInner::SafeBind(
+                TypedPattern::IntLit(Ty::Int, 1.into()),
+                Box::new(local_var("value", 82, Ty::Int)),
+                SafeBindRhsProjection::PassThroughNonResultPartial {
+                    pattern_input_ty: Ty::Int,
+                },
+                SafeBindFailureTarget::TopLevel,
+            ),
+        };
+
+        gene.emit_node(&node)
+            .expect("literal safebind emission should succeed");
+        let (_, state) = gene.finalize().expect("labels should resolve");
+
+        assert!(state.error_templates.iter().any(|template| matches!(
+            &template.diagnostic,
+            Some(sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch { lhs })
+                if lhs == "1"
+        )));
+        assert!(state.constants.iter().all(|constant| {
+            !matches!(constant, Constant::Str(value) if value.contains("@@lhs") || value.contains("@@rhs"))
+        }));
     }
 
     #[test]
@@ -6523,6 +6557,7 @@ impl Codegen {
             column: 0,
             format: String::new(),
             num_params: params.len() as u8,
+            diagnostic: None,
         });
 
         let saved_slot_map = self.state.slot_map.clone();
@@ -8562,7 +8597,13 @@ impl Codegen {
             )?;
 
             self.patch_label(fail_mismatch);
-            self.emit_pattern_mismatch_failure(rhs.span.clone())?;
+            self.emit_safebind_rule_failure(
+                "PatternMismatch",
+                "Pattern did not match.",
+                "fixed-length list elements must match",
+                Some("List"),
+                rhs.span.clone(),
+            )?;
 
             self.patch_label(success_label);
             let unit_idx = self.add_constant(Constant::Unit);
@@ -8635,7 +8676,13 @@ impl Codegen {
             )?;
 
             self.patch_label(fail_mismatch);
-            self.emit_pattern_mismatch_failure(rhs.span.clone())?;
+            self.emit_safebind_rule_failure(
+                "PatternMismatch",
+                "Pattern did not match.",
+                "fixed-length list elements must match",
+                Some("List"),
+                rhs.span.clone(),
+            )?;
 
             self.patch_label(success_label);
             let unit_idx = self.add_constant(Constant::Unit);
@@ -8658,8 +8705,18 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_empty_list_failure(&mut self, span: Span) -> Result<(), CodegenError> {
-        self.emit_pattern_failure("EmptyList", "Empty List.", span)
+    fn emit_empty_list_failure(
+        &mut self,
+        input_source: &'static str,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        self.emit_safebind_rule_failure(
+            "EmptyList",
+            "Empty List.",
+            &format!("head-tail list pattern requires a non-empty {input_source}"),
+            Some(input_source),
+            span,
+        )
     }
 
     fn emit_safebind_pattern_failure(
@@ -8672,8 +8729,13 @@ impl Codegen {
             TypedPattern::As(_, inner, _) => {
                 self.emit_safebind_pattern_failure(inner, value_slot, span)
             }
-            TypedPattern::ListNil(_) | TypedPattern::ListCons(_, _, _) => {
-                self.emit_empty_list_failure(span)
+            TypedPattern::ListNil(ty) | TypedPattern::ListCons(ty, _, _) => {
+                let input_source = if matches!(ty, Ty::Str) {
+                    "String"
+                } else {
+                    "List"
+                };
+                self.emit_empty_list_failure(input_source, span)
             }
             TypedPattern::Extractor {
                 input_ty,
@@ -8682,7 +8744,7 @@ impl Codegen {
             } if matches!(extractor_ty, Ty::BuiltinFunc { name, .. } if name == "uncons")
                 && matches!(input_ty, Ty::List(_)) =>
             {
-                self.emit_empty_list_failure(span)
+                self.emit_empty_list_failure("List", span)
             }
             TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
@@ -8690,7 +8752,13 @@ impl Codegen {
             | TypedPattern::DurationLit(_, _) => {
                 self.emit_literal_pattern_mismatch_failure(pat, value_slot, span)
             }
-            _ => self.emit_pattern_mismatch_failure(span),
+            _ => self.emit_safebind_rule_failure(
+                "PatternMismatch",
+                "Pattern did not match.",
+                "pattern must match the SafeBind input",
+                None,
+                span,
+            ),
         }
     }
 
@@ -8701,18 +8769,14 @@ impl Codegen {
         span: Span,
     ) -> Result<(), CodegenError> {
         let Some(lhs_value) = literal_pattern_display(pat) else {
-            return self.emit_pattern_mismatch_failure(span);
+            return self.emit_safebind_rule_failure(
+                "PatternMismatch",
+                "Pattern did not match.",
+                "literal pattern must equal the SafeBind input",
+                None,
+                span,
+            );
         };
-
-        let prefix_idx = self.add_constant(Constant::Str("Pattern did not match.\t@@lhs=".into()));
-        self.emit(Opcode::LoadConst(prefix_idx));
-        let lhs_idx = self.add_constant(Constant::Str(lhs_value));
-        self.emit(Opcode::LoadConst(lhs_idx));
-        self.emit(Opcode::ConcatStr);
-
-        let rhs_prefix_idx = self.add_constant(Constant::Str("\t@@rhs=".into()));
-        self.emit(Opcode::LoadConst(rhs_prefix_idx));
-        self.emit(Opcode::ConcatStr);
 
         self.emit(Opcode::LoadLocal(value_slot));
         let inspect_id = Self::builtin_id("inspect").ok_or_else(|| CodegenError {
@@ -8725,9 +8789,15 @@ impl Codegen {
             span_start: span.start as u32,
             span_end: span.end as u32,
         });
-        self.emit(Opcode::ConcatStr);
-
-        self.emit_pattern_failure_from_message_stack("PatternMismatch", span)
+        self.emit_pattern_failure_from_message_stack_with_diagnostic(
+            "PatternMismatch",
+            span,
+            Some(
+                sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch {
+                    lhs: lhs_value,
+                },
+            ),
+        )
     }
 
     fn emit_list_len_mismatch_failure_concrete(
@@ -8737,9 +8807,11 @@ impl Codegen {
         op: &str,
         span: Span,
     ) -> Result<(), CodegenError> {
-        self.emit_pattern_failure(
+        self.emit_safebind_rule_failure(
             "IndexOutOfBounds",
             &format!("LHS.len({}) {} RHS.len({})", lhs_len, op, rhs_len),
+            "fixed-length list pattern requires List.len to match the pattern arity",
+            Some("List"),
             span,
         )
     }
@@ -8783,7 +8855,39 @@ impl Codegen {
         self.emit(Opcode::LoadConst(suffix_idx));
         self.emit(Opcode::ConcatStr);
 
-        self.emit_pattern_failure_from_message_stack("IndexOutOfBounds", span)
+        self.emit_pattern_failure_from_message_stack_with_diagnostic(
+            "IndexOutOfBounds",
+            span,
+            Some(
+                sindr::ir::RuntimeErrorDiagnosticTemplate::SafeBindPatternFailure {
+                    rule: "fixed-length list pattern requires List.len to match the pattern arity"
+                        .into(),
+                    input_source: Some("List".into()),
+                },
+            ),
+        )
+    }
+
+    fn emit_safebind_rule_failure(
+        &mut self,
+        kind: &str,
+        message: &str,
+        rule: &str,
+        input_source: Option<&str>,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        let message_idx = self.add_constant(Constant::Str(message.into()));
+        self.emit(Opcode::LoadConst(message_idx));
+        self.emit_pattern_failure_from_message_stack_with_diagnostic(
+            kind,
+            span,
+            Some(
+                sindr::ir::RuntimeErrorDiagnosticTemplate::SafeBindPatternFailure {
+                    rule: rule.into(),
+                    input_source: input_source.map(str::to_string),
+                },
+            ),
+        )
     }
 
     fn emit_pattern_mismatch_failure(&mut self, span: Span) -> Result<(), CodegenError> {
@@ -8868,10 +8972,11 @@ impl Codegen {
         Ok(())
     }
 
-    fn emit_pattern_failure_from_message_stack(
+    fn emit_pattern_failure_from_message_stack_with_diagnostic(
         &mut self,
         kind: &str,
         span: Span,
+        diagnostic: Option<sindr::ir::RuntimeErrorDiagnosticTemplate>,
     ) -> Result<(), CodegenError> {
         if matches!(
             self.safe_bind_failure_target,
@@ -8883,7 +8988,7 @@ impl Codegen {
             let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit(Opcode::LoadLocal(msg_slot));
-            self.emit_error_value_from_stack(kind, &span);
+            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic.clone());
             self.emit(Opcode::StructNew { field_count: 1 });
             self.emit(Opcode::Return);
         } else if matches!(
@@ -8897,11 +9002,11 @@ impl Codegen {
                 let tag_const = self.add_constant(Constant::Tag(1));
                 self.emit(Opcode::LoadConst(tag_const));
                 self.emit(Opcode::LoadLocal(msg_slot));
-                self.emit_error_value_from_stack(kind, &span);
+                self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic.clone());
                 self.emit(Opcode::StructNew { field_count: 1 });
                 self.emit(Opcode::Halt);
             } else {
-                self.emit_error_value_from_stack(kind, &span);
+                self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic.clone());
                 let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
                     message: "Unknown builtin: eprint".into(),
                     span: span.clone(),
@@ -8922,7 +9027,7 @@ impl Codegen {
             let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit(Opcode::LoadLocal(msg_slot));
-            self.emit_error_value_from_stack(kind, &span);
+            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic.clone());
             self.emit(Opcode::StructNew { field_count: 1 });
             self.emit(Opcode::Return);
         } else if self.top_level_returns_result {
@@ -8933,11 +9038,11 @@ impl Codegen {
             let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit(Opcode::LoadLocal(msg_slot));
-            self.emit_error_value_from_stack(kind, &span);
+            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic.clone());
             self.emit(Opcode::StructNew { field_count: 1 });
             self.emit(Opcode::Halt);
         } else {
-            self.emit_error_value_from_stack(kind, &span);
+            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic);
             let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
                 message: "Unknown builtin: eprint".into(),
                 span: span.clone(),
@@ -8990,30 +9095,37 @@ impl Codegen {
         });
     }
 
-    fn emit_error_value_from_stack(&mut self, kind: &str, span: &Span) {
-        if let Some((fun_idx, arity)) = self.state.error_ctor_funs.get(kind).copied() {
-            match arity {
-                1 => {
-                    self.emit(Opcode::Call {
-                        fun_idx,
-                        arity: 1,
-                        span_start: span.start as u32,
-                        span_end: span.end as u32,
-                    });
-                    return;
-                }
-                0 => {
-                    self.emit(Opcode::Pop);
-                    self.emit(Opcode::Call {
-                        fun_idx,
-                        arity: 0,
-                        span_start: span.start as u32,
-                        span_end: span.end as u32,
-                    });
-                    return;
-                }
-                _ => {
-                    // fall through to literal fallback
+    fn emit_error_value_from_stack_with_diagnostic(
+        &mut self,
+        kind: &str,
+        span: &Span,
+        diagnostic: Option<sindr::ir::RuntimeErrorDiagnosticTemplate>,
+    ) {
+        if diagnostic.is_none() {
+            if let Some((fun_idx, arity)) = self.state.error_ctor_funs.get(kind).copied() {
+                match arity {
+                    1 => {
+                        self.emit(Opcode::Call {
+                            fun_idx,
+                            arity: 1,
+                            span_start: span.start as u32,
+                            span_end: span.end as u32,
+                        });
+                        return;
+                    }
+                    0 => {
+                        self.emit(Opcode::Pop);
+                        self.emit(Opcode::Call {
+                            fun_idx,
+                            arity: 0,
+                            span_start: span.start as u32,
+                            span_end: span.end as u32,
+                        });
+                        return;
+                    }
+                    _ => {
+                        // fall through to literal fallback
+                    }
                 }
             }
         }
@@ -9028,6 +9140,7 @@ impl Codegen {
             column: 0,
             format: String::new(),
             num_params: 1,
+            diagnostic,
         });
         self.emit(Opcode::MakeError { template_id });
     }

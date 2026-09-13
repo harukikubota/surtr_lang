@@ -48,6 +48,10 @@ impl SigilSession {
                         return Err(ResolveError {
                             message: format!("Duplicate top-level definition: {}", name),
                             span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Namespace,
+                                subject: None,
+                            },
                             related_labels: Vec::new(),
                         });
                     }

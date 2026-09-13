@@ -38,6 +38,7 @@ impl Parser<'_> {
             )
         {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::StatementSyntax,
                 "Declarations are only allowed at the top level",
                 self.peek_span(),
             ));

@@ -10,13 +10,24 @@ fn permissive_module_rules() -> spire::ParseRules {
 }
 
 fn parse_module_ast(src: &str, module_path: &str) -> Vec<Ast> {
-    let _ = module_path;
-    spire::parse_with_context(
+    let mut ast = spire::parse_with_context(
         src,
         spire::ParserContext::module(0, Some(module_path.to_string()))
             .with_rules(permissive_module_rules()),
     )
-    .expect("definition source should parse")
+    .expect("definition source should parse");
+    if module_path == "DynamicSupervisor" {
+        // The fixture models the compiler-provided internal runtime declarations,
+        // not user-authored source surfaces.
+        for statement in &mut ast {
+            if let Ast::BuiltinDecl(_, name, _, _, _, _, attrs) = statement {
+                if matches!(name.as_str(), "spawn" | "adopt" | "status") {
+                    attrs.compiler_generated = true;
+                }
+            }
+        }
+    }
+    ast
 }
 
 fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {

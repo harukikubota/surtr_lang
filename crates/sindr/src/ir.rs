@@ -1124,6 +1124,17 @@ pub enum Constant {
 }
 
 /// Error template — baked location info for `deferror` values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RuntimeErrorDiagnosticTemplate {
+    LiteralPatternMismatch {
+        lhs: String,
+    },
+    SafeBindPatternFailure {
+        rule: String,
+        input_source: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ErrTemplate {
     pub id: u32,
@@ -1134,6 +1145,8 @@ pub struct ErrTemplate {
     pub column: u32,
     pub format: String,
     pub num_params: u8,
+    #[serde(default)]
+    pub diagnostic: Option<RuntimeErrorDiagnosticTemplate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2047,6 +2060,7 @@ mod tests {
                 column: 4,
                 format: "bad".to_string(),
                 num_params: 0,
+                diagnostic: None,
             }],
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),
@@ -2507,6 +2521,7 @@ mod tests {
             column: 0,
             format: "{}".into(),
             num_params: 1,
+            diagnostic: None,
         }];
 
         populate_error_template_lines(&mut templates, source);

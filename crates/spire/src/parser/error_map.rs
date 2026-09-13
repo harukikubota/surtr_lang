@@ -18,7 +18,11 @@ pub(crate) fn map_chumsky_error_with_diagnostic(
 ) -> ParseErrorDiagnostic {
     let Some(err) = errs.pop() else {
         return ParseErrorDiagnostic {
-            error: ParseError::syntax("unknown parse error", fallback_span(tokens)),
+            error: ParseError::syntax(
+                crate::error::ParseErrorReason::CompilerInvariant,
+                "unknown parse error",
+                fallback_span(tokens),
+            ),
             expected_tokens: Vec::new(),
             cursor_span: fallback_span(tokens),
         };
@@ -31,11 +35,8 @@ pub(crate) fn map_chumsky_error_with_diagnostic(
         RichReason::ExpectedFound { .. } => "unexpected token while parsing program".to_string(),
     };
 
-    let error = if let Some(expected) = message.strip_prefix("Incomplete input: expected ") {
-        ParseError::incomplete(expected.to_string(), span.clone())
-    } else if message.contains("end of input") || message.contains("unexpected end of input") {
-        ParseError::incomplete("input", span.clone())
-    } else if matches!(err.reason(), RichReason::ExpectedFound { .. }) && err.found().is_none() {
+    let error = if matches!(err.reason(), RichReason::ExpectedFound { .. }) && err.found().is_none()
+    {
         let expected = if expected_tokens.is_empty() {
             "token".to_string()
         } else {
@@ -43,8 +44,19 @@ pub(crate) fn map_chumsky_error_with_diagnostic(
         };
         ParseError::incomplete(expected, span.clone())
     } else {
-        ParseError::syntax(message, span.clone())
+        let reason = match err.reason() {
+            RichReason::ExpectedFound { .. } => crate::error::ParseErrorReason::UnexpectedToken,
+            RichReason::Custom(_) => crate::error::ParseErrorReason::StatementSyntax,
+        };
+        let error = ParseError::syntax(reason, message, span.clone());
+        match err.found() {
+            Some(found) => error
+                .with_token_kind(format!("{:?}", found.token))
+                .with_guidance(crate::error::ParseErrorGuidance::UnexpectedToken),
+            None => error,
+        }
     };
+    let error = error.with_parser_context(expected_tokens.clone(), span.clone());
 
     ParseErrorDiagnostic {
         error,
@@ -55,13 +67,6 @@ pub(crate) fn map_chumsky_error_with_diagnostic(
 
 fn extract_expected_tokens(err: &Rich<'_, Spanned<Token>>) -> Vec<String> {
     let mut out = Vec::new();
-
-    if let RichReason::Custom(message) = err.reason() {
-        if let Some(expected) = message.strip_prefix("Incomplete input: expected ") {
-            out.push(expected.to_string());
-            return out;
-        }
-    }
 
     for expected in err.expected() {
         let label = format!("{expected:?}");

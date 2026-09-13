@@ -1,2 +1,2 @@
 phase: typecheck
-contains: duration literal pattern requires Duration, got Int
+contains: Pattern type mismatch: expected Duration, got Int

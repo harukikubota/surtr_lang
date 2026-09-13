@@ -6376,7 +6376,16 @@ fn test_defgenserver_worker_init_route_uses_user_defined_name() {
                 .find(|node| matches!(node, Ast::Def(_, def_name, _, _, _, _, _, _) if def_name == "size"))
                 .expect("worker genserver should include @call wrapper");
             match init_wrapper {
-                Ast::Def(_, _, _, params, Some(AstTy::Generic(_, ty_name, ty_args)), _, body, _) => {
+                Ast::Def(
+                    _,
+                    _,
+                    _,
+                    params,
+                    Some(AstTy::Generic(_, ty_name, ty_args)),
+                    _,
+                    body,
+                    _,
+                ) => {
                     assert_eq!(params.len(), 1);
                     assert!(
                         ty_name == "Result"
@@ -6401,7 +6410,9 @@ fn test_defgenserver_worker_init_route_uses_user_defined_name() {
                             )
                     ));
                 }
-                other => panic!("expected worker genserver init wrapper to return Result<PID<QueueServer>>, got {other:?}"),
+                other => panic!(
+                    "expected worker genserver init wrapper to return Result<PID<QueueServer>>, got {other:?}"
+                ),
             }
             match size_wrapper {
                 Ast::Def(_, _, _, params, _, _, _, _) => {

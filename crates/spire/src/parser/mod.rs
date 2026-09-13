@@ -77,6 +77,7 @@ fn reject_excessive_delimiter_nesting(tokens: &[Spanned<Token>]) -> Result<(), P
                 depth += 1;
                 if depth > MAX_PARSE_NESTING {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::PositionRule,
                         MAX_PARSE_NESTING_MESSAGE,
                         token.span.clone(),
                     ));
@@ -99,6 +100,7 @@ pub(super) fn reject_marker_owner_paths(tokens: &[Spanned<Token>]) -> Result<(),
                 if matches!(body.split_once("::"), Some(("Self" | "Type", _)))
         ) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
                 "`Self` and `Type` are type markers, not value-level call owners",
                 token.span.clone(),
             ));
@@ -114,6 +116,7 @@ pub(super) fn reject_marker_owner_paths(tokens: &[Spanned<Token>]) -> Result<(),
             && matches!(window[3].token, Token::Ident(_))
         {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
                 "`Self` and `Type` are type markers, not value-level call owners",
                 Span {
                     start: window[0].span.start,
@@ -211,6 +214,7 @@ impl<'a> Parser<'a> {
             ))
         } else {
             Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
                 format!("Expected {:?}, got {:?}", expected, self.peek()),
                 sp,
             ))
@@ -258,6 +262,7 @@ impl<'a> Parser<'a> {
             }
             Token::Eof => Err(ParseError::incomplete(">", sp)),
             other => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
                 format!("Expected Gt, got {:?}", other),
                 sp,
             )),
@@ -273,6 +278,7 @@ impl<'a> Parser<'a> {
             }
             Token::Eof => Err(ParseError::incomplete("identifier", sp)),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
                 format!("Expected identifier, got {:?}", self.peek()),
                 sp,
             )),
@@ -313,6 +319,7 @@ impl<'a> Parser<'a> {
             }
             Token::Eof => Err(ParseError::incomplete("identifier", sp)),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
                 format!("Expected identifier, got {:?}", self.peek()),
                 sp,
             )),
@@ -341,7 +348,11 @@ impl<'a> Parser<'a> {
         self.parse_nesting_depth += 1;
         if self.parse_nesting_depth > MAX_PARSE_NESTING {
             self.parse_nesting_depth -= 1;
-            return Err(ParseError::syntax(MAX_PARSE_NESTING_MESSAGE, span));
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
+                MAX_PARSE_NESTING_MESSAGE,
+                span,
+            ));
         }
         let result = f(self);
         self.parse_nesting_depth -= 1;
@@ -381,16 +392,18 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
         if self.starts_immediate_anonymous_callable_call(stmt) {
-            return Err(ParseError::syntax(
+            return Err(ParseError::syntax(crate::error::ParseErrorReason::PositionRule,
                 "Immediate calls on anonymous callable expressions are not supported; bind the callable to a name and call it as `fn(args)`",
                 self.peek_span(),
-            ));
+            ).with_guidance(crate::error::ParseErrorGuidance::ImmediateAnonymousCall));
         }
         if matches!(self.peek(), Token::DotDot) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
                 "Range literals must use bracket syntax",
                 self.peek_span(),
-            ));
+            )
+            .with_guidance(crate::error::ParseErrorGuidance::RangeLiteral));
         }
         let ok = matches!(self.peek(), Token::Newline | Token::Eof)
             || (allow_rbrace && matches!(self.peek(), Token::RBrace));
@@ -398,6 +411,7 @@ impl<'a> Parser<'a> {
             Ok(())
         } else {
             Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
                 "Expected newline or `;` between statements",
                 self.peek_span(),
             ))
@@ -410,7 +424,11 @@ impl<'a> Parser<'a> {
 
     fn consume_path_separator(&mut self) -> Result<Span, ParseError> {
         if !self.has_path_separator() {
-            return Err(ParseError::syntax("Expected `::`", self.peek_span()));
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
+                "Expected `::`",
+                self.peek_span(),
+            ));
         }
         let start = self.peek_span().start;
         self.advance();
@@ -435,6 +453,7 @@ impl<'a> Parser<'a> {
             segments.push(segment);
             if segments.len() > max_segments {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::PositionRule,
                     format!("{label} path must not exceed {max_segments} segments"),
                     Span { start, end },
                 ));
@@ -442,6 +461,7 @@ impl<'a> Parser<'a> {
         }
         if segments.len() > 1 && segments[0] == IMPLICIT_ROOT_NAMESPACE {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
                 format!(
                     "{label} path must not explicitly use reserved root namespace `{IMPLICIT_ROOT_NAMESPACE}`"
                 ),
@@ -477,6 +497,7 @@ fn lower_namespace_node(
         Ast::Namespace(span, name, body) => {
             if namespace.is_some() {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::PositionRule,
                     "Nested namespace declarations are not allowed",
                     span,
                 ));
@@ -625,6 +646,7 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
             qualify_namespace_type(rhs, namespace)?,
         )),
         Ast::Namespace(span, _, _) => Err(ParseError::syntax(
+            crate::error::ParseErrorReason::PositionRule,
             "Nested namespace declarations are not allowed",
             span,
         )),
@@ -643,12 +665,14 @@ fn qualify_namespace_head(
     let segments = name.split("::").collect::<Vec<_>>();
     if segments.len() > max_segments {
         return Err(ParseError::syntax(
+            crate::error::ParseErrorReason::PositionRule,
             format!("{label} path must not exceed {max_segments} segments"),
             span.clone(),
         ));
     }
     if reject_same_tail_as_namespace && segments.len() == 1 && segments[0] == namespace {
         return Err(ParseError::syntax(
+            crate::error::ParseErrorReason::PositionRule,
             format!("{label} name `{name}` conflicts with active namespace `{namespace}`"),
             span.clone(),
         ));
@@ -1487,6 +1511,7 @@ fn validate_top_level_namespace_owner_collisions(ast: &[Ast]) -> Result<(), Pars
         if let Ast::Namespace(span, name, _) = node {
             if name == IMPLICIT_ROOT_NAMESPACE {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::PositionRule,
                     format!(
                         "`{IMPLICIT_ROOT_NAMESPACE}` is reserved for the implicit root namespace"
                     ),
@@ -1495,6 +1520,7 @@ fn validate_top_level_namespace_owner_collisions(ast: &[Ast]) -> Result<(), Pars
             }
             if let Some(existing) = namespaces.get(name) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::PositionRule,
                     format!("namespace `{name}` is already defined in this scope"),
                     Span {
                         start: existing.start,
@@ -1513,6 +1539,7 @@ fn validate_top_level_namespace_owner_collisions(ast: &[Ast]) -> Result<(), Pars
         let owner_root = owner_name.split("::").next().unwrap_or(owner_name);
         if owner_root == IMPLICIT_ROOT_NAMESPACE {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
                 format!("`{IMPLICIT_ROOT_NAMESPACE}` is reserved for the implicit root namespace"),
                 node.span().clone(),
             ));
@@ -1522,6 +1549,7 @@ fn validate_top_level_namespace_owner_collisions(ast: &[Ast]) -> Result<(), Pars
         }
         if namespaces.contains_key(owner_root) && !owner_name.contains("::") {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PositionRule,
                 format!("owner name `{owner_name}` conflicts with namespace `{owner_root}`"),
                 node.span().clone(),
             ));

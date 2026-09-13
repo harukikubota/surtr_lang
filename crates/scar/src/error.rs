@@ -23,7 +23,9 @@ impl TypeError {
     }
 
     pub fn reason(&self) -> Option<TypeDiagnosticReason> {
-        self.structured.as_ref().map(|diagnostic| diagnostic.reason)
+        self.structured
+            .as_ref()
+            .and_then(|diagnostic| diagnostic.reason.type_reason())
     }
 
     pub fn new(message: impl Into<String>, span: Span) -> Self {

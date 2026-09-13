@@ -836,6 +836,7 @@ mod tests {
                 column: 1,
                 format: "sample".into(),
                 num_params: 0,
+                diagnostic: None,
             }],
             dbg_templates: Vec::new(),
             callable_templates: Vec::new(),

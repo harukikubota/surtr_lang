@@ -1,8 +1,9 @@
 //! Type assertions commit on success and preserve both source facts on failure.
 use super::*;
 use diagnostics::{
-    ArgumentRelationData, BranchAssertionData, DiagnosticData, DiagnosticOrigin, SourceFact,
-    SourceId, SourceRole, StructuredDiagnostic, TypeDiagnosticReason,
+    ArgumentRelationData, BranchAssertionData, DiagnosticData, DiagnosticOrigin,
+    PatternDiagnosticData, PatternKind, PolicyData, SourceFact, SourceId, SourceRole,
+    StructuredDiagnostic, TypeDiagnosticReason, TypePolicy,
 };
 
 struct TypeRelationCheckpoint {
@@ -219,13 +220,121 @@ impl Checker {
             })
         };
         TypeError::from_structured(StructuredDiagnostic {
-            reason,
+            reason: reason.into(),
             origin,
             data,
             primary: actual_fact,
             related: vec![expected_fact],
             remediation: None,
         })
+    }
+
+    pub(super) fn pattern_error(
+        &self,
+        reason: TypeDiagnosticReason,
+        pattern_kind: PatternKind,
+        name: Option<String>,
+        expected_type: Option<String>,
+        actual: Option<&Ty>,
+        expected_count: Option<usize>,
+        actual_count: Option<usize>,
+        details: Vec<String>,
+        span: &Span,
+    ) -> TypeError {
+        let actual_type = actual.map(|ty| self.diagnostic_ty_name(&self.resolve_ty(ty)));
+        let mut related = Vec::new();
+        if let Some(ty) = expected_type.as_deref() {
+            related.push(SourceFact::typed(
+                SourceRole::Expected,
+                SourceId(0),
+                span.clone(),
+                ty,
+            ));
+        }
+        if let Some(ty) = actual_type.as_deref() {
+            related.push(SourceFact::typed(
+                SourceRole::Value,
+                SourceId(0),
+                span.clone(),
+                ty,
+            ));
+        }
+        TypeError::from_structured(StructuredDiagnostic {
+            reason: reason.into(),
+            origin: DiagnosticOrigin::Pattern,
+            data: DiagnosticData::Pattern(PatternDiagnosticData {
+                pattern_kind,
+                name,
+                expected_type,
+                actual_type,
+                expected_count,
+                actual_count,
+                details,
+            }),
+            primary: SourceFact::untyped(SourceRole::Pattern, SourceId(0), span.clone()),
+            related,
+            remediation: None,
+        })
+    }
+
+    pub(super) fn policy_error(
+        &self,
+        reason: TypeDiagnosticReason,
+        policy: TypePolicy,
+        subject: Option<String>,
+        expected: Option<&Ty>,
+        actual: Option<&Ty>,
+        stage: Option<String>,
+        entrypoint: Option<String>,
+        span: &Span,
+        hint: Option<String>,
+    ) -> TypeError {
+        let expected_type = expected.map(|ty| self.diagnostic_ty_name(&self.resolve_ty(ty)));
+        let actual_type = actual.map(|ty| self.diagnostic_ty_name(&self.resolve_ty(ty)));
+        let primary_type = actual_type.as_deref().or(expected_type.as_deref());
+        let primary = primary_type.map_or_else(
+            || SourceFact::untyped(SourceRole::Value, SourceId(0), span.clone()),
+            |ty| SourceFact::typed(SourceRole::Value, SourceId(0), span.clone(), ty),
+        );
+        let related = expected_type
+            .as_deref()
+            .map(|ty| SourceFact::typed(SourceRole::Expected, SourceId(0), span.clone(), ty))
+            .into_iter()
+            .collect();
+        let error = TypeError::from_structured(StructuredDiagnostic {
+            reason: reason.into(),
+            origin: DiagnosticOrigin::Intrinsic,
+            data: DiagnosticData::Policy(PolicyData {
+                policy,
+                subject,
+                expected_type,
+                actual_type,
+                stage,
+                entrypoint,
+            }),
+            primary,
+            related,
+            remediation: None,
+        });
+        hint.map_or(error.clone(), |hint| error.with_hint(hint))
+    }
+
+    pub(super) fn typecheck_invariant_error(
+        &self,
+        subject: impl Into<String>,
+        span: &Span,
+    ) -> TypeError {
+        self.policy_error(
+            TypeDiagnosticReason::TypecheckInvariantViolation,
+            TypePolicy::ProducerContract,
+            Some(subject.into()),
+            None,
+            None,
+            None,
+            None,
+            span,
+            None,
+        )
     }
 }
 
@@ -331,7 +440,7 @@ impl Checker {
         origin: DiagnosticOrigin,
     ) -> StructuredDiagnostic {
         StructuredDiagnostic {
-            reason,
+            reason: reason.into(),
             origin,
             data: DiagnosticData::ArgumentContract(diagnostics::ArgumentContractData {
                 callable: callable.into(),
@@ -354,7 +463,7 @@ impl Checker {
     ) -> TypeError {
         if reason == TypeDiagnosticReason::MissingTypeConstructorCapability {
             return TypeError::from_structured(StructuredDiagnostic {
-                reason,
+                reason: reason.into(),
                 origin,
                 data: DiagnosticData::TypeConstructorCarrier(
                     diagnostics::TypeConstructorCarrierData {
@@ -397,7 +506,7 @@ impl Checker {
                 TypeDiagnosticReason::CallableShapeMismatch
             };
         TypeError::from_structured(StructuredDiagnostic {
-            reason,
+            reason: reason.into(),
             origin: DiagnosticOrigin::Call,
             data: DiagnosticData::CallableShape(diagnostics::CallableShapeData {
                 callable: callable.into(),
@@ -574,7 +683,7 @@ impl Checker {
         span: &Span,
     ) -> TypeError {
         TypeError::from_structured(StructuredDiagnostic {
-            reason,
+            reason: reason.into(),
             origin: DiagnosticOrigin::TraitCall,
             data: DiagnosticData::TraitDispatch(diagnostics::TraitDispatchData {
                 impl_declaration: None,
@@ -682,7 +791,7 @@ impl Checker {
             })
         };
         TypeError::from_structured(StructuredDiagnostic {
-            reason,
+            reason: reason.into(),
             origin,
             data,
             primary: self.type_fact(SourceRole::Value, span, subject),
@@ -700,7 +809,7 @@ impl Checker {
         span: &Span,
     ) -> TypeError {
         TypeError::from_structured(StructuredDiagnostic {
-            reason: TypeDiagnosticReason::CallableShapeMismatch,
+            reason: TypeDiagnosticReason::CallableShapeMismatch.into(),
             origin: DiagnosticOrigin::Call,
             data: DiagnosticData::CallableShape(diagnostics::CallableShapeData {
                 callable: "closure".into(),
@@ -753,7 +862,7 @@ impl Checker {
         span: &Span,
     ) -> TypeError {
         TypeError::from_structured(StructuredDiagnostic {
-            reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument,
+            reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument.into(),
             origin: DiagnosticOrigin::ReturnTypeArgument { ordinal: 0 },
             data: DiagnosticData::ReturnTypeArgument(diagnostics::ReturnTypeArgumentData {
                 declared_origin: None,
@@ -910,8 +1019,11 @@ impl Checker {
         if let Some(diagnostic) = &mut error.structured {
             if diagnostic.origin == DiagnosticOrigin::Call
                 && matches!(
-                    diagnostic.reason,
-                    TypeDiagnosticReason::NotCallable | TypeDiagnosticReason::CallableShapeMismatch
+                    diagnostic.reason.type_reason(),
+                    Some(
+                        TypeDiagnosticReason::NotCallable
+                            | TypeDiagnosticReason::CallableShapeMismatch
+                    )
                 )
             {
                 let role = if &diagnostic.primary.span == left {

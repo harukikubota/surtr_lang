@@ -10,6 +10,7 @@ impl Parser<'_> {
         let assign_tok = self.peek().clone();
         if !matches!(assign_tok, Token::Bind | Token::SafeBind) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PatternSyntax,
                 "Pattern destructuring requires assignment operator (`=` or `=?`)",
                 self.peek_span(),
             ));
@@ -23,6 +24,7 @@ impl Parser<'_> {
         };
         if matches!(assign_tok, Token::Bind) && pattern_contains_pin(&pat) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PatternSyntax,
                 "Pinned patterns are not allowed with =. Use =? or match for value checks.",
                 span,
             ));
@@ -141,6 +143,7 @@ impl Parser<'_> {
             }
             if super::pattern_depth(&pat) >= super::MAX_PARSE_NESTING {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::PatternSyntax,
                     super::MAX_PARSE_NESTING_MESSAGE,
                     super::pattern_span(&pat).clone(),
                 ));
@@ -164,12 +167,15 @@ impl Parser<'_> {
             };
             if alias.starts_with('_') {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::PatternSyntax,
                     "as-pattern alias must be a binding identifier.",
                     alias_span,
-                ));
+                )
+                .with_guidance(crate::error::ParseErrorGuidance::AsPatternAlias));
             }
             if alias == "self" && self.impl_target_stack.is_empty() {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::PatternSyntax,
                     "`self` can only be used inside impl methods",
                     alias_span,
                 ));
@@ -208,6 +214,7 @@ impl Parser<'_> {
                 let (name, name_span) = self.expect_ident()?;
                 if name == "self" && self.impl_target_stack.is_empty() {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::PatternSyntax,
                         "`self` can only be used inside impl methods",
                         name_span,
                     ));
@@ -250,6 +257,7 @@ impl Parser<'_> {
                     }
                     Token::Eof => Err(ParseError::incomplete("integer literal", neg_span)),
                     _ => Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::PatternSyntax,
                         "Expected integer literal after '-' in pattern",
                         neg_span,
                     )),
@@ -270,6 +278,7 @@ impl Parser<'_> {
             Token::Ident(name) => {
                 if name == "self" && self.impl_target_stack.is_empty() {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::PatternSyntax,
                         "`self` can only be used inside impl methods",
                         sp,
                     ));
@@ -361,6 +370,7 @@ impl Parser<'_> {
 
                 if segments.len() > 1 {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::PatternSyntax,
                         "Qualified patterns support constructor forms only",
                         Span {
                             start: sp.start,
@@ -374,54 +384,56 @@ impl Parser<'_> {
             }
             Token::LBrack => self.parse_list_bind_pattern(),
             Token::Unit => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PatternSyntax,
                 "The Unit type has no pattern matching.",
                 sp,
-            )),
-            Token::LParen => {
-                self.with_parse_nesting(sp.clone(), |parser| {
+            )
+            .with_guidance(crate::error::ParseErrorGuidance::UnitPattern)),
+            Token::LParen => self.with_parse_nesting(sp.clone(), |parser| {
+                parser.advance();
+                parser.skip_newlines();
+                let first = parser.parse_bind_pattern()?;
+                parser.skip_newlines();
+                if matches!(parser.peek(), Token::Comma) {
                     parser.advance();
                     parser.skip_newlines();
-                    let first = parser.parse_bind_pattern()?;
+                    if matches!(parser.peek(), Token::RParen) {
+                        return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::PatternSyntax,
+                            "1-tuple patterns are not supported",
+                            Span {
+                                start: sp.start,
+                                end: parser.peek_span().end,
+                            },
+                        ));
+                    }
+                    let mut items = vec![first, parser.parse_bind_pattern()?];
                     parser.skip_newlines();
-                    if matches!(parser.peek(), Token::Comma) {
+                    while matches!(parser.peek(), Token::Comma) {
                         parser.advance();
                         parser.skip_newlines();
                         if matches!(parser.peek(), Token::RParen) {
-                            return Err(ParseError::syntax(
-                                "1-tuple patterns are not supported",
-                                Span {
-                                    start: sp.start,
-                                    end: parser.peek_span().end,
-                                },
-                            ));
+                            break;
                         }
-                        let mut items = vec![first, parser.parse_bind_pattern()?];
+                        items.push(parser.parse_bind_pattern()?);
                         parser.skip_newlines();
-                        while matches!(parser.peek(), Token::Comma) {
-                            parser.advance();
-                            parser.skip_newlines();
-                            if matches!(parser.peek(), Token::RParen) {
-                                break;
-                            }
-                            items.push(parser.parse_bind_pattern()?);
-                            parser.skip_newlines();
-                        }
-                        let end = parser.expect(&Token::RParen)?;
-                        Ok(AstPattern::Tuple(
-                            Span {
-                                start: sp.start,
-                                end: end.end,
-                            },
-                            items,
-                        ))
-                    } else {
-                        parser.expect(&Token::RParen)?;
-                        Ok(first)
                     }
-                })
-            }
+                    let end = parser.expect(&Token::RParen)?;
+                    Ok(AstPattern::Tuple(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        items,
+                    ))
+                } else {
+                    parser.expect(&Token::RParen)?;
+                    Ok(first)
+                }
+            }),
             Token::Eof => Err(ParseError::incomplete("list pattern", sp)),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PatternSyntax,
                 "Pattern supports identifiers, literals, `_`, list patterns, nested `Ok(...)` patterns, and `pattern @ alias`",
                 sp,
             )),

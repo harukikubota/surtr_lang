@@ -26,7 +26,12 @@ pub(crate) fn validate_stmt_by_context(
                     }
                     _ => "This top-level declaration is not allowed in the current source policy",
                 };
-                return Err(ParseError::syntax(message, stmt.span().clone()));
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::SourcePolicy,
+                    message,
+                    stmt.span().clone(),
+                )
+                .with_guidance(crate::error::ParseErrorGuidance::TopLevelDeclaration));
             }
         } else if !context.parse_rules.allow_top_level_expr {
             let message = if context.unit_kind == ParseUnitKind::Module {
@@ -34,7 +39,12 @@ pub(crate) fn validate_stmt_by_context(
             } else {
                 "Top-level expressions are not allowed in this source context"
             };
-            return Err(ParseError::syntax(message, stmt.span().clone()));
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::SourcePolicy,
+                message,
+                stmt.span().clone(),
+            )
+            .with_guidance(crate::error::ParseErrorGuidance::TopLevelExpression));
         }
     }
     Ok(())
@@ -56,6 +66,7 @@ pub(crate) fn validate_program_by_context(
             Some(TopLevelDeclKind::Include) => {
                 if seen_non_include {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::PositionRule,
                         "include directive must appear before declarations and top-level expressions",
                         stmt.span().clone(),
                     ));
@@ -65,6 +76,7 @@ pub(crate) fn validate_program_by_context(
                 seen_non_include = true;
                 if seen_expr {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::PositionRule,
                         "top-level definition cannot appear after top-level expression",
                         stmt.span().clone(),
                     ));

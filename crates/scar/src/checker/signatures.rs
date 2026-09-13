@@ -157,7 +157,7 @@ pub(super) fn return_type_argument_arity_error(
         span: span.clone(),
         hint: None,
         structured: Some(StructuredDiagnostic {
-            reason: TypeDiagnosticReason::ReturnTypeArgumentArityMismatch,
+            reason: TypeDiagnosticReason::ReturnTypeArgumentArityMismatch.into(),
             origin: DiagnosticOrigin::Call,
             data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
                 callable: callable.into(),
@@ -201,7 +201,7 @@ pub(super) fn return_type_argument_mismatch_error(
         span: explicit_span.clone(),
         hint: None,
         structured: Some(StructuredDiagnostic {
-            reason: TypeDiagnosticReason::ReturnTypeArgumentMismatch,
+            reason: TypeDiagnosticReason::ReturnTypeArgumentMismatch.into(),
             origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
             data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
                 declared_origin: (related_role == SourceRole::Declaration).then(|| {
@@ -370,7 +370,7 @@ fn occurrence_error(
         span,
         hint: Some(help.into()),
         structured: Some(StructuredDiagnostic {
-            reason,
+            reason: reason.into(),
             origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
             data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
                 declared_origin: (reason != TypeDiagnosticReason::MissingReturnTypeArgument)
@@ -410,7 +410,7 @@ fn duplicate_return_type_argument_error(
         span: current.span.clone(),
         hint: Some(help.clone()),
         structured: Some(StructuredDiagnostic {
-            reason: TypeDiagnosticReason::DuplicateReturnTypeArgumentInput,
+            reason: TypeDiagnosticReason::DuplicateReturnTypeArgumentInput.into(),
             origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
             data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
                 declared_origin: Some(current.clone()),
@@ -601,7 +601,7 @@ pub(super) fn validate_constructor_variable_constraints(
         span: span.clone(),
         hint: Some(help.clone()),
         structured: Some(StructuredDiagnostic {
-            reason: TypeDiagnosticReason::MissingTypeConstructorConstraint,
+            reason: TypeDiagnosticReason::MissingTypeConstructorConstraint.into(),
             origin: DiagnosticOrigin::Declaration,
             data: DiagnosticData::ConstraintSubject(ConstraintSubjectData {
                 subject_origin: Some(source_fact(SourceRole::Declaration, span.clone(), &name)),
@@ -628,7 +628,7 @@ pub(super) fn invalid_trait_constraint_subject_error(
         span: span.clone(),
         hint: Some(help.clone()),
         structured: Some(StructuredDiagnostic {
-            reason: TypeDiagnosticReason::InvalidTraitConstraintSubject,
+            reason: TypeDiagnosticReason::InvalidTraitConstraintSubject.into(),
             origin: DiagnosticOrigin::Declaration,
             data: DiagnosticData::ConstraintSubject(ConstraintSubjectData {
                 subject_origin: Some(source_fact(SourceRole::Trait, span.clone(), subject)),
@@ -922,7 +922,7 @@ fn canonical_signature_consistency_error(
         span: id.span.clone(),
         hint: None,
         structured: Some(StructuredDiagnostic {
-            reason: TypeDiagnosticReason::CallableSignatureMetadataMismatch,
+            reason: TypeDiagnosticReason::CallableSignatureMetadataMismatch.into(),
             origin: DiagnosticOrigin::Declaration,
             data: DiagnosticData::CallableSignature(CallableSignatureData {
                 callable: id.name.clone(),
@@ -952,7 +952,7 @@ pub(super) fn missing_canonical_callable_signature(
         span: span.clone(),
         hint: None,
         structured: Some(StructuredDiagnostic {
-            reason: TypeDiagnosticReason::CallableSignatureMetadataMismatch,
+            reason: TypeDiagnosticReason::CallableSignatureMetadataMismatch.into(),
             origin: DiagnosticOrigin::Call,
             data: DiagnosticData::CallableSignature(CallableSignatureData {
                 callable: id.name.clone(),
@@ -980,7 +980,7 @@ pub(super) fn constructor_signature_metadata_error(
         span: span.clone(),
         hint: None,
         structured: Some(StructuredDiagnostic {
-            reason: TypeDiagnosticReason::CallableSignatureMetadataMismatch,
+            reason: TypeDiagnosticReason::CallableSignatureMetadataMismatch.into(),
             origin: DiagnosticOrigin::Declaration,
             data: DiagnosticData::CallableSignature(CallableSignatureData {
                 callable: callable.into(),
@@ -1097,53 +1097,87 @@ fn canonical_parameter_mode(mode: ValueParameterMode) -> CanonicalValueParameter
 pub(super) fn builtin_surface_signature(
     id: &sigil::resolved::ResolvedId,
 ) -> Option<BuiltinSurfaceSignatureMeta> {
-    builtin_surface_variant_for_decl(&id.name, id.qualified_name.as_deref())
+    let declared_name = id.name.rsplit("::").next().unwrap_or(&id.name);
+    builtin_surface_variant_for_decl(declared_name, id.qualified_name.as_deref())
 }
 
-/// Validate the source declaration's callable shape against metadata. Explicit
-/// metadata parameter names and modes are part of the contract; generated
-/// `argN` names denote runtime-only entries whose surface name is supplied by
-/// the declaration.
+/// Validate the complete source declaration identity and callable signature
+/// against its canonical builtin surface metadata.
 pub(super) fn builtin_surface_matches(
     id: &sigil::resolved::ResolvedId,
+    return_type_arguments: &[ResolvedReturnTypeArgument],
     params: &[ResolvedValueParameter],
-    ret_ty: Option<&spire::ast::AstTy>,
+    ret_ty: Option<&ResolvedSignatureTy>,
+    where_clause: Option<&ResolvedWhereClause>,
 ) -> bool {
-    let runtime_name = sindr::builtin::builtin_runtime_name(&id.name, id.qualified_name.as_deref());
-    if runtime_name.starts_with("__") {
-        return true;
-    }
     let Some(variant) = builtin_surface_signature(id) else {
         return false;
     };
-    if variant.value_parameters.len() != params.len() {
+    let (owner, name) = source_builtin_surface_identity(id);
+    let declared_name = id.name.rsplit("::").next().unwrap_or(&id.name);
+    if variant.identity.owner != owner || variant.identity.name != name || name != declared_name {
+        return false;
+    }
+    if variant.return_type_arguments.len() != return_type_arguments.len()
+        || variant.value_parameters.len() != params.len()
+    {
         return false;
     }
     if variant
-        .value_parameters
+        .return_type_arguments
         .iter()
-        .zip(params)
-        .any(|(expected, actual)| {
-            (!expected.name.starts_with("arg") && expected.name != actual.id.name)
-                || expected.mode != canonical_parameter_mode(actual.mode)
-        })
+        .zip(return_type_arguments)
+        .any(|(expected, actual)| expected.ordinal != actual.ordinal)
+        || variant
+            .value_parameters
+            .iter()
+            .zip(params)
+            .any(|(expected, actual)| {
+                expected.name != actual.id.name
+                    || expected.mode != canonical_parameter_mode(actual.mode)
+            })
     {
         return false;
     }
     let actual_return = ret_ty
-        .map(Checker::surface_ast_ty)
+        .map(|ty| Checker::surface_ast_ty(&ty.syntax))
         .unwrap_or_else(|| "Unit".to_string());
-    let actual_types = params
+    let actual_types = return_type_arguments
         .iter()
-        .map(|param| Checker::surface_ast_ty(&param.ty))
+        .map(|argument| Checker::surface_ast_ty(&argument.ty.syntax))
+        .chain(
+            params
+                .iter()
+                .map(|param| Checker::surface_ast_ty(&param.ty.syntax)),
+        )
         .chain(std::iter::once(actual_return))
         .collect::<Vec<_>>();
     let expected_types = variant
-        .value_parameters
+        .return_type_arguments
         .iter()
-        .map(|parameter| parameter.ty.clone())
+        .map(|argument| argument.ty.clone())
+        .chain(
+            variant
+                .value_parameters
+                .iter()
+                .map(|parameter| parameter.ty.clone()),
+        )
         .chain(std::iter::once(variant.return_type.ty.clone()))
         .collect::<Vec<_>>();
+
+    let actual_constraints = match source_builtin_constraints(where_clause) {
+        Some(constraints) => constraints,
+        None => return false,
+    };
+    let expected_constraints = variant
+        .where_constraints
+        .constraints
+        .iter()
+        .map(|constraint| (constraint.subject.clone(), constraint.trait_name.clone()))
+        .collect::<Vec<_>>();
+    if actual_constraints.len() != expected_constraints.len() {
+        return false;
+    }
     let mut actual_variables = HashMap::new();
     let mut expected_variables = HashMap::new();
     let actual_types = actual_types
@@ -1157,7 +1191,65 @@ pub(super) fn builtin_surface_matches(
     if actual_types != expected_types {
         return false;
     }
-    true
+
+    let mut actual_constraints = actual_constraints
+        .into_iter()
+        .map(|(subject, trait_name)| {
+            (
+                normalize_surface_type(&subject, &mut actual_variables),
+                trait_name,
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut expected_constraints = expected_constraints
+        .into_iter()
+        .map(|(subject, trait_name)| {
+            (
+                normalize_surface_type(&subject, &mut expected_variables),
+                trait_name,
+            )
+        })
+        .collect::<Vec<_>>();
+    actual_constraints.sort();
+    expected_constraints.sort();
+    actual_constraints == expected_constraints
+}
+
+fn source_builtin_surface_identity(id: &sigil::resolved::ResolvedId) -> (Option<String>, String) {
+    let qualified_name = id.qualified_name.as_deref().unwrap_or(&id.name);
+    match Checker::surface_name(qualified_name).rsplit_once("::") {
+        Some((owner, name)) => (Some(owner.to_string()), name.to_string()),
+        None => (
+            None,
+            id.name.rsplit("::").next().unwrap_or(&id.name).to_string(),
+        ),
+    }
+}
+
+/// Source builtin surfaces currently expose ordinary Trait bounds. A bound
+/// with constructor slots is not equivalent to an absent bound, and metadata
+/// without that role must reject it fail-closed.
+fn source_builtin_constraints(
+    where_clause: Option<&ResolvedWhereClause>,
+) -> Option<Vec<(String, String)>> {
+    let mut constraints = Vec::new();
+    let Some(where_clause) = where_clause else {
+        return Some(constraints);
+    };
+    for constraint in &where_clause.constraints {
+        let subject = Checker::surface_ast_ty(&constraint.subject);
+        for bound in &constraint.bounds {
+            let ResolvedWhereConstraintRhs::Trait { trait_id } = bound else {
+                return None;
+            };
+            let trait_name = trait_id.qualified_name.as_deref().unwrap_or(&trait_id.name);
+            constraints.push((
+                subject.clone(),
+                Checker::surface_name(trait_name).to_string(),
+            ));
+        }
+    }
+    Some(constraints)
 }
 
 /// Validate an `@builtin` Trait implementation against the runtime entry, not
@@ -1178,15 +1270,10 @@ pub(super) fn builtin_trait_surface_matches(
     if params.len() != usize::from(runtime.runtime_arity()) {
         return false;
     }
-    let Some(signature) = runtime.surface_variants().into_iter().next() else {
-        return false;
-    };
-    if signature.value_parameters.len() != value_parameters.len()
-        || signature
-            .value_parameters
-            .iter()
-            .zip(value_parameters)
-            .any(|(expected, actual)| expected.mode != canonical_parameter_mode(actual.mode))
+    if value_parameters.len() != params.len()
+        || value_parameters.iter().any(|actual| {
+            canonical_parameter_mode(actual.mode) != CanonicalValueParameterMode::PositionalOrNamed
+        })
     {
         return false;
     }
@@ -1396,12 +1483,14 @@ fn builtin_runtime_type_matches(
 }
 
 fn normalize_surface_type(ty: &str, variables: &mut HashMap<String, String>) -> String {
-    let ty = ty.replace("<()>", "<Unit>");
-    let ty = if ty.trim() == "()" {
-        "Unit".to_string()
-    } else {
-        ty
-    };
+    // The resolved AST renderer and the metadata parser format function-type
+    // separators differently; whitespace is not part of type identity.
+    let compact = ty
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    let compact = compact.replace("<()>", "<Unit>");
+    let ty = if compact == "()" { "Unit" } else { &compact };
     let mut normalized = String::with_capacity(ty.len());
     let mut chars = ty.chars().peekable();
     while let Some(character) = chars.next() {
@@ -1555,6 +1644,17 @@ mod tests {
         assert_eq!(
             data.right_origin.as_ref().map(|fact| fact.role),
             Some(SourceRole::ReturnTypeArgument)
+        );
+    }
+
+    #[test]
+    fn builtin_surface_type_normalization_ignores_function_type_whitespace() {
+        let mut actual_variables = HashMap::new();
+        let mut expected_variables = HashMap::new();
+
+        assert_eq!(
+            normalize_surface_type("( -> Result<$State>)", &mut actual_variables),
+            normalize_surface_type("(-> Result<$State>)", &mut expected_variables),
         );
     }
 }

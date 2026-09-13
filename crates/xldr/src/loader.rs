@@ -743,7 +743,7 @@ pub struct ScriptIncludeDirective {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScriptSourcePrepareError {
-    Parse { message: String, span: Span },
+    Parse { error: spire::error::ParseError },
     IncludeRead { message: String, span: Span },
 }
 
@@ -809,10 +809,7 @@ pub fn collect_script_include_directives(
         source,
         crate::derive_parser_context(0, source_kind, sindr::policy::CompileUnitKind::Script, None),
     )
-    .map_err(|e| ScriptSourcePrepareError::Parse {
-        message: e.message().to_string(),
-        span: e.span().clone(),
-    })?;
+    .map_err(|error| ScriptSourcePrepareError::Parse { error })?;
 
     let mut chars = source.chars().collect::<Vec<_>>();
     let mut directives = Vec::new();

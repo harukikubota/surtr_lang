@@ -44,6 +44,7 @@ impl Parser<'_> {
         } else if let [InterpolatedPart::Text(_)] = parts.as_slice() {
             let [part] = <[InterpolatedPart; 1]>::try_from(parts).map_err(|parts| {
                 ParseError::syntax(
+                    crate::error::ParseErrorReason::InterpolationSyntax,
                     format!(
                         "Interpolated string text simplification expected one part, got {}",
                         parts.len()
@@ -172,18 +173,21 @@ impl Parser<'_> {
                     end: expr_offset + e.span().end,
                 };
                 ParseError::syntax(
+                    crate::error::ParseErrorReason::InterpolationSyntax,
                     format!("Invalid interpolation expression: {}", e.message()),
                     mapped,
                 )
             })?;
             if parsed.len() != 1 {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::InterpolationSyntax,
                     "Interpolation expression must contain exactly one expression",
                     base_span.clone(),
                 ));
             }
             let [expr] = <[Ast; 1]>::try_from(parsed).map_err(|parsed| {
                 ParseError::syntax(
+                    crate::error::ParseErrorReason::InterpolationSyntax,
                     format!(
                         "Interpolation expression must contain exactly one expression, got {}",
                         parsed.len()

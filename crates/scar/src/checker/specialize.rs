@@ -116,7 +116,7 @@ impl Checker {
                         span: span.clone(),
                         hint: Some(help.clone()),
                         structured: Some(StructuredDiagnostic {
-                            reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument,
+                            reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument.into(),
                             origin: DiagnosticOrigin::ReturnTypeArgument { ordinal },
                             data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
                                 declared_origin: None,
@@ -165,7 +165,8 @@ impl Checker {
                         span: span.clone(),
                         hint: Some(help.clone()),
                         structured: Some(StructuredDiagnostic {
-                            reason: TypeDiagnosticReason::UnresolvedEnumConstructorTypeArgument,
+                            reason: TypeDiagnosticReason::UnresolvedEnumConstructorTypeArgument
+                                .into(),
                             origin: DiagnosticOrigin::EnumConstructor { ordinal },
                             data: DiagnosticData::EnumConstructorTypeArgument(
                                 EnumConstructorTypeArgumentData {

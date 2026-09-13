@@ -167,7 +167,7 @@ impl Parser<'_> {
                     parser.advance();
                     parser.skip_newlines();
                     if matches!(parser.peek(), Token::RParen) {
-                        return Err(ParseError::syntax(
+                        return Err(ParseError::syntax(crate::error::ParseErrorReason::TypeSyntax,
                             "1-tuple types are not supported",
                             Span {
                                 start: sp.start,
@@ -201,7 +201,7 @@ impl Parser<'_> {
                     } else {
                         "Parenthesized type annotations with one element are not supported: use the type without parentheses, `(T, U)` for a tuple, or `(T -> R)` for a function type."
                     };
-                    return Err(ParseError::syntax(
+                    return Err(ParseError::syntax(crate::error::ParseErrorReason::TypeSyntax,
                         message,
                         Span {
                             start: sp.start,
@@ -224,11 +224,16 @@ impl Parser<'_> {
             let (name, end) = self.expect_ident()?;
             let name = format!("${}", name);
             if name == "$Self" {
-                return Err(ParseError::syntax("Invalid type variable name: $Self", sp));
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::TypeSyntax,
+                    "Invalid type variable name: $Self",
+                    sp,
+                ));
             }
             if matches!(self.peek(), Token::Lt) {
                 if !context.permits_constructor_variable_application(&name) {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::TypeSyntax,
                         "type constructor variables may only be applied in callable signatures or nominal fields with an explicit declaration constraint",
                         sp,
                     ));
@@ -276,10 +281,16 @@ impl Parser<'_> {
         }
 
         if matches!(self.peek(), Token::Impl) {
-            return Err(ParseError::syntax(
+            let error = ParseError::syntax(
+                crate::error::ParseErrorReason::TypeSyntax,
                 "Anonymous `impl Trait` types are not supported; introduce a named type slot and constrain it with `where`",
                 sp,
-            ));
+            );
+            return Err(if context.position == TypePosition::DirectSignatureReturn {
+                error.with_guidance(crate::error::ParseErrorGuidance::ReturnPositionImplTrait)
+            } else {
+                error
+            });
         }
 
         // Named type, possibly with type args: Result<Int>, List<Int>, Option<Int>, ...
@@ -287,6 +298,7 @@ impl Parser<'_> {
         if name == "Self" {
             if impl_target.is_none() {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::TypeSyntax,
                     "`Self` can only be used inside trait or impl declarations",
                     sp,
                 ));
@@ -294,6 +306,7 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::Lt) {
                 if !context.permits_signature_self_application() {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::TypeSyntax,
                         "`Self<...>` is only allowed inside an impl or trait-method signature",
                         sp,
                     ));
@@ -329,7 +342,11 @@ impl Parser<'_> {
             )));
         }
         if name == "self" {
-            return Err(ParseError::syntax("`self` is not a type name", sp));
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::TypeSyntax,
+                "`self` is not a type name",
+                sp,
+            ));
         }
 
         // Check for type parameters: Name<T> or Name<T, E>

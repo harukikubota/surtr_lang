@@ -35,18 +35,16 @@ use super::output::{ReplOutput, ReplResult};
 use super::preload::PreloadCompileMode;
 use super::query::{
     ast_ty_from_query_arg, format_query_ty, parse_binding_query_type, parse_repl_query,
-    parse_signature_type, OperatorTargetQuery, QueryArg, QueryArgKind, ReplQuery, TypedCallQuery,
+    parse_signature_type, CommandQueryParseErrorReason, OperatorTargetQuery, QueryArg,
+    QueryArgKind, ReplQuery, TypedCallQuery,
 };
 use super::{eval, render, session};
 
 fn type_error_spec_from_scar(
-    sources: &SourceRegistry,
     source_id: SourceId,
     error: &scar::error::TypeError,
     span: Span,
 ) -> DiagnosticSpec {
-    let legacy =
-        diagnostics::TypeErrorDiagnostic::new(error.message.clone(), span, error.hint.clone());
     error
         .structured
         .as_ref()
@@ -58,7 +56,14 @@ fn type_error_spec_from_scar(
                 },
             ))
         })
-        .unwrap_or_else(|| diagnostics::type_error_spec_by_id(sources, source_id, &legacy))
+        .unwrap_or_else(|| {
+            diagnostics::typecheck_invariant_spec_with_display(
+                source_id,
+                span,
+                error.message.clone(),
+                error.hint.clone(),
+            )
+        })
 }
 use crate::error_display::StackTraceDisplayMode;
 use crate::loader::{self, StagedModule};
@@ -1091,6 +1096,10 @@ impl ReplEngine {
                     short_name, module_name
                 ),
                 span: span.clone(),
+                diagnostic: sigil::error::ResolveErrorDiagnostic {
+                    reason: sigil::error::ResolveErrorReason::Import,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -1124,6 +1133,10 @@ impl ReplEngine {
                         trait_fq_name
                     ),
                     span: span.clone(),
+                    diagnostic: sigil::error::ResolveErrorDiagnostic {
+                        reason: sigil::error::ResolveErrorReason::Import,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 })?;
             self.bind_import_name(&trait_name, trait_uid, module_name, span, imported_symbols)?;
@@ -1148,6 +1161,10 @@ impl ReplEngine {
                             method_entry.fq_name
                         ),
                         span: span.clone(),
+                        diagnostic: sigil::error::ResolveErrorDiagnostic {
+                            reason: sigil::error::ResolveErrorReason::Import,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     })?;
                 self.bind_import_name(
@@ -1202,12 +1219,20 @@ impl ReplEngine {
                     module_name
                 ),
                 span: span.clone(),
+                diagnostic: sigil::error::ResolveErrorDiagnostic {
+                    reason: sigil::error::ResolveErrorReason::Import,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             })
         } else {
             Err(ResolveError {
                 message: format!("Unknown module import: {}", module_name),
                 span: span.clone(),
+                diagnostic: sigil::error::ResolveErrorDiagnostic {
+                    reason: sigil::error::ResolveErrorReason::Import,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             })
         }
@@ -1239,6 +1264,10 @@ impl ReplEngine {
                     format!("Unknown module import: {}", module_name)
                 },
                 span: span.clone(),
+                diagnostic: sigil::error::ResolveErrorDiagnostic {
+                    reason: sigil::error::ResolveErrorReason::Import,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             });
         };
@@ -1250,6 +1279,10 @@ impl ReplEngine {
                     fq_name
                 ),
                 span: span.clone(),
+                diagnostic: sigil::error::ResolveErrorDiagnostic {
+                    reason: sigil::error::ResolveErrorReason::Import,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -1263,6 +1296,10 @@ impl ReplEngine {
                     fq_name
                 ),
                 span: span.clone(),
+                diagnostic: sigil::error::ResolveErrorDiagnostic {
+                    reason: sigil::error::ResolveErrorReason::Import,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             })?;
         self.bind_import_name(name, uid, module_name, span, imported_symbols)
@@ -1290,6 +1327,10 @@ impl ReplEngine {
                         module_name
                     ),
                     span: span.clone(),
+                    diagnostic: sigil::error::ResolveErrorDiagnostic {
+                        reason: sigil::error::ResolveErrorReason::Import,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 });
             }
@@ -1347,7 +1388,6 @@ impl ReplEngine {
                 .unwrap_or((fallback_source_id, span.clone()))
         };
         let (source_id, primary_span) = diagnostic_location(&error.span);
-        let source = self.sources.source(source_id).unwrap_or("");
         let labels = error
             .related_labels
             .iter()
@@ -1356,22 +1396,14 @@ impl ReplEngine {
                 (label_source_id, span, label.message.clone())
             })
             .collect::<Vec<_>>();
-        let local_labels = labels
-            .iter()
-            .map(|(_, span, message)| (span.clone(), message.clone()))
-            .collect::<Vec<_>>();
-        let mut spec = diagnostics::resolve_error_spec_with_labels(
-            source,
+        let spec = diagnostics::resolve_error_spec(
+            source_id,
             &error.message,
             primary_span,
-            &local_labels,
+            resolve_diagnostic_reason(error.diagnostic.reason),
+            error.diagnostic.subject.clone(),
+            &labels,
         );
-        let related_label_start = spec.labels.len().saturating_sub(labels.len());
-        for (label, (label_source_id, _, _)) in
-            spec.labels[related_label_start..].iter_mut().zip(labels)
-        {
-            label.source_id = (label_source_id != source_id).then_some(label_source_id);
-        }
         (source_id, spec)
     }
 
@@ -2990,10 +3022,11 @@ impl ReplEngine {
         source: &str,
         message: impl Into<String>,
         span: Span,
+        reason: diagnostics::ReplDiagnosticReason,
         help: Option<String>,
         summary_tail: Vec<String>,
     ) -> ReplResult {
-        let mut spec = diagnostics::repl_command_parse_error_spec(source, message, span);
+        let mut spec = diagnostics::repl_command_parse_error_spec(source, message, span, reason);
         if let Some(help) = help {
             spec.help = Some(help);
         }
@@ -3007,15 +3040,39 @@ impl ReplEngine {
         source: &str,
         message: impl Into<String>,
         span: Span,
+        reason: diagnostics::ReplDiagnosticReason,
         help: Option<String>,
     ) -> ReplResult {
-        let mut spec = diagnostics::repl_query_parse_error_spec(source, message, span);
+        let mut spec = diagnostics::repl_query_parse_error_spec(source, message, span, reason);
         if let Some(help) = help {
             spec.help = Some(help);
         }
         let rendered =
             error_display::diagnostic_lines("REPL", source, &spec, self.error_display_mode);
         ReplResult::diagnostic(rendered, Vec::new())
+    }
+
+    fn query_diagnostic_reason(
+        reason: CommandQueryParseErrorReason,
+    ) -> diagnostics::ReplDiagnosticReason {
+        use diagnostics::ReplDiagnosticReason as Target;
+        match reason {
+            CommandQueryParseErrorReason::Empty => Target::QueryEmpty,
+            CommandQueryParseErrorReason::UnsupportedSymbol
+            | CommandQueryParseErrorReason::UnsupportedForm => Target::QueryUnsupported,
+            CommandQueryParseErrorReason::TypedCallMissingClosingParen => {
+                Target::TypedCallMissingClosingParen
+            }
+            CommandQueryParseErrorReason::TypedCallMissingCallee => Target::TypedCallMissingCallee,
+            CommandQueryParseErrorReason::TypedCallInvalidCallee => Target::TypedCallInvalidCallee,
+            CommandQueryParseErrorReason::TypedCallEmptyArgument => Target::TypedCallEmptyArgument,
+            CommandQueryParseErrorReason::OperatorMissingTarget => Target::OperatorMissingTarget,
+            CommandQueryParseErrorReason::UnsupportedArgument => Target::QueryArgumentUnsupported,
+            CommandQueryParseErrorReason::UnterminatedArgumentList => {
+                Target::QueryArgumentListUnterminated
+            }
+            CommandQueryParseErrorReason::InvalidTypeArgument => Target::QueryTypeInvalid,
+        }
     }
 
     fn handle_doc(&self, symbol: &str) -> ReplResult {
@@ -3038,6 +3095,7 @@ impl ReplEngine {
                 &format!(":doc {trimmed}"),
                 err.message().to_string(),
                 err.span(),
+                Self::query_diagnostic_reason(err.reason()),
                 Some("Accepted forms: symbol, typed call, or operator target.".to_string()),
             ),
         }
@@ -4960,6 +5018,7 @@ impl ReplEngine {
                 &format!(":sig {trimmed}"),
                 err.message().to_string(),
                 err.span(),
+                Self::query_diagnostic_reason(err.reason()),
                 Some("Accepted forms: symbol, typed call, or operator target.".to_string()),
             ),
         }
@@ -4978,6 +5037,7 @@ impl ReplEngine {
                     start: ":type ".chars().count(),
                     end: format!(":type {trimmed}").chars().count(),
                 },
+                diagnostics::ReplDiagnosticReason::CommandArgumentInvalid,
                 Some("Usage: :type <binding|singleton-owner>".to_string()),
                 Vec::new(),
             );
@@ -5040,6 +5100,7 @@ impl ReplEngine {
                 &format!(":info {trimmed}"),
                 err.message().to_string(),
                 err.span(),
+                Self::query_diagnostic_reason(err.reason()),
                 Some("Accepted forms: symbol, typed call, or operator target.".to_string()),
             ),
         }
@@ -5224,8 +5285,7 @@ impl ReplEngine {
         ) {
             Ok(ast) => ast,
             Err(e) => {
-                let message = e.message();
-                let spec = diagnostics::parse_error_spec(query_source, message, e.span().clone());
+                let spec = diagnostics::parse_error_spec(self.repl_source_id, query_source, &e);
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
@@ -5263,12 +5323,7 @@ impl ReplEngine {
         let typed = match self.scar_session.typecheck_with_context(resolved, context) {
             Ok(t) => t,
             Err(e) => {
-                let spec = type_error_spec_from_scar(
-                    &self.sources,
-                    self.repl_source_id,
-                    &e,
-                    e.span.clone(),
-                );
+                let spec = type_error_spec_from_scar(self.repl_source_id, &e, e.span.clone());
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
@@ -5573,6 +5628,7 @@ impl ReplEngine {
                     start: ":info ".chars().count(),
                     end: format!(":info {source_query}").chars().count(),
                 },
+                diagnostics::ReplDiagnosticReason::QueryEvaluationFailed,
                 None,
             ),
         }
@@ -6359,18 +6415,18 @@ impl ReplEngine {
         got: usize,
         callable_ty: &AstTy,
     ) -> ReplResult {
-        let error = diagnostics::TypeErrorDiagnostic::new(
+        let spec = diagnostics::simple_error(
+            "ReplQueryError",
             format!("function expects {} argument(s), got {}", expected, got),
             Span {
                 start: 0,
-                end: source_query.len(),
+                end: source_query.chars().count(),
             },
             Some(format!(
                 "Callable type signature: {}",
                 format_query_ty(callable_ty)
             )),
         );
-        let spec = diagnostics::type_error_spec(source_query, &error);
         let rendered =
             error_display::diagnostic_lines("REPL", source_query, &spec, self.error_display_mode);
         ReplResult::ok(ReplOutput::EvalError {
@@ -7258,6 +7314,7 @@ impl ReplEngine {
                             start: ":history ".chars().count(),
                             end: format!(":history {}", selector.trim()).chars().count(),
                         },
+                        diagnostics::ReplDiagnosticReason::CommandArgumentInvalid,
                         Some("Usage: :history [selector]".to_string()),
                         Vec::new(),
                     );
@@ -7282,6 +7339,7 @@ impl ReplEngine {
                             .chars()
                             .count(),
                     },
+                    diagnostics::ReplDiagnosticReason::CommandArgumentInvalid,
                     Some("Usage: :history [selector]".to_string()),
                     Vec::new(),
                 );
@@ -7351,6 +7409,7 @@ impl ReplEngine {
                         start: ":reload ".chars().count(),
                         end: format!(":reload {}", other).chars().count(),
                     },
+                    diagnostics::ReplDiagnosticReason::CommandArgumentInvalid,
                     Some("Usage: :reload [all|defs]".to_string()),
                     Vec::new(),
                 );
@@ -7477,6 +7536,7 @@ impl ReplEngine {
                     start: ":error ".chars().count(),
                     end: format!(":error {}", mode.trim()).chars().count(),
                 },
+                diagnostics::ReplDiagnosticReason::CommandArgumentInvalid,
                 Some("Usage: :error [full|summary]".to_string()),
                 vec!["Use `:error full` or `:error summary`.".to_string()],
             ),
@@ -7518,6 +7578,7 @@ impl ReplEngine {
                     start: ":stacktrace ".chars().count(),
                     end: format!(":stacktrace {}", mode).chars().count(),
                 },
+                diagnostics::ReplDiagnosticReason::CommandArgumentInvalid,
                 Some("Usage: :stacktrace [off|verbose|full]".to_string()),
                 vec![
                     "Use `:stacktrace off` or `:stacktrace verbose`.".to_string(),
@@ -7624,6 +7685,7 @@ impl ReplEngine {
                                 start: 0,
                                 end: raw.chars().count(),
                             },
+                            diagnostics::ReplDiagnosticReason::CommandUnknown,
                             Some("Type :help for available REPL commands.".to_string()),
                             Vec::new(),
                         );
@@ -7655,8 +7717,7 @@ impl ReplEngine {
                 return Self::plain(vec![]);
             }
             Err(e) => {
-                let message = e.message();
-                let spec = diagnostics::parse_error_spec(&self.pending, message, e.span().clone());
+                let spec = diagnostics::parse_error_spec(self.repl_source_id, &self.pending, &e);
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
@@ -7759,12 +7820,7 @@ impl ReplEngine {
                 self.sigil_session.rollback(sigil_cp);
                 self.scar_session.rollback(scar_cp);
                 self.forge_session.rollback(forge_cp);
-                let spec = type_error_spec_from_scar(
-                    &self.sources,
-                    self.repl_source_id,
-                    &e,
-                    e.span.clone(),
-                );
+                let spec = type_error_spec_from_scar(self.repl_source_id, &e, e.span.clone());
                 let rendered = error_display::diagnostic_lines_by_id(
                     &self.sources,
                     self.repl_source_id,
@@ -7798,13 +7854,12 @@ impl ReplEngine {
                     names.join(", ")
                 )
             };
-            let error = diagnostics::TypeErrorDiagnostic::new(
+            let spec = diagnostics::simple_error(
+                "ReplQueryError",
                 REPL_UNRESOLVED_TYPE_MESSAGE,
                 span,
                 Some(hint),
             );
-            let spec =
-                diagnostics::type_error_spec_by_id(&self.sources, self.repl_source_id, &error);
             let rendered = error_display::diagnostic_lines_by_id(
                 &self.sources,
                 self.repl_source_id,
@@ -8116,6 +8171,7 @@ impl ReplEngine {
                         start: ":v ".chars().count(),
                         end: format!(":v {arg}").chars().count(),
                     },
+                    diagnostics::ReplDiagnosticReason::CommandArgumentInvalid,
                     Some("Usage: :v <line>".to_string()),
                     Vec::new(),
                 );
@@ -8354,7 +8410,6 @@ fn compile_repl_preload_from_module_stages(
             sources: compile_sources.sources.clone(),
             source_id: diagnostic_source_id(&compile_sources, &e.span),
             spec: type_error_spec_from_scar(
-                &compile_sources.sources,
                 diagnostic_source_id(&compile_sources, &e.span),
                 &e,
                 local_diagnostic_span(&compile_sources, &e.span),
@@ -8524,11 +8579,23 @@ fn parse_preload_sources(
                 phase: "parse".to_string(),
                 sources: compile_sources.sources.clone(),
                 source_id: e.source_id,
-                spec: diagnostics::parse_error_spec(
-                    compile_sources.sources.source(e.source_id).unwrap_or(""),
-                    e.message(),
-                    e.span(),
-                ),
+                spec: match &e.kind {
+                    crate::ModuleStageParseErrorKind::Parse { error } => {
+                        diagnostics::parse_error_spec(
+                            e.source_id,
+                            compile_sources.sources.source(e.source_id).unwrap_or(""),
+                            error,
+                        )
+                    }
+                    crate::ModuleStageParseErrorKind::DuplicateModulePath { .. } => {
+                        diagnostics::parse_policy_error_spec(
+                            e.source_id,
+                            compile_sources.sources.source(e.source_id).unwrap_or(""),
+                            e.message(),
+                            e.span(),
+                        )
+                    }
+                },
             })?;
     let mut module_stage_asts = expanded.module_stages.into_owned();
     let raw_module_stages = compile_sources.module_stages.clone();
@@ -8550,7 +8617,7 @@ fn parse_preload_sources(
         phase: "parse".to_string(),
         sources: compile_sources.sources.clone(),
         source_id: compile_sources.user_source_id,
-        spec: diagnostics::parse_error_spec(user_source, e.message(), e.span().clone()),
+        spec: diagnostics::parse_error_spec(compile_sources.user_source_id, user_source, &e),
     })?;
     let (preload_ast, script_runtime_inputs) = split_preload_script_ast(&user_ast, user_source);
     let (process_stage, preload_ast) = crate::extract_process_modules_from_user_ast(preload_ast);
@@ -8768,10 +8835,10 @@ fn preload_script_prepare_error(
     error: crate::ScriptSourcePrepareError,
 ) -> ReplLoadError {
     match error {
-        crate::ScriptSourcePrepareError::Parse { message, span } => preload_script_diagnostic(
+        crate::ScriptSourcePrepareError::Parse { error } => preload_script_diagnostic(
             file_name,
             source,
-            diagnostics::parse_error_spec(source, &message, span),
+            diagnostics::parse_error_spec(diagnostics::SourceId(0), source, &error),
         ),
         crate::ScriptSourcePrepareError::IncludeRead { message, span } => {
             preload_script_load_error(file_name, source, span, message)
@@ -8807,12 +8874,30 @@ fn preload_script_diagnostic(
     }
 }
 
+fn resolve_diagnostic_reason(
+    reason: sigil::error::ResolveErrorReason,
+) -> diagnostics::ResolveDiagnosticReason {
+    use diagnostics::ResolveDiagnosticReason as D;
+    use sigil::error::ResolveErrorReason as R;
+    match reason {
+        R::NameResolution => D::NameResolution,
+        R::Namespace => D::Namespace,
+        R::Visibility => D::Visibility,
+        R::Import => D::Import,
+        R::Capture => D::Capture,
+        R::Pattern => D::Pattern,
+        R::Declaration => D::Declaration,
+        R::SpecialForm => D::SpecialForm,
+        R::SourcePolicy => D::SourcePolicy,
+        R::CompilerInvariant => D::CompilerInvariant,
+    }
+}
+
 fn preload_resolve_error(
     compile_sources: &crate::CompileSources,
     error: &sigil::error::ResolveError,
 ) -> ReplLoadError {
     let source_id = diagnostic_source_id(compile_sources, &error.span);
-    let source = compile_sources.sources.source(source_id).unwrap_or("");
     let labels = error
         .related_labels
         .iter()
@@ -8824,22 +8909,14 @@ fn preload_resolve_error(
             )
         })
         .collect::<Vec<_>>();
-    let local_labels = labels
-        .iter()
-        .map(|(_, span, message)| (span.clone(), message.clone()))
-        .collect::<Vec<_>>();
-    let mut spec = diagnostics::resolve_error_spec_with_labels(
-        source,
+    let spec = diagnostics::resolve_error_spec(
+        source_id,
         &error.message,
         local_diagnostic_span(compile_sources, &error.span),
-        &local_labels,
+        resolve_diagnostic_reason(error.diagnostic.reason),
+        error.diagnostic.subject.clone(),
+        &labels,
     );
-    let related_label_start = spec.labels.len().saturating_sub(labels.len());
-    for (label, (label_source_id, _, _)) in
-        spec.labels[related_label_start..].iter_mut().zip(labels)
-    {
-        label.source_id = (label_source_id != source_id).then_some(label_source_id);
-    }
     ReplLoadError::Diagnostic {
         phase: "resolve".to_string(),
         sources: compile_sources.sources.clone(),
@@ -9380,12 +9457,9 @@ fn parse_stage_modules_parallel(
                                 (module.module_path == "Facet").then(|| "Facet".into()),
                             ),
                         )
-                        .map_err(|e| ModuleStageParseError {
+                        .map_err(|error| ModuleStageParseError {
                             source_id: module.source_id,
-                            kind: ModuleStageParseErrorKind::Parse {
-                                message: e.message().to_string(),
-                                span: e.span().clone(),
-                            },
+                            kind: ModuleStageParseErrorKind::Parse { error },
                         })?;
                         let fallback_module_path = sigil::const_only_fallback_module_path(
                             &parsed,
@@ -10250,13 +10324,21 @@ supervisor_init {
             .labels
             .iter()
             .any(|label| label.message == "conflicting Mod declaration"));
+        let structured = spec
+            .structured
+            .as_ref()
+            .expect("resolver diagnostics should carry producer-owned structured facts");
         assert_eq!(
-            spec.notes,
-            ["Top-level owners share one namespace, so an owner name can be declared only once."]
+            structured.reason,
+            diagnostics::DiagnosticReason::Resolve(diagnostics::ResolveDiagnosticReason::Namespace)
         );
+        assert_eq!(structured.origin, diagnostics::DiagnosticOrigin::Resolve);
         assert_eq!(
-            spec.help.as_deref(),
-            Some("Rename one of the owners so each top-level owner has a unique name.")
+            structured.data,
+            diagnostics::DiagnosticData::Resolve(diagnostics::ResolveDiagnosticData {
+                detail: "Duplicate top-level owner: Hoge".into(),
+                subject: Some("Hoge".into()),
+            })
         );
     }
 

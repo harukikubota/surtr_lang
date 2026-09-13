@@ -149,6 +149,7 @@ fn validate_doc_visibility(attrs: &DeclAttrs, span: &Span) -> Result<(), ParseEr
 fn parse_doc_attr_in_place(parser: &mut Parser, attrs: &mut DeclAttrs) -> Result<(), ParseError> {
     if attrs.doc.is_some() {
         return Err(ParseError::syntax(
+            crate::error::ParseErrorReason::DeclarationSyntax,
             "@doc may only appear once before a declaration",
             parser.peek_span(),
         ));
@@ -157,6 +158,7 @@ fn parse_doc_attr_in_place(parser: &mut Parser, attrs: &mut DeclAttrs) -> Result
         Token::DocString(text) => {
             if Parser::string_has_interpolation(&text) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@doc does not allow string interpolation",
                     parser.peek_span(),
                 ));
@@ -167,6 +169,7 @@ fn parse_doc_attr_in_place(parser: &mut Parser, attrs: &mut DeclAttrs) -> Result
         }
         Token::Eof => Err(ParseError::incomplete("doc string", parser.peek_span())),
         _ => Err(ParseError::syntax(
+            crate::error::ParseErrorReason::DeclarationSyntax,
             "@doc expects a triple-quoted doc string",
             parser.peek_span(),
         )),
@@ -193,7 +196,11 @@ fn make_process_helper_private(def: Ast) -> Ast {
 }
 
 fn private_doc_forbidden_error(span: Span) -> ParseError {
-    ParseError::syntax("@doc is only allowed on public declarations", span)
+    ParseError::syntax(
+        crate::error::ParseErrorReason::DeclarationSyntax,
+        "@doc is only allowed on public declarations",
+        span,
+    )
 }
 
 fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
@@ -492,6 +499,7 @@ fn rename_agent_handler(
             Ok(def)
         }
         other => Err(ParseError::syntax(
+            crate::error::ParseErrorReason::DeclarationSyntax,
             "agent handlers must be `def` declarations",
             other.span().clone(),
         )),
@@ -502,6 +510,7 @@ fn def_params(def: &Ast) -> Result<&Vec<ValueParameter>, ParseError> {
     match def {
         Ast::Def(_, _, _, params, _, _, _, _) => Ok(params),
         other => Err(ParseError::syntax(
+            crate::error::ParseErrorReason::DeclarationSyntax,
             "agent lowering expected a function definition",
             other.span().clone(),
         )),
@@ -512,6 +521,7 @@ fn def_ret_ty(def: &Ast) -> Result<Option<AstTy>, ParseError> {
     match def {
         Ast::Def(_, _, _, _, ret_ty, _, _, _) => Ok(ret_ty.clone()),
         other => Err(ParseError::syntax(
+            crate::error::ParseErrorReason::DeclarationSyntax,
             "agent lowering expected a function definition",
             other.span().clone(),
         )),
@@ -522,6 +532,7 @@ fn def_name(def: &Ast) -> Result<String, ParseError> {
     match def {
         Ast::Def(_, name, _, _, _, _, _, _) => Ok(name.clone()),
         other => Err(ParseError::syntax(
+            crate::error::ParseErrorReason::DeclarationSyntax,
             "process lowering expected a function definition",
             other.span().clone(),
         )),
@@ -532,6 +543,7 @@ fn def_return_type_arguments(def: &Ast) -> Result<Vec<ReturnTypeArgument>, Parse
     match def {
         Ast::Def(_, _, return_type_arguments, _, _, _, _, _) => Ok(return_type_arguments.clone()),
         other => Err(ParseError::syntax(
+            crate::error::ParseErrorReason::DeclarationSyntax,
             "agent lowering expected a function definition",
             other.span().clone(),
         )),
@@ -971,6 +983,7 @@ fn ensure_no_compiler_managed_process_surface_names(
         };
         if is_compiler_managed_process_surface_name(def_name) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 format!(
                     "`{}::{}` is compiler-managed and cannot be user-defined",
                     process_name, def_name
@@ -989,6 +1002,7 @@ fn ensure_process_surface_name_not_reserved(
 ) -> Result<(), ParseError> {
     if is_compiler_managed_process_surface_name(name) {
         return Err(ParseError::syntax(
+            crate::error::ParseErrorReason::DeclarationSyntax,
             format!(
                 "`{}::{}` is compiler-managed and cannot be user-defined",
                 process_name, name
@@ -1388,6 +1402,7 @@ impl Parser<'_> {
     ) -> Result<(), ParseError> {
         if Self::is_cap_pattern(name) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 format!("{kind} cannot use CAP_PATTERN names; `{name}` is reserved for const"),
                 span,
             ));
@@ -1402,6 +1417,7 @@ impl Parser<'_> {
             || name.contains("__")
         {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 format!(
                     "const name must match CAP_PATTERN `[A-Z][A-Z0-9_]*` without leading/trailing/double underscores: {name}"
                 ),
@@ -1421,6 +1437,7 @@ impl Parser<'_> {
                 Token::Private => {
                     if saw_visibility {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "field visibility may only be specified once",
                             self.peek_span(),
                         ));
@@ -1433,6 +1450,7 @@ impl Parser<'_> {
                 Token::Public => {
                     if saw_visibility {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "field visibility may only be specified once",
                             self.peek_span(),
                         ));
@@ -1445,6 +1463,7 @@ impl Parser<'_> {
                 Token::Readonly => {
                     if readonly {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "readonly field modifier may only be specified once",
                             self.peek_span(),
                         ));
@@ -1483,6 +1502,7 @@ impl Parser<'_> {
 
         if names.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Import list requires at least one symbol",
                 self.peek_span(),
             ));
@@ -1524,12 +1544,14 @@ impl Parser<'_> {
                 )
             } else if self.has_path_separator() {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Expected identifier or `{` after `::` in import",
                     self.peek_span(),
                 ));
             } else if saw_separator {
                 let Some((name, selected_span)) = qualified.pop() else {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "Expected import path",
                         Span {
                             start: path_start,
@@ -1593,9 +1615,10 @@ impl Parser<'_> {
             }
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "include expects a string literal path",
                     self.peek_span(),
-                ))
+                ));
             }
         };
 
@@ -1622,6 +1645,7 @@ impl Parser<'_> {
         let (name, _) = self.expect_ident()?;
         if name == "Global" {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "`Global` is reserved for the implicit root namespace",
                 sp,
             ));
@@ -1714,6 +1738,7 @@ impl Parser<'_> {
                 }
                 if !matches!(self.peek(), Token::Def | Token::Defp | Token::Annotator(_)) {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "trait impl body may only contain `def` / `defp` declarations",
                         self.peek_span(),
                     ));
@@ -1747,6 +1772,7 @@ impl Parser<'_> {
 
         if !trait_args.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Plain `impl Type { ... }` does not accept trait-style type arguments",
                 self.peek_span(),
             ));
@@ -1754,12 +1780,14 @@ impl Parser<'_> {
 
         if attrs.doc.is_some() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "@doc is not allowed before `impl Type`; attach docs to the type declaration, defagent, or impl members",
                 sp.clone(),
             ));
         }
         if attrs.hidden {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "@hidden is only allowed together with @builtin in standard/internal source",
                 sp.clone(),
             ));
@@ -1787,6 +1815,7 @@ impl Parser<'_> {
                 Token::Def | Token::Defp | Token::Defextractor | Token::Annotator(_)
             ) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "impl body may only contain `def` / `defp` / `defextractor` declarations",
                     self.peek_span(),
                 ));
@@ -1846,6 +1875,7 @@ impl Parser<'_> {
             }
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Expected `def` or `defp`",
                     self.peek_span(),
                 ));
@@ -1875,6 +1905,7 @@ impl Parser<'_> {
                     let param_ty = if param_name == "self" {
                         if !first_param {
                             return Err(ParseError::syntax(
+                                crate::error::ParseErrorReason::DeclarationSyntax,
                                 "`self` is only allowed as the first parameter of impl methods",
                                 param_span,
                             ));
@@ -1886,6 +1917,7 @@ impl Parser<'_> {
                                 .parse_direct_signature_parameter_type(Some(target.to_string()))?;
                             if !Self::is_impl_receiver_type(&ty, target) {
                                 return Err(ParseError::syntax(
+                                    crate::error::ParseErrorReason::DeclarationSyntax,
                                     "`self` receiver type must be `Self` or the impl target type",
                                     ast_ty_span(&ty).clone(),
                                 ));
@@ -1940,6 +1972,7 @@ impl Parser<'_> {
         let body_stmts = body_stmts?;
         if body_stmts.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Function body must not be empty",
                 self.peek_span(),
             ));
@@ -1981,6 +2014,7 @@ impl Parser<'_> {
         );
         let attrs = ast_decl_attrs(&ast).ok_or_else(|| {
             ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "impl method lowering must produce a declaration",
                 ast.span().clone(),
             )
@@ -2008,6 +2042,7 @@ impl Parser<'_> {
             }
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Expected `def` or `defp`",
                     self.peek_span(),
                 ));
@@ -2036,6 +2071,7 @@ impl Parser<'_> {
                     let param_ty = if param_name == "self" {
                         if !first_param {
                             return Err(ParseError::syntax(
+                                crate::error::ParseErrorReason::DeclarationSyntax,
                                 "`self` is only allowed as the first parameter of impl methods",
                                 param_span,
                             ));
@@ -2047,6 +2083,7 @@ impl Parser<'_> {
                                 .parse_direct_signature_parameter_type(Some(target.to_string()))?;
                             if !Self::is_impl_receiver_type(&ty, target) {
                                 return Err(ParseError::syntax(
+                                    crate::error::ParseErrorReason::DeclarationSyntax,
                                     "`self` receiver type must be `Self` or the impl target type",
                                     ast_ty_span(&ty).clone(),
                                 ));
@@ -2103,6 +2140,7 @@ impl Parser<'_> {
             Some(Token::LBrace)
         ) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "@builtin declaration must not have a function body",
                 self.tokens[lookahead].span.clone(),
             ));
@@ -2140,6 +2178,7 @@ impl Parser<'_> {
         let body_stmts = body_stmts?;
         if body_stmts.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Extractor body must not be empty",
                 self.peek_span(),
             ));
@@ -2190,6 +2229,7 @@ impl Parser<'_> {
                 "builtin" => {
                     if saw_builtin {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@builtin may only appear once before an impl member",
                             annotator_span,
                         ));
@@ -2199,12 +2239,14 @@ impl Parser<'_> {
                 "intrinsic" => {
                     if saw_intrinsic {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@intrinsic may only appear once before an impl member",
                             annotator_span,
                         ));
                     }
                     if saw_builtin {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@builtin and @intrinsic cannot be combined",
                             annotator_span,
                         ));
@@ -2214,6 +2256,7 @@ impl Parser<'_> {
                 "doc" => {
                     if attrs.doc.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@doc may only appear once before an impl member",
                             annotator_span,
                         ));
@@ -2222,6 +2265,7 @@ impl Parser<'_> {
                         Token::DocString(text) => {
                             if Self::string_has_interpolation(&text) {
                                 return Err(ParseError::syntax(
+                                    crate::error::ParseErrorReason::DeclarationSyntax,
                                     "@doc does not allow string interpolation",
                                     self.peek_span(),
                                 ));
@@ -2234,6 +2278,7 @@ impl Parser<'_> {
                         }
                         _ => {
                             return Err(ParseError::syntax(
+                                crate::error::ParseErrorReason::DeclarationSyntax,
                                 "@doc expects a triple-quoted doc string",
                                 self.peek_span(),
                             ));
@@ -2243,6 +2288,7 @@ impl Parser<'_> {
                 "hidden" => {
                     if attrs.hidden {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@hidden may only appear once before an impl member",
                             annotator_span,
                         ));
@@ -2251,6 +2297,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "Only @doc / @hidden / @builtin / @intrinsic are allowed before impl members",
                         annotator_span,
                     ));
@@ -2261,6 +2308,7 @@ impl Parser<'_> {
 
         if !saw_annotator {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Expected impl member annotation",
                 self.peek_span(),
             ));
@@ -2279,6 +2327,7 @@ impl Parser<'_> {
                     .allows(super::context::TopLevelDeclKind::BuiltinDecl)
             {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@hidden is only allowed together with @builtin in standard/internal source",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
@@ -2295,14 +2344,17 @@ impl Parser<'_> {
                     self.parse_builtin_extractor_decl(start, attrs)
                 }
                 Token::Defextractor => Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "trait impl body may only contain `@builtin def` declarations",
                     self.peek_span(),
                 )),
                 Token::Defp => Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@builtin is not allowed before `defp` impl members",
                     self.peek_span(),
                 )),
                 _ => Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "impl body may only contain `@builtin def` / `@builtin defextractor` declarations",
                     self.peek_span(),
                 )),
@@ -2317,10 +2369,12 @@ impl Parser<'_> {
             return match self.peek() {
                 Token::Def => self.parse_intrinsic_decl(start, attrs),
                 Token::Defp => Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@intrinsic is not allowed before `defp` impl members",
                     self.peek_span(),
                 )),
                 _ => Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "impl body may only contain `@intrinsic def` declarations for intrinsic members",
                     self.peek_span(),
                 )),
@@ -2330,12 +2384,14 @@ impl Parser<'_> {
         if trait_impl_only {
             if !matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "trait impl body may only contain `def` declarations",
                     self.peek_span(),
                 ));
             }
         } else if !matches!(self.peek(), Token::Def | Token::Defp | Token::Defextractor) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "impl body may only contain `def` / `defp` / `defextractor` declarations",
                 self.peek_span(),
             ));
@@ -2351,6 +2407,7 @@ impl Parser<'_> {
             AstTy::Func(_, _, _) => Ok("Function".to_string()),
             AstTy::Tuple(_, items) if items.len() >= 2 => Ok(format!("Tuple{}", items.len())),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "trait impl target must be a concrete named type, tuple type, or function type in V1",
                 ast_ty_span(ty).clone(),
             )),
@@ -2372,6 +2429,7 @@ impl Parser<'_> {
                 "init" | "get" | "set" => {
                     if marker.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "process member may only have one handler marker",
                             self.peek_span(),
                         ));
@@ -2400,6 +2458,7 @@ impl Parser<'_> {
                 "init" | "call" | "cast" => {
                     if marker.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "process member may only have one handler marker",
                             self.peek_span(),
                         ));
@@ -2424,6 +2483,7 @@ impl Parser<'_> {
         let sp = self.peek_span();
         if self.context.module_path.is_some() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Nested module declarations are not allowed",
                 sp,
             ));
@@ -2438,6 +2498,7 @@ impl Parser<'_> {
             let constraint = reserved_owner_surface_name_constraint(reserved_name)
                 .expect("Boolean variant aliases are reserved owner names");
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 format!(
                     "Module name `{}` is {}",
                     constraint.surface_name,
@@ -2449,6 +2510,7 @@ impl Parser<'_> {
         let (name, _) = self.expect_qualified_ident(2, "module")?;
         if let Some(constraint) = reserved_owner_surface_name_constraint(&name) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 format!(
                     "Module name `{}` is {}",
                     constraint.surface_name,
@@ -2506,6 +2568,7 @@ impl Parser<'_> {
                     "doc" => parse_doc_attr_in_place(self, &mut method_attrs)?,
                     _ => {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "Only @doc is allowed before trait methods",
                             annotator_span,
                         ));
@@ -2515,6 +2578,7 @@ impl Parser<'_> {
             }
             if !matches!(self.peek(), Token::Def | Token::Defp) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "trait body may only contain `def` / `defp` declarations",
                     self.peek_span(),
                 ));
@@ -2557,6 +2621,7 @@ impl Parser<'_> {
             }
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Expected `def` or `defp`",
                     self.peek_span(),
                 ));
@@ -2567,6 +2632,7 @@ impl Parser<'_> {
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Regular function definitions must not declare explicit type parameters; introduce type slots from the signature instead",
                 type_params[0].span.clone(),
             ));
@@ -2610,9 +2676,11 @@ impl Parser<'_> {
         let ret_ty = self.parse_direct_signature_return_type(self_context.clone())?;
         if matches!(ret_ty, AstTy::ImplTrait(_, _)) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "return-position `impl Trait` is not supported; name the type parameter explicitly",
                 ast_ty_span(&ret_ty).clone(),
-            ));
+            )
+            .with_guidance(crate::error::ParseErrorGuidance::ReturnPositionImplTrait));
         }
         let where_clause = self.parse_optional_where_clause(WhereClauseContext::trait_method())?;
 
@@ -2644,6 +2712,7 @@ impl Parser<'_> {
             let body_stmts = body_stmts?;
             if body_stmts.is_empty() {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Function body must not be empty",
                     self.peek_span(),
                 ));
@@ -2662,6 +2731,7 @@ impl Parser<'_> {
         } else {
             if visibility == Visibility::Private {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "trait `defp` must have a body",
                     self.peek_span(),
                 ));
@@ -2713,6 +2783,7 @@ impl Parser<'_> {
         self.skip_newlines();
         if matches!(self.peek(), Token::Gt) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "return type argument list must not be empty",
                 self.peek_span(),
             ));
@@ -2726,12 +2797,14 @@ impl Parser<'_> {
                 self.skip_newlines();
                 let (_, bound_span) = self.expect_qualified_ident(2, "trait bound")?;
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "inline constraints are not allowed in return type arguments; move the bound to a `where` clause",
                     bound_span,
                 ));
             }
             if !trait_impl_substitution && !matches!(ty, AstTy::Named(..)) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "return type arguments must declare abstract type inputs",
                     span,
                 ));
@@ -2743,7 +2816,7 @@ impl Parser<'_> {
                 if return_type_arguments.iter().any(|argument| {
                     matches!(&argument.ty, AstTy::Named(_, previous) if previous == name)
                 }) {
-                    return Err(ParseError::syntax(
+                    return Err(ParseError::syntax(crate::error::ParseErrorReason::DeclarationSyntax,
                         format!("return type argument `{name}` is duplicated"),
                         span,
                     ));
@@ -2775,6 +2848,7 @@ impl Parser<'_> {
         if name == "self" {
             if !is_first_param {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "`self` is only allowed as the first parameter of trait methods",
                     span,
                 ));
@@ -2786,6 +2860,7 @@ impl Parser<'_> {
                 let ty = self.parse_direct_signature_parameter_type(self_context)?;
                 if !Self::is_self_type(&ty) {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "`self` receiver type must be `Self`",
                         ast_ty_span(&ty).clone(),
                     ));
@@ -2895,6 +2970,7 @@ impl Parser<'_> {
                 let (visibility, readonly) = self.parse_field_modifiers()?;
                 if readonly {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "readonly field modifier is only supported on `defstruct` fields",
                         self.peek_span(),
                     ));
@@ -3027,6 +3103,7 @@ impl Parser<'_> {
 
         if variants.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Enum definition requires at least one variant",
                 Span {
                     start: sp.start,
@@ -3068,6 +3145,7 @@ impl Parser<'_> {
             let param_span = self.peek_span();
             if let Token::Ident(bound_name) = self.peek().clone() {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     format!(
                         "Declaration type parameters must be `$` binders; write `<$M> where $M: {bound_name}`"
                     ),
@@ -3081,6 +3159,7 @@ impl Parser<'_> {
                 self.skip_newlines();
                 let (bound_name, bound_span) = self.expect_ident()?;
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     format!(
                         "Inline declaration constraints are not allowed; write `<${param_name}> where ${param_name}: {bound_name}`"
                     ),
@@ -3113,6 +3192,7 @@ impl Parser<'_> {
             }
 
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Expected `,` or `>` in declaration type parameter list",
                 self.peek_span(),
             ));
@@ -3132,12 +3212,14 @@ impl Parser<'_> {
         for constraint in where_clause.constraints {
             let AstTy::Named(subject_span, subject) = constraint.subject else {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "A nominal declaration constraint subject must be a declared type parameter",
                     constraint.span,
                 ));
             };
             let Some(param) = params.iter_mut().find(|param| param.name == subject) else {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     format!(
                         "Nominal declaration constraint subject `{subject}` is not declared in the type parameter list"
                     ),
@@ -3146,12 +3228,14 @@ impl Parser<'_> {
             };
             if param.bound.is_some() {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     format!("Nominal type parameter `{subject}` has more than one constraint"),
                     constraint.span,
                 ));
             }
             let [WhereConstraintRhs::Trait(_, bound)] = constraint.bounds.as_slice() else {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "A nominal type parameter requires exactly one bare trait constraint",
                     constraint.span,
                 ));
@@ -3170,6 +3254,7 @@ impl Parser<'_> {
             let int_span = self.peek_span();
             let Token::Int(n) = self.peek().clone() else {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Expected integer literal after '-' in enum discriminant",
                     int_span,
                 ));
@@ -3184,6 +3269,7 @@ impl Parser<'_> {
             }
             Token::Eof => Err(ParseError::incomplete("integer literal", span)),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Enum discriminant must be an integer literal",
                 span,
             )),
@@ -3218,6 +3304,7 @@ impl Parser<'_> {
                     let (visibility, readonly) = self.parse_field_modifiers()?;
                     if readonly {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "readonly field modifier is only supported on `defstruct` fields",
                             self.peek_span(),
                         ));
@@ -3311,6 +3398,7 @@ impl Parser<'_> {
             }
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Expected `def` or `defp`",
                     self.peek_span(),
                 ));
@@ -3359,10 +3447,10 @@ impl Parser<'_> {
             self.skip_newlines();
             let ret_ty = self.parse_direct_signature_return_type(None)?;
             if matches!(ret_ty, AstTy::ImplTrait(_, _)) {
-                return Err(ParseError::syntax(
+                return Err(ParseError::syntax(crate::error::ParseErrorReason::DeclarationSyntax,
                     "return-position `impl Trait` is not supported; name the type parameter explicitly",
                     ast_ty_span(&ret_ty).clone(),
-                ));
+                ).with_guidance(crate::error::ParseErrorGuidance::ReturnPositionImplTrait));
             }
             Some(ret_ty)
         } else {
@@ -3405,12 +3493,14 @@ impl Parser<'_> {
         let type_params = self.parse_decl_type_params()?;
         if !type_params.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Extractor definitions must not declare explicit type parameters; introduce type slots from the signature instead",
                 type_params[0].span.clone(),
             ));
         }
         if Self::is_constructor_style_name(&name) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 format!(
                     "Extractor names must not use constructor-style names like `{}`; implement `impl {} {{ defextractor deconstruct(...) ... }}` instead",
                     name, name
@@ -3439,9 +3529,11 @@ impl Parser<'_> {
         let ret_ty = self.parse_type()?;
         if matches!(ret_ty, AstTy::ImplTrait(_, _)) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "return-position `impl Trait` is not supported; name the type parameter explicitly",
                 ast_ty_span(&ret_ty).clone(),
-            ));
+            )
+            .with_guidance(crate::error::ParseErrorGuidance::ReturnPositionImplTrait));
         }
         self.reject_where_clause()?;
         Ok((
@@ -3460,9 +3552,11 @@ impl Parser<'_> {
     pub(super) fn reject_where_clause(&self) -> Result<(), ParseError> {
         if matches!(self.peek(), Token::Where) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "`where` clauses are staged and not implemented yet",
                 self.peek_span(),
-            ));
+            )
+            .with_guidance(crate::error::ParseErrorGuidance::WhereClause));
         }
         Ok(())
     }
@@ -3534,6 +3628,7 @@ impl Parser<'_> {
             }
             if !matches!(self.peek(), Token::Newline) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Expected `+`, a new constraint line, or `{` after where constraint",
                     self.peek_span(),
                 ));
@@ -3548,6 +3643,7 @@ impl Parser<'_> {
 
         if constraints.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "`where` must contain at least one constraint",
                 self.peek_span(),
             ));
@@ -3579,6 +3675,7 @@ impl Parser<'_> {
         if matches!(self.peek(), Token::Type) {
             if !permits_type_constructor_shape {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "`Type<...>` is only allowed as `Self: Type<...>` in a deftrait where clause",
                     self.peek_span(),
                 ));
@@ -3590,6 +3687,7 @@ impl Parser<'_> {
             let mut slots = Vec::new();
             if matches!(self.peek(), Token::Gt) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "`Type` requires at least one constructor slot",
                     self.peek_span(),
                 ));
@@ -3618,6 +3716,7 @@ impl Parser<'_> {
         if matches!(self.peek(), Token::Dot) {
             if !permits_trait_slot_mapping {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "`Trait.$Slot` mappings are only allowed in a trait implementation where clause",
                     self.peek_span(),
                 ));
@@ -3637,6 +3736,7 @@ impl Parser<'_> {
 
         if matches!(self.peek(), Token::Lt) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 format!(
                     "Parameterized trait bounds are not allowed in `where`; use bare `{trait_name}`"
                 ),
@@ -3677,6 +3777,7 @@ impl Parser<'_> {
                 "builtin" => {
                     if saw_builtin {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@builtin may only appear once before a declaration",
                             annotator_span,
                         ));
@@ -3686,6 +3787,7 @@ impl Parser<'_> {
                 "derive" => {
                     if saw_derive {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@derive may only appear once before a declaration",
                             annotator_span,
                         ));
@@ -3693,6 +3795,7 @@ impl Parser<'_> {
                     saw_derive = true;
                     if !matches!(self.peek(), Token::Ident(_)) {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@derive expects at least one bare trait name",
                             self.peek_span(),
                         ));
@@ -3704,6 +3807,7 @@ impl Parser<'_> {
                         };
                         if attrs.derives.iter().any(|name| name == &trait_name) {
                             return Err(ParseError::syntax(
+                                crate::error::ParseErrorReason::DeclarationSyntax,
                                 format!("DuplicateDerivedTrait: `{trait_name}`"),
                                 self.peek_span(),
                             ));
@@ -3717,14 +3821,16 @@ impl Parser<'_> {
                                 Token::Ident(name) => name,
                                 _ => {
                                     return Err(ParseError::syntax(
+                                        crate::error::ParseErrorReason::DeclarationSyntax,
                                         "@derive variant expects a bare name",
                                         self.peek_span(),
-                                    ))
+                                    ));
                                 }
                             };
                             self.skip_newlines();
                             if !matches!(self.peek(), Token::RParen) {
                                 return Err(ParseError::syntax(
+                                    crate::error::ParseErrorReason::DeclarationSyntax,
                                     "@derive variant expects `)`",
                                     self.peek_span(),
                                 ));
@@ -3742,6 +3848,7 @@ impl Parser<'_> {
                         self.skip_newlines();
                         if !matches!(self.peek(), Token::Ident(_)) {
                             return Err(ParseError::syntax(
+                                crate::error::ParseErrorReason::DeclarationSyntax,
                                 "@derive expects a bare trait name after `,`",
                                 self.peek_span(),
                             ));
@@ -3751,6 +3858,7 @@ impl Parser<'_> {
                 "FacetPathKind" => {
                     if saw_facet_path_kind {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@FacetPathKind may only appear once before a declaration",
                             annotator_span,
                         ));
@@ -3761,12 +3869,14 @@ impl Parser<'_> {
                 "intrinsic" => {
                     if saw_intrinsic {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@intrinsic may only appear once before a declaration",
                             annotator_span,
                         ));
                     }
                     if saw_builtin {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@builtin and @intrinsic cannot be combined",
                             annotator_span,
                         ));
@@ -3776,12 +3886,14 @@ impl Parser<'_> {
                 }
                 "agent" => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "@agent(...) metadata is no longer supported. Use `meta { instance, init_policy, state }` inside the process definition.",
                         annotator_span,
                     ));
                 }
                 "process_state" => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "@process_state has been removed. Declare process state with `meta { state: StateTy }` inside the process definition.",
                         annotator_span,
                     ));
@@ -3789,6 +3901,7 @@ impl Parser<'_> {
                 "doc" => {
                     if attrs.doc.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@doc may only appear once before a declaration",
                             annotator_span,
                         ));
@@ -3798,6 +3911,7 @@ impl Parser<'_> {
                         Token::DocString(text) => {
                             if Self::string_has_interpolation(&text) {
                                 return Err(ParseError::syntax(
+                                    crate::error::ParseErrorReason::DeclarationSyntax,
                                     "@doc does not allow string interpolation",
                                     self.peek_span(),
                                 ));
@@ -3810,6 +3924,7 @@ impl Parser<'_> {
                         }
                         _ => {
                             return Err(ParseError::syntax(
+                                crate::error::ParseErrorReason::DeclarationSyntax,
                                 "@doc expects a triple-quoted doc string",
                                 self.peek_span(),
                             ));
@@ -3819,6 +3934,7 @@ impl Parser<'_> {
                 "autoimport" => {
                     if attrs.auto_import {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@autoimport may only appear once before a declaration",
                             annotator_span,
                         ));
@@ -3828,6 +3944,7 @@ impl Parser<'_> {
                 "hidden" => {
                     if attrs.hidden {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@hidden may only appear once before a declaration",
                             annotator_span,
                         ));
@@ -3837,6 +3954,7 @@ impl Parser<'_> {
                 "readonly" => {
                     if attrs.readonly {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "@readonly may only appear once before a declaration",
                             annotator_span,
                         ));
@@ -3845,21 +3963,28 @@ impl Parser<'_> {
                 }
                 "entrypoint" => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "@entrypoint has been removed",
                         annotator_span,
                     ));
                 }
                 "test" => {
-                    return Err(ParseError::syntax("@test has been removed", annotator_span));
+                    return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
+                        "@test has been removed",
+                        annotator_span,
+                    ));
                 }
                 "init" | "get" | "set" => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "@init/@get/@set are only allowed on def declarations inside defagent",
                         annotator_span,
                     ));
                 }
                 _ => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         format!("Unknown annotation: @{name}"),
                         annotator_span,
                     ));
@@ -3876,6 +4001,7 @@ impl Parser<'_> {
         if saw_facet_path_kind {
             if saw_builtin || saw_intrinsic {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@FacetPathKind cannot be combined with @builtin or @intrinsic",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
@@ -3888,12 +4014,14 @@ impl Parser<'_> {
                 || self.context.module_path.as_deref() != Some("Facet")
             {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@FacetPathKind Type declarations are only allowed in canonical standard library source",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
             }
             if !matches!(self.peek(), Token::Type) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Expected `Type` after @FacetPathKind",
                     self.peek_span(),
                 ));
@@ -3907,6 +4035,7 @@ impl Parser<'_> {
             match self.peek() {
                 Token::Def => self.parse_intrinsic_decl(intrinsic_start, attrs),
                 _ => Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Expected `def` after @intrinsic",
                     self.peek_span(),
                 )),
@@ -3919,6 +4048,7 @@ impl Parser<'_> {
                 .allows(super::context::TopLevelDeclKind::BuiltinDecl)
             {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@builtin declarations are only allowed in standard/internal source",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
@@ -3932,6 +4062,7 @@ impl Parser<'_> {
                     .allows(super::context::TopLevelDeclKind::BuiltinDecl)
             {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@hidden is only allowed together with @builtin in standard/internal source",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
@@ -3942,6 +4073,7 @@ impl Parser<'_> {
                 Token::Type => self.parse_builtin_type_decl(start, attrs),
                 Token::Defenum => self.parse_enum_def_with_attrs(attrs, Some(start)),
                 _ => Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Expected `def`, `defextractor`, `defenum`, or `type` after @builtin",
                     self.peek_span(),
                 )),
@@ -3954,18 +4086,21 @@ impl Parser<'_> {
                 )
             {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "DeriveNotAllowed: @derive is only allowed on `defstruct`, `defrecord`, or `defenum`",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
             }
             if attrs.hidden {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@hidden is only allowed together with @builtin in standard/internal source",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
             }
             if attrs.readonly && !matches!(self.peek(), Token::Defstruct) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@readonly may only annotate `defstruct` declarations",
                     start_span.unwrap_or_else(|| self.peek_span()),
                 ));
@@ -3989,6 +4124,7 @@ impl Parser<'_> {
                 Token::Type => self.parse_type_alias(),
                 Token::Eof => Err(ParseError::incomplete("declaration", self.peek_span())),
                 _ => Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@doc / @autoimport must annotate `def`, `defmod`, `deftrait`, `impl`, `defagent`, `defstruct`, `defrecord`, `deferror`, `defenum`, `defextractor`, `@builtin type/def/defextractor`, or `@intrinsic def`",
                     self.peek_span(),
                 )),
@@ -4006,6 +4142,7 @@ impl Parser<'_> {
         let rhs = self.parse_type()?;
         if !matches!(rhs, AstTy::Func(..)) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "type aliases may only name function signatures",
                 ast_ty_span(&rhs).clone(),
             ));
@@ -4043,6 +4180,7 @@ impl Parser<'_> {
             let (entry_name, entry_span) = self.expect_ident()?;
             if entry_name == "singleton" {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "supervisor_init `singleton` keyword is no longer used",
                     entry_span,
                 ));
@@ -4053,6 +4191,7 @@ impl Parser<'_> {
                 .any(|existing: &SupervisorInitEntry| existing.process_name == entry.process_name)
             {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "supervisor_init entry is duplicated",
                     entry.span,
                 ));
@@ -4100,6 +4239,7 @@ impl Parser<'_> {
                     let parsed = self.parse_supervisor_init_timeout_ms()?;
                     if !(1..=60_000).contains(&parsed) {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             if parsed == 0 {
                                 "init timeout must be at least `1ms`"
                             } else {
@@ -4118,6 +4258,7 @@ impl Parser<'_> {
                     self.skip_newlines();
                     if overrides.strategy.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "strategy override is duplicated",
                             key_span,
                         ));
@@ -4129,6 +4270,7 @@ impl Parser<'_> {
                     self.skip_newlines();
                     if overrides.max_restarts.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "max_restarts override is duplicated",
                             key_span,
                         ));
@@ -4140,6 +4282,7 @@ impl Parser<'_> {
                     self.skip_newlines();
                     if overrides.max_seconds.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "max_seconds override is duplicated",
                             key_span,
                         ));
@@ -4151,6 +4294,7 @@ impl Parser<'_> {
                     self.skip_newlines();
                     if overrides.child_restart_default.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "child_restart_default override is duplicated",
                             key_span,
                         ));
@@ -4162,6 +4306,7 @@ impl Parser<'_> {
                     self.skip_newlines();
                     if overrides.allow_adopt.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "allow_adopt override is duplicated",
                             key_span,
                         ));
@@ -4173,6 +4318,7 @@ impl Parser<'_> {
                     self.skip_newlines();
                     if overrides.shutdown_timeout_ms.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "shutdown_timeout override is duplicated",
                             key_span,
                         ));
@@ -4184,24 +4330,28 @@ impl Parser<'_> {
                     self.expect(&Token::Colon)?;
                     self.skip_newlines();
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "supervisor parent override is fixed in the initial phase",
                         key_span,
                     ));
                 }
                 "init_policy" => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "init policy belongs to process definition",
                         key_span,
                     ));
                 }
                 "boot" => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "boot policy is no longer used",
                         key_span,
                     ));
                 }
                 _ => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         format!("Unknown supervisor_init key: {key}"),
                         key_span,
                     ));
@@ -4231,6 +4381,7 @@ impl Parser<'_> {
         let span = self.peek_span();
         let Token::Int(n) = self.peek().clone() else {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "init timeout must be a duration literal like `5s` or `100ms`",
                 span,
             ));
@@ -4239,6 +4390,7 @@ impl Parser<'_> {
         let (suffix, suffix_span) = self.expect_ident()?;
         let Some(value) = n.to_string().parse::<u64>().ok() else {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "init timeout literal is too large",
                 span,
             ));
@@ -4246,9 +4398,14 @@ impl Parser<'_> {
         match suffix.as_str() {
             "ms" => Ok(value),
             "s" => value.checked_mul(1_000).ok_or_else(|| {
-                ParseError::syntax("init timeout literal is too large", suffix_span)
+                ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "init timeout literal is too large",
+                    suffix_span,
+                )
             }),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "init timeout must use `ms` or `s`",
                 suffix_span,
             )),
@@ -4258,12 +4415,20 @@ impl Parser<'_> {
     fn parse_non_negative_int_literal(&mut self) -> Result<u64, ParseError> {
         let span = self.peek_span();
         let Token::Int(n) = self.peek().clone() else {
-            return Err(ParseError::syntax("expected integer literal", span));
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "expected integer literal",
+                span,
+            ));
         };
         self.advance();
-        n.to_string()
-            .parse::<u64>()
-            .map_err(|_| ParseError::syntax("integer literal is too large", span))
+        n.to_string().parse::<u64>().map_err(|_| {
+            ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "integer literal is too large",
+                span,
+            )
+        })
     }
 
     fn parse_bool_literal(&mut self) -> Result<bool, ParseError> {
@@ -4277,7 +4442,11 @@ impl Parser<'_> {
                 self.advance();
                 Ok(false)
             }
-            _ => Err(ParseError::syntax("expected `True` or `False`", span)),
+            _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "expected `True` or `False`",
+                span,
+            )),
         }
     }
 
@@ -4285,22 +4454,31 @@ impl Parser<'_> {
         let span = self.peek_span();
         let Token::Int(n) = self.peek().clone() else {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 format!("{field_name} must be a duration literal like `5s` or `100ms`"),
                 span,
             ));
         };
         self.advance();
         let (suffix, suffix_span) = self.expect_ident()?;
-        let value = n
-            .to_string()
-            .parse::<u64>()
-            .map_err(|_| ParseError::syntax("duration literal is too large", span.clone()))?;
+        let value = n.to_string().parse::<u64>().map_err(|_| {
+            ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "duration literal is too large",
+                span.clone(),
+            )
+        })?;
         match suffix.as_str() {
             "ms" => Ok(value),
-            "s" => value
-                .checked_mul(1_000)
-                .ok_or_else(|| ParseError::syntax("duration literal is too large", suffix_span)),
+            "s" => value.checked_mul(1_000).ok_or_else(|| {
+                ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "duration literal is too large",
+                    suffix_span,
+                )
+            }),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 format!("{field_name} must use `ms` or `s`"),
                 suffix_span,
             )),
@@ -4312,6 +4490,7 @@ impl Parser<'_> {
         match value.as_str() {
             "OneForOne" => Ok(SupervisorStrategy::OneForOne),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "supervisor strategy must be OneForOne",
                 span,
             )),
@@ -4325,6 +4504,7 @@ impl Parser<'_> {
             "Transient" => Ok(ChildRestartPolicy::Transient),
             "Temporary" => Ok(ChildRestartPolicy::Temporary),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "child_restart_default must be Permanent, Transient, or Temporary",
                 span,
             )),
@@ -4351,6 +4531,7 @@ impl Parser<'_> {
                 .any(|entry: &SupervisorInitHandlerOverride| entry.slot == slot)
             {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "handler override is duplicated",
                     slot_span,
                 ));
@@ -4403,6 +4584,7 @@ impl Parser<'_> {
                     self.skip_newlines();
                 } else if !matches!(self.peek(), Token::RParen) {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "Expected `,` or `)` in handler target arguments",
                         self.peek_span(),
                     ));
@@ -4437,6 +4619,7 @@ impl Parser<'_> {
             }
             Token::Eof => Err(ParseError::incomplete("handler argument value", span)),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "handler argument values currently accept string, integer, or identifier literals",
                 span,
             )),
@@ -4467,6 +4650,7 @@ impl Parser<'_> {
             }
             let err_span = self.peek_span();
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "defsupervisor is policy-only; spawn, adopt, and status are compiler-managed",
                 err_span,
             ));
@@ -4539,6 +4723,7 @@ impl Parser<'_> {
         let (head, head_span) = self.expect_ident()?;
         if head != "meta" {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "supervisor declarations must start with `meta { ... }`",
                 head_span,
             ));
@@ -4575,15 +4760,17 @@ impl Parser<'_> {
                 }
                 "instance" | "init_policy" | "handlers" => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "defsupervisor meta only accepts supervisor policy keys",
                         key_span,
-                    ))
+                    ));
                 }
                 _ => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         format!("Unknown supervisor meta key: {key}"),
                         key_span,
-                    ))
+                    ));
                 }
             }
             self.skip_newlines();
@@ -4597,19 +4784,39 @@ impl Parser<'_> {
         Ok(SupervisorMeta {
             policy: SupervisorPolicy {
                 strategy: strategy.ok_or_else(|| {
-                    ParseError::syntax("meta requires strategy", self.peek_span())
+                    ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
+                        "meta requires strategy",
+                        self.peek_span(),
+                    )
                 })?,
                 max_restarts: max_restarts.ok_or_else(|| {
-                    ParseError::syntax("meta requires max_restarts", self.peek_span())
+                    ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
+                        "meta requires max_restarts",
+                        self.peek_span(),
+                    )
                 })?,
                 max_seconds: max_seconds.ok_or_else(|| {
-                    ParseError::syntax("meta requires max_seconds", self.peek_span())
+                    ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
+                        "meta requires max_seconds",
+                        self.peek_span(),
+                    )
                 })?,
                 child_restart_default: child_restart_default.ok_or_else(|| {
-                    ParseError::syntax("meta requires child_restart_default", self.peek_span())
+                    ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
+                        "meta requires child_restart_default",
+                        self.peek_span(),
+                    )
                 })?,
                 allow_adopt: allow_adopt.ok_or_else(|| {
-                    ParseError::syntax("meta requires allow_adopt", self.peek_span())
+                    ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
+                        "meta requires allow_adopt",
+                        self.peek_span(),
+                    )
                 })?,
                 shutdown_timeout_ms,
             },
@@ -4620,6 +4827,7 @@ impl Parser<'_> {
         let (head, head_span) = self.expect_ident()?;
         if head != "meta" {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "process declarations must start with `meta { ... }`",
                 head_span,
             ));
@@ -4653,9 +4861,10 @@ impl Parser<'_> {
                         "Worker" => AgentInstance::Worker,
                         _ => {
                             return Err(ParseError::syntax(
+                                crate::error::ParseErrorReason::DeclarationSyntax,
                                 "process instance must be Singleton or Worker",
                                 value_span,
-                            ))
+                            ));
                         }
                     });
                 }
@@ -4668,9 +4877,10 @@ impl Parser<'_> {
                         "Standby" => InitPolicy::Standby,
                         _ => {
                             return Err(ParseError::syntax(
+                                crate::error::ParseErrorReason::DeclarationSyntax,
                                 "init_policy must be Eager or Standby",
                                 value_span,
-                            ))
+                            ));
                         }
                     });
                 }
@@ -4684,9 +4894,10 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         format!("Unknown process meta key: {key}"),
                         key_span,
-                    ))
+                    ));
                 }
             }
             self.skip_newlines();
@@ -4698,10 +4909,23 @@ impl Parser<'_> {
         self.expect(&Token::RBrace)?;
 
         Ok(ProcessMeta {
-            instance: instance
-                .ok_or_else(|| ParseError::syntax("meta requires instance", meta_span.clone()))?,
+            instance: instance.ok_or_else(|| {
+                ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "meta requires instance",
+                    meta_span.clone(),
+                )
+                .with_guidance(crate::error::ParseErrorGuidance::MissingMetaInstance)
+            })?,
             init_policy: init_policy.unwrap_or(InitPolicy::Eager),
-            state: state.ok_or_else(|| ParseError::syntax("meta requires state", meta_span))?,
+            state: state.ok_or_else(|| {
+                ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "meta requires state",
+                    meta_span,
+                )
+                .with_guidance(crate::error::ParseErrorGuidance::MissingMetaState)
+            })?,
             handlers,
         })
     }
@@ -4727,7 +4951,11 @@ impl Parser<'_> {
                 .iter()
                 .any(|entry: &ProcessHandlerDependency| entry.slot == slot)
             {
-                return Err(ParseError::syntax("handler slot is duplicated", slot_span));
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "handler slot is duplicated",
+                    slot_span,
+                ));
             }
             handlers.push(ProcessHandlerDependency {
                 slot,
@@ -4782,6 +5010,7 @@ impl Parser<'_> {
             let (marker, member_attrs) = self.parse_agent_member_prefixes()?;
             if marker.is_some() && !matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Agent handler marker must be followed by def inside defagent",
                     self.peek_span(),
                 ));
@@ -4792,6 +5021,7 @@ impl Parser<'_> {
                 Some(AgentHandlerKind::Init) => {
                     if init.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "duplicate @init handler",
                             def.span().clone(),
                         ));
@@ -4801,6 +5031,7 @@ impl Parser<'_> {
                 Some(AgentHandlerKind::Get) => {
                     if get.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "duplicate @get handler",
                             def.span().clone(),
                         ));
@@ -4810,6 +5041,7 @@ impl Parser<'_> {
                 Some(AgentHandlerKind::Set) => {
                     if set.is_some() {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "duplicate @set handler",
                             def.span().clone(),
                         ));
@@ -4820,6 +5052,7 @@ impl Parser<'_> {
                     let def = make_process_helper_private(def);
                     let attrs = ast_decl_attrs(&def).ok_or_else(|| {
                         ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "process helper lowering must produce a declaration",
                             def.span().clone(),
                         )
@@ -4834,6 +5067,7 @@ impl Parser<'_> {
 
         let init = init.ok_or_else(|| {
             ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "agents must define an @init handler",
                 Span {
                     start,
@@ -4843,6 +5077,7 @@ impl Parser<'_> {
         })?;
         let get = get.ok_or_else(|| {
             ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "agents must define a @get handler",
                 Span {
                     start,
@@ -4856,6 +5091,7 @@ impl Parser<'_> {
             None => {
                 let process_meta = process_meta.ok_or_else(|| {
                     ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "defagent must include process metadata",
                         Span {
                             start,
@@ -4928,12 +5164,14 @@ impl Parser<'_> {
 
             if marker.is_some() && !matches!(self.peek(), Token::Def) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "GenServer handler marker must be followed by def inside defgenserver",
                     self.peek_span(),
                 ));
             }
             if matches!(self.peek(), Token::Defp) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "GenServer body uses `def`; visibility is controlled by annotations.",
                     self.peek_span(),
                 ));
@@ -4943,7 +5181,11 @@ impl Parser<'_> {
             match marker {
                 Some((marker, marker_span)) if marker == "init" => {
                     if init.is_some() {
-                        return Err(ParseError::syntax("duplicate @init handler", marker_span));
+                        return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
+                            "duplicate @init handler",
+                            marker_span,
+                        ));
                     }
                     init = Some(AgentHandler { def });
                 }
@@ -4959,6 +5201,7 @@ impl Parser<'_> {
                 }
                 Some((_, marker_span)) => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "GenServer handler marker must be @init, @call, or @cast",
                         marker_span,
                     ));
@@ -4967,6 +5210,7 @@ impl Parser<'_> {
                     let def = make_process_helper_private(def);
                     let attrs = ast_decl_attrs(&def).ok_or_else(|| {
                         ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
                             "process helper lowering must produce a declaration",
                             def.span().clone(),
                         )
@@ -4986,12 +5230,14 @@ impl Parser<'_> {
             && process_meta.instance != AgentInstance::Singleton
         {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "init_policy: Standby is only allowed for Singleton GenServer",
                 span,
             ));
         }
         let init = init.ok_or_else(|| {
             ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "GenServer requires exactly one @init handler",
                 Span {
                     start,
@@ -5001,6 +5247,7 @@ impl Parser<'_> {
         })?;
         if call_handlers.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "GenServer requires at least one @call handler",
                 Span {
                     start,
@@ -5122,6 +5369,7 @@ impl Parser<'_> {
         let span = self.peek_span();
         let Token::Annotator(name) = self.peek().clone() else {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "agent handler marker must be @init, @get, or @set",
                 self.peek_span(),
             ));
@@ -5133,6 +5381,7 @@ impl Parser<'_> {
             "get" => Ok(AgentHandlerKind::Get),
             "set" => Ok(AgentHandlerKind::Set),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "agent handler marker must be @init, @get, or @set",
                 span,
             )),
@@ -5147,6 +5396,7 @@ impl Parser<'_> {
     ) -> Result<(), ParseError> {
         if meta.lazy && meta.instance != AgentInstance::Singleton {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "init_policy: Standby is only allowed for Singleton Agent",
                 span,
             ));
@@ -5156,6 +5406,7 @@ impl Parser<'_> {
             AgentKind::ReadOnly => {
                 if set.is_some() {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "Agent with no write protocol must not define @set",
                         span,
                     ));
@@ -5164,6 +5415,7 @@ impl Parser<'_> {
             AgentKind::State => {
                 if set.is_none() {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "State agents must define an @set handler",
                         span,
                     ));
@@ -5208,12 +5460,14 @@ impl Parser<'_> {
         let get_params = def_params(&get_def)?;
         if meta.instance == AgentInstance::Singleton && !init_params.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Singleton agent @init handlers must not take parameters",
                 span.clone(),
             ));
         }
         if get_params.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "@get handlers must take state as their first parameter",
                 span.clone(),
             ));
@@ -5222,6 +5476,7 @@ impl Parser<'_> {
             let set_params = def_params(set_def)?;
             if set_params.is_empty() {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "@set handlers must take state as their first parameter",
                     span.clone(),
                 ));
@@ -5329,13 +5584,14 @@ impl Parser<'_> {
                 return Err(ParseError::incomplete(
                     "intrinsic declaration name",
                     self.peek_span(),
-                ))
+                ));
             }
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     format!("Expected identifier, got {:?}", self.peek()),
                     self.peek_span(),
-                ))
+                ));
             }
         };
 
@@ -5345,6 +5601,7 @@ impl Parser<'_> {
 
         if matches!(self.peek(), Token::LBrace) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "@intrinsic declaration must not have a function body",
                 self.peek_span(),
             ));
@@ -5362,6 +5619,7 @@ impl Parser<'_> {
             Some(Token::LBrace)
         ) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "@intrinsic declaration must not have a function body",
                 self.tokens[lookahead].span.clone(),
             ));
@@ -5403,6 +5661,7 @@ impl Parser<'_> {
             Some(Token::LBrace)
         ) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "@builtin declaration must not have a function body",
                 self.tokens[lookahead].span.clone(),
             ));
@@ -5446,6 +5705,7 @@ impl Parser<'_> {
             Some(Token::LBrace)
         ) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "@builtin extractor declaration must not have a function body",
                 self.tokens[lookahead].span.clone(),
             ));
@@ -5521,6 +5781,7 @@ impl Parser<'_> {
                     return Err(ParseError::incomplete(">", self.peek_span()));
                 }
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
                     "Expected `,` or `>` in builtin type parameter list",
                     self.peek_span(),
                 ));
@@ -5556,6 +5817,7 @@ impl Parser<'_> {
         let (name, name_span) = self.expect_ident()?;
         if !name.chars().next().is_some_and(char::is_uppercase) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "@FacetPathKind Type requires a PascalCase type name",
                 name_span,
             ));
@@ -5569,6 +5831,7 @@ impl Parser<'_> {
                 let (member, member_span) = self.expect_ident()?;
                 if !member.chars().next().is_some_and(char::is_uppercase) {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::DeclarationSyntax,
                         "Facet path kind aliases may contain only PascalCase kind names",
                         member_span,
                     ));
@@ -5622,6 +5885,7 @@ impl Parser<'_> {
 
         if matches!(self.peek(), Token::LBrace) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Result constructor builtin contracts in std modules must not have a function body",
                 self.peek_span(),
             ));
@@ -5722,6 +5986,7 @@ impl Parser<'_> {
         let body_stmts = self.parse_block_stmts()?;
         if body_stmts.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Function body must not be empty",
                 self.peek_span(),
             ));
@@ -5763,6 +6028,7 @@ impl Parser<'_> {
         let body_stmts = self.parse_block_stmts()?;
         if body_stmts.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Extractor body must not be empty",
                 self.peek_span(),
             ));
@@ -5835,6 +6101,7 @@ impl Parser<'_> {
 
         if matches!(self.peek(), Token::LBrace) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "Result constructor declarations in std modules must not have a function body",
                 self.peek_span(),
             ));
@@ -5862,6 +6129,7 @@ impl Parser<'_> {
         let (name, span) = self.expect_ident()?;
         if name == "self" {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
                 "`self` is only allowed as the first parameter of impl methods",
                 span,
             ));

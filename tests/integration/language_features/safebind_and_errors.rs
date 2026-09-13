@@ -469,6 +469,17 @@ fn safebind_requires_result_return_function() {
     );
 }
 
+fn safebind_rejects_compile_time_facet_values() {
+    assert_compile_error(
+        r#"defstruct User { name: String }
+impl User {
+  def new(name: String) -> Self { User { name: name } }
+}
+path =? User.name"#,
+        "Facet values cannot be bound with `=?`",
+    );
+}
+
 fn assignment_operators_non_associative() {
     assert_compile_error("x = y =? z", "non-associative");
 }
@@ -804,6 +815,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "safebind_requires_result_return_function",
             safebind_requires_result_return_function as fn(),
+        ),
+        (
+            "safebind_rejects_compile_time_facet_values",
+            safebind_rejects_compile_time_facet_values as fn(),
         ),
         (
             "assignment_operators_non_associative",

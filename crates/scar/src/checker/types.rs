@@ -2879,21 +2879,32 @@ impl Checker {
                 self.ty_satisfies_bounds(&resolved, std::slice::from_ref(bound))
             };
             if !satisfied {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "Type argument {} for {} does not satisfy declaration constraint {} on {}",
-                        self.ty_name(&resolved),
-                        parameter,
-                        self.trait_display_name(bound),
-                        Self::surface_name(&def.name)
+                let actual_type = self.ty_name(&resolved);
+                let error = TypeError::from_structured(diagnostics::StructuredDiagnostic {
+                    reason: diagnostics::TypeDiagnosticReason::NominalDeclarationConstraintViolation
+                        .into(),
+                    origin: diagnostics::DiagnosticOrigin::Annotation,
+                    data: diagnostics::DiagnosticData::Policy(diagnostics::PolicyData {
+                        policy: diagnostics::TypePolicy::NominalDeclarationConstraint,
+                        subject: Some(parameter.clone()),
+                        expected_type: Some(self.trait_display_name(bound)),
+                        actual_type: Some(actual_type.clone()),
+                        stage: Some(Self::surface_name(&def.name).to_string()),
+                        entrypoint: None,
+                    }),
+                    primary: diagnostics::SourceFact::typed(
+                        diagnostics::SourceRole::Value,
+                        diagnostics::SourceId(0),
+                        span.clone(),
+                        actual_type,
                     ),
-                    span: span.clone(),
-                    hint: Some(
+                    related: Vec::new(),
+                    remediation: None,
+                })
+                .with_hint(
                         "Use a constructor head with the declared capability, or add the same explicit bound to the rigid type variable."
-                            .into(),
-                    ),
-                });
+                );
+                return Err(error);
             }
         }
         Ok(())
