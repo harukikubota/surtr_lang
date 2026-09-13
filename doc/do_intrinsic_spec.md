@@ -332,7 +332,7 @@ do::<Either> {
 ```surtr
 do::<Either> {
   number <- left_source  # Either<String, Int>
-  flag <- right_source   # Either<Error, Boolean>
+  flag <- right_source   # Either<Int, Boolean>
   return((number, flag))
 }
 ```
