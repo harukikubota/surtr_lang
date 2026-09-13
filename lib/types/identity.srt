@@ -14,8 +14,8 @@ impl Identity {
   Construct an `Identity<$A>` from a value.
 
   ## REPL
-  xldr(1)> Identity::run(Identity::new(7))
-  7
+  xldr(1)> Identity::new(7)
+  Identity(value: 7)
   """
   def new(value: $A) -> Identity<$A> {
     Identity { value }
@@ -43,8 +43,8 @@ impl Functor for Identity<$T> {
   Map a function over the stored value.
 
   ## REPL
-  xldr(1)> Identity::run(Identity::new(7) |*> {|n| n + 1})
-  8
+  xldr(1)> Functor::fmap(Identity::new(7), {|n| n + 1})
+  Identity(value: 8)
   """
   def fmap(self: Identity<$A>, mapper: ($A -> $B)) -> Identity<$B> {
     Identity::new(mapper(self.value))
@@ -61,8 +61,9 @@ impl Applicative for Identity<$T> {
   Lift a plain value into `Identity`.
 
   ## REPL
-  xldr(1)> Identity::run(Applicative::pure(7))
-  7
+  xldr(1)> value: Identity<Int> = Applicative::pure(7)
+  xldr(2)> value
+  Identity(value: 7)
   """
   def pure::<Identity<$T>>(value: $A) -> Identity<$A> {
     Identity::new(value)
@@ -72,8 +73,8 @@ impl Applicative for Identity<$T> {
   Apply a stored function to a stored value.
 
   ## REPL
-  xldr(1)> Identity::run(Applicative::ap(Identity::new({|n| n + 1}), Identity::new(7)))
-  8
+  xldr(1)> Applicative::ap(Identity::new({|n| n + 1}), Identity::new(7))
+  Identity(value: 8)
   """
   def ap(mapper: Identity<($A -> $B)>, value: Identity<$A>) -> Identity<$B> {
     Identity::new(apply(mapper.value, value.value))
@@ -90,8 +91,9 @@ impl Monad for Identity<$T> {
   Return a plain value as an `Identity`.
 
   ## REPL
-  xldr(1)> Identity::run(Monad::return(7))
-  7
+  xldr(1)> value: Identity<Int> = Monad::return(7)
+  xldr(2)> value
+  Identity(value: 7)
   """
   def return::<Identity<$T>>(value: $A) -> Identity<$A> {
     Identity::new(value)
@@ -101,8 +103,8 @@ impl Monad for Identity<$T> {
   Bind an `Identity` to a function returning another `Identity`.
 
   ## REPL
-  xldr(1)> Identity::run(Identity::new(7) |>= {|n| Identity::new(n + 1)})
-  8
+  xldr(1)> Monad::bind(Identity::new(7), {|n| Identity::new(n + 1)})
+  Identity(value: 8)
   """
   def bind(self: Identity<$A>, mapper: ($A -> Identity<$B>)) -> Identity<$B> {
     mapper(self.value)
