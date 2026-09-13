@@ -103,6 +103,7 @@ pub enum Token {
     Impl,
     For,
     Match,
+    Do,
     When,
     Cond,
     Private,

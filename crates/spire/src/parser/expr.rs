@@ -642,14 +642,30 @@ impl Parser<'_> {
         target: Ast,
     ) -> Result<Ast, ParseError> {
         let start = target.span().start;
+        let (span, args) = self.parse_explicit_return_type_arguments(
+            start,
+            crate::error::ParseErrorReason::ExpressionSyntax,
+        )?;
+        Ok(Ast::ReturnTypeArgumentApply(span, Box::new(target), args))
+    }
+
+    fn parse_explicit_return_type_arguments(
+        &mut self,
+        start: usize,
+        empty_reason: crate::error::ParseErrorReason,
+    ) -> Result<(Span, Vec<ReturnTypeArgument>), ParseError> {
+        let list_start = self.peek_span().start;
         self.consume_path_separator()?;
         self.expect(&Token::Lt)?;
         self.skip_newlines();
         if matches!(self.peek(), Token::Gt) {
             return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::ExpressionSyntax,
+                empty_reason,
                 "Explicit type arguments cannot be empty",
-                self.peek_span(),
+                Span {
+                    start: list_start,
+                    end: self.peek_span().end,
+                },
             ));
         }
         let first = self.parse_type_in_impl_context(None)?;
@@ -678,12 +694,11 @@ impl Parser<'_> {
             self.skip_newlines();
         }
         let end = self.expect_type_gt()?;
-        Ok(Ast::ReturnTypeArgumentApply(
+        Ok((
             Span {
                 start,
                 end: end.end,
             },
-            Box::new(target),
             args,
         ))
     }
@@ -1007,6 +1022,9 @@ impl Parser<'_> {
             // Cond expression
             Token::Cond => self.parse_cond_expr(),
 
+            // Compiler-owned monadic sequencing expression
+            Token::Do => self.parse_do_expr(sp),
+
             // Identifier — could be: variable, binding, function call
             Token::Ident(name) => {
                 self.advance();
@@ -1024,6 +1042,164 @@ impl Parser<'_> {
                 .with_token_kind(token_kind)
                 .with_guidance(crate::error::ParseErrorGuidance::UnexpectedToken))
             }
+        }
+    }
+
+    fn parse_do_expr(&mut self, do_span: Span) -> Result<Ast, ParseError> {
+        self.advance();
+
+        if matches!(self.peek(), Token::Lt) {
+            let invalid_span = self.do_angle_argument_span();
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::InvalidDoCarrierReturnTypeArgument,
+                "`do<...>` is not valid carrier syntax",
+                invalid_span,
+            )
+            .with_guidance(crate::error::ParseErrorGuidance::DoCarrierReturnTypeArgument));
+        }
+
+        let return_type_arguments = if self.explicit_type_args_start() {
+            let rta_start = self.peek_span().start;
+            let (rta_span, arguments) = self.parse_explicit_return_type_arguments(
+                do_span.start,
+                crate::error::ParseErrorReason::ReturnTypeArgumentArityMismatch,
+            )?;
+            if arguments.len() != 1 {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ReturnTypeArgumentArityMismatch,
+                    "`do` expects exactly one return type argument",
+                    Span {
+                        start: rta_start,
+                        end: rta_span.end,
+                    },
+                ));
+            }
+            let carrier_ty = &arguments[0].ty;
+            let outer_constructor_variable = matches!(
+                carrier_ty,
+                AstTy::Named(_, name) | AstTy::Generic(_, name, _) if name.starts_with('$')
+            );
+            let valid_carrier_shape = matches!(
+                carrier_ty,
+                AstTy::Named(_, name) | AstTy::Generic(_, name, _) if !name.starts_with('$')
+            );
+            if !valid_carrier_shape {
+                let message = if outer_constructor_variable {
+                    "`do` return type argument must be a constructor head, applied carrier, or `_`; an outer constructor variable is not a valid carrier type input"
+                } else {
+                    "`do` return type argument must be a constructor head, applied carrier, or `_`"
+                };
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::InvalidDoCarrierReturnTypeArgument,
+                    message,
+                    arguments[0].span.clone(),
+                )
+                .with_guidance(crate::error::ParseErrorGuidance::DoCarrierReturnTypeArgument));
+            }
+            arguments
+        } else {
+            Vec::new()
+        };
+
+        if !matches!(self.peek(), Token::LBrace) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
+                "`do` requires a block",
+                self.peek_span(),
+            ));
+        }
+
+        self.with_parse_nesting(do_span.clone(), |parser| {
+            parser.advance();
+            parser.skip_newlines();
+            let mut statements = Vec::new();
+            while !matches!(parser.peek(), Token::RBrace) {
+                if matches!(parser.peek(), Token::Eof) {
+                    return Err(ParseError::incomplete("}", parser.peek_span()));
+                }
+
+                let start = parser.pos;
+                let is_do_pattern_statement = parser.is_pattern_bind_stmt_start()
+                    && parser.stmt_has_top_level_token_from(start, |token| {
+                        matches!(token, Token::LeftArrow | Token::SafeBind)
+                    });
+                let statement = if is_do_pattern_statement {
+                    parser.parse_do_pattern_statement()?
+                } else {
+                    AstDoStatement::Statement(parser.parse_stmt()?)
+                };
+                let boundary_ast = match &statement {
+                    AstDoStatement::Extract { rhs, .. } | AstDoStatement::SafeBind { rhs, .. } => {
+                        rhs
+                    }
+                    AstDoStatement::Statement(statement) => statement,
+                };
+                if is_do_pattern_statement && matches!(parser.peek(), Token::Semicolon) {
+                    parser.advance();
+                } else {
+                    parser.ensure_stmt_boundary(boundary_ast, true)?;
+                }
+                statements.push(statement);
+                while matches!(parser.peek(), Token::Newline) {
+                    parser.advance();
+                }
+            }
+
+            let end = parser.expect(&Token::RBrace)?;
+            let has_final_expression = matches!(
+                statements.last(),
+                Some(AstDoStatement::Statement(statement))
+                    if !matches!(statement, Ast::Bind(..) | Ast::SafeBind(..) | Ast::Semi(..))
+            );
+            if !has_final_expression {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
+                    "A do block must end with a final monadic expression",
+                    Span {
+                        start: do_span.start,
+                        end: end.end,
+                    },
+                ));
+            }
+
+            Ok(Ast::Do(
+                Span {
+                    start: do_span.start,
+                    end: end.end,
+                },
+                return_type_arguments,
+                statements,
+            ))
+        })
+    }
+
+    fn do_angle_argument_span(&self) -> Span {
+        let start = self.peek_span();
+        let mut depth = 0usize;
+        let mut end = start.end;
+        for token in self.tokens.iter().skip(self.pos) {
+            end = token.span.end;
+            match &token.token {
+                Token::Lt => depth += 1,
+                Token::Gt => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                Token::Compose => {
+                    if depth <= 2 {
+                        break;
+                    }
+                    depth -= 2;
+                }
+                Token::Newline | Token::LBrace | Token::RBrace | Token::Eof => break,
+                _ => {}
+            }
+        }
+        Span {
+            start: start.start,
+            end,
         }
     }
 
@@ -2967,6 +3143,14 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
         Ast::ReturnTypeArgumentApply(_, target, _) => {
             bulk_update_proc_contains_operation_call(target)
         }
+        Ast::Do(_, _, statements) => statements.iter().any(|statement| match statement {
+            AstDoStatement::Extract { rhs, .. } | AstDoStatement::SafeBind { rhs, .. } => {
+                bulk_update_proc_contains_operation_call(rhs)
+            }
+            AstDoStatement::Statement(statement) => {
+                bulk_update_proc_contains_operation_call(statement)
+            }
+        }),
         Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
             stmts.iter().any(bulk_update_proc_contains_operation_call)
         }

@@ -1541,6 +1541,17 @@ impl Checker {
             }
 
             Resolved::SafeBind(span, pat, rhs) => self.check_safebind(span, pat, rhs),
+            Resolved::Do(span, ..) => Err(self.policy_error(
+                TypeDiagnosticReason::CompilePolicyViolation,
+                diagnostics::TypePolicy::CompileUnitAvailability,
+                Some("`do` carrier inference and lowering are not implemented until N09".into()),
+                None,
+                None,
+                Some("N08".into()),
+                None,
+                span,
+                None,
+            )),
 
             Resolved::App(span, func, args) => self.check_app(span, func, args),
 
@@ -3896,6 +3907,7 @@ impl Checker {
             | Resolved::Block(span, _)
             | Resolved::Bind(span, _, _)
             | Resolved::SafeBind(span, _, _)
+            | Resolved::Do(span, _, _, _)
             | Resolved::BinOp(span, _, _, _)
             | Resolved::Pipe(span, _, _)
             | Resolved::ContextMap(span, _, _)
@@ -13774,6 +13786,27 @@ mod tests {
             error.reason(),
             Some(TypeDiagnosticReason::CallableSignatureMetadataMismatch)
         );
+    }
+
+    #[test]
+    fn resolved_do_fails_closed_at_the_n08_n09_boundary() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let node = Resolved::Do(
+            test_span(),
+            sindr::intrinsic::IntrinsicId::Do,
+            Vec::new(),
+            vec![sigil::resolved::ResolvedDoStatement::Statement(
+                Resolved::Lit(test_span(), Lit::Int(int(1))),
+            )],
+        );
+        let error = checker
+            .check_node(&node)
+            .expect_err("N08 must not lower do before N09 carrier inference exists");
+        assert_eq!(
+            error.reason(),
+            Some(TypeDiagnosticReason::CompilePolicyViolation)
+        );
+        assert!(error.message.contains("N09"), "{error:?}");
     }
 
     #[test]

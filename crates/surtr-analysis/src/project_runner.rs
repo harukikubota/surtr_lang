@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use sindr::policy::{CompileUnitKind, SourceKind};
 use sindr::runtime::{TypeEntry, TypeRegistry, Value};
-use spire::ast::{Ast, Lit, RecordLitArg, Span};
+use spire::ast::{Ast, AstDoStatement, Lit, RecordLitArg, Span};
 
 use crate::{
     parse_document, AnalysisSpan, ExternalInputState, ModuleFileFingerprint, ModuleStage,
@@ -328,6 +328,15 @@ impl ProjectRunnerExtractor {
                 }
             }
             Ast::Block(_, nodes) => self.visit_many(nodes),
+            Ast::Do(_, _, statements) => {
+                for statement in statements {
+                    match statement {
+                        AstDoStatement::Extract { rhs, .. }
+                        | AstDoStatement::SafeBind { rhs, .. } => self.visit(rhs),
+                        AstDoStatement::Statement(statement) => self.visit(statement),
+                    }
+                }
+            }
             Ast::Pipe(_, left, right)
             | Ast::ContextMap(_, left, right)
             | Ast::ContextBind(_, left, right)
@@ -564,6 +573,18 @@ fn collect_config_builder_facts(node: &Ast, project_file: &Path, facts: &mut Con
         Ast::Block(_, nodes) => {
             for node in nodes {
                 collect_config_builder_facts(node, project_file, facts);
+            }
+        }
+        Ast::Do(_, _, statements) => {
+            for statement in statements {
+                match statement {
+                    AstDoStatement::Extract { rhs, .. } | AstDoStatement::SafeBind { rhs, .. } => {
+                        collect_config_builder_facts(rhs, project_file, facts);
+                    }
+                    AstDoStatement::Statement(statement) => {
+                        collect_config_builder_facts(statement, project_file, facts);
+                    }
+                }
             }
         }
         Ast::Pipe(_, left, right)

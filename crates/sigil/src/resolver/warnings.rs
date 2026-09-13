@@ -5,8 +5,9 @@ use spire::ast::Span;
 
 use super::{DeclarationKind, ExplicitFunctionImport};
 use crate::resolved::{
-    Resolved, ResolvedHashMapLiteralEntry, ResolvedId, ResolvedInterpolatedPart, ResolvedMatchArm,
-    ResolvedPattern, ResolvedRecordLitArg, ResolvedStructLitField,
+    Resolved, ResolvedDoStatement, ResolvedHashMapLiteralEntry, ResolvedId,
+    ResolvedInterpolatedPart, ResolvedMatchArm, ResolvedPattern, ResolvedRecordLitArg,
+    ResolvedStructLitField,
 };
 
 #[derive(Debug, Clone)]
@@ -145,6 +146,20 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs) => {
             collect_node_usage(rhs, usage);
             collect_pattern_usage(pattern, usage);
+        }
+        Resolved::Do(_, _, _, statements) => {
+            for statement in statements {
+                match statement {
+                    ResolvedDoStatement::Extract { pattern, rhs, .. }
+                    | ResolvedDoStatement::SafeBind { pattern, rhs, .. } => {
+                        collect_node_usage(rhs, usage);
+                        collect_pattern_usage(pattern, usage);
+                    }
+                    ResolvedDoStatement::Statement(statement) => {
+                        collect_node_usage(statement, usage);
+                    }
+                }
+            }
         }
         Resolved::BinOp(_, _, left, right)
         | Resolved::Pipe(_, left, right)

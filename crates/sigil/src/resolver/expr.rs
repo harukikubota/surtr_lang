@@ -564,6 +564,22 @@ impl Resolver {
                 inside_placeholder_capture,
                 used,
             ),
+            Ast::Do(_, _, statements) => {
+                for statement in statements {
+                    let node = match statement {
+                        AstDoStatement::Extract { rhs, .. }
+                        | AstDoStatement::SafeBind { rhs, .. } => rhs,
+                        AstDoStatement::Statement(statement) => statement,
+                    };
+                    self.collect_capture_placeholders(
+                        node,
+                        allow_placeholders,
+                        inside_placeholder_capture,
+                        used,
+                    )?;
+                }
+                Ok(())
+            }
             Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
                 for stmt in stmts {
                     self.collect_capture_placeholders(
@@ -881,6 +897,55 @@ impl Resolver {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Ast::Do(span, return_type_arguments, statements) => Ok(Ast::Do(
+                span,
+                return_type_arguments,
+                statements
+                    .into_iter()
+                    .map(|statement| match statement {
+                        AstDoStatement::Extract {
+                            span,
+                            operator_span,
+                            pattern,
+                            rhs,
+                        } => Ok(AstDoStatement::Extract {
+                            span,
+                            operator_span,
+                            pattern,
+                            rhs: self.rewrite_capture_placeholders(
+                                rhs,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        }),
+                        AstDoStatement::SafeBind {
+                            span,
+                            operator_span,
+                            pattern,
+                            rhs,
+                        } => Ok(AstDoStatement::SafeBind {
+                            span,
+                            operator_span,
+                            pattern,
+                            rhs: self.rewrite_capture_placeholders(
+                                rhs,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        }),
+                        AstDoStatement::Statement(statement) => Ok(AstDoStatement::Statement(
+                            self.rewrite_capture_placeholders(
+                                statement,
+                                capture_span,
+                                allow_placeholders,
+                                inside_placeholder_capture,
+                            )?,
+                        )),
+                    })
+                    .collect::<Result<Vec<_>, ResolveError>>()?,
             )),
             Ast::Bind(span, pat, rhs) => Ok(Ast::Bind(
                 span,
@@ -1488,6 +1553,12 @@ impl Resolver {
             Ast::Block(_, stmts) | Ast::ListLiteral(_, stmts) | Ast::TupleLiteral(_, stmts) => {
                 stmts.iter().find_map(Self::pipe_slot_span)
             }
+            Ast::Do(_, _, statements) => statements.iter().find_map(|statement| match statement {
+                AstDoStatement::Extract { rhs, .. } | AstDoStatement::SafeBind { rhs, .. } => {
+                    Self::pipe_slot_span(rhs)
+                }
+                AstDoStatement::Statement(statement) => Self::pipe_slot_span(statement),
+            }),
             Ast::HashMapLiteral(_, entries) => entries.iter().find_map(|entry| {
                 Self::pipe_slot_span(&entry.key).or_else(|| Self::pipe_slot_span(&entry.value))
             }),
@@ -2649,6 +2720,59 @@ impl Resolver {
                     span,
                     resolved_pat,
                     Box::new(resolved_rhs),
+                ))
+            }
+
+            Ast::Do(span, return_type_arguments, statements) => {
+                let resolved_return_type_arguments = return_type_arguments
+                    .into_iter()
+                    .map(|argument| self.resolve_return_type_argument(argument))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let resolved_statements = self.with_child_scope(|child| {
+                    statements
+                        .into_iter()
+                        .map(|statement| match statement {
+                            AstDoStatement::Extract {
+                                span,
+                                operator_span,
+                                pattern,
+                                rhs,
+                            } => {
+                                let resolved_rhs = child.resolve_node(rhs)?;
+                                let resolved_pattern = child.resolve_pattern(pattern)?;
+                                Ok(ResolvedDoStatement::Extract {
+                                    span,
+                                    operator_span,
+                                    pattern: resolved_pattern,
+                                    rhs: resolved_rhs,
+                                })
+                            }
+                            AstDoStatement::SafeBind {
+                                span,
+                                operator_span,
+                                pattern,
+                                rhs,
+                            } => {
+                                let resolved_rhs = child.resolve_node(rhs)?;
+                                let resolved_pattern = child.resolve_pattern(pattern)?;
+                                Ok(ResolvedDoStatement::SafeBind {
+                                    span,
+                                    operator_span,
+                                    pattern: resolved_pattern,
+                                    rhs: resolved_rhs,
+                                })
+                            }
+                            AstDoStatement::Statement(statement) => Ok(
+                                ResolvedDoStatement::Statement(child.resolve_node(statement)?),
+                            ),
+                        })
+                        .collect::<Result<Vec<_>, ResolveError>>()
+                })?;
+                Ok(Resolved::Do(
+                    span,
+                    sindr::intrinsic::do_intrinsic_contract().identity,
+                    resolved_return_type_arguments,
+                    resolved_statements,
                 ))
             }
 

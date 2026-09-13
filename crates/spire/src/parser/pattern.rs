@@ -5,6 +5,40 @@ use crate::token::Token;
 use super::Parser;
 
 impl Parser<'_> {
+    pub(super) fn parse_do_pattern_statement(&mut self) -> Result<AstDoStatement, ParseError> {
+        let pat = self.parse_bind_pattern()?;
+        let operator = self.peek().clone();
+        if !matches!(operator, Token::LeftArrow | Token::SafeBind) {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PatternSyntax,
+                "A do pattern statement requires `<-` or `=?`",
+                self.peek_span(),
+            ));
+        }
+        let operator_span = self.advance().span;
+        let rhs = self.parse_expr()?;
+        self.ensure_non_associative_assignment(&rhs)?;
+        let span = Span {
+            start: super::pattern_span(&pat).start,
+            end: rhs.span().end,
+        };
+        Ok(match operator {
+            Token::LeftArrow => AstDoStatement::Extract {
+                span,
+                operator_span,
+                pattern: pat,
+                rhs,
+            },
+            Token::SafeBind => AstDoStatement::SafeBind {
+                span,
+                operator_span,
+                pattern: pat,
+                rhs,
+            },
+            _ => unreachable!("do pattern operator was checked before consuming"),
+        })
+    }
+
     pub(super) fn parse_pattern_bind_stmt(&mut self) -> Result<Ast, ParseError> {
         let pat = self.parse_bind_pattern()?;
         let assign_tok = self.peek().clone();

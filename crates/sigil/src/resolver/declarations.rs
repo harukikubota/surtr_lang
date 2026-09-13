@@ -2038,6 +2038,43 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .map(|arg| rewrite_self_ast(arg, target))
                 .collect(),
         ),
+        Ast::Do(span, return_type_arguments, statements) => Ast::Do(
+            span,
+            return_type_arguments
+                .into_iter()
+                .map(|argument| rewrite_self_return_type_argument(argument, target))
+                .collect(),
+            statements
+                .into_iter()
+                .map(|statement| match statement {
+                    AstDoStatement::Extract {
+                        span,
+                        operator_span,
+                        pattern,
+                        rhs,
+                    } => AstDoStatement::Extract {
+                        span,
+                        operator_span,
+                        pattern: rewrite_self_pattern(pattern, target),
+                        rhs: rewrite_self_ast(rhs, target),
+                    },
+                    AstDoStatement::SafeBind {
+                        span,
+                        operator_span,
+                        pattern,
+                        rhs,
+                    } => AstDoStatement::SafeBind {
+                        span,
+                        operator_span,
+                        pattern: rewrite_self_pattern(pattern, target),
+                        rhs: rewrite_self_ast(rhs, target),
+                    },
+                    AstDoStatement::Statement(statement) => {
+                        AstDoStatement::Statement(rewrite_self_ast(statement, target))
+                    }
+                })
+                .collect(),
+        ),
         Ast::ReturnTypeArgumentApply(span, target_expr, args) => Ast::ReturnTypeArgumentApply(
             span,
             Box::new(rewrite_self_ast(*target_expr, target)),

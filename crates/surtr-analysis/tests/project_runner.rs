@@ -67,6 +67,39 @@ Project::config({|config|
 }
 
 #[test]
+fn project_runner_visitors_recurse_into_do_items() {
+    let root = temp_root("runner-do-visitors");
+    let source = r#"
+Project::config({|config|
+  do {
+    Project::entrypoint(config, "main", {|c|
+      do {
+        Config::entry_fun(c, "Main::main")
+        Config::add_path(c, "./main.srt")
+      }
+    })
+    config
+  }
+})
+"#;
+
+    let input = extract_project_runner_input(ProjectRunnerSourceInput {
+        project_file: root.join("project.srt"),
+        selected_profile: "main".to_string(),
+        normalized_args: Vec::new(),
+        active_file: None,
+        source: source.to_string(),
+    })
+    .expect("project runner analysis should inspect calls nested in do items");
+
+    assert_eq!(input.entrypoint, "Main::main");
+    assert_eq!(input.declared_paths.len(), 1);
+    assert_eq!(input.declared_paths[0].literal_or_glob, "./main.srt");
+
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn project_runner_decodes_vm_project_value_into_runner_result() {
     let root = temp_root("runner-value");
     let registry = project_value_registry();

@@ -23,7 +23,7 @@ carrier 指定、自然言語 message の再解析を追加してはならない
 
 本書のSafeBindは[`diagnostics_cleanup_spec.md`](diagnostics_cleanup_spec.md) §§3–4で実装済みの契約を再利用する。
 N01–N07は完了し、compiler-owned contract、`DoBlock`、surface validationまで実装済みである。
-N08–N11のdo構文・推論・lowering・統合検証は未着手である。
+N08のdo構文・AST・resolver・scopeは実装済みである。N09–N11の推論・lowering・統合検証は未着手である。
 Extractorは現行の`Option<T>`返却を前提とし、更改タスクへの依存はない。
 以下の`Result<R, E>`は内部型関係の説明表記であり、doの変数注釈やRTAに二引数Result構文を追加しない。
 現行のerror値はabstract `Error`へ収束するため、独立したcaptured error parameterを新設しない。
@@ -200,7 +200,7 @@ DoExpression :=
   "do" DoCarrierReturnTypeArgument? "{" DoItems "}"
 
 DoCarrierReturnTypeArgument :=
-  "::" "<" (BareTypeConstructorHead | "_") ">"
+  "::" "<" (BareTypeConstructorHead | AppliedCarrierType | "_") ">"
 
 DoItems :=
   DoStatement* FinalExpression
@@ -215,7 +215,9 @@ OrdinaryDoStatement :=
   OrdinaryStatementOtherThanSafeBind
 ```
 
-`do` は予約語とし、callable 名や変数名として shadow できない。block は空にできず、最後に block 全体の
+`do` は予約語とし、callable 名や変数名として shadow できない。compiler-ownedな
+`@intrinsic def do...` の宣言名だけは、canonical stdlib surfaceを構造検証するために予約tokenを受理する。
+block は空にできず、最後に block 全体の
 monadic result を返す式を一つ持つ。最後が `<-`、`=?`、`=`、または明示的に `Unit` へ捨てる文なら、
 最終 monadic result がないため拒否する。
 
@@ -683,12 +685,15 @@ runtime trait dictionary、runtime candidate selectionを追加しない。
 
 - `do` token、`do` expression、block固有`<-`を構文化する。
 - `do::<...>` は既存call-site ReturnTypeArgument parser routeのtoken / span処理を再利用し、項目を
-  bare TypeConstructor headまたは`_`一項に制限する。
+  具象TypeConstructor head、完全・部分適用carrier、または`_`一項に制限する。
 - ASTは`Ast::Do`に`call_site_return_type_arguments`と`AstDoStatement`列を持つ。
-- `AstDoStatement`は少なくとも`Extract { pattern, rhs }`、`SafeBind { pattern, rhs }`、通常statementを区別する。
+- `AstDoStatement`は少なくとも`Extract { operator_span, pattern, rhs }`、
+  `SafeBind { operator_span, pattern, rhs }`、通常statementを区別する。
 - parser段階でlowerせず、`<-` LHSを既存MatchBlock pattern grammarで保持する。
 - `=?` LHS / RHSも既存SafeBind grammarとsource spanを保持し、parser段階でfailure targetを決めない。
-- `do<...>`、applied / variable carrier、空block、ReturnTypeArgumentの空listなどidentity不要の違反をparse errorにする。
+- do専用Extract / SafeBindにも通常statementと同じ改行または`;` separatorを許し、末尾ではどちらも
+  final expression不足として拒否する。
+- `do<...>`、外側constructor variable、空block、ReturnTypeArgumentの空listなどidentity不要の違反をparse errorにする。
 - `@intrinsic def do...` surfaceをraw display textと構造化validation inputに分ける。validation inputを通常callable
   schemeとして登録しない。
 
@@ -703,6 +708,8 @@ runtime trait dictionary、runtime candidate selectionを追加しない。
 - intrinsic identityを通常callableへ変換せず、`do`構文のownerとして保持する。
 - user sourceによる`DoBlock` declarationと`DoBlock` inherent impl / impl targetを
   `ReservedIntrinsicMarkerDeclaration` / `ReservedIntrinsicMarkerImpl`で拒否する。
+- N08単独では`Resolved::Do`をScarで暗黙loweringしない。N09のcarrier推論・core loweringが入るまで、
+  Scar入口で明示的に未実装として拒否し、workspaceをbuildableなphase境界に保つ。
 
 ### 10.3 Scar
 

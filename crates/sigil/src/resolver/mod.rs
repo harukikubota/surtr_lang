@@ -8,9 +8,9 @@ use sindr::names::{
 };
 use sindr::warning::PhaseOutput;
 use spire::ast::{
-    Ast, AstMatchArm, AstPattern, AstTy, ClosureParam, DeclAttrs, ExtractorParam, Lit,
-    RecordLitArg, ReturnTypeArgument, Span, StructLitField, SupervisorInitSpec, ValueParameter,
-    Visibility,
+    Ast, AstDoStatement, AstMatchArm, AstPattern, AstTy, ClosureParam, DeclAttrs, ExtractorParam,
+    Lit, RecordLitArg, ReturnTypeArgument, Span, StructLitField, SupervisorInitSpec,
+    ValueParameter, Visibility,
 };
 
 use crate::error::{ResolveError, ResolveErrorLabel};
@@ -686,6 +686,20 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs) => {
             rebase_pattern(pattern, base, offset);
             rebase_resolved_node(rhs, base, offset);
+        }
+        Resolved::Do(_, _, _, statements) => {
+            for statement in statements {
+                match statement {
+                    ResolvedDoStatement::Extract { pattern, rhs, .. }
+                    | ResolvedDoStatement::SafeBind { pattern, rhs, .. } => {
+                        rebase_pattern(pattern, base, offset);
+                        rebase_resolved_node(rhs, base, offset);
+                    }
+                    ResolvedDoStatement::Statement(statement) => {
+                        rebase_resolved_node(statement, base, offset);
+                    }
+                }
+            }
         }
         Resolved::BinOp(_, _, left, right)
         | Resolved::Pipe(_, left, right)

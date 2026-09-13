@@ -7,7 +7,7 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- N01–N07は実装済み。N08以降は未着手である。
+- N01–N08は実装済み。N09以降は未着手である。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
@@ -50,8 +50,8 @@ N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け
 | N05 | 標準Transformer | N04。Identityを使うテストはN02 | [x] 完了 | 新規標準機能 |
 | N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision、実装済みSafeBind RHS訂正 | [x] 完了 | 旧Task 10を再編 |
 | N07 | do compiler-owned contract | N06 | [x] 完了 | 旧Task 11 |
-| N08 | do syntax・AST・resolver・scope | N07 | [ ] 着手可能 | 旧Task 12 |
-| N09 | do carrier推論・core lowering | N08 | [ ] 未着手 | 旧Task 13 |
+| N08 | do syntax・AST・resolver・scope | N07 | [x] 完了 | 旧Task 12 |
+| N09 | do carrier推論・core lowering | N08 | [ ] 着手可能 | 旧Task 13 |
 | N10 | do SafeBind・Forge lowering | N09 | [ ] 未着手 | 旧Task 14 |
 | N11 | do診断・全carrier統合検証 | N10 | [ ] 未着手 | 旧Task 15 |
 | N12 | Generator core改修 | G-I01/G-I02確定。独立Task | [ ] 未着手 | 新規 |
@@ -105,7 +105,8 @@ dirtyなメインworktreeは変更せず、専用worktreeで文書だけを整�
 | `type_constructor_signature_unification_implementation_plan.md` Task 1–9 | 完了履歴 | commits `b1805d75`, `6221dffd`, `d134c95a`, `256c4b79`, `65ba6172`, `25c53c4e`, `dfe4a2e1`, `c28d185c`, `f2c0affd`と各review fixがHEAD祖先 | 恒久契約は担当`/docs`、実装手順・検証ログはVCS |
 | 同 Task 10 | 完了履歴 | SafeBind旧制限、diagnostic heuristic、builtin surface allowlistをN06で撤去 | `docs/dev/diagnostics.md`、`diagnostics_cleanup_spec.md` / N06 |
 | 同 Task 11 | 実装済み | Sindrの`DoIntrinsicContract` / `DoBlock` / `IntrinsicId::Do`、標準surfaceの構造検証、reserved marker拒否を実装 | `do_intrinsic_spec.md` / N07 |
-| 同 Task 12–15 | 確定未実装 | `Token::Do` / `Ast::Do` / `Resolved::Do` / `TypedDo`、推論・lowering・実行経路なし | `do_intrinsic_spec.md` / N08–N11 |
+| 同 Task 12 | 実装済み | `Token::Do` / `Ast::Do` / `Resolved::Do`、RTA・statement span、RHS-first scope resolution | `do_intrinsic_spec.md` / N08 |
+| 同 Task 13–15 | 確定未実装 | carrier推論、typed lowering、SafeBind failure target、Forge lowering、全carrier受入検証なし | `do_intrinsic_spec.md` / N09–N11 |
 | 同 Task 16 | implementation plan | 最終監査はdo/Generator等の完了後 | N14 |
 | `signature_level_type_constructor_inference_draft.md` | draft | import前後のblob hash一致を確認 | 本文を変更せず`doc/`に保持 |
 
@@ -379,11 +380,37 @@ raw signatureの再解析、通常callable scheme化、runtime function / opcode
   再レビューはfindings 0件。Astra顧問も一般AST span保持を採用すべきと確認し、CI初回timeoutを
   binary fingerprint変更後のProject prefix cold並列構築と切り分けた。
 
-N08の`Token::Do` / `Ast::Do` / resolver scope以降は未実装。commitは未作成。
+N08まで実装済み。N09のcarrier推論 / core lowering以降は未実装。commitは未作成。
 
 ### N08: syntax / AST / resolver / scope
 
 既存RTA parserを再利用し、doの `<-` とFacet bulk_updateの `<-` を構文所有者で区別する。RHSはLHS bindingより先に解決する。適用済みcarrier型を新たなdo文法にしない。
+
+状態: 完了。strict / tolerant lexerで`do`を予約し、compiler-ownedな`@intrinsic def do`の宣言名だけを
+canonical surface検証用に受理する。既存RTA parserからlist処理を共通化し、head、完全・部分適用carrier、`_`、
+省略を保持する。空list / 複数項 / `do<...>` / 外側constructor variableは、項目またはRTA listのsource spanと
+structured parse reasonを保って拒否する。
+
+Spire / Sigilにはlower前の`Do` nodeと`Extract` / `SafeBind` / ordinary statementを追加し、`<-` / `=?`の
+operator spanを保持する。do全体をchild scopeに置き、各pattern statementはRHSを先にresolveしてからpattern bindingを
+後続statementへ公開し、block外へは漏らさない。capture、warning、parallel ID rebase、process owner / self、impl `Self`、
+bulk_update operation検査など、silent fallbackを持つAST / resolved visitorもdo内部へ再帰させた。
+
+N08では型推論・loweringを行わず、`Resolved::Do`はScar入口でstructured `CompilePolicyViolation`として明示拒否する。
+この境界はN09でcarrier推論とcore loweringへ置き換える。
+
+検証（2026-09-14）:
+
+- TDD Red: `Token::Do` / `Ast::Do` / `Resolved::Do`がないcompile failureを確認後に実装した。
+- `rtk cargo nextest run -p spire -p sigil -p diagnostics -p scar -p surtr-analysis do_`: 37 passed、1104 skipped。
+- `rtk cargo nextest run -p surtr-analysis project_runner`: 14 passed、122 skipped。
+- `rtk cargo nextest run -p spire -p sigil -p diagnostics -p scar -p surtr-analysis`: 1141 passed。
+- `cargo check --workspace`: 成功。
+- `cargo run -- test --quiet --all`: 成功。新規worktree初回だけGit管理外の`tmp/sandbox`不在でfile I/O 5件が失敗し、
+  directory作成後の同一コマンドで成功した。
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace`: 1911 passed。
+- 独立サブエージェントレビューでRTA形状、silent visitor、状態文言、pin capture、pattern identity testを補正し、
+  最終再レビューはfindings 0件。
 
 ### N09: carrier inference / core lowering
 

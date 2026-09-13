@@ -4025,6 +4025,23 @@ impl Checker {
                 self.validate_constructor_pattern(pattern, constructor_traits)?;
                 self.validate_constructor_body_positions(rhs, constructor_traits)?;
             }
+            Resolved::Do(_, _, _, statements) => {
+                for statement in statements {
+                    match statement {
+                        sigil::resolved::ResolvedDoStatement::Extract { pattern, rhs, .. }
+                        | sigil::resolved::ResolvedDoStatement::SafeBind { pattern, rhs, .. } => {
+                            self.validate_constructor_pattern(pattern, constructor_traits)?;
+                            self.validate_constructor_body_positions(rhs, constructor_traits)?;
+                        }
+                        sigil::resolved::ResolvedDoStatement::Statement(statement) => {
+                            self.validate_constructor_body_positions(
+                                statement,
+                                constructor_traits,
+                            )?;
+                        }
+                    }
+                }
+            }
             Resolved::Closure(_, params, _, body)
             | Resolved::CaptureClosure(_, params, _, body) => {
                 for param in params {

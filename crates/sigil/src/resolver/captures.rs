@@ -89,6 +89,22 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(rhs, bound, free);
             collect_bind_pattern_bindings(pat, bound);
         }
+        Resolved::Do(_, _, _, statements) => {
+            let mut local_bound = bound.clone();
+            for statement in statements {
+                match statement {
+                    ResolvedDoStatement::Extract { pattern, rhs, .. }
+                    | ResolvedDoStatement::SafeBind { pattern, rhs, .. } => {
+                        collect_captures_inner(rhs, &mut local_bound, free);
+                        collect_pattern_captures(pattern, &local_bound, free);
+                        collect_bind_pattern_bindings(pattern, &mut local_bound);
+                    }
+                    ResolvedDoStatement::Statement(statement) => {
+                        collect_captures_inner(statement, &mut local_bound, free);
+                    }
+                }
+            }
+        }
         Resolved::BinOp(_, _, left, right) => {
             collect_captures_inner(left, bound, free);
             collect_captures_inner(right, bound, free);
@@ -257,6 +273,43 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             }
         }
         Resolved::Semi(_, inner) => collect_captures_inner(inner, bound, free),
+    }
+}
+
+fn collect_pattern_captures(
+    pat: &ResolvedPattern,
+    bound: &HashSet<u32>,
+    free: &mut Vec<ResolvedId>,
+) {
+    match pat {
+        ResolvedPattern::Pin(id) => {
+            if !bound.contains(&id.unique_id)
+                && !free.iter().any(|seen| seen.unique_id == id.unique_id)
+            {
+                free.push(id.clone());
+            }
+        }
+        ResolvedPattern::Constructor(_, inners)
+        | ResolvedPattern::Extractor(_, inners)
+        | ResolvedPattern::Tuple(inners)
+        | ResolvedPattern::Or(inners) => {
+            for inner in inners {
+                collect_pattern_captures(inner, bound, free);
+            }
+        }
+        ResolvedPattern::As(inner, _, _) => collect_pattern_captures(inner, bound, free),
+        ResolvedPattern::ListCons(head, tail) => {
+            collect_pattern_captures(head, bound, free);
+            collect_pattern_captures(tail, bound, free);
+        }
+        ResolvedPattern::Var(_)
+        | ResolvedPattern::Annotated(_, _)
+        | ResolvedPattern::Wildcard(_)
+        | ResolvedPattern::ListNil(_)
+        | ResolvedPattern::IntLit(_, _)
+        | ResolvedPattern::StrLit(_, _)
+        | ResolvedPattern::BoolLit(_, _)
+        | ResolvedPattern::DurationLit(_, _) => {}
     }
 }
 

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sindr::intrinsic::IntrinsicId;
 use sindr::names::SymbolIdentityInfo;
 use sindr::primitives::SurtrInt;
 use spire::ast::{AstTy, BinOp, Lit, ProcessSpec, Span, Symbol, ValueParameterMode, Visibility};
@@ -145,6 +146,14 @@ pub enum Resolved {
 
     /// Safe bind: `x =? expr` — unwrap `Ok(x)`, propagate `Err` early
     SafeBind(Span, ResolvedPattern, Box<Resolved>),
+
+    /// Compiler-owned monadic sequencing expression.
+    Do(
+        Span,
+        IntrinsicId,
+        Vec<ResolvedReturnTypeArgument>,
+        Vec<ResolvedDoStatement>,
+    ),
 
     /// Binary operation
     BinOp(Span, BinOp, Box<Resolved>, Box<Resolved>),
@@ -383,6 +392,23 @@ pub enum Resolved {
 
     /// String-keyed HashMap literal
     HashMapLiteral(Span, Vec<ResolvedHashMapLiteralEntry>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ResolvedDoStatement {
+    Extract {
+        span: Span,
+        operator_span: Span,
+        pattern: ResolvedPattern,
+        rhs: Resolved,
+    },
+    SafeBind {
+        span: Span,
+        operator_span: Span,
+        pattern: ResolvedPattern,
+        rhs: Resolved,
+    },
+    Statement(Resolved),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

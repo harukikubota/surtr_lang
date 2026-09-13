@@ -149,6 +149,31 @@ pub fn parse_error_spec(source_id: SourceId, source: &str, error: &ParseError) -
                 &mut spec,
             );
         }
+        Some(ParseErrorGuidance::DoCarrierReturnTypeArgument) => {
+            let written = crate::source::slice_chars(source, span.start, span.end);
+            let written = (!written.is_empty()).then_some(written);
+            let outer_constructor_variable = written
+                .as_deref()
+                .is_some_and(|argument| argument.starts_with('$'));
+            spec.help = Some(match written.as_deref() {
+                Some(argument) if argument.starts_with('<') && argument.ends_with('>') => {
+                    format!("Write `do::{argument} {{ ... }}`.")
+                }
+                _ => "Write `do::<Either> { ... }`, `do::<Either<String, _>> { ... }`, or add an expected result type.".into(),
+            });
+            let label = if outer_constructor_variable {
+                "this is an outer constructor variable, not a valid carrier type input"
+            } else {
+                "invalid `do` carrier return type argument"
+            };
+            if outer_constructor_variable {
+                spec.notes.push(
+                    "captured and fixed arguments in an applied carrier are checked against do block constraints"
+                        .into(),
+                );
+            }
+            add_line_label(source_id, source, &span, label, &mut spec);
+        }
         None => {}
     }
 
@@ -193,6 +218,12 @@ fn map_reason(reason: ParseErrorReason) -> ParseDiagnosticReason {
         ParseErrorReason::PositionRule => ParseDiagnosticReason::PositionRule,
         ParseErrorReason::SourcePolicy => ParseDiagnosticReason::SourcePolicy,
         ParseErrorReason::InterpolationSyntax => ParseDiagnosticReason::InterpolationSyntax,
+        ParseErrorReason::ReturnTypeArgumentArityMismatch => {
+            ParseDiagnosticReason::ReturnTypeArgumentArityMismatch
+        }
+        ParseErrorReason::InvalidDoCarrierReturnTypeArgument => {
+            ParseDiagnosticReason::InvalidDoCarrierReturnTypeArgument
+        }
         ParseErrorReason::CompilerInvariant => ParseDiagnosticReason::CompilerInvariant,
     }
 }
@@ -225,6 +256,9 @@ fn map_guidance(guidance: &ParseErrorGuidance) -> ParseDiagnosticGuidance {
         }
         ParseErrorGuidance::ImmediateAnonymousCall => {
             ParseDiagnosticGuidance::ImmediateAnonymousCall
+        }
+        ParseErrorGuidance::DoCarrierReturnTypeArgument => {
+            ParseDiagnosticGuidance::DoCarrierReturnTypeArgument
         }
     }
 }

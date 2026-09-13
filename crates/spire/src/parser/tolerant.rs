@@ -758,6 +758,7 @@ fn keyword_token(text: &str) -> (Token, SyntaxTokenKind) {
         "impl" => Some(Token::Impl),
         "for" => Some(Token::For),
         "match" => Some(Token::Match),
+        "do" => Some(Token::Do),
         "when" => Some(Token::When),
         "cond" => Some(Token::Cond),
         "private" => Some(Token::Private),
