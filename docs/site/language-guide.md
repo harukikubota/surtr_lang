@@ -770,7 +770,7 @@ not_fn = &`Boolean::not`
 現在の Surtr では、標準定義ソースを次の順で先に読み込みます。
 
 ```text
-Bootstrap -> [SpecialTypes, Kernel, Show, Eq, Ordering, Compare, Concat, From, TryFrom, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Option, Facet, Float] -> user source
+Bootstrap -> [SpecialTypes, Function, Kernel, Add, Sub, Mul, Eq, Compare, Concat, Show, Default, Ordering, Tuple, From, TryFrom, Encode, Decode, Functor, Bifunctor, Applicative, Monad, MonadT, Identity, Reader, State, Alternative, Monoid, PipeApply, Compose, Composable, LiftComposable, KleisliComposable, Int, String, Regex, Boolean, Error, List, Generator, HashMap, Result, Either, Duration, Range, Option, OptionT, EitherT, ReaderT, StateT, Task, Facet, Float, Json, Config, Project, Random, File, FS, IO, Shell, StyledDoc, Test] -> user source
 ```
 
 役割の分け方は次のとおりです。
