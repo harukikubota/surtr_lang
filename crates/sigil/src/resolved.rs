@@ -366,6 +366,15 @@ pub enum Resolved {
         Box<Resolved>,
     ),
 
+    /// Closure generated from a named capture expression. Keeps the source
+    /// origin explicit after capture lowering.
+    CaptureClosure(
+        Span,
+        Vec<ResolvedClosureParam>,
+        Vec<ResolvedId>,
+        Box<Resolved>,
+    ),
+
     /// Captured function value
     Capture(Span, Box<Resolved>, Vec<Resolved>),
 

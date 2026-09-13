@@ -358,7 +358,13 @@ pub struct CallableMetadata {
     pub module: Option<String>,
     pub name: Option<String>,
     pub full_signature: Option<String>,
-    pub applied_args: usize,
+    /// A synthesized callable may explicitly inherit display origin and
+    /// identity from one callable-valued lexical capture.
+    pub origin_source: Option<usize>,
+    /// Direct user-function target of a generated wrapper callable, when one
+    /// exists. Runtime process initialization uses this without changing the
+    /// wrapper's display origin.
+    pub delegate_function: Option<u32>,
 }
 
 impl Default for CallableMetadata {
@@ -368,7 +374,8 @@ impl Default for CallableMetadata {
             module: None,
             name: None,
             full_signature: None,
-            applied_args: 0,
+            origin_source: None,
+            delegate_function: None,
         }
     }
 }

@@ -7596,7 +7596,8 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             TypedInner::Dbg(args) => args.iter().any(|arg| has_pending_trait_call(&arg.expr)),
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
-            | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),
+            | TypedInner::Closure(_, _, body)
+            | TypedInner::CaptureClosure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil
@@ -7710,7 +7711,8 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             TypedInner::Dbg(args) => args.iter().any(|arg| has_pending_trait_call(&arg.expr)),
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
-            | TypedInner::Closure(_, _, body) => has_pending_trait_call(body),
+            | TypedInner::Closure(_, _, body)
+            | TypedInner::CaptureClosure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
             | TypedInner::ListNil

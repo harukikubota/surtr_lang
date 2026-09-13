@@ -20,7 +20,7 @@ impl StateT {
 
   ## REPL
   xldr(1)> StateT::new({|state| Identity::new((state + 1, state + 2))})
-  StateT(run_state: <function:489; lexical_captures=0>)
+  StateT(run_state: Closure(Int -> Identity<(Int, Int)>))
 
   """
   def new(run_state: ($S -> $M<($A, $S)>)) -> StateT<$S, $M, $A>
@@ -186,7 +186,7 @@ where
   ## REPL
   xldr(1)> state: StateT<Int, Identity, Int> = Applicative::pure(2)
   xldr(2)> state
-  StateT(run_state: <function:491; lexical_captures=1>)
+  StateT(run_state: Closure(Int -> Identity<(Int, Int)>))
 
   """
   def pure::<StateT<$S, $M, $T>>(value: $A) -> StateT<$S, $M, $A> {
@@ -236,7 +236,7 @@ where
   ## REPL
   xldr(1)> state: StateT<Int, Identity, Int> = Monad::return(2)
   xldr(2)> state
-  StateT(run_state: <function:491; lexical_captures=1>)
+  StateT(run_state: Closure(Int -> Identity<(Int, Int)>))
 
   """
   def return::<StateT<$S, $M, $T>>(value: $A) -> StateT<$S, $M, $A> {
@@ -278,7 +278,7 @@ where
   xldr(1)> base: Result<Int> = Ok(7)
   xldr(2)> lifted: StateT<Int, Result, Int> = MonadT::lift(base)
   xldr(3)> lifted
-  StateT(run_state: <function:491; lexical_captures=1>)
+  StateT(run_state: Closure(Int -> Result<(Int, Int), Error>))
 
   """
   def lift::<StateT<$S, $M, $T>>(value: $M<$A>) -> StateT<$S, $M, $A> {
@@ -305,7 +305,7 @@ where
   ## REPL
   xldr(1)> empty: StateT<Int, Option, Int> = Alternative::empty()
   xldr(2)> empty
-  StateT(run_state: <template:6; lexical_captures=0>)
+  StateT(run_state: Closure(Int -> Option<(Int, Int)>))
 
   """
   def empty::<StateT<$S, $M, $T>>() -> StateT<$S, $M, $T> {

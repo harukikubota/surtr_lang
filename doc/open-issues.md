@@ -345,6 +345,23 @@
   - 仕様確定後、Spireでrecord grammar、Sigilでowner / parameter scope、Scarでwell-formednessとFacet destination、Forge / Eldrで値表現を責務ごとに固定する。
   - parserだけを先行して`defstruct`のgeneric surfaceへ合わせるテストは追加しない。
 
+### OI-036 Facet capture callable identity
+
+- 背景:
+  - [`callable-display-origin-spec.md`](./callable-display-origin-spec.md) で、callable の Capture / Closure origin と capture-site signature を値ごとの runtime metadata に保持する契約を整理した。
+  - Facet path capture は Scar が synthetic closure wrapper へ lower するため、source-level Capture origin と `FnCapture(module, name)` に出す canonical identity が失われうる。
+- 未確定点:
+  - Facet capture の表示名を `Facet` helper (`view` など) として出すか、Facet path の owner/segment を identity とするか。
+  - optional / fallible segment capture、複数 segment path、field update が identity にどう反映されるか。
+  - Facet capture の partial application / variable re-capture で identity を維持する canonical representation。
+- 受け入れ条件:
+  - Facet capture の source origin は closure literal と混同しない。
+  - canonical identity は path shape や lexical capture 順に依存せず決定的である。
+  - ordinary Closure display、type acceptance、Facet dispatch、privacy checks は変化しない。
+- テスト方針:
+  - identity 規約を要件定義へ確定してから、`scar` / `forge` / `eldr` に direct・optional・fallible path と partial/re-capture 境界を置く。
+  - Xldr では direct binding と struct / Result 等の nested field display が同じ metadata を使うことを確認する。
+
 ## 更新ルール
 
 - 解決済み事項は本ファイルに残さず削除する。必要な履歴は正本仕様・関連 spec・コミット履歴で追跡する。

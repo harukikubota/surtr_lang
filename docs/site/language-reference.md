@@ -405,7 +405,10 @@ Option::Some(saved) =? Option::Some(1)
 - `&`op`` は 2 引数 callable に lower される
 - `&`op`(args...)`` は placeholder capture 規約で lower される
 - bare capture を `inspect` / `to_string` すると、metadata があれば
-  `FnCapture(module: M, name: f, signature: sig)` 形式で表示する
+  `FnCapture(module: M, name: f, sig: sig)` 形式で表示する
+- callable の表示は `Result` などの tagged value、struct / record field、List、HashMap、tuple の内部にも再帰適用する
+- 部分適用した capture は変数への束縛や再 capture を経ても capture として表示し、closure literal で包んだ場合は `Closure` として表示する
+- user-facing callable 表示に内部 function / template ID を出さない
 - `Result` と `List` を `|*>`, `|*|`, `|>=`, `>*`, `>=>` で混在させない
 - `|>`, `|*>`, `|*|`, `|>=`, `>>`, `>*`, `>=>`, `=?` は同一優先度・左結合
 - unqualified infix `` `on` `` と `` `Function::on` `` は flow より低優先度

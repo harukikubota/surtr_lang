@@ -1643,11 +1643,15 @@ fn repl_allows_trait_helper_capture_with_expected_callable_annotation() {
 
     let stdout = strip_ansi(&String::from_utf8_lossy(&output.stdout));
     assert!(
-        stdout.contains("cmp: (Int, Int -> Ordering) = Closure(Int, Int -> Ordering)"),
+        stdout.contains(
+            "cmp: (Int, Int -> Ordering) = FnCapture(module: Compare, name: compare, sig: (Int, Int -> Ordering))"
+        ),
         "{stdout}"
     );
     assert!(
-        stdout.contains("join: (String, String -> String) = Closure(String, String -> String)"),
+        stdout.contains(
+            "join: (String, String -> String) = FnCapture(module: Concat, name: concat, sig: (String, String -> String))"
+        ),
         "{stdout}"
     );
     assert!(stdout.contains("Ordering::Less"), "{stdout}");

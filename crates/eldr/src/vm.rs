@@ -997,7 +997,8 @@ impl VM {
             full_signature: doc
                 .and_then(|doc| doc.signature.clone())
                 .or_else(|| Some(meta.sig_str.to_string())),
-            applied_args: 0,
+            origin_source: None,
+            delegate_function: None,
         }
     }
 
@@ -1015,7 +1016,8 @@ impl VM {
                     module,
                     name,
                     full_signature: Some(signature),
-                    applied_args: 0,
+                    origin_source: None,
+                    delegate_function: None,
                 };
             }
             return CallableMetadata {
@@ -1052,7 +1054,8 @@ impl VM {
             module,
             name,
             full_signature: signature,
-            applied_args: 0,
+            origin_source: None,
+            delegate_function: None,
         }
     }
 
@@ -1071,7 +1074,8 @@ impl VM {
                 module: template.metadata.module.clone(),
                 name: template.metadata.name.clone(),
                 full_signature: template.metadata.full_signature.clone(),
-                applied_args: 0,
+                origin_source: None,
+                delegate_function: None,
             })
             .unwrap_or_default()
     }
@@ -1342,40 +1346,6 @@ impl VM {
                     }
                 }
             }
-        }
-    }
-
-    fn promote_partial_apply_metadata(
-        &self,
-        target: &Callable,
-        lexical_captures: &[Value],
-    ) -> CallableMetadata {
-        let Some(Value::Callable(original)) = lexical_captures.first() else {
-            return target.metadata.clone();
-        };
-        if original.metadata.origin != CallableOrigin::Capture {
-            return target.metadata.clone();
-        }
-
-        let promoted = match target.target {
-            CallableTarget::Function(fun_idx) => self
-                .bytecode
-                .functions
-                .get(fun_idx as usize)
-                .is_some_and(|entry| entry.flags.partial_apply_wrapper),
-            _ => false,
-        };
-        if promoted
-            || matches!(
-                target.metadata.origin,
-                CallableOrigin::Capture | CallableOrigin::Unknown
-            )
-        {
-            let mut metadata = original.metadata.clone();
-            metadata.applied_args += lexical_captures.len().saturating_sub(1);
-            metadata
-        } else {
-            target.metadata.clone()
         }
     }
 
@@ -3421,17 +3391,59 @@ impl VM {
         &self,
         callable: &Callable,
     ) -> Option<String> {
+        fn worker_process_name(module: &str, name: &str) -> Option<String> {
+            matches!(name, "init" | "__agent_init").then(|| module.to_string())
+        }
+
         match (
             callable.metadata.module.as_deref(),
             callable.metadata.name.as_deref(),
         ) {
-            (Some(module), Some("init" | "__agent_init")) => Some(module.to_string()),
-            _ => callable.lexical_captures.iter().find_map(|value| {
-                let Value::Callable(callable) = value else {
-                    return None;
-                };
-                self.infer_worker_process_name_from_callable(callable)
-            }),
+            (Some(module), Some(name)) if worker_process_name(module, name).is_some() => {
+                worker_process_name(module, name)
+            }
+            _ => {
+                let fun_idx =
+                    callable
+                        .metadata
+                        .delegate_function
+                        .or_else(|| match callable.target {
+                            CallableTarget::Function(fun_idx) => Some(fun_idx),
+                            CallableTarget::Template(template_id) => self
+                                .callable_template(template_id)
+                                .ok()
+                                .and_then(|template| match &template.kind {
+                                    CallableTemplateKind::PartialDirectCall { target, .. }
+                                    | CallableTemplateKind::InjectDirectCall { target, .. } => {
+                                        match target {
+                                            CallableTemplateDirectTarget::Function(fun_idx) => {
+                                                Some(*fun_idx)
+                                            }
+                                            CallableTemplateDirectTarget::Builtin(_) => None,
+                                        }
+                                    }
+                                    CallableTemplateKind::ComposeDirect { .. } => None,
+                                }),
+                            CallableTarget::Builtin(_) => None,
+                        });
+                fun_idx
+                    .and_then(|fun_idx| {
+                        self.bytecode
+                            .functions
+                            .get(fun_idx as usize)
+                            .and_then(|entry| entry.qualified_name.as_deref())
+                            .and_then(|qualified| qualified.rsplit_once("::"))
+                            .and_then(|(module, name)| worker_process_name(module, name))
+                    })
+                    .or_else(|| {
+                        callable.lexical_captures.iter().find_map(|value| {
+                            let Value::Callable(source) = value else {
+                                return None;
+                            };
+                            self.infer_worker_process_name_from_callable(source)
+                        })
+                    })
+            }
         }
     }
 
@@ -5296,6 +5308,18 @@ impl VM {
                     }
                 }
                 Opcode::LoadFunctionRef(_) | Opcode::Call { .. } => {}
+                Opcode::SetCallableDelegateFunction(fun_idx) => {
+                    if !bytecode
+                        .functions
+                        .iter()
+                        .any(|entry| entry.fun_idx == *fun_idx)
+                    {
+                        return Err(RuntimeError::new(format!(
+                            "Bytecode verifier: unknown callable delegate function {}",
+                            fun_idx
+                        )));
+                    }
+                }
                 Opcode::LoadCallableTemplateRef(template_id) => {
                     if !bytecode
                         .callable_templates
@@ -6475,8 +6499,6 @@ impl VM {
                 let callable = match target {
                     Value::Callable(mut callable) => {
                         callable.lexical_captures.extend(lexical_captures);
-                        callable.metadata = self
-                            .promote_partial_apply_metadata(&callable, &callable.lexical_captures);
                         callable
                     }
                     _ => {
@@ -6486,6 +6508,43 @@ impl VM {
                     }
                 };
                 self.stack.push(Value::Callable(callable));
+            }
+
+            Opcode::SetCallableSignature(signature) => {
+                let Some(Value::Callable(callable)) = self.stack.last_mut() else {
+                    return Err(RuntimeError::new(
+                        "SetCallableSignature expects a callable on the stack",
+                    ));
+                };
+                callable.metadata.full_signature = Some(signature.clone());
+            }
+
+            Opcode::SetCallableOriginSource(capture_index) => {
+                let Some(Value::Callable(callable)) = self.stack.last_mut() else {
+                    return Err(RuntimeError::new(
+                        "SetCallableOriginSource expects a callable on the stack",
+                    ));
+                };
+                let is_callable_source = matches!(
+                    callable.lexical_captures.get(capture_index as usize),
+                    Some(Value::Callable(_))
+                );
+                if !is_callable_source {
+                    return Err(RuntimeError::new(format!(
+                        "SetCallableOriginSource capture index {} is not a callable",
+                        capture_index
+                    )));
+                }
+                callable.metadata.origin_source = Some(capture_index as usize);
+            }
+
+            Opcode::SetCallableDelegateFunction(function_index) => {
+                let Some(Value::Callable(callable)) = self.stack.last_mut() else {
+                    return Err(RuntimeError::new(
+                        "SetCallableDelegateFunction expects a callable on the stack",
+                    ));
+                };
+                callable.metadata.delegate_function = Some(function_index);
             }
 
             Opcode::CallClosure {

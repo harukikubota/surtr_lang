@@ -71,7 +71,8 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                     Resolved::BuiltinTypeDecl(_, _, _, _) => {}
                     Resolved::TypeAlias(_, _, _, _, _) => {}
                     Resolved::ResultCtorDecl(_, _, _, _, _) => {}
-                    Resolved::Closure(_, params, _, _) => {
+                    Resolved::Closure(_, params, _, _)
+                    | Resolved::CaptureClosure(_, params, _, _) => {
                         for param in params {
                             local_bound.insert(param.id.unique_id);
                         }
@@ -240,7 +241,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             fun_bound.insert(param.id.unique_id);
             collect_captures_inner(body, &mut fun_bound, free);
         }
-        Resolved::Closure(_, _, captures, _) => {
+        Resolved::Closure(_, _, captures, _) | Resolved::CaptureClosure(_, _, captures, _) => {
             for cap in captures {
                 if !bound.contains(&cap.unique_id)
                     && !free.iter().any(|seen| seen.unique_id == cap.unique_id)

@@ -20,7 +20,7 @@ impl Reader {
 
   ## REPL
   xldr(1)> Reader::new({|n| n + 1})
-  Reader(run_reader: <function:495; lexical_captures=0>)
+  Reader(run_reader: Closure(Int -> Int))
   """
   def new(run_reader: ($R -> $A)) -> Reader<$R, $A> {
     Reader { run_reader }
@@ -112,7 +112,7 @@ where
   ## REPL
   xldr(1)> value: Reader<Int, Int> = Applicative::pure(7)
   xldr(2)> value
-  Reader(run_reader: <function:496; lexical_captures=1>)
+  Reader(run_reader: Closure(Int -> Int))
   """
   def pure::<Reader<$E, $R>>(value: $A) -> Reader<$E, $A> {
     Reader::new({|_environment| value})
@@ -154,7 +154,7 @@ where
   ## REPL
   xldr(1)> value: Reader<Int, Int> = Monad::return(7)
   xldr(2)> value
-  Reader(run_reader: <function:496; lexical_captures=1>)
+  Reader(run_reader: Closure(Int -> Int))
   """
   def return::<Reader<$E, $R>>(value: $A) -> Reader<$E, $A> {
     Reader::new({|_environment| value})

@@ -543,7 +543,7 @@ match pipeline("x") {
     );
 
     let json: Value = serde_json::from_slice(&dump.stdout).expect("dump output must be valid json");
-    assert_eq!(json["header"]["version"], 2);
+    assert_eq!(json["header"]["version"], 3);
     assert!(
         json["summary"]["callable_template_count"]
             .as_u64()

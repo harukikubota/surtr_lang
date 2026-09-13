@@ -4199,9 +4199,7 @@ impl ReplEngine {
     }
 
     fn capture_doc_entry(&self, value: &Value) -> Option<&DocEntry> {
-        let Value::Callable(callable) = value else {
-            return None;
-        };
+        let callable = Self::callable_origin_source(value)?;
         let module = callable.metadata.module.as_deref()?;
         let name = callable.metadata.name.as_deref()?;
         let qualified = format!("{module}::{name}");
@@ -4282,9 +4280,7 @@ impl ReplEngine {
     }
 
     fn callable_origin_label(&self, value: &Value) -> Option<String> {
-        let Value::Callable(callable) = value else {
-            return None;
-        };
+        let callable = Self::callable_origin_source(value)?;
         match (
             callable.metadata.module.as_deref(),
             callable.metadata.name.as_deref(),
@@ -6389,17 +6385,32 @@ impl ReplEngine {
         &self,
         binding: &forge::BindingInfo,
     ) -> Option<forge::ReplCallableKind> {
-        if let Some(kind) = binding.callable_kind {
-            return Some(kind);
+        self.vm
+            .get_local(binding.slot_id)
+            .and_then(|value| Self::callable_origin_kind(&value))
+            .or(binding.callable_kind)
+    }
+
+    fn callable_origin_kind(value: &Value) -> Option<forge::ReplCallableKind> {
+        let callable = Self::callable_origin_source(value)?;
+        match callable.metadata.origin {
+            sindr::runtime::CallableOrigin::Closure => Some(forge::ReplCallableKind::Closure),
+            sindr::runtime::CallableOrigin::Capture => Some(forge::ReplCallableKind::Capture),
+            sindr::runtime::CallableOrigin::Unknown => None,
         }
-        let value = self.vm.get_local(binding.slot_id)?;
-        match value {
-            Value::Callable(callable) => match callable.metadata.origin {
-                sindr::runtime::CallableOrigin::Closure => Some(forge::ReplCallableKind::Closure),
-                sindr::runtime::CallableOrigin::Capture => Some(forge::ReplCallableKind::Capture),
-                sindr::runtime::CallableOrigin::Unknown => None,
-            },
-            _ => None,
+    }
+
+    fn callable_origin_source(value: &Value) -> Option<&sindr::runtime::Callable> {
+        let mut current = value;
+        loop {
+            let Value::Callable(callable) = current else {
+                return None;
+            };
+            if let Some(index) = callable.metadata.origin_source {
+                current = callable.lexical_captures.get(index)?;
+            } else {
+                return Some(callable);
+            }
         }
     }
 
@@ -7482,7 +7493,7 @@ impl ReplEngine {
                 .identity_label()
                 .to_string();
         }
-        if let Some(kind) = binding.callable_kind {
+        if let Some(kind) = self.binding_callable_kind(binding) {
             return Self::callable_display_category(kind)
                 .identity_label()
                 .to_string();

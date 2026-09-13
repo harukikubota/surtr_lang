@@ -4316,16 +4316,16 @@ g = &print"#,
 }
 
 #[test]
-fn test_capture_placeholder_lowers_to_closure() {
+fn test_capture_placeholder_lowers_to_capture_closure() {
     let resolved =
         parse_and_resolve("def add(x: Int, y: Int) -> Int { x + y }\ninc = &add(&1, 1)").unwrap();
     match &resolved[1] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Closure(_, params, _, body) => {
+            Resolved::CaptureClosure(_, params, _, body) => {
                 assert_eq!(params.len(), 1);
                 assert!(matches!(body.as_ref(), Resolved::App(_, _, _)));
             }
-            other => panic!("Expected lowered closure, got {:?}", other),
+            other => panic!("Expected lowered capture closure, got {:?}", other),
         },
         other => panic!("Expected bind, got {:?}", other),
     }

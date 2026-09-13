@@ -3845,6 +3845,8 @@ impl Resolver {
             }
 
             Ast::Capture(span, target, args) => {
+                let capture_uses_named_callable =
+                    !matches!(target.as_ref(), Ast::FuncLiteralRef(_, _));
                 match self.lower_capture_expr(span.clone(), *target, args)? {
                     Ast::Capture(_, target, args) => {
                         let resolved_target = self.resolve_node(*target)?;
@@ -3857,6 +3859,14 @@ impl Resolver {
                             Box::new(resolved_target),
                             resolved_args,
                         ))
+                    }
+                    Ast::Closure(closure_span, params, body) if capture_uses_named_callable => {
+                        match self.resolve_node(Ast::Closure(closure_span, params, body))? {
+                            Resolved::Closure(span, params, captures, body) => {
+                                Ok(Resolved::CaptureClosure(span, params, captures, body))
+                            }
+                            other => Ok(other),
+                        }
                     }
                     lowered => self.resolve_node(lowered),
                 }

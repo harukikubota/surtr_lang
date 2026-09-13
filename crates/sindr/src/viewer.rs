@@ -219,6 +219,15 @@ pub enum OpcodeView {
     CaptureClosure {
         capture_count: u8,
     },
+    SetCallableSignature {
+        signature: String,
+    },
+    SetCallableOriginSource {
+        capture_index: u8,
+    },
+    SetCallableDelegateFunction {
+        function_index: u32,
+    },
     MakeError {
         template_id: u32,
     },
@@ -642,6 +651,17 @@ fn opcode_view(opcode: &Opcode) -> OpcodeView {
         Opcode::CaptureClosure(count) => OpcodeView::CaptureClosure {
             capture_count: *count,
         },
+        Opcode::SetCallableSignature(signature) => OpcodeView::SetCallableSignature {
+            signature: signature.clone(),
+        },
+        Opcode::SetCallableOriginSource(capture_index) => OpcodeView::SetCallableOriginSource {
+            capture_index: *capture_index,
+        },
+        Opcode::SetCallableDelegateFunction(function_index) => {
+            OpcodeView::SetCallableDelegateFunction {
+                function_index: *function_index,
+            }
+        }
         Opcode::MakeError { template_id } => OpcodeView::MakeError {
             template_id: *template_id,
         },

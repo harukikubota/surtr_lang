@@ -184,6 +184,14 @@ pub enum Opcode {
         span_end: u32,
     },
     LoadCallableTemplateRef(u32),
+    /// Replace the capture-site signature on a callable value while retaining
+    /// its origin and canonical identity metadata.
+    SetCallableSignature(String),
+    /// Explicitly link a synthesized callable's display origin to a captured
+    /// callable value at this lexical-capture index.
+    SetCallableOriginSource(u8),
+    /// Record the direct user-function target of a generated wrapper callable.
+    SetCallableDelegateFunction(u32),
 }
 
 impl Opcode {
@@ -215,6 +223,9 @@ impl Opcode {
             Self::JumpIfLocalTagNe { .. } => "JumpIfLocalTagNe",
             Self::TailCallClosure { .. } => "TailCallClosure",
             Self::LoadCallableTemplateRef(..) => "LoadCallableTemplateRef",
+            Self::SetCallableSignature(..) => "SetCallableSignature",
+            Self::SetCallableOriginSource(..) => "SetCallableOriginSource",
+            Self::SetCallableDelegateFunction(..) => "SetCallableDelegateFunction",
             Self::AddInt => "AddInt",
             Self::SubInt => "SubInt",
             Self::MulInt => "MulInt",
@@ -332,7 +343,7 @@ pub struct CompileInfo {
 impl Default for CompileInfo {
     fn default() -> Self {
         Self {
-            bytecode_version: 2,
+            bytecode_version: 3,
             debug_level: 2,
             num_locals: 0,
             compiler_version: None,
@@ -1318,7 +1329,7 @@ struct ParsedContainer<'a> {
 
 impl Bytecode {
     const MAGIC: [u8; 4] = *b"ELDR";
-    const VERSION: u32 = 2;
+    const VERSION: u32 = 3;
     const HEADER_LEN: usize = 16;
     const CHUNK_HEADER_LEN: usize = 8;
     const CHUNK_CODE: [u8; 4] = *b"Code";
@@ -2449,20 +2460,20 @@ mod tests {
 
     #[test]
     fn decode_rejects_unsupported_version() {
-        let bytes = b"ELDR\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let bytes = b"ELDR\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
         let err = Bytecode::decode(bytes).expect_err("decode must fail");
-        assert!(matches!(err, BytecodeFormatError::UnsupportedVersion(3)));
+        assert!(matches!(err, BytecodeFormatError::UnsupportedVersion(4)));
     }
 
     #[test]
     fn decode_accepts_previous_version_header() {
         let bytecode = sample_bytecode(None);
         let mut bytes = bytecode.encode().expect("encode should succeed");
-        bytes[4..8].copy_from_slice(&1u32.to_le_bytes());
+        bytes[4..8].copy_from_slice(&2u32.to_le_bytes());
 
-        let decoded = Bytecode::decode(&bytes).expect("decode should accept version 1");
+        let decoded = Bytecode::decode(&bytes).expect("decode should accept version 2");
         assert_eq!(decoded.callable_templates, bytecode.callable_templates);
-        assert_eq!(decoded.compile_info.bytecode_version, 2);
+        assert_eq!(decoded.compile_info.bytecode_version, 3);
     }
 
     #[test]
@@ -2485,7 +2496,7 @@ mod tests {
         let bytes = bytecode.encode().expect("encode should succeed");
         let inspected = Bytecode::inspect(&bytes).expect("inspect should succeed");
         assert_eq!(inspected.header.magic, "ELDR");
-        assert_eq!(inspected.header.version, 2);
+        assert_eq!(inspected.header.version, 3);
         assert!(inspected.chunks.len() >= 15);
         assert_eq!(inspected.chunks[0].tag, "Code");
         assert!(inspected.chunks.iter().any(|chunk| chunk.tag == "Proc"));

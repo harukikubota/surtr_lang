@@ -18,7 +18,7 @@ impl State {
 
   ## REPL
   xldr(1)> State::new({|state| (state + 1, state + 2)})
-  State(run_state: <function:495; lexical_captures=0>)
+  State(run_state: Closure(Int -> (Int, Int)))
   """
   def new(run_state: ($S -> ($A, $S))) -> State<$S, $A> {
     State { run_state }
@@ -159,7 +159,7 @@ where
   ## REPL
   xldr(1)> value: State<Int, Int> = Applicative::pure(4)
   xldr(2)> value
-  State(run_state: <function:496; lexical_captures=1>)
+  State(run_state: Closure(Int -> (Int, Int)))
   """
   def pure::<State<$S, $T>>(value: $A) -> State<$S, $A> {
     State::new({|state| (value, state)})
@@ -205,7 +205,7 @@ where
   ## REPL
   xldr(1)> value: State<Int, Int> = Monad::return(4)
   xldr(2)> value
-  State(run_state: <function:496; lexical_captures=1>)
+  State(run_state: Closure(Int -> (Int, Int)))
   """
   def return::<State<$S, $T>>(value: $A) -> State<$S, $A> {
     State::new({|state| (value, state)})
