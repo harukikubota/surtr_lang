@@ -6,6 +6,9 @@
 - 基準 commit: `f1986a27d84728e1e7a88de457a1d6b55cfe5ab8`。
 - 入力: Git履歴に残る旧計画のTask 10、[`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md)で未実装と明記された契約、既存[`do_intrinsic_spec.md`](do_intrinsic_spec.md)。
 - 旧 Task 9 は完了済み。reason/origin/typed data の基盤を作り直さない。
+- N01–N05完了後のN06実装入力。SafeBind変更は未実装であり、現在利用できる動作の説明ではない。
+- level4（型・評価規則とフェーズ間契約の変更）。本書整理時は文書検証のみ行い、実装時に全体検証と独立レビューを行う。
+- Extractorは現行の`Option<T>`返却を維持する。Extractor更改は独立した別タスクであり、本書の前提・成果・do開始ゲートに含めない。
 
 基準commitの旧計画は、Task 9での修正・検証記録と、SafeBind是正・残存familyのheuristic撤去をTask 10へ残すことを記録している。本書はその残作業だけを引き継ぐ。記録されたテスト結果は過去の実行記録であり、本書作成時の再実行結果ではない。
 
@@ -47,6 +50,30 @@ def mismatch(value: Option<Int>) -> Result<Int> {
 ```
 
 non-Resultの値へpatternを適用した結果の失敗は、通常のpattern/Extractorの失敗契約に従う。container名別の新しい失敗生成規則を加えない。
+
+### 3.1 現行との差分と維持する境界
+
+現行ScarにはOption RHS拒否とSafeBind constructor patternの`Ok`限定がある。N06で両方を撤去し、
+射影後の入力を通常MatchBlock checkerへ渡す。`num: Int =? Option::Some(1)`は変更後も静的型不一致で拒否するが、
+理由はOption禁止ではなく`Option<Int>`と`Int`の不一致である。`saved =? Option::None`も入力型が決まれば値全体の束縛として成功する。
+
+RHS射影と明示pattern分解を区別する。nested Resultの内側も通常のscrutineeであり、
+constructorの名前やpayloadがResultであることを理由に追加の自動射影を行わない。
+現行の`TypedPattern::ResultOk`による内側Err伝播も撤去対象である。`Ok(x) =? Ok(Err(error))`は、
+外側Okを射影した後、内側ErrがOk patternに一致しないため`PatternMismatch`となり、内側errorを伝播しない。
+`Err(e) =? Ok(Err(error))`は通常constructor照合として成功し、eへerrorを束縛する。
+二段ともErrを伝播したい場合は`inner =? rhs`、`value =? inner`の二文に分ける。
+静的な型不一致・constructor arity・Extractor返却型の違反をruntime no-matchやfailure targetへ落とさない。
+型検査後の未知tag等の内部契約違反もno-matchとして扱わない。
+
+現行Extractorは`Option<T>`を返し、`Some(payload)`を子patternへ渡し、`None`をno-matchとする。
+Extractorが独自の`Err(error)`を返す契約を導入しない。SafeBindではno-matchを既存のpattern failureへ変換するのであり、
+Extractorの返却値からErrorを取り出すのではない。通常matchは引き続き次のarmへ進む。
+
+各RHSは一回、各Extractor occurrenceは到達したとき一回だけ評価し、成功検査と束縛で再実行しない。
+既存MatchBlockの段階的評価順・payload arity・pin/as-pattern・scopeを維持し、失敗後の子patternと後続文を評価しない。
+Facetのcompile-time値を`=?`で束縛する禁止、nearest callableへの早期return、closureのResult戻り値要求、
+REPL top-levelで診断後にセッションを継続する境界も維持する。non-Result pass-throughはこれらの独立したpolicyを解除しない。
 
 ## 4. failure target
 
@@ -157,6 +184,21 @@ helpのための候補照会は、型推論の成功条件やdispatch結果を�
 
 ドラフトは内容を変えず残す。旧用語の検索では、draftや保存された入力メモを正本のゼロ件監査対象に含めない。draft内の歴史的リンクを理由にdraft本文を書き換えない。
 
+### 11.1 N06の変更先と作業順
+
+1. Scarの`checker/expr.rs`、`checker/patterns.rs`と通常MatchBlock経路を照合し、RHS射影、pattern検査、failure型関係を固定する。
+2. typed IRとForgeの各failure emitterを明示targetへ接続する。旧SafeBind専用pattern経路を互換fallbackとして残さない。
+3. §§6–9のphase producer、renderer、Rune/Xldr adapter、builtin surface metadataを移行し、最後にheuristicを削除する。
+4. `option_safebind_rejected`等の旧fixtureを、値全体を束縛できる成功例とannotation mismatchの拒否例へ改める。
+5. `要件定義v9.md` §§2.3・3.1、`../docs/dev/{diagnostics,テスト方針}.md`、
+   `../docs/site/{language-reference,error-handling,function-operators}.md`のSafeBind・pattern関連説明と
+   `../lib/bootstrap.srt`の`@doc`を実装に合わせて更新する。ExtractorのOption返却規定は維持する。
+6. DC条件を実テストへ対応付け、focused / REPL検証後、同一revisionでCI workspaceを2回連続成功させる。
+   `cargo run -- test --quiet --all`、独立レビューと文書移管を含めてN06完了を記録し、N07へ渡す。
+
+N06ではdo宣言・DoBlock・DoIntrinsicContractを追加しない。N10は完成したSafeBindのfailure targetを
+do continuationへ差し替える作業であり、N06のRHS/pattern是正を再実装しない。
+
 ## 12. 受け入れ条件
 
 | ID | 検証 |
@@ -175,5 +217,8 @@ helpのための候補照会は、型推論の成功条件やdispatch結果を�
 | DC-12 | do開始前のfocused/REPL/workspace gateを記録する |
 | DC-13 | draftを削除・現行化せず、正本の参照だけ更新する |
 | DC-14 | qualified builtin surfaceを`BUILTIN_METAS`の構造データから解決し、allowlist合成経路を撤去する |
+| DC-15 | 現行Option-returning ExtractorのSome/None、子pattern不一致、単一評価、非Option返却拒否を維持し、更改を要求しない |
+| DC-16 | nearest callable / closure / REPL継続 / Facet禁止と、静的patternエラーをruntime failureにしない境界を維持する |
+| DC-17 | 通常constructor / nested Result / 明示pattern分解を共通MatchBlock経路で検証し、旧Ok限定経路を残さない |
 
 実装後、本書の恒久的契約を `/docs` へ移管し、進捗やコマンドログを言語仕様へ混在させない。

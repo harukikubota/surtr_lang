@@ -21,6 +21,11 @@ TypeCtorTraitのcall-site ReturnTypeArgumentにおける完全・部分型applic
 carrier 指定、自然言語 message の再解析を追加してはならない。具象データ型固有の failure route は原則として
 追加しないが、既存 SafeBind の Result-style failure を保存する [8節](#8-safebindとの統合) の限定規則だけは例外とする。
 
+本書のSafeBindはN06完了後の契約を再利用する。N01–N05は完了、N06–N11は未実装である。
+Extractorは現行の`Option<T>`返却を前提とし、更改タスクへの依存はない。
+以下の`Result<R, E>`は内部型関係の説明表記であり、doの変数注釈やRTAに二引数Result構文を追加しない。
+現行のerror値はabstract `Error`へ収束するため、独立したcaptured error parameterを新設しない。
+
 ## 2. 実装順序と開始条件
 
 `do` の実装は、既存の ReturnTypeArgument / Trait dispatch / diagnostics の修正より後に行う。
@@ -525,13 +530,14 @@ enclosing source functionではなく、現在のdo continuationが返す`F<R>`�
 
 ### 8.2 Result-do
 
-do carrierがcanonical `Result`なら、SafeBindの既存意味論を次のとおり保持する。
+do carrierがcanonical `Result`なら、N06完了後のSafeBind意味論を次のとおり保持する。
 
 - RHSが`Err(error)`なら、その`error`を変更せずdo式の`Err(error)`として返し、後続文を評価しない。
-- Result payloadまたはnon-Result RHS全体に対するpattern不一致／Extractor failureは、既存SafeBindが選ぶ`PatternMismatch`、`EmptyList`、
+- Result payloadまたはnon-Result RHS全体に対するpattern不一致／Extractor failureは、N06完了後のSafeBindが選ぶ`PatternMismatch`、`EmptyList`、
   `IndexOutOfBounds`などのfailure kind / detailを保持し、do式の`Err`として返す。
 - 成功時はpattern bindingを後続continuationのscopeへ導入する。
-- do carrierのcaptured error型`E`は、RHSから伝播するerror型とpatternが生成し得るerror型をすべて受理しなければならない。
+- do結果の既存Result error関係は、RHSから伝播するerrorとpatternが生成し得るerrorをすべて受理しなければならない。
+- Extractorの`Some`はpayloadを渡し、`None`はno-matchからpattern failureへ変換する。Extractor自身のErr返却・独自error伝播を前提にしない。
 
 最後の型関係は、通常関数内のSafeBindでenclosing returnのerror型と照合している既存共通relationを、
 do式のexpected `Result<R, E>`へ向け直したものである。衝突時はSafeBind固有の自由形式messageではなく、
@@ -647,7 +653,9 @@ NormalizedDoSafeBind {
 
 `<-`とSafeBindのRHSは一度だけ評価する。`pattern <- source` のpatternは、合成closureが受け取った一時値へ適用する。
 partial `<-`のExtractorも既存MatchBlock contractに従い、no-matchだけがAlternative failure branchへ進む。
-SafeBindのExtractor failureは8節で選択したfailure targetへ進む。
+SafeBindではOption-returning Extractorの`None`をpattern failureへ変換し、8節で選択したfailure targetへ進む。
+Extractorの不正な返却型は静的診断であり、no-matchやemptyとして処理しない。
+型検査後に未知tag等の内部契約違反を検出した場合も、通常のno-matchに丸めない。
 
 Forgeへは`do`固有の未解決carrierやcandidateを渡さない。typed loweringを既存IRで表せるため、do専用opcode、
 runtime trait dictionary、runtime candidate selectionを追加しない。
@@ -711,9 +719,8 @@ runtime trait dictionary、runtime candidate selectionを追加しない。
 3. Spire / Sigilにsurface contractの構造化validationを追加し、raw signature文字列をschemeへ変換しないことを固定する。
 4. `DoBlock`のuser declaration、通常type position、impl target / inherent impl拒否を追加する。
 5. do parser / resolverを追加し、`<-`とSafeBindを別のdo statementとしてscope付きで保持する。
-6. ScarのSafeBind入力処理を「Result一段分解／non-Result pass-through + 通常MatchBlock pattern検査」へ統一し、
-   Option固有拒否とconstructor patternの`Ok`限定を削除する。`lib/bootstrap.srt`のOption拒否説明を置換し、
-   `option_safebind_rejected` fixtureをnon-Result pass-throughの成功／pattern型不一致fixtureへ分割する。
+6. N06で完成した「Result一段分解／non-Result pass-through + 通常MatchBlock pattern検査」とtyped failure targetを再利用する。
+   Option拒否・Ok限定の撤去、旧fixture移行、通常SafeBindの`@doc`更新はN06ゲート通過前に完了していることを確認する。
 7. Scarがvalidated contractをinstantiateしてconstraint収集、capability生成、SafeBind failure target選択、typed loweringを行う。
 8. diagnostics / fixture / Forge boundary監査を追加し、focused test後にworkspace testを実行する。
 
@@ -814,13 +821,13 @@ help: match both layers with `Option::Some(Option::Some(num))`, or change the bi
 このfailureは`Alternative::empty`へlowerするruntime no-matchではない。LHS patternと検査対象型の静的な共通
 pattern type relation failureであり、failure target選択より先に報告する。
 
-Result-doでRHS errorまたはpattern-generated errorがdo carrierのcaptured error型に入らない場合は、共通type relation
+Result-doでRHS errorまたはpattern-generated errorがdo結果の既存Result error関係に適合しない場合は、共通type relation
 failureを使い、failure originとdo result originの二地点をlabelする。
 
 ```text
 message: SafeBind failure does not fit this Result do block
-label 1: this SafeBind can return `SourceError`
-label 2: this do block returns `Result<Value, TargetError>`
+label 1: this SafeBind failure originates here
+label 2: this do block requires a compatible Result failure
 note: Result-do preserves SafeBind errors instead of replacing them with `Alternative::empty`
 help: make the Result error types agree or convert the SafeBind error explicitly
 ```
@@ -976,6 +983,8 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 ### 13.5 SafeBind / match / if
 
 - Result RHSだけを外側一段自動分解し、nested Resultを再帰分解しないこと
+- `Ok(x) =? Ok(Err(error))`は内側errorの伝播ではなくpattern no-matchになり、Result-doではPatternMismatch、他carrierではemptyとなること
+- `Err(e) =? Ok(Err(error))`は成功し、二文のSafeBindで明示二段伝播できること
 - non-Result RHSはOption、List、String、user-defined型を含めて値／型全体を通常MatchBlock pattern検査へ渡すこと
 - `Option::Some(num) =? Option::Some(Option::Some(1))`で`num: Option<Int>`になること
 - `Option::Some(num: Int)`なら静的pattern type mismatchになり、empty routeへ進まないこと
@@ -985,7 +994,7 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 - Result-doでliteral、list/string分解、Extractorなどのpattern failure kind / detailが既存SafeBindと一致すること
 - Result-doのSafeBind成功時にbindingが後続文だけで利用できること
 - Result-doがAlternative implなしでSafeBindを受理すること
-- Result-doのRHS error / pattern-generated errorとcaptured error型の一致／不一致
+- Result-doのRHS error / pattern-generated errorを現行のResult error relationで検査し、独立したcaptured error型を新設しないこと
 - non-Result Alternative-doでRHS failure、pattern不一致、Extractor failureがすべて同じcarrierのemptyになること
 - non-Result Alternative-doでfailure payloadを観測せず、後続を実行しないこと
 - user-defined Monad + Alternative carrierでも同じempty routeを使うこと

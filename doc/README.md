@@ -16,6 +16,7 @@
 | 仕様決定・実装待ち | [`do` intrinsic](./do_intrinsic_spec.md) | N07–N11 の入力 |
 | 仕様決定・実装待ち | [Generator](./generator_spec.md) | N12–N13 の入力。未確定 API は本文の確認ゲートに従う |
 | implementation plan | [N01–N14 implementation plan](./type_constructor_monad_do_implementation_plan.md) | 作業順・受け入れ条件・進捗だけを管理 |
+| 独立draft・採用未決 | [Extractor更改](./extractor_revision_draft.md) | 現行はOption返却。N06–N14と相互依存なしの別タスク |
 | draft | [signature-level type constructor inference](./signature_level_type_constructor_inference_draft.md) | 本文を現行化せず、そのまま保持 |
 
 旧 Type Constructor Signature Unification の実装済み契約は

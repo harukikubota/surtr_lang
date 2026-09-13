@@ -345,6 +345,14 @@
   - 仕様確定後、Spireでrecord grammar、Sigilでowner / parameter scope、Scarでwell-formednessとFacet destination、Forge / Eldrで値表現を責務ごとに固定する。
   - parserだけを先行して`defstruct`のgeneric surfaceへ合わせるテストは追加しない。
 
+### OI-036 Extractor更改の返却契約
+
+- 背景: 現行Extractorは`Option<T>`のSome/Noneを成功/no-matchとする。更改の具体的な返却形式は指定されていない。
+- 未確定点: 更改の必要性、二状態の維持または実行時失敗の追加、返却型、各pattern文脈での失敗処理と移行範囲。
+  比較と受入候補は[独立ドラフト](extractor_revision_draft.md)に置く。
+- 受け入れ条件: 変更理由と成功/no-match/失敗の意味を先に確定する。N06–N14には相互依存を置かず、現行Option契約で各Nタスクを完了できる。
+- テスト方針: 採用後にユーザ定義・builtinのpayload/arity、単一評価、no-match、契約違反と診断を検証する。採用前に実行可能テストを追加しない。
+
 ## 更新ルール
 
 - 解決済み事項は本ファイルに残さず削除する。必要な履歴は正本仕様・関連 spec・コミット履歴で追跡する。

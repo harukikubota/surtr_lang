@@ -37,6 +37,7 @@ N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け
 - N05は言語機能完成後の標準API。helper候補をcompiler特例で実現しない。
 - GeneratorはMonadTやdo開始の技術的前提ではない。通常の実施順はdoの後とし、独立した変更として管理する。
 - 仕様の追加と実装済み `/docs` の更新を混同しない。
+- ExtractorはN06–N14でも現行のOption返却を前提にする。更改は`extractor_revision_draft.md`の独立した別タスクであり、N番号を付けず、相互の着手・完了条件に含めない。
 
 ## 4. 全体順序と依存
 
@@ -306,7 +307,11 @@ qualified builtin surfaceの`BUILTIN_METAS`構造化を完了する。
 
 旧Task 10に含まれるdraft削除、draft本文を含めた旧語彙ゼロ件検査、Task 9の再実装は行わない。
 
-完了条件: DC-01–DC-14。既存全体ゲートどおり同じrevisionでworkspaceを2回連続成功させ、ログとcommitを記録する。do実装symbolがまだないことを確認する。
+N06はlevel4の仕様変更であり、Option RHS拒否・constructor patternのOk限定を撤去し、通常MatchBlockを再利用する。
+現行Option返却ExtractorのSome/Noneと単一評価を維持し、Extractor更改やdo symbol導入を含めない。
+詳細な作業順・変更先・移管先は`diagnostics_cleanup_spec.md` §11.1、追加境界は§3.1を入力にする。
+
+完了条件: DC-01–DC-17。既存全体ゲートどおり同じrevisionでworkspaceを2回連続成功させ、ログとcommitを記録する。do実装symbolがまだないことを確認する。
 
 ## 12. N07–N11 — do
 
@@ -362,6 +367,7 @@ Facet・field・collection・SafeBind・pipeline・REPL・do内の通常関数�
 - Monadインスタンス追加と言語機能追加のcommit/試験/移管先が分離している。
 - doはTransformerの内部構造を知らず、Generatorにobservableなcursor mutationがない。
 - 旧正本への生きた参照がなく、draftは保持されている。
+- ExtractorはOption返却契約で検証し、独立した更改ドラフトの採用・実装をN14完了条件へ混入させていない。
 - 実装済み仕様を `/docs` へ移し、未実装・未採用の内容を混入させていない。
 - qualified builtin surfaceを`BUILTIN_METAS`以外のallowlistや表示名fallbackから合成していない。
 
