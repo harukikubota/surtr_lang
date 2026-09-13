@@ -1,0 +1,255 @@
+@doc """
+Standard `OptionT<$M, $A>` transformer.
+The representation is a base computation producing `Option<$A>`.
+"""
+defstruct OptionT<$M, $A>
+where
+  $M: Monad
+{
+  inner: $M<Option<$A>>,
+}
+
+impl OptionT {
+  @doc """
+  Wrap a base computation that produces an Option.
+
+  ## REPL
+  xldr(1)> inner: Identity<Option<Int>> = Identity::new(Option::Some(2))
+  xldr(2)> OptionT::new(inner)
+  OptionT(inner: Identity(value: Option::Some(2)))
+  """
+  def new(inner: $M<Option<$A>>) -> OptionT<$M, $A>
+  where
+    $M: Monad
+  {
+    OptionT { inner }
+  }
+
+  @doc """
+  Extract and run the base computation.
+
+  ## REPL
+  xldr(1)> option: OptionT<Identity, Int> = OptionT::some(2)
+  xldr(2)> OptionT::run(option)
+  Identity(value: Option::Some(2))
+  """
+  def run(self: OptionT<$M, $A>) -> $M<Option<$A>>
+  where
+    $M: Monad
+  {
+    self.inner
+  }
+
+  @doc """
+  Lift a present payload with the base Applicative's pure.
+
+  ## REPL
+  xldr(1)> OptionT::some::<Identity>(2)
+  OptionT(inner: Identity(value: Option::Some(2)))
+  """
+  def some::<$M>(value: $A) -> OptionT<$M, $A>
+  where
+    $M: Monad
+  {
+    OptionT::new(Applicative::pure(Option::Some(value)))
+  }
+
+  @doc """
+  Create an absent payload with the base Applicative's pure.
+
+  ## REPL
+  xldr(1)> OptionT::none::<Identity, Int>()
+  OptionT(inner: Identity(value: Option::None))
+  """
+  def none::<$M, $A>() -> OptionT<$M, $A>
+  where
+    $M: Monad
+  {
+    OptionT::new(Applicative::pure(Option<$A>::None))
+  }
+
+  @doc """
+  Lift an existing Option with the base Applicative's pure.
+
+  ## REPL
+  xldr(1)> OptionT::from_option::<Identity>(Option::Some(2))
+  OptionT(inner: Identity(value: Option::Some(2)))
+  """
+  def from_option::<$M>(value: Option<$A>) -> OptionT<$M, $A>
+  where
+    $M: Monad
+  {
+    OptionT::new(Applicative::pure(value))
+  }
+}
+
+@doc """Map only the present payload while preserving the base carrier."""
+impl Functor for OptionT<$M, $T>
+where
+  $M: Monad
+  $T: Functor.$A
+{
+  @doc """
+  Map the present payload while preserving the base carrier.
+
+  ## REPL
+  xldr(1)> base: Result<Int> = Ok(7)
+  xldr(2)> value: OptionT<Result, Int> = MonadT::lift(base)
+  xldr(3)> Functor::fmap(value, &to_string)
+  OptionT(inner: Ok(Option::Some("7")))
+  """
+  def fmap(self: OptionT<$M, $A>, mapper: ($A -> $B)) -> OptionT<$M, $B> {
+    OptionT::new(Functor::fmap(self.inner, &Functor::fmap(&1, mapper)))
+  }
+}
+
+@doc """Apply transformed functions in base-Monad order and preserve `None`."""
+impl Applicative for OptionT<$M, $T>
+where
+  $M: Monad
+  $T: Applicative.$A
+{
+  @doc """
+  Inject a payload through the base Applicative.
+
+  ## REPL
+  xldr(1)> value: OptionT<Identity, Int> = Applicative::pure(2)
+  xldr(2)> value
+  OptionT(inner: Identity(value: Option::Some(2)))
+  """
+  def pure::<OptionT<$M, $T>>(value: $A) -> OptionT<$M, $A> {
+    OptionT::new(Applicative::pure(Option::Some(value)))
+  }
+
+  @doc """
+  Apply a transformed function before the transformed value.
+
+  Evaluation order within the base Monad:
+
+  1. `mapper.inner` is sequenced first.
+  2. If it produces `Option::None`, `value.inner` is not sequenced.
+  3. If it produces `Option::Some(function)`, `value.inner` is mapped by `function`.
+
+  The `mapper` and `value` arguments themselves still use normal eager argument
+  evaluation.
+
+  ## REPL
+  xldr(1)> mapper: OptionT<Identity, (Int -> Int)> = Applicative::pure({|item| item + 1})
+  xldr(2)> value: OptionT<Identity, Int> = OptionT::some(2)
+  xldr(3)> Applicative::ap(mapper, value)
+  OptionT(inner: Identity(value: Option::Some(3)))
+  """
+  def ap(
+    mapper: OptionT<$M, ($A -> $B)>,
+    value: OptionT<$M, $A>,
+  ) -> OptionT<$M, $B> {
+    OptionT::new(Monad::bind(mapper.inner, {|inner_mapper|
+      match inner_mapper {
+        Option::Some(function) => Functor::fmap(value.inner, &Functor::fmap(&1, function)),
+        Option::None => Applicative::pure(Option<$B>::None),
+      }
+    }))
+  }
+}
+
+@doc """Sequence present payloads and short-circuit the inner `Option::None`."""
+impl Monad for OptionT<$M, $T>
+where
+  $M: Monad
+  $T: Monad.$A
+{
+  @doc """
+  Return a payload as a present OptionT value.
+
+  ## REPL
+  xldr(1)> value: OptionT<Identity, Int> = Monad::return(2)
+  xldr(2)> value
+  OptionT(inner: Identity(value: Option::Some(2)))
+  """
+  def return::<OptionT<$M, $T>>(value: $A) -> OptionT<$M, $A> {
+    OptionT::new(Monad::return(Option::Some(value)))
+  }
+
+  @doc """
+  Continue a present payload and preserve absence.
+
+  ## REPL
+  xldr(1)> value: OptionT<Identity, Int> = OptionT::some(2)
+  xldr(2)> Monad::bind(value, {|item| OptionT::some(item + 1)})
+  OptionT(inner: Identity(value: Option::Some(3)))
+  """
+  def bind(self: OptionT<$M, $A>, mapper: ($A -> OptionT<$M, $B>)) -> OptionT<$M, $B> {
+    OptionT::new(Monad::bind(self.inner, {|option|
+      match option {
+        Option::Some(value) => mapper(value).inner,
+        Option::None => Applicative::pure(Option<$B>::None),
+      }
+    }))
+  }
+}
+
+@doc """
+`MonadT<$M>` implementation for `OptionT`.
+Lifting maps each base payload to `Option::Some` and preserves base failures.
+"""
+impl MonadT<$M> for OptionT<$M, $T>
+where
+  $M: Monad
+  $T: MonadT.$A
+{
+  @doc """
+  Lift a base computation by mapping each payload to Option::Some.
+
+  ## REPL
+  xldr(1)> base: Result<Int> = Ok(7)
+  xldr(2)> lifted: OptionT<Result, Int> = MonadT::lift(base)
+  xldr(3)> lifted
+  OptionT(inner: Ok(Option::Some(7)))
+  """
+  def lift::<OptionT<$M, $T>>(value: $M<$A>) -> OptionT<$M, $A> {
+    OptionT::new(Functor::fmap(value, {|item| Option::Some(item)}))
+  }
+}
+
+@doc """
+  Provide OptionT-level absence. `empty` is base `pure(None)`, not base `empty`.
+  For `OptionT<List, A>` this is `[Option::None]`, never the empty List `[]`.
+"""
+impl Alternative for OptionT<$M, $T>
+where
+  $M: Monad
+  $T: Alternative.$A
+{
+  @doc """
+  Create OptionT-level absence through the base Applicative.
+
+  ## REPL
+  xldr(1)> empty: OptionT<Identity, Int> = Alternative::empty()
+  xldr(2)> empty
+  OptionT(inner: Identity(value: Option::None))
+  """
+  def empty::<OptionT<$M, $T>>() -> OptionT<$M, $T> {
+    OptionT::new(Applicative::pure(Option<$T>::None))
+  }
+
+  @doc """
+  Keep the first present value, or use the second computation. Base-provided
+  multiplicity is preserved; List branches are not collapsed into one Option.
+  Only the stored computation can short-circuit. The ordinary argument
+  expressions passed to `choose` remain eagerly evaluated.
+
+  ## REPL
+  xldr(1)> left: OptionT<Identity, Int> = OptionT::none()
+  xldr(2)> right: OptionT<Identity, Int> = OptionT::some(2)
+  xldr(3)> Alternative::choose(left, right)
+  OptionT(inner: Identity(value: Option::Some(2)))
+  """
+  def choose(left: OptionT<$M, $A>, right: OptionT<$M, $A>) -> OptionT<$M, $A> {
+    OptionT::new(Monad::bind(left.inner, {|option|
+      match option {
+        Option::Some(_) => Applicative::pure(option),
+        Option::None => right.inner,
+      }
+    }))
+  }
+}

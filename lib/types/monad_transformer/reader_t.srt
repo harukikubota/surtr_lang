@@ -1,0 +1,295 @@
+import Function::apply;
+
+@doc """
+Standard `ReaderT` transformer.
+
+`ReaderT<$R, $M, $A>` stores an environment function from `$R` to a base
+computation `$M<$A>`. The base carrier is captured at compile time; no
+runtime Monad dictionary or implicit lift is introduced.
+"""
+defstruct ReaderT<$R, $M, $A>
+where
+  $M: Monad
+{
+  run_reader: ($R -> $M<$A>),
+}
+
+impl ReaderT {
+  @doc """
+  Construct a ReaderT from an environment function.
+
+  ## REPL
+  xldr(1)> ReaderT::new({|environment| Identity::new(environment + 1)})
+  ReaderT(run_reader: <function:489; lexical_captures=0>)
+
+  """
+  def new(run_reader: ($R -> $M<$A>)) -> ReaderT<$R, $M, $A>
+  where
+    $M: Monad
+  {
+    ReaderT { run_reader }
+  }
+
+  @doc """
+  Run a ReaderT with an explicit environment.
+
+  ## REPL
+  xldr(1)> ReaderT::run(ReaderT::ask::<Int, Identity>(), 3)
+  Identity(value: 3)
+
+  """
+  def run(self: ReaderT<$R, $M, $A>, environment: $R) -> $M<$A>
+  where
+    $M: Monad
+  {
+    apply(self.run_reader, environment)
+  }
+
+  @doc """
+  Read the complete environment through the base Monad.
+
+  ## REPL
+  xldr(1)> reader = ReaderT::ask::<Int, Identity>()
+  xldr(2)> ReaderT::run(reader, 3)
+  Identity(value: 3)
+
+  """
+  def ask::<$R, $M>() -> ReaderT<$R, $M, $R>
+  where
+    $M: Monad
+  {
+    ReaderT::new(&Applicative::pure)
+  }
+
+  @doc """
+  Map the environment into a payload through the base Monad.
+
+  ## REPL
+  xldr(1)> reader: ReaderT<Int, Identity, Int> = ReaderT::asks({|environment| environment * 2})
+  xldr(2)> ReaderT::run(reader, 3)
+  Identity(value: 6)
+
+  """
+  def asks::<$M>(mapper: ($R -> $A)) -> ReaderT<$R, $M, $A>
+  where
+    $M: Monad
+  {
+    ReaderT::new({|environment| Applicative::pure(mapper(environment))})
+  }
+
+  @doc """
+  Run a ReaderT under a locally transformed environment.
+
+  ## REPL
+  xldr(1)> reader: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+  xldr(2)> localized = ReaderT::local(reader, {|environment| environment + 10})
+  xldr(3)> ReaderT::run(localized, 3)
+  Identity(value: 14)
+
+  """
+  def local(self: ReaderT<$R, $M, $A>, mapper: ($R -> $R)) -> ReaderT<$R, $M, $A>
+  where
+    $M: Monad
+  {
+    ReaderT::new({|environment| apply(self.run_reader, mapper(environment))})
+  }
+}
+
+@doc """
+`Functor` implementation for `ReaderT`.
+Mapping changes only the payload of the base computation and preserves the
+captured environment type and base carrier.
+"""
+impl Functor for ReaderT<$E, $M, $T>
+where
+  $M: Monad
+  $T: Functor.$A
+{
+  @doc """
+  Map the base result while preserving the environment.
+
+  ## REPL
+  xldr(1)> reader: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+  xldr(2)> mapped = Functor::fmap(reader, {|item| item * 2})
+  xldr(3)> ReaderT::run(mapped, 3)
+  Identity(value: 8)
+
+  """
+  def fmap(self: ReaderT<$E, $M, $A>, mapper: ($A -> $B)) -> ReaderT<$E, $M, $B> {
+    ReaderT::new({|environment|
+      Functor::fmap(apply(self.run_reader, environment), mapper)
+    })
+  }
+}
+
+@doc """
+`Applicative` implementation for `ReaderT`.
+Both computations receive the same environment and the base applicative
+combines their results.
+"""
+impl Applicative for ReaderT<$E, $M, $T>
+where
+  $M: Monad
+  $T: Applicative.$A
+{
+  @doc """
+  Return a payload independently of the environment.
+
+  ## REPL
+  xldr(1)> reader: ReaderT<Int, Identity, Int> = Applicative::pure(2)
+  xldr(2)> reader
+  ReaderT(run_reader: <template:6; lexical_captures=1>)
+
+  """
+  def pure::<ReaderT<$E, $M, $T>>(value: $A) -> ReaderT<$E, $M, $A> {
+    ReaderT::new({|_environment| Applicative::pure(value)})
+  }
+
+  @doc """
+  Run both computations with the same environment.
+
+  Evaluation order when the returned ReaderT is run:
+
+  1. The mapper function is run with the environment.
+  2. The value function is run with the same environment.
+  3. Their base results are combined with `Applicative::ap`.
+
+  ReaderT does not add short-circuiting between the first two function calls;
+  the base Applicative determines how their produced values are combined.
+
+  ## REPL
+  xldr(1)> mapper: ReaderT<Int, Identity, (Int -> Int)> = ReaderT::new({|environment| Identity::new({|item| item + environment})})
+  xldr(2)> value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+  xldr(3)> applied = Applicative::ap(mapper, value)
+  xldr(4)> ReaderT::run(applied, 3)
+  Identity(value: 7)
+
+  """
+  def ap(
+    mapper: ReaderT<$E, $M, ($A -> $B)>,
+    value: ReaderT<$E, $M, $A>,
+  ) -> ReaderT<$E, $M, $B> {
+    ReaderT::new({|environment|
+      mapped = apply(mapper.run_reader, environment)
+      applied = apply(value.run_reader, environment)
+      Applicative::ap(mapped, applied)
+    })
+  }
+}
+
+@doc """
+`Monad` implementation for `ReaderT`.
+The same environment is passed to the first computation and to the
+ReaderT selected by the mapper.
+"""
+impl Monad for ReaderT<$E, $M, $T>
+where
+  $M: Monad
+  $T: Monad.$A
+{
+  @doc """
+  Return a payload independently of the environment.
+
+  ## REPL
+  xldr(1)> reader: ReaderT<Int, Identity, Int> = Monad::return(2)
+  xldr(2)> reader
+  ReaderT(run_reader: <template:6; lexical_captures=1>)
+
+  """
+  def return::<ReaderT<$E, $M, $T>>(value: $A) -> ReaderT<$E, $M, $A> {
+    ReaderT::new({|_environment| Monad::return(value)})
+  }
+
+  @doc """
+  Pass the same environment to both computations.
+
+  ## REPL
+  xldr(1)> reader: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+  xldr(2)> bound = Monad::bind(reader, {|item| ReaderT::new({|environment| Identity::new(item + environment)})})
+  xldr(3)> ReaderT::run(bound, 3)
+  Identity(value: 7)
+
+  """
+  def bind(self: ReaderT<$E, $M, $A>, mapper: ($A -> ReaderT<$E, $M, $B>)) -> ReaderT<$E, $M, $B> {
+    ReaderT::new({|environment|
+      first = apply(self.run_reader, environment)
+      Monad::bind(first, {|value|
+        next = mapper(value)
+        apply(next.run_reader, environment)
+      })
+    })
+  }
+}
+
+@doc """
+`MonadT<$M>` implementation for `ReaderT`.
+Lifting stores a base computation in an environment-independent ReaderT.
+"""
+impl MonadT<$M> for ReaderT<$R, $M, $T>
+where
+  $M: Monad
+  $T: MonadT.$A
+{
+  @doc """
+  Lift a base computation; the environment is ignored.
+
+  ## REPL
+  xldr(1)> base: Result<Int> = Ok(7)
+  xldr(2)> lifted: ReaderT<String, Result, Int> = MonadT::lift(base)
+  xldr(3)> lifted
+  ReaderT(run_reader: <function:490; lexical_captures=1>)
+
+  """
+  def lift::<ReaderT<$R, $M, $T>>(value: $M<$A>) -> ReaderT<$R, $M, $A> {
+    ReaderT::new({|_environment| value})
+  }
+}
+
+@doc """
+`Alternative` implementation for `ReaderT` when the base carrier also has
+`Alternative`. Choice runs both ReaderT functions with the same environment
+and delegates the choice to the base carrier. Both stored branches run normally;
+this does not make the ordinary argument expressions passed to `choose` lazy.
+"""
+impl Alternative for ReaderT<$E, $M, $T>
+where
+  $M: Monad
+  $M: Alternative
+  $T: Alternative.$A
+{
+  @doc """
+  Create an empty ReaderT when the base has Alternative.
+
+  ## REPL
+  xldr(1)> empty: ReaderT<Int, Option, Int> = Alternative::empty()
+  xldr(2)> empty
+  ReaderT(run_reader: <template:6; lexical_captures=0>)
+
+  """
+  def empty::<ReaderT<$E, $M, $T>>() -> ReaderT<$E, $M, $T> {
+    ReaderT::new({|_environment| Alternative::empty()})
+  }
+
+  @doc """
+  Run both branches with the same environment and choose in the base. Branch
+  evaluation is not cancelled after one result is available.
+
+  ## REPL
+  xldr(1)> left: ReaderT<Int, Option, Int> = ReaderT::new({|_| Option::None})
+  xldr(2)> right: ReaderT<Int, Option, Int> = ReaderT::new({|environment| Option::Some(environment + 1)})
+  xldr(3)> chosen = Alternative::choose(left, right)
+  xldr(4)> ReaderT::run(chosen, 3)
+  Option::Some(4)
+
+  """
+  def choose(
+    left: ReaderT<$E, $M, $A>,
+    right: ReaderT<$E, $M, $A>,
+  ) -> ReaderT<$E, $M, $A> {
+    ReaderT::new({|environment|
+      left_result = apply(left.run_reader, environment)
+      right_result = apply(right.run_reader, environment)
+      Alternative::choose(left_result, right_result)
+    })
+  }
+}

@@ -1,0 +1,2 @@
+phase: typecheck
+contains: return type arguments for `MonadT::lift` cannot be inferred

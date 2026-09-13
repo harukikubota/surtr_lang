@@ -736,10 +736,10 @@ print("skip:" ++ inspect(user4.score))
 user5 =? Facet::over_result(User.score, user1, {|score: Result<Int>| Ok(Ok(9))})
 print("over_result:" ++ inspect(user5.score))"#,
         &[
-            "set:Ok(Ok(3))",
-            "over ok:Ok(Ok(4))",
-            "skip:Ok(Err(NoneError(\"None Value.\")))",
-            "over_result:Ok(Ok(9))",
+            "set:Ok(3)",
+            "over ok:Ok(4)",
+            "skip:Err(NoneError(\"None Value.\"))",
+            "over_result:Ok(9)",
         ],
     );
 }
@@ -798,11 +798,11 @@ print(inspect(width2))"#,
             "taro",
             "21",
             "Tokyo",
-            "score:Ok(Ok(30))",
+            "score:Ok(30)",
             "pair:(\"left\", 7)",
             "zip:531",
-            "score skip:Ok(Err(NoneError(\"None Value.\")))",
-            "score over_result:Ok(Ok(41))",
+            "score skip:Err(NoneError(\"None Value.\"))",
+            "score over_result:Ok(41)",
             "BulkWidth::Wide(9)",
         ],
     );
@@ -839,11 +839,11 @@ print("set variant tuple:" ++ inspect(shape2))
 shape3 =? Facet::over(Shape.Point._1, shape2, {|n| Ok(n * 2)})
 print("over variant tuple:" ++ inspect(shape3))"#,
         &[
-            "view payload:Ok(Ok(4))",
+            "view payload:Ok(4)",
             "view tuple:1",
-            "set payload:Ok(Ok(9))",
+            "set payload:Ok(9)",
             "over tuple:(\"x\", 3)",
-            "over_result payload:Ok(Ok(12))",
+            "over_result payload:Ok(12)",
             "preview point:(2, 5)",
             "set variant tuple:Shape::Point((7, 5))",
             "over variant tuple:Shape::Point((7, 10))",

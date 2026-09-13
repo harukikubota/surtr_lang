@@ -6,12 +6,69 @@ test("Either") {
   it("distinguishes variants") {
     left_value: Either<String, String> = Either::Left("x")
     assert_eq(True, Either::is_left(left_value))
+    assert_eq(False, Either::is_right(left_value))
+    right_value: Either<String, String> = Either::Right("x")
+    assert_eq(False, Either::is_left(right_value))
+    assert_eq(True, Either::is_right(right_value))
     expected_wrapped: Either<Int, String> = Either::Right("wrapped")
     assert_eq(expected_wrapped, Either::wrap("wrapped"))
     expected_swapped: Either<String, String> = Either::Right("x")
     assert_eq(expected_swapped, Either::swap(left_value))
+    assert_eq(left_value, Either::swap(right_value))
     expected_mapped: Either<String, String> = Either::Left("x!")
     assert_eq(expected_mapped, Either::map_left(left_value, {|value| value ++ "!"}))
+    assert_eq(right_value, Either::map_left(right_value, {|value| value ++ "!"}))
+    assert_eq("left:x", Either::fold(left_value, {|value| "left:" ++ value}, {|value| "right:" ++ value}))
+    assert_eq("right:x", Either::fold(right_value, {|value| "left:" ++ value}, {|value| "right:" ++ value}))
+  }
+
+  it("maps either slot with explicit helpers") {
+    left: Either<String, Int> = Either::Left("stop")
+    right: Either<String, Int> = Either::Right(7)
+    mapped_left: Either<Int, Int> = Either::map_left(left, &String::len)
+    preserved_right: Either<Int, Int> = Either::map_left(right, &String::len)
+    preserved_left: Either<String, String> = Either::map_right(left, &to_string)
+    mapped_right: Either<String, String> = Either::map_right(right, &to_string)
+    bimap_left: Either<Int, String> = Either::bimap(left, &String::len, &to_string)
+    bimap_right: Either<Int, String> = Either::bimap(right, &String::len, &to_string)
+
+    assert_eq(Either::Left(4), mapped_left)
+    assert_eq(Either::Right(7), preserved_right)
+    assert_eq(Either::Left("stop"), preserved_left)
+    assert_eq(Either::Right("7"), mapped_right)
+    assert_eq(Either::Left(4), bimap_left)
+    assert_eq(Either::Right("7"), bimap_right)
+    assert_eq(mapped_right, Functor::fmap(right, &to_string))
+    assert_eq(preserved_left, Functor::fmap(left, &to_string))
+  }
+
+  it("selects eager and deferred defaults") {
+    left: Either<String, Int> = Either::Left("stop")
+    right: Either<String, Int> = Either::Right(7)
+
+    assert_eq("stop", Either::left_or(left, "fallback"))
+    assert_eq("fallback", Either::left_or(right, "fallback"))
+    assert_eq(7, Either::right_or(right, 9))
+    assert_eq(9, Either::right_or(left, 9))
+
+    capture_stdout()
+    assert_eq("stop", Either::left_or_else(left, {|_| print("unexpected-left"); "fallback"}))
+    assert_eq("left-default", Either::left_or_else(right, {|_| print("left-default"); "left-default"}))
+    assert_eq(7, Either::right_or_else(right, {|_| print("unexpected-right"); 9}))
+    assert_eq(9, Either::right_or_else(left, {|_| print("right-default"); 9}))
+    assert_stdout_eq(["left-default", "right-default"])
+  }
+
+  it("converts the right slot to Option") {
+    left: Either<String, Int> = Either::Left("stop")
+    right: Either<String, Int> = Either::Right(7)
+    converted_left: Option<Int> = from::<Option>(left)
+    converted_right: Option<Int> = from::<Option<Int>>(right)
+
+    assert_eq(Option::None, Either::to_option(left))
+    assert_eq(Option::Some(7), Either::to_option(right))
+    assert_eq(Either::to_option(left), converted_left)
+    assert_eq(Either::to_option(right), converted_right)
   }
 
   it("maps and binds the right slot") {

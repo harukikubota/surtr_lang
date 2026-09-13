@@ -1,0 +1,1 @@
+value: StateT<Int, Result, Int> = Alternative::empty()

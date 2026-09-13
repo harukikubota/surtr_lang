@@ -14,10 +14,10 @@ Surtr の標準定義ソースは language surface の一部です。
   - `print`, `inspect`, `if`, `assert`, `ensure` などの cross-cutting API
   - auto import される最小の標準 API
 - trait modules
-  - capability: `Show`, `Compare`, `From`, `TryFrom`
+  - capability: `Show`, `Compare`, `From`, `TryFrom`, `MonadT`
   - operator dispatch: `Eq`, `Concat` など
 - type modules
-  - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Generator`, `HashMap`, `Result`, `Range`, `Option`, `Facet`, `Float`
+  - `Int`, `String`, `Regex`, `Boolean`, `Error`, `List`, `Generator`, `HashMap`, `Result`, `Range`, `Option`, `OptionT`, `EitherT`, `ReaderT`, `StateT`, `Facet`, `Float`
 - effect / runtime-facing modules
   - `Process`, `IO`, `File`, `FS`, `Shell`, `Task`, `Random`, `Json`
 
@@ -28,6 +28,7 @@ Surtr の標準定義ソースは language surface の一部です。
 - 変換: `../../lib/traits/from.srt`, `../../lib/traits/try_from.srt`
 - 型ごとの helper: `../../lib/types/int.srt`, `../../lib/types/string.srt`, `../../lib/types/list.srt` など
 - range helpers と generator range: `../../lib/types/range.srt`, `../../lib/types/generator.srt`
+- Monad Transformer: `../../lib/traits/monad_t.srt`, `../../lib/types/monad_transformer/`
 - 正規表現: `../../lib/types/regex.srt`
 - JSON: `../../lib/types/json.srt`, `../../lib/traits/encode.srt`, `../../lib/traits/decode.srt`
 - Facet path: `../../lib/facet.srt`
@@ -60,6 +61,7 @@ xldr(2)>
 - trait 系を見たいなら `./trait-impls.md`
 - path 操作を見たいなら `./facet.md`
 - range の違いを整理したいなら `./range.md`
+- Monad Transformer を使いたいなら `./monad-transformers.md`
 
 ## 確認したソース
 

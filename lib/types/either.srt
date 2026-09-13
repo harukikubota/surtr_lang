@@ -1,6 +1,12 @@
 @doc """
 One of two independently typed values.
 Either is a general choice value, not Result-style error control flow.
+
+## REPL
+xldr(1)> Either<String, Int>::Right(2)
+Either::Right(2)
+xldr(2)> Either<String, Int>::Left("stop")
+Either::Left("stop")
 """
 defenum Either<$L, $R> {
   Left($L),
@@ -8,6 +14,15 @@ defenum Either<$L, $R> {
 }
 
 impl Either {
+  @doc """
+  Return `True` when the value is `Either::Left(...)`.
+
+  ## REPL
+  xldr(1)> Either::is_left(Either<String, Int>::Left("stop"))
+  True
+  xldr(2)> Either::is_left(Either<String, Int>::Right(2))
+  False
+  """
   def is_left(value: Either<$L, $R>) -> Boolean {
     match value {
       Either::Left(_) => True,
@@ -15,12 +30,37 @@ impl Either {
     }
   }
 
+  @doc """
+  Return `True` when the value is `Either::Right(...)`.
+
+  ## REPL
+  xldr(1)> Either::is_right(Either<String, Int>::Left("stop"))
+  False
+  xldr(2)> Either::is_right(Either<String, Int>::Right(2))
+  True
+  """
   def is_right(value: Either<$L, $R>) -> Boolean {
     Boolean::not(Either::is_left(value))
   }
 
+  @doc """
+  Wrap a payload in `Either::Right(...)` while choosing the Left type explicitly.
+
+  ## REPL
+  xldr(1)> Either::wrap::<String>(2)
+  Either::Right(2)
+  """
   def wrap::<$L>(value: $R) -> Either<$L, $R> { Either::Right(value) }
 
+  @doc """
+  Exchange the Left and Right slots.
+
+  ## REPL
+  xldr(1)> Either::swap(Either<String, Int>::Left("stop"))
+  Either::Right("stop")
+  xldr(2)> Either::swap(Either<String, Int>::Right(2))
+  Either::Left(2)
+  """
   def swap(value: Either<$L, $R>) -> Either<$R, $L> {
     match value {
       Either::Left(left) => Either::Right(left),
@@ -28,6 +68,15 @@ impl Either {
     }
   }
 
+  @doc """
+  Collapse either variant by applying the matching mapper.
+
+  ## REPL
+  xldr(1)> Either::fold(Either<String, Int>::Right(2), {|value| value}, &to_string)
+  "2"
+  xldr(2)> Either::fold(Either<String, Int>::Left("stop"), {|value| value}, &to_string)
+  "stop"
+  """
   def fold(value: Either<$L, $R>, on_left: ($L -> $A), on_right: ($R -> $A)) -> $A {
     match value {
       Either::Left(left) => on_left(left),
@@ -35,32 +84,192 @@ impl Either {
     }
   }
 
+  @doc """
+  Map only the Left payload and preserve Right values.
+
+  ## REPL
+  xldr(1)> Either::map_left(Either<String, Int>::Left("stop"), &String::len)
+  Either::Left(4)
+  xldr(2)> Either::map_left(Either<String, Int>::Right(2), &String::len)
+  Either::Right(2)
+  """
   def map_left(value: Either<$L, $R>, mapper: ($L -> $A)) -> Either<$A, $R> {
     match value {
       Either::Left(left) => Either::Left(mapper(left)),
       Either::Right(right) => Either::Right(right),
     }
   }
-}
 
-impl Functor for Either<$L, $R>
-where
-  $R: Functor.$A
-{
-  def fmap(self: Either<$L, $A>, mapper: ($A -> $B)) -> Either<$L, $B> {
-    match self {
+  @doc """
+  Map only the Right payload and preserve Left values.
+
+  ## REPL
+  xldr(1)> Either::map_right(Either<String, Int>::Left("stop"), &to_string)
+  Either::Left("stop")
+  xldr(2)> Either::map_right(Either<String, Int>::Right(2), &to_string)
+  Either::Right("2")
+  """
+  def map_right(value: Either<$L, $R>, mapper: ($R -> $A)) -> Either<$L, $A> {
+    match value {
       Either::Left(left) => Either::Left(left),
       Either::Right(right) => Either::Right(mapper(right)),
     }
   }
+
+  @doc """
+  Map the payload of either variant with its corresponding mapper.
+
+  ## REPL
+  xldr(1)> Either::bimap(Either<String, Int>::Left("stop"), &String::len, &to_string)
+  Either::Left(4)
+  xldr(2)> Either::bimap(Either<String, Int>::Right(2), &String::len, &to_string)
+  Either::Right("2")
+  """
+  def bimap(
+    value: Either<$L, $R>,
+    on_left: ($L -> $A),
+    on_right: ($R -> $B),
+  ) -> Either<$A, $B> {
+    match value {
+      Either::Left(left) => Either::Left(on_left(left)),
+      Either::Right(right) => Either::Right(on_right(right)),
+    }
+  }
+
+  @doc """
+  Return the Left payload, or the supplied default for a Right value.
+
+  ## REPL
+  xldr(1)> Either::left_or(Either<String, Int>::Left("stop"), "fallback")
+  "stop"
+  xldr(2)> Either::left_or(Either<String, Int>::Right(2), "fallback")
+  "fallback"
+  """
+  def left_or(value: Either<$L, $R>, default: $L) -> $L {
+    match value {
+      Either::Left(left) => left,
+      Either::Right(_) => default,
+    }
+  }
+
+  @doc """
+  Return the Right payload, or the supplied default for a Left value.
+
+  ## REPL
+  xldr(1)> Either::right_or(Either<String, Int>::Left("stop"), 9)
+  9
+  xldr(2)> Either::right_or(Either<String, Int>::Right(2), 9)
+  2
+  """
+  def right_or(value: Either<$L, $R>, default: $R) -> $R {
+    match value {
+      Either::Left(_) => default,
+      Either::Right(right) => right,
+    }
+  }
+
+  @doc """
+  Return the Left payload, evaluating the Unit callback only for a Right value.
+
+  ## REPL
+  xldr(1)> Either::left_or_else(Either<String, Int>::Left("stop"), {|_| "fallback"})
+  "stop"
+  xldr(2)> Either::left_or_else(Either<String, Int>::Right(2), {|_| "fallback"})
+  "fallback"
+  """
+  def left_or_else(value: Either<$L, $R>, default: (Unit -> $L)) -> $L {
+    match value {
+      Either::Left(left) => left,
+      Either::Right(_) => default(()),
+    }
+  }
+
+  @doc """
+  Return the Right payload, evaluating the Unit callback only for a Left value.
+
+  ## REPL
+  xldr(1)> Either::right_or_else(Either<String, Int>::Left("stop"), {|_| 9})
+  9
+  xldr(2)> Either::right_or_else(Either<String, Int>::Right(2), {|_| 9})
+  2
+  """
+  def right_or_else(value: Either<$L, $R>, default: (Unit -> $R)) -> $R {
+    match value {
+      Either::Left(_) => default(()),
+      Either::Right(right) => right,
+    }
+  }
+
+  @doc """
+  Convert Right to `Option::Some` and discard Left as `Option::None`.
+
+  ## REPL
+  xldr(1)> Either::to_option(Either<String, Int>::Left("stop"))
+  Option::None
+  xldr(2)> Either::to_option(Either<String, Int>::Right(2))
+  Option::Some(2)
+  """
+  def to_option(value: Either<$L, $R>) -> Option<$R> {
+    match value {
+      Either::Left(_) => Option::None,
+      Either::Right(right) => Option::Some(right),
+    }
+  }
 }
 
+@doc """
+`Functor` implementation for `Either`.
+Mapping changes only the Right payload and preserves the captured Left type.
+"""
+impl Functor for Either<$L, $R>
+where
+  $R: Functor.$A
+{
+  @doc """
+  Map the Right payload through `Either::map_right`.
+
+  ## REPL
+  xldr(1)> Functor::fmap(Either<String, Int>::Left("stop"), &to_string)
+  Either::Left("stop")
+  xldr(2)> Functor::fmap(Either<String, Int>::Right(2), &to_string)
+  Either::Right("2")
+  """
+  def fmap(self: Either<$L, $A>, mapper: ($A -> $B)) -> Either<$L, $B> {
+    Either::map_right(self, mapper)
+  }
+}
+
+@doc """
+`Applicative` implementation for `Either`.
+The mapper is inspected first, and the first encountered Left value is kept.
+"""
 impl Applicative for Either<$L, $R>
 where
   $R: Applicative.$A
 {
+  @doc """
+  Inject a payload as `Either::Right`.
+
+  ## REPL
+  xldr(1)> value: Either<String, Int> = Applicative::pure(2)
+  xldr(2)> value
+  Either::Right(2)
+  """
   def pure::<Either<$L, $R>>(value: $A) -> Either<$L, $A> { Either::Right(value) }
 
+  @doc """
+  Apply a Right function to a Right payload while preserving the first Left.
+
+  ## REPL
+  xldr(1)> left_mapper: Either<String, (Int -> Int)> = Either::Left("mapper")
+  xldr(2)> Applicative::ap(left_mapper, Either::Left("value"))
+  Either::Left("mapper")
+  xldr(3)> mapper: Either<String, (Int -> Int)> = Either::Right({|value| value + 1})
+  xldr(4)> Applicative::ap(mapper, Either::Left("value"))
+  Either::Left("value")
+  xldr(5)> Applicative::ap(mapper, Either::Right(2))
+  Either::Right(3)
+  """
   def ap(mapper: Either<$L, ($A -> $B)>, value: Either<$L, $A>) -> Either<$L, $B> {
     match mapper {
       Either::Left(left) => Either::Left(left),
@@ -72,16 +281,58 @@ where
   }
 }
 
+@doc """
+`Monad` implementation for `Either`.
+Binding continues Right payloads and short-circuits Left values.
+"""
 impl Monad for Either<$L, $R>
 where
   $R: Monad.$A
 {
+  @doc """
+  Return a payload as `Either::Right`.
+
+  ## REPL
+  xldr(1)> value: Either<String, Int> = Monad::return(2)
+  xldr(2)> value
+  Either::Right(2)
+  """
   def return::<Either<$L, $R>>(value: $A) -> Either<$L, $A> { Either::Right(value) }
 
+  @doc """
+  Continue a Right payload with the mapper and preserve a Left value.
+
+  ## REPL
+  xldr(1)> left: Either<String, Int> = Either::Left("stop")
+  xldr(2)> Monad::bind(left, {|item| Either::Right(item + 1)})
+  Either::Left("stop")
+  xldr(3)> right: Either<String, Int> = Either::Right(2)
+  xldr(4)> Monad::bind(right, {|item| Either::Right(item + 1)})
+  Either::Right(3)
+  """
   def bind(self: Either<$L, $A>, mapper: ($A -> Either<$L, $B>)) -> Either<$L, $B> {
     match self {
       Either::Left(left) => Either::Left(left),
       Either::Right(right) => mapper(right),
     }
+  }
+}
+
+@doc """
+Infallible conversion from `Either<$L, $R>` to `Option<$R>`.
+Left values become `Option::None`; Right payloads become `Option::Some`.
+"""
+impl From<Option<$R>> for Either<$L, $R> {
+  @doc """
+  Convert Either to Option using the same rules as `Either::to_option`.
+
+  ## REPL
+  xldr(1)> from::<Option>(Either<String, Int>::Left("stop"))
+  Option::None
+  xldr(2)> from::<Option>(Either<String, Int>::Right(2))
+  Option::Some(2)
+  """
+  def from::<Option<$R>>(self: Self) -> Option<$R> {
+    Either::to_option(self)
   }
 }

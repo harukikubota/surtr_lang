@@ -20,6 +20,23 @@
 
 `docs/dev/Trait_system_spec.md`、`doc/do_intrinsic_spec.md`、関連する実装計画はこの契約へ整合済みである。旧規則との併存やfallbackは設けない。
 
+### 1.1 移管状況
+
+| 節・受け入れ条件 | 状態 | 実装正本・検証根拠・残作業 |
+|---|---|---|
+| §§1–3 | 実装済み・移管済み | `../doc/要件定義v9.md` §2.6、`../docs/dev/Trait_system_spec.md`、`../docs/site/{trait-system,trait-impls,type-annotations}.md` |
+| §4の`defstruct` / `defenum`、§§5–6.2 | 実装済み・移管済み | `../docs/dev/Trait_system_spec.md`、`../docs/site/{structs,enums,type-annotations,facet}.md`、`../crates/scar/tests/nominal_constructor_parameters.rs` |
+| §4のgeneric `defrecord` / constructor parameter | 対象外・open issue | `open-issues.md` OI-035。record grammar、値表現、constructor surface、Facet再構築を別仕様で決める |
+| §§7–9.1 | 実装済み・移管済み | `../docs/dev/Trait_system_spec.md`、`../lib/traits/monad_t.srt`、`../crates/scar/tests/{parameterized_type_constructor_traits,type_constructor_carriers,return_type_arguments}.rs` |
+| §10 | 実装済み・移管済み | 本follow-upで`../docs/site/{facet,monad-transformers}.md`、`../crates/xldr/tests/repl_core.rs`のnominal owner成功・拒否境界を補強 |
+| §11 | 実装済み・移管済み | `../docs/dev/Trait_system_spec.md`、`../docs/site/trait-impls.md`、`do_intrinsic_spec.md` |
+| §12 MT-L01–21、MT-L23–24 | 実装済み・移管済み | N03–N04の対応表と実テストは`type_constructor_monad_do_implementation_plan.md` §§8–9を参照 |
+| §12 MT-L22 | 未実装・後続Task | N07–N11、`do_intrinsic_spec.md`。`do::<Either<String, _>>`を通常のTypeCtorTrait RTA経路で検証する |
+| §13 | 実装済み・移管済み | 本follow-upで上記正本、実テスト、実装計画へ対応を固定。入力文書はN11完了まで保持する |
+
+状態名は本follow-up仕様の分類に従う。着手時に「実装済み・追加移管あり」だった箇所は、
+補強完了後の現在形として「実装済み・移管済み」へ更新し、今回追加した文書・テスト対応は根拠欄に残す。
+
 ## 2. 確定要件
 
 1. `Monad` / `MonadT` はユーザ定義型にも開く。標準型名の allowlist で利用可否を決めない。
@@ -68,7 +85,10 @@ where
 
 型parameterに constraint を併記する `defstruct OptionT<$M: Monad, $A>` は受理しない。同一意味の複数surfaceを作らず、capability constraint は `where` に統一する。
 
-`defrecord` / `defenum` の同等な generic parameter を扱う場合も、同じ metadata と well-formedness 検査を使う。`deferror` / Error の運搬制限を、この拡張に便乗して変更しない。
+`defenum` のgeneric parameterは同じmetadataとwell-formedness検査を使う。generic `defrecord` / constructor
+parameterはN03の実装済み範囲に含めず、`open-issues.md` OI-035でrecord grammar、値表現、constructor
+surface、Facet再構築を別に設計する。仕様未確定のままparserだけを`defstruct`へ合わせない。
+`deferror` / Error の運搬制限も、この拡張に便乗して変更しない。
 
 ## 5. 型の適用と格納
 
@@ -382,32 +402,32 @@ MT-I01 は、以下の確定内容により **CLOSED** とする。
 
 ## 12. 受け入れ条件
 
-| ID | 検証 |
-|---|---|
-| MT-L01 | nominal boundのある通常ユーザ型を構文・型検査できる |
-| MT-L02 | `$M<T>` のconstructor shapeとarityを既存metadataから検査する |
-| MT-L03 | 適用先のnested field/property型まで型置換が到達する |
-| MT-L04 | 入出力・Facet再構築・nominal instanceのdestination boundを検査する |
-| MT-L05 | rigid genericの不足boundを拒否し、型利用だけで仮定を追加しない |
-| MT-L06 | 型形成に必要な明示boundを正しく使用済みとして扱う |
-| MT-L07 | TypeCtorTraitのTrait argumentとmapped slotを区別する |
-| MT-L08 | `Self` とbaseが同じfamilyでも独立carrierとして扱える |
-| MT-L09 | MonadT型名に依存しない通常のimpl matching・coherenceを使う |
-| MT-L10 | `lift` の出力carrierを期待型から解き、根拠なしの候補選択を拒否する |
-| MT-L11 | RTAの個数・順序・型関係を抽象contractとimplで一致させる |
-| MT-L12 | 標準型以外のbase MonadとTransformerの組を定義できる |
-| MT-L13 | 公開representation fieldをFacetで読み取り・通常の合法な更新ができる |
-| MT-L14 | REPLに具象データ値だけを保存し、エラー後の継続とcheckpointを保つ |
-| MT-L15 | dyn値・runtime dictionary・新しいtype lambda・field探索を導入しない |
-| MT-L16 | 標準Transformerとは別に、最小ユーザ定義型で言語機能の完了を検証する |
-| MT-L17 | Trait-head binder と Trait constraint を分離し、`deftrait MonadT<$M: Monad>` / `deftrait MonadT<Monad>` を拒否して、diagnostic の help を `where $M: Monad` に一意化する |
-| MT-L18 | `pure::<Either<String, _>>(10)` を `Either<String, Int>` に解決する |
-| MT-L19 | 通常関数・Trait methodを含むRTA内の `_` をそのslotの推論委譲として扱い、通常型注釈の `Hole` と区別する |
-| MT-L20 | `OptionT<_, Int>` を constructor inference として受理しない |
-| MT-L21 | constructor headのみのRTAは全captured/mapped argumentが導出可能な場合だけ成功する |
-| MT-L22 | `do::<Either<String, _>>` が通常のTypeCtorTrait RTA解決経路を使用する |
-| MT-L23 | `Alternative::empty::<Option<Int>>()` からmapped slotを取得し、payload用の追加RTAを要求しない |
-| MT-L24 | user-defined `Alternative` impl の `empty` 生成方法を標準型・representationで制限しない |
+| ID | 状態 | 検証 |
+|---|---|---|
+| MT-L01 | 実装済み・移管済み | nominal boundのある通常ユーザ型を構文・型検査できる |
+| MT-L02 | 実装済み・移管済み | `$M<T>` のconstructor shapeとarityを既存metadataから検査する |
+| MT-L03 | 実装済み・移管済み | 適用先のnested field/property型まで型置換が到達する |
+| MT-L04 | 実装済み・移管済み | 入出力・Facet再構築・nominal instanceのdestination boundを検査する |
+| MT-L05 | 実装済み・移管済み | rigid genericの不足boundを拒否し、型利用だけで仮定を追加しない |
+| MT-L06 | 実装済み・移管済み | 型形成に必要な明示boundを正しく使用済みとして扱う |
+| MT-L07 | 実装済み・移管済み | TypeCtorTraitのTrait argumentとmapped slotを区別する |
+| MT-L08 | 実装済み・移管済み | `Self` とbaseが同じfamilyでも独立carrierとして扱える |
+| MT-L09 | 実装済み・移管済み | MonadT型名に依存しない通常のimpl matching・coherenceを使う |
+| MT-L10 | 実装済み・移管済み | `lift` の出力carrierを期待型から解き、根拠なしの候補選択を拒否する |
+| MT-L11 | 実装済み・移管済み | RTAの個数・順序・型関係を抽象contractとimplで一致させる |
+| MT-L12 | 実装済み・移管済み | 本follow-upで、標準型以外のbase MonadとTransformerの組を定義できることを利用者文書へ補強 |
+| MT-L13 | 実装済み・移管済み | 本follow-upで、公開representation fieldの同一owner成功とcross-nominal拒否を対にして固定 |
+| MT-L14 | 実装済み・移管済み | 本follow-upで、REPLに具象データ値だけを保存し、エラー後の継続とcheckpointを保つ境界を再検証 |
+| MT-L15 | 実装済み・移管済み | dyn値・runtime dictionary・新しいtype lambda・field探索を導入しない |
+| MT-L16 | 実装済み・移管済み | 本follow-upで、標準Transformerとは別の最小ユーザ定義型と検証先を利用者文書・実装計画へ補強 |
+| MT-L17 | 実装済み・移管済み | Trait-head binder と Trait constraint を分離し、`deftrait MonadT<$M: Monad>` / `deftrait MonadT<Monad>` を拒否して、diagnostic の help を `where $M: Monad` に一意化する |
+| MT-L18 | 実装済み・移管済み | `pure::<Either<String, _>>(10)` を `Either<String, Int>` に解決する |
+| MT-L19 | 実装済み・移管済み | 通常関数・Trait methodを含むRTA内の `_` をそのslotの推論委譲として扱い、通常型注釈の `Hole` と区別する |
+| MT-L20 | 実装済み・移管済み | `OptionT<_, Int>` を constructor inference として受理しない |
+| MT-L21 | 実装済み・移管済み | constructor headのみのRTAは全captured/mapped argumentが導出可能な場合だけ成功する |
+| MT-L22 | 未実装・後続Task | `do::<Either<String, _>>` が通常のTypeCtorTrait RTA解決経路を使用する |
+| MT-L23 | 実装済み・移管済み | `Alternative::empty::<Option<Int>>()` からmapped slotを取得し、payload用の追加RTAを要求しない |
+| MT-L24 | 実装済み・移管済み | user-defined `Alternative` impl の `empty` 生成方法を標準型・representationで制限しない |
 
 ## 13. 実装後の移管
 

@@ -253,8 +253,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         facet_put_supports_same_type_tuple_update_inside_annotated_closure as fn(),
     ),
     (
-        "facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return",
-        facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return as fn(),
+        "facet_put_unannotated_closure_uses_declared_return_tuple_context",
+        facet_put_unannotated_closure_uses_declared_return_tuple_context as fn(),
     ),
     (
         "facet_put_supports_type_changing_tuple_update",
@@ -2474,17 +2474,14 @@ fn facet_put_supports_same_type_tuple_update_inside_annotated_closure() {
     assert!(!typed.is_empty());
 }
 
-fn facet_put_unannotated_closure_still_lacks_tuple_context_from_expected_return() {
-    let err = typecheck_with_rules(
+fn facet_put_unannotated_closure_uses_declared_return_tuple_context() {
+    typecheck_with_rules(
         r#"def first(f: (Int -> Int)) -> ((Int, Boolean) -> (Int, Boolean)) {
   {|pair| Facet::put(Tuple._0, pair, f(pair._0))}
 }"#,
         RuntimeSourcePolicy::script(),
     )
-    .expect_err("unannotated closure should still expose tuple context gap");
-    assert!(err
-        .message
-        .contains("Tuple._0 requires tuple source context"));
+    .expect("the declared function return should contextualize the unannotated closure");
 }
 
 fn facet_put_supports_type_changing_tuple_update() {

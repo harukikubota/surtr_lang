@@ -1,0 +1,2 @@
+phase: typecheck
+contains: does not satisfy declaration constraint Monad

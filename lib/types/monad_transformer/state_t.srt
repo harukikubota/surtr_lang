@@ -1,0 +1,337 @@
+import Function::apply;
+
+@doc """
+Standard `StateT` transformer.
+
+`StateT<$S, $M, $A>` stores a state transition from `$S` to a base
+computation `$M<($A, $S)>`. The state and base carrier are captured at compile
+time, while the runtime value remains an ordinary function field.
+"""
+defstruct StateT<$S, $M, $A>
+where
+  $M: Monad
+{
+  run_state: ($S -> $M<($A, $S)>),
+}
+
+impl StateT {
+  @doc """
+  Construct a StateT from a state transition.
+
+  ## REPL
+  xldr(1)> StateT::new({|state| Identity::new((state + 1, state + 2))})
+  StateT(run_state: <function:489; lexical_captures=0>)
+
+  """
+  def new(run_state: ($S -> $M<($A, $S)>)) -> StateT<$S, $M, $A>
+  where
+    $M: Monad
+  {
+    StateT { run_state }
+  }
+
+  @doc """
+  Run a StateT with an explicit initial state.
+
+  ## REPL
+  xldr(1)> state: StateT<Int, Identity, Int> = StateT::get()
+  xldr(2)> StateT::run(state, 3)
+  Identity(value: (3, 3))
+
+  """
+  def run(self: StateT<$S, $M, $A>, initial: $S) -> $M<($A, $S)>
+  where
+    $M: Monad
+  {
+    apply(self.run_state, initial)
+  }
+
+  @doc """
+  Run a StateT and return only its payload.
+
+  ## REPL
+  xldr(1)> state: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state + 1, state + 2))})
+  xldr(2)> StateT::eval(state, 3)
+  Identity(value: 4)
+
+  """
+  def eval(self: StateT<$S, $M, $A>, initial: $S) -> $M<$A>
+  where
+    $M: Monad
+  {
+    Functor::fmap(StateT::run(self, initial), &Tuple._0)
+  }
+
+  @doc """
+  Run a StateT and return only its next state.
+
+  ## REPL
+  xldr(1)> state: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state + 1, state + 2))})
+  xldr(2)> StateT::exec(state, 3)
+  Identity(value: 5)
+
+  """
+  def exec(self: StateT<$S, $M, $A>, initial: $S) -> $M<$S>
+  where
+    $M: Monad
+  {
+    Functor::fmap(StateT::run(self, initial), &Tuple._1)
+  }
+
+  @doc """
+  Read the current state without changing it.
+
+  ## REPL
+  xldr(1)> state = StateT::get::<Int, Identity>()
+  xldr(2)> StateT::run(state, 3)
+  Identity(value: (3, 3))
+
+  """
+  def get::<$S, $M>() -> StateT<$S, $M, $S>
+  where
+    $M: Monad
+  {
+    StateT::new({|state| Applicative::pure((state, state))})
+  }
+
+  @doc """
+  Read a projection of the current state.
+
+  ## REPL
+  xldr(1)> value: StateT<Int, Identity, Int> = StateT::gets({|state| state * 2})
+  xldr(2)> StateT::run(value, 3)
+  Identity(value: (6, 3))
+
+  """
+  def gets::<$M>(mapper: ($S -> $A)) -> StateT<$S, $M, $A>
+  where
+    $M: Monad
+  {
+    StateT::new({|state| Applicative::pure((mapper(state), state))})
+  }
+
+  @doc """
+  Replace the current state.
+
+  ## REPL
+  xldr(1)> state = StateT::put::<Identity>(9)
+  xldr(2)> StateT::run(state, 3)
+  Identity(value: ((), 9))
+
+  """
+  def put::<$M>(state: $S) -> StateT<$S, $M, Unit>
+  where
+    $M: Monad
+  {
+    StateT::new({|_| Applicative::pure(((), state))})
+  }
+
+  @doc """
+  Update the current state with a pure function.
+
+  ## REPL
+  xldr(1)> state: StateT<Int, Identity, Unit> = StateT::modify({|state| state + 1})
+  xldr(2)> StateT::run(state, 3)
+  Identity(value: ((), 4))
+
+  """
+  def modify::<$M>(mapper: ($S -> $S)) -> StateT<$S, $M, Unit>
+  where
+    $M: Monad
+  {
+    StateT::new({|state| Applicative::pure(((), mapper(state)))})
+  }
+}
+
+@doc """
+`Functor` implementation for `StateT`.
+Mapping changes only the payload and keeps the state returned by the base
+transition.
+"""
+impl Functor for StateT<$S, $M, $T>
+where
+  $M: Monad
+  $T: Functor.$A
+{
+  @doc """
+  Map the payload while preserving the next state.
+
+  ## REPL
+  xldr(1)> state: StateT<Int, Identity, Int> = StateT::get()
+  xldr(2)> mapped = Functor::fmap(state, {|item| item * 2})
+  xldr(3)> StateT::run(mapped, 3)
+  Identity(value: (6, 3))
+
+  """
+  def fmap(self: StateT<$S, $M, $A>, mapper: ($A -> $B)) -> StateT<$S, $M, $B> {
+    StateT::new({|initial|
+      Functor::fmap(StateT::run(self, initial), {|pair| (mapper(pair._0), pair._1)})
+    })
+  }
+}
+
+@doc """
+`Applicative` implementation for `StateT`.
+The mapper transition runs first; its next state is passed to the value
+transition, and the base Monad sequences the two computations.
+"""
+impl Applicative for StateT<$S, $M, $T>
+where
+  $M: Monad
+  $T: Applicative.$A
+{
+  @doc """
+  Return a payload without changing the state.
+
+  ## REPL
+  xldr(1)> state: StateT<Int, Identity, Int> = Applicative::pure(2)
+  xldr(2)> state
+  StateT(run_state: <function:491; lexical_captures=1>)
+
+  """
+  def pure::<StateT<$S, $M, $T>>(value: $A) -> StateT<$S, $M, $A> {
+    StateT::new({|state| Applicative::pure((value, state))})
+  }
+
+  @doc """
+  Run the mapper transition first and pass its next state to the value transition.
+
+  Evaluation order when the returned StateT is run:
+
+  1. The mapper transition runs with the initial state.
+  2. Its base result is sequenced before the value transition.
+  3. The value transition receives the state returned by the mapper transition.
+
+  ## REPL
+  xldr(1)> mapper: StateT<Int, Identity, (Int -> Int)> = StateT::new({|state| Identity::new(({|item| item + state}, state + 1))})
+  xldr(2)> value: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((10, state + 10))})
+  xldr(3)> applied = Applicative::ap(mapper, value)
+  xldr(4)> StateT::run(applied, 1)
+  Identity(value: (11, 12))
+
+  """
+  def ap(mapper: StateT<$S, $M, ($A -> $B)>, value: StateT<$S, $M, $A>) -> StateT<$S, $M, $B> {
+    StateT::new({|initial|
+      Monad::bind(StateT::run(mapper, initial), {|mapped|
+        second = StateT::run(value, mapped._1)
+        Functor::fmap(second, {|applied| (apply(mapped._0, applied._0), applied._1)})
+      })
+    })
+  }
+}
+
+@doc """
+`Monad` implementation for `StateT`.
+The next state from the first computation is passed to the computation
+selected by the mapper.
+"""
+impl Monad for StateT<$S, $M, $T>
+where
+  $M: Monad
+  $T: Monad.$A
+{
+  @doc """
+  Return a payload without changing the state.
+
+  ## REPL
+  xldr(1)> state: StateT<Int, Identity, Int> = Monad::return(2)
+  xldr(2)> state
+  StateT(run_state: <function:491; lexical_captures=1>)
+
+  """
+  def return::<StateT<$S, $M, $T>>(value: $A) -> StateT<$S, $M, $A> {
+    StateT::new({|state| Monad::return((value, state))})
+  }
+
+  @doc """
+  Pass the next state from the first computation to the second.
+
+  ## REPL
+  xldr(1)> first: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state, state + 1))})
+  xldr(2)> bound = Monad::bind(first, {|item| StateT::new({|state| Identity::new((item + state, state + 10))})})
+  xldr(3)> StateT::run(bound, 1)
+  Identity(value: (3, 12))
+
+  """
+  def bind(self: StateT<$S, $M, $A>, mapper: ($A -> StateT<$S, $M, $B>)) -> StateT<$S, $M, $B> {
+    StateT::new({|initial|
+      Monad::bind(StateT::run(self, initial), {|result|
+        StateT::run(mapper(result._0), result._1)
+      })
+    })
+  }
+}
+
+@doc """
+`MonadT<$M>` implementation for `StateT`.
+Lifting maps a base payload into a pair with the current state.
+"""
+impl MonadT<$M> for StateT<$S, $M, $T>
+where
+  $M: Monad
+  $T: MonadT.$A
+{
+  @doc """
+  Lift a base computation while preserving the supplied state.
+
+  ## REPL
+  xldr(1)> base: Result<Int> = Ok(7)
+  xldr(2)> lifted: StateT<Int, Result, Int> = MonadT::lift(base)
+  xldr(3)> lifted
+  StateT(run_state: <function:491; lexical_captures=1>)
+
+  """
+  def lift::<StateT<$S, $M, $T>>(value: $M<$A>) -> StateT<$S, $M, $A> {
+    StateT::new({|state| Functor::fmap(value, {|item| (item, state)})})
+  }
+}
+
+@doc """
+`Alternative` implementation for `StateT` when the base carrier also has
+`Alternative`. Both branches receive the same initial state and the base
+carrier decides between their results. Both stored branches run normally;
+sharing the initial state does not roll back external effects, and ordinary
+argument expressions passed to `choose` remain eagerly evaluated.
+"""
+impl Alternative for StateT<$S, $M, $T>
+where
+  $M: Monad
+  $M: Alternative
+  $T: Alternative.$A
+{
+  @doc """
+  Create an empty StateT when the base has Alternative.
+
+  ## REPL
+  xldr(1)> empty: StateT<Int, Option, Int> = Alternative::empty()
+  xldr(2)> empty
+  StateT(run_state: <template:6; lexical_captures=0>)
+
+  """
+  def empty::<StateT<$S, $M, $T>>() -> StateT<$S, $M, $T> {
+    StateT::new({|_state| Alternative::empty()})
+  }
+
+  @doc """
+  Run both branches from the same initial state and choose in the base. This
+  does not cancel either branch or roll back external effects.
+
+  ## REPL
+  xldr(1)> left: StateT<Int, Option, Int> = StateT::new({|_state| Option::None})
+  xldr(2)> right: StateT<Int, Option, Int> = StateT::new({|state| Option::Some((state + 1, state + 2))})
+  xldr(3)> chosen = Alternative::choose(left, right)
+  xldr(4)> StateT::run(chosen, 3)
+  Option::Some((4, 5))
+
+  """
+  def choose(
+    left: StateT<$S, $M, $A>,
+    right: StateT<$S, $M, $A>,
+  ) -> StateT<$S, $M, $A> {
+    StateT::new({|initial|
+      left_result = apply(left.run_state, initial)
+      right_result = apply(right.run_state, initial)
+      Alternative::choose(left_result, right_result)
+    })
+  }
+}

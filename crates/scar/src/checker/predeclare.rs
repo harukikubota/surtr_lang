@@ -2055,7 +2055,7 @@ impl Checker {
         Ok((vars, positions))
     }
 
-    fn trait_head_parameter_constructor_bound(
+    pub(super) fn trait_head_parameter_constructor_bound(
         &self,
         trait_info: &TraitInfo,
         parameter_name: &str,
@@ -3320,33 +3320,47 @@ impl Checker {
             };
             self.traits.insert(trait_key.clone(), trait_info.clone());
 
-            // Trait helpers participate in the same canonical callable
-            // registry as user functions and non-intrinsic builtins. Dispatch
-            // remains trait-owned, but signature roles and provenance do not.
-            for method in trait_info.methods.values() {
-                let self_ty = self.env.fresh_tyvar();
-                let (param_tys, ret, _, return_type_argument_tys, _) =
-                    self.resolve_trait_method_signature(&trait_info, method, &self_ty)?;
-                self.callable_signatures.insert(
-                    method.id.unique_id,
-                    super::signatures::canonical_callable_signature(
-                        &method.id,
-                        &method.return_type_arguments,
-                        &method.value_parameters,
-                        return_type_argument_tys.as_slice(),
-                        param_tys.as_slice(),
-                        ret,
-                        sindr::signature::CanonicalConstraintSet::default(),
-                        sindr::signature::RuntimeTarget::TraitDispatch(method.id.unique_id),
-                        sindr::signature::CallableDeclarationKind::TraitMethod,
-                    )?,
-                );
-            }
             let _ = span;
         }
 
         if declared_trait {
             self.resolve_trait_constraint_closure()?;
+
+            // Trait helpers participate in the same canonical callable
+            // registry as user functions and non-intrinsic builtins. Resolve
+            // their signatures only after inherited constructor slots are
+            // closed so parameter bounds such as `$M: Monad` retain their
+            // constructor witness metadata.
+            for stmt in stmts {
+                let Resolved::TraitDef(_, id, ..) = stmt else {
+                    continue;
+                };
+                let trait_key = self.trait_key(id);
+                let trait_info = self
+                    .traits
+                    .get(&trait_key)
+                    .cloned()
+                    .expect("predeclared Trait must remain registered");
+                for method in trait_info.methods.values() {
+                    let self_ty = self.env.fresh_tyvar();
+                    let (param_tys, ret, _, return_type_argument_tys, _) =
+                        self.resolve_trait_method_signature(&trait_info, method, &self_ty)?;
+                    self.callable_signatures.insert(
+                        method.id.unique_id,
+                        super::signatures::canonical_callable_signature(
+                            &method.id,
+                            &method.return_type_arguments,
+                            &method.value_parameters,
+                            return_type_argument_tys.as_slice(),
+                            param_tys.as_slice(),
+                            ret,
+                            sindr::signature::CanonicalConstraintSet::default(),
+                            sindr::signature::RuntimeTarget::TraitDispatch(method.id.unique_id),
+                            sindr::signature::CallableDeclarationKind::TraitMethod,
+                        )?,
+                    );
+                }
+            }
         }
 
         for stmt in stmts {

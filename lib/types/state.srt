@@ -17,9 +17,8 @@ impl State {
   Construct a `State<$S, $A>` from a state transition.
 
   ## REPL
-  xldr(1)> action = State::new({|state| (state + 1, state + 2)})
-  xldr(2)> State::run(action, 7)
-  (8, 9)
+  xldr(1)> State::new({|state| (state + 1, state + 2)})
+  State(run_state: <function:495; lexical_captures=0>)
   """
   def new(run_state: ($S -> ($A, $S))) -> State<$S, $A> {
     State { run_state }
@@ -44,7 +43,7 @@ impl State {
   8
   """
   def eval(self: State<$S, $A>, initial: $S) -> $A {
-    result = apply(self.run_state, initial)
+    result = State::run(self, initial)
     result._0
   }
 
@@ -56,7 +55,7 @@ impl State {
   9
   """
   def exec(self: State<$S, $A>, initial: $S) -> $S {
-    result = apply(self.run_state, initial)
+    result = State::run(self, initial)
     result._1
   }
 
@@ -64,7 +63,8 @@ impl State {
   Read the current state without changing it.
 
   ## REPL
-  xldr(1)> State::run(State::get(), 7)
+  xldr(1)> value = State::get::<Int>()
+  xldr(2)> State::run(value, 7)
   (7, 7)
   """
   def get::<$S>() -> State<$S, $S> {
@@ -75,7 +75,8 @@ impl State {
   Read a projection of the current state without changing it.
 
   ## REPL
-  xldr(1)> State::run(State::gets({|state| state * 2}), 7)
+  xldr(1)> value: State<Int, Int> = State::gets({|state| state * 2})
+  xldr(2)> State::run(value, 7)
   (14, 7)
   """
   def gets(mapper: ($S -> $A)) -> State<$S, $A> {
@@ -86,7 +87,8 @@ impl State {
   Replace the current state.
 
   ## REPL
-  xldr(1)> State::run(State::put(11), 7)
+  xldr(1)> value = State::put(11)
+  xldr(2)> State::run(value, 7)
   ((), 11)
   """
   def put(state: $S) -> State<$S, Unit> {
@@ -97,7 +99,8 @@ impl State {
   Update the current state with a pure function.
 
   ## REPL
-  xldr(1)> State::run(State::modify({|state| state + 1}), 7)
+  xldr(1)> value: State<Int, Unit> = State::modify({|state| state + 1})
+  xldr(2)> State::run(value, 7)
   ((), 8)
   """
   def modify(mapper: ($S -> $S)) -> State<$S, Unit> {
@@ -123,7 +126,8 @@ where
   its next state.
 
   ## REPL
-  xldr(1)> State::run(State::get() |*> &to_string, 7)
+  xldr(1)> mapped = Functor::fmap(State::get::<Int>(), &to_string)
+  xldr(2)> State::run(mapped, 7)
   ("7", 7)
   """
   def fmap(self: State<$S, $A>, mapper: ($A -> $B)) -> State<$S, $B> {
@@ -153,8 +157,9 @@ where
   Lift a plain value into a state-preserving transition.
 
   ## REPL
-  xldr(1)> State::run(Applicative::pure(4), 9)
-  (4, 9)
+  xldr(1)> value: State<Int, Int> = Applicative::pure(4)
+  xldr(2)> value
+  State(run_state: <function:496; lexical_captures=1>)
   """
   def pure::<State<$S, $T>>(value: $A) -> State<$S, $A> {
     State::new({|state| (value, state)})
@@ -165,7 +170,10 @@ where
   produced by the value transition, threading state from left to right.
 
   ## REPL
-  xldr(1)> State::run(Applicative::ap(Applicative::pure({|x| x + 1}), Applicative::pure(2)), 9)
+  xldr(1)> mapper: State<Int, (Int -> Int)> = Applicative::pure({|x| x + 1})
+  xldr(2)> value: State<Int, Int> = Applicative::pure(2)
+  xldr(3)> applied = Applicative::ap(mapper, value)
+  xldr(4)> State::run(applied, 9)
   (3, 9)
   """
   def ap(mapper: State<$S, ($A -> $B)>, value: State<$S, $A>) -> State<$S, $B> {
@@ -195,8 +203,9 @@ where
   Lift a plain value into a state-preserving transition as `Monad::return`.
 
   ## REPL
-  xldr(1)> State::run(Monad::return(4), 9)
-  (4, 9)
+  xldr(1)> value: State<Int, Int> = Monad::return(4)
+  xldr(2)> value
+  State(run_state: <function:496; lexical_captures=1>)
   """
   def return::<State<$S, $T>>(value: $A) -> State<$S, $A> {
     State::new({|state| (value, state)})
@@ -207,7 +216,8 @@ where
   the transition returned by the mapper.
 
   ## REPL
-  xldr(1)> State::run(State::put(8) |>= {|_| State::get()}, 3)
+  xldr(1)> bound = Monad::bind(State::put(8), {|_| State::get()})
+  xldr(2)> State::run(bound, 3)
   (8, 8)
   """
   def bind(self: State<$S, $A>, mapper: ($A -> State<$S, $B>)) -> State<$S, $B> {

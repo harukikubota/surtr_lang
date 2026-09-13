@@ -20,6 +20,7 @@ const CONSTRUCTOR_CASES: &[(&str, fn())] = &[
     constructor_case!(one_registered_carrier_is_not_constructor_inference_evidence),
     constructor_case!(generic_receiverless_family_helpers_use_expected_return),
     constructor_case!(generic_constructor_trait_wrappers_specialize_all_method_roles),
+    constructor_case!(monadt_lift_uses_trait_target_and_value_arguments_together),
 ];
 
 #[test]
@@ -239,6 +240,47 @@ impl Family for Boxed<$T> {
         scar::typecheck(sigil::resolve(ast).unwrap())
             .expect("receiverless helpers are signature-driven");
     }
+}
+
+fn monadt_lift_uses_trait_target_and_value_arguments_together() {
+    let identity_impl = r#"
+impl MonadT<Identity> for Option<$T> {
+    def lift::<Option<$T>>(value: Identity<$A>) -> Option<$A> {
+        Option::Some(Identity::run(value))
+    }
+}
+"#;
+    for expression in ["Monad::return(1)", "Applicative::pure(1)"] {
+        let underconstrained =
+            format!("{identity_impl}\nresult: Option<Int> = MonadT::lift({expression})");
+        let error = support::typecheck(support::resolve_with_builtin_prelude(&underconstrained))
+            .expect_err("a fixed MonadT argument must not guess a nested constructor witness");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::AmbiguousReturnTypeArgument),
+            "{expression}: {error:?}"
+        );
+    }
+
+    let disjoint_impl = r#"
+impl MonadT<Option> for Option<$T> {
+    def lift::<Option<$T>>(value: Option<$A>) -> Option<$A> { value }
+}
+"#;
+    let source_selects_identity = format!(
+        "{identity_impl}\n{disjoint_impl}\nresult: Option<Int> = MonadT::lift(Identity::new(1))"
+    );
+    support::typecheck(support::resolve_with_builtin_prelude(
+        &source_selects_identity,
+    ))
+    .unwrap_or_else(|error| {
+        panic!("the Identity input selects its matching MonadT argument: {error:?}")
+    });
+
+    let incompatible_result =
+        format!("{identity_impl}\nresult: Option<String> = MonadT::lift(Identity::new(1))");
+    support::typecheck(support::resolve_with_builtin_prelude(&incompatible_result))
+        .expect_err("the selected Identity payload must remain Int through the expected result");
 }
 
 fn generic_constructor_trait_wrappers_specialize_all_method_roles() {

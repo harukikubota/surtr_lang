@@ -1,0 +1,2 @@
+source: OptionT<Result, Int> = OptionT::some::<Result>(1)
+mapped: OptionT<Result, Int> = source |>= {|value| OptionT::some::<Option>(value + 1)}

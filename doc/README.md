@@ -10,8 +10,8 @@
 | 分類 | 文書 | 状態 |
 |---|---|---|
 | 実装済み API | [Identity](../docs/site/identity.md) / [Reader](../docs/site/reader.md) / [State](../docs/site/state.md) | N02 の利用者向け文書 |
-| 実装履歴・後続入力 | [MonadT 言語拡張](./monadt_language_extension_spec.md) | N03–N04 の恒久契約は担当文書へ移管済み。N05以降の入力境界を保持 |
-| 仕様決定・実装待ち | [標準 MonadT 型](./monadt_standard_types_spec.md) | N05 の入力。未確定 API は本文の確認ゲートに従う |
+| 実装済み仕様・後続入力 | [MonadT 言語拡張](./monadt_language_extension_spec.md) | N03–N04の恒久契約は担当文書へ移管済み。未実装のMT-L22だけをN11へ残し、generic `defrecord`は`open-issues.md` OI-035へ分離 |
+| 実装済み標準 API・後続入力 | [標準 MonadT 型](./monadt_standard_types_spec.md) | N05の正本は`../lib/traits/monad_t.srt`と`../lib/types/monad_transformer/`、利用者向け説明は[`../docs/site/monad-transformers.md`](../docs/site/monad-transformers.md)。未実装のMT-S14だけをN11へ残す |
 | 仕様決定・実装待ち | [SafeBind / diagnostics cleanup](./diagnostics_cleanup_spec.md) | N06 の入力 |
 | 仕様決定・実装待ち | [`do` intrinsic](./do_intrinsic_spec.md) | N07–N11 の入力 |
 | 仕様決定・実装待ち | [Generator](./generator_spec.md) | N12–N13 の入力。未確定 API は本文の確認ゲートに従う |

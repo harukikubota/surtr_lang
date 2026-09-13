@@ -1,0 +1,46 @@
+defenum Box<$A> {
+  Box($A),
+}
+
+impl Functor for Box<$T> {
+  def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> {
+    match self {
+      Box::Box(value) => Box::Box(mapper(value)),
+    }
+  }
+}
+
+impl Applicative for Box<$T> {
+  def pure::<Box<$T>>(value: $A) -> Box<$A> { Box::Box(value) }
+  def ap(mapper: Box<($A -> $B)>, value: Box<$A>) -> Box<$B> {
+    match mapper {
+      Box::Box(function) => Functor::fmap(value, function),
+    }
+  }
+}
+
+impl Monad for Box<$T> {
+  def return::<Box<$T>>(value: $A) -> Box<$A> { Box::Box(value) }
+  def bind(self: Box<$A>, mapper: ($A -> Box<$B>)) -> Box<$B> {
+    match self {
+      Box::Box(value) => mapper(value),
+    }
+  }
+}
+
+def retain(value: $F<Int>) -> $F<Int>
+where
+  $F: Functor
+{
+  Functor::fmap(value, {|item| item})
+}
+
+def stronger(value: Monad<Int>) -> Int { 1 }
+
+payload = retain(Box::Box(1))
+lifted: OptionT<Identity, Box<Int>> = MonadT::lift(Applicative::pure(payload))
+
+match lifted.inner.value {
+  Option::Some(item) => stronger(item),
+  Option::None => 0,
+}

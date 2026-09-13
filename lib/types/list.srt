@@ -691,6 +691,13 @@ impl List {
 This is the source-level meaning of `values |*> f`.
 """
 impl Functor for List<$T> {
+  @doc """
+  Map every list element in order.
+
+  ## REPL
+  xldr(1)> Functor::fmap([1, 2], {|item| item + 1})
+  [2, 3]
+  """
   def fmap(self: List<$A>, mapper: ($A -> $B)) -> List<$B> {
     List::map(self, mapper)
   }
@@ -700,10 +707,26 @@ impl Functor for List<$T> {
 `Applicative` implementation for `List`.
 """
 impl Applicative for List<$T> {
+  @doc """
+  Lift a plain value into a singleton list.
+
+  ## REPL
+  xldr(1)> value: List<Int> = Applicative::pure(2)
+  xldr(2)> value
+  [2]
+  """
   def pure::<List<$T>>(value: $A) -> List<$A> {
     [value]
   }
 
+  @doc """
+  Apply every function to every value in function-major order.
+
+  ## REPL
+  xldr(1)> mapper: List<(Int -> Int)> = [{|item| item + 1}, {|item| item * 2}]
+  xldr(2)> Applicative::ap(mapper, [1, 2])
+  [2, 3, 2, 4]
+  """
   def ap(mapper: List<($A -> $B)>, value: List<$A>) -> List<$B> {
     List::flat_map(mapper, {|f| List::map(value, f)})
   }
@@ -714,10 +737,25 @@ impl Applicative for List<$T> {
 This is the source-level meaning of `values |>= mapper`.
 """
 impl Monad for List<$T> {
+  @doc """
+  Return a plain value as a singleton list.
+
+  ## REPL
+  xldr(1)> value: List<Int> = Monad::return(2)
+  xldr(2)> value
+  [2]
+  """
   def return::<List<$T>>(value: $A) -> List<$A> {
     [value]
   }
 
+  @doc """
+  Map each element to a list and concatenate the results in order.
+
+  ## REPL
+  xldr(1)> Monad::bind([1, 2], {|item| [item, item + 10]})
+  [1, 11, 2, 12]
+  """
   def bind(self: List<$A>, mapper: ($A -> List<$B>)) -> List<$B> {
     List::flat_map(self, mapper)
   }
@@ -728,10 +766,25 @@ impl Monad for List<$T> {
 `<|>` concatenates its operands from left to right.
 """
 impl Alternative for List<$T> {
+  @doc """
+  Create the empty list.
+
+  ## REPL
+  xldr(1)> value: List<Int> = Alternative::empty()
+  xldr(2)> value
+  []
+  """
   def empty::<List<$T>>() -> List<$T> {
     []
   }
 
+  @doc """
+  Concatenate the left and right lists in order.
+
+  ## REPL
+  xldr(1)> Alternative::choose([1, 2], [3, 4])
+  [1, 2, 3, 4]
+  """
   def choose(left: List<$A>, right: List<$A>) -> List<$A> {
     List::append(left, right)
   }

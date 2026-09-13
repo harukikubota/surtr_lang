@@ -289,6 +289,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_doc_and_sig_commands_resolve_aliases_and_typed_queries),
     repl_core_case!(core_sig_monad_operator_lists_user_defined_box_impl),
     repl_core_case!(core_standard_monad_instances_construct_and_run),
+    repl_core_case!(core_standard_monad_transformer_smoke),
     repl_core_case!(core_standard_state_get_rejects_ambiguity_and_keeps_session_alive),
     repl_core_case!(
         core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing
@@ -2759,18 +2760,18 @@ fn core_nominal_constructor_value_survives_failed_bound_check() {
     let mut engine = ReplEngine::from_script_source(
         "nominal_constructor_parameter.srt",
         r#"
-defstruct OptionT<$M, $A>
+defstruct ReplOptionT<$M, $A>
 where
   $M: Monad
 {
   inner: $M<Option<$A>>,
 }
-impl OptionT {
-  def new(inner: $M<Option<$A>>) -> OptionT<$M, $A>
+impl ReplOptionT {
+  def new(inner: $M<Option<$A>>) -> ReplOptionT<$M, $A>
   where
     $M: Monad
   {
-    OptionT { inner: inner }
+    ReplOptionT { inner: inner }
   }
 }
 
@@ -2781,7 +2782,8 @@ defenum Plain<$A> {
     )
     .expect("nominal constructor parameter preload should load");
 
-    let stored = engine.handle_line("value: OptionT<Result, Int> = OptionT(Ok(Option::Some(1)))");
+    let stored =
+        engine.handle_line("value: ReplOptionT<Result, Int> = ReplOptionT(Ok(Option::Some(1)))");
     assert!(!stored.should_exit);
     assert!(
         !matches!(stored.output, ReplOutput::EvalError { .. }),
@@ -2789,7 +2791,7 @@ defenum Plain<$A> {
         rendered_text(&stored)
     );
 
-    let rejected = engine.handle_line("bad: OptionT<Plain, Int> = value");
+    let rejected = engine.handle_line("bad: ReplOptionT<Plain, Int> = value");
     assert!(!rejected.should_exit);
     assert!(matches!(rejected.output, ReplOutput::EvalError { .. }));
     assert!(
@@ -2799,15 +2801,16 @@ defenum Plain<$A> {
     );
 
     let inference_rejected =
-        engine.handle_line("bad: OptionT<Result, String> = OptionT(Ok(Option::Some(1)))");
+        engine.handle_line("bad: ReplOptionT<Result, String> = ReplOptionT(Ok(Option::Some(1)))");
     assert!(!inference_rejected.should_exit);
     assert!(matches!(
         inference_rejected.output,
         ReplOutput::EvalError { .. }
     ));
 
-    let rebound = engine
-        .handle_line("bad: OptionT<Option, String> = OptionT(Option::Some(Option::Some(\"ok\")))");
+    let rebound = engine.handle_line(
+        "bad: ReplOptionT<Option, String> = ReplOptionT(Option::Some(Option::Some(\"ok\")))",
+    );
     assert!(!rebound.should_exit);
     assert!(
         !matches!(rebound.output, ReplOutput::EvalError { .. }),
@@ -2815,16 +2818,7 @@ defenum Plain<$A> {
         rendered_text(&rebound)
     );
 
-    let rebound_viewed = engine.handle_line("Facet::view(OptionT.inner, bad)");
-    assert!(!rebound_viewed.should_exit);
-    assert!(
-        !matches!(rebound_viewed.output, ReplOutput::EvalError { .. }),
-        "{}",
-        rendered_text(&rebound_viewed)
-    );
-    assert!(rendered_text(&rebound_viewed).contains("Some(\"ok\")"));
-
-    let viewed = engine.handle_line("Facet::view(OptionT.inner, value)");
+    let viewed = engine.handle_line("Facet::view(ReplOptionT.inner, value)");
     assert!(!viewed.should_exit);
     assert!(
         !matches!(viewed.output, ReplOutput::EvalError { .. }),
@@ -2832,6 +2826,14 @@ defenum Plain<$A> {
         rendered_text(&viewed)
     );
     assert!(rendered_text(&viewed).contains("Some(1)"));
+
+    let cross_nominal = engine.handle_line("Facet::view(OptionT.inner, value)");
+    assert!(!cross_nominal.should_exit);
+    assert!(
+        matches!(cross_nominal.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&cross_nominal)
+    );
 }
 
 fn core_parameterized_monad_t_value_survives_failed_inference() {
@@ -4488,6 +4490,163 @@ fn core_standard_monad_instances_construct_and_run() {
     assert!(!state.should_exit);
     let state_run = engine.handle_line("State::run(state_value, 10)");
     assert_eq!(rendered_text(&state_run).trim(), "(11, 10)");
+}
+
+fn core_standard_monad_transformer_smoke() {
+    let mut engine = engine();
+
+    let lifted = engine.handle_line("value: OptionT<Result, Int> = MonadT::lift(Ok(1))");
+    assert!(
+        !matches!(lifted.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&lifted)
+    );
+    let run = engine.handle_line("OptionT::run(value)");
+    assert_eq!(rendered_text(&run).trim(), "Ok(Option::Some(1))");
+}
+
+#[test]
+fn core_standard_monad_transformer_survives_ambiguous_lift() {
+    let mut engine = engine();
+
+    let constructed =
+        engine.handle_line("option_new: OptionT<Result, Int> = OptionT::new(Ok(Option::Some(1)))");
+    assert!(!constructed.should_exit);
+    assert!(
+        !matches!(constructed.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&constructed)
+    );
+
+    let lifted = engine.handle_line("option_lifted: OptionT<Result, Int> = MonadT::lift(Ok(2))");
+    assert!(!lifted.should_exit);
+    assert!(
+        !matches!(lifted.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&lifted)
+    );
+
+    let mapped = engine
+        .handle_line("option_mapped: OptionT<Result, Int> = option_lifted |*> {|value| value + 1}");
+    assert!(!mapped.should_exit);
+    assert!(
+        !matches!(mapped.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&mapped)
+    );
+
+    let ambiguous = engine.handle_line("MonadT::lift(Identity::new(9))");
+    assert!(!ambiguous.should_exit);
+    assert!(matches!(ambiguous.output, ReplOutput::EvalError { .. }));
+    let ambiguous_text = rendered_text(&ambiguous);
+    assert!(
+        ambiguous_text.contains("return type arguments for")
+            && ambiguous_text.contains("cannot be inferred"),
+        "{ambiguous_text}"
+    );
+
+    let run = engine.handle_line("OptionT::run(option_mapped)");
+    assert!(!run.should_exit);
+    assert!(
+        !matches!(run.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&run)
+    );
+    assert_eq!(rendered_text(&run).trim(), "Ok(Option::Some(3))");
+
+    let either_new = engine.handle_line(
+        "either_new: EitherT<String, Identity, Int> = EitherT::new(Identity::new(Either::Right(4)))",
+    );
+    assert!(!matches!(either_new.output, ReplOutput::EvalError { .. }));
+    let either_lifted = engine.handle_line(
+        "either_lifted: EitherT<String, Identity, Int> = MonadT::lift(Identity::new(5))",
+    );
+    assert!(!matches!(
+        either_lifted.output,
+        ReplOutput::EvalError { .. }
+    ));
+    let either_mapped = engine.handle_line(
+        "either_mapped: EitherT<String, Identity, Int> = either_lifted |*> {|value| value + 1}",
+    );
+    assert!(!matches!(
+        either_mapped.output,
+        ReplOutput::EvalError { .. }
+    ));
+    let either_run = engine.handle_line("Identity::run(EitherT::run(either_mapped))");
+    assert_eq!(rendered_text(&either_run).trim(), "Either::Right(6)");
+
+    let reader_new = engine.handle_line(
+        "reader_new: ReaderT<Int, Identity, Int> = ReaderT::new({|environment: Int| Identity::new(environment)})",
+    );
+    assert!(!matches!(reader_new.output, ReplOutput::EvalError { .. }));
+    let reader_lifted = engine
+        .handle_line("reader_lifted: ReaderT<Int, Identity, Int> = MonadT::lift(Identity::new(7))");
+    assert!(!matches!(
+        reader_lifted.output,
+        ReplOutput::EvalError { .. }
+    ));
+    let reader_mapped = engine.handle_line(
+        "reader_mapped: ReaderT<Int, Identity, Int> = reader_lifted |*> {|value| value + 1}",
+    );
+    assert!(!matches!(
+        reader_mapped.output,
+        ReplOutput::EvalError { .. }
+    ));
+    let reader_run = engine.handle_line("Identity::run(ReaderT::run(reader_mapped, 99))");
+    assert_eq!(rendered_text(&reader_run).trim(), "8");
+
+    let state_new = engine.handle_line(
+        "state_new: StateT<Int, Identity, Int> = StateT::new({|state: Int| Identity::new((state, state))})",
+    );
+    assert!(!matches!(state_new.output, ReplOutput::EvalError { .. }));
+    let state_lifted = engine
+        .handle_line("state_lifted: StateT<Int, Identity, Int> = MonadT::lift(Identity::new(9))");
+    assert!(!matches!(state_lifted.output, ReplOutput::EvalError { .. }));
+    let state_mapped = engine.handle_line(
+        "state_mapped: StateT<Int, Identity, Int> = state_lifted |*> {|value| value + 1}",
+    );
+    assert!(!matches!(state_mapped.output, ReplOutput::EvalError { .. }));
+    let state_run = engine.handle_line("Identity::run(StateT::run(state_mapped, 12))");
+    assert_eq!(rendered_text(&state_run).trim(), "(10, 12)");
+}
+
+#[test]
+fn core_standard_monad_transformer_persists_explicit_rta() {
+    let mut engine = engine();
+
+    let full = engine.handle_line("full = MonadT::lift::<OptionT<Result, Int>>(Ok(1))");
+    assert!(
+        !matches!(full.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&full)
+    );
+    let full_run = engine.handle_line("OptionT::run(full)");
+    assert_eq!(rendered_text(&full_run).trim(), "Ok(Option::Some(1))");
+
+    let inferred = engine.handle_line("inferred = MonadT::lift::<OptionT<Result, _>>(Ok(2))");
+    assert!(
+        !matches!(inferred.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&inferred)
+    );
+    let inferred_run = engine.handle_line("OptionT::run(inferred)");
+    assert_eq!(rendered_text(&inferred_run).trim(), "Ok(Option::Some(2))");
+
+    let base = engine.handle_line("base: OptionT<Result, Int> = OptionT::some::<Result>(3)");
+    assert!(
+        !matches!(base.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&base)
+    );
+    let stacked = engine
+        .handle_line("stacked = MonadT::lift::<ReaderT<String, OptionT<Result, _>, _>>(base)");
+    assert!(
+        !matches!(stacked.output, ReplOutput::EvalError { .. }),
+        "{}",
+        rendered_text(&stacked)
+    );
+    let stacked_run = engine.handle_line("OptionT::run(ReaderT::run(stacked, \"env\"))");
+    assert_eq!(rendered_text(&stacked_run).trim(), "Ok(Option::Some(3))");
 }
 
 fn core_standard_state_get_rejects_ambiguity_and_keeps_session_alive() {

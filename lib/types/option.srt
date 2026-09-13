@@ -12,14 +12,16 @@ container family.
 
 Example:
 
-`user.nickname |> from(Result) |>= normalize_name |> from(Option)`
+`user.nickname |> from::<Result>() |>= normalize_name |> from::<Option>()`
 
 The equivalent `nickname: String?` field has the same `Option<String>` surface
 and uses the same explicit bridge when you want to enter `Result` control flow.
 
 ## REPL
-xldr(1)> Option::is_some(Option::Some(1))
-True
+xldr(1)> Option::Some(1)
+Option::Some(1)
+xldr(2)> Option<Int>::None
+Option::None
 """
 defenum Option<$T> {
   Some($T),
@@ -87,6 +89,14 @@ impl Option {
 This is the source-level meaning of `value |*> f`.
 """
 impl Functor for Option<$T> {
+  @doc """
+  Map a `Some` payload and preserve `None`.
+  This is the source-level meaning of `value |*> f`.
+
+  ## REPL
+  xldr(1)> Functor::fmap(Option::Some(2), {|item| item + 1})
+  Option::Some(3)
+  """
   def fmap(self: Option<$A>, mapper: ($A -> $B)) -> Option<$B> {
     match self {
       Option::Some(value) => Option::Some(mapper(value)),
@@ -99,10 +109,26 @@ impl Functor for Option<$T> {
 `Applicative` implementation for `Option`.
 """
 impl Applicative for Option<$T> {
+  @doc """
+  Lift a plain value into `Option::Some`.
+
+  ## REPL
+  xldr(1)> value: Option<Int> = Applicative::pure(2)
+  xldr(2)> value
+  Option::Some(2)
+  """
   def pure::<Option<$T>>(value: $A) -> Option<$A> {
     Option::Some(value)
   }
 
+  @doc """
+  Apply a `Some` function to a `Some` payload and preserve absence.
+
+  ## REPL
+  xldr(1)> mapper: Option<(Int -> Int)> = Option::Some({|item| item + 1})
+  xldr(2)> Applicative::ap(mapper, Option::Some(2))
+  Option::Some(3)
+  """
   def ap(mapper: Option<($A -> $B)>, value: Option<$A>) -> Option<$B> {
     match mapper {
       Option::Some(f) => match value {
@@ -119,10 +145,25 @@ impl Applicative for Option<$T> {
 This is the source-level meaning of `value |>= mapper`.
 """
 impl Monad for Option<$T> {
+  @doc """
+  Return a plain value as `Option::Some`.
+
+  ## REPL
+  xldr(1)> value: Option<Int> = Monad::return(2)
+  xldr(2)> value
+  Option::Some(2)
+  """
   def return::<Option<$T>>(value: $A) -> Option<$A> {
     Option::Some(value)
   }
 
+  @doc """
+  Continue a `Some` payload with an Option-returning mapper and preserve `None`.
+
+  ## REPL
+  xldr(1)> Monad::bind(Option::Some(2), {|item| Option::Some(item + 1)})
+  Option::Some(3)
+  """
   def bind(self: Option<$A>, mapper: ($A -> Option<$B>)) -> Option<$B> {
     match self {
       Option::Some(value) => mapper(value),
@@ -137,10 +178,25 @@ impl Monad for Option<$T> {
 `None`.
 """
 impl Alternative for Option<$T> {
+  @doc """
+  Create the absent Option value.
+
+  ## REPL
+  xldr(1)> value: Option<Int> = Alternative::empty()
+  xldr(2)> value
+  Option::None
+  """
   def empty::<Option<$T>>() -> Option<$T> {
     Option::None
   }
 
+  @doc """
+  Return the first present option, or the right option when the left is absent.
+
+  ## REPL
+  xldr(1)> Alternative::choose(Option<Int>::None, Option::Some(2))
+  Option::Some(2)
+  """
   def choose(left: Option<$A>, right: Option<$A>) -> Option<$A> {
     match left {
       Option::Some(_) => left,

@@ -1,3 +1,6 @@
+// The shared helper module is compiled as part of this test target, although
+// most of its helpers belong to the larger surface-test target.
+#[allow(dead_code)]
 mod support;
 
 use scar::error::TypeError;

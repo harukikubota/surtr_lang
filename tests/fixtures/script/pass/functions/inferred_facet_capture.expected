@@ -7,5 +7,5 @@
 bob
 b
 carol-profile
-Ok(User(name: "dave", age: 50, profile: Profile(name: "dave-profile")))
-Ok("eve")
+User(name: "dave", age: 50, profile: Profile(name: "dave-profile"))
+"eve"

@@ -34,6 +34,18 @@ const READER_SOURCE: &str = include_str!("../../../lib/types/reader.srt");
 const STATE_FILE: &str = "types/state.srt";
 const STATE_MODULE_PATH: &str = "State";
 const STATE_SOURCE: &str = include_str!("../../../lib/types/state.srt");
+const OPTION_T_FILE: &str = "types/monad_transformer/option_t.srt";
+const OPTION_T_MODULE_PATH: &str = "OptionT";
+const OPTION_T_SOURCE: &str = include_str!("../../../lib/types/monad_transformer/option_t.srt");
+const EITHER_T_FILE: &str = "types/monad_transformer/either_t.srt";
+const EITHER_T_MODULE_PATH: &str = "EitherT";
+const EITHER_T_SOURCE: &str = include_str!("../../../lib/types/monad_transformer/either_t.srt");
+const READER_T_FILE: &str = "types/monad_transformer/reader_t.srt";
+const READER_T_MODULE_PATH: &str = "ReaderT";
+const READER_T_SOURCE: &str = include_str!("../../../lib/types/monad_transformer/reader_t.srt");
+const STATE_T_FILE: &str = "types/monad_transformer/state_t.srt";
+const STATE_T_MODULE_PATH: &str = "StateT";
+const STATE_T_SOURCE: &str = include_str!("../../../lib/types/monad_transformer/state_t.srt");
 const STYLED_DOC_FILE: &str = "styled_doc.srt";
 const STYLED_DOC_MODULE_PATH: &str = "StyledDoc";
 const STYLED_DOC_SOURCE: &str = include_str!("../../../lib/styled_doc.srt");
@@ -213,9 +225,9 @@ const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         variant: StdlibVariant::Default,
     },
     StdlibModuleSpec {
-        file_name: "traits/operator/monad_t.srt",
+        file_name: "traits/monad_t.srt",
         module_path: "MonadT",
-        source: include_str!("../../../lib/traits/operator/monad_t.srt"),
+        source: include_str!("../../../lib/traits/monad_t.srt"),
         stage: StdlibStage::Main,
         variant: StdlibVariant::Default,
     },
@@ -377,6 +389,34 @@ const STDLIB_MODULE_SPECS: &[StdlibModuleSpec] = &[
         file_name: "types/option.srt",
         module_path: "Option",
         source: include_str!("../../../lib/types/option.srt"),
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
+        file_name: OPTION_T_FILE,
+        module_path: OPTION_T_MODULE_PATH,
+        source: OPTION_T_SOURCE,
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
+        file_name: EITHER_T_FILE,
+        module_path: EITHER_T_MODULE_PATH,
+        source: EITHER_T_SOURCE,
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
+        file_name: READER_T_FILE,
+        module_path: READER_T_MODULE_PATH,
+        source: READER_T_SOURCE,
+        stage: StdlibStage::Main,
+        variant: StdlibVariant::Default,
+    },
+    StdlibModuleSpec {
+        file_name: STATE_T_FILE,
+        module_path: STATE_T_MODULE_PATH,
+        source: STATE_T_SOURCE,
         stage: StdlibStage::Main,
         variant: StdlibVariant::Default,
     },
@@ -1423,6 +1463,10 @@ mod tests {
                 "Duration",
                 "Range",
                 "Option",
+                "OptionT",
+                "EitherT",
+                "ReaderT",
+                "StateT",
                 "Task",
                 "Facet",
                 "Float",
@@ -1614,6 +1658,10 @@ mod tests {
                 "Duration",
                 "Range",
                 "Option",
+                "OptionT",
+                "EitherT",
+                "ReaderT",
+                "StateT",
                 "Task",
                 "Facet",
                 "Float",

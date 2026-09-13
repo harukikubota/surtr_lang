@@ -19,8 +19,8 @@ impl Reader {
   Construct a `Reader<$R, $A>` from an environment function.
 
   ## REPL
-  xldr(1)> Reader::run(Reader::new({|n| n + 1}), 4)
-  5
+  xldr(1)> Reader::new({|n| n + 1})
+  Reader(run_reader: <function:495; lexical_captures=0>)
   """
   def new(run_reader: ($R -> $A)) -> Reader<$R, $A> {
     Reader { run_reader }
@@ -41,7 +41,8 @@ impl Reader {
   Read the complete environment as the Reader payload.
 
   ## REPL
-  xldr(1)> Reader::run(Reader::ask::<Int>(), 4)
+  xldr(1)> value = Reader::ask::<Int>()
+  xldr(2)> Reader::run(value, 4)
   4
   """
   def ask::<$R>() -> Reader<$R, $R> {
@@ -52,7 +53,8 @@ impl Reader {
   Build a Reader by applying `mapper` to the environment.
 
   ## REPL
-  xldr(1)> Reader::run(Reader::asks({|n| n + 1}), 4)
+  xldr(1)> value: Reader<Int, Int> = Reader::asks({|n| n + 1})
+  xldr(2)> Reader::run(value, 4)
   5
   """
   def asks(mapper: ($R -> $A)) -> Reader<$R, $A> {
@@ -65,7 +67,8 @@ impl Reader {
 
   ## REPL
   xldr(1)> value = Reader::new({|n| n * 2})
-  xldr(2)> Reader::run(Reader::local(value, {|n| n + 10}), 4)
+  xldr(2)> localized = Reader::local(value, {|n| n + 10})
+  xldr(3)> Reader::run(localized, 4)
   28
   """
   def local(self: Reader<$R, $A>, mapper: ($R -> $R)) -> Reader<$R, $A> {
@@ -85,7 +88,8 @@ where
   Apply `mapper` to the result produced by a Reader.
 
   ## REPL
-  xldr(1)> Reader::run(Reader::new({|n| n + 1}) |*> {|n| n * 2}, 4)
+  xldr(1)> mapped = Functor::fmap(Reader::new({|n| n + 1}), {|n| n * 2})
+  xldr(2)> Reader::run(mapped, 4)
   10
   """
   def fmap(self: Reader<$E, $A>, mapper: ($A -> $B)) -> Reader<$E, $B> {
@@ -106,8 +110,9 @@ where
   Lift a plain value into a Reader that ignores its environment.
 
   ## REPL
-  xldr(1)> Reader::run(Applicative::pure(7), 99)
-  7
+  xldr(1)> value: Reader<Int, Int> = Applicative::pure(7)
+  xldr(2)> value
+  Reader(run_reader: <function:496; lexical_captures=1>)
   """
   def pure::<Reader<$E, $R>>(value: $A) -> Reader<$E, $A> {
     Reader::new({|_environment| value})
@@ -118,8 +123,9 @@ where
   shared environment.
 
   ## REPL
-  xldr(1)> f = Reader::new({|n| {|x| x + n}})
-  xldr(2)> Reader::run(Applicative::ap(f, Reader::new({|n| n * 2})), 3)
+  xldr(1)> mapper: Reader<Int, (Int -> Int)> = Reader::new({|n| {|x| x + n}})
+  xldr(2)> applied = Applicative::ap(mapper, Reader::new({|n| n * 2}))
+  xldr(3)> Reader::run(applied, 3)
   9
   """
   def ap(
@@ -146,8 +152,9 @@ where
   Lift a plain value into a Reader that ignores its environment.
 
   ## REPL
-  xldr(1)> Reader::run(Monad::return(7), 99)
-  7
+  xldr(1)> value: Reader<Int, Int> = Monad::return(7)
+  xldr(2)> value
+  Reader(run_reader: <function:496; lexical_captures=1>)
   """
   def return::<Reader<$E, $R>>(value: $A) -> Reader<$E, $A> {
     Reader::new({|_environment| value})
@@ -158,7 +165,8 @@ where
 
   ## REPL
   xldr(1)> first = Reader::new({|n| n + 1})
-  xldr(2)> Reader::run(first |>= {|x| Reader::new({|n| x + n})}, 4)
+  xldr(2)> bound = Monad::bind(first, {|x| Reader::new({|n| x + n})})
+  xldr(3)> Reader::run(bound, 4)
   9
   """
   def bind(self: Reader<$E, $A>, mapper: ($A -> Reader<$E, $B>)) -> Reader<$E, $B> {

@@ -677,7 +677,7 @@ impl Checker {
                 origin,
                 args,
             } => {
-                let args = args
+                let mut args = args
                     .into_iter()
                     .map(|arg| {
                         self.rewrite_specializations_in_node(
@@ -691,6 +691,9 @@ impl Checker {
                         .map(|node| *node)
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                for argument in &mut args {
+                    argument.ty = self.normalize_executable_constructor_identities(&argument.ty);
+                }
                 let receiver_ty = self.resolve_ty(&receiver_ty);
                 let obligation = TraitObligation {
                     trait_id: obligation.trait_id,
@@ -764,6 +767,25 @@ impl Checker {
                 } else {
                     dispatch
                 };
+                let receiver_ty = self.normalize_executable_constructor_identities(&receiver_ty);
+                let obligation = TraitObligation {
+                    trait_id: obligation.trait_id.clone(),
+                    trait_args: obligation
+                        .trait_args
+                        .iter()
+                        .enumerate()
+                        .map(|(ordinal, argument)| {
+                            self.normalize_executable_trait_argument(
+                                &obligation.trait_id,
+                                ordinal,
+                                argument,
+                            )
+                        })
+                        .collect(),
+                    receiver: self
+                        .normalize_executable_constructor_identities(&obligation.receiver),
+                };
+                ty = self.normalize_executable_constructor_identities(&ty);
                 TypedInner::TraitCall {
                     trait_name,
                     method_name,
@@ -817,9 +839,18 @@ impl Checker {
                 }
                 TypedInner::Block(stmts)
             }
-            TypedInner::Bind(pattern, rhs) => TypedInner::Bind(
-                self.concretize_specialized_typed_pattern(
+            TypedInner::Bind(pattern, rhs) => {
+                let rhs = self.rewrite_specializations_in_node(
+                    *rhs,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?;
+                let pattern = self.concretize_specialized_typed_pattern(
                     pattern,
+                    Some(&rhs.ty),
                     &span,
                     &mut SpecializationContext {
                         defs_by_fun_idx,
@@ -828,19 +859,21 @@ impl Checker {
                         specialization_fun_idxs,
                         generated_defs,
                     },
-                )?,
-                self.rewrite_specializations_in_node(
+                )?;
+                TypedInner::Bind(pattern, rhs)
+            }
+            TypedInner::SafeBind(pattern, rhs) => {
+                let rhs = self.rewrite_specializations_in_node(
                     *rhs,
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?,
-            ),
-            TypedInner::SafeBind(pattern, rhs) => TypedInner::SafeBind(
-                self.concretize_specialized_typed_pattern(
+                )?;
+                let pattern = self.concretize_specialized_typed_pattern(
                     pattern,
+                    Some(&rhs.ty),
                     &span,
                     &mut SpecializationContext {
                         defs_by_fun_idx,
@@ -849,16 +882,9 @@ impl Checker {
                         specialization_fun_idxs,
                         generated_defs,
                     },
-                )?,
-                self.rewrite_specializations_in_node(
-                    *rhs,
-                    defs_by_fun_idx,
-                    bound_tyvars_by_fun_idx,
-                    needs_specialization,
-                    specialization_fun_idxs,
-                    generated_defs,
-                )?,
-            ),
+                )?;
+                TypedInner::SafeBind(pattern, rhs)
+            }
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
                 self.rewrite_specializations_in_node(
@@ -1868,6 +1894,7 @@ impl Checker {
                     substitution,
                     &constructor_bounds,
                 )?;
+                let ty = self.normalize_executable_contract_type(&entry.ty, ty)?;
                 if ty.has_pending_instantiation() {
                     return Err(self.trait_dispatch_failure(
                         TypeDiagnosticReason::UnresolvedTraitMethodInstantiation,
@@ -3539,10 +3566,16 @@ impl Checker {
 
     fn materialize_trait_method_instantiation(
         &mut self,
-        instantiation: TraitMethodInstantiation,
+        mut instantiation: TraitMethodInstantiation,
         span: &Span,
         context: &mut SpecializationContext<'_>,
     ) -> Result<TraitDispatch, TypeError> {
+        for (variable, ty) in &mut instantiation.substitution {
+            *ty = self.normalize_executable_constructor_binding(*variable, ty);
+        }
+        for (variable, ty) in &mut instantiation.caller_substitution {
+            *ty = self.normalize_executable_constructor_binding(*variable, ty);
+        }
         let signature = &instantiation.callable_signature;
         if signature
             .return_type_arguments
@@ -3684,36 +3717,101 @@ impl Checker {
     fn concretize_specialized_typed_pattern(
         &mut self,
         pattern: TypedPattern,
+        expected_ty: Option<&Ty>,
         span: &Span,
         context: &mut SpecializationContext<'_>,
     ) -> Result<TypedPattern, TypeError> {
+        let normalized_ty = |checker: &Checker, ty: &Ty, expected: Option<&Ty>| {
+            checker.resolve_ty(expected.unwrap_or(ty))
+        };
         Ok(match pattern {
             TypedPattern::Pin(ty, id, dispatch) => {
+                let ty = normalized_ty(self, &ty, expected_ty);
                 let dispatch =
                     self.specialize_pattern_pin_dispatch(&ty, dispatch, span, context)?;
                 TypedPattern::Pin(ty, id, dispatch)
             }
-            TypedPattern::As(ty, inner, id) => TypedPattern::As(
-                ty,
-                Box::new(self.concretize_specialized_typed_pattern(*inner, span, context)?),
-                id,
-            ),
-            TypedPattern::ListCons(ty, head, tail) => TypedPattern::ListCons(
-                ty,
-                Box::new(self.concretize_specialized_typed_pattern(*head, span, context)?),
-                Box::new(self.concretize_specialized_typed_pattern(*tail, span, context)?),
-            ),
-            TypedPattern::Tuple(ty, items) => TypedPattern::Tuple(
-                ty,
-                items
-                    .into_iter()
-                    .map(|item| self.concretize_specialized_typed_pattern(item, span, context))
-                    .collect::<Result<Vec<_>, _>>()?,
-            ),
-            TypedPattern::ResultOk(ty, inner) => TypedPattern::ResultOk(
-                ty,
-                Box::new(self.concretize_specialized_typed_pattern(*inner, span, context)?),
-            ),
+            TypedPattern::Var(ty, id) => {
+                TypedPattern::Var(normalized_ty(self, &ty, expected_ty), id)
+            }
+            TypedPattern::As(ty, inner, id) => {
+                let ty = normalized_ty(self, &ty, expected_ty);
+                TypedPattern::As(
+                    ty.clone(),
+                    Box::new(self.concretize_specialized_typed_pattern(
+                        *inner,
+                        Some(&ty),
+                        span,
+                        context,
+                    )?),
+                    id,
+                )
+            }
+            TypedPattern::Wildcard(ty) => {
+                TypedPattern::Wildcard(normalized_ty(self, &ty, expected_ty))
+            }
+            TypedPattern::ListNil(ty) => {
+                TypedPattern::ListNil(normalized_ty(self, &ty, expected_ty))
+            }
+            TypedPattern::ListCons(ty, head, tail) => {
+                let ty = normalized_ty(self, &ty, expected_ty);
+                let item_ty = match &ty {
+                    Ty::List(inner) => Some(inner.as_ref()),
+                    _ => None,
+                };
+                let head =
+                    self.concretize_specialized_typed_pattern(*head, item_ty, span, context)?;
+                let tail =
+                    self.concretize_specialized_typed_pattern(*tail, Some(&ty), span, context)?;
+                TypedPattern::ListCons(ty, Box::new(head), Box::new(tail))
+            }
+            TypedPattern::IntLit(ty, value) => {
+                TypedPattern::IntLit(normalized_ty(self, &ty, expected_ty), value)
+            }
+            TypedPattern::StrLit(ty, value) => {
+                TypedPattern::StrLit(normalized_ty(self, &ty, expected_ty), value)
+            }
+            TypedPattern::BoolLit(ty, value) => {
+                TypedPattern::BoolLit(normalized_ty(self, &ty, expected_ty), value)
+            }
+            TypedPattern::DurationLit(ty, value) => {
+                TypedPattern::DurationLit(normalized_ty(self, &ty, expected_ty), value)
+            }
+            TypedPattern::Tuple(ty, items) => {
+                let ty = normalized_ty(self, &ty, expected_ty);
+                let expected_items = match &ty {
+                    Ty::Tuple(items) => Some(items.as_slice()),
+                    _ => None,
+                };
+                TypedPattern::Tuple(
+                    ty.clone(),
+                    items
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, item)| {
+                            self.concretize_specialized_typed_pattern(
+                                item,
+                                expected_items.and_then(|items| items.get(index)),
+                                span,
+                                context,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
+            }
+            TypedPattern::ResultOk(ty, inner) => {
+                let ty = normalized_ty(self, &ty, expected_ty);
+                let inner_ty = match &ty {
+                    Ty::Result(ok, _) => Some(ok.as_ref()),
+                    _ => None,
+                };
+                TypedPattern::ResultOk(
+                    ty.clone(),
+                    Box::new(
+                        self.concretize_specialized_typed_pattern(*inner, inner_ty, span, context)?,
+                    ),
+                )
+            }
             TypedPattern::Extractor {
                 input_ty,
                 extractor,
@@ -3724,19 +3822,20 @@ impl Checker {
                 seq_tys,
                 items,
             } => TypedPattern::Extractor {
-                input_ty,
+                input_ty: normalized_ty(self, &input_ty, expected_ty),
                 extractor,
-                extractor_ty,
+                extractor_ty: self.resolve_ty(&extractor_ty),
                 success_tag,
                 no_match_tag,
                 err_tag,
-                seq_tys,
+                seq_tys: seq_tys.iter().map(|ty| self.resolve_ty(ty)).collect(),
                 items: items
                     .into_iter()
-                    .map(|item| self.concretize_specialized_typed_pattern(item, span, context))
+                    .map(|item| {
+                        self.concretize_specialized_typed_pattern(item, None, span, context)
+                    })
                     .collect::<Result<Vec<_>, _>>()?,
             },
-            other => other,
         })
     }
 

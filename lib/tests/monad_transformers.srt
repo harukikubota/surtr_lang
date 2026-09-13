@@ -1,0 +1,575 @@
+import Test;
+import Function::apply;
+
+defstruct Probe<$A> {
+  value: $A,
+  origin: String,
+}
+
+impl Probe {
+  def new(value: $A, origin: String) -> Probe<$A> {
+    Probe { value, origin }
+  }
+}
+
+impl Functor for Probe<$T> {
+  def fmap(self: Probe<$A>, mapper: ($A -> $B)) -> Probe<$B> {
+    Probe { value: mapper(self.value), origin: self.origin }
+  }
+}
+
+impl Applicative for Probe<$T> {
+  def pure::<Probe<$T>>(value: $A) -> Probe<$A> {
+    Probe { value, origin: "pure" }
+  }
+
+  def ap(mapper: Probe<($A -> $B)>, value: Probe<$A>) -> Probe<$B> {
+    Probe { value: apply(mapper.value, value.value), origin: "ap" }
+  }
+}
+
+impl Monad for Probe<$T> {
+  def return::<Probe<$T>>(value: $A) -> Probe<$A> {
+    Probe { value, origin: "return" }
+  }
+
+  def bind(self: Probe<$A>, mapper: ($A -> Probe<$B>)) -> Probe<$B> {
+    mapper(self.value)
+  }
+}
+
+def option_t_inc(value: Int) -> OptionT<Identity, Int> {
+  OptionT::some::<Identity>(value + 1)
+}
+
+def option_t_double(value: Int) -> OptionT<Identity, Int> {
+  OptionT::some::<Identity>(value * 2)
+}
+
+def option_t_pure(value: Int) -> OptionT<Identity, Int> {
+  Applicative::pure(value)
+}
+
+def either_t_inc(value: Int) -> EitherT<String, Identity, Int> {
+  EitherT::right::<String, Identity>(value + 1)
+}
+
+def either_t_double(value: Int) -> EitherT<String, Identity, Int> {
+  EitherT::right::<String, Identity>(value * 2)
+}
+
+def either_t_pure(value: Int) -> EitherT<String, Identity, Int> {
+  Applicative::pure(value)
+}
+
+def reader_t_inc(value: Int) -> ReaderT<Int, Identity, Int> {
+  ReaderT::new({|environment| Identity::new(value + environment)})
+}
+
+def reader_t_double(value: Int) -> ReaderT<Int, Identity, Int> {
+  ReaderT::new({|environment| Identity::new(value * 2 + environment)})
+}
+
+def reader_t_pure(value: Int) -> ReaderT<Int, Identity, Int> {
+  Applicative::pure(value)
+}
+
+def state_t_inc(value: Int) -> StateT<Int, Identity, Int> {
+  StateT::new({|state| Identity::new((value + state, state + 1))})
+}
+
+def state_t_double(value: Int) -> StateT<Int, Identity, Int> {
+  StateT::new({|state| Identity::new((value * 2 + state, state + 2))})
+}
+
+def state_t_pure(value: Int) -> StateT<Int, Identity, Int> {
+  Applicative::pure(value)
+}
+
+defstruct TransformerHolder {
+  option: OptionT<Identity, Int>,
+  either: EitherT<String, Identity, Int>,
+  reader: ReaderT<Int, Identity, Int>,
+  state: StateT<Int, Identity, Int>,
+}
+
+impl TransformerHolder {
+  def new(
+    option: OptionT<Identity, Int>,
+    either: EitherT<String, Identity, Int>,
+    reader: ReaderT<Int, Identity, Int>,
+    state: StateT<Int, Identity, Int>,
+  ) -> TransformerHolder {
+    TransformerHolder { option, either, reader, state }
+  }
+}
+
+test("Monad transformers") {
+  describe("OptionT") {
+    it("round-trips representations and provides the minimum constructors") {
+      inner: Identity<Option<Int>> = Identity::new(Option::Some(1))
+      wrapped: OptionT<Identity, Int> = OptionT::new(inner)
+      some: OptionT<Identity, Int> = OptionT::some::<Identity>(2)
+      none: OptionT<Identity, Int> = OptionT::none::<Identity, Int>()
+      from_option: OptionT<Identity, Int> = OptionT::from_option::<Identity>(Option::Some(3))
+      from_none: OptionT<Identity, Int> = OptionT::from_option::<Identity>(Option::None)
+
+      assert_eq(inner, OptionT::run(wrapped))
+      assert_eq(Option::Some(2), Identity::run(OptionT::run(some)))
+      assert_eq(Option::None, Identity::run(OptionT::run(none)))
+      assert_eq(Option::Some(3), Identity::run(OptionT::run(from_option)))
+      assert_eq(Option::None, Identity::run(OptionT::run(from_none)))
+    }
+
+    it("maps applies and binds only Some payloads") {
+      value: OptionT<Identity, Int> = OptionT::some::<Identity>(2)
+      mapped: OptionT<Identity, Int> = value |*> {|item| item + 1}
+      mapper: OptionT<Identity, (Int -> Int)> = OptionT::some::<Identity>({|item| item * 3})
+      applied: OptionT<Identity, Int> = Applicative::ap(mapper, value)
+      bound: OptionT<Identity, Int> = value |>= &option_t_inc
+      none: OptionT<Identity, Int> = OptionT::none::<Identity, Int>()
+      none_mapped: OptionT<Identity, Int> = none |*> {|item| item + 1}
+      none_bound: OptionT<Identity, Int> = none |>= &option_t_inc
+
+      assert_eq(Option::Some(3), Identity::run(OptionT::run(mapped)))
+      assert_eq(Option::Some(6), Identity::run(OptionT::run(applied)))
+      assert_eq(Option::Some(3), Identity::run(OptionT::run(bound)))
+      assert_eq(Option::None, Identity::run(OptionT::run(none_mapped)))
+      assert_eq(Option::None, Identity::run(OptionT::run(none_bound)))
+    }
+
+    it("keeps inner None separate from base failure") {
+      none: OptionT<Result, Int> = OptionT::none::<Result, Int>()
+      base_failure: Result<Option<Int>> = Err(NoneError)
+      failed: OptionT<Result, Int> = OptionT::new(base_failure)
+      none_bound: OptionT<Result, Int> = none |>= {|item| OptionT::some::<Result>(item + 1)}
+      failed_bound: OptionT<Result, Int> = failed |>= {|item| OptionT::some::<Result>(item + 1)}
+
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(base_failure))
+      assert_eq("Ok(Option::None)", inspect(OptionT::run(none_bound)))
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(OptionT::run(failed_bound)))
+    }
+
+    it("uses inner None for Alternative empty and preserves List multiplicity") {
+      empty: OptionT<Result, Int> = Alternative::empty()
+      empty_list: OptionT<List, Int> = Alternative::empty()
+      left: OptionT<List, Int> = OptionT::new([
+        Option::None,
+        Option::None,
+        Option::Some(1),
+      ])
+      right: OptionT<List, Int> = OptionT::new([Option::Some(2), Option::Some(3)])
+      chosen: OptionT<List, Int> = left <|> right
+
+      assert_eq("Ok(Option::None)", inspect(OptionT::run(empty)))
+      assert_eq("[Option::None]", inspect(OptionT::run(empty_list)))
+      assert_eq(
+        "[Option::Some(2), Option::Some(3), Option::Some(2), Option::Some(3), Option::Some(1)]",
+        inspect(OptionT::run(chosen)),
+      )
+    }
+
+    it("sequences ap in base order while None short-circuits the value") {
+      absent_mapper: OptionT<Result, (Int -> Int)> = OptionT::new(Ok(Option::None))
+      failed_value: OptionT<Result, Int> = OptionT::new(Err(NoneError))
+      absent_ap: OptionT<Result, Int> = Applicative::ap(absent_mapper, failed_value)
+      failed_mapper: OptionT<Result, (Int -> Int)> = OptionT::new(Err(NoneError))
+      present_value: OptionT<Result, Int> = OptionT::new(Ok(Option::Some(1)))
+      failed_mapper_ap: OptionT<Result, Int> = Applicative::ap(failed_mapper, present_value)
+      present_mapper: OptionT<Result, (Int -> Int)> = OptionT::new(
+        Ok(Option::Some({|value| value + 1})),
+      )
+      failed_ap: OptionT<Result, Int> = Applicative::ap(present_mapper, failed_value)
+
+      assert_eq("Ok(Option::None)", inspect(OptionT::run(absent_ap)))
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(OptionT::run(failed_mapper_ap)))
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(OptionT::run(failed_ap)))
+    }
+
+    it("preserves finite Monad and lift laws") {
+      value: OptionT<Identity, Int> = OptionT::some::<Identity>(3)
+      left_identity: OptionT<Identity, Int> = Monad::return(3) |>= &option_t_inc
+      right_identity: OptionT<Identity, Int> = value |>= &option_t_pure
+      assoc_left: OptionT<Identity, Int> = (value |>= &option_t_inc) |>= &option_t_double
+      assoc_right: OptionT<Identity, Int> = value |>= {|item| option_t_inc(item) |>= &option_t_double}
+      base: Identity<Int> = Identity::new(3)
+      lifted: OptionT<Identity, Int> = MonadT::lift(base)
+      lifted_pure: OptionT<Identity, Int> = MonadT::lift(Applicative::pure(3))
+      transformer_pure: OptionT<Identity, Int> = Applicative::pure(3)
+      lifted_bind: OptionT<Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
+      bound_lifts: OptionT<Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
+
+      assert_eq(OptionT::run(option_t_inc(3)), OptionT::run(left_identity))
+      assert_eq(OptionT::run(value), OptionT::run(right_identity))
+      assert_eq(OptionT::run(assoc_left), OptionT::run(assoc_right))
+      assert_eq(OptionT::run(lifted_pure), OptionT::run(transformer_pure))
+      assert_eq(OptionT::run(lifted_bind), OptionT::run(bound_lifts))
+    }
+  }
+
+  describe("EitherT") {
+    it("round-trips representations and provides left right and from_either") {
+      inner: Identity<Either<String, Int>> = Identity::new(Either::Right(1))
+      wrapped: EitherT<String, Identity, Int> = EitherT::new(inner)
+      left: EitherT<String, Identity, Int> = EitherT::left::<Identity, Int>("stop")
+      right: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(2)
+      from_either: EitherT<String, Identity, Int> = EitherT::from_either::<Identity>(Either::Right(3))
+
+      assert_eq(inner, EitherT::run(wrapped))
+      assert_eq(Either::Left("stop"), Identity::run(EitherT::run(left)))
+      assert_eq(Either::Right(2), Identity::run(EitherT::run(right)))
+      assert_eq(Either::Right(3), Identity::run(EitherT::run(from_either)))
+    }
+
+    it("maps and constructs through Left as well as Right") {
+      left: EitherT<String, Identity, Int> = EitherT::from_either::<Identity>(Either::Left("stop"))
+      mapped: EitherT<String, Identity, Int> = left |*> {|value| value + 1}
+
+      assert_eq(Either::Left("stop"), Identity::run(EitherT::run(mapped)))
+    }
+
+    it("maps either slot through the base functor") {
+      left: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Left("stop"), "input"),
+      )
+      right: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Right(7), "input"),
+      )
+      mapped_left: EitherT<Int, Probe, Int> = EitherT::map_left(left, &String::len)
+      preserved_right: EitherT<Int, Probe, Int> = EitherT::map_left(right, &String::len)
+      preserved_left: EitherT<String, Probe, String> = EitherT::map_right(left, &to_string)
+      mapped_right: EitherT<String, Probe, String> = EitherT::map_right(right, &to_string)
+      bimap_left: EitherT<Int, Probe, String> = EitherT::bimap(left, &String::len, &to_string)
+      bimap_right: EitherT<Int, Probe, String> = EitherT::bimap(right, &String::len, &to_string)
+      functor_left: EitherT<String, Probe, String> = Functor::fmap(left, &to_string)
+      functor_right: EitherT<String, Probe, String> = Functor::fmap(right, &to_string)
+
+      assert_eq(Either::Left(4), EitherT::run(mapped_left).value)
+      assert_eq(Either::Right(7), EitherT::run(preserved_right).value)
+      assert_eq(Either::Left("stop"), EitherT::run(preserved_left).value)
+      assert_eq(Either::Right("7"), EitherT::run(mapped_right).value)
+      assert_eq(Either::Left(4), EitherT::run(bimap_left).value)
+      assert_eq(Either::Right("7"), EitherT::run(bimap_right).value)
+      assert_eq(EitherT::run(preserved_left), EitherT::run(functor_left))
+      assert_eq(EitherT::run(mapped_right), EitherT::run(functor_right))
+      assert_eq(("input", "input", "input"), (
+        EitherT::run(mapped_left).origin,
+        EitherT::run(mapped_right).origin,
+        EitherT::run(bimap_right).origin,
+      ))
+    }
+
+    it("preserves base failure while mapping either slot") {
+      failed: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+      mapped_left: EitherT<Int, Result, Int> = EitherT::map_left(failed, &String::len)
+      mapped_right: EitherT<String, Result, String> = EitherT::map_right(failed, &to_string)
+      mapped_both: EitherT<Int, Result, String> = EitherT::bimap(failed, &String::len, &to_string)
+
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(mapped_left)))
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(mapped_right)))
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(mapped_both)))
+    }
+
+    it("maps applies and binds only Right payloads") {
+      value: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(2)
+      mapped: EitherT<String, Identity, Int> = value |*> {|item| item + 1}
+      mapper: EitherT<String, Identity, (Int -> Int)> = EitherT::right::<String, Identity>({|item| item * 3})
+      applied: EitherT<String, Identity, Int> = Applicative::ap(mapper, value)
+      bound: EitherT<String, Identity, Int> = value |>= &either_t_inc
+      left: EitherT<String, Identity, Int> = EitherT::left::<Identity, Int>("stop")
+      left_bound: EitherT<String, Identity, Int> = left |>= &either_t_inc
+
+      assert_eq(Either::Right(3), Identity::run(EitherT::run(mapped)))
+      assert_eq(Either::Right(6), Identity::run(EitherT::run(applied)))
+      assert_eq(Either::Right(3), Identity::run(EitherT::run(bound)))
+      assert_eq(Either::Left("stop"), Identity::run(EitherT::run(left_bound)))
+    }
+
+    it("keeps inner Left separate from base failure") {
+      left: EitherT<String, Result, Int> = EitherT::left::<Result, Int>("stop")
+      base_failure: Result<Either<String, Int>> = Err(NoneError)
+      failed: EitherT<String, Result, Int> = EitherT::new(base_failure)
+      left_bound: EitherT<String, Result, Int> = left |>= {|item| EitherT::right::<String, Result>(item + 1)}
+      failed_bound: EitherT<String, Result, Int> = failed |>= {|item| EitherT::right::<String, Result>(item + 1)}
+
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(base_failure))
+      assert_eq("Ok(Either::Left(\"stop\"))", inspect(EitherT::run(left_bound)))
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(failed_bound)))
+    }
+
+    it("sequences ap in base order while Left short-circuits the value") {
+      left_mapper: EitherT<String, Result, (Int -> Int)> = EitherT::new(
+        Ok(Either::Left("stop")),
+      )
+      failed_value: EitherT<String, Result, Int> = EitherT::new(Err(NoneError))
+      left_ap: EitherT<String, Result, Int> = Applicative::ap(left_mapper, failed_value)
+      failed_mapper: EitherT<String, Result, (Int -> Int)> = EitherT::new(Err(NoneError))
+      right_value: EitherT<String, Result, Int> = EitherT::new(Ok(Either::Right(1)))
+      failed_mapper_ap: EitherT<String, Result, Int> = Applicative::ap(failed_mapper, right_value)
+      right_mapper: EitherT<String, Result, (Int -> Int)> = EitherT::new(
+        Ok(Either::Right({|value| value + 1})),
+      )
+      failed_ap: EitherT<String, Result, Int> = Applicative::ap(right_mapper, failed_value)
+
+      assert_eq("Ok(Either::Left(\"stop\"))", inspect(EitherT::run(left_ap)))
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(failed_mapper_ap)))
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(EitherT::run(failed_ap)))
+    }
+
+    it("preserves finite Monad and lift laws") {
+      value: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(3)
+      left_identity: EitherT<String, Identity, Int> = Monad::return(3) |>= &either_t_inc
+      right_identity: EitherT<String, Identity, Int> = value |>= &either_t_pure
+      assoc_left: EitherT<String, Identity, Int> = (value |>= &either_t_inc) |>= &either_t_double
+      assoc_right: EitherT<String, Identity, Int> = value |>= {|item| either_t_inc(item) |>= &either_t_double}
+      base: Identity<Int> = Identity::new(3)
+      lifted: EitherT<String, Identity, Int> = MonadT::lift(base)
+      lifted_pure: EitherT<String, Identity, Int> = MonadT::lift(Applicative::pure(3))
+      transformer_pure: EitherT<String, Identity, Int> = Applicative::pure(3)
+      lifted_bind: EitherT<String, Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
+      bound_lifts: EitherT<String, Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
+
+      assert_eq(EitherT::run(either_t_inc(3)), EitherT::run(left_identity))
+      assert_eq(EitherT::run(value), EitherT::run(right_identity))
+      assert_eq(EitherT::run(assoc_left), EitherT::run(assoc_right))
+      assert_eq(EitherT::run(lifted_pure), EitherT::run(transformer_pure))
+      assert_eq(EitherT::run(lifted_bind), EitherT::run(bound_lifts))
+    }
+  }
+
+  describe("ReaderT") {
+    it("runs asks and local with one explicit environment") {
+      value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+      asked: ReaderT<Int, Identity, Int> = ReaderT::ask::<Int, Identity>()
+      projected: ReaderT<Int, Identity, Int> = ReaderT::asks::<Identity>({|environment| environment * 2})
+      localized: ReaderT<Int, Identity, Int> = ReaderT::local(value, {|environment| environment + 10})
+
+      assert_eq(Identity::new(4), ReaderT::run(value, 3))
+      assert_eq(Identity::new(3), ReaderT::run(asked, 3))
+      assert_eq(Identity::new(6), ReaderT::run(projected, 3))
+      assert_eq(Identity::new(14), ReaderT::run(localized, 3))
+    }
+
+    it("maps applies and binds with the same environment") {
+      value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+      mapped: ReaderT<Int, Identity, Int> = value |*> {|item| item * 2}
+      mapper: ReaderT<Int, Identity, (Int -> Int)> = ReaderT::new({|environment| Identity::new({|item| item + environment})})
+      applied: ReaderT<Int, Identity, Int> = Applicative::ap(mapper, value)
+      bound: ReaderT<Int, Identity, Int> = value |>= {|item|
+        ReaderT::new({|environment| Identity::new(item + environment)})
+      }
+
+      assert_eq(Identity::new(8), ReaderT::run(mapped, 3))
+      assert_eq(Identity::new(7), ReaderT::run(applied, 3))
+      assert_eq(Identity::new(7), ReaderT::run(bound, 3))
+    }
+
+    it("preserves base failure while binding") {
+      failed: ReaderT<Int, Result, Int> = ReaderT::new({|_environment| Err(NoneError)})
+      bound: ReaderT<Int, Result, Int> = failed |>= {|value|
+        ReaderT::new({|environment| Ok(value + environment)})
+      }
+
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(ReaderT::run(bound, 3)))
+    }
+
+    it("derives Alternative only from an Alternative base") {
+      empty: ReaderT<Int, Option, Int> = Alternative::empty()
+      left: ReaderT<Int, Option, Int> = ReaderT::new({|_environment| Option::None})
+      right: ReaderT<Int, Option, Int> = ReaderT::new({|environment| Option::Some(environment + 1)})
+      left_list: ReaderT<Int, List, Int> = ReaderT::new({|environment| [environment]})
+      right_list: ReaderT<Int, List, Int> = ReaderT::new({|environment| [environment + 10]})
+      chosen_list: ReaderT<Int, List, Int> = left_list <|> right_list
+
+      assert_eq(Option::None, ReaderT::run(empty, 3))
+      assert_eq(Option::Some(4), ReaderT::run(left <|> right, 3))
+      assert_eq([3, 13], ReaderT::run(chosen_list, 3))
+    }
+
+    it("preserves finite Monad and lift laws") {
+      value: ReaderT<Int, Identity, Int> = ReaderT::new({|environment| Identity::new(environment + 1)})
+      left_identity: ReaderT<Int, Identity, Int> = Monad::return(3) |>= &reader_t_inc
+      right_identity: ReaderT<Int, Identity, Int> = value |>= &reader_t_pure
+      assoc_left: ReaderT<Int, Identity, Int> = (value |>= &reader_t_inc) |>= &reader_t_double
+      assoc_right: ReaderT<Int, Identity, Int> = value |>= {|item| reader_t_inc(item) |>= &reader_t_double}
+      base: Identity<Int> = Identity::new(3)
+      lifted: ReaderT<Int, Identity, Int> = MonadT::lift(base)
+      lifted_pure: ReaderT<Int, Identity, Int> = MonadT::lift(Applicative::pure(3))
+      transformer_pure: ReaderT<Int, Identity, Int> = Applicative::pure(3)
+      lifted_bind: ReaderT<Int, Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
+      bound_lifts: ReaderT<Int, Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
+
+      assert_eq(ReaderT::run(reader_t_inc(3), 4), ReaderT::run(left_identity, 4))
+      assert_eq(ReaderT::run(value, 4), ReaderT::run(right_identity, 4))
+      assert_eq(ReaderT::run(assoc_left, 4), ReaderT::run(assoc_right, 4))
+      assert_eq(ReaderT::run(lifted_pure, 4), ReaderT::run(transformer_pure, 4))
+      assert_eq(ReaderT::run(lifted_bind, 4), ReaderT::run(bound_lifts, 4))
+    }
+  }
+
+  describe("StateT") {
+    it("runs evals execs gets puts and modifies through the base") {
+      value: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state + 1, state + 2))})
+      current: StateT<Int, Identity, Int> = StateT::get::<Int, Identity>()
+      projected: StateT<Int, Identity, Int> = StateT::gets::<Identity>({|state| state * 2})
+      put: StateT<Int, Identity, Unit> = StateT::put::<Identity>(9)
+      modified: StateT<Int, Identity, Unit> = StateT::modify::<Identity>({|state| state + 1})
+
+      assert_eq(Identity::new((4, 5)), StateT::run(value, 3))
+      assert_eq(Identity::new(4), StateT::eval(value, 3))
+      assert_eq(Identity::new(5), StateT::exec(value, 3))
+      assert_eq(Identity::new((3, 3)), StateT::run(current, 3))
+      assert_eq(Identity::new((6, 3)), StateT::run(projected, 3))
+      assert_eq(Identity::new(((), 9)), StateT::run(put, 3))
+      assert_eq(Identity::new(((), 4)), StateT::run(modified, 3))
+    }
+
+    it("threads applicative and monadic state from left to right") {
+      mapper: StateT<Int, Identity, (Int -> Int)> = StateT::new({|state|
+        Identity::new(({|item| item + state}, state + 1))
+      })
+      value: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((10, state + 10))})
+      applied: StateT<Int, Identity, Int> = Applicative::ap(mapper, value)
+      first: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state, state + 1))})
+      bound: StateT<Int, Identity, Int> = first |>= {|item|
+        StateT::new({|state| Identity::new((item + state, state + 10))})
+      }
+
+      assert_eq(Identity::new((11, 12)), StateT::run(applied, 1))
+      assert_eq(Identity::new((3, 12)), StateT::run(bound, 1))
+    }
+
+    it("derives Alternative only from an Alternative base") {
+      empty: StateT<Int, Option, Int> = Alternative::empty()
+      left: StateT<Int, Option, Int> = StateT::new({|_state| Option::None})
+      right: StateT<Int, Option, Int> = StateT::new({|state| Option::Some((state + 1, state + 2))})
+      left_list: StateT<Int, List, Int> = StateT::new({|state| [(state, state + 1)]})
+      right_list: StateT<Int, List, Int> = StateT::new({|state| [(state + 10, state + 20)]})
+      chosen_list: StateT<Int, List, Int> = left_list <|> right_list
+
+      assert_eq(Option::None, StateT::run(empty, 3))
+      assert_eq(Option::Some((4, 5)), StateT::run(left <|> right, 3))
+      assert_eq([(3, 4), (13, 23)], StateT::run(chosen_list, 3))
+    }
+
+    it("preserves base failure without producing a next state") {
+      failed: StateT<Int, Result, Int> = StateT::new({|state|
+        Err(NoneError)
+      })
+      bound: StateT<Int, Result, Int> = failed |>= {|value|
+        StateT::new({|state| Ok((value + 1, state + 1))})
+      }
+
+      assert_eq("Err(NoneError(\"None Value.\"))", inspect(StateT::run(bound, 3)))
+    }
+
+    it("preserves finite Monad and lift laws") {
+      value: StateT<Int, Identity, Int> = StateT::new({|state| Identity::new((state + 1, state + 2))})
+      left_identity: StateT<Int, Identity, Int> = Monad::return(3) |>= &state_t_inc
+      right_identity: StateT<Int, Identity, Int> = value |>= &state_t_pure
+      assoc_left: StateT<Int, Identity, Int> = (value |>= &state_t_inc) |>= &state_t_double
+      assoc_right: StateT<Int, Identity, Int> = value |>= {|item| state_t_inc(item) |>= &state_t_double}
+      base: Identity<Int> = Identity::new(3)
+      lifted: StateT<Int, Identity, Int> = MonadT::lift(base)
+      lifted_pure: StateT<Int, Identity, Int> = MonadT::lift(Applicative::pure(3))
+      transformer_pure: StateT<Int, Identity, Int> = Applicative::pure(3)
+      lifted_bind: StateT<Int, Identity, Int> = MonadT::lift(base |>= {|item| Identity::new(item + 1)})
+      bound_lifts: StateT<Int, Identity, Int> = lifted |>= {|item| MonadT::lift(Identity::new(item + 1))}
+
+      assert_eq(StateT::run(state_t_inc(3), 4), StateT::run(left_identity, 4))
+      assert_eq(StateT::run(value, 4), StateT::run(right_identity, 4))
+      assert_eq(StateT::run(assoc_left, 4), StateT::run(assoc_right, 4))
+      assert_eq(StateT::run(lifted_pure, 4), StateT::run(transformer_pure, 4))
+      assert_eq(StateT::run(lifted_bind, 4), StateT::run(bound_lifts, 4))
+    }
+  }
+
+  describe("ordinary values") {
+    it("stores transformer values in fields functions collections and Facets") {
+      option: OptionT<Identity, Int> = OptionT::some::<Identity>(1)
+      either: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(2)
+      reader: ReaderT<Int, Identity, Int> = ReaderT::ask::<Int, Identity>()
+      state: StateT<Int, Identity, Int> = StateT::get::<Int, Identity>()
+      holder: TransformerHolder = TransformerHolder::new(option, either, reader, state)
+      updated: TransformerHolder = Facet::put(
+        TransformerHolder.option,
+        holder,
+        OptionT::some::<Identity>(9),
+      )
+      values: List<OptionT<Identity, Int>> = [holder.option, updated.option]
+      second: OptionT<Identity, Int> =? List::at(values, 1)
+
+      assert_eq(Option::Some(1), Identity::run(OptionT::run(holder.option)))
+      assert_eq(Option::Some(9), Identity::run(OptionT::run(second)))
+      assert_eq(Either::Right(2), Identity::run(EitherT::run(holder.either)))
+      assert_eq(Identity::new(3), ReaderT::run(holder.reader, 3))
+      assert_eq(Identity::new((3, 3)), StateT::run(holder.state, 3))
+    }
+  }
+
+  describe("base Applicative::pure injection") {
+    it("uses base pure for transformer injection and preserves Monad return") {
+      option_pure: OptionT<Probe, Int> = Applicative::pure(1)
+      option_some: OptionT<Probe, Int> = OptionT::some::<Probe>(2)
+      option_none: OptionT<Probe, Int> = OptionT::none::<Probe, Int>()
+      option_from_some: OptionT<Probe, Int> = OptionT::from_option::<Probe>(Option::Some(2))
+      option_from_none: OptionT<Probe, Int> = OptionT::from_option::<Probe>(Option::None)
+      option_empty: OptionT<Probe, Int> = Alternative::empty()
+      option_bind_none: OptionT<Probe, Int> = OptionT::new(
+        Probe::new(Option::None, "input"),
+      ) |>= {|value| OptionT::some::<Probe>(value + 1)}
+      option_ap_none: OptionT<Probe, Int> = Applicative::ap(
+        OptionT::new(Probe::new(Option::None, "input")),
+        OptionT::some::<Probe>(3),
+      )
+      option_return: OptionT<Probe, Int> = Monad::return(4)
+
+      either_pure: EitherT<String, Probe, Int> = Applicative::pure(1)
+      either_left: EitherT<String, Probe, Int> = EitherT::left::<Probe, Int>("stop")
+      either_right: EitherT<String, Probe, Int> = EitherT::right::<String, Probe>(2)
+      either_from_right: EitherT<String, Probe, Int> = EitherT::from_either::<Probe>(Either::Right(2))
+      either_from_left: EitherT<String, Probe, Int> = EitherT::from_either::<Probe>(Either::Left("stop"))
+      either_bind_left: EitherT<String, Probe, Int> = EitherT::new(
+        Probe::new(Either::Left("stop"), "input"),
+      ) |>= {|value| EitherT::right::<String, Probe>(value + 1)}
+      either_ap_left: EitherT<String, Probe, Int> = Applicative::ap(
+        EitherT::new(Probe::new(Either::Left("stop"), "input")),
+        EitherT::right::<String, Probe>(3),
+      )
+      either_return: EitherT<String, Probe, Int> = Monad::return(4)
+
+      reader_ask: ReaderT<Int, Probe, Int> = ReaderT::ask::<Int, Probe>()
+      reader_asks: ReaderT<Int, Probe, Int> = ReaderT::asks::<Probe>({|value| value + 1})
+      state_get: StateT<Int, Probe, Int> = StateT::get::<Int, Probe>()
+      state_gets: StateT<Int, Probe, Int> = StateT::gets::<Probe>({|value| value + 1})
+      state_put: StateT<Int, Probe, Unit> = StateT::put::<Probe>(2)
+      state_modify: StateT<Int, Probe, Unit> = StateT::modify::<Probe>({|value| value + 1})
+
+      assert_eq("pure", OptionT::run(option_pure).origin)
+      assert_eq("pure", OptionT::run(option_some).origin)
+      assert_eq("pure", OptionT::run(option_none).origin)
+      assert_eq("pure", OptionT::run(option_from_some).origin)
+      assert_eq("pure", OptionT::run(option_from_none).origin)
+      assert_eq("pure", OptionT::run(option_empty).origin)
+      assert_eq("pure", OptionT::run(option_bind_none).origin)
+      assert_eq("pure", OptionT::run(option_ap_none).origin)
+      assert_eq("return", OptionT::run(option_return).origin)
+
+      assert_eq("pure", EitherT::run(either_pure).origin)
+      assert_eq("pure", EitherT::run(either_left).origin)
+      assert_eq("pure", EitherT::run(either_right).origin)
+      assert_eq("pure", EitherT::run(either_from_right).origin)
+      assert_eq("pure", EitherT::run(either_from_left).origin)
+      assert_eq("pure", EitherT::run(either_bind_left).origin)
+      assert_eq("pure", EitherT::run(either_ap_left).origin)
+      assert_eq("return", EitherT::run(either_return).origin)
+
+      assert_eq("pure", ReaderT::run(reader_ask, 1).origin)
+      assert_eq("pure", ReaderT::run(reader_asks, 1).origin)
+      assert_eq("pure", StateT::run(state_get, 1).origin)
+      assert_eq("pure", StateT::run(state_gets, 1).origin)
+      assert_eq("pure", StateT::run(state_put, 1).origin)
+      assert_eq("pure", StateT::run(state_modify, 1).origin)
+    }
+  }
+}

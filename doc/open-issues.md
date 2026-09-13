@@ -3,7 +3,7 @@
 > 目的: V9 正本でまだ固定していない未解決事項だけを追跡する。
 > 本ファイルは「未解決事項の台帳」であり、確定事項は `doc/要件定義v9.md`、開発者向け spec は `docs/dev/` 配下を正本とする。`doc/` は draft / input / tmp 置き場として扱う。cleanup で解消済みの項目は本ファイルに残さない。
 
-最終更新日: 2026-05-22
+最終更新日: 2026-09-13
 
 ---
 
@@ -327,6 +327,23 @@
   - `cargo nextest run -p xldr --test repl_core` に、後続引数から `User` 型を推論できる FacetAPI 入力と、推論不能な `_` root 入力の両方を追加する。
   - `cargo nextest run -p surtr-analysis --test completion` に、FacetPath context と call argument context の境界テストを追加する。
   - LSP 側へ共有する場合は `surtr-lsp` の completion / signatureHelp DTO 変換テストも追加する。
+
+### OI-035 generic `defrecord` と constructor parameter
+
+- 背景:
+  - N03のnominal constructor parameterは、MonadTに必要な`defstruct`と`defenum`を対象に実装した。
+  - `defrecord`はrecord固有のgrammar、値表現、constructor surface、Facet再構築を持つため、同じ実装済み範囲には含めない。
+- 未確定点:
+  - generic parameterとdeclaration `where` constraintをrecord grammarへどう導入するか。
+  - positional / named constructor surfaceとrecordの値表現へ型argumentをどう保持するか。
+  - type-changing Facet updateでgeneric record全体をどう再構築し、destination boundをどこで検証するか。
+- 受け入れ条件:
+  - `defstruct`のparser経路を場当たり的に流用せず、record grammarとconstructor surfaceを別仕様で確定する。
+  - generic recordの型形成、値構築、pattern、Facet再構築が同じnominal identityとdeclaration constraintを保持する。
+  - MonadT N03–N05の完了条件や標準Transformerの残作業へ混入させない。
+- テスト方針:
+  - 仕様確定後、Spireでrecord grammar、Sigilでowner / parameter scope、Scarでwell-formednessとFacet destination、Forge / Eldrで値表現を責務ごとに固定する。
+  - parserだけを先行して`defstruct`のgeneric surfaceへ合わせるテストは追加しない。
 
 ## 更新ルール
 

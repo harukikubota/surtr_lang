@@ -1,0 +1,3 @@
+phase: typecheck
+contains: No implementation satisfies
+contains: Alternative for StateT<Int, Result<_, Error>, Int>
