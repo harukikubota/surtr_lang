@@ -20,6 +20,7 @@
 | `../docs/site/{identity,reader,state}.md` | 実装済み Identity / Reader / State の利用者向け契約 |
 | `monadt_language_extension_spec.md` | nominal constructor parameter・parameterized TypeCtorTrait・MonadT契約 |
 | `monadt_standard_types_spec.md` | OptionT / EitherT / ReaderT / StateTの意味とAPI。実装正本は`../lib/traits/monad_t.srt`と`../lib/types/monad_transformer/` |
+| `safebind_total_pattern_rhs_correction_proposal.md` | N06着手前に適用するSafeBind totality / RHS分類の訂正。旧non-Result全面pass-throughを置き換える |
 | `diagnostics_cleanup_spec.md` | 旧Task 10のSafeBind・診断残作業 |
 | 既存 `do_intrinsic_spec.md` | doの詳細仕様。新carrier規則と参照先を更新して利用 |
 | `generator_spec.md` | 遅延・persistent GeneratorとAPI移行 |
@@ -48,7 +49,7 @@ N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け
 | N03 | nominal constructor parameterとdeclaration constraint | N01 | [x] 完了 | 新規言語機能 |
 | N04 | parameterized TypeCtorTrait・MonadT契約 | N03 | [x] 完了 | 新規言語機能 |
 | N05 | 標準Transformer | N04。Identityを使うテストはN02 | [x] 完了 | 新規標準機能 |
-| N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision | [ ] 未着手 | 旧Task 10を再編 |
+| N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision、SafeBind訂正提案の周辺入力反映 | [ ] 未着手 | 旧Task 10を再編 |
 | N07 | do compiler-owned contract | N06 | [ ] 未着手 | 旧Task 11 |
 | N08 | do syntax・AST・resolver・scope | N07 | [ ] 未着手 | 旧Task 12 |
 | N09 | do carrier推論・core lowering | N08 | [ ] 未着手 | 旧Task 13 |
@@ -297,19 +298,27 @@ parameterはN03–N05に含めず、`open-issues.md` OI-035で別仕様を待つ
 標準APIと実装契約は各`.srt`の`@doc`、`docs/site/monad-transformers.md`、
 `docs/site/{README,standard-library,standard-modules}.md`へ移管した。
 N06へはN01–N05の検証済み差分を引き継ぎ、N05のための追加作業は残さない。
+N06実装用worktreeを作る前に、`safebind_total_pattern_rhs_correction_proposal.md`を
+`diagnostics_cleanup_spec.md`、本計画、`do_intrinsic_spec.md`、`要件定義v9.md`へ反映し、
+旧non-Result全面pass-through契約が生きた入力に残っていないことを確認する。
 
 ## 11. N06 — SafeBind / diagnostics cleanup / do開始ゲート
 
 担当: `diagnostics_cleanup_spec.md`。旧Task 10の残作業を引き継ぐ。
 
-Result一段projection、non-Result pass-through、remaining phase producer、heuristic撤去、Rune/Xldr adapter、
+Result一段projection、partial non-Result pass-through、pattern型関係が成立するtotal non-Resultの
+「非Monad」「Result以外のMonad」二診断、remaining phase producer、heuristic撤去、Rune/Xldr adapter、
 qualified builtin surfaceの`BUILTIN_METAS`構造化を完了する。
 
 旧Task 10に含まれるdraft削除、draft本文を含めた旧語彙ゼロ件検査、Task 9の再実装は行わない。
 
-N06はlevel4の仕様変更であり、Option RHS拒否・constructor patternのOk限定を撤去し、通常MatchBlockを再利用する。
+N06はlevel4の仕様変更であり、Option名による先行拒否・constructor patternのOk限定を撤去し、通常MatchBlockを再利用する。
+`num: Int =? Option::Some(10)`のようなstatic pattern型不一致は通常TypeErrorを優先し、SafeBind固有説明を加えない。
+通常pattern検査を通過したtotal non-Resultだけを二診断へ分類し、両方でResultだけがRHS分解能力を持つことを示す。
+変換APIのhelpは出さず、`total =? value`をnon-Result pass-throughとして受理しない。
 現行Option返却ExtractorのSome/Noneと単一評価を維持し、Extractor更改やdo symbol導入を含めない。
-詳細な作業順・変更先・移管先は`diagnostics_cleanup_spec.md` §11.1、追加境界は§3.1を入力にする。
+詳細な作業順・変更先・移管先は`diagnostics_cleanup_spec.md` §11.1、追加境界は§3.1と
+`safebind_total_pattern_rhs_correction_proposal.md`を入力にする。
 
 完了条件: DC-01–DC-17。既存全体ゲートどおり同じrevisionでworkspaceを2回連続成功させ、ログとcommitを記録する。do実装symbolがまだないことを確認する。
 
@@ -329,7 +338,9 @@ monadic originを一つのdo-local carrierへ結び付け、payloadを別型と�
 
 ### N10: SafeBind / Forge lowering
 
-N06のSafeBindを再利用し、canonical ResultならError保存、それ以外は同じcarrierのemptyへ失敗先を変更する。Error生成・RHS評価回数・source originを維持する。do専用VM opcodeを追加しない。
+N06で合法と確定したSafeBindを再利用し、do carrierがcanonical ResultならError保存、それ以外は同じcarrierのemptyへ
+失敗先を変更する。total non-Result RHSの入力判定をN10で緩和・再実装しない。Error生成・RHS評価回数・source originを維持する。
+do専用VM opcodeを追加しない。
 
 ### N11: diagnostics / acceptance
 
