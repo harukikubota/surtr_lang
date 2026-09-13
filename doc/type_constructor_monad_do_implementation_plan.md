@@ -7,7 +7,7 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- N01–N04 は実装済み。N05 以降のTaskは未着手である。
+- N01–N05 は実装済み。N06 以降のTaskは未着手である。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
@@ -19,7 +19,7 @@
 |---|---|
 | `../docs/site/{identity,reader,state}.md` | 実装済み Identity / Reader / State の利用者向け契約 |
 | `monadt_language_extension_spec.md` | nominal constructor parameter・parameterized TypeCtorTrait・MonadT契約 |
-| `monadt_standard_types_spec.md` | OptionT / EitherT / ReaderT / StateTの意味とAPI |
+| `monadt_standard_types_spec.md` | OptionT / EitherT / ReaderT / StateTの意味とAPI。実装正本は`../lib/traits/monad_t.srt`と`../lib/types/monad_transformer/` |
 | `diagnostics_cleanup_spec.md` | 旧Task 10のSafeBind・診断残作業 |
 | 既存 `do_intrinsic_spec.md` | doの詳細仕様。新carrier規則と参照先を更新して利用 |
 | `generator_spec.md` | 遅延・persistent GeneratorとAPI移行 |
@@ -46,7 +46,7 @@ N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け
 | N02 | Identity / Reader / State | 既存通常型・Trait基盤 | [x] 完了 | 新規・独立 |
 | N03 | nominal constructor parameterとdeclaration constraint | N01 | [x] 完了 | 新規言語機能 |
 | N04 | parameterized TypeCtorTrait・MonadT契約 | N03 | [x] 完了 | 新規言語機能 |
-| N05 | 標準Transformer | N04。Identityを使うテストはN02 | [ ] 未着手 | 新規標準機能 |
+| N05 | 標準Transformer | N04。Identityを使うテストはN02 | [x] 完了 | 新規標準機能 |
 | N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision | [ ] 未着手 | 旧Task 10を再編 |
 | N07 | do compiler-owned contract | N06 | [ ] 未着手 | 旧Task 11 |
 | N08 | do syntax・AST・resolver・scope | N07 | [ ] 未着手 | 旧Task 12 |
@@ -237,7 +237,65 @@ N04のcompiler特例を追加しない。
 
 Alternativeは各型で条件付き実装する。IdentityT、抽象Transformer引数API、ResultT特例を追加しない。
 
-完了条件: MT-S01–13、MT-S15–17。doのMT-S14はN11へ引き継ぐ。
+完了条件: MT-S01–13、MT-S15–18。doのMT-S14はN11へ引き継ぐ。
+
+状態: 完了。MT-SI01–04は`monadt_standard_types_spec.md` §11の採用一覧どおり固定し、
+`map_inner` / `map_t`は追加せず、EitherTには作用するslotを明示する
+`map_left` / `map_right` / `bimap`を追加した。OptionT / EitherT / ReaderT / StateTを
+標準moduleとして追加し、new / run / lift、各型固有helper、Functor / Applicative / Monad / MonadT、
+仕様で定めた条件付きAlternativeを通常のSurtr定義として実装した。IdentityT、抽象Transformer引数API、
+runtime辞書、標準型名に依存するcompiler特例は追加していない。
+
+標準4型を通じて顕在化した一般的なconstructor provenance / captured boundの伝播をcanonical solver上で補い、
+`MonadT::lift`の入力payload capabilityを保持するようにした。`Deferred`は後続制約へ残す一方、
+`Rejected`を候補bindへ流すfallbackは削除した。Facetではplain sourceのResult-valued focusに余分な
+`Ok`を重ねず、source自体がResultまたはpathがfallibleな場合だけ外側Resultを生成する契約へ揃えた。
+
+対応する受け入れ条件ID: MT-S01–13、MT-S15–18。MT-S14は予定どおりN11へ残す。
+
+検証（2026-09-12）:
+
+- `rtk cargo nextest run -p scar`: 269 passed。
+- `rtk cargo nextest run -p forge`: 72 passed。
+- `rtk cargo nextest run -p xldr`: 79 passed、78 skipped。
+- `rtk cargo nextest run -p rune --test integration run_srt`: 11 passed、120 skipped。
+- `rtk cargo nextest run -p rune --test integration`: 131 passed。
+- `cargo run -- test --quiet --all`: 成功（quietのため件数表示なし）。
+- `cargo run -- test --all`: 489 passed（quiet実行と同じ標準test集合の件数確認）。
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace`: 1895 passedを同一差分で2回連続成功。
+- `cargo fmt --all -- --check`、`git diff --check`: 成功。
+
+Either / EitherT API 追加後の検証（2026-09-13）:
+
+- `cargo run -- test --quiet either`: 成功（quietのため件数表示なし）。
+- `cargo run -- test --quiet monad_transformers`: 成功（quietのため件数表示なし）。
+- `cargo run -- test --quiet --all`: 成功（quietのため件数表示なし）。
+- `target/debug/surtr repl --quiet --no-local-config`の実REPLで、変更したEither helper、
+  From変換、EitherT mapping helperの代表24入力を確認: すべて成功。
+- `git diff --check`とstaleな非採用記述の検索: 成功。
+
+### N03–N05 受け入れ条件と実テスト対応
+
+削除予定の入力文書を開かなくても完了契約を追跡できるよう、IDの意味と直接の検証先を次に固定する。
+
+| Task / 受け入れ条件 | 完了した契約 | 主な実テスト・fixture |
+|---|---|---|
+| N03 / MT-L01–06 | `defstruct` / `defenum`のconstructor parameterとdeclaration `where` constraintを分離し、nested field、型形成、destination bound、rigid genericを同じwell-formedness経路で検査する | `crates/scar/tests/nominal_constructor_parameters.rs`、`crates/scar/tests/typecheck_surface.rs` |
+| N03 / MT-L13–15のN03範囲 | nominal値をFacetで合法に再構築し、REPLには具象値だけを保存する。runtime dictionary、field探索、型lambdaを導入しない | `crates/scar/tests/nominal_constructor_parameters.rs`、`crates/xldr/tests/repl_core.rs`の`core_nominal_constructor_value_survives_failed_bound_check` |
+| N04 / MT-L07–12 | Trait-head parameterとmapped slotを分離し、base / Selfを独立carrierとして通常のimpl matching、coherence、expected type、value argumentで解決する | `crates/scar/tests/{parameterized_type_constructor_traits,type_constructor_carriers,common_constructor_invocation}.rs` |
+| N04 / MT-L16–21、MT-L23–24 | user-defined MonadT、完全・部分RTA、`_`、bare head、`Alternative::empty`をcanonical solverで扱い、impl数・順序・固定Trait argumentから補完しない | `crates/scar/tests/{parameterized_type_constructor_traits,return_type_arguments}.rs`、`tests/fixtures/script/pass/stdmod/monad_transformer_*`、`tests/fixtures/script/fail/typecheck/monad_transformer_*` |
+| N05 / MT-S01–10 | 4 Transformerのrepresentation round-trip、Functor / Applicative / Monad / lift、短絡、base failure、State threading、条件付きAlternativeを観測する | `lib/tests/monad_transformers.srt`、`tests/fixtures/script/pass/stdmod/monad_transformers.srt`、`tests/fixtures/script/fail/typecheck/{either_t_has_no_alternative,option_t_requires_monad_base,reader_t_alternative_requires_base_capability,state_t_alternative_requires_base_capability}.*` |
+| N05 / MT-S11–13、MT-S15 | 通常field・collection・Facet・REPLで具象値を扱い、ambiguityを拒否し、user-defined base / Transformerを実行する | `lib/tests/monad_transformers.srt`、`tests/fixtures/script/pass/stdmod/user_defined_monad_transformer.srt`、`tests/fixtures/script/fail/typecheck/monad_transformer_lift_ambiguous.*`、`crates/xldr/tests/repl_core.rs` |
+| N05 / MT-S16–18 | 有限Monad / lift law、EitherT mapping helperのslot / base failure保持、非採用API・runtime経路の不在を固定する | `lib/tests/monad_transformers.srt`、`lib/tests/either.srt`、`tests/fixtures/script/pass/stdmod/user_defined_monad_transformer.srt` |
+| N11 / MT-L22、MT-S14 | `do::<Either<String, _>>`を通常のTypeCtorTrait RTA経路へ接続し、pipelineと型・観測結果を比較する | **未実装**。`do_intrinsic_spec.md`に従いN07–N11で追加する |
+
+N14ではこの表を起点に受け入れ条件と実テストを再照合する。generic `defrecord` / constructor
+parameterはN03–N05に含めず、`open-issues.md` OI-035で別仕様を待つ。
+
+実装は専用worktree `.worktrees/type-constructor-monad-do-n05` で task-local commit に分割した。
+標準APIと実装契約は各`.srt`の`@doc`、`docs/site/monad-transformers.md`、
+`docs/site/{README,standard-library,standard-modules}.md`へ移管した。
+N06へはN01–N05の検証済み差分を引き継ぎ、N05のための追加作業は残さない。
 
 ## 11. N06 — SafeBind / diagnostics cleanup / do開始ゲート
 

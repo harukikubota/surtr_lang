@@ -5,8 +5,7 @@
 > The current language permits `deftrait T<$P> where ...`, keeps Trait-head
 > parameters separate from constructor slots, and rejects inline
 > `<$P: Bound>` constraints. See
-> [Trait_system_spec.md](../../dev/Trait_system_spec.md) and
-> [monadt_language_extension_spec.md](../../../doc/monadt_language_extension_spec.md).
+> [Trait_system_spec.md](../../dev/Trait_system_spec.md).
 > The task steps below remain as implementation history rather than the current
 > semantic authority.
 
