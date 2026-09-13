@@ -1256,6 +1256,7 @@ impl Checker {
 
     pub(super) fn body_tail_is_return_type_argument_call(&self, body: &Resolved) -> bool {
         match body {
+            Resolved::Do(..) => true,
             Resolved::Block(_, statements) => statements
                 .last()
                 .is_some_and(|tail| self.body_tail_is_return_type_argument_call(tail)),

@@ -1541,17 +1541,13 @@ impl Checker {
             }
 
             Resolved::SafeBind(span, pat, rhs) => self.check_safebind(span, pat, rhs),
-            Resolved::Do(span, ..) => Err(self.policy_error(
-                TypeDiagnosticReason::CompilePolicyViolation,
-                diagnostics::TypePolicy::CompileUnitAvailability,
-                Some("`do` carrier inference and lowering are not implemented until N09".into()),
-                None,
-                None,
-                Some("N08".into()),
-                None,
+            Resolved::Do(span, intrinsic, return_type_arguments, statements) => self.check_do(
                 span,
+                *intrinsic,
+                return_type_arguments,
+                statements,
                 None,
-            )),
+            ),
 
             Resolved::App(span, func, args) => self.check_app(span, func, args),
 
@@ -2811,6 +2807,14 @@ impl Checker {
             (Resolved::Match(span, scrutinee, arms), Some(expected_ty)) => {
                 self.check_match(span, scrutinee, arms, Some(expected_ty))
             }
+            (Resolved::Do(span, intrinsic, return_type_arguments, statements), expected) => self
+                .check_do(
+                    span,
+                    *intrinsic,
+                    return_type_arguments,
+                    statements,
+                    expected,
+                ),
             // Constructor applications are normally handled by `check_app`
             // after resolving the callee as a value.  When an enclosing
             // expression supplies an expected type (notably the mapper side
@@ -2932,6 +2936,506 @@ impl Checker {
             span: span.clone(),
             node: TypedInner::Block(typed_stmts),
         })
+    }
+
+    fn canonical_do_trait_key(
+        &self,
+        identity: sindr::intrinsic::CanonicalTraitIdentity,
+        span: &Span,
+    ) -> Result<String, TypeError> {
+        let surface = identity.surface_name();
+        let canonical = format!("Global::{surface}");
+        let key = if self.traits.contains_key(&canonical) {
+            canonical
+        } else if self.traits.contains_key(surface) {
+            surface.to_string()
+        } else {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some(format!("canonical intrinsic Trait {surface}")),
+                None,
+                None,
+                None,
+                None,
+                span,
+                None,
+            ));
+        };
+        let info = &self.traits[&key];
+        if info.id.name != surface || info.constructor_slots.is_empty() {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some(format!("canonical intrinsic TypeCtorTrait {surface}")),
+                None,
+                None,
+                None,
+                None,
+                span,
+                None,
+            ));
+        }
+        Ok(key)
+    }
+
+    fn canonical_do_method_id(
+        &self,
+        identity: sindr::intrinsic::CanonicalTraitMethodIdentity,
+        span: &Span,
+    ) -> Result<ResolvedId, TypeError> {
+        let trait_key = self.canonical_do_trait_key(identity.trait_identity(), span)?;
+        self.traits[&trait_key]
+            .methods
+            .get(identity.method_name())
+            .map(|method| method.id.clone())
+            .ok_or_else(|| {
+                self.policy_error(
+                    TypeDiagnosticReason::TypecheckInvariantViolation,
+                    diagnostics::TypePolicy::ProducerContract,
+                    Some(format!(
+                        "canonical intrinsic method {}::{}",
+                        identity.trait_identity().surface_name(),
+                        identity.method_name()
+                    )),
+                    None,
+                    None,
+                    None,
+                    None,
+                    span,
+                    None,
+                )
+            })
+    }
+
+    fn partial_do_failure_method(
+        &self,
+        span: &Span,
+    ) -> Result<sindr::intrinsic::CanonicalTraitMethodIdentity, TypeError> {
+        let contract = sindr::intrinsic::do_intrinsic_contract();
+        let method = contract.lowering.partial_failure;
+        let has_matching_rule = contract.capability_rules.iter().any(|rule| {
+            rule.predicate == sindr::intrinsic::DoCapabilityPredicate::HasPartialExtractPattern
+                && rule.capability == method.trait_identity()
+                && rule.same_carrier == contract.do_local_carrier
+        });
+        if has_matching_rule {
+            Ok(method)
+        } else {
+            Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("do partial-extract capability and lowering contract".into()),
+                None,
+                None,
+                None,
+                None,
+                span,
+                None,
+            ))
+        }
+    }
+
+    fn check_do(
+        &mut self,
+        span: &Span,
+        intrinsic: sindr::intrinsic::IntrinsicId,
+        return_type_arguments: &[ResolvedReturnTypeArgument],
+        statements: &[ResolvedDoStatement],
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let contract = sindr::intrinsic::do_intrinsic_contract();
+        if intrinsic != contract.identity || contract.return_type_arguments.len() != 1 {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("validated do intrinsic contract".into()),
+                None,
+                None,
+                None,
+                None,
+                span,
+                None,
+            ));
+        }
+        if return_type_arguments.len() > 1 {
+            return Err(super::signatures::return_type_argument_arity_error(
+                intrinsic.surface_name(),
+                1,
+                return_type_arguments.len(),
+                span,
+            ));
+        }
+        let explicit_carrier = return_type_arguments
+            .first()
+            .map(|argument| {
+                self.resolve_type_constructor_return_type_argument(argument.ty.syntax())
+                    .map(|ty| (ty, argument))
+            })
+            .transpose()?;
+        let mut carrier_hint = explicit_carrier.as_ref().map(|(ty, _)| ty.clone());
+        if let Some(expected) = expected {
+            let expected = self.resolve_ty(expected);
+            if let Some((explicit, argument)) = &explicit_carrier {
+                if self
+                    .assert_type_relation(
+                        &expected,
+                        explicit,
+                        self.type_fact(SourceRole::Expected, span, &expected),
+                        self.type_fact(SourceRole::ReturnTypeArgument, &argument.span, explicit),
+                        TypeDiagnosticReason::ReturnTypeArgumentMismatch,
+                        DiagnosticOrigin::ReturnTypeArgument { ordinal: 0 },
+                        intrinsic.surface_name(),
+                        0,
+                    )
+                    .is_err()
+                {
+                    return Err(super::signatures::return_type_argument_mismatch_error(
+                        intrinsic.surface_name(),
+                        0,
+                        &self.diagnostic_ty_name(&expected),
+                        &self.diagnostic_ty_name(explicit),
+                        &argument.span,
+                        SourceRole::Expected,
+                        span,
+                    ));
+                }
+                carrier_hint = Some(self.resolve_ty(explicit));
+            } else {
+                carrier_hint = Some(expected);
+            }
+        }
+
+        let saved_facet_bindings = self.facet_bindings.clone();
+        let saved_constructor_capabilities = self.constructor_capabilities.clone();
+        self.env.push_var_scope();
+        let result = self.check_do_statements(span, intrinsic, statements, carrier_hint.as_ref());
+        self.env.pop_var_scope();
+        self.facet_bindings = saved_facet_bindings;
+        self.constructor_capabilities = saved_constructor_capabilities;
+        result
+    }
+
+    fn check_do_statements(
+        &mut self,
+        do_span: &Span,
+        intrinsic: sindr::intrinsic::IntrinsicId,
+        statements: &[ResolvedDoStatement],
+        carrier_hint: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let Some((first, rest)) = statements.split_first() else {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("non-empty resolved do block".into()),
+                None,
+                None,
+                None,
+                None,
+                do_span,
+                None,
+            ));
+        };
+        if rest.is_empty() {
+            let ResolvedDoStatement::Statement(final_expression) = first else {
+                return Err(self.policy_error(
+                    TypeDiagnosticReason::TypecheckInvariantViolation,
+                    diagnostics::TypePolicy::ProducerContract,
+                    Some("final do expression".into()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    do_span,
+                    None,
+                ));
+            };
+            return self.check_do_final_expression(do_span, final_expression, carrier_hint);
+        }
+
+        match first {
+            ResolvedDoStatement::Extract {
+                span,
+                operator_span: _,
+                pattern,
+                rhs,
+            } => self.check_do_extract(do_span, intrinsic, span, pattern, rhs, rest, carrier_hint),
+            ResolvedDoStatement::SafeBind { span, .. } => Err(self.policy_error(
+                TypeDiagnosticReason::CompilePolicyViolation,
+                diagnostics::TypePolicy::CompileUnitAvailability,
+                Some("do SafeBind failure-target lowering is implemented in N10".into()),
+                None,
+                None,
+                Some("N09".into()),
+                None,
+                span,
+                None,
+            )),
+            ResolvedDoStatement::Statement(statement)
+                if matches!(
+                    statement,
+                    Resolved::Bind(..)
+                        | Resolved::Semi(..)
+                        | Resolved::Def(..)
+                        | Resolved::ExtractorDef(..)
+                        | Resolved::ConstDef(..)
+                ) =>
+            {
+                let inherited_substitutions = self.substitutions.clone();
+                let typed_statement = self.check_node(statement)?;
+                self.substitutions = inherited_substitutions;
+                let typed_rest =
+                    self.check_do_statements(do_span, intrinsic, rest, carrier_hint)?;
+                Ok(TypedNode {
+                    ty: typed_rest.ty.clone(),
+                    span: do_span.clone(),
+                    node: TypedInner::Block(vec![typed_statement, typed_rest]),
+                })
+            }
+            ResolvedDoStatement::Statement(statement) => self.check_do_bare_or_plain_statement(
+                do_span,
+                intrinsic,
+                statement,
+                rest,
+                carrier_hint,
+            ),
+        }
+    }
+
+    fn check_do_final_expression(
+        &mut self,
+        do_span: &Span,
+        expression: &Resolved,
+        carrier_hint: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let typed = match carrier_hint {
+            Some(expected) => self.check_node_with_expected(expression, Some(expected))?,
+            None => self.check_node(expression)?,
+        };
+        if let Some(expected) = carrier_hint {
+            self.assert_type_relation(
+                expected,
+                &typed.ty,
+                self.type_fact(SourceRole::Expected, do_span, expected),
+                self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                TypeDiagnosticReason::TypeConstructorFamilyMismatch,
+                DiagnosticOrigin::Intrinsic,
+                "do",
+                0,
+            )?;
+        }
+        let carrier = self.resolve_ty(&typed.ty);
+        let contract = sindr::intrinsic::do_intrinsic_contract();
+        let monad_identity = contract
+            .capability_rules
+            .iter()
+            .find(|rule| {
+                rule.predicate == sindr::intrinsic::DoCapabilityPredicate::Always
+                    && rule.same_carrier == contract.do_local_carrier
+            })
+            .map(|rule| rule.capability)
+            .ok_or_else(|| {
+                self.policy_error(
+                    TypeDiagnosticReason::TypecheckInvariantViolation,
+                    diagnostics::TypePolicy::ProducerContract,
+                    Some("do Monad capability rule".into()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    do_span,
+                    None,
+                )
+            })?;
+        let monad = self.canonical_do_trait_key(monad_identity, do_span)?;
+        match self.constructor_slot_type_for(&monad, &carrier) {
+            ConstructorApplicationOutcome::Applied(_) => {
+                self.consume_matching_capability(&carrier, &monad);
+                Ok(typed)
+            }
+            ConstructorApplicationOutcome::Deferred { .. } => {
+                Err(self.ambiguous_constructor_result(&monad, "do", do_span))
+            }
+            ConstructorApplicationOutcome::Rejected { failures }
+                if Self::constructor_projection_failures_are_metadata(&failures) =>
+            {
+                Err(signatures::constructor_signature_metadata_error(
+                    "do",
+                    do_span,
+                    Self::constructor_projection_failure_detail(&failures),
+                ))
+            }
+            ConstructorApplicationOutcome::Rejected { .. } => Err(self.trait_obligation_failure(
+                TypeDiagnosticReason::MissingTypeConstructorCapability,
+                &monad,
+                &[],
+                None,
+                &carrier,
+                &typed.span,
+                DiagnosticOrigin::Intrinsic,
+            )),
+        }
+    }
+
+    fn synthetic_do_continuation(
+        &self,
+        span: &Span,
+        intrinsic: sindr::intrinsic::IntrinsicId,
+        statements: &[ResolvedDoStatement],
+    ) -> Resolved {
+        Resolved::Do(span.clone(), intrinsic, Vec::new(), statements.to_vec())
+    }
+
+    fn check_do_bind_invocation(
+        &mut self,
+        do_span: &Span,
+        source: &Resolved,
+        closure: Resolved,
+        carrier_hint: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let contract = sindr::intrinsic::do_intrinsic_contract();
+        let sequence = contract.lowering.sequence;
+        let trait_key = self.canonical_do_trait_key(sequence.trait_identity(), do_span)?;
+        let args = vec![
+            ResolvedRecordLitArg::Positional(source.clone()),
+            ResolvedRecordLitArg::Positional(closure),
+        ];
+        self.check_trait_invocation(
+            do_span,
+            &trait_key,
+            sequence.method_name(),
+            &args,
+            None,
+            carrier_hint,
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn check_do_extract(
+        &mut self,
+        do_span: &Span,
+        intrinsic: sindr::intrinsic::IntrinsicId,
+        statement_span: &Span,
+        pattern: &ResolvedPattern,
+        rhs: &Resolved,
+        rest: &[ResolvedDoStatement],
+        carrier_hint: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let parameter_id = ResolvedId {
+            name: "__do_payload".into(),
+            qualified_name: None,
+            symbol_info: None,
+            unique_id: Self::next_synthetic_range_uid(),
+            compiler_generated: true,
+            span: statement_span.clone(),
+        };
+        let parameters = vec![ResolvedClosureParam {
+            id: parameter_id.clone(),
+            ty: None,
+        }];
+        let continuation = self.synthetic_do_continuation(do_span, intrinsic, rest);
+        let body = if Self::is_total_bind_pattern(pattern) {
+            Resolved::Block(
+                statement_span.clone(),
+                vec![
+                    Resolved::Bind(
+                        statement_span.clone(),
+                        pattern.clone(),
+                        Box::new(Resolved::Var(statement_span.clone(), parameter_id.clone())),
+                    ),
+                    continuation,
+                ],
+            )
+        } else {
+            let failure = self.partial_do_failure_method(statement_span)?;
+            let empty_id = self.canonical_do_method_id(failure, statement_span)?;
+            Resolved::Match(
+                statement_span.clone(),
+                Box::new(Resolved::Var(statement_span.clone(), parameter_id.clone())),
+                vec![
+                    ResolvedMatchArm {
+                        pattern: pattern.clone(),
+                        guard: None,
+                        body: continuation,
+                    },
+                    ResolvedMatchArm {
+                        pattern: ResolvedPattern::Wildcard(statement_span.clone()),
+                        guard: None,
+                        body: Resolved::App(
+                            statement_span.clone(),
+                            Box::new(Resolved::Var(statement_span.clone(), empty_id)),
+                            Vec::new(),
+                        ),
+                    },
+                ],
+            )
+        };
+        let captures = sigil::collect_resolved_closure_captures(&body, &parameters);
+        let closure =
+            Resolved::Closure(statement_span.clone(), parameters, captures, Box::new(body));
+        self.check_do_bind_invocation(do_span, rhs, closure, carrier_hint)
+    }
+
+    fn check_do_bare_or_plain_statement(
+        &mut self,
+        do_span: &Span,
+        intrinsic: sindr::intrinsic::IntrinsicId,
+        statement: &Resolved,
+        rest: &[ResolvedDoStatement],
+        carrier_hint: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let monad = self.canonical_do_trait_key(
+            sindr::intrinsic::do_intrinsic_contract()
+                .lowering
+                .sequence
+                .trait_identity(),
+            do_span,
+        )?;
+        let checkpoint = self.candidate_probe_checkpoint();
+        let probe = self.check_node(statement);
+        let is_monadic = match &probe {
+            Ok(typed) => !matches!(
+                self.constructor_slot_type_for(&monad, &typed.ty),
+                ConstructorApplicationOutcome::Rejected { .. }
+            ),
+            Err(error) => error.reason() == Some(TypeDiagnosticReason::AmbiguousReturnTypeArgument),
+        };
+        self.rollback_candidate_probe(checkpoint);
+        if !is_monadic {
+            let inherited_substitutions = self.substitutions.clone();
+            let typed_statement = self.check_node(statement)?;
+            self.substitutions = inherited_substitutions;
+            let typed_rest = self.check_do_statements(do_span, intrinsic, rest, carrier_hint)?;
+            return Ok(TypedNode {
+                ty: typed_rest.ty.clone(),
+                span: do_span.clone(),
+                node: TypedInner::Block(vec![typed_statement, typed_rest]),
+            });
+        }
+
+        let parameter_id = ResolvedId {
+            name: "__do_ignored_payload".into(),
+            qualified_name: None,
+            symbol_info: None,
+            unique_id: Self::next_synthetic_range_uid(),
+            compiler_generated: true,
+            span: self.resolved_span(statement).clone(),
+        };
+        let parameters = vec![ResolvedClosureParam {
+            id: parameter_id,
+            ty: None,
+        }];
+        let body = self.synthetic_do_continuation(do_span, intrinsic, rest);
+        let captures = sigil::collect_resolved_closure_captures(&body, &parameters);
+        let closure = Resolved::Closure(
+            self.resolved_span(statement).clone(),
+            parameters,
+            captures,
+            Box::new(body),
+        );
+        self.check_do_bind_invocation(do_span, statement, closure, carrier_hint)
     }
 
     /// A user-facing Facet annotation describes a path template; it does not
@@ -13789,7 +14293,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_do_fails_closed_at_the_n08_n09_boundary() {
+    fn resolved_do_requires_canonical_intrinsic_contract_inputs() {
         let mut checker = Checker::new(TypecheckContext::default());
         let node = Resolved::Do(
             test_span(),
@@ -13801,12 +14305,18 @@ mod tests {
         );
         let error = checker
             .check_node(&node)
-            .expect_err("N08 must not lower do before N09 carrier inference exists");
+            .expect_err("do lowering must fail closed without canonical trait metadata");
         assert_eq!(
             error.reason(),
-            Some(TypeDiagnosticReason::CompilePolicyViolation)
+            Some(TypeDiagnosticReason::TypecheckInvariantViolation)
         );
-        assert!(error.message.contains("N09"), "{error:?}");
+        assert!(matches!(
+            error.structured.as_ref().map(|diagnostic| &diagnostic.data),
+            Some(DiagnosticData::Policy(diagnostics::PolicyData {
+                subject: Some(subject),
+                ..
+            })) if subject == "canonical intrinsic Trait Monad"
+        ));
     }
 
     #[test]

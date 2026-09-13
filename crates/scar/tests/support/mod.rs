@@ -65,6 +65,7 @@ const GENERATOR_MODULE_SOURCE: &str = r#"@builtin type Generator<$State, $Item>
 impl Generator {}"#;
 const HASH_MAP_MODULE_SOURCE: &str = include_str!("../../../../lib/types/hash_map.srt");
 const RESULT_MODULE_SOURCE: &str = include_str!("../../../../lib/types/result.srt");
+const EITHER_MODULE_SOURCE: &str = include_str!("../../../../lib/types/either.srt");
 const DURATION_MODULE_SOURCE: &str = include_str!("../../../../lib/types/duration.srt");
 const RANGE_MODULE_SOURCE: &str = include_str!("../../../../lib/types/range.srt");
 const PROCESS_MODULE_SOURCE: &str = include_str!("../../../../lib/process.srt");
@@ -641,6 +642,10 @@ fn build_std_module_stages(overrides: &[(&str, &str)]) -> Vec<Vec<sigil::StagedM
             (
                 "Result",
                 pick_override("Result", RESULT_MODULE_SOURCE, overrides),
+            ),
+            (
+                "Either",
+                pick_override("Either", EITHER_MODULE_SOURCE, overrides),
             ),
             (
                 "Duration",

@@ -7,7 +7,7 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- N01–N08は実装済み。N09以降は未着手である。
+- N01–N09は実装済み。N10以降は未着手である。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
@@ -51,7 +51,7 @@ N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け
 | N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision、実装済みSafeBind RHS訂正 | [x] 完了 | 旧Task 10を再編 |
 | N07 | do compiler-owned contract | N06 | [x] 完了 | 旧Task 11 |
 | N08 | do syntax・AST・resolver・scope | N07 | [x] 完了 | 旧Task 12 |
-| N09 | do carrier推論・core lowering | N08 | [ ] 着手可能 | 旧Task 13 |
+| N09 | do carrier推論・core lowering | N08 | [x] 完了 | 旧Task 13 |
 | N10 | do SafeBind・Forge lowering | N09 | [ ] 未着手 | 旧Task 14 |
 | N11 | do診断・全carrier統合検証 | N10 | [ ] 未着手 | 旧Task 15 |
 | N12 | Generator core改修 | G-I01/G-I02確定。独立Task | [ ] 未着手 | 新規 |
@@ -380,7 +380,7 @@ raw signatureの再解析、通常callable scheme化、runtime function / opcode
   再レビューはfindings 0件。Astra顧問も一般AST span保持を採用すべきと確認し、CI初回timeoutを
   binary fingerprint変更後のProject prefix cold並列構築と切り分けた。
 
-N08まで実装済み。N09のcarrier推論 / core lowering以降は未実装。commitは未作成。
+N09まで実装済み。N10のSafeBind / Forge lowering以降は未実装。commitは未作成。
 
 ### N08: syntax / AST / resolver / scope
 
@@ -415,6 +415,31 @@ N08では型推論・loweringを行わず、`Resolved::Do`はScar入口でstruct
 ### N09: carrier inference / core lowering
 
 monadic originを一つのdo-local carrierへ結び付け、payloadを別型として扱う。常時Monad、partial `<-` はAlternative。通常 `=` の値保存を自動bindしない。
+
+状態: 完了。Scarはvalidated `DoIntrinsicContract`のReturnTypeArgument position 0、expected result、`<-` RHS、
+bare monadic expression、通常callのRTA推論、最終式を、通常のTypeCtorTrait / Trait dispatch経路で一つのcarrierへ統一する。
+mapped payloadは各bindで独立に変化でき、captured / fixed argumentは同じcarrier identityとして固定する。
+
+total `<-` とbare monadic expressionはconcrete `Monad::bind`、partial `<-` はwildcard failure armを持つmatchと
+同じcarrierのconcrete `Alternative::empty`へ、Scar内で既存のTraitCall / Closure / Block / Matchへlowerする。
+生成closureのcaptureはSigilのresolved capture collectorを再利用する。通常 `=` は値保存のまま、最終式だけのdoにも
+Monadを要求する。do内SafeBindはN10のfailure target / Forge loweringが入るまでstructured `CompilePolicyViolation`として
+fail closedを維持する。
+
+検証（2026-09-14）:
+
+- TDD Red: N08のScar入口 `CompilePolicyViolation` により追加したcarrier / lowering surface case 6件が失敗することを確認後、
+  N09 routeでGreen化した。
+- `rtk cargo nextest run -p scar --test typecheck_surface`: 9 passed。
+- `rtk cargo nextest run -p scar`: 276 passed。
+- `cargo check --workspace`: 成功。
+- `cargo run -- test --quiet --all`: 成功。新規worktree初回だけGit管理外の`tmp/sandbox`不在でfile I/O 5件が失敗し、
+  directory作成後の同一コマンドで成功した。
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace`: 2回連続で各1911 passed。
+- total / partial / failure / bareの手動scriptを`cargo run -- run`で実行し、Identity、Option::Some、
+  Option::Noneの既存Forge / Eldr経路を確認した。検証用scriptは削除済み。
+- 独立Lunaレビューはfindings 0件。指摘された`Either<String, _>`のcaptured carrier成功例と、
+  compiler生成continuationの外側local captureを追加テストで補完した。Astra顧問を必要とするblocking issueは発生しなかった。
 
 ### N10: SafeBind / Forge lowering
 
