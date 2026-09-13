@@ -7,7 +7,7 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- N01–N05 は実装済み。N06 以降のTaskは未着手である。
+- N01–N05 とN06のSafeBind RHS訂正は実装済み。N06の残作業とN07以降は未着手である。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
@@ -20,7 +20,6 @@
 | `../docs/site/{identity,reader,state}.md` | 実装済み Identity / Reader / State の利用者向け契約 |
 | `monadt_language_extension_spec.md` | nominal constructor parameter・parameterized TypeCtorTrait・MonadT契約 |
 | `monadt_standard_types_spec.md` | OptionT / EitherT / ReaderT / StateTの意味とAPI。実装正本は`../lib/traits/monad_t.srt`と`../lib/types/monad_transformer/` |
-| `safebind_total_pattern_rhs_correction_proposal.md` | N06着手前に適用するSafeBind totality / RHS分類の訂正。旧non-Result全面pass-throughを置き換える |
 | `diagnostics_cleanup_spec.md` | 旧Task 10のSafeBind・診断残作業 |
 | 既存 `do_intrinsic_spec.md` | doの詳細仕様。新carrier規則と参照先を更新して利用 |
 | `generator_spec.md` | 遅延・persistent GeneratorとAPI移行 |
@@ -49,7 +48,7 @@ N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け
 | N03 | nominal constructor parameterとdeclaration constraint | N01 | [x] 完了 | 新規言語機能 |
 | N04 | parameterized TypeCtorTrait・MonadT契約 | N03 | [x] 完了 | 新規言語機能 |
 | N05 | 標準Transformer | N04。Identityを使うテストはN02 | [x] 完了 | 新規標準機能 |
-| N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision、SafeBind訂正提案の周辺入力反映 | [ ] 未着手 | 旧Task 10を再編 |
+| N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision、実装済みSafeBind RHS訂正 | [~] SafeBind訂正完了・残作業未着手 | 旧Task 10を再編 |
 | N07 | do compiler-owned contract | N06 | [ ] 未着手 | 旧Task 11 |
 | N08 | do syntax・AST・resolver・scope | N07 | [ ] 未着手 | 旧Task 12 |
 | N09 | do carrier推論・core lowering | N08 | [ ] 未着手 | 旧Task 13 |
@@ -298,9 +297,9 @@ parameterはN03–N05に含めず、`open-issues.md` OI-035で別仕様を待つ
 標準APIと実装契約は各`.srt`の`@doc`、`docs/site/monad-transformers.md`、
 `docs/site/{README,standard-library,standard-modules}.md`へ移管した。
 N06へはN01–N05の検証済み差分を引き継ぎ、N05のための追加作業は残さない。
-N06実装用worktreeを作る前に、`safebind_total_pattern_rhs_correction_proposal.md`を
-`diagnostics_cleanup_spec.md`、本計画、`do_intrinsic_spec.md`、`要件定義v9.md`へ反映し、
-旧non-Result全面pass-through契約が生きた入力に残っていないことを確認する。
+SafeBind RHS訂正は専用worktreeで`diagnostics_cleanup_spec.md`、本計画、`do_intrinsic_spec.md`、
+`要件定義v9.md`、恒久文書、標準`@doc`、実装とテストへ反映した。旧non-Result全面pass-through契約を
+生きた入力から除き、移管元の一時提案書も削除した。
 
 ## 11. N06 — SafeBind / diagnostics cleanup / do開始ゲート
 
@@ -317,8 +316,7 @@ N06はlevel4の仕様変更であり、Option名による先行拒否・construc
 通常pattern検査を通過したtotal non-Resultだけを二診断へ分類し、両方でResultだけがRHS分解能力を持つことを示す。
 変換APIのhelpは出さず、`total =? value`をnon-Result pass-throughとして受理しない。
 現行Option返却ExtractorのSome/Noneと単一評価を維持し、Extractor更改やdo symbol導入を含めない。
-詳細な作業順・変更先・移管先は`diagnostics_cleanup_spec.md` §11.1、追加境界は§3.1と
-`safebind_total_pattern_rhs_correction_proposal.md`を入力にする。
+詳細な作業順・変更先・移管先は`diagnostics_cleanup_spec.md` §11.1、SafeBindの追加境界は同書§3.1を入力にする。
 
 完了条件: DC-01–DC-17。既存全体ゲートどおり同じrevisionでworkspaceを2回連続成功させ、ログとcommitを記録する。do実装symbolがまだないことを確認する。
 

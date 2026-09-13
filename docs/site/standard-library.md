@@ -386,8 +386,10 @@ defenum Option<$T> {
 }
 ```
 
-`Option` は `=?` の対象ではありませんが、`|*>`、`|*|`、`|>=`、`>*`、`>=>` には `Option` 文脈の標準実装があります。
-失敗伝播へ載せたい場合は `from::<Result>(value)`、値として分岐したい場合は `match` を使います。
+`Option` は `|*>`、`|*|`、`|>=`、`>*`、`>=>` に標準実装があります。
+`=?`では`Option::Some(value) =? option`のようなpartial constructor patternでOption全体を検査できますが、
+`value =? option`のようなtotal patternでpayloadを暗黙に取り出すことはできません。
+Result-styleの失敗伝播へ変換したい場合は`from::<Result>(value)`、通常の分岐には`match`を使います。
 `from::<Option>(value)` は `Err(_)` を `None` に畳み込む明示変換です。
 
 ## Public vs Hidden

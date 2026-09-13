@@ -12,8 +12,7 @@
 | 実装済み API | [Identity](../docs/site/identity.md) / [Reader](../docs/site/reader.md) / [State](../docs/site/state.md) | N02 の利用者向け文書 |
 | 実装済み仕様・後続入力 | [MonadT 言語拡張](./monadt_language_extension_spec.md) | N03–N04の恒久契約は担当文書へ移管済み。未実装のMT-L22だけをN11へ残し、generic `defrecord`は`open-issues.md` OI-035へ分離 |
 | 実装済み標準 API・後続入力 | [標準 MonadT 型](./monadt_standard_types_spec.md) | N05の正本は`../lib/traits/monad_t.srt`と`../lib/types/monad_transformer/`、利用者向け説明は[`../docs/site/monad-transformers.md`](../docs/site/monad-transformers.md)。未実装のMT-S14だけをN11へ残す |
-| 訂正提案・着手前必須 | [SafeBind total pattern / RHS分類](./safebind_total_pattern_rhs_correction_proposal.md) | N06開始前にSafeBind・doの各入力へ反映する。total non-Result二診断とpartial pass-throughの境界を定める |
-| 仕様決定・実装待ち | [SafeBind / diagnostics cleanup](./diagnostics_cleanup_spec.md) | N06 の入力 |
+| 一部実装済み・後続入力 | [SafeBind / diagnostics cleanup](./diagnostics_cleanup_spec.md) | SafeBind RHS訂正は実装済み。N06には残る診断producer・heuristic撤去・builtin metadata統合を引き継ぐ |
 | 仕様決定・実装待ち | [`do` intrinsic](./do_intrinsic_spec.md) | N07–N11 の入力 |
 | 仕様決定・実装待ち | [Generator](./generator_spec.md) | N12–N13 の入力。未確定 API は本文の確認ゲートに従う |
 | implementation plan | [N01–N14 implementation plan](./type_constructor_monad_do_implementation_plan.md) | 作業順・受け入れ条件・進捗だけを管理 |

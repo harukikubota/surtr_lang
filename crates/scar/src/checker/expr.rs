@@ -232,7 +232,7 @@ impl Checker {
                 .iter()
                 .find_map(|(key, value)| recurse(key).or_else(|| recurse(value))),
             TypedInner::Bind(_, rhs)
-            | TypedInner::SafeBind(_, rhs)
+            | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
             | TypedInner::EagerBoundary(rhs) => recurse(rhs),
@@ -631,7 +631,7 @@ impl Checker {
                     .or_else(|| self.first_pending_trait_helper(value))
             }),
             TypedInner::Bind(_, rhs)
-            | TypedInner::SafeBind(_, rhs)
+            | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => self.first_pending_trait_helper(rhs),
             TypedInner::BinOp(_, left, right)
@@ -751,7 +751,7 @@ impl Checker {
                     }
                 }
                 TypedInner::Bind(_, rhs)
-                | TypedInner::SafeBind(_, rhs)
+                | TypedInner::SafeBind(_, rhs, _, _)
                 | TypedInner::Semi(rhs)
                 | TypedInner::FieldAccess(rhs, _)
                 | TypedInner::EagerBoundary(rhs) => collect(rhs, obligations),
@@ -951,9 +951,11 @@ impl Checker {
                 pattern,
                 Box::new(self.concretize_pending_trait_calls(*rhs)?),
             ),
-            TypedInner::SafeBind(pattern, rhs) => TypedInner::SafeBind(
+            TypedInner::SafeBind(pattern, rhs, projection, failure_target) => TypedInner::SafeBind(
                 pattern,
                 Box::new(self.concretize_pending_trait_calls(*rhs)?),
+                projection,
+                failure_target,
             ),
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
@@ -3015,7 +3017,11 @@ impl Checker {
                     self.clear_facet_pattern_bindings(item);
                 }
             }
-            TypedPattern::ResultOk(_, inner) => self.clear_facet_pattern_bindings(inner),
+            TypedPattern::Constructor { fields, .. } => {
+                for field in fields {
+                    self.clear_facet_pattern_bindings(field);
+                }
+            }
             TypedPattern::Extractor { items, .. } => {
                 for item in items {
                     self.clear_facet_pattern_bindings(item);
@@ -3047,39 +3053,95 @@ impl Checker {
             });
         }
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
-        if matches!(&rhs_ty, Ty::Enum(name, _) if Self::surface_name(name) == "Option") {
-            return Err(TypeError {
-                structured: None,
-                message: "Option is not a SafeBind target; `=?` propagates Result-style failures, not optional values.".into(),
-                span: typed_rhs.span.clone(),
-                hint: Some(
-                    "Convert explicitly with Option::to_result(value, err) before using `=?`."
-                        .into(),
-                ),
-            });
-        }
-        let pattern_can_nomatch = !Self::is_total_bind_pattern(pat);
-        let (ok_ty, mut propagated_err_tys) = match rhs_ty {
+        let (ok_ty, mut propagated_err_tys, rhs_projection) = match rhs_ty {
             Ty::Result(ok, err) => {
-                let mut err_tys = vec![err.as_ref().clone()];
-                if pattern_can_nomatch {
-                    err_tys.push(Ty::Error);
-                }
-                (ok.as_ref().clone(), err_tys)
+                let payload_ty = ok.as_ref().clone();
+                let error_ty = err.as_ref().clone();
+                (
+                    payload_ty.clone(),
+                    vec![error_ty.clone()],
+                    SafeBindRhsProjection::CanonicalResultOnce {
+                        payload_ty,
+                        error_ty,
+                    },
+                )
             }
-            other => {
-                let err_tys = if pattern_can_nomatch {
-                    vec![Ty::Error]
-                } else {
-                    Vec::new()
-                };
-                (other, err_tys)
-            }
+            other => (
+                other.clone(),
+                Vec::new(),
+                SafeBindRhsProjection::PassThroughNonResultPartial {
+                    pattern_input_ty: other,
+                },
+            ),
         };
 
         let (typed_pat, pat_ty) = self.check_pattern(pat, &ok_ty, span)?;
+        let pattern_can_nomatch = !Self::is_total_bind_pattern(pat);
+        if pattern_can_nomatch {
+            propagated_err_tys.push(Ty::Error);
+        } else if !matches!(self.resolve_ty(&typed_rhs.ty), Ty::Result(_, _)) {
+            let monad = self
+                .trait_key_by_short_name("Monad")
+                .ok_or_else(|| TypeError::new("Missing canonical Monad trait", span.clone()))?;
+            let proof = self.prove_trait_capability(&monad, &ok_ty)?;
+            if type_contains_unresolved_vars(&ok_ty) {
+                match proof {
+                    ApplicabilityProof::Satisfied(_) => {}
+                    ApplicabilityProof::Deferred(_) => {
+                        return Err(self.trait_obligation_failure(
+                            TypeDiagnosticReason::MissingTraitCapability,
+                            &monad,
+                            &[],
+                            None,
+                            &ok_ty,
+                            &typed_rhs.span,
+                            DiagnosticOrigin::Intrinsic,
+                        ));
+                    }
+                    ApplicabilityProof::Unsatisfied => {
+                        return Err(self.trait_obligation_failure(
+                            TypeDiagnosticReason::MissingGenericBound,
+                            &monad,
+                            &[],
+                            None,
+                            &ok_ty,
+                            &typed_rhs.span,
+                            DiagnosticOrigin::Intrinsic,
+                        ));
+                    }
+                }
+            }
+            let (reason, monad_capability) = match proof {
+                ApplicabilityProof::Satisfied(_) => (
+                    TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs,
+                    "satisfied",
+                ),
+                ApplicabilityProof::Unsatisfied => (
+                    TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs,
+                    "unsatisfied",
+                ),
+                ApplicabilityProof::Deferred(_) => {
+                    unreachable!("a deferred Monad proof must retain unresolved type variables")
+                }
+            };
+            let rhs_name = self.ty_name(&ok_ty);
+            return Err(TypeError::from_structured(StructuredDiagnostic {
+                reason,
+                origin: DiagnosticOrigin::Intrinsic,
+                data: DiagnosticData::SafeBindRelation(diagnostics::SafeBindRelationData {
+                    lhs_type: self.ty_name(&pat_ty),
+                    rhs_type: rhs_name,
+                    lhs_is_total: true,
+                    rhs_is_canonical_result: false,
+                    monad_capability: monad_capability.into(),
+                }),
+                primary: self.type_fact(SourceRole::Value, &typed_rhs.span, &ok_ty),
+                related: vec![self.type_fact(SourceRole::Pattern, span, &pat_ty)],
+                remediation: None,
+            }));
+        }
         self.ensure_self_rebinding_types(&typed_pat, span)?;
-        if let Some(ret_ty) = self.function_return_ty.clone() {
+        let failure_target = if let Some(ret_ty) = self.function_return_ty.clone() {
             let fn_err_ty = match ret_ty {
                 Ty::Result(_, fn_err_ty) => fn_err_ty,
                 other => {
@@ -3111,7 +3173,12 @@ impl Checker {
                     });
                 }
             }
-        }
+            SafeBindFailureTarget::EnclosingResult {
+                error_ty: fn_err_ty.as_ref().clone(),
+            }
+        } else {
+            SafeBindFailureTarget::TopLevel
+        };
 
         self.bind_typed_pattern(&typed_pat, &pat_ty);
         self.bind_constructor_provenance(
@@ -3122,7 +3189,12 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::SafeBind(typed_pat, Box::new(typed_rhs)),
+            node: TypedInner::SafeBind(
+                typed_pat,
+                Box::new(typed_rhs),
+                rhs_projection,
+                failure_target,
+            ),
         })
     }
 

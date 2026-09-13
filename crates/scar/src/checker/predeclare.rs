@@ -1440,8 +1440,11 @@ impl Checker {
                 }
                 Ok(())
             }
-            TypedPattern::ResultOk(_, inner) => {
-                self.ensure_self_rebinding_types_inner(inner, span, expected_self)
+            TypedPattern::Constructor { fields, .. } => {
+                for field in fields {
+                    self.ensure_self_rebinding_types_inner(field, span, expected_self)?;
+                }
+                Ok(())
             }
             TypedPattern::Extractor { items, .. } => {
                 for item in items {

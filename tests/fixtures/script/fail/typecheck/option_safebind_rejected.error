@@ -1,2 +1,9 @@
 phase: typecheck
-contains: Option is not a SafeBind target
+contains: Option<Int> is not a SafeBind target
+contains: Only a Result RHS can be decomposed by `=?`.
+json: /reason = "SafeBindTotalPatternNonResultMonadRhs"
+json: /origin/kind = "Intrinsic"
+json: /data/kind = "SafeBindRelation"
+json: /data/lhs_is_total = true
+json: /data/rhs_is_canonical_result = false
+json: /data/monad_capability = "satisfied"

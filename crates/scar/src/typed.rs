@@ -412,7 +412,12 @@ pub enum TypedInner {
     InjectCall(Box<TypedNode>, Vec<TypedNode>),
     Block(Vec<TypedNode>),
     Bind(TypedPattern, Box<TypedNode>),
-    SafeBind(TypedPattern, Box<TypedNode>),
+    SafeBind(
+        TypedPattern,
+        Box<TypedNode>,
+        SafeBindRhsProjection,
+        SafeBindFailureTarget,
+    ),
     BinOp(BinOp, Box<TypedNode>, Box<TypedNode>),
     Pipe(Box<TypedNode>, Box<TypedNode>),
     Compose(ComposeFlavor, Box<TypedNode>, Box<TypedNode>),
@@ -588,8 +593,14 @@ pub enum TypedPattern {
     BoolLit(Ty, bool),
     DurationLit(Ty, SurtrInt),
     Tuple(Ty, Vec<TypedPattern>),
-    /// `Ok(inner)` pattern node in safe-bind recursion.
-    ResultOk(Ty, Box<TypedPattern>),
+    /// Enum/Result constructor pattern checked through the common MatchBlock rules.
+    Constructor {
+        ty: Ty,
+        tag: u32,
+        field_tys: Vec<Ty>,
+        fields: Vec<TypedPattern>,
+        field_offset: u32,
+    },
     Extractor {
         input_ty: Ty,
         extractor: ResolvedId,
@@ -601,6 +612,18 @@ pub enum TypedPattern {
         seq_tys: Vec<Ty>,
         items: Vec<TypedPattern>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SafeBindRhsProjection {
+    CanonicalResultOnce { payload_ty: Ty, error_ty: Ty },
+    PassThroughNonResultPartial { pattern_input_ty: Ty },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum SafeBindFailureTarget {
+    EnclosingResult { error_ty: Ty },
+    TopLevel,
 }
 
 /// Match pattern (typed).

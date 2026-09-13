@@ -8949,12 +8949,13 @@ fn collect_unresolved_pattern_binding_names(pat: &TypedPattern, names: &mut Vec<
             collect_unresolved_pattern_binding_names(head, names);
             collect_unresolved_pattern_binding_names(tail, names);
         }
-        TypedPattern::Tuple(_, items) | TypedPattern::Extractor { items, .. } => {
+        TypedPattern::Tuple(_, items)
+        | TypedPattern::Constructor { fields: items, .. }
+        | TypedPattern::Extractor { items, .. } => {
             for item in items {
                 collect_unresolved_pattern_binding_names(item, names);
             }
         }
-        TypedPattern::ResultOk(_, inner) => collect_unresolved_pattern_binding_names(inner, names),
         TypedPattern::Wildcard(_)
         | TypedPattern::Pin(_, _, _)
         | TypedPattern::ListNil(_)
@@ -8975,7 +8976,7 @@ fn unresolved_repl_binding_issue(typed: &[TypedNode]) -> Option<(Span, Vec<Strin
 
     fn visit_stmt(stmt: &TypedNode) -> Option<(Span, Vec<String>)> {
         match &stmt.node {
-            TypedInner::Bind(pat, rhs) | TypedInner::SafeBind(pat, rhs) => {
+            TypedInner::Bind(pat, rhs) | TypedInner::SafeBind(pat, rhs, _, _) => {
                 if binding_rhs_allows_unresolved_persistence(rhs) {
                     return None;
                 }

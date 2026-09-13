@@ -2,16 +2,17 @@
 
 ## 1. 状態と根拠
 
-- 分類: `/doc` に置く、仕様決定・実装待ち。
+- 分類: `/doc` に置く、一部実装済み・残作業の実装入力。
 - 基準 commit: `f1986a27d84728e1e7a88de457a1d6b55cfe5ab8`。
-- 入力: Git履歴に残る旧計画のTask 10、[`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md)で未実装と明記された契約、既存[`do_intrinsic_spec.md`](do_intrinsic_spec.md)、N06着手前の[`SafeBind total pattern / RHS分類 訂正提案`](safebind_total_pattern_rhs_correction_proposal.md)。
+- 入力: Git履歴に残る旧計画のTask 10、[`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md)に残る未実装契約、既存[`do_intrinsic_spec.md`](do_intrinsic_spec.md)。
 - 旧 Task 9 は完了済み。reason/origin/typed data の基盤を作り直さない。
-- N01–N05完了後のN06実装入力。SafeBind変更は未実装であり、現在利用できる動作の説明ではない。
+- N01–N05完了後のN06実装入力。§§3–5のSafeBind RHS射影・pattern・failure target契約と、対応するstructured reason / typed IR / Forge経路は実装済みである。残るdiagnostic family、heuristic撤去、builtin metadata統合は未実装である。
 - level4（型・評価規則とフェーズ間契約の変更）。本書整理時は文書検証のみ行い、実装時に全体検証と独立レビューを行う。
 - Extractorは現行の`Option<T>`返却を維持する。Extractor更改は独立した別タスクであり、本書の前提・成果・do開始ゲートに含めない。
 
-N06は上記訂正提案を本書と周辺入力へ反映したrevisionから開始する。旧記述の「すべてのnon-Result RHSを
-pass-throughする」「total patternでOption全体を束縛できる」は実装入力として使用しない。
+SafeBind RHS訂正は本書、恒久文書、標準`@doc`、実装とテストへ反映済みである。旧記述の「すべてのnon-Result RHSを
+pass-throughする」「total patternでOption全体を束縛できる」は実装入力として使用しない。訂正元の一時提案書は、
+この移管完了により削除した。
 
 基準commitの旧計画は、Task 9での修正・検証記録と、SafeBind是正・残存familyのheuristic撤去をTask 10へ残すことを記録している。本書はその残作業だけを引き継ぐ。記録されたテスト結果は過去の実行記録であり、本書作成時の再実行結果ではない。
 

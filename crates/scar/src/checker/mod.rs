@@ -1928,7 +1928,7 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(value, rewrites);
                 }
             }
-            TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs) => {
+            TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs, _, _) => {
                 Self::rewrite_fun_indices_in_pattern(pattern, rewrites);
                 Self::rewrite_fun_indices_in_node(rhs, rewrites);
             }
@@ -2079,8 +2079,13 @@ impl ScarSession {
             | TypedPattern::StrLit(ty, _)
             | TypedPattern::BoolLit(ty, _)
             | TypedPattern::DurationLit(ty, _)
-            | TypedPattern::Tuple(ty, _)
-            | TypedPattern::ResultOk(ty, _) => Self::rewrite_fun_indices_in_ty(ty, rewrites),
+            | TypedPattern::Tuple(ty, _) => Self::rewrite_fun_indices_in_ty(ty, rewrites),
+            TypedPattern::Constructor { ty, field_tys, .. } => {
+                Self::rewrite_fun_indices_in_ty(ty, rewrites);
+                for field_ty in field_tys {
+                    Self::rewrite_fun_indices_in_ty(field_ty, rewrites);
+                }
+            }
             TypedPattern::Extractor {
                 input_ty,
                 extractor_ty,
@@ -2095,14 +2100,14 @@ impl ScarSession {
             }
         }
         match pattern {
-            TypedPattern::As(_, inner, _) | TypedPattern::ResultOk(_, inner) => {
+            TypedPattern::As(_, inner, _) => {
                 Self::rewrite_fun_indices_in_pattern(inner, rewrites);
             }
             TypedPattern::ListCons(_, head, tail) => {
                 Self::rewrite_fun_indices_in_pattern(head, rewrites);
                 Self::rewrite_fun_indices_in_pattern(tail, rewrites);
             }
-            TypedPattern::Tuple(_, items) => {
+            TypedPattern::Tuple(_, items) | TypedPattern::Constructor { fields: items, .. } => {
                 for item in items {
                     Self::rewrite_fun_indices_in_pattern(item, rewrites);
                 }
@@ -3023,7 +3028,7 @@ impl Checker {
                 }
             }
             TypedInner::Bind(_, rhs)
-            | TypedInner::SafeBind(_, rhs)
+            | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::FieldAccess(rhs, _)
             | TypedInner::Semi(rhs) => self.collect_unused_value_warnings_in_node(rhs),
             TypedInner::BinOp(_, left, right)

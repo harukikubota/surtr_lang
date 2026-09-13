@@ -41,7 +41,7 @@ typecheck 診断は、phase 固有の error 型を維持したまま、次の構
 - `cond` の節と `if_let` の発生文脈は Spire / Sigil から Scar まで保持する。分岐診断には全 body の型・span・ordinal と guard の source fact を含める。`cond` の実行は型検査後に既存の `TypedInner::If` へ lowering する。
 - JSON の `data` は source location の rebase 後に typed projection から生成する。必須 key は省略せず、該当しない値は `null` にする。`related` は primary fact も含み、型は `type`、source role は `left_value` / `right_value` などの snake_case とする。
 - constructor `family_id` は同じ族の canonical Trait ID をソートして構成する。familyはcapability継承を表し、別direct parameterのcarrier同一性を暗黙に作らない。完全な source value の型には captured 引数と `Result` の error 型も含める。登録順や内部 inference ID を表示しない。
-- structured input がある場合、optional field の欠落を理由に message / label / source の解析へ戻らない。未移行の policy / runtime 等の legacy 経路、SafeBind是正、heuristic全撤去は未実装であり、[`../../doc/diagnostics_cleanup_spec.md`](../../doc/diagnostics_cleanup_spec.md)を実装入力とする。
+- structured input がある場合、optional field の欠落を理由に message / label / source の解析へ戻らない。SafeBind total non-Result二分類は実装済みであり、未移行の policy / runtime 等の legacy 経路とheuristic全撤去は引き続き[`../../doc/diagnostics_cleanup_spec.md`](../../doc/diagnostics_cleanup_spec.md)を実装入力とする。
 
 ## stable reason と typed data
 
@@ -59,6 +59,7 @@ typecheck 診断は、phase 固有の error 型を維持したまま、次の構
 | TypeCtorTrait | `MissingTypeConstructorConstraint`, `TypeConstructorFamilyMismatch`, `TypePayloadMismatch`, `MissingTypeConstructorCapability` |
 | Trait method contract | `TraitMethodTypeListMismatch`, `TraitMethodTypeListArityMismatch`, `TraitMethodConstraintMismatch` |
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
+| SafeBind input | `SafeBindTotalPatternNonMonadRhs`, `SafeBindTotalPatternNonResultMonadRhs` |
 
 `MissingGenericBound`はrigid genericの宣言済みproof不足、`MissingTraitCapability`は具象subjectの能力不足、
 `MissingTypeConstructorCapability`はconstructor carrier occurrenceの能力不足であり、相互に置換しない。
@@ -81,7 +82,14 @@ messageに合わせて変形させない。
 | `ConstraintSubject` / `TraitObligation` | subject/constraint、またはtrait name/arguments・subject type・position |
 | `TypeConstructorCarrier` | `family`, `family_id`, `expected_carrier`, `actual_carrier` |
 | `BranchAssertion` | `expected_type`, `actual_type`, `branch` |
-| `SafeBindRelation` / `Policy` / `Runtime` | 現行payload。N06でprojectionとfailure targetを拡張する |
+| `SafeBindRelation` | `lhs_type`, `rhs_type`, `lhs_is_total`, `rhs_is_canonical_result`, `monad_capability` |
+| `Policy` / `Runtime` | 現行payload。未移行familyで順次構造化する |
+
+SafeBind固有reasonは、通常pattern型検査を通過したtotal pattern + non-Result RHSにだけ生成する。
+canonical Monad proofが成立すれば`SafeBindTotalPatternNonResultMonadRhs`、closed concrete typeで
+不成立なら`SafeBindTotalPatternNonMonadRhs`とする。Deferred、rigid genericのbound不足、solverの
+既存structured failureをこの二reasonへ畳み込まない。どちらのheadlineもcanonical Resultだけが
+外側一段の自動分解対象であることを本文に含め、変換APIのhelpは生成しない。
 
 constructor-context経路の`CandidateFailureData`は候補ごとの型と失敗detailを保持する。通常のTrait候補選択は
 内部`CandidateFailure`からrelated factsとsummary noteを構築する。どちらも全候補reject時に情報を捨てて

@@ -331,49 +331,144 @@ impl Checker {
                 Ok((TypedPattern::DurationLit(rhs_ty.clone(), n.clone()), rhs_ty))
             }
             ResolvedPattern::Constructor(ctor_id, inners) => {
-                if ctor_id.name != "Ok" {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "SafeBind constructor pattern only supports Ok(...), got {}(...)",
-                            ctor_id.name
-                        ),
-                        span: ctor_id.span.clone(),
-                        hint: None,
-                    });
-                }
-
                 let rhs_ty = self.resolve_ty(rhs_ty);
-                let ok_ty = match &rhs_ty {
-                    Ty::Result(ok, _) => ok.as_ref().clone(),
-                    other => {
+                if matches!(rhs_ty, Ty::Bool) {
+                    let variant = self
+                        .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
+                        .ok_or_else(|| {
+                            TypeError::new(
+                                format!("Unknown constructor: {}", ctor_id.name),
+                                ctor_id.span.clone(),
+                            )
+                        })?
+                        .clone();
+                    let variant = self.instantiate_enum_variant(&variant);
+                    if Self::surface_name(&variant.enum_name) != "Boolean" {
                         return Err(TypeError {
                             structured: None,
                             message: format!(
-                                "`Ok(...)` pattern requires Result<...>, got {}",
-                                self.ty_name(other)
+                                "Constructor {} does not belong to enum Boolean",
+                                ctor_id.name
                             ),
                             span: ctor_id.span.clone(),
-                            hint: Some(
-                                "Use `num =? expr` directly for Result<T>, and only add `Ok(...)` on the left for nested Result values.".into(),
-                            ),
+                            hint: None,
                         });
                     }
-                };
-
-                if inners.len() != 1 {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "SafeBind Ok(...) pattern requires exactly one inner pattern"
-                            .into(),
-                        span: ctor_id.span.clone(),
-                        hint: None,
-                    });
+                    if !inners.is_empty() {
+                        return Err(TypeError::new(
+                            format!(
+                                "{} pattern expects 0 argument(s), got {}",
+                                ctor_id.name,
+                                inners.len()
+                            ),
+                            ctor_id.span.clone(),
+                        ));
+                    }
+                    return match variant.short_name.as_str() {
+                        "True" => Ok((TypedPattern::BoolLit(Ty::Bool, true), Ty::Bool)),
+                        "False" => Ok((TypedPattern::BoolLit(Ty::Bool, false), Ty::Bool)),
+                        _ => Err(TypeError::new(
+                            format!("Unknown Boolean constructor: {}", ctor_id.name),
+                            ctor_id.span.clone(),
+                        )),
+                    };
                 }
-
-                let (typed_inner, _) = self.check_pattern(&inners[0], &ok_ty, span)?;
+                if let Ty::Result(ok_ty, err_ty) = &rhs_ty {
+                    let (tag, inner_ty) = match ctor_id.name.as_str() {
+                        "Ok" => (0, ok_ty.as_ref().clone()),
+                        "Err" => (1, err_ty.as_ref().clone()),
+                        _ => {
+                            return Err(TypeError::new(
+                                format!("Unknown constructor: {}", ctor_id.name),
+                                ctor_id.span.clone(),
+                            ));
+                        }
+                    };
+                    if inners.len() != 1 {
+                        return Err(TypeError::new(
+                            format!(
+                                "{}(...) pattern requires exactly one argument",
+                                ctor_id.name
+                            ),
+                            ctor_id.span.clone(),
+                        ));
+                    }
+                    let (typed_inner, _) = self.check_pattern(&inners[0], &inner_ty, span)?;
+                    return Ok((
+                        TypedPattern::Constructor {
+                            ty: rhs_ty.clone(),
+                            tag,
+                            field_tys: vec![inner_ty],
+                            fields: vec![typed_inner],
+                            field_offset: 0,
+                        },
+                        rhs_ty,
+                    ));
+                }
+                let Ty::Enum(expected_enum_name, _) = &rhs_ty else {
+                    return Err(TypeError::new(
+                        format!(
+                            "Constructor pattern requires an enum or Result RHS, got {}",
+                            self.ty_name(&rhs_ty)
+                        ),
+                        ctor_id.span.clone(),
+                    ));
+                };
+                let variant = self
+                    .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
+                    .ok_or_else(|| {
+                        TypeError::new(
+                            format!("Unknown constructor: {}", ctor_id.name),
+                            ctor_id.span.clone(),
+                        )
+                    })?
+                    .clone();
+                let variant = self.instantiate_enum_variant(&variant);
+                if &variant.enum_name != expected_enum_name {
+                    return Err(TypeError::new(
+                        format!(
+                            "Constructor {} does not belong to enum {}",
+                            ctor_id.name,
+                            Self::surface_name(expected_enum_name)
+                        ),
+                        ctor_id.span.clone(),
+                    ));
+                }
+                if !self.types_compatible(&variant.enum_ty, &rhs_ty) {
+                    return Err(TypeError::new(
+                        format!(
+                            "Constructor {} does not match expected type {}",
+                            ctor_id.name,
+                            self.ty_name(&rhs_ty)
+                        ),
+                        ctor_id.span.clone(),
+                    ));
+                }
+                if inners.len() != variant.payload.len() {
+                    return Err(TypeError::new(
+                        format!(
+                            "{} pattern expects {} argument(s), got {}",
+                            ctor_id.name,
+                            variant.payload.len(),
+                            inners.len()
+                        ),
+                        ctor_id.span.clone(),
+                    ));
+                }
+                let mut typed_fields = Vec::with_capacity(inners.len());
+                for (inner, field_ty) in inners.iter().zip(variant.payload.iter()) {
+                    let field_ty = self.resolve_ty(field_ty);
+                    let (typed_inner, _) = self.check_pattern(inner, &field_ty, span)?;
+                    typed_fields.push(typed_inner);
+                }
                 Ok((
-                    TypedPattern::ResultOk(rhs_ty.clone(), Box::new(typed_inner)),
+                    TypedPattern::Constructor {
+                        ty: rhs_ty.clone(),
+                        tag: variant.tag,
+                        field_tys: variant.payload,
+                        fields: typed_fields,
+                        field_offset: 1,
+                    },
                     rhs_ty,
                 ))
             }
@@ -491,12 +586,12 @@ impl Checker {
                 let tail_ty = Ty::List(Box::new(elem_ty));
                 self.bind_typed_pattern(tail, &tail_ty);
             }
-            TypedPattern::ResultOk(_, inner) => {
-                let ok_ty = match &rhs_ty {
-                    Ty::Result(ok, _) => ok.as_ref().clone(),
-                    _ => return,
-                };
-                self.bind_typed_pattern(inner, &ok_ty);
+            TypedPattern::Constructor {
+                field_tys, fields, ..
+            } => {
+                for (field, field_ty) in fields.iter().zip(field_tys) {
+                    self.bind_typed_pattern(field, field_ty);
+                }
             }
             TypedPattern::Extractor { seq_tys, items, .. } => {
                 for (item, item_ty) in items.iter().zip(seq_tys.iter()) {
@@ -526,11 +621,10 @@ impl Checker {
 
     pub(super) fn collect_pattern_result_error_types(&self, pat: &TypedPattern, out: &mut Vec<Ty>) {
         match pat {
-            TypedPattern::ResultOk(ty, inner) => {
-                if let Ty::Result(_, err) = self.resolve_ty(ty) {
-                    out.push(err.as_ref().clone());
+            TypedPattern::Constructor { fields, .. } => {
+                for field in fields {
+                    self.collect_pattern_result_error_types(field, out);
                 }
-                self.collect_pattern_result_error_types(inner, out);
             }
             TypedPattern::ListCons(_, head, tail) => {
                 self.collect_pattern_result_error_types(head, out);

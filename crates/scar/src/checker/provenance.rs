@@ -358,7 +358,7 @@ impl Checker {
                             let source = self.source_provenance(value, &local);
                             self.pattern_provenance_bindings(pattern, &source, &mut local);
                         }
-                        TypedInner::SafeBind(pattern, value) => {
+                        TypedInner::SafeBind(pattern, value, _, _) => {
                             let source = self.source_provenance(value, &local);
                             let success = self.safebind_source_provenance(&source);
                             self.pattern_provenance_bindings(pattern, &success, &mut local);
@@ -1249,18 +1249,27 @@ impl Checker {
                 );
                 self.pattern_provenance_bindings(tail, source, bindings);
             }
-            TypedPattern::ResultOk(_, inner) => self.pattern_provenance_bindings(
-                inner,
-                &self.project_provenance(
-                    source,
-                    &Projection::Field {
-                        index: 0,
-                        tag: Some(0),
-                    },
-                    &Ty::Hole,
-                ),
-                bindings,
-            ),
+            TypedPattern::Constructor {
+                tag,
+                fields,
+                field_offset,
+                ..
+            } => {
+                for (index, field) in fields.iter().enumerate() {
+                    self.pattern_provenance_bindings(
+                        field,
+                        &self.project_provenance(
+                            source,
+                            &Projection::Field {
+                                index: *field_offset as usize + index,
+                                tag: Some(*tag),
+                            },
+                            &Ty::Hole,
+                        ),
+                        bindings,
+                    );
+                }
+            }
             _ => {}
         }
     }

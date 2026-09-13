@@ -303,7 +303,7 @@ impl Checker {
             | TypedInner::ConstructorCall(_, args) => args.iter().find_map(visit),
             TypedInner::Block(stmts) => stmts.iter().find_map(visit),
             TypedInner::Bind(_, rhs)
-            | TypedInner::SafeBind(_, rhs)
+            | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::EagerBoundary(rhs)
             | TypedInner::FieldAccess(rhs, _) => visit(rhs),
@@ -862,7 +862,7 @@ impl Checker {
                 )?;
                 TypedInner::Bind(pattern, rhs)
             }
-            TypedInner::SafeBind(pattern, rhs) => {
+            TypedInner::SafeBind(pattern, rhs, projection, failure_target) => {
                 let rhs = self.rewrite_specializations_in_node(
                     *rhs,
                     defs_by_fun_idx,
@@ -883,7 +883,7 @@ impl Checker {
                         generated_defs,
                     },
                 )?;
-                TypedInner::SafeBind(pattern, rhs)
+                TypedInner::SafeBind(pattern, rhs, projection, failure_target)
             }
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
@@ -2361,7 +2361,9 @@ impl Checker {
                     self.collect_pending_trait_receiver_tyvars_in_node(stmt, ordered, seen);
                 }
             }
-            TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) | TypedInner::Semi(rhs) => {
+            TypedInner::Bind(_, rhs)
+            | TypedInner::SafeBind(_, rhs, _, _)
+            | TypedInner::Semi(rhs) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(rhs, ordered, seen)
             }
             TypedInner::BinOp(_, left, right)
@@ -2511,9 +2513,9 @@ impl Checker {
                     self.collect_bound_tyvars_in_node(stmt, ordered, seen);
                 }
             }
-            TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) | TypedInner::Semi(rhs) => {
-                self.collect_bound_tyvars_in_node(rhs, ordered, seen)
-            }
+            TypedInner::Bind(_, rhs)
+            | TypedInner::SafeBind(_, rhs, _, _)
+            | TypedInner::Semi(rhs) => self.collect_bound_tyvars_in_node(rhs, ordered, seen),
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right) => {
@@ -2829,9 +2831,32 @@ impl Checker {
                 self.substitute_typed_pattern_with_mapping(pattern, mapping),
                 Box::new(self.substitute_typed_node_with_mapping(*rhs, mapping)),
             ),
-            TypedInner::SafeBind(pattern, rhs) => TypedInner::SafeBind(
+            TypedInner::SafeBind(pattern, rhs, projection, failure_target) => TypedInner::SafeBind(
                 self.substitute_typed_pattern_with_mapping(pattern, mapping),
                 Box::new(self.substitute_typed_node_with_mapping(*rhs, mapping)),
+                match projection {
+                    SafeBindRhsProjection::CanonicalResultOnce {
+                        payload_ty,
+                        error_ty,
+                    } => SafeBindRhsProjection::CanonicalResultOnce {
+                        payload_ty: self.substitute_ty_with_mapping(&payload_ty, mapping),
+                        error_ty: self.substitute_ty_with_mapping(&error_ty, mapping),
+                    },
+                    SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
+                        SafeBindRhsProjection::PassThroughNonResultPartial {
+                            pattern_input_ty: self
+                                .substitute_ty_with_mapping(&pattern_input_ty, mapping),
+                        }
+                    }
+                },
+                match failure_target {
+                    SafeBindFailureTarget::EnclosingResult { error_ty } => {
+                        SafeBindFailureTarget::EnclosingResult {
+                            error_ty: self.substitute_ty_with_mapping(&error_ty, mapping),
+                        }
+                    }
+                    SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
+                },
             ),
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
@@ -3289,10 +3314,25 @@ impl Checker {
                     .map(|item| self.substitute_typed_pattern_with_mapping(item, mapping))
                     .collect(),
             ),
-            TypedPattern::ResultOk(ty, inner) => TypedPattern::ResultOk(
-                self.substitute_ty_with_mapping(&ty, mapping),
-                Box::new(self.substitute_typed_pattern_with_mapping(*inner, mapping)),
-            ),
+            TypedPattern::Constructor {
+                ty,
+                tag,
+                field_tys,
+                fields,
+                field_offset,
+            } => TypedPattern::Constructor {
+                ty: self.substitute_ty_with_mapping(&ty, mapping),
+                tag,
+                field_tys: field_tys
+                    .into_iter()
+                    .map(|ty| self.substitute_ty_with_mapping(&ty, mapping))
+                    .collect(),
+                fields: fields
+                    .into_iter()
+                    .map(|field| self.substitute_typed_pattern_with_mapping(field, mapping))
+                    .collect(),
+                field_offset,
+            },
             TypedPattern::Extractor {
                 input_ty,
                 extractor,
@@ -3799,18 +3839,37 @@ impl Checker {
                         .collect::<Result<Vec<_>, _>>()?,
                 )
             }
-            TypedPattern::ResultOk(ty, inner) => {
+            TypedPattern::Constructor {
+                ty,
+                tag,
+                field_tys,
+                fields,
+                field_offset,
+            } => {
                 let ty = normalized_ty(self, &ty, expected_ty);
-                let inner_ty = match &ty {
-                    Ty::Result(ok, _) => Some(ok.as_ref()),
-                    _ => None,
-                };
-                TypedPattern::ResultOk(
-                    ty.clone(),
-                    Box::new(
-                        self.concretize_specialized_typed_pattern(*inner, inner_ty, span, context)?,
-                    ),
-                )
+                let field_tys = field_tys
+                    .into_iter()
+                    .map(|field_ty| normalized_ty(self, &field_ty, None))
+                    .collect::<Vec<_>>();
+                let fields = fields
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, field)| {
+                        self.concretize_specialized_typed_pattern(
+                            field,
+                            field_tys.get(index),
+                            span,
+                            context,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                TypedPattern::Constructor {
+                    ty,
+                    tag,
+                    field_tys,
+                    fields,
+                    field_offset,
+                }
             }
             TypedPattern::Extractor {
                 input_ty,
@@ -3940,14 +3999,14 @@ impl Checker {
     fn typed_pattern_has_pending_dispatch(pattern: &TypedPattern) -> bool {
         match pattern {
             TypedPattern::Pin(_, _, dispatch) => matches!(dispatch, TraitDispatch::Pending),
-            TypedPattern::As(_, inner, _) | TypedPattern::ResultOk(_, inner) => {
-                Self::typed_pattern_has_pending_dispatch(inner)
-            }
+            TypedPattern::As(_, inner, _) => Self::typed_pattern_has_pending_dispatch(inner),
             TypedPattern::ListCons(_, head, tail) => {
                 Self::typed_pattern_has_pending_dispatch(head)
                     || Self::typed_pattern_has_pending_dispatch(tail)
             }
-            TypedPattern::Tuple(_, items) | TypedPattern::Extractor { items, .. } => {
+            TypedPattern::Tuple(_, items)
+            | TypedPattern::Constructor { fields: items, .. }
+            | TypedPattern::Extractor { items, .. } => {
                 items.iter().any(Self::typed_pattern_has_pending_dispatch)
             }
             _ => false,
@@ -4017,7 +4076,7 @@ impl Checker {
                     || args.iter().any(Self::typed_node_has_pending_trait_call)
             }
             TypedInner::Block(stmts) => stmts.iter().any(Self::typed_node_has_pending_trait_call),
-            TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs) => {
+            TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs, _, _) => {
                 Self::typed_pattern_has_pending_dispatch(pattern)
                     || Self::typed_node_has_pending_trait_call(rhs)
             }

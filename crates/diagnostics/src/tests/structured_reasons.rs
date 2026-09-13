@@ -143,6 +143,20 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
                 branch: Some(1),
             })
         }
+        SafeBindTotalPatternNonMonadRhs | SafeBindTotalPatternNonResultMonadRhs => {
+            DiagnosticData::SafeBindRelation(SafeBindRelationData {
+                lhs_type: "Option<Int>".into(),
+                rhs_type: "Option<Int>".into(),
+                lhs_is_total: true,
+                rhs_is_canonical_result: false,
+                monad_capability: if reason == SafeBindTotalPatternNonResultMonadRhs {
+                    "satisfied"
+                } else {
+                    "unsatisfied"
+                }
+                .into(),
+            })
+        }
     };
     let origin = match reason {
         IfBranchTypeMismatch => DiagnosticOrigin::Branch {
@@ -220,6 +234,8 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         IfBranchTypeMismatch,
         MatchArmTypeMismatch,
         CondBranchTypeMismatch,
+        SafeBindTotalPatternNonMonadRhs,
+        SafeBindTotalPatternNonResultMonadRhs,
     ];
     let mut sources = SourceRegistry::new();
     let source_id = sources.register("main.srt", "abcdefgh");
@@ -297,6 +313,13 @@ fn every_common_reason_has_a_typed_template_and_schema() {
                 "right_type",
                 "left_origin",
                 "right_origin",
+            ],
+            "SafeBindRelation" => &[
+                "lhs_type",
+                "rhs_type",
+                "lhs_is_total",
+                "rhs_is_canonical_result",
+                "monad_capability",
             ],
             "CallableShape" | "ArgumentContract" | "CallableSignature" => &[],
             other => panic!("unexpected schema: {other}"),

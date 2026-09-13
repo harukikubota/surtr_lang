@@ -364,12 +364,14 @@ value: Int =? parse_int("1")
 [head, ..tail] =? [1, 2, 3]
 [head, ..tail] =? Ok([1, 2, 3])
 [first, ..tail] =? "source"
+Option::Some(saved) =? Option::Some(1)
 ```
 
 - `pattern =? Result<T, E>` は `Ok` を束縛し、`Err` を早期伝播する
-- `pattern =? expr` は SafeBind 対象の失敗しうるパターン入力を扱う
-- 現時点の対象は `Result`、`List`、`String`
-- `Option` は SafeBind 対象ではない。`from::<Result>(value)` で明示的に変換してから使う
+- canonical `Result` RHS は外側一段だけを自動分解し、nested Result は通常 pattern として扱う
+- Result 以外の RHS は値と型を変えず、constructor / literal / list / string / Extractor などの partial patternが値全体を明示検査するときだけ受理する
+- total pattern + non-Result RHS は、非MonadとResult以外のMonadを区別したSafeBind compile errorにする
+- 通常patternのannotation / constructor arity / Extractor契約エラーはSafeBind固有分類より先に報告する
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
 
 #### range literal

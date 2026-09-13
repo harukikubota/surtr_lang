@@ -3275,13 +3275,13 @@ fn core_range_bindings_keep_constructor_and_compare_fun_indices_in_sync() {
     assert!(!a.should_exit);
     assert!(rendered_text(&a).contains("a: Duration = 20ms"));
 
-    let a_typed = engine.handle_line("a =? 20ms");
-    assert!(!a_typed.should_exit);
-    assert!(rendered_text(&a_typed).contains("a: Duration = 20ms"));
+    let a_rebound = engine.handle_line("a = 20ms");
+    assert!(!a_rebound.should_exit);
+    assert!(rendered_text(&a_rebound).contains("a: Duration = 20ms"));
 
-    let b_typed = engine.handle_line("b =? 10ms");
-    assert!(!b_typed.should_exit);
-    assert!(rendered_text(&b_typed).contains("b: Duration = 10ms"));
+    let b = engine.handle_line("b = 10ms");
+    assert!(!b.should_exit);
+    assert!(rendered_text(&b).contains("b: Duration = 10ms"));
 
     let range = engine.handle_line("Range(a,b)");
     assert!(!range.should_exit);
@@ -3313,7 +3313,7 @@ fn core_range_generic_helpers_survive_sig_doc_interleaving() {
     assert!(!doc.contains("Unknown function index"), "{doc}");
     assert!(!doc.contains("Call arity mismatch"), "{doc}");
 
-    let b = engine.handle_line("b =? 10ms");
+    let b = engine.handle_line("b = 10ms");
     assert!(!b.should_exit);
     assert!(rendered_text(&b).contains("b: Duration = 10ms"));
 
@@ -3332,7 +3332,7 @@ fn core_range_generic_helpers_survive_runtime_error_rollback() {
     assert!(!a.should_exit);
     assert!(rendered_text(&a).contains("a: Duration = 20ms"));
 
-    let b = engine.handle_line("b =? 10ms");
+    let b = engine.handle_line("b = 10ms");
     assert!(!b.should_exit);
     assert!(rendered_text(&b).contains("b: Duration = 10ms"));
 
@@ -4070,11 +4070,15 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     );
     assert!(
         safe_bind_doc
-            .contains("It may be used only inside functions whose current evaluation returns"),
+            .contains("In user functions it may be used only when the current evaluation returns"),
         "{safe_bind_doc}"
     );
     assert!(
-        safe_bind_doc.contains("`num: Int =? Option::Some(1)` is an error"),
+        safe_bind_doc.contains("`Option::Some(num) =? Option::Some(1)` explicitly inspects"),
+        "{safe_bind_doc}"
+    );
+    assert!(
+        safe_bind_doc.contains("A total pattern with a non-Result RHS is a compile"),
         "{safe_bind_doc}"
     );
     assert!(
