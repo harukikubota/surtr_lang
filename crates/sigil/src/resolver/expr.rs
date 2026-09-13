@@ -804,7 +804,7 @@ impl Resolver {
             | Ast::Defsupervisor(_, _, _, _, _)
             | Ast::DefdynamicSupervisor(_, _, _, _, _)
             | Ast::Namespace(_, _, _)
-            | Ast::ImplDef(_, _, _, _)
+            | Ast::ImplDef(_, _, _, _, _)
             | Ast::TraitDef(..)
             | Ast::TraitImplDef(..)
             | Ast::Import(_, _, _)
@@ -3796,7 +3796,7 @@ impl Resolver {
                 },
                 related_labels: Vec::new(),
             }),
-            Ast::ImplDef(span, target, _, _) => Err(ResolveError {
+            Ast::ImplDef(span, target, _, _, _) => Err(ResolveError {
                 message: format!("impl lowering failed for target `{}`", target),
                 span,
                 diagnostic: crate::error::ResolveErrorDiagnostic {

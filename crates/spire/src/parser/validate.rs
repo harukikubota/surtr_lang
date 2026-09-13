@@ -102,7 +102,7 @@ fn top_level_decl_kind(ast: &Ast) -> Option<TopLevelDeclKind> {
         Ast::Defsupervisor(_, _, _, _, _) => Some(TopLevelDeclKind::Defsupervisor),
         Ast::DefdynamicSupervisor(_, _, _, _, _) => Some(TopLevelDeclKind::DefdynamicSupervisor),
         Ast::Namespace(_, _, _) => Some(TopLevelDeclKind::Namespace),
-        Ast::ImplDef(_, _, _, _) => Some(TopLevelDeclKind::ImplDef),
+        Ast::ImplDef(_, _, _, _, _) => Some(TopLevelDeclKind::ImplDef),
         Ast::TraitDef(_, _, _, _, _, _) => Some(TopLevelDeclKind::TraitDef),
         Ast::TraitImplDef(_, _, _, _, _, _, _) => Some(TopLevelDeclKind::TraitImplDef),
         Ast::Import(_, _, _) => Some(TopLevelDeclKind::Import),

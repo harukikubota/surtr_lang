@@ -1,5 +1,6 @@
 pub mod builtin;
 pub mod derive;
+pub mod intrinsic;
 pub mod ir;
 pub mod names;
 pub mod operator_diagnostics;

@@ -11,6 +11,9 @@ pub enum ResolveErrorReason {
     Declaration,
     SpecialForm,
     SourcePolicy,
+    InvalidIntrinsicSurfaceContract,
+    ReservedIntrinsicMarkerDeclaration,
+    ReservedIntrinsicMarkerImpl,
     CompilerInvariant,
 }
 

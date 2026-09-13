@@ -3642,6 +3642,11 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         identity: TypeIdentity::Type,
     },
     BuiltinTypeMeta {
+        name: TypeName::DoBlock.as_str(),
+        params: &["$Result"],
+        identity: TypeIdentity::Type,
+    },
+    BuiltinTypeMeta {
         name: TypeName::BulkUpdateEntries.as_str(),
         params: &["$State"],
         identity: TypeIdentity::Type,

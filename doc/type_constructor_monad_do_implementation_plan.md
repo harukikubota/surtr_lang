@@ -7,7 +7,7 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- N01–N06は実装済み。N07以降は未着手である。
+- N01–N07は実装済み。N08以降は未着手である。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
@@ -49,8 +49,8 @@ N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け
 | N04 | parameterized TypeCtorTrait・MonadT契約 | N03 | [x] 完了 | 新規言語機能 |
 | N05 | 標準Transformer | N04。Identityを使うテストはN02 | [x] 完了 | 新規標準機能 |
 | N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision、実装済みSafeBind RHS訂正 | [x] 完了 | 旧Task 10を再編 |
-| N07 | do compiler-owned contract | N06 | [ ] 着手可能 | 旧Task 11 |
-| N08 | do syntax・AST・resolver・scope | N07 | [ ] 未着手 | 旧Task 12 |
+| N07 | do compiler-owned contract | N06 | [x] 完了 | 旧Task 11 |
+| N08 | do syntax・AST・resolver・scope | N07 | [ ] 着手可能 | 旧Task 12 |
 | N09 | do carrier推論・core lowering | N08 | [ ] 未着手 | 旧Task 13 |
 | N10 | do SafeBind・Forge lowering | N09 | [ ] 未着手 | 旧Task 14 |
 | N11 | do診断・全carrier統合検証 | N10 | [ ] 未着手 | 旧Task 15 |
@@ -104,7 +104,8 @@ dirtyなメインworktreeは変更せず、専用worktreeで文書だけを整�
 | 同 builtin / diagnostic残件 | 実装済み | source surfaceとcompiler-generated declaration identityを`BUILTIN_METAS`の構造データへ統合し、message heuristicと外部allowlistを撤去 | `docs/dev/diagnostics.md`、実装履歴は`diagnostics_cleanup_spec.md` §8.1・DC-14 |
 | `type_constructor_signature_unification_implementation_plan.md` Task 1–9 | 完了履歴 | commits `b1805d75`, `6221dffd`, `d134c95a`, `256c4b79`, `65ba6172`, `25c53c4e`, `dfe4a2e1`, `c28d185c`, `f2c0affd`と各review fixがHEAD祖先 | 恒久契約は担当`/docs`、実装手順・検証ログはVCS |
 | 同 Task 10 | 完了履歴 | SafeBind旧制限、diagnostic heuristic、builtin surface allowlistをN06で撤去 | `docs/dev/diagnostics.md`、`diagnostics_cleanup_spec.md` / N06 |
-| 同 Task 11–15 | 確定未実装 | `Ast::Do` / `Resolved::Do` / `TypedDo` / `DoBlock` / `IntrinsicId::Do`なし | `do_intrinsic_spec.md` / N07–N11 |
+| 同 Task 11 | 実装済み | Sindrの`DoIntrinsicContract` / `DoBlock` / `IntrinsicId::Do`、標準surfaceの構造検証、reserved marker拒否を実装 | `do_intrinsic_spec.md` / N07 |
+| 同 Task 12–15 | 確定未実装 | `Token::Do` / `Ast::Do` / `Resolved::Do` / `TypedDo`、推論・lowering・実行経路なし | `do_intrinsic_spec.md` / N08–N11 |
 | 同 Task 16 | implementation plan | 最終監査はdo/Generator等の完了後 | N14 |
 | `signature_level_type_constructor_inference_draft.md` | draft | import前後のblob hash一致を確認 | 本文を変更せず`doc/`に保持 |
 
@@ -351,6 +352,34 @@ fileだけをstageして作成する。DC-01–DC-17のfocused / REPL / 全体�
 ### N07: compiler-owned contract
 
 既存 `do_intrinsic_spec.md` のcompiler-owned contract、DoBlock、surface validationを実装する。do-local carrierの単一性をcontract自体へ明示する。
+
+状態: 完了。Sindrに`IntrinsicId::Do`、`DoIntrinsicContract`、canonical Trait / method / Result identity、
+ReturnTypeArgument position 0に結び付く単一のdo-local carrier、条件付き`Alternative`、SafeBind input / failure policy、
+lowering contractをclosed metadataとして追加した。`DoBlock` builtin identityは
+`IntrinsicSignatureOnly(IntrinsicId::Do)`とし、標準sourceからidentityを生成しない。
+
+Spireは`@intrinsic`のraw display textと構造化signatureを分離し、Sigilは`Bootstrap::do`のowner、
+ReturnTypeArgument arity / role、parameter、return、反復`$Result`関係をSindr contractと構造比較する。
+user sourceの`DoBlock`宣言・通常type position・inherent / Trait impl targetは用途別のclosed reasonで拒否する。
+raw signatureの再解析、通常callable scheme化、runtime function / opcode、do構文・推論・loweringは追加していない。
+
+検証（2026-09-13）:
+
+- TDD Red: Spireの構造化signatureテストは旧`String` ASTでcompile failure、Sigilの不正surfaceは受理、
+  `DoBlock`予約テストは汎用builtin診断となることを確認後、新契約でGreen化。
+- `rtk cargo nextest run -p sindr -p spire -p sigil -p diagnostics -p scar`: 1080 passed。
+- `cargo check --workspace`: 成功。
+- `cargo run -- test --quiet --all`: 成功。新規worktree初回はGit管理外の`tmp/sandbox`不在で
+  file I/O 5件だけが失敗し、先行filesystem testが同directoryを作成した後の同一コマンドで成功。
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace`: 1885 passed。AST変更後の初回は
+  Project modeの8 language-feature bucketが別々cold prefixを並列構築し、15秒timeoutで8件失敗。
+  同binaryで個別・逐次実行を成功させた後、並列8 passed / 4.096sと最終workspace 1885 passed / 70.430sを確認。
+- 独立Lunaレビューは、具象payloadの誤受理、表示名だけのsurface検証、impl target span欠落の3件を検出。
+  型変数種別、canonical owner / Trait / builtin identity、一般`Ast::ImplDef` target spanと診断label / note / helpを修正後、
+  再レビューはfindings 0件。Astra顧問も一般AST span保持を採用すべきと確認し、CI初回timeoutを
+  binary fingerprint変更後のProject prefix cold並列構築と切り分けた。
+
+N08の`Token::Do` / `Ast::Do` / resolver scope以降は未実装。commitは未作成。
 
 ### N08: syntax / AST / resolver / scope
 

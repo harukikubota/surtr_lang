@@ -141,7 +141,8 @@ fn parse_std_module_stage(source: &str, fallback_module_path: &str) -> Vec<sigil
                         .ast
                         .iter()
                         .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-                    Some(Ast::ImplDef(_, target, _, _)) if surface_module_name(target) == "Result"
+                    Some(Ast::ImplDef(_, target, _, _, _))
+                        if surface_module_name(target) == "Result"
                 )
         })
     }
@@ -199,11 +200,17 @@ fn parse_std_module_stage(source: &str, fallback_module_path: &str) -> Vec<sigil
                     process_spec: Some(process_spec),
                 });
             }
-            Ast::ImplDef(span, target, methods, attrs) => {
+            Ast::ImplDef(span, target, target_span, methods, attrs) => {
                 let mut module_ast = shared_imports.clone();
                 let (local_imports, methods) = partition_nested_imports(methods);
                 module_ast.extend(local_imports);
-                module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
+                module_ast.push(Ast::ImplDef(
+                    span,
+                    target.clone(),
+                    target_span,
+                    methods,
+                    attrs.clone(),
+                ));
                 lowered.push(sigil::StagedModuleAst {
                     source_index: 0,
                     module_path: target,
@@ -434,9 +441,15 @@ fn parse_user_module_stage(source: &str) -> Vec<sigil::StagedModuleAst> {
                     process_spec: Some(process_spec),
                 });
             }
-            Ast::ImplDef(span, target, methods, attrs) => {
+            Ast::ImplDef(span, target, target_span, methods, attrs) => {
                 let mut module_ast = shared_imports.clone();
-                module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
+                module_ast.push(Ast::ImplDef(
+                    span,
+                    target.clone(),
+                    target_span,
+                    methods,
+                    attrs.clone(),
+                ));
                 lowered.push(sigil::StagedModuleAst {
                     source_index: 0,
                     module_path: target,

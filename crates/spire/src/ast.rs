@@ -480,6 +480,19 @@ pub struct ValueParameter {
     pub span: Span,
 }
 
+/// Source declaration for a compiler-owned intrinsic.
+///
+/// `raw` is retained only for documentation/signature display. Compiler
+/// validation consumes the structured fields and must not reparse `raw`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IntrinsicSignature {
+    pub raw: String,
+    pub return_type_arguments: Vec<ReturnTypeArgument>,
+    pub value_parameters: Vec<ValueParameter>,
+    pub return_type: Option<AstTy>,
+    pub where_clause: Option<WhereClause>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TraitMethodSig {
     pub name: Symbol,
@@ -729,8 +742,9 @@ pub enum Ast {
         DeclAttrs,
     ),
 
-    /// Display-only intrinsic declaration: `@intrinsic def dbg!(values: *$A) -> Unit`
-    IntrinsicDecl(Span, Symbol, String, DeclAttrs),
+    /// Compiler-owned intrinsic declaration. Its raw source is display-only;
+    /// phases validate the structured signature against canonical metadata.
+    IntrinsicDecl(Span, Symbol, IntrinsicSignature, DeclAttrs),
 
     BuiltinExtractorDecl(Span, Symbol, ExtractorParam, AstTy, DeclAttrs),
 
@@ -763,7 +777,9 @@ pub enum Ast {
     Namespace(Span, Symbol, Vec<Ast>),
 
     /// Impl definition: `impl User { def normalize(self) -> Self { self } }`
-    ImplDef(Span, Symbol, Vec<Ast>, DeclAttrs),
+    ///
+    /// Stores both the full declaration span and the exact target-symbol span.
+    ImplDef(Span, Symbol, Span, Vec<Ast>, DeclAttrs),
 
     /// Trait definition: `deftrait Add { def add(self: Self, rhs: Self) -> Self }`
     TraitDef(

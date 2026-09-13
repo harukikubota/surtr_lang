@@ -323,6 +323,14 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             stage: None,
             entrypoint: None,
         }),
+        ReservedIntrinsicMarkerUsage => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::IntrinsicMarkerUsage,
+            subject: Some("DoBlock".into()),
+            expected_type: None,
+            actual_type: Some("DoBlock".into()),
+            stage: None,
+            entrypoint: Some("do".into()),
+        }),
         TypecheckInvariantViolation => DiagnosticData::Policy(PolicyData {
             policy: TypePolicy::ProducerContract,
             subject: Some("typechecker".into()),
@@ -438,6 +446,7 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         ProcessHandlerScope,
         SourcePolicyViolation,
         CompilePolicyViolation,
+        ReservedIntrinsicMarkerUsage,
         TypecheckInvariantViolation,
         ProcessPolicyViolation,
     ];
@@ -565,6 +574,34 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         assert_eq!(before.hint, after.hint);
         assert_eq!(before.related, after.related);
     }
+}
+
+#[test]
+fn reserved_intrinsic_marker_usage_has_specific_label_note_and_help() {
+    let mut diagnostic = input(TypeDiagnosticReason::ReservedIntrinsicMarkerUsage);
+    diagnostic.primary = SourceFact::untyped(
+        SourceRole::Annotation,
+        SourceId(0),
+        Span { start: 4, end: 11 },
+    );
+    diagnostic.remediation = Some(Remediation::Help {
+        text: "Remove `DoBlock`; write a `do { ... }` expression to sequence Monad values.".into(),
+    });
+
+    let spec = structured_type_error_spec(&diagnostic);
+    assert_eq!(
+        spec.message,
+        "`DoBlock` is reserved for the compiler-owned `do` signature"
+    );
+    assert_eq!(
+        spec.labels[0].message,
+        "`DoBlock` cannot be used in this type position"
+    );
+    assert_eq!(spec.notes, ["`DoBlock` is not an ordinary value type"]);
+    assert_eq!(
+        spec.help.as_deref(),
+        Some("Remove `DoBlock`; write a `do { ... }` expression to sequence Monad values.")
+    );
 }
 
 #[test]

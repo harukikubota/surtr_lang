@@ -48,6 +48,13 @@ targets, or module/type declarations.
 @builtin type CondClauses<$Result>
 
 @doc """
+Compiler-reserved `do` block marker.
+Use level: intrinsic-signature-only marker.
+`DoBlock<$Result>` is not an ordinary first-class value type.
+"""
+@builtin type DoBlock<$Result>
+
+@doc """
 Compiler-reserved `Facet::bulk_update` entry-block marker.
 Use level: intrinsic-signature-only marker.
 `BulkUpdateEntries<$State>` does not describe an ordinary first-class value.

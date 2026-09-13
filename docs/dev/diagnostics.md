@@ -63,7 +63,7 @@ source span を必要としない説明や修正案を `labels` に置かない�
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
 | SafeBind input | `SafeBindTotalPatternNonMonadRhs`, `SafeBindTotalPatternNonResultMonadRhs` |
 | pattern / Extractor | `PatternTypeMismatch`, `PatternShapeMismatch`, `PatternArityMismatch`, `NonTotalBindingPattern`, `NestedResultErrorPattern`, `MatchGuardTypeMismatch`, `ConstructorPatternRequiresEnumOrResultRhs`, `ExtractorInputTypeMismatch`, `ExtractorArityMismatch`, `NonExhaustiveMatch` |
-| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresResultTarget`, `ErrorValueMustBeWrapped`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitHelperCaptureNeedsExpectedType` |
+| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresResultTarget`, `ErrorValueMustBeWrapped`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
 | producer contract | `TypecheckInvariantViolation` |
 
 `MissingGenericBound`はrigid genericの宣言済みproof不足、`MissingTraitCapability`は具象subjectの能力不足、
@@ -104,6 +104,12 @@ constructor-context経路の`CandidateFailureData`は候補ごとの型と失敗
 remediationはbase reason、expected/actual type、primary spanを変更しないoverlayである。具体的な変換案は
 canonical identityと可視なconversion implから一意に裏付けられる場合だけ追加し、rendered type名やmessageの
 文字列一致から選ばない。
+
+compiler-owned intrinsic の標準 surface が canonical contract と異なる場合は resolve reason
+`InvalidIntrinsicSurfaceContract`、intrinsic 専用 marker の user declaration / impl target は
+`ReservedIntrinsicMarkerDeclaration` / `ReservedIntrinsicMarkerImpl` を使う。通常 type position に現れた
+marker は typecheck reason `ReservedIntrinsicMarkerUsage` とし、raw intrinsic signature や表示文を再解析して
+reason を決めない。
 
 ## 実装規則
 

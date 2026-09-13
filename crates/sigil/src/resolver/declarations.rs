@@ -5,13 +5,184 @@ use sindr::builtin::{
     builtin_type_head_meta_by_name, builtin_type_supports_inherent_impl,
     standard_owner_identity_by_name,
 };
+use sindr::intrinsic::{
+    do_intrinsic_contract, IntrinsicId, IntrinsicType, IntrinsicTypeParameter,
+    ReturnTypeArgumentRole,
+};
 use sindr::names::{
-    reserved_owner_surface_name_constraint, surface_path_name, ReservedOwnerSurfaceNameKind,
-    TypeIdentity,
+    builtin_type_name, reserved_owner_surface_name_constraint, surface_path_name,
+    ReservedOwnerSurfaceNameKind, TypeIdentity, TypeName,
 };
 use spire::ast::FacetPathSegment;
 
 use serde::{Deserialize, Serialize};
+
+fn is_do_block_surface_name(name: &str) -> bool {
+    global_surface_name(name) == TypeName::DoBlock.as_str()
+}
+
+fn reserved_do_block_error(span: &Span, reason: crate::error::ResolveErrorReason) -> ResolveError {
+    let marker = TypeName::DoBlock.as_str();
+    let intrinsic = IntrinsicId::Do.surface_name();
+    ResolveError {
+        message: format!("`{marker}` is reserved for the compiler-owned `{intrinsic}` signature"),
+        span: span.clone(),
+        diagnostic: crate::error::ResolveErrorDiagnostic {
+            reason,
+            subject: Some(marker.to_string()),
+        },
+        related_labels: Vec::new(),
+    }
+}
+
+fn intrinsic_type_matches(
+    owner_registry: &OwnerRegistry,
+    actual: &AstTy,
+    expected: IntrinsicType,
+    type_parameters: &mut HashMap<IntrinsicTypeParameter, String>,
+) -> bool {
+    let (actual_head, actual_args) = match actual {
+        AstTy::Generic(_, head, args) => (global_surface_name(head), args.as_slice()),
+        _ => return false,
+    };
+    if actual_args.len() != 1 {
+        return false;
+    }
+    let expected_parameter = match expected {
+        IntrinsicType::BuiltinApplication { head, argument } => {
+            if builtin_type_name(actual_head) != Some(head)
+                || !owner_registry.get(actual_head).is_some_and(|entry| {
+                    entry.kind == OwnerKind::BuiltinType
+                        && entry.identity
+                            == builtin_type_head_meta_by_name(head.as_str())
+                                .expect("intrinsic builtin type metadata")
+                                .identity
+                })
+            {
+                return false;
+            }
+            argument
+        }
+        IntrinsicType::TraitApplication {
+            trait_identity,
+            argument,
+        } => {
+            if !canonical_intrinsic_trait_matches(owner_registry, actual_head, trait_identity) {
+                return false;
+            }
+            argument
+        }
+    };
+    let AstTy::Named(_, actual_parameter) = &actual_args[0] else {
+        return false;
+    };
+    if !actual_parameter.starts_with('$') {
+        return false;
+    }
+    match type_parameters.get(&expected_parameter) {
+        Some(bound) => bound == actual_parameter,
+        None => {
+            type_parameters.insert(expected_parameter, actual_parameter.clone());
+            true
+        }
+    }
+}
+
+fn canonical_intrinsic_trait_matches(
+    owner_registry: &OwnerRegistry,
+    actual: &str,
+    expected: sindr::intrinsic::CanonicalTraitIdentity,
+) -> bool {
+    global_surface_name(actual) == expected.surface_name()
+        && owner_registry.get(actual).is_some_and(|entry| {
+            entry.kind == OwnerKind::Trait && entry.identity == TypeIdentity::TypeConstructor
+        })
+}
+
+fn invalid_do_intrinsic_surface_error(span: &Span) -> ResolveError {
+    let contract = do_intrinsic_contract();
+    let intrinsic = contract.identity.surface_name();
+    ResolveError {
+        message: format!(
+            "the `{intrinsic}` intrinsic declaration does not match its compiler-owned contract"
+        ),
+        span: span.clone(),
+        diagnostic: crate::error::ResolveErrorDiagnostic {
+            reason: crate::error::ResolveErrorReason::InvalidIntrinsicSurfaceContract,
+            subject: Some(format!("{}::{intrinsic}", contract.owner.surface_name())),
+        },
+        related_labels: Vec::new(),
+    }
+}
+
+fn validate_intrinsic_surface(
+    owner_registry: &OwnerRegistry,
+    owner: &str,
+    span: &Span,
+    name: &str,
+    signature: &spire::ast::IntrinsicSignature,
+) -> Result<(), ResolveError> {
+    if name != IntrinsicId::Do.surface_name() {
+        return Ok(());
+    }
+
+    let contract = do_intrinsic_contract();
+    let mut type_parameters = HashMap::new();
+    let valid_owner = global_surface_name(owner) == contract.owner.surface_name()
+        && owner_registry.get(owner).is_some_and(|entry| {
+            entry.kind == OwnerKind::Mod && entry.identity == TypeIdentity::Mod
+        });
+    let valid_return_type_arguments = signature.return_type_arguments.len()
+        == contract.return_type_arguments.len()
+        && signature
+            .return_type_arguments
+            .iter()
+            .zip(contract.return_type_arguments)
+            .all(|(actual, expected)| {
+                actual.ordinal as usize == expected.position
+                    && match (&actual.ty, expected.role) {
+                        (
+                            AstTy::Named(_, name),
+                            ReturnTypeArgumentRole::DirectTypeCtorTrait(identity),
+                        ) => canonical_intrinsic_trait_matches(owner_registry, name, identity),
+                        _ => false,
+                    }
+            });
+    let valid_value_parameters = signature.value_parameters.len()
+        == contract.value_parameters.len()
+        && signature
+            .value_parameters
+            .iter()
+            .zip(contract.value_parameters)
+            .all(|(actual, expected)| {
+                actual.mode == spire::ast::ValueParameterMode::PositionalOrNamed
+                    && intrinsic_type_matches(
+                        owner_registry,
+                        &actual.ty,
+                        *expected,
+                        &mut type_parameters,
+                    )
+            });
+    let valid_return_type = signature.return_type.as_ref().is_some_and(|actual| {
+        intrinsic_type_matches(
+            owner_registry,
+            actual,
+            contract.return_type,
+            &mut type_parameters,
+        )
+    });
+
+    if valid_owner
+        && valid_return_type_arguments
+        && valid_value_parameters
+        && valid_return_type
+        && signature.where_clause.is_none()
+    {
+        Ok(())
+    } else {
+        Err(invalid_do_intrinsic_surface_error(span))
+    }
+}
 
 fn reserved_owner_name_error(
     owner_kind: &str,
@@ -19,6 +190,12 @@ fn reserved_owner_name_error(
     span: &Span,
     allow_canonical_builtin_type: bool,
 ) -> Option<ResolveError> {
+    if is_do_block_surface_name(name) && !allow_canonical_builtin_type {
+        return Some(reserved_do_block_error(
+            span,
+            crate::error::ResolveErrorReason::ReservedIntrinsicMarkerDeclaration,
+        ));
+    }
     let constraint = reserved_owner_surface_name_constraint(name)?;
     if allow_canonical_builtin_type
         && matches!(
@@ -182,7 +359,7 @@ fn validate_definition_return_type_arguments(
             }
             Ok(())
         }
-        Ast::ImplDef(_, _, methods, _) => {
+        Ast::ImplDef(_, _, _, methods, _) => {
             for method in methods {
                 validate_definition_return_type_arguments(owner_registry, method)?;
             }
@@ -386,13 +563,19 @@ pub fn lower_module_source_ast(
                     process_spec: Some(process_spec),
                 });
             }
-            Ast::ImplDef(span, target, methods, attrs) => {
+            Ast::ImplDef(span, target, target_span, methods, attrs) => {
                 let declared_span = span.clone();
                 let module_path = target.clone();
                 let mut module_ast = shared_imports.clone();
                 let (local_imports, methods) = partition_nested_imports(methods);
                 module_ast.extend(local_imports);
-                module_ast.push(Ast::ImplDef(span, target, methods, attrs.clone()));
+                module_ast.push(Ast::ImplDef(
+                    span,
+                    target,
+                    target_span,
+                    methods,
+                    attrs.clone(),
+                ));
                 lowered.push(LoweredModuleAst {
                     module_path,
                     doc_module_path: None,
@@ -654,7 +837,7 @@ pub fn lowered_module_is_impl_owner(lowered: &LoweredModuleAst) -> bool {
             .ast
             .iter()
             .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(..))
+        Some(Ast::ImplDef(_, _, _, _, _) | Ast::TraitImplDef(..))
     )
 }
 
@@ -664,7 +847,7 @@ fn staged_module_is_impl_owner(module: &StagedModuleAst) -> bool {
             .ast
             .iter()
             .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-        Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(..))
+        Some(Ast::ImplDef(_, _, _, _, _) | Ast::TraitImplDef(..))
     )
 }
 
@@ -705,7 +888,7 @@ fn find_result_owner_module(lowered: &[LoweredModuleAst]) -> Option<usize> {
                     .ast
                     .iter()
                     .find(|stmt| !matches!(stmt, Ast::Import(_, _, _))),
-                Some(Ast::ImplDef(_, target, _, _)) if surface_path_name(target) == "Result"
+                Some(Ast::ImplDef(_, target, _, _, _)) if surface_path_name(target) == "Result"
             )
     })
 }
@@ -1370,6 +1553,12 @@ fn resolve_impl_target_kind(
     span: &Span,
     targets: &HashMap<String, ImplTargetResolution>,
 ) -> Result<DeclarationKind, ResolveError> {
+    if is_do_block_surface_name(target) {
+        return Err(reserved_do_block_error(
+            span,
+            crate::error::ResolveErrorReason::ReservedIntrinsicMarkerImpl,
+        ));
+    }
     match targets.get(target) {
         Some(ImplTargetResolution::Unique(kind)) => Ok(kind.clone()),
         Some(ImplTargetResolution::Ambiguous) => Err(ResolveError {
@@ -2225,12 +2414,23 @@ pub fn precollect_declarations(
         let stage_impl_targets = collect_stage_impl_target_resolutions(stage);
         for module in stage {
             for stmt in &module.ast {
-                if let Ast::ImplDef(span, target, methods, _) = stmt {
+                if let Ast::IntrinsicDecl(span, name, signature, _) = stmt {
+                    validate_intrinsic_surface(
+                        &owner_registry,
+                        &module.module_path,
+                        span,
+                        name,
+                        signature,
+                    )?;
+                    continue;
+                }
+                if let Ast::ImplDef(span, target, target_span, methods, _) = stmt {
                     validate_unique_callable_names(
                         &format!("impl `{}`", global_surface_name(target)),
                         methods,
                     )?;
-                    let target_kind = resolve_impl_target_kind(target, span, &stage_impl_targets)?;
+                    let target_kind =
+                        resolve_impl_target_kind(target, target_span, &stage_impl_targets)?;
                     if !matches!(
                         target_kind,
                         DeclarationKind::Struct
@@ -2282,6 +2482,15 @@ pub fn precollect_declarations(
 
                     let method_module_path = impl_owner_module_path(target);
                     for method in methods {
+                        if let Ast::IntrinsicDecl(method_span, method_name, signature, _) = method {
+                            validate_intrinsic_surface(
+                                &owner_registry,
+                                &method_module_path,
+                                method_span,
+                                method_name,
+                                signature,
+                            )?;
+                        }
                         let (method_span, method_name, kind, attrs) = match method {
                             Ast::Def(method_span, method_name, _, _, _, _, _, attrs) => {
                                 let kind = if method_name == "new" {
@@ -2401,6 +2610,22 @@ pub fn precollect_declarations(
                 if let Ast::TraitImplDef(span, trait_name, trait_args, target_ty, _, methods, _) =
                     stmt
                 {
+                    let target_head = match target_ty {
+                        AstTy::Named(target_span, name)
+                        | AstTy::ImplTrait(target_span, name)
+                        | AstTy::Generic(target_span, name, _) => {
+                            Some((name.as_str(), target_span))
+                        }
+                        AstTy::Tuple(..) | AstTy::Func(..) => None,
+                    };
+                    if let Some((_, target_span)) =
+                        target_head.filter(|(name, _)| is_do_block_surface_name(name))
+                    {
+                        return Err(reserved_do_block_error(
+                            target_span,
+                            crate::error::ResolveErrorReason::ReservedIntrinsicMarkerImpl,
+                        ));
+                    }
                     validate_unique_callable_names(
                         &format!(
                             "impl `{}` for `{}`",
@@ -2549,7 +2774,7 @@ pub fn precollect_declarations(
                             entry_user_importable(attrs),
                             entry_user_callable(attrs),
                         ),
-                        Ast::ImplDef(_, _, _, _) | Ast::TraitDef(..) | Ast::TraitImplDef(..) => {
+                        Ast::ImplDef(_, _, _, _, _) | Ast::TraitDef(..) | Ast::TraitImplDef(..) => {
                             continue;
                         }
                         Ast::ResultCtorDecl(span, name, _, _, attrs) => (
@@ -2811,12 +3036,13 @@ impl Resolver {
 
         for stmt in stmts {
             match stmt {
-                Ast::ImplDef(span, target, methods, _attrs) => {
+                Ast::ImplDef(span, target, target_span, methods, _attrs) => {
                     validate_unique_callable_names(
                         &format!("impl `{}`", global_surface_name(&target)),
                         &methods,
                     )?;
-                    let target_kind = resolve_impl_target_kind(&target, &span, impl_targets)?;
+                    let target_kind =
+                        resolve_impl_target_kind(&target, &target_span, impl_targets)?;
                     if !matches!(
                         target_kind,
                         DeclarationKind::Struct

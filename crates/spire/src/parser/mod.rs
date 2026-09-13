@@ -573,9 +573,10 @@ fn apply_namespace_to_decl(node: Ast, namespace: Option<&str>) -> Result<Ast, Pa
                 attrs,
             ))
         }
-        Ast::ImplDef(span, target, methods, attrs) => Ok(Ast::ImplDef(
+        Ast::ImplDef(span, target, target_span, methods, attrs) => Ok(Ast::ImplDef(
             span.clone(),
             qualify_namespace_head(namespace, &target, 2, &span, "impl target", false)?,
+            target_span,
             methods,
             attrs,
         )),
@@ -1288,9 +1289,10 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             rewrite_process_owner_ty(ret_ty, old_name, new_name),
             attrs,
         ),
-        Ast::ImplDef(span, target, methods, attrs) => Ast::ImplDef(
+        Ast::ImplDef(span, target, target_span, methods, attrs) => Ast::ImplDef(
             span,
             rewrite_process_owner_symbol(target, old_name, new_name),
+            target_span,
             rewrite_process_owner_refs_in_body(methods, old_name, new_name),
             attrs,
         ),
@@ -2343,7 +2345,23 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
         Ast::IntrinsicDecl(span, name, signature, attrs) => Ast::IntrinsicDecl(
             shift_span(span, delta),
             name,
-            signature,
+            IntrinsicSignature {
+                raw: signature.raw,
+                return_type_arguments: signature
+                    .return_type_arguments
+                    .into_iter()
+                    .map(|argument| shift_return_type_argument(argument, delta))
+                    .collect(),
+                value_parameters: signature
+                    .value_parameters
+                    .into_iter()
+                    .map(|parameter| shift_value_parameter(parameter, delta))
+                    .collect(),
+                return_type: signature.return_type.map(|ty| shift_ast_ty(ty, delta)),
+                where_clause: signature
+                    .where_clause
+                    .map(|clause| shift_where_clause(clause, delta)),
+            },
             shift_decl_attrs(attrs),
         ),
         Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
@@ -2414,9 +2432,10 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 shift_decl_attrs(attrs),
             )
         }
-        Ast::ImplDef(span, target, methods, attrs) => Ast::ImplDef(
+        Ast::ImplDef(span, target, target_span, methods, attrs) => Ast::ImplDef(
             shift_span(span, delta),
             target,
+            shift_span(target_span, delta),
             methods
                 .into_iter()
                 .map(|method| shift_ast_span(method, delta))
@@ -2588,7 +2607,7 @@ impl Ast {
             | Ast::Defgenserver(s, _, _, _, _)
             | Ast::Defsupervisor(s, _, _, _, _)
             | Ast::DefdynamicSupervisor(s, _, _, _, _)
-            | Ast::ImplDef(s, _, _, _)
+            | Ast::ImplDef(s, _, _, _, _)
             | Ast::TraitDef(s, _, _, _, _, _)
             | Ast::TraitImplDef(s, _, _, _, _, _, _)
             | Ast::Import(s, _, _)

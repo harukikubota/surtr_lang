@@ -22,7 +22,8 @@ carrier 指定、自然言語 message の再解析を追加してはならない
 追加しないが、既存 SafeBind の Result-style failure を保存する [8節](#8-safebindとの統合) の限定規則だけは例外とする。
 
 本書のSafeBindは[`diagnostics_cleanup_spec.md`](diagnostics_cleanup_spec.md) §§3–4で実装済みの契約を再利用する。
-N01–N06は完了し、do開始ゲートを通過した。N07–N11のdo実装は未着手である。
+N01–N07は完了し、compiler-owned contract、`DoBlock`、surface validationまで実装済みである。
+N08–N11のdo構文・推論・lowering・統合検証は未着手である。
 Extractorは現行の`Option<T>`返却を前提とし、更改タスクへの依存はない。
 以下の`Result<R, E>`は内部型関係の説明表記であり、doの変数注釈やRTAに二引数Result構文を追加しない。
 現行のerror値はabstract `Error`へ収束するため、独立したcaptured error parameterを新設しない。
