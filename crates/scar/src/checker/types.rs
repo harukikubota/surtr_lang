@@ -428,7 +428,7 @@ impl Checker {
         )
     }
 
-    fn canonical_user_type_name(name: &str) -> String {
+    pub(super) fn canonical_user_type_name(name: &str) -> String {
         if name.contains("::") {
             name.to_string()
         } else {
@@ -1177,13 +1177,15 @@ impl Checker {
                     }
                     let mut resolved_args = Vec::with_capacity(args.len());
                     for (argument, bound) in args.iter().zip(&def.type_param_bounds) {
-                        let resolved = if bound
+                        let constructor_trait = bound
                             .as_deref()
-                            .and_then(|bound| self.declaration_constructor_trait_key(bound))
-                            .is_some()
-                            && !matches!(argument, AstTy::Named(_, variable) if variable.starts_with('$'))
-                        {
-                            self.resolve_type_constructor_head(argument)?
+                            .and_then(|bound| self.declaration_constructor_trait_key(bound));
+                        let resolved = if let Some(trait_key) = constructor_trait.filter(|_| {
+                            !matches!(argument, AstTy::Named(_, variable) if variable.starts_with('$'))
+                        }) {
+                            let head = self.resolve_type_constructor_head(argument)?;
+                            self.normalize_inferred_constructor_identity(&trait_key, &head)
+                                .unwrap_or(head)
                         } else {
                             self.resolve_ast_ty_in_context(
                                 argument,
@@ -1281,10 +1283,11 @@ impl Checker {
         if matches!(ast_ty, AstTy::Named(_, name) if Self::surface_name(name) == "_") {
             return Ok(self.env.fresh_tyvar());
         }
-        let is_constructor_slot = matches!(
-            slot_ty,
-            Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some()
-        );
+        let is_constructor_slot = match slot_ty {
+            Ty::SelfApp(items) => Self::constructor_application_parts(items).is_some(),
+            Ty::Var(variable) => self.constructor_witness_traits.contains_key(variable),
+            _ => false,
+        };
         if !is_constructor_slot {
             return self.resolve_ast_ty_in_context(ast_ty, TypeSyntaxContext::General);
         }
@@ -2322,13 +2325,15 @@ impl Checker {
                     }
                     let mut resolved_args = Vec::with_capacity(args.len());
                     for (argument, bound) in args.iter().zip(&def.type_param_bounds) {
-                        let resolved = if bound
+                        let constructor_trait = bound
                             .as_deref()
-                            .and_then(|bound| self.declaration_constructor_trait_key(bound))
-                            .is_some()
-                            && !matches!(argument, AstTy::Named(_, variable) if variable.starts_with('$'))
-                        {
-                            self.resolve_type_constructor_head(argument)?
+                            .and_then(|bound| self.declaration_constructor_trait_key(bound));
+                        let resolved = if let Some(trait_key) = constructor_trait.filter(|_| {
+                            !matches!(argument, AstTy::Named(_, variable) if variable.starts_with('$'))
+                        }) {
+                            let head = self.resolve_type_constructor_head(argument)?;
+                            self.normalize_inferred_constructor_identity(&trait_key, &head)
+                                .unwrap_or(head)
                         } else {
                             self.resolve_signature_like_ast_ty_in_context(
                                 argument,
@@ -2548,7 +2553,16 @@ impl Checker {
                         }
                         None => self.types_compatible(witness, other),
                     }
-                } else if !self.types_compatible(witness, other) {
+                } else if !match witness {
+                    Ty::Var(occurrence)
+                        if self.constructor_witness_traits.contains_key(occurrence)
+                            && (matches!(self.resolve_ty(witness), Ty::Var(_))
+                                || self.is_projected_constructor_identity(witness)) =>
+                    {
+                        self.match_bare_constructor_occurrence(*occurrence, other)
+                    }
+                    _ => self.types_compatible(witness, other),
+                } {
                     false
                 } else {
                     match self.constructor_application_slots_for_witness(
@@ -2599,12 +2613,7 @@ impl Checker {
             }
             (Ty::Struct(n1, fields1), Ty::Struct(n2, fields2)) => {
                 Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                    && fields1.arguments.len() == fields2.arguments.len()
-                    && fields1
-                        .arguments
-                        .iter()
-                        .zip(&fields2.arguments)
-                        .all(|(left, right)| self.types_compatible(left, right))
+                    && self.nominal_arguments_compatible(n1, &fields1.arguments, &fields2.arguments)
                     && (fields1.is_empty()
                         || fields2.is_empty()
                         || (fields1.len() == fields2.len()
@@ -2617,12 +2626,7 @@ impl Checker {
             }
             (Ty::Record(n1, fields1), Ty::Record(n2, fields2)) => {
                 Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                    && fields1.arguments.len() == fields2.arguments.len()
-                    && fields1
-                        .arguments
-                        .iter()
-                        .zip(&fields2.arguments)
-                        .all(|(left, right)| self.types_compatible(left, right))
+                    && self.nominal_arguments_compatible(n1, &fields1.arguments, &fields2.arguments)
                     && (fields1.is_empty()
                         || fields2.is_empty()
                         || (fields1.len() == fields2.len()
@@ -2635,11 +2639,7 @@ impl Checker {
             }
             (Ty::Enum(n1, args1), Ty::Enum(n2, args2)) => {
                 Self::canonical_user_type_name(n1) == Self::canonical_user_type_name(n2)
-                    && args1.len() == args2.len()
-                    && args1
-                        .iter()
-                        .zip(args2.iter())
-                        .all(|(left, right)| self.types_compatible(left, right))
+                    && self.nominal_arguments_compatible(n1, args1, args2)
             }
             _ => false,
         };
@@ -2763,7 +2763,30 @@ impl Checker {
                     }
                 }
                 _ => {
-                    if !self.ty_satisfies_bounds(&ty, &var_bounds) {
+                    let has_constructor_identity_marker =
+                        self.canonical_request(&ty).ok().is_some_and(|canonical| {
+                            fn contains_hole(ty: &CanonicalTy) -> bool {
+                                ty.head == CanonicalTypeHead::Hole
+                                    || ty.arguments.iter().any(contains_hole)
+                            }
+                            canonical.head != CanonicalTypeHead::SelfApplication
+                                && contains_hole(&canonical)
+                        });
+                    let bounds_satisfied = var_bounds.iter().all(|bound| {
+                        let constructor_bound =
+                            (self.constructor_witness_traits.contains_key(&var)
+                                && has_constructor_identity_marker)
+                                .then(|| self.declaration_constructor_trait_key(bound))
+                                .flatten();
+                        match constructor_bound {
+                            Some(trait_key) => matches!(
+                                self.constructor_head_projection(&trait_key, &ty),
+                                ConstructorProjectionOutcome::Applicable { .. }
+                            ),
+                            None => self.ty_satisfies_bounds(&ty, std::slice::from_ref(bound)),
+                        }
+                    });
+                    if !bounds_satisfied {
                         self.profiler.finish(ProfileEvent::BindTyVar, profile);
                         return false;
                     }
@@ -3122,7 +3145,19 @@ impl Checker {
                 // An unresolved application still needs its declaration's
                 // mapped-slot metadata after call-site constraints arrive.
                 if let Some(source) = source_witness.filter(|_| resolved.len() > 2) {
-                    resolved[1] = source;
+                    let shares_constructor_metadata = match (&source, &resolved[1]) {
+                        (Ty::Var(source_var), Ty::Var(resolved_var)) => self
+                            .constructor_witness_traits
+                            .get(source_var)
+                            .zip(self.constructor_witness_traits.get(resolved_var))
+                            .is_some_and(|(source_trait, resolved_trait)| {
+                                self.constructor_traits_share_mapping(source_trait, resolved_trait)
+                            }),
+                        _ => false,
+                    };
+                    if !shares_constructor_metadata {
+                        resolved[1] = source;
+                    }
                 }
                 Ty::SelfApp(resolved)
             }

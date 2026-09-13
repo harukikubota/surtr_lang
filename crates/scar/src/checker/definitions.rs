@@ -420,7 +420,10 @@ impl Checker {
                 if !atomic {
                     return Err(TypeError {
                         structured: None,
-                        message: format!("Facet path kind `{}` must be an alias or one of the compiler-derived atomic kinds", id.name),
+                        message: format!(
+                            "Facet path kind `{}` must be an alias or one of the compiler-derived atomic kinds",
+                            id.name
+                        ),
                         span: span.clone(),
                         hint: None,
                     });
@@ -441,7 +444,10 @@ impl Checker {
                     if !self.facet_path_kind_decls.contains_key(member) {
                         return Err(TypeError {
                             structured: None,
-                            message: format!("Facet path kind alias `{}` must reference a previously declared kind; `{member}` is not available", id.name),
+                            message: format!(
+                                "Facet path kind alias `{}` must reference a previously declared kind; `{member}` is not available",
+                                id.name
+                            ),
                             span: span.clone(),
                             hint: None,
                         });
@@ -701,74 +707,62 @@ impl Checker {
         match name {
             "if" => SpecialFormContract {
                 expected_qname: "Kernel::if",
-                expected_signature:
-                    "@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
+                expected_signature: "@builtin def if(flag: Boolean, then_branch: Lazy<$A>, else_branch: Lazy<$A>) -> $A",
                 shape_ok: special_form_shape_if,
             },
             "if_then" => SpecialFormContract {
                 expected_qname: "Kernel::if_then",
-                expected_signature:
-                    "@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
+                expected_signature: "@builtin def if_then(flag: Boolean, then_branch: Lazy<Unit>) -> Unit",
                 shape_ok: special_form_shape_if_then,
             },
             "if_let" => SpecialFormContract {
                 expected_qname: "Kernel::if_let",
-                expected_signature:
-                    "@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B",
+                expected_signature: "@builtin def if_let(value: $A, pattern: $Pattern, then_branch: Lazy<$B>, else_branch: Lazy<$B>) -> $B",
                 shape_ok: special_form_shape_if_let,
             },
             "if_let_then" => SpecialFormContract {
                 expected_qname: "Kernel::if_let_then",
-                expected_signature:
-                    "@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
+                expected_signature: "@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
                 shape_ok: special_form_shape_if_let_then,
             },
             "is_match" => SpecialFormContract {
                 expected_qname: "Kernel::is_match",
-                expected_signature:
-                    "@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
+                expected_signature: "@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean",
                 shape_ok: special_form_shape_is_match,
             },
             "assert" => SpecialFormContract {
                 expected_qname: "Kernel::assert",
-                expected_signature:
-                    "@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
+                expected_signature: "@builtin def assert(flag: Boolean, err: Lazy<Error>) -> Result<Unit>",
                 shape_ok: special_form_shape_assert,
             },
             "ensure" => SpecialFormContract {
                 expected_qname: "Kernel::ensure",
-                expected_signature:
-                    "@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
+                expected_signature: "@builtin def ensure(value: $A, pred: ($A -> Boolean), err: Lazy<Error>) -> Result<$A>",
                 shape_ok: special_form_shape_ensure,
             },
             "map_err" => SpecialFormContract {
                 expected_qname: "Result::map_err",
-                expected_signature:
-                    "@builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
+                expected_signature: "@builtin def map_err(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
                 shape_ok: special_form_shape_map_err_or_cause,
             },
             "cause" => SpecialFormContract {
                 expected_qname: "Result::cause",
-                expected_signature:
-                    "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
+                expected_signature: "@builtin def cause(result: Result<$T>, err: Lazy<Error>) -> Result<$T>",
                 shape_ok: special_form_shape_map_err_or_cause,
             },
             "recover_kind" => SpecialFormContract {
                 expected_qname: "Result::recover_kind",
-                expected_signature:
-                    "@builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>",
+                expected_signature: "@builtin def recover_kind(value: Result<$A>, marker: Lazy<Error>, handler: (Error -> Result<$A>)) -> Result<$A>",
                 shape_ok: special_form_shape_recover_kind,
             },
             "and" => SpecialFormContract {
                 expected_qname: "Kernel::and",
-                expected_signature:
-                    "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
+                expected_signature: "@builtin def and(left: Boolean, right: Lazy<Boolean>) -> Boolean",
                 shape_ok: special_form_shape_and_or,
             },
             "or" => SpecialFormContract {
                 expected_qname: "Kernel::or",
-                expected_signature:
-                    "@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
+                expected_signature: "@builtin def or(left: Boolean, right: Lazy<Boolean>) -> Boolean",
                 shape_ok: special_form_shape_and_or,
             },
             "(,)" => SpecialFormContract {
@@ -1209,18 +1203,7 @@ impl Checker {
         // definition. Check the body now, but defer subtree normalization to the
         // single resolve_typed_node pass in check_program.
         let profile = self.profiler.start();
-        let contextual_constructor_body = matches!(
-            &function_return_ty,
-            Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some()
-        ) && self.constructor_body_needs_expected(body);
-        let result = if contextual_constructor_body
-            || self.body_tail_is_receiverless_trait_call(body)
-            || self.body_tail_is_return_type_argument_call(body)
-        {
-            self.check_node_with_expected(body, Some(&function_return_ty))
-        } else {
-            self.check_node(body)
-        };
+        let result = self.check_node_with_expected(body, Some(&function_return_ty));
         for (deferred, checked) in deferred_capabilities.iter_mut().zip(
             self.active_capabilities
                 .iter()
@@ -1268,29 +1251,6 @@ impl Checker {
         result
     }
 
-    pub(super) fn body_tail_is_receiverless_trait_call(&self, body: &Resolved) -> bool {
-        match body {
-            Resolved::Block(_, statements) => statements
-                .last()
-                .is_some_and(|tail| self.body_tail_is_receiverless_trait_call(tail)),
-            Resolved::Grouped(_, inner) => self.body_tail_is_receiverless_trait_call(inner),
-            Resolved::App(_, function, _) => self
-                .trait_method_ref(function)
-                .and_then(|(_, trait_name, method_name)| {
-                    self.traits
-                        .get(&trait_name)
-                        .and_then(|trait_info| trait_info.methods.get(&method_name))
-                })
-                .is_some_and(|method| {
-                    !method
-                        .value_parameters
-                        .iter()
-                        .any(|param| Self::ast_ty_mentions_self(&param.ty))
-                }),
-            _ => false,
-        }
-    }
-
     pub(super) fn body_tail_is_return_type_argument_call(&self, body: &Resolved) -> bool {
         match body {
             Resolved::Block(_, statements) => statements
@@ -1320,36 +1280,6 @@ impl Checker {
                         .is_some_and(|signature| !signature.return_type_arguments.is_empty()))
             }
             _ => false,
-        }
-    }
-
-    fn constructor_body_needs_expected(&self, body: &Resolved) -> bool {
-        match body {
-            Resolved::Block(_, statements) => statements
-                .last()
-                .is_some_and(|tail| self.constructor_body_needs_expected(tail)),
-            Resolved::Grouped(_, inner) => self.constructor_body_needs_expected(inner),
-            Resolved::Cond(_, clauses) => clauses
-                .iter()
-                .all(|(_, body)| self.body_tail_is_receiverless_trait_call(body)),
-            Resolved::If(_, _, then_branch, Some(else_branch)) => {
-                self.body_tail_is_receiverless_trait_call(then_branch)
-                    && self.body_tail_is_receiverless_trait_call(else_branch)
-            }
-            _ => self.body_tail_is_receiverless_trait_call(body),
-        }
-    }
-
-    fn ast_ty_mentions_self(ty: &AstTy) -> bool {
-        match ty {
-            AstTy::Named(_, name) | AstTy::ImplTrait(_, name) => name == "Self",
-            AstTy::Generic(_, name, args) => {
-                name == "Self" || args.iter().any(Self::ast_ty_mentions_self)
-            }
-            AstTy::Tuple(_, items) => items.iter().any(Self::ast_ty_mentions_self),
-            AstTy::Func(_, params, ret) => {
-                params.iter().any(Self::ast_ty_mentions_self) || Self::ast_ty_mentions_self(ret)
-            }
         }
     }
 

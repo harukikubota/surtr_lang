@@ -565,12 +565,14 @@ impl Checker {
         trait_name: &str,
         method_name: &str,
         param_tys: &[Ty],
+        receiver_index: Option<usize>,
         args: &[TypedNode],
     ) -> Result<(), TypeError> {
-        if let Some(receiver) = args.first() {
-            self.check_constructor_capability(trait_name, method_name, receiver)?;
-        }
-        for (expected, arg) in param_tys.iter().zip(args).skip(1) {
+        for (index, (expected, arg)) in param_tys.iter().zip(args).enumerate() {
+            if receiver_index == Some(index) {
+                self.check_constructor_capability(trait_name, method_name, arg)?;
+                continue;
+            }
             if !matches!(expected, Ty::SelfApp(items)
                 if Self::constructor_application_parts(items).is_some())
             {
@@ -905,7 +907,7 @@ impl Checker {
                                     &obligation.receiver,
                                     &span,
                                     DiagnosticOrigin::TraitCall,
-                                ))
+                                ));
                             }
                         }
                     }
@@ -1887,6 +1889,7 @@ impl Checker {
             &typed_func.ty,
         );
         self.apply_return_type_argument_constraints(&constraints)?;
+        self.apply_concrete_expected_call_constraint(&constraints, span, None)?;
         let typed_args = self.check_callable_application(
             id.unique_id,
             &id.name,
@@ -1975,23 +1978,33 @@ impl Checker {
             let Some(explicit_ty) = constraint.explicit_ty() else {
                 continue;
             };
-            if self
-                .assert_type_relation(
-                    &slot.ty,
-                    explicit_ty,
-                    self.type_fact(SourceRole::Contract, constraint.span(), &slot.ty),
-                    self.type_fact(
-                        SourceRole::ReturnTypeArgument,
-                        constraint.span(),
+            let relation_failed = match slot.ty {
+                Ty::Var(variable) if self.constructor_witness_traits.contains_key(&variable) => {
+                    let checkpoint = self.candidate_probe_checkpoint();
+                    let matched = self.match_explicit_constructor_occurrence(variable, explicit_ty);
+                    if !matched {
+                        self.rollback_candidate_probe(checkpoint);
+                    }
+                    !matched
+                }
+                _ => self
+                    .assert_type_relation(
+                        &slot.ty,
                         explicit_ty,
-                    ),
-                    TypeDiagnosticReason::ArgumentTypeMismatch,
-                    DiagnosticOrigin::Call,
-                    &constraints.signature.identity.name,
-                    slot.ordinal,
-                )
-                .is_err()
-            {
+                        self.type_fact(SourceRole::Contract, constraint.span(), &slot.ty),
+                        self.type_fact(
+                            SourceRole::ReturnTypeArgument,
+                            constraint.span(),
+                            explicit_ty,
+                        ),
+                        TypeDiagnosticReason::ArgumentTypeMismatch,
+                        DiagnosticOrigin::Call,
+                        &constraints.signature.identity.name,
+                        slot.ordinal,
+                    )
+                    .is_err(),
+            };
+            if relation_failed {
                 return Err(super::signatures::return_type_argument_mismatch_error(
                     &constraints.signature.identity.name,
                     slot.ordinal,
@@ -2108,6 +2121,98 @@ impl Checker {
             expected,
             &constraints.signature.return_type.ty,
             self.type_fact(SourceRole::Expected, span, expected),
+            self.type_fact(
+                SourceRole::Value,
+                span,
+                &constraints.signature.return_type.ty,
+            ),
+            TypeDiagnosticReason::ReturnTypeMismatch,
+            DiagnosticOrigin::Return,
+            &constraints.signature.identity.name,
+            0,
+        )
+        .map_err(|_| {
+            self.call_expected_return_mismatch_error(constraints, expected, span, explicit)
+        })
+    }
+
+    /// A result context whose variables are fixed by the enclosing declaration
+    /// may safely shape closure and constructor arguments before their bodies
+    /// are checked.  Fresh inference variables must wait until value arguments
+    /// have contributed their constraints, otherwise generic bounds are proved
+    /// too early.
+    fn apply_concrete_expected_call_constraint(
+        &mut self,
+        constraints: &super::signatures::CallConstraintSet,
+        span: &Span,
+        explicit: Option<&[AstTy]>,
+    ) -> Result<(), TypeError> {
+        let Some(expected) = constraints
+            .expected_return
+            .as_ref()
+            .and_then(super::signatures::TypeConstraint::explicit_ty)
+        else {
+            return Ok(());
+        };
+        let normalized_expected =
+            self.normalize_executable_constructor_identities(&self.resolve_ty(expected));
+        let Ok(canonical_expected) = self.canonical_request(&normalized_expected) else {
+            return Ok(());
+        };
+        fn is_stable_context(ty: &CanonicalTy, rigid: &HashSet<u32>) -> bool {
+            match ty.head {
+                CanonicalTypeHead::Variable(variable) => rigid.contains(&variable),
+                CanonicalTypeHead::SelfApplication => false,
+                _ => ty
+                    .arguments
+                    .iter()
+                    .all(|argument| is_stable_context(argument, rigid)),
+            }
+        }
+        fn needs_context(ty: &Ty) -> bool {
+            match ty {
+                Ty::Func(..) | Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => true,
+                Ty::SelfApp(items) => Checker::constructor_application_parts(items).is_some(),
+                Ty::List(inner) | Ty::Lazy(inner) => needs_context(inner),
+                Ty::Result(ok, error) => needs_context(ok) || needs_context(error),
+                Ty::Tuple(items) => items.iter().any(needs_context),
+                Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                    nominal.arguments.iter().any(needs_context)
+                        || nominal.iter().any(|(_, field)| needs_context(field))
+                }
+                Ty::Enum(_, arguments) => arguments.iter().any(needs_context),
+                Ty::Facet(_, source, focus, update_source, update_focus) => {
+                    needs_context(source)
+                        || needs_context(focus)
+                        || needs_context(update_source)
+                        || needs_context(update_focus)
+                }
+                Ty::Var(_)
+                | Ty::Hole
+                | Ty::Int
+                | Ty::Float
+                | Ty::Str
+                | Ty::Bool
+                | Ty::Unit
+                | Ty::Error
+                | Ty::Pid(_) => false,
+            }
+        }
+        if !constraints
+            .signature
+            .value_parameters
+            .iter()
+            .any(|parameter| needs_context(&parameter.ty))
+        {
+            return Ok(());
+        }
+        if !is_stable_context(&canonical_expected, &self.rigid_tyvars) {
+            return Ok(());
+        }
+        self.assert_type_relation(
+            &normalized_expected,
+            &constraints.signature.return_type.ty,
+            self.type_fact(SourceRole::Expected, span, &normalized_expected),
             self.type_fact(
                 SourceRole::Value,
                 span,
@@ -2303,7 +2408,16 @@ impl Checker {
         for obligation in &constraints.obligations {
             let subject = self.resolve_ty(&obligation.subject);
             let trait_key = &obligation.trait_name;
-            if !self.ty_satisfies_bounds(&subject, std::slice::from_ref(trait_key)) {
+            let constructor_head_satisfies = matches!(
+                &obligation.subject,
+                Ty::Var(variable) if self.constructor_witness_traits.contains_key(variable)
+            ) && matches!(
+                self.constructor_head_projection(trait_key, &subject),
+                ConstructorProjectionOutcome::Applicable { .. }
+            );
+            if !constructor_head_satisfies
+                && !self.ty_satisfies_bounds(&subject, std::slice::from_ref(trait_key))
+            {
                 let reason = if matches!(subject, Ty::Var(var) if self.rigid_tyvars.contains(&var))
                 {
                     TypeDiagnosticReason::MissingGenericBound
@@ -2407,7 +2521,7 @@ impl Checker {
                 span,
             );
         }
-        self.type_relation_error(
+        let error = self.type_relation_error(
             expected,
             &signature.return_type.ty,
             self.type_fact(SourceRole::Expected, span, expected),
@@ -2416,7 +2530,24 @@ impl Checker {
             DiagnosticOrigin::Return,
             &signature.identity.name,
             0,
-        )
+        );
+        if matches!(self.resolve_ty(&signature.return_type.ty), Ty::Unit) && error.hint.is_none() {
+            let params = signature
+                .value_parameters
+                .iter()
+                .map(|parameter| parameter.ty.clone())
+                .collect::<Vec<_>>();
+            return error.with_hint(format!(
+                "{}\nThis call returns Unit; the surrounding context expects {}.",
+                self.format_signature(
+                    &signature.identity.name,
+                    &params,
+                    &signature.return_type.ty,
+                ),
+                self.diagnostic_ty_name(expected),
+            ));
+        }
+        error
     }
 
     fn conflicting_return_type_argument_ordinal(
@@ -3006,7 +3137,9 @@ impl Checker {
             | Resolved::Compose(_, _, _)
             | Resolved::LiftedCompose(_, _, _)
             | Resolved::KleisliCompose(_, _, _) => self.check_node(node),
-            Resolved::Var(_, _) | Resolved::Grouped(_, _) | Resolved::ReturnTypeArgumentApply(_, _, _) => {
+            Resolved::Var(_, _)
+            | Resolved::Grouped(_, _)
+            | Resolved::ReturnTypeArgumentApply(_, _, _) => {
                 self.check_function_value_operand(node, op_name)
             }
             _ => Err(TypeError {
@@ -3389,7 +3522,7 @@ impl Checker {
                     hint: Some(
                         "Use `curry(&function)` or bind a closure/callable value first.".into(),
                     ),
-                })
+                });
             }
             _ => {
                 return Err(TypeError {
@@ -3400,7 +3533,7 @@ impl Checker {
                     ),
                     span: typed_source.span.clone(),
                     hint: None,
-                })
+                });
             }
         };
         if params.len() < 2 {
@@ -4301,6 +4434,231 @@ impl Checker {
         )
     }
 
+    fn constructor_trait_arguments_shared_with_target(info: &TraitImplInfo) -> Vec<usize> {
+        let mut target_variables = Vec::new();
+        Self::collect_ty_vars(&info.target_ty, &mut target_variables);
+        let target_variables = target_variables.into_iter().collect::<HashSet<_>>();
+        info.trait_arg_tys
+            .iter()
+            .enumerate()
+            .filter_map(|(index, argument)| {
+                let mut argument_variables = Vec::new();
+                Self::collect_ty_vars(argument, &mut argument_variables);
+                let argument_variables = argument_variables.into_iter().collect::<HashSet<_>>();
+                (!argument_variables.is_empty() && argument_variables.is_subset(&target_variables))
+                    .then_some(index)
+            })
+            .collect()
+    }
+
+    fn apply_receiverless_target_candidate(
+        &mut self,
+        implementation: &TraitImplInfo,
+        sourceable_trait_arguments: &[usize],
+        span: &Span,
+        trait_name: &str,
+        method_name: &str,
+        args: &[ResolvedRecordLitArg],
+        declared_params: &[Ty],
+        trait_args: &[Ty],
+        self_ty: &Ty,
+        expected: &Ty,
+        operator: Option<OperatorTraitOp>,
+    ) -> Result<Option<Vec<TypedNode>>, TypeError> {
+        let mut fresh = HashMap::new();
+        let target = self.instantiate_ty_with_fresh(&implementation.target_ty, &mut fresh);
+        if self
+            .assert_type_relation(
+                expected,
+                &target,
+                self.type_fact(SourceRole::Expected, span, expected),
+                self.type_fact(SourceRole::Contract, &implementation.trait_id.span, &target),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::TraitCall,
+                &format!("{trait_name}::{method_name}"),
+                0,
+            )
+            .is_err()
+        {
+            return Ok(None);
+        }
+        self.assert_type_relation(
+            self_ty,
+            expected,
+            self.type_fact(SourceRole::Expected, span, expected),
+            self.type_fact(SourceRole::Contract, &implementation.trait_id.span, self_ty),
+            TypeDiagnosticReason::ReturnTypeMismatch,
+            DiagnosticOrigin::TraitCall,
+            &format!("{trait_name}::{method_name}"),
+            0,
+        )?;
+        if implementation.trait_arg_tys.len() != trait_args.len() {
+            return Err(TypeError::new(
+                "Trait implementation argument metadata mismatch",
+                implementation.trait_id.span.clone(),
+            ));
+        }
+        for index in sourceable_trait_arguments {
+            let inferred =
+                self.instantiate_ty_with_fresh(&implementation.trait_arg_tys[*index], &mut fresh);
+            self.assert_type_relation(
+                &trait_args[*index],
+                &inferred,
+                self.type_fact(
+                    SourceRole::Contract,
+                    &implementation.trait_id.span,
+                    &trait_args[*index],
+                ),
+                self.type_fact(
+                    SourceRole::Expected,
+                    &implementation.trait_id.span,
+                    &inferred,
+                ),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::TraitCall,
+                &format!("{trait_name}::{method_name}"),
+                *index as u32,
+            )?;
+        }
+
+        let mut typed_args = Vec::with_capacity(args.len());
+        for (index, (argument, parameter)) in args.iter().zip(declared_params).enumerate() {
+            let ResolvedRecordLitArg::Positional(argument) = argument else {
+                return Ok(None);
+            };
+            let parameter = self.resolve_ty(parameter);
+            let typed =
+                self.check_invocation_argument(argument, &parameter, operator.clone(), index)?;
+            self.assert_type_relation(
+                &parameter,
+                &typed.ty,
+                self.type_fact(SourceRole::Expected, &typed.span, &parameter),
+                self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::TraitCall,
+                &format!("{trait_name}::{method_name}"),
+                index as u32,
+            )?;
+            typed_args.push(typed);
+        }
+        self.check_trait_method_constructor_capabilities(
+            trait_name,
+            method_name,
+            declared_params,
+            None,
+            &typed_args,
+        )?;
+
+        let resolved_trait_args = trait_args
+            .iter()
+            .map(|argument| self.resolve_ty(argument))
+            .collect::<Vec<_>>();
+        let argument_types = typed_args
+            .iter()
+            .map(|argument| self.resolve_ty(&argument.ty))
+            .collect::<Vec<_>>();
+        match self.select_trait_method_instantiation(
+            trait_name,
+            method_name,
+            expected,
+            &resolved_trait_args,
+            &argument_types,
+            expected,
+        )? {
+            CandidateApplicability::Applicable(instantiation)
+                if matches!(
+                    instantiation.implementation,
+                    TraitImplementationId::Declared { ref declaration, .. }
+                        if declaration == &implementation.declaration_key
+                ) =>
+            {
+                Ok(Some(typed_args))
+            }
+            CandidateApplicability::Applicable(_) => Ok(None),
+            CandidateApplicability::Deferred(_) => Err(self.trait_dispatch_failure(
+                TypeDiagnosticReason::UnresolvedTraitMethodInstantiation,
+                trait_name,
+                method_name,
+                Some(expected),
+                &implementation.trait_id.span,
+            )),
+            CandidateApplicability::Rejected(_) => Err(self.trait_dispatch_failure(
+                TypeDiagnosticReason::NoApplicableTraitImplementation,
+                trait_name,
+                method_name,
+                Some(expected),
+                &implementation.trait_id.span,
+            )),
+        }
+    }
+
+    fn contextual_receiverless_target_arguments(
+        &mut self,
+        trait_name: &str,
+        method_name: &str,
+        span: &Span,
+        args: &[ResolvedRecordLitArg],
+        declared_params: &[Ty],
+        trait_args: &[Ty],
+        self_ty: &Ty,
+        expected: &Ty,
+        operator: Option<OperatorTraitOp>,
+    ) -> Result<Option<Vec<TypedNode>>, TypeError> {
+        let mut accepted = Vec::new();
+        let mut failures = Vec::new();
+        for key in self.trait_impl_candidate_keys(trait_name) {
+            let Some(implementation) = self.trait_impls.get(&key).cloned() else {
+                continue;
+            };
+            let sourceable = Self::constructor_trait_arguments_shared_with_target(&implementation);
+            if sourceable.len() != trait_args.len() || sourceable.is_empty() {
+                continue;
+            }
+            let checkpoint = self.candidate_probe_checkpoint();
+            let result = self.apply_receiverless_target_candidate(
+                &implementation,
+                &sourceable,
+                span,
+                trait_name,
+                method_name,
+                args,
+                declared_params,
+                trait_args,
+                self_ty,
+                expected,
+                operator.clone(),
+            );
+            match result {
+                Ok(Some(_)) => accepted.push((implementation, sourceable)),
+                Ok(None) => {}
+                Err(error) => failures.push(error),
+            }
+            self.rollback_candidate_probe(checkpoint);
+        }
+        match accepted.as_slice() {
+            [(implementation, sourceable)] => self
+                .apply_receiverless_target_candidate(
+                    implementation,
+                    sourceable,
+                    span,
+                    trait_name,
+                    method_name,
+                    args,
+                    declared_params,
+                    trait_args,
+                    self_ty,
+                    expected,
+                    operator,
+                )
+                .map(|arguments| Some(arguments.unwrap_or_default())),
+            [] => match failures.into_iter().next() {
+                Some(error) => Err(error),
+                None => Ok(None),
+            },
+            _ => Err(self.ambiguous_constructor_result(trait_name, method_name, span)),
+        }
+    }
+
     fn check_trait_invocation(
         &mut self,
         span: &Span,
@@ -4587,6 +4945,173 @@ impl Checker {
 
         let declared_param_tys = param_tys.clone();
         let mut constructor_receiver_index = None;
+        let mut prepared_args = vec![None; args.len()];
+        let declared_receiver_index = param_tys.iter().enumerate().rev().find_map(|(index, ty)| {
+            matches!(ty, Ty::SelfApp(items) if Self::constructor_application_parts(items).is_none())
+                .then_some(index)
+        });
+        fn contains_trait_constructor_input(ty: &Ty, trait_args: &[Ty]) -> bool {
+            match ty {
+                Ty::SelfApp(items) => {
+                    Checker::constructor_application_parts(items).is_some_and(|(witness, _)| {
+                        trait_args.iter().any(|argument| argument == witness)
+                    }) || items
+                        .iter()
+                        .any(|item| contains_trait_constructor_input(item, trait_args))
+                }
+                Ty::List(inner) | Ty::Lazy(inner) => {
+                    contains_trait_constructor_input(inner, trait_args)
+                }
+                Ty::Result(ok, error) => {
+                    contains_trait_constructor_input(ok, trait_args)
+                        || contains_trait_constructor_input(error, trait_args)
+                }
+                Ty::Tuple(items) | Ty::Enum(_, items) => items
+                    .iter()
+                    .any(|item| contains_trait_constructor_input(item, trait_args)),
+                Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
+                    nominal
+                        .arguments
+                        .iter()
+                        .any(|item| contains_trait_constructor_input(item, trait_args))
+                        || nominal
+                            .iter()
+                            .any(|(_, field)| contains_trait_constructor_input(field, trait_args))
+                }
+                Ty::Func(inputs, output)
+                | Ty::BuiltinFunc {
+                    params: inputs,
+                    ret: output,
+                    ..
+                }
+                | Ty::UserFunc {
+                    params: inputs,
+                    ret: output,
+                    ..
+                } => {
+                    inputs
+                        .iter()
+                        .any(|item| contains_trait_constructor_input(item, trait_args))
+                        || contains_trait_constructor_input(output, trait_args)
+                }
+                Ty::Facet(_, source, focus, update_source, update_focus) => [
+                    source.as_ref(),
+                    focus.as_ref(),
+                    update_source.as_ref(),
+                    update_focus.as_ref(),
+                ]
+                .into_iter()
+                .any(|item| contains_trait_constructor_input(item, trait_args)),
+                Ty::Var(_)
+                | Ty::Hole
+                | Ty::Int
+                | Ty::Float
+                | Ty::Str
+                | Ty::Bool
+                | Ty::Unit
+                | Ty::Error
+                | Ty::Pid(_) => false,
+            }
+        }
+        // When a receiverless constructor method's value parameter carries a
+        // trait-head constructor (for example MonadT<$M>::lift($M<$A>)), let
+        // concrete value arguments constrain the trait head before projecting
+        // the result carrier. Projecting from the result alone can otherwise
+        // choose an implementation and feed its input type back into an
+        // underconstrained argument.
+        let direct_self_result = match &ret_ty {
+            Ty::Var(variable) => matches!(
+                self.resolve_ty(&self_ty),
+                Ty::Var(self_variable) if self_variable == *variable
+            ),
+            Ty::SelfApp(items) => Self::constructor_application_parts(items).is_none(),
+            _ => false,
+        };
+        let receiverless_head_input = explicit_type_args.is_none()
+            && declared_receiver_index.is_none()
+            && !trait_info.constructor_slots.is_empty()
+            && direct_self_result
+            && declared_param_tys
+                .iter()
+                .any(|parameter| contains_trait_constructor_input(parameter, &trait_arg_tys));
+        if receiverless_head_input && args.len() == declared_param_tys.len() {
+            if expected_ret_ty.is_none() {
+                return Err(self.ambiguous_constructor_result(trait_name, method_name, span));
+            }
+            for (param, argument) in trait_info.type_params.iter().zip(&trait_arg_tys) {
+                let constructor_trait =
+                    self.trait_head_parameter_constructor_bound(&trait_info, &param.name);
+                if let (Some(constructor_trait), Ty::Var(variable)) =
+                    (constructor_trait, self.resolve_ty(argument))
+                {
+                    if !self.rigid_tyvars.contains(&variable) {
+                        self.constructor_witness_traits
+                            .entry(variable)
+                            .or_insert(constructor_trait);
+                    }
+                }
+            }
+            if let Some(expected) = expected_ret_ty {
+                let normalized = self.resolve_ty(expected);
+                let mut variables = Vec::new();
+                Self::collect_ty_vars(&normalized, &mut variables);
+                let stable_context = variables
+                    .iter()
+                    .all(|variable| self.rigid_tyvars.contains(variable));
+                let contextual_args = if stable_context {
+                    self.contextual_receiverless_target_arguments(
+                        trait_name,
+                        method_name,
+                        span,
+                        args,
+                        &declared_param_tys,
+                        &trait_arg_tys,
+                        &self_ty,
+                        &normalized,
+                        operator.clone(),
+                    )?
+                } else {
+                    None
+                };
+                if let Some(contextual_args) = contextual_args {
+                    prepared_args = contextual_args.into_iter().map(Some).collect();
+                } else {
+                    for (index, (argument, parameter)) in
+                        args.iter().zip(&declared_param_tys).enumerate()
+                    {
+                        if !contains_trait_constructor_input(parameter, &trait_arg_tys) {
+                            continue;
+                        }
+                        let ResolvedRecordLitArg::Positional(argument) = argument else {
+                            continue;
+                        };
+                        let typed = self.check_node(argument)?;
+                        self.assert_type_relation(
+                            parameter,
+                            &typed.ty,
+                            self.type_fact(SourceRole::Contract, span, parameter),
+                            self.type_fact(SourceRole::Value, &typed.span, &typed.ty),
+                            TypeDiagnosticReason::ArgumentTypeMismatch,
+                            DiagnosticOrigin::TraitCall,
+                            &format!("{trait_name}::{method_name}"),
+                            index as u32,
+                        )?;
+                        prepared_args[index] = Some(typed);
+                    }
+                    self.assert_type_relation(
+                        &self_ty,
+                        &normalized,
+                        self.type_fact(SourceRole::Expected, span, &normalized),
+                        self.type_fact(SourceRole::Contract, span, &self_ty),
+                        TypeDiagnosticReason::ReturnTypeMismatch,
+                        DiagnosticOrigin::TraitCall,
+                        &format!("{trait_name}::{method_name}"),
+                        0,
+                    )?;
+                }
+                ret_ty = self.resolve_ty(expected);
+            }
+        }
         let plain_output_parameters = param_tys
             .iter()
             .map(|param| {
@@ -4594,7 +5119,6 @@ impl Checker {
                 if slots.contains(output.as_ref()))
             })
             .collect::<Vec<_>>();
-        let mut prepared_args = vec![None; args.len()];
         // Resolve the standard operator's inference policy once. Preparation
         // supplies value constraints; every helper and operator still reaches
         // the same signature assertions and candidate solver below.
@@ -4654,15 +5178,11 @@ impl Checker {
             }
         }
 
-        if !trait_info.constructor_slots.is_empty() && args.len() == param_tys.len() {
-            let receiver_index = param_tys
-                .iter()
-                .enumerate()
-                .rev()
-                .find_map(|(index, ty)| {
-                    matches!(ty, Ty::SelfApp(items) if Self::constructor_application_parts(items).is_none())
-                        .then_some(index)
-                });
+        if !trait_info.constructor_slots.is_empty()
+            && args.len() == param_tys.len()
+            && !receiverless_head_input
+        {
+            let receiver_index = declared_receiver_index;
             let typed_receiver = if let Some(index) = receiver_index {
                 constructor_receiver_index = Some(index);
                 if receiver_hint.is_none() {
@@ -4686,6 +5206,14 @@ impl Checker {
             };
             let receiver_ty = if let Some(typed) = &typed_receiver {
                 self.resolve_ty(&typed.ty)
+            } else if receiverless_head_input {
+                let contextual = expected_ret_ty
+                    .map(|ty| self.resolve_ty(ty))
+                    .unwrap_or_else(|| self.resolve_ty(&self_ty));
+                if matches!(contextual, Ty::Var(_) | Ty::Hole) {
+                    return Err(self.ambiguous_constructor_result(trait_name, method_name, span));
+                }
+                contextual
             } else if matches!(ret_ty, Ty::SelfApp(_)) {
                 let contextual = expected_ret_ty
                     .map(|ty| self.resolve_ty(ty))
@@ -4702,26 +5230,28 @@ impl Checker {
                     .as_ref()
                     .map(|typed| &typed.span)
                     .unwrap_or(span);
-                let (target, slots, captured) = if let Ty::SelfApp(items) = &receiver_ty {
-                    let (witness, payloads) = Self::constructor_application_parts(items)
-                        .ok_or_else(|| {
-                            TypeError::new(
-                                "Constructor application has no witness",
-                                receiver_span.clone(),
-                            )
-                        })?;
-                    let mut target = vec![Ty::Hole, witness.clone()];
-                    let mut slots = Vec::new();
-                    for _ in payloads {
-                        let slot = self.env.fresh_tyvar();
-                        let Ty::Var(var) = slot else { unreachable!() };
-                        slots.push(var);
-                        target.push(slot);
-                    }
-                    (Ty::SelfApp(target), slots, HashMap::new())
-                } else {
-                    let (implementation, mut captured) =
-                        match self.constructor_capability_projection(trait_name, &receiver_ty) {
+                let (target, slots, captured, implementation_trait_args) =
+                    if let Ty::SelfApp(items) = &receiver_ty {
+                        let (witness, payloads) = Self::constructor_application_parts(items)
+                            .ok_or_else(|| {
+                                TypeError::new(
+                                    "Constructor application has no witness",
+                                    receiver_span.clone(),
+                                )
+                            })?;
+                        let mut target = vec![Ty::Hole, witness.clone()];
+                        let mut slots = Vec::new();
+                        for _ in payloads {
+                            let slot = self.env.fresh_tyvar();
+                            let Ty::Var(var) = slot else { unreachable!() };
+                            slots.push(var);
+                            target.push(slot);
+                        }
+                        (Ty::SelfApp(target), slots, HashMap::new(), None)
+                    } else {
+                        let (implementation, mut captured) = match self
+                            .constructor_capability_projection(trait_name, &receiver_ty)
+                        {
                             ConstructorProjectionOutcome::Applicable { info, mapping } => {
                                 (info, mapping)
                             }
@@ -4744,15 +5274,71 @@ impl Checker {
                                 ));
                             }
                         };
-                    for slot in &implementation.constructor_slot_vars {
-                        captured.remove(slot);
+                        let implementation_trait_args = implementation
+                            .trait_arg_tys
+                            .iter()
+                            .map(|argument| {
+                                self.resolve_ty(
+                                    &self.substitute_ty_with_mapping(argument, &captured),
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        for slot in &implementation.constructor_slot_vars {
+                            captured.remove(slot);
+                        }
+                        (
+                            implementation.target_ty,
+                            implementation.constructor_slot_vars,
+                            captured,
+                            Some(implementation_trait_args),
+                        )
+                    };
+                if let Some(implementation_trait_args) = implementation_trait_args {
+                    if implementation_trait_args.len() != trait_arg_tys.len() {
+                        return Err(TypeError::new(
+                            "Trait implementation argument metadata mismatch",
+                            receiver_span.clone(),
+                        ));
                     }
-                    (
-                        implementation.target_ty,
-                        implementation.constructor_slot_vars,
-                        captured,
-                    )
-                };
+                    for (ordinal, (declared, inferred)) in trait_arg_tys
+                        .iter()
+                        .zip(&implementation_trait_args)
+                        .enumerate()
+                    {
+                        let constructor_trait = self
+                            .traits
+                            .get(trait_name)
+                            .and_then(|info| {
+                                info.type_params.get(ordinal).map(|param| (info, param))
+                            })
+                            .and_then(|(info, param)| {
+                                self.trait_head_parameter_constructor_bound(info, &param.name)
+                            });
+                        if let (Some(constructor_trait), Ty::Var(variable)) =
+                            (constructor_trait, self.resolve_ty(declared))
+                        {
+                            if !self.rigid_tyvars.contains(&variable) {
+                                self.constructor_witness_traits
+                                    .entry(variable)
+                                    .or_insert(constructor_trait);
+                            }
+                        }
+                        let declared =
+                            self.normalize_executable_trait_argument(trait_name, ordinal, declared);
+                        let inferred =
+                            self.normalize_executable_trait_argument(trait_name, ordinal, inferred);
+                        self.assert_type_relation(
+                            &declared,
+                            &inferred,
+                            self.type_fact(SourceRole::Contract, span, &declared),
+                            self.type_fact(SourceRole::Value, receiver_span, &inferred),
+                            TypeDiagnosticReason::ArgumentTypeMismatch,
+                            DiagnosticOrigin::TraitCall,
+                            &format!("{trait_name}::{method_name}"),
+                            0,
+                        )?;
+                    }
+                }
                 if let Some(typed) = &typed_receiver {
                     self.check_constructor_capability(trait_name, method_name, typed)?;
                 }
@@ -4885,14 +5471,13 @@ impl Checker {
         }
         self.ensure_no_runtime_facet_args(&typed_args, span, "Trait method call")?;
 
-        if constructor_receiver_index.is_some() || trait_info.constructor_slots.is_empty() {
-            self.check_trait_method_constructor_capabilities(
-                trait_name,
-                method_name,
-                &param_tys,
-                &typed_args,
-            )?;
-        }
+        self.check_trait_method_constructor_capabilities(
+            trait_name,
+            method_name,
+            &declared_param_tys,
+            constructor_receiver_index,
+            &typed_args,
+        )?;
 
         if let Some(owner_hint) = receiver_owner_hint {
             if let Some(receiver) = typed_args.first() {
@@ -5163,7 +5748,7 @@ impl Checker {
                     ),
                     span: span.clone(),
                     hint: None,
-                })
+                });
             }
         };
 
@@ -5872,7 +6457,10 @@ impl Checker {
                 }
             }
         }
-        let candidates = self.constructor_context_candidates(trait_name, &value_ty)?;
+        let candidates = match &carrier_evidence {
+            Some(carrier) => vec![carrier.clone()],
+            None => self.constructor_context_candidates(trait_name, &value_ty)?,
+        };
         let mut accepted = Vec::new();
         let mut failures = Vec::new();
         for candidate in candidates {
@@ -6485,7 +7073,7 @@ impl Checker {
                     hint: None,
                 })?;
                 let defer = defer_constructor_conflicts
-                    && matches!(expected_ty, Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some());
+                    && self.constructor_argument_needs_deferred_check(expected_ty);
                 let typed = if defer {
                     self.check_node(expr)?
                 } else {
@@ -6558,7 +7146,7 @@ impl Checker {
                 });
             };
             let defer = defer_constructor_conflicts
-                && matches!(expected_ty, Ty::SelfApp(items) if Self::constructor_application_parts(items).is_some());
+                && self.constructor_argument_needs_deferred_check(expected_ty);
             let typed = if defer {
                 self.check_node(expr)?
             } else {
@@ -6590,6 +7178,42 @@ impl Checker {
         }
 
         Ok(typed_args)
+    }
+
+    fn constructor_argument_needs_deferred_check(&self, expected_ty: &Ty) -> bool {
+        let Ty::SelfApp(items) = expected_ty else {
+            return false;
+        };
+        let Some((witness, _)) = Self::constructor_application_parts(items) else {
+            return false;
+        };
+        let resolved = self.resolve_ty(witness);
+        if matches!(&resolved, Ty::Var(variable) if !self.rigid_tyvars.contains(variable)) {
+            return true;
+        }
+        let Ty::Var(variable) = witness else {
+            return false;
+        };
+        if self.constructor_witness_traits.contains_key(variable) {
+            if let Ok(canonical) = self.canonical_request(&resolved) {
+                fn contains_inference_variable(ty: &CanonicalTy, rigid: &HashSet<u32>) -> bool {
+                    matches!(ty.head, CanonicalTypeHead::Variable(variable) if !rigid.contains(&variable))
+                        || ty
+                            .arguments
+                            .iter()
+                            .any(|argument| contains_inference_variable(argument, rigid))
+                }
+                if contains_inference_variable(&canonical, &self.rigid_tyvars) {
+                    return true;
+                }
+            }
+        }
+        self.constructor_witness_traits
+            .get(variable)
+            .and_then(|trait_key| {
+                self.normalize_inferred_constructor_identity(trait_key, &resolved)
+            })
+            .is_some_and(|identity| identity != resolved)
     }
 
     fn typed_callee_allows_error_observer_arg(&self, typed_func: &TypedNode) -> bool {
@@ -8989,6 +9613,11 @@ impl Checker {
                         let application_constraints = application_constraints;
                         if let Some(constraints) = application_constraints.as_ref() {
                             self.apply_return_type_argument_constraints(constraints)?;
+                            self.apply_concrete_expected_call_constraint(
+                                constraints,
+                                span,
+                                explicit_type_arguments.as_deref(),
+                            )?;
                         }
                         let typed_args = if let (Some(uid), Some(signature)) = (
                             builtin_uid,
@@ -9041,7 +9670,7 @@ impl Checker {
                                         pending.substitution
                                     }
                                     super::signatures::SolveState::Failed(error) => {
-                                        return Err(error)
+                                        return Err(error);
                                     }
                                 };
                                 if let Ty::UserFunc {
@@ -9203,6 +9832,11 @@ impl Checker {
                         let application_constraints = application_constraints;
                         if let Some(constraints) = application_constraints.as_ref() {
                             self.apply_return_type_argument_constraints(constraints)?;
+                            self.apply_concrete_expected_call_constraint(
+                                constraints,
+                                span,
+                                explicit_type_arguments.as_deref(),
+                            )?;
                         }
                         let allow_error_observer_args =
                             self.typed_callee_allows_error_observer_arg(&typed_func);
@@ -9271,7 +9905,7 @@ impl Checker {
                                         pending.substitution
                                     }
                                     super::signatures::SolveState::Failed(error) => {
-                                        return Err(error)
+                                        return Err(error);
                                     }
                                 };
                                 if let Ty::UserFunc {
@@ -10691,7 +11325,7 @@ impl Checker {
                     &typed_target.span,
                     None,
                     diagnostics::CallableReturnShape::Any,
-                ))
+                ));
             }
         };
         if let Some(signature) = &capture_signature {
@@ -12426,11 +13060,38 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let (source_ty, expected_focus_ty) = match expected.map(|ty| self.resolve_ty(ty)) {
             Some(Ty::Facet(_, source, focus, ..)) => {
-                (source.as_ref().clone(), Some(focus.as_ref().clone()))
+                let expected_source_ty = source.as_ref().clone();
+                let authored_owner = match expr {
+                    Resolved::Var(_, id) => id.qualified_name.as_deref().unwrap_or(&id.name),
+                    _ => unreachable!("type-root Facet paths are resolved variables"),
+                };
+                let expected_owner = match self.resolve_ty(&expected_source_ty) {
+                    Ty::Struct(name, _) | Ty::Record(name, _) | Ty::Enum(name, _) => Some(name),
+                    Ty::Bool => Some("Boolean".into()),
+                    Ty::Result(_, _) => Some("Result".into()),
+                    _ => None,
+                };
+                let same_owner = expected_owner.is_some_and(|expected_owner| {
+                    Self::canonical_user_type_name(authored_owner)
+                        == Self::canonical_user_type_name(&expected_owner)
+                });
+                if !same_owner {
+                    return Err(TypeError {
+                        structured: None,
+                        message: format!(
+                            "Facet path source owner mismatch: path root is {}, source is {}",
+                            Self::surface_name(authored_owner),
+                            self.ty_name(&expected_source_ty)
+                        ),
+                        span: span.clone(),
+                        hint: None,
+                    });
+                }
+                (expected_source_ty, Some(focus.as_ref().clone()))
             }
             _ => {
-                let typed_expr = self.check_node(expr)?;
-                (self.resolve_ty(&typed_expr.ty), None)
+                let typed_root = self.check_node(expr)?;
+                (self.resolve_ty(&typed_root.ty), None)
             }
         };
         let (segment, focus_ty, may_fail) =

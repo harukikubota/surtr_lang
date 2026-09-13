@@ -935,12 +935,21 @@ def preserve(values: $F<$T>) -> $F<$T> where $F: Functor { Functor::fmap(values,
 defenum Wrap<$T> { Wrap($T), }
 impl Functor for Wrap<$T> { def fmap(self: Wrap<$A>, mapper: ($A -> $B)) -> Wrap<$B> { match self { Wrap::Wrap(x) => Wrap::Wrap(mapper(x)), } } }
 impl Monad for Wrap<$T> { def return::<Wrap<$T>>(value: $A) -> Wrap<$A> { Wrap::Wrap(value) } }
+deftrait Nest where Self: Type<$A> { def wrap::<Self>(values: List<$A>) -> Self<List<$A>> }
+impl Nest for Wrap<$T> { def wrap::<Wrap<$T>>(values: List<$A>) -> Wrap<List<$A>> { Wrap::Wrap(values) } }
 "#;
     for expression in [
         r#"identity = factory(Box::Box(0)); stronger(identity(a))"#,
         r#"apply: ((Unit -> Box<Int>) -> Box<Int>) = callback_factory(); stronger(apply({|u: Unit| a}))"#,
         r#"wrapped: Wrap<Box<Int>> = Monad::return(a)
 match wrapped { Wrap::Wrap(item) => stronger(item), }"#,
+        r#"nested: Wrap<List<Box<Int>>> = Nest::wrap([a])
+match nested {
+  Wrap::Wrap(items) => match items {
+    [item, .._] => stronger(item),
+    [] => 0,
+  },
+}"#,
         r#"identity = if (True, &id, &id)
 stronger(identity(a))"#,
     ] {
@@ -955,4 +964,35 @@ stronger(identity(a))"#,
             "{expression}: {error:?}"
         );
     }
+}
+
+#[test]
+fn constructor_method_result_provenance_uses_the_declared_self_receiver() {
+    let declarations = r#"
+deftrait Functor where Self: Type<$A> { def fmap(self: Self<$A>, mapper: ($A -> $B)) -> Self<$B> }
+deftrait Monad where Self: Functor {}
+deftrait Extract where Self: Type<$A> { def extract(self: Self<$A>) -> $A }
+defenum Box<$T> { Box($T), }
+impl Functor for Box<$T> { def fmap(self: Box<$A>, mapper: ($A -> $B)) -> Box<$B> { match self { Box::Box(x) => Box::Box(mapper(x)), } } }
+impl Monad for Box<$T> {}
+defenum Outer<$T> { Outer($T), }
+impl Extract for Outer<$T> { def extract(self: Outer<$A>) -> $A { match self { Outer::Outer(value) => value, } } }
+def retain(value: $F<Int>) -> $F<Int> where $F: Functor { Functor::fmap(value, {|x| x}) }
+def stronger(value: Monad<Int>) -> Int { 1 }
+"#;
+
+    check(&format!(
+        "{declarations}\nwrapped = Outer::Outer(Box::Box(1))\nstronger(Extract::extract(wrapped))"
+    ))
+    .expect("a fresh payload projected from Self uses the receiver provenance");
+
+    let error = check(&format!(
+        "{declarations}\npayload = retain(Box::Box(1))\nwrapped = Outer::Outer(payload)\nstronger(Extract::extract(wrapped))"
+    ))
+    .expect_err("a projected payload must retain the receiver's restricted capability");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+        "{error:?}"
+    );
 }

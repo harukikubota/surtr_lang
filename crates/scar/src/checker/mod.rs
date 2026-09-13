@@ -2455,6 +2455,12 @@ enum ConstructorCapabilityProvenance {
     /// No abstract guarantee: concrete constructor applicability must be proved.
     RequiresProof,
     Constrained(BTreeSet<String>),
+    /// The outer carrier is fixed by a declared return capability while its
+    /// representation still carries value-derived provenance for projections.
+    ConstrainedTemplate {
+        capabilities: BTreeSet<String>,
+        source: Box<(ConstructorCapabilityProvenance, Ty)>,
+    },
     /// Every source must justify the requested capability at the use site.
     Intersection(Vec<(ConstructorCapabilityProvenance, Ty)>),
     Fields(Vec<(ConstructorCapabilityProvenance, Ty)>),

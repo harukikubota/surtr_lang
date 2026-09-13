@@ -325,6 +325,7 @@ impl Checker {
                 substitution,
                 constructor_bounds,
             )?;
+            let ty = self.normalize_executable_contract_type(&entry.ty, ty)?;
             match entry.role {
                 TypeListRole::ReturnTypeArgument => rtas.push(CanonicalReturnTypeArgument {
                     ordinal: entry.ordinal,
@@ -383,7 +384,10 @@ impl Checker {
                         TypeError::new("MissingCanonicalTraitConstraint", method_id.span.clone())
                     })?;
                 constraints.push(sindr::signature::CanonicalConstraint {
-                    subject: self.substitute_canonical_type(&constraint.subject, substitution)?,
+                    subject: self.normalize_executable_contract_type(
+                        &constraint.subject,
+                        self.substitute_canonical_type(&constraint.subject, substitution)?,
+                    )?,
                     trait_name: self.trait_key(&info.id),
                     origin: origin.clone(),
                 });
@@ -410,6 +414,21 @@ impl Checker {
             },
             declaration_origins: vec![origin],
         })
+    }
+
+    pub(super) fn normalize_executable_contract_type(
+        &self,
+        declared: &CanonicalTy,
+        instantiated: CanonicalTy,
+    ) -> Result<CanonicalTy, TypeError> {
+        let instantiated = self.canonical_to_ty(&instantiated)?;
+        let instantiated = match declared.head {
+            CanonicalTypeHead::Variable(variable) => {
+                self.normalize_executable_constructor_binding(variable, &instantiated)
+            }
+            _ => self.normalize_executable_constructor_identities(&instantiated),
+        };
+        self.canonical_resolved_type(&instantiated)
     }
 
     fn canonical_resolved_type(&self, ty: &Ty) -> Result<CanonicalTy, TypeError> {
@@ -1239,6 +1258,33 @@ impl CanonicalUnifier {
                         && b.head == CanonicalTypeHead::Hole)
                         || self.unify(a, b)
                 })
+    }
+
+    /// Compare a constructor witness with an observed application.  `Hole`
+    /// is the canonical marker for an unconstrained mapped slot of a bare
+    /// head; captured and explicitly supplied mapped arguments still unify
+    /// structurally.
+    fn unify_constructor_identity(&mut self, expected: &CanonicalTy, actual: &CanonicalTy) -> bool {
+        let expected = self.resolve(expected);
+        let actual = self.resolve(actual);
+        if expected.head == CanonicalTypeHead::Hole {
+            return true;
+        }
+        if expected == actual {
+            return true;
+        }
+        if matches!(expected.head, CanonicalTypeHead::Variable(_))
+            || matches!(actual.head, CanonicalTypeHead::Variable(_))
+        {
+            return self.unify(&expected, &actual);
+        }
+        expected.head == actual.head
+            && expected.arguments.len() == actual.arguments.len()
+            && expected
+                .arguments
+                .iter()
+                .zip(&actual.arguments)
+                .all(|(expected, actual)| self.unify_constructor_identity(expected, actual))
     }
 }
 
@@ -2173,6 +2219,24 @@ impl Checker {
             };
             let subject = self.fresh_canonical(&constraint.subject, fresh, next_variable);
             let subject = unifier.resolve(&subject);
+            let constructor_head_proved =
+                matches!(constraint.subject.head, CanonicalTypeHead::Variable(_))
+                    && self
+                        .traits
+                        .iter()
+                        .find(|(_, info)| info.id.unique_id == trait_id)
+                        .is_some_and(|(trait_key, info)| {
+                            !info.constructor_slots.is_empty()
+                                && self.canonical_to_ty(&subject).ok().is_some_and(|subject| {
+                                    matches!(
+                                        self.constructor_head_projection(trait_key, &subject),
+                                        ConstructorProjectionOutcome::Applicable { .. }
+                                    )
+                                })
+                        });
+            if constructor_head_proved {
+                continue;
+            }
             match self.prove_canonical_capability(trait_id, &subject, visiting, next_variable)? {
                 ApplicabilityProof::Unsatisfied => return Ok(ApplicabilityProof::Unsatisfied),
                 ApplicabilityProof::Deferred(vars) => waiting.extend(vars),
@@ -2302,10 +2366,11 @@ impl Checker {
                 CanonicalTypeHead::Variable(var)
             }
         };
-        // Keep the source's mapped constructor slots as inference variables.
-        // They are erased for identity matching only conceptually; retaining
-        // them lets a concrete method input bind the carrier's representative
-        // slot before specialization (e.g. Base<$X> against Base<Int>).
+        // A bare or partially inferred constructor head has no payload at its
+        // mapped positions.  Lower those unresolved representatives to the
+        // canonical identity marker before building an executable method
+        // instantiation.  Concrete arguments in a complete RTA remain intact
+        // and therefore continue to constrain the application.
         let mut arguments = self.canonical_request(ty)?.arguments;
         if arguments.len() != carrier.arity as usize {
             arguments =
@@ -2316,6 +2381,14 @@ impl Checker {
                 return self.canonical_request(ty);
             };
             *slot = captured.ty;
+        }
+        for mapped in carrier.mapped_slots {
+            let Some(slot) = arguments.get_mut(mapped.position as usize) else {
+                return self.canonical_request(ty);
+            };
+            if matches!(slot.head, CanonicalTypeHead::Variable(_)) {
+                *slot = CanonicalTy::new(CanonicalTypeHead::Hole, Vec::new());
+            }
         }
         Ok(CanonicalTy::new(head, arguments))
     }
@@ -2582,7 +2655,7 @@ impl Checker {
                     && fresh_expected.arguments[0].head == CanonicalTypeHead::Hole
                 {
                     let witness = unifier.resolve(&fresh_expected.arguments[1]);
-                    matches &= unifier.unify(&witness, requested);
+                    matches &= unifier.unify_constructor_identity(&witness, requested);
                 }
                 let expected = candidate.expand_fresh_constructor_applications(
                     &entry.ty,
@@ -2619,13 +2692,14 @@ impl Checker {
                 &contract.impl_constraints,
                 &contract.signature.where_constraints,
             ] {
-                match candidate.prove_canonical_constraints(
+                let proof = candidate.prove_canonical_constraints(
                     constraints,
                     &mut fresh,
                     &unifier,
                     &mut HashSet::new(),
                     &mut next_variable,
-                )? {
+                )?;
+                match proof {
                     ApplicabilityProof::Satisfied(indices) => proof_evidence.extend(indices),
                     ApplicabilityProof::Deferred(vars) => candidate_waiting.extend(vars),
                     ApplicabilityProof::Unsatisfied => {
@@ -2639,16 +2713,32 @@ impl Checker {
                 continue;
             }
             for obligation in &method.body_obligations {
-                let subject = candidate.canonical_request(&obligation.receiver)?;
-                let subject = candidate.fresh_canonical(&subject, &mut fresh, &mut next_variable);
+                let declared_subject = candidate.canonical_request(&obligation.receiver)?;
+                let fresh_subject =
+                    candidate.fresh_canonical(&declared_subject, &mut fresh, &mut next_variable);
+                let subject = candidate.expand_fresh_constructor_applications(
+                    &declared_subject,
+                    &fresh_subject,
+                    &unifier,
+                    &constructor_bounds,
+                )?;
                 let subject = candidate.canonical_to_ty(&unifier.resolve(&subject))?;
                 let arguments = obligation
                     .trait_args
                     .iter()
                     .map(|ty| {
-                        let argument = candidate.canonical_request(ty)?;
-                        let argument =
-                            candidate.fresh_canonical(&argument, &mut fresh, &mut next_variable);
+                        let declared_argument = candidate.canonical_request(ty)?;
+                        let fresh_argument = candidate.fresh_canonical(
+                            &declared_argument,
+                            &mut fresh,
+                            &mut next_variable,
+                        );
+                        let argument = candidate.expand_fresh_constructor_applications(
+                            &declared_argument,
+                            &fresh_argument,
+                            &unifier,
+                            &constructor_bounds,
+                        )?;
                         candidate.canonical_to_ty(&unifier.resolve(&argument))
                     })
                     .collect::<Result<Vec<_>, TypeError>>()?;
@@ -3053,7 +3143,18 @@ impl Checker {
         trait_name: &str,
         container: &Ty,
     ) -> ConstructorProjectionOutcome {
-        self.constructor_projection_with_proof(trait_name, container, true)
+        self.constructor_projection_with_proof(trait_name, container, true, false)
+    }
+
+    /// Prove the capability of an explicitly supplied constructor head. Its
+    /// mapped payload positions may remain call-local inference variables;
+    /// captured positions still require independent source evidence.
+    pub(super) fn constructor_head_projection(
+        &self,
+        trait_name: &str,
+        container: &Ty,
+    ) -> ConstructorProjectionOutcome {
+        self.constructor_projection_with_proof(trait_name, container, true, true)
     }
 
     /// Match only the declared constructor shape of an existing capability.
@@ -3064,7 +3165,7 @@ impl Checker {
         trait_name: &str,
         container: &Ty,
     ) -> ConstructorProjectionOutcome {
-        self.constructor_projection_with_proof(trait_name, container, false)
+        self.constructor_projection_with_proof(trait_name, container, false, false)
     }
 
     fn constructor_projection_with_proof(
@@ -3072,6 +3173,7 @@ impl Checker {
         trait_name: &str,
         container: &Ty,
         prove_constraints: bool,
+        allow_unresolved_mapped_slots: bool,
     ) -> ConstructorProjectionOutcome {
         let requested = match self.canonical_request(container) {
             Ok(requested) => requested,
@@ -3132,12 +3234,34 @@ impl Checker {
             if !unifier.unify(&target, &requested) {
                 continue;
             }
-            if request_variables.iter().any(|var| {
-                unifier.resolve(&CanonicalTy::variable(*var)) != CanonicalTy::variable(*var)
-            }) {
-                waiting_on.extend(request_variables.iter().copied().filter(|var| {
+            let unresolved_inputs = request_variables
+                .iter()
+                .copied()
+                .filter(|var| {
                     unifier.resolve(&CanonicalTy::variable(*var)) != CanonicalTy::variable(*var)
-                }));
+                })
+                .filter(|var| {
+                    if !allow_unresolved_mapped_slots {
+                        return true;
+                    }
+                    let occurs_in = requested
+                        .arguments
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(position, argument)| {
+                            let mut variables_in_argument = Vec::new();
+                            variables(argument, &mut variables_in_argument);
+                            variables_in_argument.contains(var).then_some(position)
+                        })
+                        .collect::<Vec<_>>();
+                    occurs_in.is_empty()
+                        || occurs_in
+                            .iter()
+                            .any(|position| !info.constructor_slot_positions.contains(position))
+                })
+                .collect::<Vec<_>>();
+            if !unresolved_inputs.is_empty() {
+                waiting_on.extend(unresolved_inputs);
                 continue;
             }
             if prove_constraints {

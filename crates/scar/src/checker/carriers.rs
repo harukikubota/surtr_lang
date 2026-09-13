@@ -127,12 +127,82 @@ impl Checker {
         TypeCtorTraitFamilyId(identities)
     }
 
+    /// Two constructor Traits can share one application witness only when
+    /// their mapped slots are anchored by a common ancestor. Parent-impl
+    /// validation requires every child to preserve that ancestor's slot
+    /// positions. A common descendant is insufficient: two unrelated parents
+    /// may legally map the same nominal parameters in different orders.
+    pub(super) fn constructor_traits_share_mapping(&self, left: &str, right: &str) -> bool {
+        self.traits.iter().any(|(candidate, info)| {
+            !info.constructor_slots.is_empty()
+                && info.type_params.is_empty()
+                && self.trait_bound_entails(left, candidate, &mut HashSet::new())
+                && self.trait_bound_entails(right, candidate, &mut HashSet::new())
+        })
+    }
+
     pub(super) fn match_bare_constructor_occurrence(&mut self, occurrence: u32, ty: &Ty) -> bool {
+        self.match_constructor_occurrence(occurrence, ty, false)
+    }
+
+    pub(super) fn match_explicit_constructor_occurrence(
+        &mut self,
+        occurrence: u32,
+        ty: &Ty,
+    ) -> bool {
+        self.match_constructor_occurrence(occurrence, ty, true)
+    }
+
+    fn match_constructor_occurrence(
+        &mut self,
+        occurrence: u32,
+        ty: &Ty,
+        preserve_mapped_arguments: bool,
+    ) -> bool {
         let Some(required_trait) = self.constructor_witness_traits.get(&occurrence).cloned() else {
             return false;
         };
         match self.resolve_ty(&Ty::Var(occurrence)) {
-            Ty::Var(unbound) => self.bind_tyvar(unbound, ty),
+            Ty::Var(unbound) => {
+                if self.rigid_tyvars.contains(&unbound) {
+                    return false;
+                }
+                match self.constructor_head_projection(&required_trait, ty) {
+                    ConstructorProjectionOutcome::Applicable { info, mut mapping } => {
+                        let identity = if preserve_mapped_arguments {
+                            self.normalize_inferred_constructor_identity(&required_trait, ty)
+                        } else {
+                            // A bare occurrence stores identity and captured
+                            // arguments only. Its surrounding application owns
+                            // every mapped payload.
+                            for slot in &info.constructor_slot_vars {
+                                mapping.insert(*slot, Ty::Hole);
+                            }
+                            Some(self.substitute_ty_with_mapping(&info.target_ty, &mapping))
+                        };
+                        identity.is_some_and(|identity| self.bind_tyvar(unbound, &identity))
+                    }
+                    // Captured arguments may still be selected by a later
+                    // expected-result constraint. Keep deferred variables live
+                    // until that constraint arrives, but never turn a rejected
+                    // constructor proof into an inferred witness.
+                    ConstructorProjectionOutcome::Deferred { .. } => self.bind_tyvar(unbound, ty),
+                    ConstructorProjectionOutcome::Rejected { .. } => false,
+                }
+            }
+            witness if preserve_mapped_arguments => {
+                let Some(identity) =
+                    self.normalize_inferred_constructor_identity(&required_trait, ty)
+                else {
+                    return false;
+                };
+                let checkpoint = self.candidate_probe_checkpoint();
+                let compatible = self.types_compatible(&witness, &identity);
+                if !compatible {
+                    self.rollback_candidate_probe(checkpoint);
+                }
+                compatible
+            }
             witness => {
                 let ConstructorCarrierOutcome::Projected(actual_carrier) =
                     self.canonical_constructor_carrier(&required_trait, ty)
@@ -154,6 +224,282 @@ impl Checker {
                 }
             }
         }
+    }
+
+    pub(super) fn is_projected_constructor_identity(&self, ty: &Ty) -> bool {
+        fn contains_hole(ty: &CanonicalTy) -> bool {
+            ty.head == CanonicalTypeHead::Hole || ty.arguments.iter().any(contains_hole)
+        }
+        self.canonical_request(&self.resolve_ty(ty))
+            .ok()
+            .is_some_and(|ty| ty.head != CanonicalTypeHead::SelfApplication && contains_hole(&ty))
+    }
+
+    /// Compare nominal arguments according to their declaration roles.
+    /// Constructor parameters compare the carrier head and captured
+    /// arguments; their mapped payload belongs to each application site.
+    pub(super) fn nominal_arguments_compatible(
+        &mut self,
+        name: &str,
+        left: &[Ty],
+        right: &[Ty],
+    ) -> bool {
+        if left.len() != right.len() {
+            return false;
+        }
+        let constructor_traits = self
+            .env
+            .lookup_type_def(name)
+            .map(|definition| {
+                definition
+                    .type_param_bounds
+                    .iter()
+                    .map(|bound| {
+                        bound
+                            .as_deref()
+                            .and_then(|bound| self.declaration_constructor_trait_key(bound))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        left.iter()
+            .zip(right)
+            .enumerate()
+            .all(|(ordinal, (left, right))| {
+                if self.resolve_ty(left) == self.resolve_ty(right) {
+                    return true;
+                }
+                let Some(trait_key) = constructor_traits
+                    .get(ordinal)
+                    .and_then(|trait_key| trait_key.as_deref())
+                else {
+                    return self.types_compatible(left, right);
+                };
+                match (self.resolve_ty(left), self.resolve_ty(right)) {
+                    (Ty::Var(variable), right) if !self.rigid_tyvars.contains(&variable) => {
+                        if let Some(existing) = self.constructor_witness_traits.get(&variable) {
+                            if !self.trait_bound_entails(existing, trait_key, &mut HashSet::new()) {
+                                return false;
+                            }
+                        } else {
+                            self.constructor_witness_traits
+                                .insert(variable, trait_key.to_string());
+                        }
+                        self.match_bare_constructor_occurrence(variable, &right)
+                    }
+                    (left, Ty::Var(variable)) if !self.rigid_tyvars.contains(&variable) => {
+                        if let Some(existing) = self.constructor_witness_traits.get(&variable) {
+                            if !self.trait_bound_entails(existing, trait_key, &mut HashSet::new()) {
+                                return false;
+                            }
+                        } else {
+                            self.constructor_witness_traits
+                                .insert(variable, trait_key.to_string());
+                        }
+                        self.match_bare_constructor_occurrence(variable, &left)
+                    }
+                    (left, right) => {
+                        let ConstructorCarrierOutcome::Projected(left) =
+                            self.canonical_constructor_carrier(trait_key, &left)
+                        else {
+                            return false;
+                        };
+                        let ConstructorCarrierOutcome::Projected(right) =
+                            self.canonical_constructor_carrier(trait_key, &right)
+                        else {
+                            return false;
+                        };
+                        self.unify_constructor_carriers(&left, &right)
+                    }
+                }
+            })
+    }
+
+    /// Convert only independent, unresolved mapped slots to the stable
+    /// constructor-identity marker.  Concrete mapped arguments from a full
+    /// RTA, captured arguments, and correlated variables remain constraints.
+    pub(super) fn normalize_inferred_constructor_identity(
+        &self,
+        trait_key: &str,
+        ty: &Ty,
+    ) -> Option<Ty> {
+        let ConstructorProjectionOutcome::Applicable { info, .. } =
+            self.constructor_head_projection(trait_key, ty)
+        else {
+            return None;
+        };
+        let mut canonical = self.canonical_request(ty).ok()?;
+        let mapped = info
+            .constructor_slot_positions
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>();
+        fn contains_variable(ty: &CanonicalTy, variable: u32) -> bool {
+            ty.head == CanonicalTypeHead::Variable(variable)
+                || ty
+                    .arguments
+                    .iter()
+                    .any(|argument| contains_variable(argument, variable))
+        }
+        for position in mapped {
+            let variable = match canonical.arguments.get(position).map(|ty| &ty.head) {
+                Some(CanonicalTypeHead::Variable(variable)) => *variable,
+                _ => continue,
+            };
+            if canonical
+                .arguments
+                .iter()
+                .enumerate()
+                .any(|(other, argument)| other != position && contains_variable(argument, variable))
+            {
+                continue;
+            }
+            canonical.arguments[position] = CanonicalTy {
+                head: CanonicalTypeHead::Hole,
+                arguments: Vec::new(),
+            };
+        }
+        self.canonical_to_ty(&canonical).ok()
+    }
+
+    /// Lower verified constructor parameters to an executable type identity.
+    /// Only declaration-marked constructor arguments are projected; ordinary
+    /// value payloads keep the usual unresolved-type checks.
+    pub(super) fn normalize_executable_constructor_identities(&self, ty: &Ty) -> Ty {
+        let normalize = |ty: &Ty| self.normalize_executable_constructor_identities(ty);
+        let normalize_nominal_arguments = |name: &str, arguments: &[Ty]| {
+            let definition = self.env.lookup_type_def(name);
+            arguments
+                .iter()
+                .enumerate()
+                .map(|(ordinal, argument)| {
+                    let argument = normalize(argument);
+                    let constructor_trait = definition
+                        .and_then(|definition| definition.type_param_bounds.get(ordinal))
+                        .and_then(|bound| bound.as_deref())
+                        .and_then(|bound| self.declaration_constructor_trait_key(bound));
+                    constructor_trait
+                        .and_then(|trait_key| {
+                            self.normalize_inferred_constructor_identity(&trait_key, &argument)
+                        })
+                        .unwrap_or(argument)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        match self.resolve_ty(ty) {
+            Ty::Var(variable) => Ty::Var(variable),
+            Ty::List(inner) => Ty::List(Box::new(normalize(&inner))),
+            Ty::Lazy(inner) => Ty::Lazy(Box::new(normalize(&inner))),
+            Ty::Tuple(items) => Ty::Tuple(items.iter().map(normalize).collect()),
+            Ty::SelfApp(items) => Ty::SelfApp(items.iter().map(normalize).collect()),
+            Ty::Result(ok, error) => {
+                Ty::Result(Box::new(normalize(&ok)), Box::new(normalize(&error)))
+            }
+            Ty::Enum(name, arguments) => {
+                Ty::Enum(name.clone(), normalize_nominal_arguments(&name, &arguments))
+            }
+            Ty::Struct(name, nominal) => {
+                let arguments = normalize_nominal_arguments(&name, &nominal.arguments);
+                let fields = self
+                    .env
+                    .lookup_type_def(&name)
+                    .map(|definition| self.instantiate_type_def_fields(definition, &arguments))
+                    .unwrap_or_else(|| {
+                        nominal
+                            .fields
+                            .iter()
+                            .map(|(field, ty)| (field.clone(), normalize(ty)))
+                            .collect()
+                    });
+                Ty::Struct(name, NominalType::new(arguments, fields))
+            }
+            Ty::Record(name, nominal) => {
+                let arguments = normalize_nominal_arguments(&name, &nominal.arguments);
+                let fields = self
+                    .env
+                    .lookup_type_def(&name)
+                    .map(|definition| self.instantiate_type_def_fields(definition, &arguments))
+                    .unwrap_or_else(|| {
+                        nominal
+                            .fields
+                            .iter()
+                            .map(|(field, ty)| (field.clone(), normalize(ty)))
+                            .collect()
+                    });
+                Ty::Record(name, NominalType::new(arguments, fields))
+            }
+            Ty::Func(parameters, ret) => Ty::Func(
+                parameters.iter().map(normalize).collect(),
+                Box::new(normalize(&ret)),
+            ),
+            Ty::BuiltinFunc { name, params, ret } => Ty::BuiltinFunc {
+                name,
+                params: params.iter().map(normalize).collect(),
+                ret: Box::new(normalize(&ret)),
+            },
+            Ty::UserFunc {
+                fun_idx,
+                type_params,
+                call_substitution,
+                params,
+                ret,
+            } => Ty::UserFunc {
+                fun_idx,
+                type_params,
+                call_substitution: call_substitution
+                    .iter()
+                    .map(|(variable, ty)| {
+                        (
+                            *variable,
+                            self.normalize_executable_constructor_binding(*variable, ty),
+                        )
+                    })
+                    .collect(),
+                params: params.iter().map(normalize).collect(),
+                ret: Box::new(normalize(&ret)),
+            },
+            Ty::Facet(kind, source, focus, update_source, update_focus) => Ty::Facet(
+                kind,
+                Box::new(normalize(&source)),
+                Box::new(normalize(&focus)),
+                Box::new(normalize(&update_source)),
+                Box::new(normalize(&update_focus)),
+            ),
+            primitive => primitive,
+        }
+    }
+
+    pub(super) fn normalize_executable_constructor_binding(&self, variable: u32, ty: &Ty) -> Ty {
+        let ty = self.normalize_executable_constructor_identities(ty);
+        self.constructor_witness_traits
+            .get(&variable)
+            .and_then(|trait_key| self.normalize_inferred_constructor_identity(trait_key, &ty))
+            .unwrap_or(ty)
+    }
+
+    pub(super) fn normalize_executable_trait_argument(
+        &self,
+        trait_name: &str,
+        ordinal: usize,
+        ty: &Ty,
+    ) -> Ty {
+        let ty = self.normalize_executable_constructor_identities(ty);
+        let constructor_trait = self
+            .traits
+            .get(trait_name)
+            .and_then(|info| {
+                info.type_params
+                    .get(ordinal)
+                    .map(|parameter| (info, parameter))
+            })
+            .and_then(|(info, parameter)| {
+                self.trait_head_parameter_constructor_bound(info, &parameter.name)
+            });
+        constructor_trait
+            .and_then(|trait_key| self.normalize_inferred_constructor_identity(&trait_key, &ty))
+            .unwrap_or(ty)
     }
 
     fn unify_constructor_carriers(

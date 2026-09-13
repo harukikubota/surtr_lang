@@ -14,6 +14,9 @@ pub(super) enum Projection {
 
 impl Checker {
     pub(super) fn constructor_capability_for_node(&self, node: &TypedNode) -> Provenance {
+        if let Some(capability) = self.constructor_capability_for_type(&node.ty) {
+            return Provenance::constrained(capability);
+        }
         self.value_provenance(node, &Bindings::new())
     }
 
@@ -204,19 +207,35 @@ impl Checker {
                 let returns_declared_self = !self.traits[&obligation.trait_id]
                     .constructor_slots
                     .is_empty()
-                    && matches!(
-                        method.ret_ty.syntax(),
-                        AstTy::Named(_, name) if Self::surface_name(name) == "Self"
-                    )
+                    && match method.ret_ty.syntax() {
+                        AstTy::Named(_, name) => Self::surface_name(name) == "Self",
+                        AstTy::Generic(_, name, _) => Self::surface_name(name) == "Self",
+                        _ => false,
+                    }
                     && method.return_type_arguments.iter().any(|argument| {
                         matches!(
                             argument.ty.syntax(),
                             AstTy::Named(_, name) if Self::surface_name(name) == "Self"
                         )
                     });
-                if returns_declared_self {
-                    return Provenance::constrained(obligation.trait_id.clone());
+                fn mentions_self(ty: &AstTy) -> bool {
+                    match ty {
+                        AstTy::Named(_, name) => name == "Self",
+                        AstTy::Generic(_, name, arguments) => {
+                            name == "Self" || arguments.iter().any(mentions_self)
+                        }
+                        AstTy::Tuple(_, items) => items.iter().any(mentions_self),
+                        AstTy::Func(_, parameters, result) => {
+                            parameters.iter().any(mentions_self) || mentions_self(result)
+                        }
+                        AstTy::ImplTrait(_, _) => false,
+                    }
                 }
+                let fresh_declared_self = returns_declared_self
+                    && method
+                        .value_parameters
+                        .iter()
+                        .all(|parameter| !mentions_self(parameter.ty.syntax()));
                 if self.traits[&obligation.trait_id]
                     .constructor_slots
                     .is_empty()
@@ -266,12 +285,45 @@ impl Checker {
                         }
                     }
                 }
-                self.invoke_provenance(
-                    &(Provenance::DeclaredCallable(method.id.unique_id), Ty::Hole),
-                    &arguments,
-                    &node.ty,
-                )
-                .0
+                let inferred = self
+                    .invoke_provenance(
+                        &(Provenance::DeclaredCallable(method.id.unique_id), Ty::Hole),
+                        &arguments,
+                        &node.ty,
+                    )
+                    .0;
+                if returns_declared_self {
+                    let mut capabilities = BTreeSet::from([obligation.trait_id.clone()]);
+                    let result_ty = self.resolve_ty(&node.ty);
+                    let concrete_return_witness = Self::is_concrete_constructor_shape(&result_ty)
+                        || matches!(
+                            &result_ty,
+                            Ty::SelfApp(items)
+                                if Self::constructor_application_parts(items)
+                                    .is_some_and(|(witness, _)| !matches!(self.resolve_ty(witness), Ty::Var(_) | Ty::Hole))
+                        );
+                    if fresh_declared_self
+                        && concrete_return_witness
+                        && matches!(dispatch, TraitDispatch::Selected(_))
+                    {
+                        for (trait_key, info) in &self.traits {
+                            if !info.constructor_slots.is_empty()
+                                && matches!(
+                                    self.constructor_projection(trait_key, &result_ty),
+                                    ConstructorProjectionOutcome::Applicable { .. }
+                                )
+                            {
+                                capabilities.insert(trait_key.clone());
+                            }
+                        }
+                    }
+                    Provenance::ConstrainedTemplate {
+                        capabilities,
+                        source: Box::new((inferred, node.ty.clone())),
+                    }
+                } else {
+                    inferred
+                }
             }
             TypedInner::EagerBoundary(inner) => self.value_provenance(inner, bindings),
             TypedInner::If(_, then_branch, Some(else_branch)) => self
@@ -461,7 +513,23 @@ impl Checker {
                     .and_then(|(name, _)| {
                         let receiver = signature.value_parameters.iter().zip(arguments).find_map(
                             |(parameter, source)| {
-                                matches!(parameter.ty, Ty::SelfApp(_)).then_some(&source.1)
+                                let is_declared_self_application = matches!(
+                                    &parameter.ty,
+                                    Ty::SelfApp(items)
+                                        if Self::constructor_application_parts(items).is_none()
+                                );
+                                let is_matching_constructor_application = self
+                                    .constructor_capability_for_type(&parameter.ty)
+                                    .is_some_and(|capability| {
+                                        self.constructor_capability_allows(
+                                            &capability,
+                                            name,
+                                            &mut HashSet::new(),
+                                        )
+                                    });
+                                (is_declared_self_application
+                                    || is_matching_constructor_application)
+                                    .then_some(&source.1)
                             },
                         );
                         Some((name.as_str(), receiver.unwrap_or(actual)))
@@ -491,6 +559,27 @@ impl Checker {
                     &mut variables,
                 ) {
                     return (Provenance::ConstructorApplication(outcome), actual.clone());
+                }
+                // Value arguments remain the authoritative provenance source.
+                // Return-only inputs have no value position to contribute one,
+                // so retain their instantiated call type without replacing any
+                // source view already collected above.
+                if let Ty::UserFunc {
+                    call_substitution, ..
+                } = &function.1
+                {
+                    for (variable, ty) in call_substitution {
+                        variables.entry(*variable).or_insert_with(|| {
+                            vec![(
+                                self.constructor_witness_traits
+                                    .get(variable)
+                                    .cloned()
+                                    .map(Provenance::constrained)
+                                    .unwrap_or(Provenance::RequiresProof),
+                                self.resolve_ty(ty),
+                            )]
+                        });
+                    }
                 }
                 self.template_provenance(
                     &return_type,
@@ -589,6 +678,7 @@ impl Checker {
             Provenance::Template { variables, .. } => variables.values().find_map(from_source),
             Provenance::RequiresProof
             | Provenance::Constrained(_)
+            | Provenance::ConstrainedTemplate { .. }
             | Provenance::Parameter(_)
             | Provenance::DeclaredCallable(_) => None,
         }
@@ -604,6 +694,11 @@ impl Checker {
             Provenance::Constrained(capabilities) => capabilities.iter().any(|actual| {
                 self.constructor_capability_allows(actual, required, &mut HashSet::new())
             }),
+            Provenance::ConstrainedTemplate { capabilities, .. } => {
+                capabilities.iter().any(|actual| {
+                    self.constructor_capability_allows(actual, required, &mut HashSet::new())
+                })
+            }
             Provenance::Intersection(sources) => {
                 !sources.is_empty()
                     && sources.iter().all(|(source, ty)| {
@@ -716,6 +811,13 @@ impl Checker {
                     .map(|(variable, source)| (*variable, substitute(source)))
                     .collect(),
             },
+            Provenance::ConstrainedTemplate {
+                capabilities,
+                source: projected,
+            } => Provenance::ConstrainedTemplate {
+                capabilities: capabilities.clone(),
+                source: Box::new(substitute(projected)),
+            },
             other => other.clone(),
         };
         (provenance, source.1.clone())
@@ -731,6 +833,9 @@ impl Checker {
             .projection_type(&source.1, projection)
             .unwrap_or_else(|| expected.clone());
         match &source.0 {
+            Provenance::ConstrainedTemplate {
+                source: projected, ..
+            } => self.project_provenance(projected, projection, &actual),
             Provenance::Intersection(sources) => {
                 let sources = sources
                     .iter()
