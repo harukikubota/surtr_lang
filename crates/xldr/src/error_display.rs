@@ -176,6 +176,9 @@ fn runtime_error_help_lines(err: &eldr::RuntimeError) -> Vec<String> {
         ));
     }
     for detail in &err.context.details {
+        if detail.starts_with("__surtr_runtime_error_kind=") {
+            continue;
+        }
         lines.push(format!("detail: {}", detail));
     }
     lines
@@ -193,11 +196,11 @@ fn runtime_error_help(err: &eldr::RuntimeError) -> Option<String> {
 fn runtime_error_spec_with_source(
     err: &eldr::RuntimeError,
     location: &sindr::runtime::Location,
-    source: &str,
+    _source: &str,
     include_help: bool,
 ) -> DiagnosticSpec {
     diagnostics::runtime_error_spec(
-        source,
+        SourceId(0),
         err.message.clone(),
         Span {
             start: location.span_start as usize,
@@ -235,10 +238,40 @@ fn runtime_error_spec_with_registry(
 }
 
 fn runtime_diagnostic_context(err: &eldr::RuntimeError) -> diagnostics::RuntimeDiagnosticContext {
+    let reason = match err.kind() {
+        eldr::error::RuntimeErrorKind::ProcessInitTimeout => {
+            diagnostics::RuntimeDiagnosticReason::ProcessInitTimeout
+        }
+        eldr::error::RuntimeErrorKind::ProcessInitFailed => {
+            diagnostics::RuntimeDiagnosticReason::ProcessInitFailed
+        }
+        eldr::error::RuntimeErrorKind::TaskTimeout => {
+            diagnostics::RuntimeDiagnosticReason::TaskTimeout
+        }
+        eldr::error::RuntimeErrorKind::CallTimeout => {
+            diagnostics::RuntimeDiagnosticReason::CallTimeout
+        }
+        eldr::error::RuntimeErrorKind::ProcessLifecycleFailed => {
+            diagnostics::RuntimeDiagnosticReason::ProcessLifecycleFailed
+        }
+        eldr::error::RuntimeErrorKind::Generic
+            if err.context.opcode.as_deref() == Some("CallBuiltin") =>
+        {
+            diagnostics::RuntimeDiagnosticReason::BuiltinContractViolation
+        }
+        eldr::error::RuntimeErrorKind::Generic => diagnostics::RuntimeDiagnosticReason::VmInvariant,
+    };
     diagnostics::RuntimeDiagnosticContext {
+        reason,
         opcode: err.context.opcode.clone(),
         function: err.context.function.clone(),
-        details: err.context.details.clone(),
+        details: err
+            .context
+            .details
+            .iter()
+            .filter(|detail| !detail.starts_with("__surtr_runtime_error_kind="))
+            .cloned()
+            .collect(),
     }
 }
 
@@ -511,21 +544,16 @@ pub fn emit_invalid_result_missing_payload(
 
 fn error_spec_from_value_error_with_source(
     value: &sindr::runtime::RichError,
-    source: &str,
+    source_id: SourceId,
 ) -> DiagnosticSpec {
     let location = value.primary_location();
-    let message = match value.diagnostic.as_ref() {
-        Some(sindr::runtime::RuntimeErrorDiagnostic::LiteralPatternMismatch { lhs, rhs }) => {
-            format!("{}\t@@lhs={lhs}\t@@rhs={rhs}", value.visible_message())
-        }
-        None => value.message.clone(),
-    };
     diagnostics::runtime_value_error_spec(
-        source,
+        source_id,
         crate::surface_path_name(&value.kind).to_string(),
-        message,
+        value.visible_message(),
         location.span_start as usize,
         location.span_end as usize,
+        value.diagnostic.as_ref(),
         runtime_value_cause_help(value),
     )
 }
@@ -534,7 +562,7 @@ pub fn runtime_value_error_text_from_vm(vm: &eldr::VM, value: &Value) -> String 
     match value {
         Value::Error(rich) => {
             if let (Some(source), Some(file_name)) = (vm.source(), vm.source_file()) {
-                let spec = error_spec_from_value_error_with_source(rich, source);
+                let spec = error_spec_from_value_error_with_source(rich, SourceId(0));
                 diagnostic_text(file_name, source, &spec)
             } else {
                 format!(
@@ -556,8 +584,7 @@ pub fn runtime_value_error_text_with_registry(
 ) -> String {
     match value {
         Value::Error(rich) => {
-            let source = sources.source(source_id).unwrap_or("");
-            let spec = error_spec_from_value_error_with_source(rich, source);
+            let spec = error_spec_from_value_error_with_source(rich, source_id);
             diagnostic_text_by_id(sources, source_id, &spec)
         }
         other => format!("Error: {}", inspect_value(vm, other)),
@@ -667,7 +694,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_error_text_splits_builtin_runtime_error_into_call_arg_and_rule() {
+    fn runtime_error_text_does_not_infer_builtin_contract_from_message() {
         let err = eldr::RuntimeError::new("len expects List as first argument");
         let text = runtime_error_text(
             &err,
@@ -682,13 +709,13 @@ mod tests {
                 span_end: 11,
             }),
         );
-        assert!(text.contains("call target"));
-        assert!(text.contains("expected rule: List as first argument"));
         assert!(text.contains("len expects List as first argument"));
+        assert!(!text.contains("call target"));
+        assert!(!text.contains("expected rule:"));
     }
 
     #[test]
-    fn runtime_error_text_splits_vm_runtime_error_into_rule_and_opcode() {
+    fn runtime_error_text_uses_explicit_opcode_without_inferring_runtime_rule() {
         let err = eldr::RuntimeError::new("JumpIfFalse: expected Bool").with_context(
             RuntimeErrorContext {
                 pc: Some(9),
@@ -713,7 +740,7 @@ mod tests {
             }),
         );
         assert!(text.contains("opcode: JumpIfFalse"));
-        assert!(text.contains("runtime rule: JumpIfFalse requires Bool"));
+        assert!(!text.contains("runtime rule:"));
     }
 
     #[test]
@@ -769,7 +796,13 @@ mod tests {
                 span_start: 7,
                 span_end: 12,
             },
-            diagnostic: None,
+            diagnostic: Some(
+                sindr::runtime::RuntimeErrorDiagnostic::SafeBindPatternFailure {
+                    rule: "fixed-length list pattern requires List.len to match the pattern arity"
+                        .into(),
+                    input_source: Some("List".into()),
+                },
+            ),
             cause: None,
             stack_trace: Vec::new(),
         }));
@@ -797,7 +830,12 @@ mod tests {
                 span_start: 12,
                 span_end: 14,
             },
-            diagnostic: None,
+            diagnostic: Some(
+                sindr::runtime::RuntimeErrorDiagnostic::SafeBindPatternFailure {
+                    rule: "head-tail list pattern requires a non-empty List".into(),
+                    input_source: Some("List".into()),
+                },
+            ),
             cause: None,
             stack_trace: Vec::new(),
         }));
@@ -823,7 +861,12 @@ mod tests {
                 span_start: 0,
                 span_end: 1,
             },
-            diagnostic: None,
+            diagnostic: Some(
+                sindr::runtime::RuntimeErrorDiagnostic::SafeBindPatternFailure {
+                    rule: "head-tail list pattern requires a non-empty String".into(),
+                    input_source: Some("String".into()),
+                },
+            ),
             cause: None,
             stack_trace: Vec::new(),
         }));

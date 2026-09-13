@@ -142,6 +142,10 @@ impl Resolver {
                         form_name, role_name
                     ),
                     span: other.span().clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::SpecialForm,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 }),
             },
@@ -151,6 +155,10 @@ impl Resolver {
                     form_name, role_name
                 ),
                 span: other.span().clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::SpecialForm,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }),
         }
@@ -235,6 +243,7 @@ impl Resolver {
             return Err(ResolveError {
                 message: "`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.".into(),
                 span: ast_pattern_span(&pattern).clone(),
+            diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::SpecialForm, subject: None },
             related_labels: Vec::new(),
             });
         }
@@ -280,7 +289,11 @@ impl Resolver {
                     Err(ResolveError {
                         message: "Qualified patterns support constructor forms only".into(),
                         span,
-                    related_labels: Vec::new(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::SpecialForm,
+                            subject: None,
+                        },
+                        related_labels: Vec::new(),
                     })
                 }
             }
@@ -294,7 +307,11 @@ impl Resolver {
                         callee_name
                     ),
                     span,
-                related_labels: Vec::new(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::SpecialForm,
+                        subject: None,
+                    },
+                    related_labels: Vec::new(),
                 }),
             },
             Ast::ListNil(span) => Ok(AstPattern::ListNil(span)),
@@ -315,7 +332,11 @@ impl Resolver {
                     return Err(ResolveError {
                         message: "1-tuple patterns are not supported".into(),
                         span,
-                    related_labels: Vec::new(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::SpecialForm,
+                            subject: None,
+                        },
+                        related_labels: Vec::new(),
                     });
                 }
                 let pats = items
@@ -338,7 +359,11 @@ impl Resolver {
                                     callee_name, name
                                 ),
                                 span,
-                            related_labels: Vec::new(),
+                                diagnostic: crate::error::ResolveErrorDiagnostic {
+                                    reason: crate::error::ResolveErrorReason::SpecialForm,
+                                    subject: None,
+                                },
+                                related_labels: Vec::new(),
                             });
                         }
                     }
@@ -360,7 +385,11 @@ impl Resolver {
                                 callee_name
                             ),
                             span: other.span().clone(),
-                        related_labels: Vec::new(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::SpecialForm,
+                                subject: None,
+                            },
+                            related_labels: Vec::new(),
                         });
                     }
                 };
@@ -377,7 +406,11 @@ impl Resolver {
                                     callee_name, name
                                 ),
                                 span,
-                            related_labels: Vec::new(),
+                                diagnostic: crate::error::ResolveErrorDiagnostic {
+                                    reason: crate::error::ResolveErrorReason::SpecialForm,
+                                    subject: None,
+                                },
+                                related_labels: Vec::new(),
                             });
                         }
                     }
@@ -395,7 +428,11 @@ impl Resolver {
                     callee_name
                 ),
                 span: other.span().clone(),
-            related_labels: Vec::new(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::SpecialForm,
+                    subject: None,
+                },
+                related_labels: Vec::new(),
             }),
         }
     }
@@ -445,6 +482,10 @@ fn collect_positional_args(
                 args.len()
             ),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::SpecialForm,
+                subject: None,
+            },
             related_labels: Vec::new(),
         });
     }
@@ -457,6 +498,10 @@ fn collect_positional_args(
                 return Err(ResolveError {
                     message: format!("{} does not accept named argument '{}'", callee_name, name),
                     span,
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::SpecialForm,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 });
             }
@@ -479,6 +524,10 @@ fn collect_fixed_positional_args<const N: usize>(
             callee_name, expected_arity, actual_arity
         ),
         span,
+        diagnostic: crate::error::ResolveErrorDiagnostic {
+            reason: crate::error::ResolveErrorReason::SpecialForm,
+            subject: None,
+        },
         related_labels: Vec::new(),
     })
 }

@@ -29,6 +29,7 @@ pub(crate) struct ScriptCompilePlan {
 pub(crate) struct ScriptPlanError {
     pub(crate) message: String,
     pub(crate) span: Span,
+    pub(crate) parse_error: Option<ParseError>,
 }
 
 impl ScriptPlanError {
@@ -36,6 +37,15 @@ impl ScriptPlanError {
         Self {
             message: message.into(),
             span,
+            parse_error: None,
+        }
+    }
+
+    fn from_parse(error: ParseError) -> Self {
+        Self {
+            message: error.message(),
+            span: error.span().clone(),
+            parse_error: Some(error),
         }
     }
 }
@@ -47,13 +57,11 @@ pub(crate) fn script_plan_error_as_rune_error(
 ) -> RuneError {
     let mut sources = SourceRegistry::new();
     let source_id = sources.register(file_path, source.to_string());
-    RuneError::diagnostic(
-        1,
-        &sources,
-        source_id,
-        "parse",
-        diagnostics::parse_error_spec(source, &error.message, error.span),
-    )
+    let spec = match error.parse_error.as_ref() {
+        Some(parse_error) => diagnostics::parse_error_spec(source_id, source, parse_error),
+        None => diagnostics::simple_error("LoadError", error.message, error.span, None),
+    };
+    RuneError::diagnostic(1, &sources, source_id, "parse", spec)
 }
 
 fn load_error_span(source: &str) -> Span {
@@ -149,39 +157,22 @@ fn diagnostic_location_for_span(
     (source_id_for_span(compile_sources, span), span.clone())
 }
 
-fn impl_header_span(source: &str, span: &Span) -> Span {
-    let chars = source.chars().collect::<Vec<_>>();
-    if chars.is_empty() {
-        return span.clone();
-    }
-    let anchor = span.start.min(chars.len().saturating_sub(1));
-    let line_start = chars[..anchor]
-        .iter()
-        .rposition(|ch| *ch == '\n')
-        .map(|idx| idx + 1)
-        .unwrap_or(0);
-    let line_end = chars[anchor..]
-        .iter()
-        .position(|ch| *ch == '\n')
-        .map(|idx| anchor + idx)
-        .unwrap_or(chars.len());
-    let mut header_start = line_start;
-    while header_start < line_end && chars[header_start].is_whitespace() {
-        header_start += 1;
-    }
-    let mut header_end = (line_start..line_end)
-        .find(|idx| chars[*idx] == '{')
-        .unwrap_or(line_end);
-    while header_end > header_start && chars[header_end - 1].is_whitespace() {
-        header_end -= 1;
-    }
-    if header_start < header_end {
-        Span {
-            start: header_start,
-            end: header_end,
-        }
-    } else {
-        span.clone()
+fn map_resolve_reason(
+    reason: sigil::error::ResolveErrorReason,
+) -> diagnostics::ResolveDiagnosticReason {
+    use diagnostics::ResolveDiagnosticReason as D;
+    use sigil::error::ResolveErrorReason as R;
+    match reason {
+        R::NameResolution => D::NameResolution,
+        R::Namespace => D::Namespace,
+        R::Visibility => D::Visibility,
+        R::Import => D::Import,
+        R::Capture => D::Capture,
+        R::Pattern => D::Pattern,
+        R::Declaration => D::Declaration,
+        R::SpecialForm => D::SpecialForm,
+        R::SourcePolicy => D::SourcePolicy,
+        R::CompilerInvariant => D::CompilerInvariant,
     }
 }
 
@@ -190,43 +181,23 @@ fn resolve_spec_for_error(
     error: &sigil::error::ResolveError,
 ) -> (SourceId, diagnostics::DiagnosticSpec) {
     let (source_id, span) = diagnostic_location_for_span(compile_sources, &error.span);
-    let source = compile_sources.sources.source(source_id).unwrap_or("");
-    let primary_span = if error.message.starts_with("Multiple impl blocks for `")
-        || error
-            .message
-            .starts_with("Multiple trait impl blocks for `")
-    {
-        impl_header_span(source, &span)
-    } else {
-        span
-    };
-    let mut spec = diagnostics::resolve_error_spec(source, &error.message, primary_span.clone());
-    for (label_index, related) in error.related_labels.iter().enumerate() {
-        let (label_source_id, label_span) =
-            diagnostic_location_for_span(compile_sources, &related.span);
-        let label_source = compile_sources
-            .sources
-            .source(label_source_id)
-            .unwrap_or("");
-        let label_span = if error.message.starts_with("Multiple impl blocks for `")
-            || error
-                .message
-                .starts_with("Multiple trait impl blocks for `")
-        {
-            impl_header_span(label_source, &label_span)
-        } else {
-            label_span
-        };
-        spec.labels.push(diagnostics::DiagnosticLabel {
-            source_id: Some(label_source_id),
-            span: label_span,
-            message: related.message.clone(),
-            color: Some(diagnostics::resolve_related_label_color(
-                &related.message,
-                label_index,
-            )),
-        });
-    }
+    let labels = error
+        .related_labels
+        .iter()
+        .map(|related| {
+            let (label_source_id, label_span) =
+                diagnostic_location_for_span(compile_sources, &related.span);
+            (label_source_id, label_span, related.message.clone())
+        })
+        .collect::<Vec<_>>();
+    let spec = diagnostics::resolve_error_spec(
+        source_id,
+        &error.message,
+        span,
+        map_resolve_reason(error.diagnostic.reason),
+        error.diagnostic.subject.clone(),
+        &labels,
+    );
     (source_id, spec)
 }
 
@@ -391,8 +362,6 @@ fn build_cached_script_compile_prefix(
             )
             .map_err(|e| {
                 let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
-                let local_error =
-                    diagnostics::TypeErrorDiagnostic::new(e.message.clone(), span, e.hint.clone());
                 let spec = e
                     .structured
                     .as_ref()
@@ -404,7 +373,12 @@ fn build_cached_script_compile_prefix(
                         )
                     })
                     .unwrap_or_else(|| {
-                        diagnostics::type_error_spec_by_id(sources, source_id, &local_error)
+                        diagnostics::typecheck_invariant_spec_with_display(
+                            source_id,
+                            span,
+                            e.message.clone(),
+                            e.hint.clone(),
+                        )
                     });
                 RuneError::diagnostic(1, sources, source_id, "typecheck", spec)
             })?;
@@ -487,11 +461,23 @@ fn parse_program_with_module_sources<'a>(
                     sources,
                     e.source_id,
                     "parse",
-                    diagnostics::parse_error_spec(
-                        sources.source(e.source_id).unwrap_or(""),
-                        e.message(),
-                        e.span(),
-                    ),
+                    match &e.kind {
+                        xldr::ModuleStageParseErrorKind::Parse { error } => {
+                            diagnostics::parse_error_spec(
+                                e.source_id,
+                                sources.source(e.source_id).unwrap_or(""),
+                                error,
+                            )
+                        }
+                        xldr::ModuleStageParseErrorKind::DuplicateModulePath { .. } => {
+                            diagnostics::parse_policy_error_spec(
+                                e.source_id,
+                                sources.source(e.source_id).unwrap_or(""),
+                                e.message(),
+                                e.span(),
+                            )
+                        }
+                    },
                 )
             })?;
     if let Some(measurement) = measurement.as_deref_mut() {
@@ -507,11 +493,7 @@ fn parse_program_with_module_sources<'a>(
                 sources,
                 user_source_id,
                 "parse",
-                diagnostics::parse_error_spec(
-                    user_source,
-                    script_err.message(),
-                    script_err.span().clone(),
-                ),
+                diagnostics::parse_error_spec(user_source_id, user_source, &script_err),
             )
         })?;
     if let Some(measurement) = measurement.as_deref_mut() {
@@ -661,8 +643,6 @@ pub(crate) fn compile_source_with_measurement(
         )
         .map_err(|e| {
             let (source_id, span) = diagnostic_location_for_span(compile_sources, &e.span);
-            let local_error =
-                diagnostics::TypeErrorDiagnostic::new(e.message.clone(), span, e.hint.clone());
             let spec = e
                 .structured
                 .as_ref()
@@ -674,7 +654,12 @@ pub(crate) fn compile_source_with_measurement(
                     )
                 })
                 .unwrap_or_else(|| {
-                    diagnostics::type_error_spec_by_id(sources, source_id, &local_error)
+                    diagnostics::typecheck_invariant_spec_with_display(
+                        source_id,
+                        span,
+                        e.message.clone(),
+                        e.hint.clone(),
+                    )
                 });
             RuneError::diagnostic(1, sources, source_id, "typecheck", spec)
         })?;
@@ -790,8 +775,8 @@ fn script_source_prepare_error_to_plan_error(
     error: xldr::ScriptSourcePrepareError,
 ) -> ScriptPlanError {
     match error {
-        xldr::ScriptSourcePrepareError::Parse { message, span }
-        | xldr::ScriptSourcePrepareError::IncludeRead { message, span } => {
+        xldr::ScriptSourcePrepareError::Parse { error } => ScriptPlanError::from_parse(error),
+        xldr::ScriptSourcePrepareError::IncludeRead { message, span } => {
             ScriptPlanError::new(message, span)
         }
     }
@@ -847,7 +832,8 @@ mod tests {
     use super::{
         collect_default_script_compile_sources, compile_source, diagnostic_location_for_span,
         load_error_span, module_source_collection_error_as_rune_error,
-        parse_script_ast_for_compile, prepare_script_compile_plan, source_id_for_span,
+        parse_script_ast_for_compile, prepare_script_compile_plan, script_plan_error_as_rune_error,
+        source_id_for_span, ScriptPlanError,
     };
     use crate::error::ExecutionEnv;
     use crate::error::RuneError;
@@ -855,13 +841,71 @@ mod tests {
     use xldr::{SourceKind, StagedModule};
 
     #[test]
+    fn parse_adapter_preserves_the_parser_reason_and_origin() {
+        let source = "def f() -> Int { ) }";
+        let parse_error = spire::parse(source).expect_err("unexpected token should fail parsing");
+        let error = script_plan_error_as_rune_error(
+            "structured_parse.srt",
+            source,
+            ScriptPlanError::from_parse(parse_error),
+        );
+
+        let RuneError::Diagnostic { diagnostic, .. } = error else {
+            panic!("parser failure should become a diagnostic: {error:?}");
+        };
+        assert_eq!(diagnostic.phase, "parse");
+        let structured = diagnostic
+            .spec
+            .structured
+            .as_ref()
+            .expect("parser diagnostics carry typed parser facts");
+        assert_eq!(
+            structured.reason,
+            diagnostics::DiagnosticReason::Parse(
+                diagnostics::ParseDiagnosticReason::UnexpectedToken
+            )
+        );
+        assert_eq!(structured.origin, diagnostics::DiagnosticOrigin::Parse);
+    }
+
+    #[test]
     fn structured_type_diagnostics_preserve_json_facts_and_source_locations() {
         let cases = [
-            ("call", include_str!("../../../tests/fixtures/script/fail/typecheck/structured_call_argument.srt"), "ArgumentTypeMismatch"),
-            ("trait", include_str!("../../../tests/fixtures/script/fail/typecheck/structured_trait_dispatch.srt"), "NoApplicableTraitImplementation"),
-            ("carrier", include_str!("../../../tests/fixtures/script/fail/typecheck/structured_carrier_relation.srt"), "TypeConstructorFamilyMismatch"),
-            ("operator", include_str!("../../../tests/fixtures/script/fail/typecheck/structured_operator_relation.srt"), "ArgumentTypeMismatch"),
-            ("branch", include_str!("../../../tests/fixtures/script/fail/typecheck/structured_branch_relation.srt"), "CondBranchTypeMismatch"),
+            (
+                "call",
+                include_str!(
+                    "../../../tests/fixtures/script/fail/typecheck/structured_call_argument.srt"
+                ),
+                "ArgumentTypeMismatch",
+            ),
+            (
+                "trait",
+                include_str!(
+                    "../../../tests/fixtures/script/fail/typecheck/structured_trait_dispatch.srt"
+                ),
+                "NoApplicableTraitImplementation",
+            ),
+            (
+                "carrier",
+                include_str!(
+                    "../../../tests/fixtures/script/fail/typecheck/structured_carrier_relation.srt"
+                ),
+                "TypeConstructorFamilyMismatch",
+            ),
+            (
+                "operator",
+                include_str!(
+                    "../../../tests/fixtures/script/fail/typecheck/structured_operator_relation.srt"
+                ),
+                "ArgumentTypeMismatch",
+            ),
+            (
+                "branch",
+                include_str!(
+                    "../../../tests/fixtures/script/fail/typecheck/structured_branch_relation.srt"
+                ),
+                "CondBranchTypeMismatch",
+            ),
         ];
         for (name, source, reason) in cases {
             let path = format!("structured_{name}.srt");

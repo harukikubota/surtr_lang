@@ -37,6 +37,10 @@ fn reserved_owner_name_error(
             constraint.kind.diagnostic_suffix()
         ),
         span: span.clone(),
+        diagnostic: crate::error::ResolveErrorDiagnostic {
+            reason: crate::error::ResolveErrorReason::Declaration,
+            subject: None,
+        },
         related_labels: Vec::new(),
     })
 }
@@ -89,6 +93,10 @@ pub(super) fn validate_unique_callable_names(
             return Err(ResolveError {
                 message: format!("Duplicate function `{name}` in {owner}"),
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Declaration,
+                    subject: Some(name.clone()),
+                },
                 related_labels: vec![
                     ResolveErrorLabel {
                         span: first_span.clone(),
@@ -128,6 +136,10 @@ fn validate_abstract_return_type_arguments(
             return Err(ResolveError {
                 message: "return type arguments must declare abstract type inputs".to_string(),
                 span: argument.span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Declaration,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             });
         };
@@ -142,6 +154,10 @@ fn validate_abstract_return_type_arguments(
             return Err(ResolveError {
                 message: "return type arguments must declare abstract type inputs".to_string(),
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Declaration,
+                    subject: Some(name.clone()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -801,6 +817,10 @@ impl OwnerRegistry {
                     global_surface_name(&entry.canonical_key)
                 ),
                 span: entry.span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Namespace,
+                    subject: Some(global_surface_name(&entry.canonical_key).to_string()),
+                },
                 related_labels: vec![
                     ResolveErrorLabel {
                         span: first.span.clone(),
@@ -1018,6 +1038,10 @@ fn duplicate_fq_declaration_error(
             prev.module_path
         ),
         span: span.clone(),
+        diagnostic: crate::error::ResolveErrorDiagnostic {
+            reason: crate::error::ResolveErrorReason::Namespace,
+            subject: Some(global_surface_name(fq_name).to_string()),
+        },
         related_labels: Vec::new(),
     }
 }
@@ -1354,6 +1378,10 @@ fn resolve_impl_target_kind(
                 target
             ),
             span: span.clone(),
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Namespace,
+                subject: Some(target.to_string()),
+            },
             related_labels: Vec::new(),
         }),
         None => {
@@ -1367,6 +1395,10 @@ fn resolve_impl_target_kind(
                         target
                     ),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Declaration,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 })
             }
@@ -2211,6 +2243,10 @@ pub fn precollect_declarations(
                                 target
                             ),
                             span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Declaration,
+                                subject: None,
+                            },
                             related_labels: Vec::new(),
                         });
                     }
@@ -2223,6 +2259,10 @@ pub fn precollect_declarations(
                                 global_surface_name(&target_fq)
                             ),
                             span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Declaration,
+                                subject: Some(target_fq.clone()),
+                            },
                             related_labels: vec![
                                 ResolveErrorLabel {
                                     span: first_span.clone(),
@@ -2250,6 +2290,7 @@ pub fn precollect_declarations(
                                             message: "`new` is only allowed in impl blocks for struct types"
                                                 .to_string(),
                                             span: method_span.clone(),
+                                        diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::Declaration, subject: None },
                                         related_labels: Vec::new(),
                                         });
                                     }
@@ -2277,6 +2318,7 @@ pub fn precollect_declarations(
                                         "impl body may only contain `def` / `defextractor` / `@builtin def` / `@builtin defextractor` / `@intrinsic def` declarations"
                                             .to_string(),
                                     span: span.clone(),
+                                diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::Declaration, subject: None },
                                 related_labels: Vec::new(),
                                 });
                             }
@@ -2379,6 +2421,7 @@ pub fn precollect_declarations(
                                     "trait impl body may only contain `def` / `defp` / `@builtin def` declarations"
                                             .to_string(),
                                     span: span.clone(),
+                                    diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::Declaration, subject: None },
                                     related_labels: Vec::new(),
                                 });
                             }
@@ -2507,7 +2550,7 @@ pub fn precollect_declarations(
                             entry_user_callable(attrs),
                         ),
                         Ast::ImplDef(_, _, _, _) | Ast::TraitDef(..) | Ast::TraitImplDef(..) => {
-                            continue
+                            continue;
                         }
                         Ast::ResultCtorDecl(span, name, _, _, attrs) => (
                             span,
@@ -2582,6 +2625,10 @@ pub fn precollect_declarations(
                                     name, prev_stage, prev_module
                                 ),
                                 span: span.clone(),
+                                diagnostic: crate::error::ResolveErrorDiagnostic {
+                                    reason: crate::error::ResolveErrorReason::Declaration,
+                                    subject: None,
+                                },
                                 related_labels: Vec::new(),
                             });
                         }
@@ -2670,6 +2717,10 @@ impl Resolver {
         ResolveError {
             message: format!("Duplicate top-level definition: {}", surface),
             span: span.clone(),
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Declaration,
+                subject: None,
+            },
             related_labels: Vec::new(),
         }
     }
@@ -2778,6 +2829,10 @@ impl Resolver {
                                 target
                             ),
                             span,
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Declaration,
+                                subject: None,
+                            },
                             related_labels: Vec::new(),
                         });
                     }
@@ -2788,6 +2843,10 @@ impl Resolver {
                                 global_surface_name(&target)
                             ),
                             span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Declaration,
+                                subject: Some(target.clone()),
+                            },
                             related_labels: vec![
                                 ResolveErrorLabel {
                                     span: first_span.clone(),
@@ -2826,6 +2885,10 @@ impl Resolver {
                                             "`new` is only allowed in impl blocks for struct types"
                                                 .to_string(),
                                         span: method_span,
+                                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                                            reason: crate::error::ResolveErrorReason::Declaration,
+                                            subject: None,
+                                        },
                                         related_labels: Vec::new(),
                                     });
                                 }
@@ -2984,6 +3047,7 @@ impl Resolver {
                                         "impl body may only contain `def` / `defextractor` / `@builtin def` / `@builtin defextractor` / `@intrinsic def` declarations"
                                             .to_string(),
                                     span: span.clone(),
+                                diagnostic: crate::error::ResolveErrorDiagnostic { reason: crate::error::ResolveErrorReason::Declaration, subject: None },
                                 related_labels: Vec::new(),
                                 });
                             }
@@ -3132,7 +3196,7 @@ impl Resolver {
                     // Re-declarations should keep that identity stable.
                     let uid = self.reserve_scope_uid(name);
                     self.record_predeclared_uid(name, uid, DeclarationKind::Def);
-                    self.predeclare_scope_binding(name, uid, None);
+                    self.predeclare_scope_binding(name, uid, Some(name));
                 }
                 Ast::IntrinsicDecl(_, _, _, _) => continue,
                 Ast::BuiltinExtractorDecl(_, name, _, _, _) => {

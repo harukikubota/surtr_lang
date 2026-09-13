@@ -1,4 +1,4 @@
-use crate::{Color, SourceId, StructuredDiagnostic};
+use crate::{Color, RuntimeDiagnosticReason, SourceId, StructuredDiagnostic};
 use serde::{Deserialize, Serialize};
 use spire::ast::Span;
 
@@ -23,8 +23,9 @@ pub struct DiagnosticLabel {
     pub color: Option<Color>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct RuntimeDiagnosticContext {
+    pub reason: RuntimeDiagnosticReason,
     pub opcode: Option<String>,
     pub function: Option<String>,
     pub details: Vec<String>,

@@ -2,11 +2,11 @@
 
 ## 1. 状態と根拠
 
-- 分類: `/doc` に置く、一部実装済み・残作業の実装入力。
+- 分類: `/doc` に置く、実装済みN06の入力仕様・履歴。
 - 基準 commit: `f1986a27d84728e1e7a88de457a1d6b55cfe5ab8`。
 - 入力: Git履歴に残る旧計画のTask 10、[`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md)に残る未実装契約、既存[`do_intrinsic_spec.md`](do_intrinsic_spec.md)。
 - 旧 Task 9 は完了済み。reason/origin/typed data の基盤を作り直さない。
-- N01–N05完了後のN06実装入力。§§3–5のSafeBind RHS射影・pattern・failure target契約と、対応するstructured reason / typed IR / Forge経路は実装済みである。残るdiagnostic family、heuristic撤去、builtin metadata統合は未実装である。
+- N01–N05完了後のN06実装入力。§§3–5のSafeBind RHS射影・pattern・failure target契約、§§6–9のdiagnostic family、heuristic撤去、builtin metadata統合まで実装済みである。
 - level4（型・評価規則とフェーズ間契約の変更）。本書整理時は文書検証のみ行い、実装時に全体検証と独立レビューを行う。
 - Extractorは現行の`Option<T>`返却を維持する。Extractor更改は独立した別タスクであり、本書の前提・成果・do開始ゲートに含めない。
 
@@ -176,9 +176,11 @@ AriadneとJSONは同じfailureを入力とする。既存のphase/kind/span/expe
 
 ### 8.1 builtin surface metadataの残作業
 
-qualified builtin surfaceは、現在も`builtin_runtime_name_for_qualified`の明示allowlistと
-`surface_variant_named`によるvariant構築を経由する。未知ownerを拒否するfail-closed境界は維持しつつ、
-owner/name/runtime targetの対応を`crates/sindr/src/builtin.rs`の`BUILTIN_METAS`へ構造データとして移す。
+qualified builtin surfaceは`crates/sindr/src/builtin.rs`の`BUILTIN_METAS.surfaces`を正本とし、
+owner/name/runtime targetとcanonical signatureを構造データから解決する。compiler-generated declarationは
+通常source surfaceへ混入させず、同じmetadata entryの`compiler_generated_surfaces`で正確なowner/nameだけを登録する。
+未知ownerを拒否するfail-closed境界を維持し、旧`builtin_runtime_name_for_qualified`の明示allowlistと
+`surface_variant_named`によるvariant合成は撤去した。
 
 追加・変更の起点を`BUILTIN_METAS`に一本化し、任意ownerのvariantを合成するfallbackや、表示名・登録順から
 runtime targetを選ぶ経路は設けない。source `@builtin def`はcanonical surface signatureとの完全一致検証、
@@ -255,4 +257,27 @@ do continuationへ差し替える作業であり、N06のRHS/pattern是正を再
 | DC-16 | nearest callable / closure / REPL継続 / Facet禁止と、静的patternエラーをruntime failureにしない境界を維持する |
 | DC-17 | 通常constructor / nested Result / 明示pattern分解を共通MatchBlock経路で検証し、旧Ok限定・Option先行拒否・total non-Result pass-throughを残さない |
 
+### 12.1 実装・検証対応
+
+| 条件 | 主な実装テスト・監査 |
+|---|---|
+| DC-01–05、DC-16/17 | `crates/scar/tests/typecheck_surface.rs`のSafeBind projection / reason / target群、`tests/integration/language_features/safebind_and_errors.rs`、module fixture `control_safebind_extractor_some_once` |
+| DC-06 | ScarのTrait/operator/branch既存回帰群と`crates/diagnostics/src/tests/structured_reasons.rs` |
+| DC-07–10 | `crates/diagnostics/src/tests/`、Spire/Sigil producer tests、Rune integration、`crates/xldr/tests/repl_core.rs`の診断後継続 |
+| DC-04、DC-15 | Forgeの`emit_extractor_bind_invokes_user_extractor_once`とtyped SafeBind failure tests、既存pattern / Extractor success・rejection tests |
+| DC-11 | `crates/diagnostics/src/heuristics*`削除、旧暫定reason・message/source/marker分類参照のゼロ件監査 |
+| DC-12 | `cargo run -- test --quiet --all`、CI profile workspaceの2回連続実行、独立レビュー |
+| DC-13 | draft本文を除外した正本参照監査とtask-local diff確認 |
+| DC-14 | Sindrのsurface signature / exact generated identity tests、Scarの完全signature検証、Sigilのunknown builtin拒否 |
+
 実装後、本書の恒久的契約を `/docs` へ移管し、進捗やコマンドログを言語仕様へ混在させない。
+
+## 13. 実装結果
+
+DC-01–DC-17を実装し、恒久契約を[`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md)と
+[`../docs/dev/Trait_system_spec.md`](../docs/dev/Trait_system_spec.md)へ同期した。SafeBind / Extractorの
+現行Option契約、structured producer、typed runtime failure、builtin metadataのfail-closed境界を維持し、
+draft本文とN07以降のdo実装には変更を加えていない。
+
+`cargo run -- test --quiet --all`とCI profileのworkspace 1874 testsを同一worktree差分で2回連続成功させ、
+独立レビューはfindings 0件だった。これにより§10のdo開始条件を満たし、N07を着手可能とする。

@@ -430,11 +430,19 @@ pub fn resolve_staged_program_from_state_with_warnings(
                 let init_uid = *declaration_uids.get(&init_fq).ok_or_else(|| ResolveError {
                     message: format!("missing lowered init handler `{init_fq}`"),
                     span: Span { start: 0, end: 0 },
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 })?;
                 let get_uid = *declaration_uids.get(&get_fq).ok_or_else(|| ResolveError {
                     message: format!("missing lowered get handler `{get_fq}`"),
                     span: Span { start: 0, end: 0 },
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 })?;
                 let set_uid = declaration_uids.get(&set_fq).copied();
@@ -457,6 +465,10 @@ pub fn resolve_staged_program_from_state_with_warnings(
                             .ok_or_else(|| ResolveError {
                                 message: format!("missing lowered process handler `{fq_name}`"),
                                 span: handler.span.clone(),
+                                diagnostic: crate::error::ResolveErrorDiagnostic {
+                                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                                    subject: None,
+                                },
                                 related_labels: Vec::new(),
                             })
                     })
@@ -591,6 +603,10 @@ fn resolve_stage_modules_parallel(
             handles.push(handle.map_err(|err| ResolveError {
                 message: format!("failed to spawn stage resolver worker: {}", err),
                 span: Span { start: 0, end: 0 },
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             }));
         }

@@ -1,4 +1,4 @@
-use crate::heuristics::char_span_to_byte_range;
+use crate::source::char_span_to_byte_range;
 use crate::Color;
 use ariadne::{Label, Report, ReportKind};
 use spire::ast::Span;

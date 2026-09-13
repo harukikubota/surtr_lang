@@ -39,6 +39,7 @@ impl Parser<'_> {
             Token::Bind => Ok(Ast::Bind(span, pat, Box::new(rhs))),
             Token::SafeBind => Ok(Ast::SafeBind(span, pat, Box::new(rhs))),
             other => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 format!("Expected assignment operator (= or =?), got {:?}", other),
                 span,
             )),
@@ -82,6 +83,7 @@ impl Parser<'_> {
 
         if !crate::func_literal::is_func_literal_ident(body) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 format!("Unsupported FuncLiteral body: `{}`", body),
                 span,
             ));
@@ -171,6 +173,7 @@ impl Parser<'_> {
             self.advance();
             if matches!(next, FlowOpKind::Choice) && matches!(self.peek(), Token::Newline) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "`<|>` must have its right operand on the same line",
                     self.peek_span(),
                 ));
@@ -202,6 +205,7 @@ impl Parser<'_> {
                 ) && Self::flow_op_kind(self.peek()).is_none()
                 {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
                         "quoted pair constructor partial call must be the complete pipeline RHS",
                         pair_call.span().clone(),
                     ));
@@ -445,6 +449,7 @@ impl Parser<'_> {
                 FuncLiteralBodyKind::Operator(op_body) => {
                     let Some(op) = Self::expr_binop_from_func_literal(&op_body) else {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::ExpressionSyntax,
                             format!("Unsupported FuncLiteral body: `{}`", op_body),
                             func_span,
                         ));
@@ -642,6 +647,7 @@ impl Parser<'_> {
         self.skip_newlines();
         if matches!(self.peek(), Token::Gt) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Explicit type arguments cannot be empty",
                 self.peek_span(),
             ));
@@ -658,6 +664,7 @@ impl Parser<'_> {
             self.skip_newlines();
             if matches!(self.peek(), Token::Gt) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "Explicit type arguments cannot end with a comma",
                     self.peek_span(),
                 ));
@@ -690,6 +697,7 @@ impl Parser<'_> {
         self.skip_newlines();
         if matches!(self.peek(), Token::Gt) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Enum constructor type arguments cannot be empty",
                 self.peek_span(),
             ));
@@ -701,6 +709,7 @@ impl Parser<'_> {
             self.skip_newlines();
             if matches!(self.peek(), Token::Gt) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "Enum constructor type arguments cannot end with a comma",
                     self.peek_span(),
                 ));
@@ -755,7 +764,10 @@ impl Parser<'_> {
                 };
                 if matches!(self.peek(), Token::Question) {
                     let question_span = self.advance().span;
-                    Ok((FacetPathSegment::optional_field(name.to_string()), question_span))
+                    Ok((
+                        FacetPathSegment::optional_field(name.to_string()),
+                        question_span,
+                    ))
                 } else {
                     Ok((FacetPathSegment::field(name.to_string()), token.span))
                 }
@@ -785,10 +797,12 @@ impl Parser<'_> {
                 ))
             }
             Token::Int(_) => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Expected field name after '.'. Tuple access uses ._0, ._1, ...",
                 self.peek_span(),
             )),
             other => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 format!(
                     "Facet path segment after `.` expects identifier or bracket segment, got {other:?}"
                 ),
@@ -870,6 +884,7 @@ impl Parser<'_> {
                 if let Token::Ident(name) = self.peek().clone() {
                     let name_span = self.peek_span();
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
                         format!(
                             "Unary minus on variables is not supported in Phase 1; write `0 - {}` instead of `-{}`",
                             name, name
@@ -902,6 +917,7 @@ impl Parser<'_> {
                         // General unary minus: desugar to 0 - expr (for Int)
                         // For now, only support literal negation
                         Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::ExpressionSyntax,
                             "Unary minus is only supported on numeric literals in Phase 1; write `0 - expr` for general subtraction",
                             Span {
                                 start: sp.start,
@@ -917,9 +933,11 @@ impl Parser<'_> {
 
             // Parenthesized expression
             Token::LParen if self.pair_constructor_at() => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "bare `(,)` is only valid in infix position",
                 self.pair_constructor_span(),
-            )),
+            )
+            .with_guidance(crate::error::ParseErrorGuidance::PairConstructorCapture)),
             Token::LParen => self.with_parse_nesting(sp.clone(), |parser| {
                 parser.advance();
                 parser.skip_newlines();
@@ -930,6 +948,7 @@ impl Parser<'_> {
                     parser.skip_newlines();
                     if matches!(parser.peek(), Token::RParen) {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::ExpressionSyntax,
                             "1-tuple literals are not supported",
                             Span {
                                 start: sp.start,
@@ -975,6 +994,7 @@ impl Parser<'_> {
             Token::Amp => self.parse_capture_expr(sp),
             Token::Tilde => self.parse_facet_capture_expr(sp),
             Token::Caret => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Pin operator ^ is only allowed in MatchBlock patterns and bulk_update paths.",
                 sp,
             )),
@@ -994,10 +1014,16 @@ impl Parser<'_> {
             }
 
             Token::Eof => Err(ParseError::incomplete("expression", sp)),
-            _ => Err(ParseError::syntax(
-                format!("Unexpected token: {:?}", self.peek()),
-                sp,
-            )),
+            _ => {
+                let token_kind = format!("{:?}", self.peek());
+                Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::UnexpectedToken,
+                    format!("Unexpected token: {token_kind}"),
+                    sp,
+                )
+                .with_token_kind(token_kind)
+                .with_guidance(crate::error::ParseErrorGuidance::UnexpectedToken))
+            }
         }
     }
 
@@ -1012,6 +1038,7 @@ impl Parser<'_> {
         let func_span = self.advance().span.clone();
         if !matches!(self.peek(), Token::LParen | Token::Unit) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "FuncLiteral must appear in infix position or be followed by a call",
                 func_span,
             ));
@@ -1054,6 +1081,7 @@ impl Parser<'_> {
                         }
 
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::ExpressionSyntax,
                             "quoted pair constructor call `(,)` expects exactly 2 positional arguments",
                             Span {
                                 start: span.start,
@@ -1067,6 +1095,7 @@ impl Parser<'_> {
                     args.as_slice()
                 else {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
                         format!(
                             "quoted operator call `{}` expects exactly 2 positional arguments",
                             op_body
@@ -1079,6 +1108,7 @@ impl Parser<'_> {
                 };
                 let Some(op) = Self::expr_binop_from_func_literal(&op_body) else {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
                         format!("quoted operator call `{}` is not supported", op_body),
                         func_span,
                     ));
@@ -1152,6 +1182,7 @@ impl Parser<'_> {
         let sp = self.peek_span();
         let Token::Int(n) = self.peek().clone() else {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "@timeout(...) requires a duration literal like `100ms`",
                 sp,
             ));
@@ -1159,6 +1190,7 @@ impl Parser<'_> {
         self.advance();
         if !self.is_duration_suffix_here() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "@timeout(...) requires a duration literal like `100ms`",
                 sp,
             ));
@@ -1179,6 +1211,7 @@ impl Parser<'_> {
         let modifier_span = self.peek_span();
         let Token::Annotator(modifier) = self.peek().clone() else {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Expected @timeout(...)",
                 self.peek_span(),
             ));
@@ -1186,6 +1219,7 @@ impl Parser<'_> {
         self.advance();
         if modifier != "timeout" {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 format!("Unsupported call modifier: @{modifier}"),
                 modifier_span,
             ));
@@ -1199,6 +1233,7 @@ impl Parser<'_> {
             Ast::App(_, func, args) => (*func, args),
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "@timeout(...) can only be applied to runtime-managed calls",
                     Span {
                         start,
@@ -1223,6 +1258,7 @@ impl Parser<'_> {
             }
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "@timeout(...) is only supported on Task::call/await and Workers::submit/broadcast",
                     Span {
                         start,
@@ -1244,6 +1280,7 @@ impl Parser<'_> {
                 .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
         {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "@timeout(...) expects positional arguments for the runtime-managed call",
                 Span {
                     start,
@@ -1284,6 +1321,7 @@ impl Parser<'_> {
 
         if name == "self" && self.impl_target_stack.is_empty() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "`self` can only be used inside impl methods",
                 name_span,
             ));
@@ -1329,6 +1367,7 @@ impl Parser<'_> {
             if self.explicit_type_args_start() {
                 if path_last_is_uppercase {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
                         "Explicit type arguments apply to callables, not constructors",
                         self.peek_span(),
                     ));
@@ -1359,6 +1398,7 @@ impl Parser<'_> {
                             .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
                     {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::ExpressionSyntax,
                             "Facet::bulk_update expects exactly 1 positional argument before its update block",
                             Span {
                                 start: name_span.start,
@@ -1368,6 +1408,7 @@ impl Parser<'_> {
                     }
                     if !matches!(self.peek(), Token::LBrace) {
                         return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::ExpressionSyntax,
                             "Facet::bulk_update requires a special update block",
                             self.peek_span(),
                         ));
@@ -1376,6 +1417,7 @@ impl Parser<'_> {
                         Ok([RecordLitArg::Positional(expr)]) => expr,
                         _ => {
                             return Err(ParseError::syntax(
+                                crate::error::ParseErrorReason::ExpressionSyntax,
                                 "Facet::bulk_update expects exactly 1 positional argument before its update block",
                                 Span {
                                     start: name_span.start,
@@ -1445,6 +1487,7 @@ impl Parser<'_> {
         if self.explicit_type_args_start() {
             if is_uppercase {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "Explicit type arguments apply to callables, not constructors",
                     self.peek_span(),
                 ));
@@ -1613,6 +1656,7 @@ impl Parser<'_> {
             let ty = self.parse_type()?;
             if matches!(self.peek(), Token::Arrow) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "Parenthesized type signatures must choose tuple or function syntax after the first element: use `,` and another type for a tuple, or put `->` before `)` for a function type (for example, `(Int -> String)`, not `(Int) -> String`).",
                     self.peek_span(),
                 ));
@@ -1630,6 +1674,7 @@ impl Parser<'_> {
                 }
                 _ => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
                         format!(
                             "Expected assignment operator (= or =?), got {:?}",
                             self.peek()
@@ -1671,6 +1716,7 @@ impl Parser<'_> {
         if matches!(self.peek(), Token::Unit) {
             let unit_span = self.advance().span.clone();
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "`dbg!` expects at least one argument",
                 Span {
                     start: name_span.start,
@@ -1680,6 +1726,7 @@ impl Parser<'_> {
         }
         if !matches!(self.peek(), Token::LParen) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Expected `(` after `dbg!`",
                 Span {
                     start: name_span.start,
@@ -1692,6 +1739,7 @@ impl Parser<'_> {
         self.skip_newlines();
         if matches!(self.peek(), Token::RParen) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "`dbg!` expects at least one argument",
                 self.peek_span(),
             ));
@@ -1731,6 +1779,7 @@ impl Parser<'_> {
     pub(super) fn ensure_non_associative_assignment(&self, rhs: &Ast) -> Result<(), ParseError> {
         if matches!(rhs, Ast::Bind(_, _, _) | Ast::SafeBind(_, _, _)) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "`=` and `=?` are non-associative; a statement can contain only one assignment operator",
                 rhs.span().clone(),
             ));
@@ -1784,6 +1833,7 @@ impl Parser<'_> {
         self.skip_newlines();
         if matches!(self.peek(), Token::Comma) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "is_match expects exactly 2 positional arguments",
                 self.peek_span(),
             ));
@@ -1813,12 +1863,14 @@ impl Parser<'_> {
                 .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
         {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 format!("{name} expects exactly 2 positional arguments"),
                 Span { start, end },
             ));
         }
         let [term_arg, pattern_arg] = <[RecordLitArg; 2]>::try_from(args).map_err(|args| {
             ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 format!(
                     "{name} expects exactly 2 positional arguments, got {}",
                     args.len()
@@ -1830,6 +1882,7 @@ impl Parser<'_> {
             RecordLitArg::Positional(expr) => expr,
             RecordLitArg::Named(_, _) => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     format!("{name} expects positional arguments"),
                     Span { start, end },
                 ));
@@ -1839,6 +1892,7 @@ impl Parser<'_> {
             RecordLitArg::Positional(expr) => expr,
             RecordLitArg::Named(_, _) => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     format!("{name} expects positional arguments"),
                     Span { start, end },
                 ));
@@ -1857,6 +1911,7 @@ impl Parser<'_> {
         let pattern = arms.remove(0).pattern;
         if super::pattern::pattern_contains_binding_var(&pattern) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.",
                 super::pattern_span(&pattern).clone(),
             ));
@@ -1947,6 +2002,7 @@ impl Parser<'_> {
     pub(super) fn reject_constructor_trailing_block(&self) -> Result<(), ParseError> {
         if self.allow_trailing_call_block && matches!(self.peek(), Token::LBrace) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Trailing block sugar is not supported for constructor calls",
                 self.peek_span(),
             ));
@@ -1969,6 +2025,7 @@ impl Parser<'_> {
             .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
         {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Trailing block sugar cannot follow named arguments",
                 self.peek_span(),
             ));
@@ -2003,6 +2060,7 @@ impl Parser<'_> {
         let expr = self.parse_expr()?;
         if matches!(expr, Ast::Bind(_, _, _) | Ast::SafeBind(_, _, _)) {
             Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Assignments (`=` and `=?`) are statements and cannot appear in argument position",
                 expr.span().clone(),
             ))
@@ -2125,6 +2183,7 @@ impl Parser<'_> {
                 parser.skip_newlines();
                 if !matches!(parser.peek(), Token::FatArrow) {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
                         "expected `=>` in hash! literal",
                         parser.peek_span(),
                     ));
@@ -2214,12 +2273,14 @@ impl Parser<'_> {
             let span = self.advance().span.clone();
             let Some(index) = n.to_usize() else {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "capture placeholder index must be a positive integer",
                     span,
                 ));
             };
             if index == 0 {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "capture placeholder index starts at &1",
                     span,
                 ));
@@ -2234,12 +2295,14 @@ impl Parser<'_> {
         }
         if self.pair_constructor_at() {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "bare `(,)` is only valid in infix position",
                 Span {
                     start: sp.start,
                     end: self.pair_constructor_span().end,
                 },
-            ));
+            )
+            .with_guidance(crate::error::ParseErrorGuidance::PairConstructorCapture));
         }
         if matches!(self.peek(), Token::LParen) {
             self.advance();
@@ -2247,29 +2310,39 @@ impl Parser<'_> {
             let inner = self.parse_expr()?;
             self.skip_newlines();
             let end_span = self.expect(&Token::RParen)?;
-            let message = match inner {
-                Ast::CapturePlaceholder(_, 1) => {
-                    "anonymous capture is not supported; use `&id` instead".to_string()
-                }
-                _ => "anonymous capture is not supported; extract a named function and capture it like `&fun_name(&1, &2)`".to_string(),
+            let (message, guidance) = match inner {
+                Ast::CapturePlaceholder(_, 1) => (
+                    "anonymous capture is not supported; use `&id` instead".to_string(),
+                    crate::error::ParseErrorGuidance::AnonymousCaptureIdentity,
+                ),
+                _ => (
+                    "anonymous capture is not supported; extract a named function and capture it like `&fun_name(&1, &2)`".to_string(),
+                    crate::error::ParseErrorGuidance::AnonymousCaptureRequiresHelper,
+                ),
             };
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 message,
                 Span {
                     start: sp.start,
                     end: end_span.end,
                 },
-            ));
+            )
+            .with_guidance(guidance));
         }
         if let Some(operator) = func_literal_operator_token(self.peek()) {
             let operator_span = self.peek_span();
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 format!("Unquoted operator capture: {operator}"),
                 Span {
                     start: sp.start,
                     end: operator_span.end,
                 },
-            ));
+            )
+            .with_guidance(crate::error::ParseErrorGuidance::OperatorCapture(
+                operator.to_string(),
+            )));
         }
         let (mut target, mut end) = match self.peek().clone() {
             Token::Ident(_) => {
@@ -2326,9 +2399,10 @@ impl Parser<'_> {
             }
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     format!("Expected identifier, got {:?}", self.peek()),
                     self.peek_span(),
-                ))
+                ));
             }
         };
 
@@ -2380,6 +2454,7 @@ impl Parser<'_> {
                 RecordLitArg::Positional(expr) => args.push(expr),
                 RecordLitArg::Named(arg_name, _) => {
                     return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
                         format!("capture does not accept named argument '{}'", arg_name),
                         Span {
                             start: sp.start,
@@ -2422,6 +2497,7 @@ impl Parser<'_> {
 
         if matches!(self.peek(), Token::RBrace) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Match expression must contain at least one arm",
                 lbrace,
             ));
@@ -2479,6 +2555,7 @@ impl Parser<'_> {
 
         if matches!(self.peek(), Token::RBrace) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Facet::bulk_update must contain at least one entry",
                 lbrace,
             ));
@@ -2518,6 +2595,7 @@ impl Parser<'_> {
             self.skip_newlines();
             if matches!(self.peek(), Token::RBrace) {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "Bulk update nested path must contain at least one entry",
                     lbrace,
                 ));
@@ -2605,6 +2683,7 @@ impl Parser<'_> {
             }
             Token::Ident(_) => self.parse_bulk_update_relative_path(),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Bulk update path must start with a path segment, pinned FacetPath (^name), or whitelisted Facet path operation",
                 start_span,
             )),
@@ -2676,6 +2755,7 @@ impl Parser<'_> {
         let count_span = self.peek_span();
         let Token::Int(count) = self.peek().clone() else {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Facet path operation count must be an integer literal",
                 count_span,
             ));
@@ -2683,6 +2763,7 @@ impl Parser<'_> {
         self.advance();
         let Some(count) = count.to_usize() else {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Facet path operation count must fit in usize",
                 count_span,
             ));
@@ -2697,6 +2778,7 @@ impl Parser<'_> {
             "strip_left" => Ok(BulkUpdatePath::StripLeft(span, Box::new(inner), count)),
             "strip_right" => Ok(BulkUpdatePath::StripRight(span, Box::new(inner), count)),
             _ => Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Unsupported bulk_update path operation",
                 method_span,
             )),
@@ -2714,6 +2796,7 @@ impl Parser<'_> {
             "case_over" => BulkUpdateEntryKind::CaseOver,
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), or case_over(update_fun)",
                     name_span,
                 ));
@@ -2730,6 +2813,7 @@ impl Parser<'_> {
                 .any(|arg| matches!(arg, RecordLitArg::Named(_, _)))
         {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), or case_over(update_fun)",
                 Span {
                     start: name_span.start,
@@ -2742,6 +2826,7 @@ impl Parser<'_> {
             Ok([RecordLitArg::Positional(expr)]) => expr,
             _ => {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "Bulk update entries must use set(value), over(update_fun), over_result(update_fun), case_set(payload), or case_over(update_fun)",
                     Span {
                         start: name_span.start,
@@ -2752,6 +2837,7 @@ impl Parser<'_> {
         };
         if bulk_update_proc_contains_operation_call(&inner) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "bulk_update operation calls cannot be nested. Use a single whitelisted operation at the leaf.",
                 inner.span().clone(),
             ));
@@ -2771,6 +2857,7 @@ impl Parser<'_> {
 
         if matches!(self.peek(), Token::RBrace) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Cond expression must contain at least one clause",
                 lbrace,
             ));
@@ -2797,6 +2884,7 @@ impl Parser<'_> {
         for (idx, (cond, _)) in clauses.iter().enumerate() {
             if Self::is_true_literal(cond) && idx + 1 != clauses.len() {
                 return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
                     "`True` clause must be the final cond clause",
                     cond.span().clone(),
                 ));
@@ -2805,12 +2893,14 @@ impl Parser<'_> {
 
         let Some((last_cond, last_body)) = clauses.pop() else {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Cond expression must contain at least one clause",
                 lbrace,
             ));
         };
         if !Self::is_true_literal(&last_cond) {
             return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 "Final cond clause must use `True` as its condition",
                 last_cond.span().clone(),
             ));

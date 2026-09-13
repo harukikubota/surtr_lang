@@ -2,11 +2,7 @@ use super::test_support::*;
 
 #[test]
 fn parse_error_spec_adds_unexpected_token_help() {
-    let spec = parse_error_spec(
-        "x = )",
-        "Unexpected token: RParen",
-        Span { start: 4, end: 5 },
-    );
+    let spec = parser_error_spec("x = )", None);
 
     assert!(spec
         .labels
@@ -19,19 +15,58 @@ fn parse_error_spec_adds_unexpected_token_help() {
 }
 
 #[test]
+fn resolve_error_spec_projects_explicit_reason_and_related_source_facts() {
+    let primary = Span { start: 12, end: 20 };
+    let related_span = Span { start: 0, end: 8 };
+    let spec = resolve_error_spec(
+        SourceId(3),
+        "Undefined variable: stale display text",
+        primary.clone(),
+        ResolveDiagnosticReason::Namespace,
+        Some("Global::Module".into()),
+        &[(
+            SourceId(2),
+            related_span.clone(),
+            "first declaration".into(),
+        )],
+    );
+
+    let structured = spec.structured.expect("resolver diagnostic is structured");
+    assert_eq!(
+        structured.reason,
+        DiagnosticReason::Resolve(ResolveDiagnosticReason::Namespace)
+    );
+    assert_eq!(structured.origin, DiagnosticOrigin::Resolve);
+    assert_eq!(structured.primary.source_id, SourceId(3));
+    assert_eq!(structured.primary.span, primary);
+    assert_eq!(structured.related[0].source_id, SourceId(2));
+    assert_eq!(structured.related[0].span, related_span);
+    let DiagnosticData::Resolve(data) = structured.data else {
+        panic!("expected resolver payload");
+    };
+    assert_eq!(data.subject.as_deref(), Some("Global::Module"));
+}
+
+#[test]
 fn resolve_error_spec_with_labels_cycles_duplicate_binding_colors() {
     let labels = [
-        (Span { start: 0, end: 1 }, "first".to_string()),
-        (Span { start: 2, end: 3 }, "second".to_string()),
-        (Span { start: 4, end: 5 }, "third".to_string()),
-        (Span { start: 6, end: 7 }, "fourth".to_string()),
-        (Span { start: 8, end: 9 }, "fifth".to_string()),
-        (Span { start: 10, end: 11 }, "first".to_string()),
+        (SourceId(0), Span { start: 0, end: 1 }, "first".to_string()),
+        (SourceId(0), Span { start: 2, end: 3 }, "second".to_string()),
+        (SourceId(0), Span { start: 4, end: 5 }, "third".to_string()),
+        (SourceId(0), Span { start: 6, end: 7 }, "fourth".to_string()),
+        (SourceId(0), Span { start: 8, end: 9 }, "fifth".to_string()),
+        (
+            SourceId(0),
+            Span { start: 10, end: 11 },
+            "first".to_string(),
+        ),
     ];
-    let spec = resolve_error_spec_with_labels(
-        "abcdefghijkl",
+    let spec = resolve_error_spec(
+        SourceId(0),
         "Duplicate binding in pattern: x",
         Span { start: 0, end: 1 },
+        ResolveDiagnosticReason::Pattern,
+        None,
         &labels,
     );
 
@@ -55,13 +90,20 @@ fn resolve_error_spec_with_labels_cycles_duplicate_binding_colors() {
 fn duplicate_top_level_owner_diagnostic_preserves_each_contract_role() {
     let first_span = Span { start: 10, end: 14 };
     let conflicting_span = Span { start: 30, end: 34 };
-    let spec = resolve_error_spec_with_labels(
-        "defrecord Hoge(value: Int)\ndefmod Hoge {}",
+    let spec = resolve_error_spec(
+        SourceId(0),
         "Duplicate top-level owner: Hoge",
         conflicting_span.clone(),
+        ResolveDiagnosticReason::Namespace,
+        Some("Hoge".into()),
         &[
-            (first_span.clone(), "first Record declaration".into()),
             (
+                SourceId(0),
+                first_span.clone(),
+                "first Record declaration".into(),
+            ),
+            (
+                SourceId(0),
                 conflicting_span.clone(),
                 "conflicting Mod declaration".into(),
             ),
@@ -77,28 +119,18 @@ fn duplicate_top_level_owner_diagnostic_preserves_each_contract_role() {
     assert!(spec.labels.iter().any(|label| {
         label.span == spec.primary_span && label.message == "conflicting Mod declaration"
     }));
+    let structured = spec.structured.expect("resolver diagnostic is structured");
     assert_eq!(
-        spec.notes,
-        ["Top-level owners share one namespace, so an owner name can be declared only once."]
+        structured.reason,
+        DiagnosticReason::Resolve(ResolveDiagnosticReason::Namespace)
     );
-    assert_eq!(
-        spec.help.as_deref(),
-        Some("Rename one of the owners so each top-level owner has a unique name.")
-    );
-    assert!(spec
-        .labels
-        .iter()
-        .all(|label| !label.message.contains("namespace")));
+    assert_eq!(structured.related.len(), 2);
 }
 
 #[test]
 fn parse_error_spec_uses_help_for_unit_pattern_guidance() {
     let source = "() = ()";
-    let spec = parse_error_spec(
-        source,
-        "The Unit type has no pattern matching.",
-        Span { start: 0, end: 2 },
-    );
+    let spec = parser_error_spec(source, None);
 
     assert_eq!(
         spec.help.as_deref(),
@@ -109,11 +141,8 @@ fn parse_error_spec_uses_help_for_unit_pattern_guidance() {
 
 #[test]
 fn parse_error_spec_guides_wildcard_as_pattern_aliases() {
-    let spec = parse_error_spec(
-        "(left, right) @ _ = (1, 2)",
-        "as-pattern alias must be a binding identifier.",
-        Span { start: 16, end: 17 },
-    );
+    let source = "(left, right) @ _ = (1, 2)";
+    let spec = parser_error_spec(source, None);
 
     assert_eq!(
         spec.help.as_deref(),
@@ -124,11 +153,7 @@ fn parse_error_spec_guides_wildcard_as_pattern_aliases() {
 #[test]
 fn parse_error_spec_rewrites_identity_anonymous_capture() {
     let source = "f = &(&1)";
-    let spec = parse_error_spec(
-        source,
-        "anonymous capture is not supported; use `&id` instead",
-        Span { start: 4, end: 9 },
-    );
+    let spec = parser_error_spec(source, None);
 
     assert_eq!(
         spec.help.as_deref(),
@@ -139,28 +164,20 @@ fn parse_error_spec_rewrites_identity_anonymous_capture() {
 #[test]
 fn parse_error_spec_rewrites_anonymous_capture_to_named_helper_shape() {
     let source = "f = &(&1 + &2)";
-    let spec = parse_error_spec(
-            source,
-            "anonymous capture is not supported; extract a named function and capture it like `&fun_name(&1, &2)`",
-            Span { start: 4, end: 14 },
-        );
+    let spec = parser_error_spec(source, None);
 
     assert_eq!(
-            spec.help.as_deref(),
-            Some(
-                "Extract the body into a named helper and replace this capture with:\n\n  f = &fun_name(&1, &2)"
-            )
-        );
+        spec.help.as_deref(),
+        Some(
+            "Extract the body into a named helper and replace this capture with:\n\n  f = &fun_name(&1, &2)"
+        )
+    );
 }
 
 #[test]
 fn parse_error_spec_explains_immediate_anonymous_callable_calls() {
     let source = "f = &add(&1, 10)(4)";
-    let spec = parse_error_spec(
-        source,
-        "Immediate calls on anonymous callable expressions are not supported; bind the callable to a name and call it as `fn(args)`",
-        Span { start: 17, end: 18 },
-    );
+    let spec = parser_error_spec(source, None);
 
     assert!(spec.labels.iter().any(|label| {
         label.message == "anonymous callable is followed by an immediate call"
@@ -176,11 +193,7 @@ fn parse_error_spec_explains_immediate_anonymous_callable_calls() {
 
 #[test]
 fn parse_error_spec_puts_range_literal_rewrite_in_help() {
-    let spec = parse_error_spec(
-        "2..8",
-        "Range literals must use bracket syntax",
-        Span { start: 1, end: 3 },
-    );
+    let spec = parser_error_spec("2..8", None);
 
     assert_eq!(spec.message, "Range literals must use bracket syntax");
     assert_eq!(spec.help.as_deref(), Some("Write `[start..stop]`."));
@@ -189,11 +202,8 @@ fn parse_error_spec_puts_range_literal_rewrite_in_help() {
 
 #[test]
 fn parse_error_spec_puts_bare_operator_capture_rewrite_in_help() {
-    let spec = parse_error_spec(
-        "List::reduce([1, 2], 0, &+)",
-        "Unquoted operator capture: +",
-        Span { start: 23, end: 25 },
-    );
+    let source = "List::reduce([1, 2], 0, &+)";
+    let spec = parser_error_spec(source, None);
 
     assert_eq!(spec.message, "Unquoted operator capture: +");
     assert_eq!(spec.help.as_deref(), Some("Write &`+`."));
@@ -202,11 +212,8 @@ fn parse_error_spec_puts_bare_operator_capture_rewrite_in_help() {
 
 #[test]
 fn parse_error_spec_puts_bare_pair_constructor_rewrite_in_help() {
-    let spec = parse_error_spec(
-        "pair = &(,)",
-        "bare `(,)` is only valid in infix position",
-        Span { start: 7, end: 11 },
-    );
+    let source = "pair = &(,)";
+    let spec = parser_error_spec(source, None);
 
     assert_eq!(spec.message, "bare `(,)` is only valid in infix position");
     assert_eq!(
@@ -217,122 +224,26 @@ fn parse_error_spec_puts_bare_pair_constructor_rewrite_in_help() {
 }
 
 #[test]
-fn type_error_spec_labels_extractor_pattern_for_safebind_rhs() {
-    let source = "uncons(head, tail) =? True";
-    let err = TypeError {
-        message: "Extractor uncons expects List<...> or String, got Boolean".into(),
-        span: Span { start: 0, end: 6 },
-        hint: None,
-    };
-
-    let spec = type_error_spec(source, &err);
-
-    assert!(spec.labels.iter().any(|label| {
-        label.message == "extractor pattern checked against the SafeBind RHS"
-            && slice_chars(source, label.span.start, label.span.end) == "uncons(head, tail)"
-    }));
-}
-
-#[test]
-fn type_error_spec_splits_total_bind_pattern_error_into_lhs_op_rhs() {
-    let source = "[h, ..t] = [1]";
-    let err = TypeError {
-        message: "Only total MatchBlock patterns can be used with `=`".into(),
-        span: Span {
-            start: 0,
-            end: source.chars().count(),
-        },
-        hint: Some("Use `=?` for partial destructuring and extractor-driven matches.".into()),
-    };
-
-    let spec = type_error_spec(source, &err);
-
-    assert!(spec.labels.iter().any(|label| {
-        label.message == "LHS pattern: partial MatchBlock pattern"
-            && label.color == Some(Color::Red)
-            && slice_chars(source, label.span.start, label.span.end) == "[h, ..t]"
-    }));
-    assert!(
-        spec_notes_text(&spec).contains("Bind rule: `=` accepts only total MatchBlock patterns.")
-    );
-    assert!(!labels_text(&spec).contains("Bind rule:"));
-    assert!(spec.labels.iter().any(|label| {
-        label.message == "RHS value"
-            && label.color.is_none()
-            && slice_chars(source, label.span.start, label.span.end) == "[1]"
-    }));
-    assert_eq!(
-        spec.help.as_deref(),
-        Some("Use `=?` for partial destructuring and extractor-driven matches.")
-    );
-}
-
-#[test]
-fn type_error_spec_by_id_adds_extractor_context_blocks() {
-    let mut sources = SourceRegistry::new();
-    let main_source = "print(match True {\n  uncons(head, tail) => head,\n  _ => 0,\n})";
-    let main_id = sources.register("main.srt", main_source);
-    let kernel_id = sources.register(
-        "lib/kernel.srt",
-        "@builtin defextractor uncons(term) -> Option<($Head, $Tail)>",
-    );
-    let err = TypeError {
-        message: "Extractor uncons expects List<...> or String, got Boolean".into(),
-        span: Span { start: 22, end: 28 },
-        hint: None,
-    };
-
-    let spec = type_error_spec_by_id(&sources, main_id, &err);
-
-    assert!(spec_notes_text(&spec).contains("input source: Boolean"));
-    assert!(!labels_text(&spec).contains("input source:"));
-    assert!(spec.labels.iter().any(|label| {
-        label.source_id == Some(kernel_id)
-            && label
-                .message
-                .contains("Extractor definition: @builtin defextractor uncons(term)")
-    }));
-}
-
-#[test]
-fn safebind_terminal_rhs_span_picks_last_pipeline_rhs() {
-    let source = "uncons(head, tail) =? seed\n  |> step1()\n  |> finalize()";
-    let lines = line_spans(source);
-    let assignment = find_safebind_assignment(&lines, 0, source).expect("safebind assignment");
-    let span = safebind_terminal_rhs_span(source, &lines, assignment).expect("terminal rhs span");
-
-    assert_eq!(slice_chars(source, span.start, span.end), "finalize()");
-}
-
-#[test]
 fn parse_error_spec_labels_source_policy_violation() {
     let source = "defstruct User {\n  name: String,\n}";
-    let spec = parse_error_spec(
-        source,
-        "This top-level declaration is not allowed in the current source policy",
-        Span { start: 0, end: 17 },
-    );
+    let spec = parser_error_spec(source, Some(spire::ParserContext::repl(0)));
 
     assert!(spec
         .labels
         .iter()
         .any(|label| label.message == "forbidden top-level declaration"));
     assert_eq!(
-            spec.help.as_deref(),
-            Some(
-                "Move this declaration into a module compile unit, or replace it with an expression that is allowed in this source kind."
-            )
-        );
+        spec.help.as_deref(),
+        Some(
+            "Move this declaration into a module compile unit, or replace it with an expression that is allowed in this source kind."
+        )
+    );
 }
 
 #[test]
 fn parse_error_spec_labels_return_position_impl_trait() {
-    let source = "def echo(x: impl Show) -> impl Show { x }";
-    let spec = parse_error_spec(
-        source,
-        "return-position `impl Trait` is not supported; name the type parameter explicitly",
-        Span { start: 29, end: 41 },
-    );
+    let source = "def echo(x: String) -> impl Show { x }";
+    let spec = parser_error_spec(source, None);
 
     assert!(spec.labels.iter().any(|label| {
         label.message == "return-position `impl Trait` is not supported"
@@ -346,12 +257,8 @@ fn parse_error_spec_labels_return_position_impl_trait() {
 
 #[test]
 fn parse_error_spec_labels_where_clause_staging() {
-    let source = "def double(x: $N) -> $N where $N: Show { x + x }";
-    let spec = parse_error_spec(
-        source,
-        "`where` clauses are staged and not implemented yet",
-        Span { start: 29, end: 46 },
-    );
+    let source = "defextractor copy(value: Int) -> Int where $T: Show";
+    let spec = parser_error_spec(source, None);
 
     assert!(spec
         .labels
@@ -366,7 +273,7 @@ fn parse_error_spec_labels_where_clause_staging() {
 #[test]
 fn parse_error_spec_guides_missing_process_state_with_concrete_meta_entry() {
     let source = "defgenserver Ticker {\n  meta {\n    instance: Singleton\n  }\n}";
-    let spec = parse_error_spec(source, "meta requires state", Span { start: 24, end: 30 });
+    let spec = parser_error_spec(source, None);
 
     assert_eq!(
         spec.help.as_deref(),
@@ -376,195 +283,4 @@ fn parse_error_spec_guides_missing_process_state_with_concrete_meta_entry() {
         .labels
         .iter()
         .any(|label| label.message == "process declaration"));
-}
-
-#[test]
-fn resolve_error_spec_labels_undefined_name() {
-    let spec = resolve_error_spec(
-        "unknown(1)",
-        "Undefined variable: unknown",
-        Span { start: 0, end: 7 },
-    );
-
-    assert!(spec
-        .labels
-        .iter()
-        .any(|label| label.message.contains("unresolved name `unknown`")));
-    assert!(spec
-        .help
-        .as_deref()
-        .is_some_and(|help| help.contains("not defined in the current scope")));
-}
-
-#[test]
-fn resolve_error_spec_labels_undefined_callable() {
-    let spec = resolve_error_spec(
-        "unknown(1)",
-        "Undefined function unknown/1",
-        Span { start: 0, end: 7 },
-    );
-
-    assert!(spec
-        .labels
-        .iter()
-        .any(|label| label.message.contains("unresolved call target `unknown/1`")));
-    assert!(spec
-        .help
-        .as_deref()
-        .is_some_and(|help| help.contains("Check the argument count")));
-}
-
-#[test]
-fn resolve_error_spec_labels_unknown_module_import() {
-    let spec = resolve_error_spec(
-        "import Missing",
-        "Unknown module import: Missing",
-        Span { start: 0, end: 14 },
-    );
-
-    assert!(spec
-        .labels
-        .iter()
-        .any(|label| label.message == "unknown import target `Missing`"));
-    assert!(spec
-        .help
-        .as_deref()
-        .is_some_and(|help| help.contains("loaded before this import")));
-}
-
-#[test]
-fn resolve_error_spec_labels_non_importable_target() {
-    let spec = resolve_error_spec(
-        "import User",
-        "Import target `User` is not importable",
-        Span { start: 0, end: 11 },
-    );
-
-    assert!(spec
-        .labels
-        .iter()
-        .any(|label| label.message == "import target `User` is not importable"));
-    assert!(spec
-        .help
-        .as_deref()
-        .is_some_and(|help| help.contains("cannot be imported directly")));
-}
-
-#[test]
-fn resolve_error_spec_rewrites_nested_pipe_slot_into_previous_pipe_step() {
-    let source = "value |> f(add(10, _1))";
-    let spec = resolve_error_spec(
-        source,
-        "pipe placeholder `_1` cannot be used as an expression",
-        Span { start: 20, end: 22 },
-    );
-
-    assert_eq!(
-            spec.help.as_deref(),
-            Some(
-                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |> add(10, _1)\n  |> f()"
-            )
-        );
-}
-
-#[test]
-fn resolve_error_spec_recursively_rewrites_nested_pipe_slot_up_to_depth_three() {
-    let source = "value |> f(g(add(10, _1)))";
-    let spec = resolve_error_spec(
-        source,
-        "pipe placeholder `_1` cannot be used as an expression",
-        Span { start: 22, end: 24 },
-    );
-
-    assert_eq!(
-            spec.help.as_deref(),
-            Some(
-                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |> add(10, _1)\n  |> g()\n  |> f()"
-            )
-        );
-}
-
-#[test]
-fn resolve_error_spec_falls_back_to_closure_for_deeper_nested_pipe_slot() {
-    let source = "value |> f(g(h(add(10, _1))))";
-    let spec = resolve_error_spec(
-        source,
-        "pipe placeholder `_1` cannot be used as an expression",
-        Span { start: 24, end: 26 },
-    );
-
-    assert_eq!(
-            spec.help.as_deref(),
-            Some(
-                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |> {|term| f(g(h(add(10, term))))}"
-            )
-        );
-}
-
-#[test]
-fn resolve_error_spec_rewrites_nested_context_map_slot_into_previous_pipe_step() {
-    let source = "value |*> f(add(10, _1))";
-    let spec = resolve_error_spec(
-        source,
-        "pipe placeholder `_1` cannot be used as an expression",
-        Span { start: 21, end: 23 },
-    );
-
-    assert_eq!(
-            spec.help.as_deref(),
-            Some(
-                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |*> add(10, _1)\n  |*> f()"
-            )
-        );
-}
-
-#[test]
-fn resolve_error_spec_preserves_pipe_slot_position_when_rewriting_nested_calls() {
-    let source = "value |> f(1, g(2, add(10, _1)))";
-    let spec = resolve_error_spec(
-        source,
-        "pipe placeholder `_1` cannot be used as an expression",
-        Span { start: 28, end: 30 },
-    );
-
-    assert_eq!(
-            spec.help.as_deref(),
-            Some(
-                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |> add(10, _1)\n  |> g(2, _1)\n  |> f(1, _1)"
-            )
-        );
-}
-
-#[test]
-fn resolve_error_spec_rewrites_nested_context_bind_slot_into_previous_pipe_step() {
-    let source = "value |>= f(add(10, _1))";
-    let spec = resolve_error_spec(
-        source,
-        "pipe placeholder `_1` cannot be used as an expression",
-        Span { start: 21, end: 23 },
-    );
-
-    assert_eq!(
-            spec.help.as_deref(),
-            Some(
-                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |>= add(10, _1)\n  |>= f()"
-            )
-        );
-}
-
-#[test]
-fn resolve_error_spec_uses_closure_fallback_for_deep_context_bind_rewrite() {
-    let source = "value |>= f(g(h(add(10, _1))))";
-    let spec = resolve_error_spec(
-        source,
-        "pipe placeholder `_1` cannot be used as an expression",
-        Span { start: 25, end: 27 },
-    );
-
-    assert_eq!(
-            spec.help.as_deref(),
-            Some(
-                "Move the `_1` transformation into the previous pipe step:\n\n  value\n  |>= {|term| f(g(h(add(10, term))))}"
-            )
-        );
 }

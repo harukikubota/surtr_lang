@@ -17,8 +17,12 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
                 return Err(ResolveError {
                     message: "DeriveNotAllowed: @derive is not allowed on deferror".into(),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Declaration,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
-                })
+                });
             }
             _ => {
                 let has_derive = match &stmt {
@@ -35,6 +39,10 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
                         message: "DeriveNotAllowed: @derive is only allowed on data declarations"
                             .into(),
                         span: stmt.span().clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::Declaration,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     });
                 }
@@ -81,6 +89,10 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
             let meta = derive_trait_meta(&derive_name).ok_or_else(|| ResolveError {
                 message: format!("UnknownDerivedTrait: {}", derive_name),
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Declaration,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             })?;
             if names
@@ -90,6 +102,10 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
                 return Err(ResolveError {
                     message: format!("DuplicateDerivedTrait: {}", derive_name),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Declaration,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 });
             }
@@ -102,6 +118,10 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
                 return Err(ResolveError {
                     message: format!("DeriveVariantNotAllowed: {}", meta.trait_name.as_str()),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Declaration,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 });
             }
@@ -110,6 +130,10 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
                     return Err(ResolveError {
                         message: format!("UnknownDefaultVariant: {}", variant),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::Declaration,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     });
                 }

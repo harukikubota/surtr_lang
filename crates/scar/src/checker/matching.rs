@@ -1,7 +1,31 @@
 use super::*;
-use diagnostics::{DiagnosticOrigin, SourceRole, TypeDiagnosticReason};
+use diagnostics::{DiagnosticOrigin, PatternKind, SourceRole, TypeDiagnosticReason};
 
 impl Checker {
+    fn resolved_pattern_span(pattern: &ResolvedPattern) -> Span {
+        match pattern {
+            ResolvedPattern::Var(id)
+            | ResolvedPattern::Annotated(id, _)
+            | ResolvedPattern::Pin(id) => id.span.clone(),
+            ResolvedPattern::Wildcard(span)
+            | ResolvedPattern::ListNil(span)
+            | ResolvedPattern::IntLit(span, _)
+            | ResolvedPattern::StrLit(span, _)
+            | ResolvedPattern::BoolLit(span, _)
+            | ResolvedPattern::DurationLit(span, _) => span.clone(),
+            ResolvedPattern::ListCons(head, _) | ResolvedPattern::As(head, _, _) => {
+                Self::resolved_pattern_span(head)
+            }
+            ResolvedPattern::Constructor(id, _) | ResolvedPattern::Extractor(id, _) => {
+                id.span.clone()
+            }
+            ResolvedPattern::Tuple(items) | ResolvedPattern::Or(items) => items
+                .first()
+                .map(Self::resolved_pattern_span)
+                .unwrap_or(Span { start: 0, end: 0 }),
+        }
+    }
+
     pub(super) fn check_match(
         &mut self,
         span: &Span,
@@ -237,7 +261,7 @@ impl Checker {
         }
 
         let result = match scrut_ty {
-            Ty::Bool => self.check_enum_like_match_exhaustive(span, "Boolean", arms),
+            Ty::Bool => self.check_enum_like_match_exhaustive(span, "Boolean", scrut_ty, arms),
             Ty::Result(_, _) => {
                 let has_ok = arms.iter().any(|arm| {
                     arm.guard.is_none()
@@ -253,20 +277,27 @@ impl Checker {
                 } else {
                     let mut missing = Vec::new();
                     if !has_ok {
-                        missing.push("Ok");
+                        missing.push("Ok".into());
                     }
                     if !has_err {
-                        missing.push("Err");
+                        missing.push("Err".into());
                     }
-                    Err(TypeError {
-                        structured: None,
-                        message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
-                        span: span.clone(),
-                        hint: None,
-                    })
+                    Err(self.pattern_error(
+                        TypeDiagnosticReason::NonExhaustiveMatch,
+                        PatternKind::Match,
+                        None,
+                        None,
+                        Some(scrut_ty),
+                        None,
+                        None,
+                        missing.into_iter().map(str::to_string).collect(),
+                        span,
+                    ))
                 }
             }
-            Ty::Enum(enum_name, _) => self.check_enum_like_match_exhaustive(span, enum_name, arms),
+            Ty::Enum(enum_name, _) => {
+                self.check_enum_like_match_exhaustive(span, enum_name, scrut_ty, arms)
+            }
             Ty::List(_) => {
                 let has_nil = arms.iter().any(|arm| {
                     arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::ListNil)
@@ -279,17 +310,22 @@ impl Checker {
                 } else {
                     let mut missing = Vec::new();
                     if !has_nil {
-                        missing.push("[]");
+                        missing.push("[]".into());
                     }
                     if !has_cons {
-                        missing.push("[head, ..tail]");
+                        missing.push("[head, ..tail]".into());
                     }
-                    Err(TypeError {
-                        structured: None,
-                        message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
-                        span: span.clone(),
-                        hint: None,
-                    })
+                    Err(self.pattern_error(
+                        TypeDiagnosticReason::NonExhaustiveMatch,
+                        PatternKind::Match,
+                        None,
+                        None,
+                        Some(scrut_ty),
+                        None,
+                        None,
+                        missing,
+                        span,
+                    ))
                 }
             }
             Ty::Str => {
@@ -314,25 +350,35 @@ impl Checker {
                 } else {
                     let mut missing = Vec::new();
                     if !has_empty {
-                        missing.push("[]");
+                        missing.push("[]".into());
                     }
                     if !has_cons {
-                        missing.push("[head, ..tail]");
+                        missing.push("[head, ..tail]".into());
                     }
-                    Err(TypeError {
-                        structured: None,
-                        message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
-                        span: span.clone(),
-                        hint: None,
-                    })
+                    Err(self.pattern_error(
+                        TypeDiagnosticReason::NonExhaustiveMatch,
+                        PatternKind::Match,
+                        None,
+                        None,
+                        Some(scrut_ty),
+                        None,
+                        None,
+                        missing,
+                        span,
+                    ))
                 }
             }
-            _ => Err(TypeError {
-                structured: None,
-                message: "Non-exhaustive match. Missing: _".into(),
-                span: span.clone(),
-                hint: None,
-            }),
+            _ => Err(self.pattern_error(
+                TypeDiagnosticReason::NonExhaustiveMatch,
+                PatternKind::Match,
+                None,
+                None,
+                Some(scrut_ty),
+                None,
+                None,
+                vec!["_".into()],
+                span,
+            )),
         };
         self.profiler.finish(ProfileEvent::MatchExhaustive, profile);
         result
@@ -342,16 +388,15 @@ impl Checker {
         &self,
         span: &Span,
         enum_name: &str,
+        scrut_ty: &Ty,
         arms: &[TypedMatchArm],
     ) -> Result<(), TypeError> {
-        let variants = self
-            .lookup_enum_variants_of(enum_name)
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: format!("Unknown enum metadata for match: {}", enum_name),
-                span: span.clone(),
-                hint: None,
-            })?;
+        let variants = self.lookup_enum_variants_of(enum_name).ok_or_else(|| {
+            self.typecheck_invariant_error(
+                "enum metadata required for exhaustiveness checking",
+                span,
+            )
+        })?;
         let mut missing = Vec::new();
         for variant in variants {
             let covered = arms.iter().any(|arm| {
@@ -365,12 +410,17 @@ impl Checker {
         if missing.is_empty() {
             Ok(())
         } else {
-            Err(TypeError {
-                structured: None,
-                message: format!("Non-exhaustive match. Missing: {}", missing.join(", ")),
-                span: span.clone(),
-                hint: None,
-            })
+            Err(self.pattern_error(
+                TypeDiagnosticReason::NonExhaustiveMatch,
+                PatternKind::Match,
+                Some(enum_name.to_string()),
+                None,
+                Some(scrut_ty),
+                None,
+                None,
+                missing,
+                span,
+            ))
         }
     }
 
@@ -408,15 +458,17 @@ impl Checker {
             let typed_guard = if let Some(guard) = &arm.guard {
                 let typed_guard = self.check_node(guard)?;
                 if !self.types_compatible(&Ty::Bool, &typed_guard.ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "match guard must be Boolean, got {}",
-                            self.ty_name(&typed_guard.ty)
-                        ),
-                        span: typed_guard.span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::MatchGuardTypeMismatch,
+                        PatternKind::Match,
+                        Some("match guard".into()),
+                        Some("Boolean".into()),
+                        Some(&typed_guard.ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        &typed_guard.span,
+                    ));
                 }
                 Some(typed_guard)
             } else {
@@ -456,48 +508,43 @@ impl Checker {
                 let expected =
                     self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                 if !self.types_compatible(&expected, expected_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "expected {}, got {}",
-                            self.ty_name(&expected),
-                            self.ty_name(expected_ty)
-                        ),
-                        span: id.span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Other,
+                        Some("annotated".into()),
+                        Some(self.ty_name(&expected)),
+                        Some(expected_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        &id.span,
+                    ));
                 }
                 let bind_ty = self.resolve_ty(&expected);
                 self.env.bind_var(id.unique_id, bind_ty);
                 Ok(TypedMatchPattern::Binding(id.clone()))
             }
             ResolvedPattern::Pin(id) => {
-                let pinned_ty =
-                    self.env
-                        .lookup_var(id.unique_id)
-                        .cloned()
-                        .ok_or_else(|| TypeError {
-                            structured: None,
-                            message: format!(
-                                "Pinned pattern requires an existing value `{}`",
-                                id.name
-                            ),
-                            span: id.span.clone(),
-                            hint: None,
-                        })?;
+                let pinned_ty = self.env.lookup_var(id.unique_id).cloned().ok_or_else(|| {
+                    self.typecheck_invariant_error(
+                        format!("resolved pinned pattern `{}` has no binding", id.name),
+                        &id.span,
+                    )
+                })?;
                 let expected_ty = self.resolve_ty(expected_ty);
                 let pinned_ty = self.resolve_ty(&pinned_ty);
                 if !self.types_compatible(&pinned_ty, &expected_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Pinned pattern type mismatch: expected {}, got {}",
-                            self.ty_name(&pinned_ty),
-                            self.ty_name(&expected_ty)
-                        ),
-                        span: id.span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Pin,
+                        Some("pinned value".into()),
+                        Some(self.ty_name(&pinned_ty)),
+                        Some(&expected_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        &id.span,
+                    ));
                 }
                 let dispatch = self.eq_dispatch_for_pattern_pin(&expected_ty, &id.span)?;
                 Ok(TypedMatchPattern::Pin {
@@ -512,16 +559,17 @@ impl Checker {
                     let expected =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                     if !self.types_compatible(&expected, expected_ty) {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "expected {}, got {}",
-                                self.ty_name(&expected),
-                                self.ty_name(expected_ty)
-                            ),
-                            span: alias.span.clone(),
-                            hint: None,
-                        });
+                        return Err(self.pattern_error(
+                            TypeDiagnosticReason::PatternTypeMismatch,
+                            PatternKind::Other,
+                            Some("as-pattern annotation".into()),
+                            Some(self.ty_name(&expected)),
+                            Some(expected_ty),
+                            None,
+                            None,
+                            Vec::new(),
+                            &alias.span,
+                        ));
                     }
                     self.resolve_ty(&expected)
                 } else {
@@ -533,28 +581,32 @@ impl Checker {
             ResolvedPattern::Wildcard(_) => Ok(TypedMatchPattern::Wildcard),
             ResolvedPattern::Tuple(items) => {
                 let expected_ty = self.resolve_ty(expected_ty);
+                let span = Self::resolved_pattern_span(pat);
                 let Ty::Tuple(item_tys) = &expected_ty else {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "tuple pattern requires tuple scrutinee, got {}",
-                            self.ty_name(&expected_ty)
-                        ),
-                        span: Span { start: 0, end: 0 },
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternShapeMismatch,
+                        PatternKind::Tuple,
+                        Some("tuple".into()),
+                        Some("tuple".into()),
+                        Some(&expected_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        &span,
+                    ));
                 };
                 if items.len() != item_tys.len() {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "tuple pattern expects {} value(s), got {}",
-                            item_tys.len(),
-                            items.len()
-                        ),
-                        span: Span { start: 0, end: 0 },
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternArityMismatch,
+                        PatternKind::Tuple,
+                        Some("tuple".into()),
+                        None,
+                        Some(&expected_ty),
+                        Some(item_tys.len()),
+                        Some(items.len()),
+                        Vec::new(),
+                        &span,
+                    ));
                 }
                 let mut typed_items = Vec::with_capacity(items.len());
                 for (item, item_ty) in items.iter().zip(item_tys.iter()) {
@@ -564,73 +616,102 @@ impl Checker {
             }
             ResolvedPattern::BoolLit(span, b) => {
                 if !self.types_compatible(&Ty::Bool, expected_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "Boolean pattern on non-Boolean scrutinee".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Other,
+                        Some("Boolean literal".into()),
+                        Some("Boolean".into()),
+                        Some(expected_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        span,
+                    ));
                 }
                 Ok(TypedMatchPattern::BoolLit(*b))
             }
             ResolvedPattern::IntLit(span, n) => {
                 if !self.types_compatible(&Ty::Int, expected_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "Int pattern on non-Int scrutinee".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Other,
+                        Some("Int literal".into()),
+                        Some("Int".into()),
+                        Some(expected_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        span,
+                    ));
                 }
                 Ok(TypedMatchPattern::IntLit(n.clone()))
             }
             ResolvedPattern::StrLit(span, s) => {
                 if !self.types_compatible(&Ty::Str, expected_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "String pattern on non-String scrutinee".into(),
-                        span: span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Other,
+                        Some("String literal".into()),
+                        Some("String".into()),
+                        Some(expected_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        span,
+                    ));
                 }
                 Ok(TypedMatchPattern::StrLit(s.clone()))
             }
             ResolvedPattern::DurationLit(span, n) => {
                 let expected_ty = self.resolve_ty(expected_ty);
                 if !Self::is_duration_ty(&expected_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "duration literal pattern requires Duration, got {}",
-                            self.ty_name(&expected_ty)
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Other,
+                        Some("duration literal".into()),
+                        Some("Duration".into()),
+                        Some(&expected_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        span,
+                    ));
                 }
                 Ok(TypedMatchPattern::DurationLit(n.clone()))
             }
             ResolvedPattern::Or(items) => {
                 if items.is_empty() {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "empty pattern alternative".into(),
-                        span: Span { start: 0, end: 0 },
-                        hint: None,
-                    });
+                    let span = Self::resolved_pattern_span(pat);
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternShapeMismatch,
+                        PatternKind::Other,
+                        Some("pattern alternative".into()),
+                        Some("at least one alternative".into()),
+                        Some(expected_ty),
+                        Some(1),
+                        Some(0),
+                        Vec::new(),
+                        &span,
+                    ));
                 }
                 let mut typed_items = Vec::with_capacity(items.len());
                 for item in items {
                     let typed_item = self.check_match_subpattern(item, expected_ty)?;
                     if self.match_pattern_has_bindings(&typed_item) {
-                        return Err(TypeError {
-                            structured: None,
-                            message: "Pattern alternatives cannot bind names directly.".into(),
-                            span: Span { start: 0, end: 0 },
-                            hint: Some(
-                                "Use an outer as-pattern such as `A | B @ err: Error`.".into(),
-                            ),
-                        });
+                        let span = Self::resolved_pattern_span(item);
+                        return Err(self
+                            .pattern_error(
+                                TypeDiagnosticReason::PatternShapeMismatch,
+                                PatternKind::Other,
+                                Some("pattern alternatives".into()),
+                                Some("patterns without direct bindings".into()),
+                                Some(expected_ty),
+                                None,
+                                None,
+                                Vec::new(),
+                                &span,
+                            )
+                            .with_hint("Use an outer as-pattern such as `A | B @ err: Error`."));
                     }
                     typed_items.push(typed_item);
                 }
@@ -640,73 +721,89 @@ impl Checker {
                 if matches!(self.resolve_ty(expected_ty), Ty::Error)
                     && matches!(ctor_id.name.as_str(), "Err" | "Result::Err")
                 {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "Nested Result errors are not allowed in match patterns: use Err(error) for the outer failure, or Ok(Err(error)) for an inner failure.".into(),
-                        span: ctor_id.span.clone(),
-                        hint: Some(
-                            "Err matches the Result layer being inspected; do not write Err(Err(...)).".into(),
-                        ),
-                    });
+                    return Err(self
+                        .pattern_error(
+                            TypeDiagnosticReason::NestedResultErrorPattern,
+                            PatternKind::Constructor,
+                            Some("nested Err".into()),
+                            Some("the current Result layer".into()),
+                            Some(expected_ty),
+                            None,
+                            None,
+                            vec!["Use Err(error) for the outer failure or Ok(Err(error)) for an inner failure".into()],
+                            &ctor_id.span,
+                        )
+                        .with_hint(
+                            "Err matches the Result layer being inspected; do not write Err(Err(...)).",
+                        ));
                 }
                 if matches!(expected_ty, Ty::Error)
                     && self.env.is_error_constructor(ctor_id.unique_id)
                 {
                     if !inner_pats.is_empty() {
-                        return Err(TypeError {
-                            structured: None,
-                            message: "Error kind patterns do not destructure payloads yet.".into(),
-                            span: ctor_id.span.clone(),
-                            hint: Some(
-                                "Use `Kind @ err: Error` and inspect the Error value.".into(),
-                            ),
-                        });
+                        return Err(self
+                            .pattern_error(
+                                TypeDiagnosticReason::PatternShapeMismatch,
+                                PatternKind::Constructor,
+                                Some("Error kind".into()),
+                                Some("a payload-free pattern".into()),
+                                Some(expected_ty),
+                                Some(0),
+                                Some(inner_pats.len()),
+                                Vec::new(),
+                                &ctor_id.span,
+                            )
+                            .with_hint("Use `Kind @ err: Error` and inspect the Error value."));
                     }
                     return Ok(TypedMatchPattern::ErrorKind(ctor_id.name.clone()));
                 }
                 if matches!(expected_ty, Ty::Bool) {
                     let variant = self
                         .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
-                        .ok_or_else(|| TypeError {
-                            structured: None,
-                            message: format!("Unknown constructor: {}", ctor_id.name),
-                            span: ctor_id.span.clone(),
-                            hint: None,
+                        .ok_or_else(|| {
+                            self.typecheck_invariant_error(
+                                format!(
+                                    "resolved constructor `{}` has no variant metadata",
+                                    ctor_id.name
+                                ),
+                                &ctor_id.span,
+                            )
                         })?
                         .clone();
                     let variant = self.instantiate_enum_variant(&variant);
                     if Self::surface_name(&variant.enum_name) != "Boolean" {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Constructor {} does not belong to enum Boolean",
-                                ctor_id.name
-                            ),
-                            span: ctor_id.span.clone(),
-                            hint: None,
-                        });
+                        return Err(self.pattern_error(
+                            TypeDiagnosticReason::PatternShapeMismatch,
+                            PatternKind::Constructor,
+                            Some(ctor_id.name.clone()),
+                            Some("constructor of Boolean".into()),
+                            Some(expected_ty),
+                            None,
+                            None,
+                            vec![format!("constructor belongs to {}", variant.enum_name)],
+                            &ctor_id.span,
+                        ));
                     }
                     if !inner_pats.is_empty() {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "{} pattern expects 0 argument(s), got {}",
-                                ctor_id.name,
-                                inner_pats.len()
-                            ),
-                            span: ctor_id.span.clone(),
-                            hint: None,
-                        });
+                        return Err(self.pattern_error(
+                            TypeDiagnosticReason::PatternArityMismatch,
+                            PatternKind::Constructor,
+                            Some(ctor_id.name.clone()),
+                            None,
+                            Some(expected_ty),
+                            Some(0),
+                            Some(inner_pats.len()),
+                            Vec::new(),
+                            &ctor_id.span,
+                        ));
                     }
                     return match variant.short_name.as_str() {
                         "True" => Ok(TypedMatchPattern::BoolLit(true)),
                         "False" => Ok(TypedMatchPattern::BoolLit(false)),
-                        _ => Err(TypeError {
-                            structured: None,
-                            message: format!("Unknown Boolean constructor: {}", ctor_id.name),
-                            span: ctor_id.span.clone(),
-                            hint: None,
-                        }),
+                        _ => Err(self.typecheck_invariant_error(
+                            format!("unknown Boolean constructor `{}`", ctor_id.name),
+                            &ctor_id.span,
+                        )),
                     };
                 }
                 if let Ty::Result(ok_ty, err_ty) = expected_ty {
@@ -714,35 +811,36 @@ impl Checker {
                         "Ok" => 0u32,
                         "Err" => 1u32,
                         _ => {
-                            return Err(TypeError {
-                                structured: None,
-                                message: format!("Unknown constructor: {}", ctor_id.name),
-                                span: ctor_id.span.clone(),
-                                hint: None,
-                            });
+                            return Err(self.typecheck_invariant_error(
+                                format!(
+                                    "resolved Result constructor `{}` is unknown",
+                                    ctor_id.name
+                                ),
+                                &ctor_id.span,
+                            ));
                         }
                     };
                     if inner_pats.len() != 1 {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "{}(...) match pattern requires exactly one argument",
-                                ctor_id.name
-                            ),
-                            span: ctor_id.span.clone(),
-                            hint: None,
-                        });
+                        return Err(self.pattern_error(
+                            TypeDiagnosticReason::PatternArityMismatch,
+                            PatternKind::Constructor,
+                            Some(ctor_id.name.clone()),
+                            None,
+                            Some(expected_ty),
+                            Some(1),
+                            Some(inner_pats.len()),
+                            Vec::new(),
+                            &ctor_id.span,
+                        ));
                     }
                     let inner_ty = match tag {
                         0 => ok_ty.as_ref().clone(),
                         1 => err_ty.as_ref().clone(),
                         _ => {
-                            return Err(TypeError {
-                                structured: None,
-                                message: format!("Unknown constructor: {}", ctor_id.name),
-                                span: ctor_id.span.clone(),
-                                hint: None,
-                            });
+                            return Err(self.typecheck_invariant_error(
+                                format!("invalid Result constructor tag {tag}"),
+                                &ctor_id.span,
+                            ));
                         }
                     };
                     let typed_inner = self.check_match_subpattern(&inner_pats[0], &inner_ty)?;
@@ -754,58 +852,69 @@ impl Checker {
                 }
 
                 let Ty::Enum(expected_enum_name, _) = expected_ty else {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "Constructor pattern on non-enum/non-Result scrutinee".into(),
-                        span: ctor_id.span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternShapeMismatch,
+                        PatternKind::Constructor,
+                        Some(ctor_id.name.clone()),
+                        Some("enum or Result scrutinee".into()),
+                        Some(expected_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        &ctor_id.span,
+                    ));
                 };
                 let variant = self
                     .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
-                    .ok_or_else(|| TypeError {
-                        structured: None,
-                        message: format!("Unknown constructor: {}", ctor_id.name),
-                        span: ctor_id.span.clone(),
-                        hint: None,
+                    .ok_or_else(|| {
+                        self.typecheck_invariant_error(
+                            format!(
+                                "resolved constructor `{}` has no variant metadata",
+                                ctor_id.name
+                            ),
+                            &ctor_id.span,
+                        )
                     })?
                     .clone();
                 let variant = self.instantiate_enum_variant(&variant);
                 if &variant.enum_name != expected_enum_name {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Constructor {} does not belong to enum {}",
-                            ctor_id.name, expected_enum_name
-                        ),
-                        span: ctor_id.span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternShapeMismatch,
+                        PatternKind::Constructor,
+                        Some(ctor_id.name.clone()),
+                        Some(expected_enum_name.clone()),
+                        Some(&variant.enum_ty),
+                        None,
+                        None,
+                        vec![format!("constructor belongs to {}", variant.enum_name)],
+                        &ctor_id.span,
+                    ));
                 }
                 if !self.types_compatible(&variant.enum_ty, expected_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Constructor {} does not match expected type {}",
-                            ctor_id.name,
-                            self.ty_name(expected_ty)
-                        ),
-                        span: ctor_id.span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Constructor,
+                        Some(ctor_id.name.clone()),
+                        Some(self.ty_name(expected_ty)),
+                        Some(&variant.enum_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        &ctor_id.span,
+                    ));
                 }
                 if inner_pats.len() != variant.payload.len() {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "{} pattern expects {} argument(s), got {}",
-                            ctor_id.name,
-                            variant.payload.len(),
-                            inner_pats.len()
-                        ),
-                        span: ctor_id.span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternArityMismatch,
+                        PatternKind::Constructor,
+                        Some(ctor_id.name.clone()),
+                        None,
+                        Some(expected_ty),
+                        Some(variant.payload.len()),
+                        Some(inner_pats.len()),
+                        Vec::new(),
+                        &ctor_id.span,
+                    ));
                 }
                 let mut typed_fields = Vec::new();
                 for (pat, field_ty) in inner_pats.iter().zip(variant.payload.iter()) {
@@ -821,12 +930,17 @@ impl Checker {
             ResolvedPattern::ListNil(span) => match self.resolve_ty(expected_ty) {
                 Ty::List(_) => Ok(TypedMatchPattern::ListNil),
                 Ty::Str => Ok(TypedMatchPattern::StrLit(String::new())),
-                _ => Err(TypeError {
-                    structured: None,
-                    message: "empty list pattern on non-List/String scrutinee".into(),
-                    span: span.clone(),
-                    hint: None,
-                }),
+                other => Err(self.pattern_error(
+                    TypeDiagnosticReason::PatternShapeMismatch,
+                    PatternKind::List,
+                    Some("empty list".into()),
+                    Some("List<...> or String".into()),
+                    Some(&other),
+                    None,
+                    None,
+                    Vec::new(),
+                    span,
+                )),
             },
             ResolvedPattern::ListCons(head, tail) => match self.resolve_ty(expected_ty) {
                 Ty::List(inner) => {
@@ -840,7 +954,8 @@ impl Checker {
                     ))
                 }
                 Ty::Str => {
-                    let extractor_id = self.kernel_uncons_id(&Span { start: 0, end: 0 })?;
+                    let pattern_span = Self::resolved_pattern_span(pat);
+                    let extractor_id = self.kernel_uncons_id(&pattern_span)?;
                     let (input_ty, extractor_ty, seq_tys, success_tag, no_match_tag, err_tag) =
                         self.extractor_contract_for_observed_ty(
                             &extractor_id,
@@ -862,15 +977,17 @@ impl Checker {
                         items: typed_items,
                     })
                 }
-                other => Err(TypeError {
-                    structured: None,
-                    message: format!(
-                        "list pattern requires List<...> or String, got {}",
-                        self.ty_name(&other)
-                    ),
-                    span: Span { start: 0, end: 0 },
-                    hint: None,
-                }),
+                other => Err(self.pattern_error(
+                    TypeDiagnosticReason::PatternShapeMismatch,
+                    PatternKind::List,
+                    Some("list".into()),
+                    Some("List<...> or String".into()),
+                    Some(&other),
+                    None,
+                    None,
+                    Vec::new(),
+                    &Self::resolved_pattern_span(pat),
+                )),
             },
             ResolvedPattern::Extractor(extractor_id, items) => {
                 let expected_ty = self.resolve_ty(expected_ty);
@@ -881,42 +998,46 @@ impl Checker {
                         &extractor_id.span,
                     )?;
                 if !self.types_compatible(&input_ty, &expected_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Extractor {} expects {}, got {}",
-                            extractor_id.name,
-                            self.ty_name(&input_ty),
-                            self.ty_name(&expected_ty)
-                        ),
-                        span: extractor_id.span.clone(),
-                        hint: Some(format!(
+                    return Err(self
+                        .pattern_error(
+                            TypeDiagnosticReason::ExtractorInputTypeMismatch,
+                            PatternKind::Extractor,
+                            Some(extractor_id.name.clone()),
+                            Some(self.ty_name(&input_ty)),
+                            Some(&expected_ty),
+                            None,
+                            None,
+                            Vec::new(),
+                            &extractor_id.span,
+                        )
+                        .with_hint(format!(
                             "Extractor type signature: {}. Match scrutinee type is {}.",
                             self.callable_signature_for_ty(&extractor_ty)
                                 .unwrap_or_else(|| self.ty_name(&extractor_ty)),
                             self.ty_name(&expected_ty)
-                        )),
-                    });
+                        )));
                 }
                 if items.len() != seq_tys.len() {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Extractor {} returns {} value(s), but pattern expects {}",
-                            extractor_id.name,
-                            seq_tys.len(),
-                            items.len()
-                        ),
-                        span: extractor_id.span.clone(),
-                        hint: Some(format!(
+                    return Err(self
+                        .pattern_error(
+                            TypeDiagnosticReason::ExtractorArityMismatch,
+                            PatternKind::Extractor,
+                            Some(extractor_id.name.clone()),
+                            None,
+                            Some(&expected_ty),
+                            Some(seq_tys.len()),
+                            Some(items.len()),
+                            seq_tys.iter().map(|ty| self.ty_name(ty)).collect(),
+                            &extractor_id.span,
+                        )
+                        .with_hint(format!(
                             "Extractor success value(s): {}.",
                             seq_tys
                                 .iter()
                                 .map(|ty| self.ty_name(ty))
                                 .collect::<Vec<_>>()
                                 .join(", ")
-                        )),
-                    });
+                        )));
                 }
                 let mut typed_items = Vec::with_capacity(items.len());
                 for (item, item_ty) in items.iter().zip(seq_tys.iter()) {
@@ -1018,7 +1139,7 @@ impl Checker {
                             .iter()
                             .any(|arm| self.resolved_span(&arm.body) == &diagnostic.primary.span)
                     {
-                        diagnostic.reason = TypeDiagnosticReason::IfBranchTypeMismatch;
+                        diagnostic.reason = TypeDiagnosticReason::IfBranchTypeMismatch.into();
                         if let DiagnosticOrigin::Branch { form, .. } = &mut diagnostic.origin {
                             *form = diagnostics::BranchForm::IfLet;
                         }

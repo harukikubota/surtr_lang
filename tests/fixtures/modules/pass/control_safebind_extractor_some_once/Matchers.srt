@@ -1,0 +1,11 @@
+defmod Matchers {
+  def source() -> Result<Int> {
+    print("rhs")
+    Ok(2)
+  }
+
+  defextractor once(term: Int) -> Option<Int> {
+    print("extractor")
+    Option::Some(term)
+  }
+}

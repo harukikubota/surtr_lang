@@ -134,7 +134,7 @@ fn structured_type_diagnostic_projects_the_same_facts_to_json_and_rendering() {
     let mut sources = SourceRegistry::new();
     let source_id = sources.register("main.srt", "guard::<Option>(value)");
     let input = StructuredDiagnostic {
-        reason: TypeDiagnosticReason::ReturnTypeArgumentMismatch,
+        reason: TypeDiagnosticReason::ReturnTypeArgumentMismatch.into(),
         origin: DiagnosticOrigin::ReturnTypeArgument { ordinal: 0 },
         data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
             declared_origin: None,
@@ -188,7 +188,7 @@ fn ambiguous_return_type_argument_has_a_distinct_headline() {
     let mut sources = SourceRegistry::new();
     let source_id = sources.register("main.srt", "make()");
     let input = StructuredDiagnostic {
-        reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument,
+        reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument.into(),
         origin: DiagnosticOrigin::ReturnTypeArgument { ordinal: 0 },
         data: DiagnosticData::ReturnTypeArgument(ReturnTypeArgumentData {
             declared_origin: None,
@@ -233,7 +233,7 @@ fn rejected_trait_candidates_preserve_structured_failure_details() {
     let mut sources = SourceRegistry::new();
     let source_id = sources.register("main.srt", "Monad::return(1) |>= {|x| x + 1}");
     let input = StructuredDiagnostic {
-        reason: TypeDiagnosticReason::NoApplicableTraitImplementation,
+        reason: TypeDiagnosticReason::NoApplicableTraitImplementation.into(),
         origin: DiagnosticOrigin::Operator {
             operator: "+".into(),
         },
@@ -320,7 +320,7 @@ fn surtr_assert_eq_template_renders_terms_through_ariadne() {
 fn trait_method_type_list_preserves_path_and_both_origins() {
     use crate::{TraitMethodTypeListData, TypeListRole};
     let input = StructuredDiagnostic {
-        reason: TypeDiagnosticReason::TraitMethodTypeListMismatch,
+        reason: TypeDiagnosticReason::TraitMethodTypeListMismatch.into(),
         origin: DiagnosticOrigin::Declaration,
         data: DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
             impl_declaration: None,
@@ -369,7 +369,7 @@ fn trait_method_type_list_preserves_path_and_both_origins() {
 fn trait_method_constraints_preserve_expected_and_actual_sets() {
     use crate::TraitMethodConstraintData;
     let input = StructuredDiagnostic {
-        reason: TypeDiagnosticReason::TraitMethodConstraintMismatch,
+        reason: TypeDiagnosticReason::TraitMethodConstraintMismatch.into(),
         origin: DiagnosticOrigin::Declaration,
         data: DiagnosticData::TraitMethodConstraint(TraitMethodConstraintData {
             impl_declaration: None,
@@ -398,7 +398,7 @@ fn trait_method_constraints_preserve_expected_and_actual_sets() {
 fn trait_method_arity_displays_expected_and_actual_counts() {
     use crate::{TraitMethodTypeListData, TypeListRole};
     let input = StructuredDiagnostic {
-        reason: TypeDiagnosticReason::TraitMethodTypeListArityMismatch,
+        reason: TypeDiagnosticReason::TraitMethodTypeListArityMismatch.into(),
         origin: DiagnosticOrigin::Declaration,
         data: DiagnosticData::TraitMethodTypeList(TraitMethodTypeListData {
             impl_declaration: None,
@@ -426,7 +426,7 @@ fn structured_diagnostics_never_extract_optional_fields_from_prose() {
     let mut sources = SourceRegistry::new();
     let source_id = sources.register("main.srt", "value");
     let input = StructuredDiagnostic {
-        reason: TypeDiagnosticReason::MissingTraitCapability,
+        reason: TypeDiagnosticReason::MissingTraitCapability.into(),
         origin: DiagnosticOrigin::Call,
         data: DiagnosticData::TraitObligation(crate::TraitObligationData {
             obligation_origin: None,

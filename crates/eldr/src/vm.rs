@@ -6373,12 +6373,37 @@ impl VM {
                     span_start,
                     span_end,
                 };
-                self.stack.push(Value::Error(Box::new(
-                    RichError::new(template.kind.clone(), message, location, None)
-                        .with_stack_trace(
-                            self.stack_trace_snapshot_without_head_function(&template.kind),
+                let mut error = match &template.diagnostic {
+                    Some(sindr::ir::RuntimeErrorDiagnosticTemplate::LiteralPatternMismatch {
+                        lhs,
+                    }) => RichError::new(
+                        template.kind.clone(),
+                        "Pattern did not match.",
+                        location,
+                        None,
+                    )
+                    .with_diagnostic(
+                        sindr::runtime::RuntimeErrorDiagnostic::LiteralPatternMismatch {
+                            lhs: lhs.clone(),
+                            rhs: message,
+                        },
+                    ),
+                    Some(sindr::ir::RuntimeErrorDiagnosticTemplate::SafeBindPatternFailure {
+                        rule,
+                        input_source,
+                    }) => RichError::new(template.kind.clone(), message, location, None)
+                        .with_diagnostic(
+                            sindr::runtime::RuntimeErrorDiagnostic::SafeBindPatternFailure {
+                                rule: rule.clone(),
+                                input_source: input_source.clone(),
+                            },
                         ),
-                )));
+                    None => RichError::new(template.kind.clone(), message, location, None),
+                };
+                error = error.with_stack_trace(
+                    self.stack_trace_snapshot_without_head_function(&template.kind),
+                );
+                self.stack.push(Value::Error(Box::new(error)));
             }
             Opcode::MakeErrorLiteral {
                 kind_const_idx,
@@ -10595,6 +10620,7 @@ mod tests {
             column: 1,
             format: "{}".into(),
             num_params: 1,
+            diagnostic: None,
         }];
         let mut vm = VM::new(bytecode);
 
@@ -10623,6 +10649,7 @@ mod tests {
                 column: 3,
                 format: "{}".into(),
                 num_params: 1,
+                diagnostic: None,
             }],
             functions: Vec::new(),
             docs: Vec::new(),
@@ -10675,6 +10702,7 @@ mod tests {
                     column: 1,
                     format: "{}".into(),
                     num_params: 1,
+                    diagnostic: None,
                 }],
                 functions: Vec::new(),
                 docs: Vec::new(),

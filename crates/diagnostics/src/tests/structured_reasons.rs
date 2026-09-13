@@ -157,6 +157,188 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
                 .into(),
             })
         }
+        PatternTypeMismatch | ExtractorInputTypeMismatch => {
+            DiagnosticData::Pattern(PatternDiagnosticData {
+                pattern_kind: PatternKind::Variable,
+                name: Some("value".into()),
+                expected_type: Some("Int".into()),
+                actual_type: Some("String".into()),
+                expected_count: None,
+                actual_count: None,
+                details: vec![],
+            })
+        }
+        PatternShapeMismatch | PatternArityMismatch | ExtractorArityMismatch => {
+            DiagnosticData::Pattern(PatternDiagnosticData {
+                pattern_kind: if matches!(reason, ExtractorArityMismatch) {
+                    PatternKind::Extractor
+                } else {
+                    PatternKind::Tuple
+                },
+                name: Some("Pair".into()),
+                expected_type: Some("Tuple".into()),
+                actual_type: Some("List".into()),
+                expected_count: Some(2),
+                actual_count: Some(1),
+                details: vec![],
+            })
+        }
+        NonExhaustiveMatch => DiagnosticData::Pattern(PatternDiagnosticData {
+            pattern_kind: PatternKind::Match,
+            name: None,
+            expected_type: None,
+            actual_type: None,
+            expected_count: None,
+            actual_count: None,
+            details: vec!["None".into()],
+        }),
+        NonTotalBindingPattern | NestedResultErrorPattern => {
+            DiagnosticData::Pattern(PatternDiagnosticData {
+                pattern_kind: if reason == NonTotalBindingPattern {
+                    PatternKind::Match
+                } else {
+                    PatternKind::Constructor
+                },
+                name: None,
+                expected_type: None,
+                actual_type: None,
+                expected_count: None,
+                actual_count: None,
+                details: vec![reason.as_str().into()],
+            })
+        }
+        MatchGuardTypeMismatch => DiagnosticData::Pattern(PatternDiagnosticData {
+            pattern_kind: PatternKind::Match,
+            name: Some("guard".into()),
+            expected_type: Some("Boolean".into()),
+            actual_type: Some("Int".into()),
+            expected_count: None,
+            actual_count: None,
+            details: vec![],
+        }),
+        ConstructorPatternRequiresEnumOrResultRhs => {
+            DiagnosticData::Pattern(PatternDiagnosticData {
+                pattern_kind: PatternKind::Constructor,
+                name: Some("Some".into()),
+                expected_type: Some("enum or Result".into()),
+                actual_type: Some("String".into()),
+                expected_count: None,
+                actual_count: None,
+                details: vec![],
+            })
+        }
+        SafeBindErrorTypeMismatch => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::SafeBindFailureTarget,
+            subject: Some("failure target".into()),
+            expected_type: Some("Error".into()),
+            actual_type: Some("String".into()),
+            stage: None,
+            entrypoint: None,
+        }),
+        SafeBindRequiresResultTarget => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::SafeBindRequiresResultTarget,
+            subject: Some("safe bind target".into()),
+            expected_type: Some("Result<T>".into()),
+            actual_type: Some("Option<T>".into()),
+            stage: None,
+            entrypoint: None,
+        }),
+        ErrorValueMustBeWrapped => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::ErrorValuePlacement,
+            subject: Some("error value".into()),
+            expected_type: Some("Result::Err(error)".into()),
+            actual_type: Some("Error".into()),
+            stage: None,
+            entrypoint: None,
+        }),
+        FacetSafeBindForbidden => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::SafeBindFacet,
+            subject: Some("facet path".into()),
+            expected_type: None,
+            actual_type: None,
+            stage: None,
+            entrypoint: None,
+        }),
+        FacetPatternBindingForbidden => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::FacetPatternBinding,
+            subject: Some("facet pattern".into()),
+            expected_type: None,
+            actual_type: None,
+            stage: None,
+            entrypoint: None,
+        }),
+        FacetOperationPolicyViolation => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::FacetOperation,
+            subject: Some("facet operation".into()),
+            expected_type: None,
+            actual_type: None,
+            stage: None,
+            entrypoint: None,
+        }),
+        FacetCompileTimeOnly => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::FacetStageRestriction,
+            subject: Some("Facet".into()),
+            expected_type: None,
+            actual_type: None,
+            stage: Some("runtime".into()),
+            entrypoint: None,
+        }),
+        ProcessHandlerScope => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::ProcessHandlerScope,
+            subject: Some("process handler".into()),
+            expected_type: None,
+            actual_type: None,
+            stage: None,
+            entrypoint: None,
+        }),
+        SourcePolicyViolation => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::SourceExitCode,
+            subject: Some("source".into()),
+            expected_type: None,
+            actual_type: None,
+            stage: Some("script".into()),
+            entrypoint: None,
+        }),
+        CompilePolicyViolation => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::EntrypointRequirement,
+            subject: Some("compile unit".into()),
+            expected_type: None,
+            actual_type: None,
+            stage: None,
+            entrypoint: Some("main".into()),
+        }),
+        NominalDeclarationConstraintViolation => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::NominalDeclarationConstraint,
+            subject: Some("$M".into()),
+            expected_type: Some("Monad".into()),
+            actual_type: Some("Plain".into()),
+            stage: Some("OptionT".into()),
+            entrypoint: None,
+        }),
+        TraitHelperCaptureNeedsExpectedType => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::TraitHelperCaptureInference,
+            subject: Some("concat".into()),
+            expected_type: None,
+            actual_type: None,
+            stage: None,
+            entrypoint: None,
+        }),
+        TypecheckInvariantViolation => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::ProducerContract,
+            subject: Some("typechecker".into()),
+            expected_type: None,
+            actual_type: None,
+            stage: None,
+            entrypoint: None,
+        }),
+        ProcessPolicyViolation => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::ProcessCapabilityPolicy,
+            subject: Some("process declaration".into()),
+            expected_type: None,
+            actual_type: None,
+            stage: None,
+            entrypoint: None,
+        }),
     };
     let origin = match reason {
         IfBranchTypeMismatch => DiagnosticOrigin::Branch {
@@ -175,7 +357,7 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
         _ => DiagnosticOrigin::Call,
     };
     StructuredDiagnostic {
-        reason,
+        reason: reason.into(),
         origin,
         data,
         primary: SourceFact::typed(
@@ -236,6 +418,28 @@ fn every_common_reason_has_a_typed_template_and_schema() {
         CondBranchTypeMismatch,
         SafeBindTotalPatternNonMonadRhs,
         SafeBindTotalPatternNonResultMonadRhs,
+        PatternTypeMismatch,
+        PatternShapeMismatch,
+        PatternArityMismatch,
+        NonTotalBindingPattern,
+        NestedResultErrorPattern,
+        MatchGuardTypeMismatch,
+        ConstructorPatternRequiresEnumOrResultRhs,
+        ExtractorInputTypeMismatch,
+        ExtractorArityMismatch,
+        NonExhaustiveMatch,
+        SafeBindErrorTypeMismatch,
+        SafeBindRequiresResultTarget,
+        ErrorValueMustBeWrapped,
+        FacetSafeBindForbidden,
+        FacetPatternBindingForbidden,
+        FacetOperationPolicyViolation,
+        FacetCompileTimeOnly,
+        ProcessHandlerScope,
+        SourcePolicyViolation,
+        CompilePolicyViolation,
+        TypecheckInvariantViolation,
+        ProcessPolicyViolation,
     ];
     let mut sources = SourceRegistry::new();
     let source_id = sources.register("main.srt", "abcdefgh");
@@ -320,6 +524,23 @@ fn every_common_reason_has_a_typed_template_and_schema() {
                 "lhs_is_total",
                 "rhs_is_canonical_result",
                 "monad_capability",
+            ],
+            "Pattern" => &[
+                "pattern_kind",
+                "name",
+                "expected_type",
+                "actual_type",
+                "expected_count",
+                "actual_count",
+                "details",
+            ],
+            "Policy" => &[
+                "policy",
+                "subject",
+                "expected_type",
+                "actual_type",
+                "stage",
+                "entrypoint",
             ],
             "CallableShape" | "ArgumentContract" | "CallableSignature" => &[],
             other => panic!("unexpected schema: {other}"),

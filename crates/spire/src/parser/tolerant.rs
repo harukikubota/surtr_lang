@@ -313,6 +313,7 @@ fn scan_tolerant(source: &str) -> TolerantScan {
                         i,
                     ),
                     _ => diagnostics.push(parse_diag(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
                         format!("Invalid float: {text}"),
                         Span { start, end: i },
                     ))),
@@ -329,6 +330,7 @@ fn scan_tolerant(source: &str) -> TolerantScan {
                         i,
                     ),
                     Err(_) => diagnostics.push(parse_diag(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
                         format!("Invalid integer: {text}"),
                         Span { start, end: i },
                     ))),
@@ -509,6 +511,7 @@ fn scan_tolerant(source: &str) -> TolerantScan {
             );
         } else {
             diagnostics.push(parse_diag(ParseError::syntax(
+                crate::error::ParseErrorReason::ExpressionSyntax,
                 format!("Unexpected character: '{c}'"),
                 Span {
                     start: i,
@@ -596,6 +599,7 @@ fn parse_tolerant_defmod(
     let sp = parser.peek_span();
     if parser.context.module_path.is_some() {
         return Err(ParseError::syntax(
+            crate::error::ParseErrorReason::ExpressionSyntax,
             "Nested module declarations are not allowed",
             sp,
         ));
@@ -627,6 +631,7 @@ fn parse_tolerant_plain_impl(
     let (head, trait_args) = parser.parse_trait_impl_head()?;
     if !trait_args.is_empty() || matches!(parser.peek(), Token::For) {
         return Err(ParseError::syntax(
+            crate::error::ParseErrorReason::ExpressionSyntax,
             "tolerant impl recovery only supports plain `impl Type { ... }` bodies",
             parser.peek_span(),
         ));

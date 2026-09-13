@@ -465,9 +465,9 @@ DeferredObligation {
 5. 全入力とconcrete dispatch targetが確定した候補だけを`Applicable`としてcommitする。
 
 候補localの失敗はhead mismatch、unsatisfied `where`、method invocation mismatchを区別する内部
-`CandidateFailure`として保持する。通常のTrait候補選択では、最終diagnostic projection時にrelated factsと
-summary noteへ写す。constructor-context候補経路では`CandidateFailureData`を使うが、全candidate failureの
-共通typed projection化はN06の残件である。全候補reject時にこの情報を捨てて一般callable経路へ降格したり、
+`CandidateFailure`として保持する。通常のTrait候補選択では閉じた`CandidateRejection`から、最終diagnostic
+projection時にrelated factsとsummary noteへ写す。constructor-context候補経路では`CandidateFailureData`を使う。
+両経路ともcandidate-local failureをtyped dataとして保持する。全候補reject時にこの情報を捨てて一般callable経路へ降格したり、
 一候補の内部failureをそのまま最終診断へ昇格したりしない。失敗probeはtype substitution、pending
 obligation、constructor carrier、proof assumption、warning、candidate-local instantiation stateをすべてrollbackする。
 

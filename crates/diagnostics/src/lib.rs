@@ -3,7 +3,6 @@ pub use ariadne::Color;
 
 mod data;
 mod debug_render;
-mod heuristics;
 mod parse;
 mod render;
 mod repl;
@@ -21,14 +20,17 @@ pub use data::{
     ArgumentContractData, ArgumentRelationData, BranchAssertionData, BranchForm,
     CallableReturnShape, CallableShapeData, CallableSignatureData, CandidateFailureData,
     CandidateSelectionData, ConstraintSubjectData, DeclarationIdentity, DiagnosticData,
-    DiagnosticOrigin, EnumConstructorConstraintStatus, EnumConstructorTypeArgumentData,
-    Remediation, ReturnTypeArgumentData, RuntimeData, SafeBindRelationData, SourceFact, SourceRole,
-    StructuredDiagnostic, TraitDiagnosticIdentity, TraitDispatchData, TraitMethodConstraintData,
-    TraitMethodTypeListData, TraitObligationData, TypeConstructorCarrierData, TypeDiagnosticReason,
-    TypeListRole,
+    DiagnosticOrigin, DiagnosticReason, EnumConstructorConstraintStatus,
+    EnumConstructorTypeArgumentData, ParseDiagnosticData, ParseDiagnosticGuidance,
+    ParseDiagnosticReason, PatternDiagnosticData, PatternKind, PolicyData, Remediation,
+    ReplDiagnosticData, ReplDiagnosticReason, ResolveDiagnosticData, ResolveDiagnosticReason,
+    ReturnTypeArgumentData, RuntimeData, RuntimeDiagnosticReason, SafeBindRelationData, SourceFact,
+    SourceRole, StructuredDiagnostic, TraitDiagnosticIdentity, TraitDispatchData,
+    TraitMethodConstraintData, TraitMethodTypeListData, TraitObligationData,
+    TypeConstructorCarrierData, TypeDiagnosticReason, TypeListRole, TypePolicy,
 };
 pub use debug_render::{render_debug_report, DebugLabel};
-pub use parse::parse_error_spec;
+pub use parse::{parse_error_spec, parse_policy_error_spec};
 pub use render::{
     render_error, render_error_by_id, report_error, report_error_by_id,
     serializable_diagnostic_by_id, serializable_report_by_id,
@@ -38,13 +40,11 @@ pub use report::{
     simple_error, DiagnosticLabel, DiagnosticSpec, RuntimeDiagnosticContext,
     SerializableDiagnostic, SerializableDiagnosticReport, SerializableSourceFact,
 };
-pub use resolve::{
-    resolve_error_spec, resolve_error_spec_with_labels, resolve_related_label_color,
-};
+pub use resolve::{resolve_error_spec, resolve_related_label_color};
 pub use runtime::{runtime_error_spec, runtime_error_spec_by_id, runtime_value_error_spec};
 pub use source::{SourceEntry, SourceId, SourceRegistry};
 pub use surtr_code::{render_surtr_code_error, surtr_assert_eq_error_spec};
 pub use typecheck::{
-    structured_type_error_spec, type_error_spec, type_error_spec_by_id,
-    type_error_spec_from_structured, TypeErrorDiagnostic,
+    structured_type_error_spec, type_error_spec_from_structured, typecheck_invariant_spec,
+    typecheck_invariant_spec_with_display,
 };

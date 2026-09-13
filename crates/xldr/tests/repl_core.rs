@@ -291,6 +291,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_standard_monad_instances_construct_and_run),
     repl_core_case!(core_standard_monad_transformer_smoke),
     repl_core_case!(core_standard_state_get_rejects_ambiguity_and_keeps_session_alive),
+    repl_core_case!(core_safebind_diagnostic_keeps_session_alive),
     repl_core_case!(
         core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing
     ),
@@ -4669,6 +4670,25 @@ fn core_standard_state_get_rejects_ambiguity_and_keeps_session_alive() {
     let continued = engine.handle_line("after_state_get_error = 42");
     assert!(!continued.should_exit);
     assert!(rendered_text(&continued).contains("after_state_get_error: Int"));
+}
+
+fn core_safebind_diagnostic_keeps_session_alive() {
+    let mut engine = engine();
+
+    let rejected = engine.handle_line("saved =? Option::Some(1)");
+    assert!(!rejected.should_exit);
+    assert!(matches!(rejected.output, ReplOutput::EvalError { .. }));
+    let rejected_text = rendered_text(&rejected);
+    assert!(
+        rejected_text.contains("Result以外")
+            || rejected_text.contains("non-Result")
+            || rejected_text.contains("SafeBind"),
+        "{rejected_text}"
+    );
+
+    let continued = engine.handle_line("after_safebind_error = 42");
+    assert!(!continued.should_exit);
+    assert!(rendered_text(&continued).contains("after_safebind_error: Int"));
 }
 
 fn core_compare_typed_queries_fall_back_to_trait_default_methods_when_impl_override_is_missing() {

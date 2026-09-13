@@ -27,6 +27,10 @@ impl Resolver {
                     start: prev_span.start,
                     end: span.end,
                 },
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Pattern,
+                    subject: None,
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -63,12 +67,20 @@ impl Resolver {
                             name
                         ),
                         span,
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::Pattern,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     });
                 }
                 let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
                     message: format!("Pinned pattern requires an existing value `{}`", name),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Pattern,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 })?;
                 Ok(ResolvedPattern::Pin(ResolvedId {
@@ -94,6 +106,10 @@ impl Resolver {
                 let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined constructor: {}", ctor_name),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Pattern,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 })?;
                 let symbol_info = self.symbol_info_for_uid(&ctor_name, ctor_uid);
@@ -120,6 +136,10 @@ impl Resolver {
                         format!("Undefined MatchBlock head: {}", head_name)
                     },
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Pattern,
+                        subject: None,
+                    },
                     related_labels: Vec::new(),
                 })?;
                 let head_kind = self
@@ -138,6 +158,10 @@ impl Resolver {
                     .ok_or_else(|| ResolveError {
                         message: format!("Unknown MatchBlock head: {}", head_name),
                         span: span.clone(),
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::Pattern,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     })?;
                 let resolved_id = ResolvedId {
@@ -161,7 +185,11 @@ impl Resolver {
                                     head_name, head_name
                                 ),
                                 span,
-                            related_labels: Vec::new(),
+                                diagnostic: crate::error::ResolveErrorDiagnostic {
+                                    reason: crate::error::ResolveErrorReason::Pattern,
+                                    subject: None,
+                                },
+                                related_labels: Vec::new(),
                             });
                         }
                         Ok(ResolvedPattern::Extractor(resolved_id, resolved_inners))
@@ -179,7 +207,11 @@ impl Resolver {
                                     head_name, head_name
                                 ),
                                 span,
-                            related_labels: Vec::new(),
+                                diagnostic: crate::error::ResolveErrorDiagnostic {
+                                    reason: crate::error::ResolveErrorReason::Pattern,
+                                    subject: None,
+                                },
+                                related_labels: Vec::new(),
                             });
                         };
                         if !matches!(extractor_kind, DeclarationKind::Extractor) {
@@ -189,7 +221,11 @@ impl Resolver {
                                     head_name, head_name
                                 ),
                                 span,
-                            related_labels: Vec::new(),
+                                diagnostic: crate::error::ResolveErrorDiagnostic {
+                                    reason: crate::error::ResolveErrorReason::Pattern,
+                                    subject: None,
+                                },
+                                related_labels: Vec::new(),
                             });
                         }
                         Ok(ResolvedPattern::Extractor(
@@ -216,6 +252,10 @@ impl Resolver {
                                 head_name
                             ),
                             span,
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Pattern,
+                                subject: None,
+                            },
                             related_labels: Vec::new(),
                         })
                     }
@@ -225,6 +265,10 @@ impl Resolver {
                             head_name, other
                         ),
                         span,
+                        diagnostic: crate::error::ResolveErrorDiagnostic {
+                            reason: crate::error::ResolveErrorReason::Pattern,
+                            subject: None,
+                        },
                         related_labels: Vec::new(),
                     }),
                 }
@@ -295,6 +339,10 @@ fn duplicate_pattern_binding_error(pat: &AstPattern) -> Option<ResolveError> {
     Some(ResolveError {
         message: format!("Duplicate binding in pattern: {}", name),
         span: first,
+        diagnostic: crate::error::ResolveErrorDiagnostic {
+            reason: crate::error::ResolveErrorReason::Pattern,
+            subject: None,
+        },
         related_labels: spans
             .iter()
             .zip(DUPLICATE_PATTERN_LABELS)

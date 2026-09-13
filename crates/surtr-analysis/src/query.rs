@@ -86,16 +86,37 @@ pub enum QueryArgKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CommandQueryParseError {
+    reason: CommandQueryParseErrorReason,
     message: String,
     span: Span,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandQueryParseErrorReason {
+    Empty,
+    UnsupportedSymbol,
+    UnsupportedForm,
+    TypedCallMissingClosingParen,
+    TypedCallMissingCallee,
+    TypedCallInvalidCallee,
+    TypedCallEmptyArgument,
+    OperatorMissingTarget,
+    UnsupportedArgument,
+    UnterminatedArgumentList,
+    InvalidTypeArgument,
+}
+
 impl CommandQueryParseError {
-    fn new(message: impl Into<String>, span: Span) -> Self {
+    fn new(reason: CommandQueryParseErrorReason, message: impl Into<String>, span: Span) -> Self {
         Self {
+            reason,
             message: message.into(),
             span,
         }
+    }
+
+    pub fn reason(&self) -> CommandQueryParseErrorReason {
+        self.reason
     }
 
     pub fn message(&self) -> &str {
@@ -112,6 +133,7 @@ pub fn parse_command_query(input: &str) -> Result<CommandQuery, CommandQueryPars
     let Some((trim_start, trim_end)) = trimmed_byte_bounds(input) else {
         let pos = input.chars().count();
         return Err(CommandQueryParseError::new(
+            CommandQueryParseErrorReason::Empty,
             "REPL query cannot be empty.",
             Span {
                 start: pos,
@@ -159,6 +181,7 @@ pub fn parse_command_query(input: &str) -> Result<CommandQuery, CommandQueryPars
     if trimmed.split_whitespace().count() == 1 {
         if trimmed.starts_with('$') || trimmed.starts_with('&') || trimmed == "_1" {
             return Err(CommandQueryParseError::new(
+                CommandQueryParseErrorReason::UnsupportedSymbol,
                 format!("Unsupported command query symbol `{trimmed}`."),
                 ctx.full_span(),
             ));
@@ -170,6 +193,7 @@ pub fn parse_command_query(input: &str) -> Result<CommandQuery, CommandQueryPars
     }
 
     Err(CommandQueryParseError::new(
+        CommandQueryParseErrorReason::UnsupportedForm,
         "Unsupported command query form. Use a symbol, typed call, or operator target.",
         ctx.full_span(),
     ))
@@ -219,6 +243,7 @@ fn parse_typed_call_query_inner(
     let open = range.start + rel_open;
     if !input.ends_with(')') {
         return Err(CommandQueryParseError::new(
+            CommandQueryParseErrorReason::TypedCallMissingClosingParen,
             "Invalid typed call query: missing closing `)`.",
             ctx.span_for_local_bytes(open, range.end),
         ));
@@ -232,12 +257,14 @@ fn parse_typed_call_query_inner(
             ctx.span_for_local_bytes(callee_range.start, callee_range.end)
         };
         return Err(CommandQueryParseError::new(
+            CommandQueryParseErrorReason::TypedCallMissingCallee,
             "Invalid typed call query: missing callee.",
             span,
         ));
     }
     if !is_callable_ref(callee) {
         return Err(CommandQueryParseError::new(
+            CommandQueryParseErrorReason::TypedCallInvalidCallee,
             format!("Invalid typed call query callee `{callee}`."),
             ctx.span_for_local_bytes(callee_range.start, callee_range.end),
         ));
@@ -250,6 +277,7 @@ fn parse_typed_call_query_inner(
         let trimmed_range = trim_byte_range(ctx.source, arg_range.clone());
         if trimmed_range.is_empty() {
             return Err(CommandQueryParseError::new(
+                CommandQueryParseErrorReason::TypedCallEmptyArgument,
                 "Invalid typed call query: empty argument.",
                 empty_argument_span(ctx, &arg_range, close),
             ));
@@ -276,6 +304,7 @@ fn parse_operator_target_query(
     let target = trim_byte_range(ctx.source, target_range.clone());
     if target.is_empty() {
         return Err(CommandQueryParseError::new(
+            CommandQueryParseErrorReason::OperatorMissingTarget,
             format!("Invalid operator target query: `{operator}` requires a target."),
             ctx.point_span_for_local_byte(operator_range.end),
         ));
@@ -295,6 +324,7 @@ fn parse_query_arg(
     let input = &ctx.source[range.clone()];
     let kind = if input.starts_with('$') || input.starts_with('&') || input == "_1" {
         return Err(CommandQueryParseError::new(
+            CommandQueryParseErrorReason::UnsupportedArgument,
             format!("Unsupported command query argument `{input}`."),
             ctx.span_for_local_bytes(range.start, range.end),
         ));
@@ -303,6 +333,7 @@ fn parse_query_arg(
             QueryArgKind::TypeExpr(ty)
         } else {
             return Err(CommandQueryParseError::new(
+                CommandQueryParseErrorReason::UnsupportedArgument,
                 format!("Unsupported command query argument `{input}`."),
                 ctx.span_for_local_bytes(range.start, range.end),
             ));
@@ -311,6 +342,7 @@ fn parse_query_arg(
         QueryArgKind::Binding(input.to_string())
     } else {
         return Err(CommandQueryParseError::new(
+            CommandQueryParseErrorReason::UnsupportedArgument,
             format!("Unsupported command query argument `{input}`."),
             ctx.span_for_local_bytes(range.start, range.end),
         ));
@@ -388,6 +420,7 @@ fn split_top_level_commas(
             .or_else(|| angle_stack.last().copied())
             .unwrap_or(part_start);
         return Err(CommandQueryParseError::new(
+            CommandQueryParseErrorReason::UnterminatedArgumentList,
             "Invalid typed call query: unterminated argument list.",
             ctx.span_for_local_bytes(error_start, end),
         ));
@@ -418,7 +451,11 @@ fn parse_user_query_type_loose_in_span(
     range: &Range<usize>,
 ) -> Result<Option<AstTy>, CommandQueryParseError> {
     parse_user_query_type_loose(input).map_err(|message| {
-        CommandQueryParseError::new(message, ctx.span_for_local_bytes(range.start, range.end))
+        CommandQueryParseError::new(
+            CommandQueryParseErrorReason::InvalidTypeArgument,
+            message,
+            ctx.span_for_local_bytes(range.start, range.end),
+        )
     })
 }
 

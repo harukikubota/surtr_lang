@@ -46,11 +46,12 @@ pub struct LspDiagnostic {
 
 impl ParseDiagnostic {
     pub(crate) fn from_parse_error(error: ParseError) -> Self {
-        let span = error.span().clone();
+        let expected_tokens = error.expected_tokens().to_vec();
+        let cursor_span = error.cursor_span().clone();
         Self {
             error,
-            expected_tokens: Vec::new(),
-            cursor_span: span,
+            expected_tokens,
+            cursor_span,
         }
     }
 
@@ -142,7 +143,11 @@ mod tests {
     #[test]
     fn to_lsp_maps_multiline_span_to_line_and_column() {
         let diag = ParseDiagnostic {
-            error: ParseError::syntax("unexpected token", Span { start: 6, end: 9 }),
+            error: ParseError::syntax(
+                crate::error::ParseErrorReason::UnexpectedToken,
+                "unexpected token",
+                Span { start: 6, end: 9 },
+            ),
             expected_tokens: Vec::new(),
             cursor_span: Span { start: 6, end: 9 },
         };

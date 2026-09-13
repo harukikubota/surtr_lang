@@ -206,13 +206,14 @@ impl Checker {
         ret_ty: &Option<sigil::resolved::ResolvedSignatureTy>,
         where_clause: Option<&ResolvedWhereClause>,
     ) -> Result<TypedNode, TypeError> {
-        let is_kernel_is_match = id.name == "is_match"
+        let declared_name = id.name.rsplit("::").next().unwrap_or(&id.name);
+        let is_kernel_is_match = declared_name == "is_match"
             && Self::surface_qualified_name(id.qualified_name.as_deref())
                 == Some("Kernel::is_match");
-        let is_special_form = if id.name == "is_match" {
+        let is_special_form = if declared_name == "is_match" {
             is_kernel_is_match
         } else {
-            Self::is_special_form_builtin_decl_name(&id.name)
+            Self::is_special_form_builtin_decl_name(declared_name)
         };
         if is_special_form {
             let syntax_ret_ty = ret_ty.as_ref().map(|ty| ty.syntax.clone());
@@ -220,7 +221,7 @@ impl Checker {
         }
 
         let builtin_name =
-            sindr::builtin::builtin_runtime_name(&id.name, id.qualified_name.as_deref());
+            sindr::builtin::builtin_runtime_name(declared_name, id.qualified_name.as_deref());
         let meta = sindr::builtin::builtin_meta_by_name(builtin_name).ok_or_else(|| TypeError {
             structured: None,
             message: format!("Unknown builtin declaration: {}", id.name),
@@ -243,8 +244,10 @@ impl Checker {
 
         if !super::signatures::builtin_surface_matches(
             id,
+            return_type_arguments,
             params,
-            ret_ty.as_ref().map(|ty| ty.syntax()),
+            ret_ty.as_ref(),
+            where_clause,
         ) {
             return Err(TypeError {
                 structured: None,

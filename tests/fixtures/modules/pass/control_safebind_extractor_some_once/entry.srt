@@ -1,0 +1,4 @@
+import Matchers::{source, once}
+
+once(value) =? source()
+print(to_string(value + 1))

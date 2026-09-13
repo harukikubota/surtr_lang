@@ -577,31 +577,6 @@ pub fn quote_surtr_string_literal(input: &str) -> String {
 
 fn visible_runtime_error_message(message: &str) -> &str {
     message
-        .split_once("\t@@lhs=")
-        .map(|(head, _)| head)
-        .unwrap_or(message)
-}
-
-fn split_runtime_error_diagnostic(
-    kind: &str,
-    message: &str,
-) -> (String, Option<RuntimeErrorDiagnostic>) {
-    if kind != "PatternMismatch" {
-        return (message.to_string(), None);
-    }
-    let Some((base, rest)) = message.split_once("\t@@lhs=") else {
-        return (message.to_string(), None);
-    };
-    let Some((lhs, rhs)) = rest.split_once("\t@@rhs=") else {
-        return (message.to_string(), None);
-    };
-    (
-        base.to_string(),
-        Some(RuntimeErrorDiagnostic::LiteralPatternMismatch {
-            lhs: lhs.to_string(),
-            rhs: rhs.to_string(),
-        }),
-    )
 }
 
 impl HashMapHandle {
@@ -737,7 +712,14 @@ impl Iterator for ListIter {
 /// Rich error value produced by `deferror`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeErrorDiagnostic {
-    LiteralPatternMismatch { lhs: String, rhs: String },
+    LiteralPatternMismatch {
+        lhs: String,
+        rhs: String,
+    },
+    SafeBindPatternFailure {
+        rule: String,
+        input_source: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -795,15 +777,19 @@ impl RichError {
         cause: Option<Box<RichError>>,
     ) -> Self {
         let kind = kind.into();
-        let (message, diagnostic) = split_runtime_error_diagnostic(&kind, &message.into());
         Self {
             kind,
-            message,
+            message: message.into(),
             location,
             cause,
-            diagnostic,
+            diagnostic: None,
             stack_trace: Vec::new(),
         }
+    }
+
+    pub fn with_diagnostic(mut self, diagnostic: RuntimeErrorDiagnostic) -> Self {
+        self.diagnostic = Some(diagnostic);
+        self
     }
 
     pub fn with_stack_trace(mut self, stack_trace: Vec<RuntimeStackFrame>) -> Self {
@@ -905,7 +891,7 @@ pub struct Location {
 mod tests {
     use super::{
         Callable, CallableMetadata, CallableTarget, HashMapHandle, ListHandle, Location, RichError,
-        TypeEntry, TypeKind, TypeRegistry, Value,
+        RuntimeErrorDiagnostic, TypeEntry, TypeKind, TypeRegistry, Value,
     };
     use crate::primitives::int;
 
@@ -1428,10 +1414,10 @@ mod tests {
     }
 
     #[test]
-    fn rich_error_eprint_lines_hide_runtime_literal_metadata() {
+    fn rich_error_eprint_lines_render_clean_message_with_structured_literal_metadata() {
         let rich = RichError {
             kind: "PatternMismatch".into(),
-            message: "Pattern did not match.\t@@lhs=\"1\"\t@@rhs=\"2\"".into(),
+            message: "Pattern did not match.".into(),
             location: Location {
                 file: "<repl>".into(),
                 func: "f".into(),
@@ -1441,7 +1427,10 @@ mod tests {
                 span_end: 1,
             },
             cause: None,
-            diagnostic: None,
+            diagnostic: Some(RuntimeErrorDiagnostic::LiteralPatternMismatch {
+                lhs: "1".into(),
+                rhs: "2".into(),
+            }),
             stack_trace: Vec::new(),
         };
 

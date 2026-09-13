@@ -1,4 +1,5 @@
 use super::*;
+use diagnostics::{PatternKind, TypeDiagnosticReason};
 
 impl Checker {
     pub(super) fn eq_dispatch_for_pattern_pin(
@@ -7,23 +8,45 @@ impl Checker {
         span: &Span,
     ) -> Result<TraitDispatch, TypeError> {
         let receiver_ty = self.resolve_ty(ty);
-        let eq_trait = self
-            .trait_key_by_short_name("Eq")
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: "Unknown trait: Eq".into(),
-                span: span.clone(),
-                hint: None,
-            })?;
-        let trait_info = self
-            .traits
-            .get(&eq_trait)
-            .cloned()
-            .ok_or_else(|| TypeError::new("Missing Eq trait contract", span.clone()))?;
-        let method = trait_info
-            .methods
-            .get("eq")
-            .ok_or_else(|| TypeError::new("Missing Eq::eq method contract", span.clone()))?;
+        let eq_trait = self.trait_key_by_short_name("Eq").ok_or_else(|| {
+            self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("Eq trait contract".into()),
+                None,
+                None,
+                None,
+                None,
+                span,
+                None,
+            )
+        })?;
+        let trait_info = self.traits.get(&eq_trait).cloned().ok_or_else(|| {
+            self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("Eq trait contract".into()),
+                None,
+                None,
+                None,
+                None,
+                span,
+                None,
+            )
+        })?;
+        let method = trait_info.methods.get("eq").ok_or_else(|| {
+            self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("Eq::eq method contract".into()),
+                None,
+                None,
+                None,
+                None,
+                span,
+                None,
+            )
+        })?;
         let (_, result_ty, trait_args, _, _) =
             self.resolve_trait_method_signature(&trait_info, method, &receiver_ty)?;
         self.consume_matching_capability(&receiver_ty, &eq_trait);
@@ -43,11 +66,16 @@ impl Checker {
             }
             CandidateApplicability::Rejected(_) => None,
         };
-        dispatch.ok_or_else(|| TypeError {
-            structured: None,
-            message: format!("`==` is not defined for {}", self.ty_name(&receiver_ty)),
-            span: span.clone(),
-            hint: Some(self.trait_implementation_summary("Eq")),
+        dispatch.ok_or_else(|| {
+            self.trait_obligation_failure(
+                TypeDiagnosticReason::MissingTraitCapability,
+                &eq_trait,
+                &[],
+                None,
+                &receiver_ty,
+                span,
+                diagnostics::DiagnosticOrigin::Pattern,
+            )
         })
     }
 
@@ -103,32 +131,33 @@ impl Checker {
                 Ok((TypedPattern::Var(expected.clone(), id.clone()), expected))
             }
             ResolvedPattern::Pin(id) => {
-                let pinned_ty =
-                    self.env
-                        .lookup_var(id.unique_id)
-                        .cloned()
-                        .ok_or_else(|| TypeError {
-                            structured: None,
-                            message: format!(
-                                "Pinned pattern requires an existing value `{}`",
-                                id.name
-                            ),
-                            span: id.span.clone(),
-                            hint: None,
-                        })?;
+                let pinned_ty = self.env.lookup_var(id.unique_id).cloned().ok_or_else(|| {
+                    self.policy_error(
+                        TypeDiagnosticReason::TypecheckInvariantViolation,
+                        diagnostics::TypePolicy::ProducerContract,
+                        Some("resolved pinned pattern binding".into()),
+                        None,
+                        None,
+                        None,
+                        None,
+                        &id.span,
+                        None,
+                    )
+                })?;
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 let pinned_ty = self.resolve_ty(&pinned_ty);
                 if !self.types_compatible(&pinned_ty, &rhs_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Pinned pattern type mismatch: expected {}, got {}",
-                            self.ty_name(&pinned_ty),
-                            self.ty_name(&rhs_ty)
-                        ),
-                        span: id.span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Pin,
+                        Some(id.name.clone()),
+                        Some(self.diagnostic_ty_name(&pinned_ty)),
+                        Some(&rhs_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        &id.span,
+                    ));
                 }
                 let dispatch = self.eq_dispatch_for_pattern_pin(&rhs_ty, &id.span)?;
                 Ok((
@@ -142,16 +171,17 @@ impl Checker {
                     let expected =
                         self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
                     if !self.types_compatible(&expected, &inner_ty) {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "expected {}, got {}",
-                                self.ty_name(&expected),
-                                self.ty_name(&inner_ty)
-                            ),
-                            span: alias.span.clone(),
-                            hint: None,
-                        });
+                        return Err(self.pattern_error(
+                            TypeDiagnosticReason::PatternTypeMismatch,
+                            PatternKind::Other,
+                            Some("as-pattern alias".into()),
+                            Some(self.diagnostic_ty_name(&expected)),
+                            Some(&inner_ty),
+                            None,
+                            None,
+                            Vec::new(),
+                            &alias.span,
+                        ));
                     }
                     self.resolve_ty(&expected)
                 } else {
@@ -170,27 +200,30 @@ impl Checker {
             ResolvedPattern::Tuple(items) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 let Ty::Tuple(item_tys) = &rhs_ty else {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "tuple pattern requires tuple scrutinee, got {}",
-                            self.ty_name(&rhs_ty)
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternShapeMismatch,
+                        PatternKind::Tuple,
+                        Some("tuple".into()),
+                        Some("tuple".into()),
+                        Some(&rhs_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        span,
+                    ));
                 };
                 if items.len() != item_tys.len() {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "tuple pattern expects {} value(s), got {}",
-                            item_tys.len(),
-                            items.len()
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternArityMismatch,
+                        PatternKind::Tuple,
+                        Some("tuple".into()),
+                        None,
+                        Some(&rhs_ty),
+                        Some(item_tys.len()),
+                        Some(items.len()),
+                        Vec::new(),
+                        span,
+                    ));
                 }
                 let mut typed_items = Vec::with_capacity(items.len());
                 for (item, item_ty) in items.iter().zip(item_tys.iter()) {
@@ -199,26 +232,33 @@ impl Checker {
                 }
                 Ok((TypedPattern::Tuple(rhs_ty.clone(), typed_items), rhs_ty))
             }
-            ResolvedPattern::Or(_) => Err(TypeError {
-                structured: None,
-                message: "Pattern alternatives are only supported in match expressions.".into(),
-                span: span.clone(),
-                hint: None,
-            }),
+            ResolvedPattern::Or(_) => Err(self.pattern_error(
+                TypeDiagnosticReason::PatternShapeMismatch,
+                PatternKind::Other,
+                Some("pattern alternatives".into()),
+                Some("match expression".into()),
+                Some(rhs_ty),
+                None,
+                None,
+                vec!["not supported in binding patterns".into()],
+                span,
+            )),
             ResolvedPattern::ListNil(pspan) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 match rhs_ty {
                     Ty::List(_) => Ok((TypedPattern::ListNil(rhs_ty.clone()), rhs_ty)),
                     Ty::Str => Ok((TypedPattern::StrLit(Ty::Str, String::new()), rhs_ty)),
-                    other => Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "empty list pattern requires List<...> or String, got {}",
-                            self.ty_name(&other)
-                        ),
-                        span: pspan.clone(),
-                        hint: None,
-                    }),
+                    other => Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternShapeMismatch,
+                        PatternKind::List,
+                        Some("empty list".into()),
+                        Some("List<...> or String".into()),
+                        Some(&other),
+                        None,
+                        None,
+                        Vec::new(),
+                        pspan,
+                    )),
                 }
             }
             ResolvedPattern::ListCons(head, tail) => {
@@ -259,74 +299,84 @@ impl Checker {
                             rhs_ty,
                         ))
                     }
-                    other => Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "list pattern requires List<...> or String, got {}",
-                            self.ty_name(other)
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    }),
+                    other => Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternShapeMismatch,
+                        PatternKind::List,
+                        Some("list".into()),
+                        Some("List<...> or String".into()),
+                        Some(other),
+                        None,
+                        None,
+                        Vec::new(),
+                        span,
+                    )),
                 }
             }
             ResolvedPattern::IntLit(pspan, n) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if !self.types_compatible(&Ty::Int, &rhs_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "integer literal pattern requires Int, got {}",
-                            self.ty_name(&rhs_ty)
-                        ),
-                        span: pspan.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Other,
+                        Some("integer literal".into()),
+                        Some("Int".into()),
+                        Some(&rhs_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        pspan,
+                    ));
                 }
                 Ok((TypedPattern::IntLit(Ty::Int, n.clone()), rhs_ty))
             }
             ResolvedPattern::StrLit(pspan, s) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if !self.types_compatible(&Ty::Str, &rhs_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "string literal pattern requires String, got {}",
-                            self.ty_name(&rhs_ty)
-                        ),
-                        span: pspan.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Other,
+                        Some("string literal".into()),
+                        Some("String".into()),
+                        Some(&rhs_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        pspan,
+                    ));
                 }
                 Ok((TypedPattern::StrLit(Ty::Str, s.clone()), rhs_ty))
             }
             ResolvedPattern::BoolLit(pspan, b) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if !self.types_compatible(&Ty::Bool, &rhs_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "boolean literal pattern requires Boolean, got {}",
-                            self.ty_name(&rhs_ty)
-                        ),
-                        span: pspan.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Other,
+                        Some("boolean literal".into()),
+                        Some("Boolean".into()),
+                        Some(&rhs_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        pspan,
+                    ));
                 }
                 Ok((TypedPattern::BoolLit(Ty::Bool, *b), rhs_ty))
             }
             ResolvedPattern::DurationLit(pspan, n) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 if !Self::is_duration_ty(&rhs_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "duration literal pattern requires Duration, got {}",
-                            self.ty_name(&rhs_ty)
-                        ),
-                        span: pspan.clone(),
-                        hint: None,
-                    });
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Other,
+                        Some("duration literal".into()),
+                        Some("Duration".into()),
+                        Some(&rhs_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        pspan,
+                    ));
                 }
                 Ok((TypedPattern::DurationLit(rhs_ty.clone(), n.clone()), rhs_ty))
             }
@@ -336,40 +386,45 @@ impl Checker {
                     let variant = self
                         .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
                         .ok_or_else(|| {
-                            TypeError::new(
-                                format!("Unknown constructor: {}", ctor_id.name),
-                                ctor_id.span.clone(),
+                            self.typecheck_invariant_error(
+                                "resolved enum pattern constructor",
+                                &ctor_id.span,
                             )
                         })?
                         .clone();
                     let variant = self.instantiate_enum_variant(&variant);
                     if Self::surface_name(&variant.enum_name) != "Boolean" {
-                        return Err(TypeError {
-                            structured: None,
-                            message: format!(
-                                "Constructor {} does not belong to enum Boolean",
-                                ctor_id.name
-                            ),
-                            span: ctor_id.span.clone(),
-                            hint: None,
-                        });
+                        return Err(self.pattern_error(
+                            TypeDiagnosticReason::PatternShapeMismatch,
+                            PatternKind::Constructor,
+                            Some(ctor_id.name.clone()),
+                            Some("Boolean".into()),
+                            Some(&rhs_ty),
+                            None,
+                            None,
+                            Vec::new(),
+                            &ctor_id.span,
+                        ));
                     }
                     if !inners.is_empty() {
-                        return Err(TypeError::new(
-                            format!(
-                                "{} pattern expects 0 argument(s), got {}",
-                                ctor_id.name,
-                                inners.len()
-                            ),
-                            ctor_id.span.clone(),
+                        return Err(self.pattern_error(
+                            TypeDiagnosticReason::PatternArityMismatch,
+                            PatternKind::Constructor,
+                            Some(ctor_id.name.clone()),
+                            None,
+                            Some(&rhs_ty),
+                            Some(0),
+                            Some(inners.len()),
+                            Vec::new(),
+                            &ctor_id.span,
                         ));
                     }
                     return match variant.short_name.as_str() {
                         "True" => Ok((TypedPattern::BoolLit(Ty::Bool, true), Ty::Bool)),
                         "False" => Ok((TypedPattern::BoolLit(Ty::Bool, false), Ty::Bool)),
-                        _ => Err(TypeError::new(
-                            format!("Unknown Boolean constructor: {}", ctor_id.name),
-                            ctor_id.span.clone(),
+                        _ => Err(self.typecheck_invariant_error(
+                            "resolved Boolean constructor variant",
+                            &ctor_id.span,
                         )),
                     };
                 }
@@ -378,19 +433,23 @@ impl Checker {
                         "Ok" => (0, ok_ty.as_ref().clone()),
                         "Err" => (1, err_ty.as_ref().clone()),
                         _ => {
-                            return Err(TypeError::new(
-                                format!("Unknown constructor: {}", ctor_id.name),
-                                ctor_id.span.clone(),
+                            return Err(self.typecheck_invariant_error(
+                                "Result pattern constructor",
+                                &ctor_id.span,
                             ));
                         }
                     };
                     if inners.len() != 1 {
-                        return Err(TypeError::new(
-                            format!(
-                                "{}(...) pattern requires exactly one argument",
-                                ctor_id.name
-                            ),
-                            ctor_id.span.clone(),
+                        return Err(self.pattern_error(
+                            TypeDiagnosticReason::PatternArityMismatch,
+                            PatternKind::Constructor,
+                            Some(ctor_id.name.clone()),
+                            None,
+                            Some(&rhs_ty),
+                            Some(1),
+                            Some(inners.len()),
+                            Vec::new(),
+                            &ctor_id.span,
                         ));
                     }
                     let (typed_inner, _) = self.check_pattern(&inners[0], &inner_ty, span)?;
@@ -406,53 +465,65 @@ impl Checker {
                     ));
                 }
                 let Ty::Enum(expected_enum_name, _) = &rhs_ty else {
-                    return Err(TypeError::new(
-                        format!(
-                            "Constructor pattern requires an enum or Result RHS, got {}",
-                            self.ty_name(&rhs_ty)
-                        ),
-                        ctor_id.span.clone(),
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::ConstructorPatternRequiresEnumOrResultRhs,
+                        PatternKind::Constructor,
+                        Some(ctor_id.name.clone()),
+                        Some("enum or Result".into()),
+                        Some(&rhs_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        &ctor_id.span,
                     ));
                 };
                 let variant = self
                     .lookup_enum_variant_by_constructor_id(ctor_id.unique_id)
                     .ok_or_else(|| {
-                        TypeError::new(
-                            format!("Unknown constructor: {}", ctor_id.name),
-                            ctor_id.span.clone(),
+                        self.typecheck_invariant_error(
+                            "resolved enum pattern constructor",
+                            &ctor_id.span,
                         )
                     })?
                     .clone();
                 let variant = self.instantiate_enum_variant(&variant);
                 if &variant.enum_name != expected_enum_name {
-                    return Err(TypeError::new(
-                        format!(
-                            "Constructor {} does not belong to enum {}",
-                            ctor_id.name,
-                            Self::surface_name(expected_enum_name)
-                        ),
-                        ctor_id.span.clone(),
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternShapeMismatch,
+                        PatternKind::Constructor,
+                        Some(ctor_id.name.clone()),
+                        Some(Self::surface_name(expected_enum_name).to_string()),
+                        Some(&rhs_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        &ctor_id.span,
                     ));
                 }
                 if !self.types_compatible(&variant.enum_ty, &rhs_ty) {
-                    return Err(TypeError::new(
-                        format!(
-                            "Constructor {} does not match expected type {}",
-                            ctor_id.name,
-                            self.ty_name(&rhs_ty)
-                        ),
-                        ctor_id.span.clone(),
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternTypeMismatch,
+                        PatternKind::Constructor,
+                        Some(ctor_id.name.clone()),
+                        Some(self.diagnostic_ty_name(&variant.enum_ty)),
+                        Some(&rhs_ty),
+                        None,
+                        None,
+                        Vec::new(),
+                        &ctor_id.span,
                     ));
                 }
                 if inners.len() != variant.payload.len() {
-                    return Err(TypeError::new(
-                        format!(
-                            "{} pattern expects {} argument(s), got {}",
-                            ctor_id.name,
-                            variant.payload.len(),
-                            inners.len()
-                        ),
-                        ctor_id.span.clone(),
+                    return Err(self.pattern_error(
+                        TypeDiagnosticReason::PatternArityMismatch,
+                        PatternKind::Constructor,
+                        Some(ctor_id.name.clone()),
+                        None,
+                        Some(&rhs_ty),
+                        Some(variant.payload.len()),
+                        Some(inners.len()),
+                        Vec::new(),
+                        &ctor_id.span,
                     ));
                 }
                 let mut typed_fields = Vec::with_capacity(inners.len());
@@ -481,42 +552,49 @@ impl Checker {
                         &extractor_id.span,
                     )?;
                 if !self.types_compatible(&input_ty, &rhs_ty) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Extractor {} expects {}, got {}",
-                            extractor_id.name,
-                            self.ty_name(&input_ty),
-                            self.ty_name(&rhs_ty)
-                        ),
-                        span: extractor_id.span.clone(),
-                        hint: Some(format!(
+                    let mut error = self.pattern_error(
+                        TypeDiagnosticReason::ExtractorInputTypeMismatch,
+                        PatternKind::Extractor,
+                        Some(extractor_id.name.clone()),
+                        Some(self.diagnostic_ty_name(&input_ty)),
+                        Some(&rhs_ty),
+                        None,
+                        None,
+                        vec![self
+                            .callable_signature_for_ty(&extractor_ty)
+                            .unwrap_or_else(|| self.diagnostic_ty_name(&extractor_ty))],
+                        &extractor_id.span,
+                    );
+                    if let Some(signature) = self.callable_signature_for_ty(&extractor_ty) {
+                        error = error.with_hint(format!(
                             "Extractor type signature: {}. RHS type is {}.",
-                            self.callable_signature_for_ty(&extractor_ty)
-                                .unwrap_or_else(|| self.ty_name(&extractor_ty)),
-                            self.ty_name(&rhs_ty)
-                        )),
-                    });
+                            signature,
+                            self.diagnostic_ty_name(&rhs_ty)
+                        ));
+                    }
+                    return Err(error);
                 }
                 if items.len() != seq_tys.len() {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Extractor {} returns {} value(s), but pattern expects {}",
-                            extractor_id.name,
-                            seq_tys.len(),
-                            items.len()
-                        ),
-                        span: extractor_id.span.clone(),
-                        hint: Some(format!(
+                    let success_types = seq_tys
+                        .iter()
+                        .map(|ty| self.diagnostic_ty_name(ty))
+                        .collect::<Vec<_>>();
+                    return Err(self
+                        .pattern_error(
+                            TypeDiagnosticReason::ExtractorArityMismatch,
+                            PatternKind::Extractor,
+                            Some(extractor_id.name.clone()),
+                            None,
+                            Some(&rhs_ty),
+                            Some(seq_tys.len()),
+                            Some(items.len()),
+                            success_types.clone(),
+                            &extractor_id.span,
+                        )
+                        .with_hint(format!(
                             "Extractor success value(s): {}.",
-                            seq_tys
-                                .iter()
-                                .map(|ty| self.ty_name(ty))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        )),
-                    });
+                            success_types.join(", ")
+                        )));
                 }
                 let mut typed_items = Vec::with_capacity(items.len());
                 for (item, item_ty) in items.iter().zip(seq_tys.iter()) {

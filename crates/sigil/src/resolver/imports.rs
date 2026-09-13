@@ -372,6 +372,10 @@ fn import_list_into_scope(
         return Err(ResolveError {
             message: format!("Unknown module import: {}", module_name),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Import,
+                subject: Some(module_name.to_string()),
+            },
             related_labels: Vec::new(),
         });
     }
@@ -493,6 +497,10 @@ fn import_list_into_scope(
         Err(ResolveError {
             message: issues.render_message(module_name),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Import,
+                subject: Some(module_name.to_string()),
+            },
             related_labels: Vec::new(),
         })
     }
@@ -553,6 +561,10 @@ fn import_module_into_scope(
                 module_name
             ),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Import,
+                subject: Some(module_name.to_string()),
+            },
             related_labels: Vec::new(),
         })
     } else if matches!(
@@ -567,12 +579,20 @@ fn import_module_into_scope(
         Err(ResolveError {
             message: format!("Import target `{}` is not importable", module_name),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Import,
+                subject: Some(module_name.to_string()),
+            },
             related_labels: Vec::new(),
         })
     } else {
         Err(ResolveError {
             message: format!("Unknown module import: {}", module_name),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Import,
+                subject: Some(module_name.to_string()),
+            },
             related_labels: Vec::new(),
         })
     }
@@ -592,6 +612,10 @@ fn import_trait_into_scope(
         return Err(ResolveError {
             message: format!("Unknown module import: {}", trait_name),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Import,
+                subject: Some(trait_name.to_string()),
+            },
             related_labels: Vec::new(),
         });
     };
@@ -600,6 +624,10 @@ fn import_trait_into_scope(
         return Err(ResolveError {
             message: format!("Import target `{}` is not importable", trait_name),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Import,
+                subject: Some(trait_name.to_string()),
+            },
             related_labels: Vec::new(),
         });
     }
@@ -614,6 +642,10 @@ fn import_trait_into_scope(
                 trait_name
             ),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Import,
+                subject: Some(trait_name.to_string()),
+            },
             related_labels: Vec::new(),
         });
     }
@@ -651,6 +683,10 @@ fn import_trait_into_scope(
                     method_entry.fq_name
                 ),
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Import,
+                    subject: Some(method_entry.fq_name.clone()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -774,6 +810,10 @@ fn import_single_into_scope(
             return Err(ResolveError {
                 message: format!("Import target `{}` is not importable", fq_name),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Import,
+                    subject: Some(fq_name.clone()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -788,6 +828,10 @@ fn import_single_into_scope(
                 format!("Unknown module import: {}", module_name)
             },
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Import,
+                subject: Some(fq_name.clone()),
+            },
             related_labels: Vec::new(),
         });
     };
@@ -796,6 +840,10 @@ fn import_single_into_scope(
         return Err(ResolveError {
             message: format!("Import target `{}` is not importable", fq_name),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Import,
+                subject: Some(fq_name.clone()),
+            },
             related_labels: Vec::new(),
         });
     }
@@ -806,6 +854,10 @@ fn import_single_into_scope(
             return Err(ResolveError {
                 message: format!("Import target `{}` is not importable", fq_name),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Import,
+                    subject: Some(fq_name.clone()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -813,6 +865,10 @@ fn import_single_into_scope(
             return Err(ResolveError {
                 message: restricted_surface_import_message(&fq_name),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Import,
+                    subject: Some(fq_name.clone()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -820,6 +876,10 @@ fn import_single_into_scope(
             return Err(ResolveError {
                 message: hidden_builtin_import_message(&fq_name),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Import,
+                    subject: Some(fq_name.clone()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -827,6 +887,10 @@ fn import_single_into_scope(
             return Err(ResolveError {
                 message: format!("Import target `{}` is private", fq_name),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Visibility,
+                    subject: Some(fq_name.clone()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -837,6 +901,10 @@ fn import_single_into_scope(
                     fq_name
                 ),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Import,
+                    subject: Some(fq_name.clone()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -882,6 +950,10 @@ fn import_single_into_scope(
                         method_entry.fq_name
                     ),
                     span: span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Import,
+                        subject: Some(method_entry.fq_name.clone()),
+                    },
                     related_labels: Vec::new(),
                 });
             }
@@ -990,6 +1062,10 @@ fn bind_import_name(
                     short_name, existing_name, incoming_name
                 ),
                 span,
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Import,
+                    subject: Some(short_name.to_string()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -1015,6 +1091,10 @@ fn bind_import_name(
                 short_name, module_name
             ),
             span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::Import,
+                subject: Some(short_name.to_string()),
+            },
             related_labels: Vec::new(),
         });
     }
@@ -1043,6 +1123,10 @@ impl ImportState {
             return Err(ResolveError {
                 message: format!("Duplicate import: {}", module_name),
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Import,
+                    subject: Some(module_name.to_string()),
+                },
                 related_labels: Vec::new(),
             });
         }
@@ -1061,6 +1145,10 @@ impl ImportState {
             return Err(ResolveError {
                 message: format!("Duplicate import: {}::{}", module_name, name),
                 span: span.clone(),
+                diagnostic: crate::error::ResolveErrorDiagnostic {
+                    reason: crate::error::ResolveErrorReason::Import,
+                    subject: Some(format!("{}::{}", module_name, name)),
+                },
                 related_labels: Vec::new(),
             });
         }

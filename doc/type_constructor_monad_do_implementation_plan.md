@@ -7,7 +7,7 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- N01–N05 とN06のSafeBind RHS訂正は実装済み。N06の残作業とN07以降は未着手である。
+- N01–N06は実装済み。N07以降は未着手である。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
@@ -48,8 +48,8 @@ N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け
 | N03 | nominal constructor parameterとdeclaration constraint | N01 | [x] 完了 | 新規言語機能 |
 | N04 | parameterized TypeCtorTrait・MonadT契約 | N03 | [x] 完了 | 新規言語機能 |
 | N05 | 標準Transformer | N04。Identityを使うテストはN02 | [x] 完了 | 新規標準機能 |
-| N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision、実装済みSafeBind RHS訂正 | [~] SafeBind訂正完了・残作業未着手 | 旧Task 10を再編 |
-| N07 | do compiler-owned contract | N06 | [ ] 未着手 | 旧Task 11 |
+| N06 | SafeBind・診断残作業・do開始ゲート | N01–N05の検証済みrevision、実装済みSafeBind RHS訂正 | [x] 完了 | 旧Task 10を再編 |
+| N07 | do compiler-owned contract | N06 | [ ] 着手可能 | 旧Task 11 |
 | N08 | do syntax・AST・resolver・scope | N07 | [ ] 未着手 | 旧Task 12 |
 | N09 | do carrier推論・core lowering | N08 | [ ] 未着手 | 旧Task 13 |
 | N10 | do SafeBind・Forge lowering | N09 | [ ] 未着手 | 旧Task 14 |
@@ -96,14 +96,14 @@ dirtyなメインworktreeは変更せず、専用worktreeで文書だけを整�
 | 同 §§11–14 | 実装済み | constructor carrier tests、default/derive/builtin dispatch tests、recursive Trait self-call fixture | `docs/dev/Trait_system_spec.md` §§1–2, 4–6、`docs/site/trait-impls.md` |
 | 同 §§15–19 | 実装済み契約と履歴 | sourceの旧語彙・fallback監査、Scar/diagnostics/Rune fixtures | `docs/dev/{Trait_system_spec,diagnostics}.md`。実装手順と過去ログはVCS |
 | `signature_diagnostics_unification.md` §§1–5.7 | 実装済み | `crates/diagnostics/src/{data.rs,projection.rs,render.rs,typecheck.rs}`、structured diagnostics tests | `docs/dev/diagnostics.md`のstructured contract・stable reason・typed data |
-| 同 §§6–9 | 一部実装済み・一部未実装 | Task 9 reason producerは実装済み。SafeBindのOption拒否、message heuristic、policy familyは残存 | 実装済み境界は`docs/dev/diagnostics.md`、残作業は`diagnostics_cleanup_spec.md` §§3–9 |
-| 同 §§10–11 | 実装済み範囲と未移行family | JSON typed projectionとphase ownershipは実装済み。全phase producer移行は未完 | `docs/dev/diagnostics.md`。残るproducer/adapterは`diagnostics_cleanup_spec.md` §§6–8 |
-| 同 §§12–15 | 作業履歴と未実装契約 | Task 9 commits/testsを祖先確認。SafeBind・全heuristic撤去・doは未実装 | N06、`do_intrinsic_spec.md`、N07–N11 |
+| 同 §§6–9 | 実装済み | SafeBindのResult一段射影、通常pattern優先、全phase producerのclosed reason、message heuristic撤去を実装 | `docs/dev/diagnostics.md`、実装入力・履歴は`diagnostics_cleanup_spec.md` |
+| 同 §§10–11 | 実装済み | JSON typed projection、phase ownership、Rune/Xldr adapterをstructured producer入力へ統一 | `docs/dev/diagnostics.md` |
+| 同 §§12–15 | 実装済み範囲と後続入力 | Task 9とN06のSafeBind・diagnostics cleanupは完了。doだけを未実装として分離 | `docs/dev/diagnostics.md`、`do_intrinsic_spec.md`、N07–N11 |
 | `type_constructor_signature_unification_task4_fallback_remediation_scope.md`の完了部分 | 実装済み | arity事前検査、canonical signature必須化、candidate rollback、RTA ambiguity tests | `docs/dev/Trait_system_spec.md` §§2.1, 3.2, 7、`docs/dev/diagnostics.md` |
 | 同 canonical Trait / constructor application残件 | 実装済み | Sigilのcanonical Trait identityを保持し、constructor projectionは`Deferred`/`Rejected`の理由を保持。実行可能な未解決`SelfApp`はScar境界で構造化診断として拒否 | `docs/dev/Trait_system_spec.md` §§0.5–0.7, 2–3, 7–8 |
-| 同 builtin / diagnostic残件 | 確定未実装 | qualified builtin allowlist合成とmessage heuristicが現存 | `diagnostics_cleanup_spec.md` §8.1・DC-14を含むN06 |
+| 同 builtin / diagnostic残件 | 実装済み | source surfaceとcompiler-generated declaration identityを`BUILTIN_METAS`の構造データへ統合し、message heuristicと外部allowlistを撤去 | `docs/dev/diagnostics.md`、実装履歴は`diagnostics_cleanup_spec.md` §8.1・DC-14 |
 | `type_constructor_signature_unification_implementation_plan.md` Task 1–9 | 完了履歴 | commits `b1805d75`, `6221dffd`, `d134c95a`, `256c4b79`, `65ba6172`, `25c53c4e`, `dfe4a2e1`, `c28d185c`, `f2c0affd`と各review fixがHEAD祖先 | 恒久契約は担当`/docs`、実装手順・検証ログはVCS |
-| 同 Task 10 | 確定未実装 | SafeBind旧制限とdiagnostic heuristicが現存 | `diagnostics_cleanup_spec.md` / N06 |
+| 同 Task 10 | 完了履歴 | SafeBind旧制限、diagnostic heuristic、builtin surface allowlistをN06で撤去 | `docs/dev/diagnostics.md`、`diagnostics_cleanup_spec.md` / N06 |
 | 同 Task 11–15 | 確定未実装 | `Ast::Do` / `Resolved::Do` / `TypedDo` / `DoBlock` / `IntrinsicId::Do`なし | `do_intrinsic_spec.md` / N07–N11 |
 | 同 Task 16 | implementation plan | 最終監査はdo/Generator等の完了後 | N14 |
 | `signature_level_type_constructor_inference_draft.md` | draft | import前後のblob hash一致を確認 | 本文を変更せず`doc/`に保持 |
@@ -319,6 +319,32 @@ N06はlevel4の仕様変更であり、Option名による先行拒否・construc
 詳細な作業順・変更先・移管先は`diagnostics_cleanup_spec.md` §11.1、SafeBindの追加境界は同書§3.1を入力にする。
 
 完了条件: DC-01–DC-17。既存全体ゲートどおり同じrevisionでworkspaceを2回連続成功させ、ログとcommitを記録する。do実装symbolがまだないことを確認する。
+
+状態: 完了。SafeBindはcanonical Resultの外側一段だけを射影し、partial non-Resultは通常MatchBlockへ渡す。
+static pattern検査を通過したtotal non-Resultはcanonical Monad proofに基づく二reasonで拒否し、RHSとExtractorの
+単一評価、nearest callableのfailure target、Facet禁止、REPL継続を保持した。phase producer、Rune/Xldr adapter、
+runtime failureをclosed reason / typed dataへ移し、自然言語message・source・label markerから意味を再構成する
+heuristicを削除した。builtin source surfaceとcompiler-generated declaration identityは`BUILTIN_METAS`を正本とし、
+通常source surfaceへの混入やowner/nameの外部allowlist合成を認めない。`do` symbolは導入していない。
+
+実装は専用worktree `surtr-n06` の未commit差分として保持する。commitは利用者から明示された時点でtask-local
+fileだけをstageして作成する。DC-01–DC-17のfocused / REPL / 全体ゲートと独立レビュー結果はN06完了時の
+作業報告に記録する。
+
+検証（2026-09-13）:
+
+- `cargo check --workspace`: 成功。
+- `cargo run -- test --quiet --all`: 成功（quietのため件数表示なし）。
+- focused: diagnostics 45 passed、Sindr 90 passed、Sigil 245 passed、Xldr 81 passed / 78 skipped、
+  Rune CI integration 131 passed。独立Lunaレビューの再検証もSindr 88 passed、Scar surface 8 passed / 1 skipped、
+  Rune language-feature 8 passed / 123 skipped。
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace`: 1874 passedを最終差分で2回連続成功。
+- `cargo fmt --all -- --check`、`git diff --check`: 成功。旧heuristic実行参照、do実装symbol、
+  DynamicSupervisor runtime対応のmetadata外allowlistはいずれも0件。
+- Astra顧問の指摘したruntime名接頭辞による検証迂回と、独立Lunaレビューが指摘したcompiler-generated
+  DynamicSupervisor対応の外部allowlistを修正し、最終レビューはfindings 0件。
+
+未検証範囲はない。commitは未作成であり、本記録の「同じrevision」は同一の未commit worktree差分を指す。
 
 ## 12. N07–N11 — do
 

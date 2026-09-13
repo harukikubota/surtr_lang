@@ -1,8 +1,7 @@
-pub(super) use crate::heuristics::*;
 pub(super) use crate::render::*;
-pub(super) use crate::TypeErrorDiagnostic as TypeError;
+pub(super) use crate::source::{char_span_to_byte_range, slice_chars};
 pub(super) use crate::*;
-pub(super) use ariadne::{Color, Fmt};
+pub(super) use ariadne::Color;
 pub(super) use spire::ast::Span;
 pub(super) use std::io::{self, Write};
 
@@ -50,4 +49,16 @@ pub(super) fn spec_notes_text(spec: &DiagnosticSpec) -> String {
         .map(|note| strip_ansi(note))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+pub(super) fn parser_error_spec(
+    source: &str,
+    context: Option<spire::ParserContext>,
+) -> DiagnosticSpec {
+    let error = match context {
+        Some(context) => spire::parse_with_context(source, context),
+        None => spire::parse(source),
+    }
+    .expect_err("test source should produce a parser diagnostic");
+    crate::parse_error_spec(crate::SourceId(0), source, &error)
 }

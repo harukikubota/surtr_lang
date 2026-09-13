@@ -1414,15 +1414,21 @@ impl Checker {
 
             Resolved::Bind(span, pat, rhs) => {
                 if !Self::is_total_bind_pattern(pat) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "Only total MatchBlock patterns can be used with `=`".into(),
-                        span: span.clone(),
-                        hint: Some(
-                            "Use `=?` for partial destructuring and extractor-driven matches."
-                                .into(),
-                        ),
-                    });
+                    return Err(self
+                        .pattern_error(
+                            TypeDiagnosticReason::NonTotalBindingPattern,
+                            diagnostics::PatternKind::Other,
+                            Some("=".into()),
+                            None,
+                            None,
+                            None,
+                            None,
+                            Vec::new(),
+                            span,
+                        )
+                        .with_hint(
+                            "Use `=?` for partial destructuring and extractor-driven matches.",
+                        ));
                 }
                 let typed_rhs = if let ResolvedPattern::Annotated(_, ast_ty) = pat {
                     let expected =
@@ -1475,12 +1481,17 @@ impl Checker {
                     None
                 };
                 if matches!(typed_rhs.ty, Ty::Error) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: "Error values must be wrapped with Err(...)".into(),
-                        span: typed_rhs.span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.policy_error(
+                        TypeDiagnosticReason::ErrorValueMustBeWrapped,
+                        diagnostics::TypePolicy::ErrorValuePlacement,
+                        Some("Error".into()),
+                        None,
+                        Some(&typed_rhs.ty),
+                        None,
+                        None,
+                        &typed_rhs.span,
+                        None,
+                    ));
                 }
                 let inherited_constructor_provenance =
                     self.constructor_capability_for_node(&typed_rhs);
@@ -2355,7 +2366,7 @@ impl Checker {
                                 .unwrap_or(span);
                             return super::signatures::SolveState::Failed(
                                 TypeError::from_structured(StructuredDiagnostic {
-                                    reason,
+                                    reason: reason.into(),
                                     origin: DiagnosticOrigin::Call,
                                     data: DiagnosticData::TypeConstructorCarrier(
                                         TypeConstructorCarrierData {
@@ -2962,14 +2973,17 @@ impl Checker {
                 segments: path.segments,
             })),
             TypedInner::PendingFacetPath(path) => Ok(StoredFacetPath::Pending(path)),
-            _ => Err(TypeError {
-                structured: None,
-                message:
-                    "Facet values are compile-time only in Stage1 and cannot be stored or passed around"
-                        .into(),
-                span: span.clone(),
-                hint: Some("Use type-root path expressions inline (e.g. User.name).".into()),
-            }),
+            _ => Err(self.policy_error(
+                TypeDiagnosticReason::FacetCompileTimeOnly,
+                diagnostics::TypePolicy::FacetStageRestriction,
+                Some("Facet values are compile-time only in Stage1 and cannot be stored or passed around".into()),
+                None,
+                Some(&typed.ty),
+                Some("Stage1".into()),
+                None,
+                span,
+                Some("Use type-root path expressions inline (e.g. User.name).".into()),
+            )),
         }
     }
 
@@ -2990,12 +3004,17 @@ impl Checker {
                 Ok(())
             }
             TypedPattern::Wildcard(_) => Ok(()),
-            _ => Err(TypeError {
-                structured: None,
-                message: "Facet values can only be bound to variables or `_` patterns".into(),
-                span: span.clone(),
-                hint: Some("Use `facet = User.name` or `_ = User.name`.".into()),
-            }),
+            _ => Err(self.policy_error(
+                TypeDiagnosticReason::FacetPatternBindingForbidden,
+                diagnostics::TypePolicy::FacetPatternBinding,
+                Some("Facet value binding pattern".into()),
+                None,
+                None,
+                Some("Stage1".into()),
+                None,
+                span,
+                Some("Use `facet = User.name` or `_ = User.name`.".into()),
+            )),
         }
     }
 
@@ -3045,12 +3064,17 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let typed_rhs = self.check_node(rhs)?;
         if matches!(typed_rhs.ty, Ty::Facet(..)) {
-            return Err(TypeError {
-                structured: None,
-                message: "Facet values cannot be bound with `=?`".into(),
-                span: typed_rhs.span.clone(),
-                hint: Some("Use `=` for compile-time Facet bindings.".into()),
-            });
+            return Err(self.policy_error(
+                TypeDiagnosticReason::FacetSafeBindForbidden,
+                diagnostics::TypePolicy::SafeBindFacet,
+                Some("Facet value".into()),
+                None,
+                Some(&typed_rhs.ty),
+                Some("Stage1".into()),
+                None,
+                &typed_rhs.span,
+                Some("Use `=` for compile-time Facet bindings.".into()),
+            ));
         }
         let rhs_ty = self.resolve_ty(&typed_rhs.ty);
         let (ok_ty, mut propagated_err_tys, rhs_projection) = match rhs_ty {
@@ -3126,7 +3150,7 @@ impl Checker {
             };
             let rhs_name = self.ty_name(&ok_ty);
             return Err(TypeError::from_structured(StructuredDiagnostic {
-                reason,
+                reason: reason.into(),
                 origin: DiagnosticOrigin::Intrinsic,
                 data: DiagnosticData::SafeBindRelation(diagnostics::SafeBindRelationData {
                     lhs_type: self.ty_name(&pat_ty),
@@ -3145,15 +3169,17 @@ impl Checker {
             let fn_err_ty = match ret_ty {
                 Ty::Result(_, fn_err_ty) => fn_err_ty,
                 other => {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`=?` can only be used in functions returning Result<...>, got {}",
-                            self.ty_name(&other)
-                        ),
-                        span: span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.policy_error(
+                        TypeDiagnosticReason::SafeBindRequiresResultTarget,
+                        diagnostics::TypePolicy::SafeBindRequiresResultTarget,
+                        Some("=?".into()),
+                        None,
+                        Some(&other),
+                        None,
+                        None,
+                        span,
+                        None,
+                    ));
                 }
             };
 
@@ -3161,16 +3187,17 @@ impl Checker {
 
             for propagated in propagated_err_tys {
                 if !self.types_compatible(fn_err_ty.as_ref(), &propagated) {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "`=?` error type mismatch: function returns {}, but expression returns {}",
-                            self.ty_name(fn_err_ty.as_ref()),
-                            self.ty_name(&propagated)
-                        ),
-                        span: typed_rhs.span.clone(),
-                        hint: None,
-                    });
+                    return Err(self.policy_error(
+                        TypeDiagnosticReason::SafeBindErrorTypeMismatch,
+                        diagnostics::TypePolicy::SafeBindFailureTarget,
+                        Some("=?".into()),
+                        Some(fn_err_ty.as_ref()),
+                        Some(&propagated),
+                        None,
+                        None,
+                        &typed_rhs.span,
+                        None,
+                    ));
                 }
             }
             SafeBindFailureTarget::EnclosingResult {
@@ -5794,7 +5821,15 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArgumentModeMismatch,
+                    op_name,
+                    None,
+                    args.len(),
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: format!(
                     "{} does not support named arguments on the right-hand side",
                     op_name
@@ -6579,7 +6614,7 @@ impl Checker {
             return Err(self.ambiguous_constructor_result(trait_name, method_name, span));
         }
         Err(TypeError::from_structured(StructuredDiagnostic {
-            reason: TypeDiagnosticReason::NoApplicableTraitImplementation,
+            reason: TypeDiagnosticReason::NoApplicableTraitImplementation.into(),
             origin: DiagnosticOrigin::TraitCall,
             data: DiagnosticData::CandidateSelection(CandidateSelectionData {
                 subject_type: Some(self.diagnostic_ty_name(&value_ty)),
@@ -7622,14 +7657,17 @@ impl Checker {
             TypedInner::PendingFacetPath(path) => {
                 self.specialize_pending_facet_path(path, span, expected_source)
             }
-            _ => Err(TypeError {
-                structured: None,
-                message:
-                    "Facet values are compile-time only in Stage1 and cannot be stored or passed around"
-                        .into(),
-                span: span.clone(),
-                hint: Some("Use type-root path expressions inline (e.g. User.name).".into()),
-            }),
+            _ => Err(self.policy_error(
+                TypeDiagnosticReason::FacetCompileTimeOnly,
+                diagnostics::TypePolicy::FacetStageRestriction,
+                Some("Facet values are compile-time only in Stage1 and cannot be stored or passed around".into()),
+                None,
+                Some(&typed.ty),
+                Some("Stage1".into()),
+                None,
+                span,
+                Some("Use type-root path expressions inline (e.g. User.name).".into()),
+            )),
         }
     }
 
@@ -7720,14 +7758,17 @@ impl Checker {
                 }
                 Ok(self.pending_facet_node(span, left_path))
             }
-            _ => Err(TypeError {
-                structured: None,
-                message:
-                    "Facet values are compile-time only in Stage1 and cannot be stored or passed around"
-                        .into(),
-                span: span.clone(),
-                hint: Some("Use type-root path expressions inline (e.g. User.name).".into()),
-            }),
+            _ => Err(self.policy_error(
+                TypeDiagnosticReason::FacetCompileTimeOnly,
+                diagnostics::TypePolicy::FacetStageRestriction,
+                Some("Facet values are compile-time only in Stage1 and cannot be stored or passed around".into()),
+                None,
+                Some(&right.ty),
+                Some("Stage1".into()),
+                None,
+                span,
+                Some("Use type-root path expressions inline (e.g. User.name).".into()),
+            )),
         }
     }
 
@@ -7797,12 +7838,17 @@ impl Checker {
     ) -> Result<(TypedNode, bool, Ty), TypeError> {
         let typed_source = self.check_node(source_expr)?;
         if matches!(typed_source.ty, Ty::Facet(..)) {
-            return Err(TypeError {
-                structured: None,
-                message: format!("{} source value cannot be a Facet", op_name),
-                span: typed_source.span.clone(),
-                hint: None,
-            });
+            return Err(self.policy_error(
+                TypeDiagnosticReason::FacetOperationPolicyViolation,
+                diagnostics::TypePolicy::FacetOperation,
+                Some(format!("{} source value cannot be a Facet", op_name)),
+                None,
+                Some(&typed_source.ty),
+                None,
+                None,
+                &typed_source.span,
+                None,
+            ));
         }
 
         let (source_is_result, source_value_ty) = match self.resolve_ty(&typed_source.ty) {
@@ -8907,12 +8953,23 @@ impl Checker {
         } = self.prepare_facet_input(span, "Facet::preview", &source_expr, path_input)?;
         self.ensure_deferred_facet_slots("Facet::preview", &path, span)?;
         if !path.has_variant_segment() {
-            return Err(TypeError {
-                structured: None,
-                message: "Facet::preview requires a variant Facet".into(),
-                span: span.clone(),
-                hint: Some("Use Facet::view for structural field and tuple paths.".into()),
-            });
+            return Err(self.policy_error(
+                TypeDiagnosticReason::FacetOperationPolicyViolation,
+                diagnostics::TypePolicy::FacetOperation,
+                Some("Facet::preview requires a variant Facet".into()),
+                None,
+                Some(&Ty::Facet(
+                    Self::facet_kind_from_path_kind(path.path_kind),
+                    Box::new(path.source_ty.clone()),
+                    Box::new(path.focus_ty.clone()),
+                    Box::new(path.update_source_ty.clone()),
+                    Box::new(path.update_focus_ty.clone()),
+                )),
+                None,
+                None,
+                span,
+                Some("Use Facet::view for structural field and tuple paths.".into()),
+            ));
         }
 
         let focus_ty = self.resolve_ty(&path.focus_ty);
@@ -8986,20 +9043,30 @@ impl Checker {
             ..
         } = self.prepare_facet_input(span, "Facet::put", &source_expr, path_input)?;
         if source_is_result {
-            return Err(TypeError {
-                structured: None,
-                message: "Facet::put requires a plain source value".into(),
-                span: typed_source.span.clone(),
-                hint: Some("Use Facet::set when the source is already Result<T>.".into()),
-            });
+            return Err(self.policy_error(
+                TypeDiagnosticReason::FacetOperationPolicyViolation,
+                diagnostics::TypePolicy::FacetOperation,
+                Some("Facet::put requires a plain source value".into()),
+                None,
+                Some(&typed_source.ty),
+                None,
+                None,
+                &typed_source.span,
+                Some("Use Facet::set when the source is already Result<T>.".into()),
+            ));
         }
         if !path.is_infallible_structural() {
-            return Err(TypeError {
-                structured: None,
-                message: "Facet::put requires an infallible structural Facet path".into(),
-                span: span.clone(),
-                hint: Some("Use Facet::set for fallible or variant-sensitive updates.".into()),
-            });
+            return Err(self.policy_error(
+                TypeDiagnosticReason::FacetOperationPolicyViolation,
+                diagnostics::TypePolicy::FacetOperation,
+                Some("Facet::put requires an infallible structural Facet path".into()),
+                None,
+                None,
+                None,
+                None,
+                span,
+                Some("Use Facet::set for fallible or variant-sensitive updates.".into()),
+            ));
         }
         self.check_mutating_facet_path_permissions("Facet::put", &path, span)?;
 
@@ -9065,12 +9132,17 @@ impl Checker {
         span: &Span,
     ) -> Result<(), TypeError> {
         if !path.has_variant_segment() {
-            return Err(TypeError {
-                structured: None,
-                message: format!("{op_name} requires an enum Facet path"),
-                span: span.clone(),
-                hint: Some("Use Facet::set/over for structural, list, or map paths.".into()),
-            });
+            return Err(self.policy_error(
+                TypeDiagnosticReason::FacetOperationPolicyViolation,
+                diagnostics::TypePolicy::FacetOperation,
+                Some(format!("{op_name} requires an enum Facet path")),
+                None,
+                None,
+                None,
+                None,
+                span,
+                Some("Use Facet::set/over for structural, list, or map paths.".into()),
+            ));
         }
         Ok(())
     }
@@ -9090,15 +9162,17 @@ impl Checker {
         } = self.prepare_facet_input(span, "Facet::case_set", &source_expr, path_input)?;
         self.require_enum_facet_path("Facet::case_set", &path, span)?;
         if !path.final_segment_is_variant() {
-            return Err(TypeError {
-                structured: None,
-                message: "Facet::case_set requires the final Facet segment to be an enum case"
-                    .into(),
-                span: span.clone(),
-                hint: Some(
-                    "Use Facet::case_over when updating inside a selected case payload.".into(),
-                ),
-            });
+            return Err(self.policy_error(
+                TypeDiagnosticReason::FacetOperationPolicyViolation,
+                diagnostics::TypePolicy::FacetOperation,
+                Some("Facet::case_set requires the final Facet segment to be an enum case".into()),
+                None,
+                None,
+                None,
+                None,
+                span,
+                Some("Use Facet::case_over when updating inside a selected case payload.".into()),
+            ));
         }
         self.check_mutating_facet_path_permissions("Facet::case_set", &path, span)?;
 
@@ -9508,16 +9582,21 @@ impl Checker {
         span: &Span,
         callee: &str,
     ) -> Result<(), TypeError> {
-        if args.iter().any(|arg| self.ty_contains_facet(&arg.ty)) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
+        if let Some(arg) = args.iter().find(|arg| self.ty_contains_facet(&arg.ty)) {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::FacetCompileTimeOnly,
+                diagnostics::TypePolicy::FacetStageRestriction,
+                Some(format!(
                     "{} cannot accept Facet values in Stage1 (Facet is compile-time only)",
                     callee
-                ),
-                span: span.clone(),
-                hint: Some("Apply Facet::view(...) before passing the value.".into()),
-            });
+                )),
+                None,
+                Some(&arg.ty),
+                Some("Stage1".into()),
+                None,
+                span,
+                Some("Apply Facet::view(...) before passing the value.".into()),
+            ));
         }
         Ok(())
     }
@@ -9528,18 +9607,23 @@ impl Checker {
         context: &str,
     ) -> Result<(), TypeError> {
         if self.ty_contains_facet(&value.ty) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
+            return Err(self.policy_error(
+                TypeDiagnosticReason::FacetCompileTimeOnly,
+                diagnostics::TypePolicy::FacetStageRestriction,
+                Some(format!(
                     "{} cannot contain Facet values in Stage1 (Facet is compile-time only)",
                     context
-                ),
-                span: value.span.clone(),
-                hint: Some(
+                )),
+                None,
+                Some(&value.ty),
+                Some("Stage1".into()),
+                None,
+                &value.span,
+                Some(
                     "Consume Facet with Facet::view/set/over first, then pass the plain value."
                         .into(),
                 ),
-            });
+            ));
         }
         Ok(())
     }
@@ -9763,16 +9847,17 @@ impl Checker {
 
                         if name == "__process_self" {
                             let Some(process_name) = self.current_process_name() else {
-                                return Err(TypeError {
-                            structured: None,
-                            message: "Process::self() is only available inside process handlers"
-                                .into(),
-                            span: span.clone(),
-                            hint: Some(
-                                "Call Process::self() inside @init/@get/@set bodies of a defagent."
-                                    .into(),
-                            ),
-                        });
+                                return Err(self.policy_error(
+                                    TypeDiagnosticReason::ProcessHandlerScope,
+                                    diagnostics::TypePolicy::ProcessHandlerScope,
+                                    Some("Process::self() is only available inside process handlers".into()),
+                                    None,
+                                    None,
+                                    None,
+                                    None,
+                                    span,
+                                    Some("Call Process::self() inside @init/@get/@set bodies of a defagent.".into()),
+                                ));
                             };
                             return Ok(TypedNode {
                                 ty: Ty::Pid(process_name),
@@ -9785,50 +9870,48 @@ impl Checker {
                             match self.runtime_policy.exit_code_policy {
                                 ExitCodePolicy::Anywhere => {}
                                 ExitCodePolicy::Forbidden => {
-                                    return Err(TypeError {
-                                structured: None,
-                                message: format!(
-                                    "set_exit_code is forbidden by source policy ({})",
-                                    self.runtime_policy.exit_code_policy.as_str()
-                                ),
-                                span: span.clone(),
-                                hint: Some(
-                                    "This source kind does not allow set_exit_code. Use Result-based failure handling instead."
-                                        .into(),
-                                ),
-                            });
+                                    return Err(self.policy_error(
+                                        TypeDiagnosticReason::SourcePolicyViolation,
+                                        diagnostics::TypePolicy::SourceExitCode,
+                                        Some("set_exit_code".into()),
+                                        None,
+                                        None,
+                                        Some(self.runtime_policy.exit_code_policy.as_str().into()),
+                                        None,
+                                        span,
+                                        Some("This source kind does not allow set_exit_code. Use Result-based failure handling instead.".into()),
+                                    ));
                                 }
                                 ExitCodePolicy::EntryOnly => {
                                     let Some(entrypoint) =
                                         self.runtime_policy.normalized_entrypoint.as_ref()
                                     else {
-                                        return Err(TypeError {
-                                    structured: None,
-                                    message:
-                                        "set_exit_code requires a normalized entrypoint but none was provided".into(),
-                                    span: span.clone(),
-                                    hint: Some(
-                                        "Configure an entrypoint, or avoid set_exit_code in this compile unit."
-                                            .into(),
-                                    ),
-                                });
+                                        return Err(self.policy_error(
+                                            TypeDiagnosticReason::CompilePolicyViolation,
+                                            diagnostics::TypePolicy::EntrypointRequirement,
+                                            Some("set_exit_code".into()),
+                                            None,
+                                            None,
+                                            Some("EntryOnly".into()),
+                                            None,
+                                            span,
+                                            Some("Configure an entrypoint, or avoid set_exit_code in this compile unit.".into()),
+                                        ));
                                     };
                                     if self.current_function_symbol.as_deref()
                                         != Some(entrypoint.as_str())
                                     {
-                                        return Err(TypeError {
-                                    structured: None,
-                                    message: format!(
-                                        "set_exit_code is only allowed inside entrypoint `{}` (policy: {})",
-                                        entrypoint,
-                                        self.runtime_policy.exit_code_policy.as_str()
-                                    ),
-                                    span: span.clone(),
-                                    hint: Some(
-                                        "Move set_exit_code into the configured entrypoint function."
-                                            .into(),
-                                    ),
-                                });
+                                        return Err(self.policy_error(
+                                            TypeDiagnosticReason::SourcePolicyViolation,
+                                            diagnostics::TypePolicy::EntrypointRequirement,
+                                            Some("set_exit_code".into()),
+                                            None,
+                                            None,
+                                            Some(self.runtime_policy.exit_code_policy.as_str().into()),
+                                            Some(entrypoint.clone()),
+                                            span,
+                                            Some("Move set_exit_code into the configured entrypoint function.".into()),
+                                        ));
                                     }
                                 }
                             }
@@ -10172,6 +10255,26 @@ impl Checker {
         Self::is_process_handler_name(handler).then(|| module.to_string())
     }
 
+    fn process_policy_error(
+        &self,
+        subject: impl Into<String>,
+        actual: Option<&Ty>,
+        span: &Span,
+        hint: Option<String>,
+    ) -> TypeError {
+        self.policy_error(
+            TypeDiagnosticReason::ProcessPolicyViolation,
+            diagnostics::TypePolicy::ProcessCapabilityPolicy,
+            Some(subject.into()),
+            None,
+            actual,
+            None,
+            None,
+            span,
+            hint,
+        )
+    }
+
     fn try_check_process_intrinsic_app(
         &mut self,
         span: &Span,
@@ -10211,7 +10314,15 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArgumentModeMismatch,
+                    &format!("{supervisor_process}::spawn"),
+                    None,
+                    1,
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: format!("{supervisor_process}::spawn does not accept named arguments"),
                 span: span.clone(),
                 hint: None,
@@ -10219,7 +10330,15 @@ impl Checker {
         }
         if args.len() != 1 {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArityMismatch,
+                    &format!("{supervisor_process}::spawn"),
+                    None,
+                    1,
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: format!(
                     "{}::spawn expects 1 argument(s), got {}",
                     supervisor_process,
@@ -10244,18 +10363,18 @@ impl Checker {
         match self.resolve_ty(&typed_init.ty) {
             Ty::Func(params, _) if params.is_empty() => {}
             other => {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
+                return Err(self.process_policy_error(
+                    format!(
                         "supervisor spawn expects a zero-argument worker init route, got {}",
                         self.ty_name(&other)
                     ),
-                    span: typed_init.span.clone(),
-                    hint: Some(
+                    Some(&other),
+                    &typed_init.span,
+                    Some(
                         "Pass a generated worker init reference like `MyWorker::init(args)`."
                             .into(),
                     ),
-                });
+                ));
             }
         }
 
@@ -10288,7 +10407,15 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArgumentModeMismatch,
+                    &format!("{supervisor_process}::adopt"),
+                    None,
+                    1,
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: format!("{supervisor_process}::adopt does not accept named arguments"),
                 span: span.clone(),
                 hint: None,
@@ -10296,7 +10423,15 @@ impl Checker {
         }
         if args.len() != 1 {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArityMismatch,
+                    &format!("{supervisor_process}::adopt"),
+                    None,
+                    1,
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: format!(
                     "{}::adopt expects 1 argument(s), got {}",
                     supervisor_process,
@@ -10313,24 +10448,24 @@ impl Checker {
         let worker_process = match self.resolve_ty(&typed_pid.ty) {
             Ty::Pid(process_name) => process_name,
             other => {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
+                return Err(self.process_policy_error(
+                    format!(
                         "supervisor adopt expects PID<Worker>, got {}",
                         self.ty_name(&other)
                     ),
-                    span: typed_pid.span.clone(),
-                    hint: Some("Pass a worker PID returned from a worker init route.".into()),
-                });
+                    Some(&other),
+                    &typed_pid.span,
+                    Some("Pass a worker PID returned from a worker init route.".into()),
+                ));
             }
         };
         let supervisor_spec = self
             .supervisor_spec_by_name(&supervisor_process)
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: format!("unknown supervisor process `{supervisor_process}`"),
-                span: span.clone(),
-                hint: None,
+            .ok_or_else(|| {
+                self.typecheck_invariant_error(
+                    format!("supervisor process metadata missing for `{supervisor_process}`"),
+                    span,
+                )
             })?;
         if !supervisor_spec
             .spec
@@ -10339,17 +10474,15 @@ impl Checker {
             .map(|policy| policy.allow_adopt)
             .unwrap_or(false)
         {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
+            return Err(self.process_policy_error(
+                format!(
                     "{}::adopt is not available because allow_adopt is False",
                     supervisor_process
                 ),
-                span: span.clone(),
-                hint: Some(
-                    "Enable `allow_adopt: True` in the supervisor definition or override.".into(),
-                ),
-            });
+                None,
+                span,
+                Some("Enable `allow_adopt: True` in the supervisor definition or override.".into()),
+            ));
         }
 
         Ok(Some(TypedNode {
@@ -10378,7 +10511,15 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArgumentModeMismatch,
+                    &format!("{supervisor_process}::status"),
+                    None,
+                    0,
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: format!("{supervisor_process}::status does not accept named arguments"),
                 span: span.clone(),
                 hint: None,
@@ -10386,7 +10527,15 @@ impl Checker {
         }
         if !args.is_empty() {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArityMismatch,
+                    &format!("{supervisor_process}::status"),
+                    None,
+                    0,
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: format!(
                     "{}::status expects 0 argument(s), got {}",
                     supervisor_process,
@@ -10408,11 +10557,8 @@ impl Checker {
                     ),
                 )
             })
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: "SupervisorStatus type is not available".into(),
-                span: span.clone(),
-                hint: None,
+            .ok_or_else(|| {
+                self.typecheck_invariant_error("SupervisorStatus type metadata", span)
             })?;
         Ok(Some(TypedNode {
             ty: Ty::Result(Box::new(status_ty), Box::new(Ty::Error)),
@@ -10436,7 +10582,15 @@ impl Checker {
             .any(|arg| matches!(arg, ResolvedRecordLitArg::Named(_, _)))
         {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArgumentModeMismatch,
+                    &format!("{supervisor_process}::workers"),
+                    None,
+                    2,
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: format!("{supervisor_process}::workers does not accept named arguments"),
                 span: span.clone(),
                 hint: None,
@@ -10444,7 +10598,15 @@ impl Checker {
         }
         if args.len() != 2 {
             return Err(TypeError {
-                structured: None,
+                structured: Some(self.argument_contract_diagnostic(
+                    TypeDiagnosticReason::ArityMismatch,
+                    &format!("{supervisor_process}::workers"),
+                    None,
+                    2,
+                    args.len(),
+                    span,
+                    DiagnosticOrigin::Call,
+                )),
                 message: format!(
                     "{}::workers expects 2 argument(s), got {}",
                     supervisor_process,
@@ -10458,16 +10620,12 @@ impl Checker {
             return Ok(None);
         }
         if !self.supervisor_workers_allowed_in_current_context() {
-            return Err(TypeError {
-                structured: None,
-                message: "supervisor workers can only be called from Singleton GenServer @init"
-                    .into(),
-                span: span.clone(),
-                hint: Some(
-                    "Create worker sets in the pool Singleton GenServer @init and keep the handle in state."
-                        .into(),
-                ),
-            });
+            return Err(self.process_policy_error(
+                "supervisor workers can only be called from Singleton GenServer @init",
+                None,
+                span,
+                Some("Create worker sets in the pool Singleton GenServer @init and keep the handle in state.".into()),
+            ));
         }
         let ResolvedRecordLitArg::Positional(worker_init) = &args[0] else {
             unreachable!("validated named arguments above")
@@ -10479,18 +10637,18 @@ impl Checker {
         match self.resolve_ty(&typed_init.ty) {
             Ty::Func(params, _) if params.is_empty() => {}
             other => {
-                return Err(TypeError {
-                    structured: None,
-                    message: format!(
+                return Err(self.process_policy_error(
+                    format!(
                         "supervisor workers expects a zero-argument worker init route, got {}",
                         self.ty_name(&other)
                     ),
-                    span: typed_init.span.clone(),
-                    hint: Some(
+                    Some(&other),
+                    &typed_init.span,
+                    Some(
                         "Pass a generated worker init reference like `MyWorker::init(args)`."
                             .into(),
                     ),
-                });
+                ));
             }
         }
         let strategy_ty = self
@@ -10505,23 +10663,19 @@ impl Checker {
                     ),
                 )
             })
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: "WorkerStrategy type is not available".into(),
-                span: span.clone(),
-                hint: None,
-            })?;
+            .ok_or_else(|| self.typecheck_invariant_error("WorkerStrategy type metadata", span))?;
         let typed_strategy = self.check_node_with_expected(strategy_expr, Some(&strategy_ty))?;
         if !self.types_compatible(&strategy_ty, &typed_strategy.ty) {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
-                    "supervisor workers expects WorkerStrategy as worker strategy, got {}",
-                    self.ty_name(&typed_strategy.ty)
-                ),
-                span: typed_strategy.span.clone(),
-                hint: None,
-            });
+            return Err(self.type_relation_error(
+                &strategy_ty,
+                &typed_strategy.ty,
+                self.type_fact(SourceRole::Expected, span, &strategy_ty),
+                self.type_fact(SourceRole::Value, &typed_strategy.span, &typed_strategy.ty),
+                TypeDiagnosticReason::ArgumentTypeMismatch,
+                DiagnosticOrigin::Call,
+                &format!("{supervisor_process}::workers"),
+                1,
+            ));
         }
         Ok(Some(TypedNode {
             ty: Ty::Result(
@@ -10591,15 +10745,20 @@ impl Checker {
         if registered {
             return Ok(());
         }
-        Err(TypeError {
-            structured: None,
-            message: format!(
+        Err(self.policy_error(
+            TypeDiagnosticReason::CompilePolicyViolation,
+            diagnostics::TypePolicy::CompileUnitAvailability,
+            Some(format!(
                 "supervisor surface `{}::{method}` is not available in this compile unit; add the supervisor to supervisor_init",
                 Self::surface_name(supervisor_process)
-            ),
-            span: span.clone(),
-            hint: Some("Register custom supervisors in supervisor_init before using their generated supervisor surface.".into()),
-        })
+            )),
+            None,
+            None,
+            Some("compile unit".into()),
+            None,
+            span,
+            Some("Register custom supervisors in supervisor_init before using their generated supervisor surface.".into()),
+        ))
     }
 
     fn try_check_worker_message_template_app(
@@ -10847,30 +11006,30 @@ impl Checker {
             }
         }
         let Resolved::App(_, func, args) = worker_init else {
-            return Err(TypeError {
-                structured: None,
-                message: "supervisor spawn expects a worker init route reference".into(),
-                span,
-                hint: Some("Use `MyWorker::init(args)`.".into()),
-            });
+            return Err(self.process_policy_error(
+                "supervisor spawn expects a worker init route reference",
+                None,
+                &span,
+                Some("Use `MyWorker::init(args)`.".into()),
+            ));
         };
         let Resolved::Var(_, id) = func.as_ref() else {
-            return Err(TypeError {
-                structured: None,
-                message: "supervisor spawn expects a worker init route reference".into(),
-                span,
-                hint: Some("Use `MyWorker::init(args)`.".into()),
-            });
+            return Err(self.process_policy_error(
+                "supervisor spawn expects a worker init route reference",
+                None,
+                &span,
+                Some("Use `MyWorker::init(args)`.".into()),
+            ));
         };
         let qualified = id.qualified_name.as_deref().unwrap_or(&id.name);
         let Some((process_spec, init_handler)) = self.worker_process_spec_for_init_route(qualified)
         else {
-            return Err(TypeError {
-                structured: None,
-                message: "supervisor spawn expects a worker init route reference".into(),
-                span,
-                hint: Some("Use `MyWorker::init(args)`.".into()),
-            });
+            return Err(self.process_policy_error(
+                "supervisor spawn expects a worker init route reference",
+                None,
+                &span,
+                Some("Use `MyWorker::init(args)`.".into()),
+            ));
         };
         let process_name = process_spec.process_name.clone();
         let internal_name = init_handler.internal_name.clone();
@@ -10905,12 +11064,17 @@ impl Checker {
         slot: &str,
     ) -> Result<TypedNode, TypeError> {
         let Some(process_name) = self.current_process_name() else {
-            return Err(TypeError {
-                structured: None,
-                message: "ctx.<slot> is only available inside process handlers".into(),
-                span: span.clone(),
-                hint: Some("Use ctx.<slot> inside @init/@get/@set/@call/@cast bodies.".into()),
-            });
+            return Err(self.policy_error(
+                TypeDiagnosticReason::ProcessHandlerScope,
+                diagnostics::TypePolicy::ProcessHandlerScope,
+                Some("ctx.<slot> is only available inside process handlers".into()),
+                None,
+                None,
+                None,
+                None,
+                span,
+                Some("Use ctx.<slot> inside @init/@get/@set/@call/@cast bodies.".into()),
+            ));
         };
         let Some(capability) = self
             .process_handler_dependencies
@@ -10918,16 +11082,21 @@ impl Checker {
             .and_then(|slots| slots.get(slot))
             .cloned()
         else {
-            return Err(TypeError {
-                structured: None,
-                message: format!(
+            return Err(self.policy_error(
+                TypeDiagnosticReason::ProcessHandlerScope,
+                diagnostics::TypePolicy::ProcessHandlerScope,
+                Some(format!(
                     "handler slot `{}` is not declared for process `{}`",
                     slot,
                     Self::surface_name(&process_name)
-                ),
-                span: span.clone(),
-                hint: Some("Declare the slot in meta.handlers before using ctx.<slot>.".into()),
-            });
+                )),
+                None,
+                None,
+                None,
+                None,
+                span,
+                Some("Declare the slot in meta.handlers before using ctx.<slot>.".into()),
+            ));
         };
         Ok(TypedNode {
             ty: Ty::Pid(capability),
@@ -10971,7 +11140,7 @@ impl Checker {
                 }
                 Some(other) => {
                     return Err(TypeError::from_structured(StructuredDiagnostic {
-                        reason: TypeDiagnosticReason::CallableShapeMismatch,
+                        reason: TypeDiagnosticReason::CallableShapeMismatch.into(),
                         origin: DiagnosticOrigin::Call,
                         data: DiagnosticData::CallableShape(diagnostics::CallableShapeData {
                             callable: "closure".into(),
@@ -11083,14 +11252,20 @@ impl Checker {
                 }
             }
             if matches!(typed_body.ty, Ty::Facet(..)) {
-                return Err(TypeError {
-                    structured: None,
-                    message:
+                return Err(self.policy_error(
+                    TypeDiagnosticReason::FacetCompileTimeOnly,
+                    diagnostics::TypePolicy::FacetStageRestriction,
+                    Some(
                         "Facet is compile-time only in Stage1 and cannot be returned from closures"
                             .into(),
-                    span: typed_body.span.clone(),
-                    hint: Some("Use Facet::view(...) inside the closure instead.".into()),
-                });
+                    ),
+                    None,
+                    Some(&typed_body.ty),
+                    Some("Stage1".into()),
+                    None,
+                    &typed_body.span,
+                    Some("Use Facet::view(...) inside the closure instead.".into()),
+                ));
             }
             // The closure result type is needed immediately for inference, but
             // the body tree itself is normalized by the enclosing typed node.
@@ -11161,30 +11336,35 @@ impl Checker {
         if self.trait_method_ref(target).is_some() {
             let Some(expected_ty) = expected else {
                 if let Resolved::Var(_, id) = target {
-                    return Err(TypeError {
-                        structured: None,
-                        message: format!(
-                            "Trait helper `{}` needs expected callable type or same-expression inference evidence",
-                            id.name
-                        ),
-                        span: span.clone(),
-                        hint: Some(
+                    return Err(self.policy_error(
+                        TypeDiagnosticReason::TraitHelperCaptureNeedsExpectedType,
+                        diagnostics::TypePolicy::TraitHelperCaptureInference,
+                        Some(id.name.clone()),
+                        None,
+                        None,
+                        None,
+                        None,
+                        span,
+                        Some(
                             "Add a callable annotation such as `cmp: (Int, Int -> Ordering) = &compare`, or use the capture inside an expression like `&compare `Function::on` _.field`."
                                 .into(),
                         ),
-                    });
+                    ));
                 }
-                return Err(TypeError {
-                    structured: None,
-                    message:
-                        "Trait helper capture needs expected callable type or same-expression inference evidence"
-                            .into(),
-                    span: span.clone(),
-                    hint: Some(
+                return Err(self.policy_error(
+                    TypeDiagnosticReason::TraitHelperCaptureNeedsExpectedType,
+                    diagnostics::TypePolicy::TraitHelperCaptureInference,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    span,
+                    Some(
                         "Add a callable annotation or use the capture where the receiver type can be inferred."
                             .into(),
                     ),
-                });
+                ));
             };
             let Ty::Func(params, _) = self.resolve_ty(expected_ty) else {
                 return Err(TypeError {
@@ -11456,7 +11636,7 @@ impl Checker {
                             .into(),
                     ),
                     structured: Some(StructuredDiagnostic {
-                        reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument,
+                        reason: TypeDiagnosticReason::AmbiguousReturnTypeArgument.into(),
                         origin: DiagnosticOrigin::ReturnTypeArgument {
                             ordinal: slot.ordinal,
                         },
