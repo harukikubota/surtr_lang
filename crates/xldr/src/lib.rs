@@ -1424,7 +1424,7 @@ impl Result {
             |stmt| matches!(stmt, spire::ast::Ast::ResultCtorDecl(_, name, _, _, _) if name == "Ok")
         ));
         assert!(lowered[0].ast.iter().any(
-            |stmt| matches!(stmt, spire::ast::Ast::ImplDef(_, target, methods, _) if target == "Global::Result"
+            |stmt| matches!(stmt, spire::ast::Ast::ImplDef(_, target, _, methods, _) if target == "Global::Result"
                 && methods.iter().any(|method| matches!(method, spire::ast::Ast::Def(_, name, _, _, _, _, _, _) if name == "dummy")))
         ));
     }
@@ -1517,7 +1517,7 @@ defmod AppConfig {
             lowered[0].ast.as_slice(),
             [
                 spire::ast::Ast::Import(_, _, spire::ast::ImportSpec::All),
-                spire::ast::Ast::ImplDef(_, target, methods, _)
+                spire::ast::Ast::ImplDef(_, target, _, methods, _)
             ] if target == "Global::User"
                 && matches!(methods.as_slice(), [spire::ast::Ast::Def(_, name, _, _, _, _, _, _)] if name == "normalize")
         ));

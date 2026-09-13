@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::intrinsic::IntrinsicId;
+
 /// Internal canonical namespace used for implicit top-level definitions.
 ///
 /// The compiler keeps this namespace in canonical identities, but user-facing
@@ -235,9 +237,20 @@ pub struct ReservedOwnerSurfaceNameConstraint {
     pub kind: ReservedOwnerSurfaceNameKind,
 }
 
+/// Closed usage class for a builtin type head.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BuiltinTypeUsage {
+    General,
+    CompilerSurfaceOnly,
+    ClauseBlockSurfaceOnly,
+    LazySignatureSurfaceOnly,
+    IntrinsicSignatureOnly(IntrinsicId),
+}
+
 /// Compile-space usage policy for builtin type heads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuiltinTypeUsagePolicy {
+    pub usage: BuiltinTypeUsage,
     pub type_annotation_allowed: bool,
     pub signature_allowed: bool,
     pub runtime_value_allowed: bool,
@@ -257,7 +270,30 @@ impl BuiltinTypeUsagePolicy {
         clause_block_surface_only: bool,
         lazy_signature_surface_only: bool,
     ) -> Self {
+        Self::new_with_usage(
+            BuiltinTypeUsage::General,
+            type_annotation_allowed,
+            signature_allowed,
+            runtime_value_allowed,
+            process_boundary_allowed,
+            facet_value_forbidden_in_stage1,
+            clause_block_surface_only,
+            lazy_signature_surface_only,
+        )
+    }
+
+    const fn new_with_usage(
+        usage: BuiltinTypeUsage,
+        type_annotation_allowed: bool,
+        signature_allowed: bool,
+        runtime_value_allowed: bool,
+        process_boundary_allowed: bool,
+        facet_value_forbidden_in_stage1: bool,
+        clause_block_surface_only: bool,
+        lazy_signature_surface_only: bool,
+    ) -> Self {
         Self {
+            usage,
             type_annotation_allowed,
             signature_allowed,
             runtime_value_allowed,
@@ -273,15 +309,55 @@ impl BuiltinTypeUsagePolicy {
     }
 
     pub const fn compiler_surface_only() -> Self {
-        Self::new(false, false, false, false, true, false, false)
+        Self::new_with_usage(
+            BuiltinTypeUsage::CompilerSurfaceOnly,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+        )
     }
 
     pub const fn clause_block_surface_only() -> Self {
-        Self::new(false, false, false, false, true, true, false)
+        Self::new_with_usage(
+            BuiltinTypeUsage::ClauseBlockSurfaceOnly,
+            false,
+            false,
+            false,
+            false,
+            true,
+            true,
+            false,
+        )
     }
 
     pub const fn lazy_signature_surface_only() -> Self {
-        Self::new(false, false, false, false, true, false, true)
+        Self::new_with_usage(
+            BuiltinTypeUsage::LazySignatureSurfaceOnly,
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            true,
+        )
+    }
+
+    pub const fn intrinsic_signature_only(intrinsic: IntrinsicId) -> Self {
+        Self::new_with_usage(
+            BuiltinTypeUsage::IntrinsicSignatureOnly(intrinsic),
+            false,
+            false,
+            false,
+            false,
+            true,
+            false,
+            false,
+        )
     }
 }
 
@@ -316,6 +392,9 @@ pub enum TypeName {
     Workers,
     WorkerLease,
     TaskHandle,
+    // Keep new variants appended so bincode discriminants of existing canonical
+    // type identities remain stable across semantic snapshot revisions.
+    DoBlock,
 }
 
 impl TypeName {
@@ -329,6 +408,7 @@ impl TypeName {
             Self::Closure => "Closure",
             Self::MatchArms => "MatchArms",
             Self::CondClauses => "CondClauses",
+            Self::DoBlock => "DoBlock",
             Self::BulkUpdateEntries => "BulkUpdateEntries",
             Self::Error => "Error",
             Self::Regex => "Regex",
@@ -359,6 +439,7 @@ impl TypeName {
                 | Self::Closure
                 | Self::MatchArms
                 | Self::CondClauses
+                | Self::DoBlock
                 | Self::BulkUpdateEntries
                 | Self::StandbyInit
                 | Self::Lazy
@@ -377,6 +458,7 @@ impl TypeName {
             Self::MatchArms | Self::CondClauses | Self::BulkUpdateEntries => {
                 BuiltinTypeUsagePolicy::clause_block_surface_only()
             }
+            Self::DoBlock => BuiltinTypeUsagePolicy::intrinsic_signature_only(IntrinsicId::Do),
             Self::Facet => BuiltinTypeUsagePolicy::new(true, true, true, true, true, false, false),
             Self::Pid | Self::Workers | Self::WorkerLease | Self::TaskHandle => {
                 BuiltinTypeUsagePolicy::new(true, true, true, true, false, false, false)
@@ -396,6 +478,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "Closure" => Some(TypeName::Closure),
         "MatchArms" => Some(TypeName::MatchArms),
         "CondClauses" => Some(TypeName::CondClauses),
+        "DoBlock" => Some(TypeName::DoBlock),
         "BulkUpdateEntries" => Some(TypeName::BulkUpdateEntries),
         "Error" => Some(TypeName::Error),
         "Regex" => Some(TypeName::Regex),
@@ -431,6 +514,7 @@ pub const fn canonical_builtin_type_has_surface_declaration(type_name: TypeName)
             | TypeName::Closure
             | TypeName::MatchArms
             | TypeName::CondClauses
+            | TypeName::DoBlock
             | TypeName::BulkUpdateEntries
             | TypeName::Error
             | TypeName::Regex

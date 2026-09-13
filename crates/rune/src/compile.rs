@@ -172,6 +172,9 @@ fn map_resolve_reason(
         R::Declaration => D::Declaration,
         R::SpecialForm => D::SpecialForm,
         R::SourcePolicy => D::SourcePolicy,
+        R::InvalidIntrinsicSurfaceContract => D::InvalidIntrinsicSurfaceContract,
+        R::ReservedIntrinsicMarkerDeclaration => D::ReservedIntrinsicMarkerDeclaration,
+        R::ReservedIntrinsicMarkerImpl => D::ReservedIntrinsicMarkerImpl,
         R::CompilerInvariant => D::CompilerInvariant,
     }
 }
@@ -809,7 +812,7 @@ fn rewrite_script_ast_for_entry(user_ast: Vec<Ast>, entry_name: &str) -> Vec<Ast
                     | Ast::StructDef(..)
                     | Ast::RecordDef(..)
                     | Ast::DeferrorDef(_, _, _, _, _)
-                    | Ast::ImplDef(_, _, _, _)
+                    | Ast::ImplDef(_, _, _, _, _)
                     | Ast::SupervisorInit(_, _)
                     | Ast::Import(_, _, _)
             )

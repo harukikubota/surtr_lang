@@ -1,5 +1,6 @@
 use super::*;
-use sindr::names::{builtin_type_name, builtin_type_usage_policy, TypeName};
+use sindr::intrinsic::IntrinsicId;
+use sindr::names::{builtin_type_name, builtin_type_usage_policy, BuiltinTypeUsage, TypeName};
 
 #[derive(Clone, Copy)]
 pub(super) enum SignatureTyMode<'a> {
@@ -441,6 +442,13 @@ impl Checker {
             .is_some_and(|policy| policy.clause_block_surface_only)
     }
 
+    fn builtin_type_intrinsic_signature_only(name: &str) -> Option<IntrinsicId> {
+        match builtin_type_usage_policy(Self::surface_name(name)).map(|policy| policy.usage) {
+            Some(BuiltinTypeUsage::IntrinsicSignatureOnly(intrinsic)) => Some(intrinsic),
+            _ => None,
+        }
+    }
+
     fn builtin_type_is_lazy_signature_surface_only(name: &str) -> bool {
         builtin_type_usage_policy(Self::surface_name(name))
             .is_some_and(|policy| policy.lazy_signature_surface_only)
@@ -688,6 +696,39 @@ impl Checker {
         }
     }
 
+    fn intrinsic_marker_type_not_allowed_error(
+        &self,
+        span: &Span,
+        intrinsic: IntrinsicId,
+    ) -> TypeError {
+        let (marker, surface) = match intrinsic {
+            IntrinsicId::Do => (TypeName::DoBlock.as_str(), intrinsic.surface_name()),
+        };
+        TypeError::from_structured(diagnostics::StructuredDiagnostic {
+            reason: diagnostics::TypeDiagnosticReason::ReservedIntrinsicMarkerUsage.into(),
+            origin: diagnostics::DiagnosticOrigin::Intrinsic,
+            data: diagnostics::DiagnosticData::Policy(diagnostics::PolicyData {
+                policy: diagnostics::TypePolicy::IntrinsicMarkerUsage,
+                subject: Some(marker.to_string()),
+                expected_type: None,
+                actual_type: Some(marker.to_string()),
+                stage: None,
+                entrypoint: Some(surface.to_string()),
+            }),
+            primary: diagnostics::SourceFact::untyped(
+                diagnostics::SourceRole::Annotation,
+                diagnostics::SourceId(0),
+                span.clone(),
+            ),
+            related: Vec::new(),
+            remediation: Some(diagnostics::Remediation::Help {
+                text: format!(
+                    "Remove `{marker}`; write a `{surface} {{ ... }}` expression to sequence Monad values."
+                ),
+            }),
+        })
+    }
+
     fn hole_not_allowed_error(&self, span: &Span) -> TypeError {
         TypeError {
             structured: None,
@@ -890,6 +931,16 @@ impl Checker {
                         }),
                     "_" => self.resolve_hole_surface_ty(span, context),
                     "Hole" => Err(self.reserved_hole_type_error(span)),
+                    builtin_name
+                        if Self::builtin_type_intrinsic_signature_only(builtin_name)
+                            .is_some() =>
+                    {
+                        Err(self.intrinsic_marker_type_not_allowed_error(
+                            span,
+                            Self::builtin_type_intrinsic_signature_only(builtin_name)
+                                .expect("guarded intrinsic marker"),
+                        ))
+                    }
                     builtin_name if Self::builtin_type_is_clause_block_surface_only(builtin_name) => {
                         Err(self.clause_block_type_not_allowed_error(
                             span,
@@ -984,6 +1035,7 @@ impl Checker {
                                 | TypeName::Closure
                                 | TypeName::MatchArms
                                 | TypeName::CondClauses
+                                | TypeName::DoBlock
                                 | TypeName::BulkUpdateEntries
                                 | TypeName::Facet
                                 | TypeName::Pid
@@ -1000,6 +1052,15 @@ impl Checker {
                         }
                     }
                 }
+            }
+            AstTy::Generic(span, name, _)
+                if Self::builtin_type_intrinsic_signature_only(name).is_some() =>
+            {
+                Err(self.intrinsic_marker_type_not_allowed_error(
+                    span,
+                    Self::builtin_type_intrinsic_signature_only(name)
+                        .expect("guarded intrinsic marker"),
+                ))
             }
             AstTy::Generic(span, name, _)
                 if Self::builtin_type_is_clause_block_surface_only(name) =>
@@ -1992,6 +2053,15 @@ impl Checker {
             AstTy::Named(span, name) if Self::surface_name(name) == "Hole" => {
                 Err(self.reserved_hole_type_error(span))
             }
+            AstTy::Named(span, name)
+                if Self::builtin_type_intrinsic_signature_only(name).is_some() =>
+            {
+                Err(self.intrinsic_marker_type_not_allowed_error(
+                    span,
+                    Self::builtin_type_intrinsic_signature_only(name)
+                        .expect("guarded intrinsic marker"),
+                ))
+            }
             AstTy::Named(span, name) if Self::builtin_type_is_clause_block_surface_only(name) => {
                 Err(self.clause_block_type_not_allowed_error(span, Self::surface_name(name)))
             }
@@ -2063,6 +2133,15 @@ impl Checker {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 Ok(Ty::SelfApp(args))
+            }
+            AstTy::Generic(span, name, _)
+                if Self::builtin_type_intrinsic_signature_only(name).is_some() =>
+            {
+                Err(self.intrinsic_marker_type_not_allowed_error(
+                    span,
+                    Self::builtin_type_intrinsic_signature_only(name)
+                        .expect("guarded intrinsic marker"),
+                ))
             }
             AstTy::Generic(span, name, _)
                 if Self::builtin_type_is_clause_block_surface_only(name) =>

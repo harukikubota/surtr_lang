@@ -554,6 +554,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         "cond_clauses_type_is_forbidden_in_return_types",
         cond_clauses_type_is_forbidden_in_return_types as fn(),
     ),
+    surface_case!(do_block_type_is_reserved_in_ordinary_type_positions),
     (
         "trailing_block_calls_typecheck_inside_script_module_scope",
         trailing_block_calls_typecheck_inside_script_module_scope as fn(),
@@ -5539,6 +5540,34 @@ fn cond_clauses_type_is_forbidden_in_return_types() {
             .contains("CondClauses<$Result> is reserved for the `cond` special form"),
         "unexpected error: {err}"
     );
+}
+
+fn do_block_type_is_reserved_in_ordinary_type_positions() {
+    for source in [
+        r#"def bad(block: DoBlock<Int>) -> Int { 1 }"#,
+        r#"def bad() -> DoBlock<Int> { 1 }"#,
+        r#"defstruct Bad { block: DoBlock<Int> }"#,
+        r#"def bad() -> Int { block: DoBlock<Int> = 1; 1 }"#,
+        r#"def bad(blocks: List<DoBlock<Int>>) -> Int { 1 }"#,
+    ] {
+        let err = typecheck_with_rules(source, RuntimeSourcePolicy::script())
+            .expect_err("DoBlock must not be an ordinary first-class type");
+        assert_eq!(
+            err.reason(),
+            Some(diagnostics::TypeDiagnosticReason::ReservedIntrinsicMarkerUsage),
+            "unexpected error for {source}: {err}"
+        );
+        assert!(
+            err.message
+                .contains("`DoBlock` is reserved for the compiler-owned `do` signature"),
+            "unexpected error for {source}: {err}"
+        );
+        assert_eq!(
+            err.span.start,
+            source.find("DoBlock").expect("fixture contains DoBlock"),
+            "primary span must point to the reserved marker"
+        );
+    }
 }
 
 fn trailing_block_calls_typecheck_inside_script_module_scope() {

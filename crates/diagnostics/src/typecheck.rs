@@ -55,6 +55,17 @@ pub fn structured_type_error_spec(input: &StructuredDiagnostic) -> DiagnosticSpe
         .chain(input.related.iter())
         .map(source_fact_label)
         .collect();
+    if input.reason.type_reason() == Some(TypeDiagnosticReason::ReservedIntrinsicMarkerUsage) {
+        let marker = match &input.data {
+            DiagnosticData::Policy(value) => value.subject.as_deref().unwrap_or("intrinsic marker"),
+            _ => "intrinsic marker",
+        };
+        if let Some(primary) = spec.labels.first_mut() {
+            primary.message = format!("`{marker}` cannot be used in this type position");
+        }
+        spec.notes
+            .push(format!("`{marker}` is not an ordinary value type"));
+    }
     spec
 }
 
@@ -388,6 +399,15 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                             "Trait helper `{helper}` needs expected callable type or same-expression inference evidence"
                         )
                     },
+                );
+            }
+        }
+        TypeDiagnosticReason::ReservedIntrinsicMarkerUsage => {
+            if let DiagnosticData::Policy(value) = &input.data {
+                let marker = value.subject.as_deref().unwrap_or("intrinsic marker");
+                let intrinsic = value.entrypoint.as_deref().unwrap_or("intrinsic");
+                return format!(
+                    "`{marker}` is reserved for the compiler-owned `{intrinsic}` signature"
                 );
             }
         }

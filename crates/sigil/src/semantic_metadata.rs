@@ -417,7 +417,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                         qualified_name: qualified_name(module_path, name),
                         kind: DocKind::Function,
                         module_path: surface_path_name(module_path).to_string(),
-                        signature: Some(signature.clone()),
+                        signature: Some(signature.raw.clone()),
                         doc: doc.clone(),
                     });
                 }
@@ -507,7 +507,7 @@ fn collect_doc_entries_for_ast(ast: &[Ast], module_path: &str, out: &mut Vec<Doc
                     });
                 }
             }
-            Ast::ImplDef(_, target, methods, _attrs) => {
+            Ast::ImplDef(_, target, _, methods, _attrs) => {
                 for method in methods {
                     match method {
                         Ast::Def(_, name, _return_type_arguments, params, ret_ty, _, _, attrs) => {
@@ -798,7 +798,7 @@ fn collect_signature_entries_for_ast(
                     module_path,
                     qualified_name(module_path, name),
                     DocKind::Function,
-                    signature.clone(),
+                    signature.raw.clone(),
                 );
             }
             Ast::ExtractorDef(_, name, type_params, param, ret_ty, _, _) => {
@@ -868,7 +868,7 @@ fn collect_signature_entries_for_ast(
                     format_record_signature(name),
                 );
             }
-            Ast::ImplDef(_, target, methods, _) => {
+            Ast::ImplDef(_, target, _, methods, _) => {
                 for method in methods {
                     match method {
                         Ast::Def(_, name, _return_type_arguments, params, ret_ty, _, _, _) => {

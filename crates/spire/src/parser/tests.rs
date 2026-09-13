@@ -379,7 +379,7 @@ fn test_intrinsic_dbg_decl_parses_in_std_module() {
             match &body[0] {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "dbg!");
-                    assert_eq!(signature, "@intrinsic def dbg!(values: *$A) -> Unit");
+                    assert_eq!(signature.raw, "@intrinsic def dbg!(values: *$A) -> Unit");
                     assert!(attrs
                         .doc
                         .as_deref()
@@ -401,7 +401,7 @@ fn test_intrinsic_decl_preserves_source_text_verbatim() {
   @doc """
   Debug special form.
   """
-  @intrinsic def dbg!<$A>(values: *$A) -> Unit
+  @intrinsic def dbg!::<$A>(values: *$A) -> Unit
 }"#,
         context,
     )
@@ -410,7 +410,10 @@ fn test_intrinsic_decl_preserves_source_text_verbatim() {
     match &ast[0] {
         Ast::Defmod(_, _, body, _) => match &body[0] {
             Ast::IntrinsicDecl(_, _, signature, _) => {
-                assert_eq!(signature, "@intrinsic def dbg!<$A>(values: *$A) -> Unit");
+                assert_eq!(
+                    signature.raw,
+                    "@intrinsic def dbg!::<$A>(values: *$A) -> Unit"
+                );
             }
             other => panic!("Expected IntrinsicDecl, got {other:?}"),
         },
@@ -440,7 +443,7 @@ fn test_intrinsic_bind_decl_parses_in_std_module() {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "=");
                     assert_eq!(
-                        signature,
+                        signature.raw,
                         "@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"
                     );
                     assert!(attrs
@@ -477,7 +480,7 @@ fn test_intrinsic_safebind_decl_parses_in_std_module() {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "=?");
                     assert_eq!(
-                        signature,
+                        signature.raw,
                         "@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"
                     );
                     assert!(attrs
@@ -514,7 +517,7 @@ fn test_intrinsic_match_decl_parses_in_std_module() {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "match");
                     assert_eq!(
-                        signature,
+                        signature.raw,
                         "@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B"
                     );
                     assert!(attrs
@@ -551,7 +554,7 @@ fn test_intrinsic_cond_decl_parses_in_std_module() {
                 Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                     assert_eq!(intrinsic_name, "cond");
                     assert_eq!(
-                        signature,
+                        signature.raw,
                         "@intrinsic def cond(clauses: CondClauses<$A>) -> $A"
                     );
                     assert!(attrs
@@ -563,6 +566,36 @@ fn test_intrinsic_cond_decl_parses_in_std_module() {
             }
         }
         other => panic!("Expected Defmod, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_do_intrinsic_decl_keeps_structured_validation_signature() {
+    let mut context = ParserContext::module(0, None);
+    context.parse_rules = ParseRules::permissive_for_tests();
+    let ast = parse_with_context(
+        r#"defmod Bootstrap {
+  @intrinsic def do::<Monad>(block: DoBlock<$Result>) -> Monad<$Result>
+}"#,
+        context,
+    )
+    .expect("canonical do intrinsic surface should parse");
+
+    match &ast[0] {
+        Ast::Defmod(_, _, body, _) => match &body[0] {
+            Ast::IntrinsicDecl(_, name, signature, _) => {
+                assert_eq!(name, "do");
+                assert_eq!(signature.return_type_arguments.len(), 1);
+                assert_eq!(signature.value_parameters.len(), 1);
+                assert!(signature.return_type.is_some());
+                assert_eq!(
+                    signature.raw,
+                    "@intrinsic def do::<Monad>(block: DoBlock<$Result>) -> Monad<$Result>"
+                );
+            }
+            other => panic!("expected structured intrinsic declaration, got {other:?}"),
+        },
+        other => panic!("expected Bootstrap module, got {other:?}"),
     }
 }
 
@@ -584,12 +617,12 @@ impl Facet {
 
     match &ast[0] {
         Ast::BuiltinTypeDecl(_, _, _) => match &ast[1] {
-            Ast::ImplDef(_, name, body, _) => {
+            Ast::ImplDef(_, name, _, body, _) => {
                 assert_eq!(name, "Global::Facet");
                 match &body[0] {
                     Ast::IntrinsicDecl(_, intrinsic_name, signature, attrs) => {
                         assert_eq!(intrinsic_name, "bulk_update");
-                        assert!(signature.contains(
+                        assert!(signature.raw.contains(
                             "@intrinsic def bulk_update(source: $S, updates: BulkUpdateEntries<$S>) -> Result<$S>"
                         ));
                         assert!(attrs
@@ -926,10 +959,10 @@ impl User {
 
     let impl_node = ast
         .iter()
-        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _, _)))
         .expect("expected impl node");
     match impl_node {
-        Ast::ImplDef(_, target, methods, attrs) => {
+        Ast::ImplDef(_, target, _, methods, attrs) => {
             assert_eq!(target, "Global::User");
             assert_eq!(attrs, &DeclAttrs::default());
             assert_eq!(methods.len(), 2);
@@ -963,10 +996,10 @@ impl Int {
 
     let impl_node = ast
         .iter()
-        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _, _)))
         .expect("expected impl node");
     match impl_node {
-        Ast::ImplDef(_, target, methods, _) => {
+        Ast::ImplDef(_, target, _, methods, _) => {
             assert_eq!(target, "Global::Int");
             assert!(matches!(
                 methods.as_slice(),
@@ -1216,7 +1249,7 @@ impl User {
     .expect("@autoimport on impl block should parse");
 
     match &ast[0] {
-        Ast::ImplDef(_, target, _, attrs) => {
+        Ast::ImplDef(_, target, _, _, attrs) => {
             assert_eq!(target, "Global::User");
             assert!(attrs.auto_import);
         }
@@ -1285,7 +1318,7 @@ impl User {
     .expect("annotated impl methods should parse");
 
     match &ast[1] {
-        Ast::ImplDef(_, target, methods, _) => {
+        Ast::ImplDef(_, target, _, methods, _) => {
             assert_eq!(target, "Global::User");
             assert_eq!(methods.len(), 2);
             match &methods[0] {
@@ -1326,10 +1359,10 @@ impl User {
 
     let impl_node = ast
         .iter()
-        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _, _)))
         .expect("expected impl node");
     match impl_node {
-        Ast::ImplDef(_, _, methods, _) => match &methods[0] {
+        Ast::ImplDef(_, _, _, methods, _) => match &methods[0] {
             Ast::Def(_, _, _, _, _, _, body, _) => match body.as_ref() {
                 Ast::Block(_, stmts) => match &stmts[0] {
                     Ast::StructLit(_, _, fields) => {
@@ -1370,10 +1403,10 @@ impl User {
 
     let impl_node = ast
         .iter()
-        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _)))
+        .find(|node| matches!(node, Ast::ImplDef(_, _, _, _, _)))
         .expect("expected impl node");
     match impl_node {
-        Ast::ImplDef(_, _, methods, _) => match &methods[0] {
+        Ast::ImplDef(_, _, _, methods, _) => match &methods[0] {
             Ast::Def(_, _, _, _, _, _, body, _) => match body.as_ref() {
                 Ast::Block(_, stmts) => match &stmts[0] {
                     Ast::StructLit(_, _, fields) => {
@@ -1876,7 +1909,7 @@ impl User {
     .expect("self rebinding should be parsed");
     assert!(ast
         .iter()
-        .any(|node| matches!(node, Ast::ImplDef(_, _, _, _))));
+        .any(|node| matches!(node, Ast::ImplDef(_, _, _, _, _))));
 }
 
 #[test]
@@ -2073,7 +2106,7 @@ fn test_hidden_builtin_impl_member_parses() {
     .expect("hidden builtin impl member should parse");
 
     match &ast[0] {
-        Ast::ImplDef(_, target, body, _) => {
+        Ast::ImplDef(_, target, _, body, _) => {
             assert_eq!(target, "Global::Task");
             assert!(matches!(
                 &body[0],
@@ -2096,7 +2129,7 @@ fn test_private_builtin_impl_member_parses() {
     .expect("private builtin impl member should parse");
 
     match &ast[0] {
-        Ast::ImplDef(_, target, body, _) => {
+        Ast::ImplDef(_, target, _, body, _) => {
             assert_eq!(target, "Global::Generator");
             assert!(matches!(
                 &body[0],
@@ -5409,18 +5442,31 @@ fn test_global_type_names_are_canonicalized_to_internal_root_path() {
 
 #[test]
 fn test_impl_accepts_qualified_type_target() {
-    let ast = parse_with_context(
-        r#"impl Auth::User {
+    let source = r#"impl Auth::User {
   def id(self: Self) -> Auth::User { self }
-}"#,
-        ParserContext::module(1, None),
-    )
-    .expect("qualified impl target should parse");
+}"#;
+    let ast = parse_with_context(source, ParserContext::module(1, None))
+        .expect("qualified impl target should parse");
+    let [Ast::ImplDef(_, target, target_span, methods, _)] = ast.as_slice() else {
+        panic!("expected one inherent impl");
+    };
+    assert_eq!(target, "Auth::User");
+    assert_eq!(target_span, &Span { start: 5, end: 15 });
     assert!(
-        matches!(ast.as_slice(), [Ast::ImplDef(_, target, methods, _)]
-        if target == "Auth::User"
-            && matches!(methods.as_slice(), [Ast::Def(_, _, _, _, Some(AstTy::Named(_, ret_ty)), _, _, _)] if ret_ty == "Auth::User"))
+        matches!(methods.as_slice(), [Ast::Def(_, _, _, _, Some(AstTy::Named(_, ret_ty)), _, _, _)] if ret_ty == "Auth::User")
     );
+
+    let rebased = rebase_ast_spans(ast.clone(), 9);
+    let [Ast::ImplDef(_, _, rebased_target_span, _, _)] = rebased.as_slice() else {
+        panic!("expected one rebased inherent impl");
+    };
+    assert_eq!(rebased_target_span, &Span { start: 14, end: 24 });
+
+    let tolerant = parse_tolerant_with_context(source, ParserContext::module(1, None), None);
+    let [Ast::ImplDef(_, _, tolerant_target_span, _, _)] = tolerant.ast.as_slice() else {
+        panic!("expected tolerant parser to retain one inherent impl");
+    };
+    assert_eq!(tolerant_target_span, &Span { start: 5, end: 15 });
 }
 
 #[test]
@@ -5479,7 +5525,7 @@ fn test_impl_body_accepts_import() {
 
     assert!(matches!(
         ast.as_slice(),
-        [Ast::ImplDef(_, target, body, _)]
+        [Ast::ImplDef(_, target, _, body, _)]
             if target == "Global::User"
                 && matches!(body.as_slice(),
                     [
@@ -5657,7 +5703,7 @@ impl Show for Auth::User {
         .any(|stmt| matches!(stmt, Ast::TraitDef(_, name, _, _, _, _) if name == "Named")));
     assert!(ast
         .iter()
-        .any(|stmt| matches!(stmt, Ast::ImplDef(_, target, _, _) if target == "Auth::User")));
+        .any(|stmt| matches!(stmt, Ast::ImplDef(_, target, _, _, _) if target == "Auth::User")));
     assert!(ast.iter().any(|stmt| matches!(
         stmt,
         Ast::TraitImplDef(_, trait_name, _, AstTy::Named(_, target), _, _, _)

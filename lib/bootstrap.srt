@@ -237,6 +237,17 @@ defmod Bootstrap {
   @intrinsic def cond(clauses: CondClauses<$A>) -> $A
 
   @doc """
+  Sequence values in one Monad carrier.
+  The carrier may be supplied with `do::<Carrier>`, inferred from the block,
+  or obtained from the expected block type.
+  Inside `do`, SafeBind unwraps one outer Result layer only. Partial patterns may
+  inspect other RHS values unchanged; total patterns reject non-Result RHS values.
+  Result-do preserves SafeBind failures, while other carriers require Alternative
+  and replace failure with empty.
+  """
+  @intrinsic def do::<Monad>(block: DoBlock<$Result>) -> Monad<$Result>
+
+  @doc """
   Language-provided import macro function.
 
   `import` belongs to `Bootstrap`, but its user-facing surface is a top-level

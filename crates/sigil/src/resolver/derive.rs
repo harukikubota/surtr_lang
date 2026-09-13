@@ -29,7 +29,7 @@ pub(super) fn expand_derive_annotations(stmts: Vec<Ast>) -> Result<Vec<Ast>, Res
                     Ast::Def(_, _, _, _, _, _, _, attrs)
                     | Ast::Defmod(_, _, _, attrs)
                     | Ast::TraitDef(_, _, _, _, _, attrs)
-                    | Ast::ImplDef(_, _, _, attrs)
+                    | Ast::ImplDef(_, _, _, _, attrs)
                     | Ast::BuiltinTypeDecl(_, _, attrs)
                     | Ast::TraitImplDef(_, _, _, _, _, _, attrs) => !attrs.derives.is_empty(),
                     _ => false,

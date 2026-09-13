@@ -71,6 +71,7 @@ pub enum TypeDiagnosticReason {
     CompilePolicyViolation,
     NominalDeclarationConstraintViolation,
     TraitHelperCaptureNeedsExpectedType,
+    ReservedIntrinsicMarkerUsage,
     TypecheckInvariantViolation,
 }
 
@@ -142,6 +143,7 @@ impl TypeDiagnosticReason {
             Self::CompilePolicyViolation => "CompilePolicyViolation",
             Self::NominalDeclarationConstraintViolation => "NominalDeclarationConstraintViolation",
             Self::TraitHelperCaptureNeedsExpectedType => "TraitHelperCaptureNeedsExpectedType",
+            Self::ReservedIntrinsicMarkerUsage => "ReservedIntrinsicMarkerUsage",
             Self::TypecheckInvariantViolation => "TypecheckInvariantViolation",
         }
     }
@@ -226,6 +228,9 @@ pub enum ResolveDiagnosticReason {
     Declaration,
     SpecialForm,
     SourcePolicy,
+    InvalidIntrinsicSurfaceContract,
+    ReservedIntrinsicMarkerDeclaration,
+    ReservedIntrinsicMarkerImpl,
     CompilerInvariant,
 }
 
@@ -279,6 +284,9 @@ impl ResolveDiagnosticReason {
             Self::Declaration => "Declaration",
             Self::SpecialForm => "SpecialForm",
             Self::SourcePolicy => "SourcePolicy",
+            Self::InvalidIntrinsicSurfaceContract => "InvalidIntrinsicSurfaceContract",
+            Self::ReservedIntrinsicMarkerDeclaration => "ReservedIntrinsicMarkerDeclaration",
+            Self::ReservedIntrinsicMarkerImpl => "ReservedIntrinsicMarkerImpl",
             Self::CompilerInvariant => "CompilerInvariant",
         }
     }
@@ -808,6 +816,7 @@ pub enum TypePolicy {
     EntrypointRequirement,
     NominalDeclarationConstraint,
     TraitHelperCaptureInference,
+    IntrinsicMarkerUsage,
     ProducerContract,
 }
 

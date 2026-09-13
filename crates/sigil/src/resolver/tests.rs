@@ -88,7 +88,7 @@ impl User {
     assert!(matches!(staged[0].ast.first(), Some(Ast::Import(_, _, _))));
     assert!(matches!(
         staged[0].ast.get(1),
-        Some(Ast::ImplDef(_, _, _, _))
+        Some(Ast::ImplDef(_, _, _, _, _))
     ));
 }
 
@@ -287,6 +287,29 @@ fn staged_module(module_path: &str, ast: Vec<Ast>) -> StagedModuleAst {
         auto_import: matches!(module_path, "Bootstrap" | "Kernel" | "Result"),
         process_spec: None,
     }
+}
+
+fn staged_do_intrinsic_contract(owner: &str, intrinsic_source: &str) -> Vec<Vec<StagedModuleAst>> {
+    let support = staged_module(
+        "",
+        parse_module_ast(
+            r#"@builtin type DoBlock<$Result>
+deftrait Monad
+where
+  Self: Type<$A>
+{
+  def bind(self: Self<$A>, mapper: ($A -> Self<$B>)) -> Self<$B>
+}"#,
+            "",
+        ),
+    );
+    let mut surface = staged_module(owner, parse_module_ast(intrinsic_source, owner));
+    surface.owner = Some(OwnerDescriptor::new(
+        owner.to_string(),
+        surface.ast[0].span().clone(),
+        OwnerSourceForm::Defmod,
+    ));
+    vec![vec![support, surface]]
 }
 
 fn staged_process_module(ast: Vec<Ast>) -> StagedModuleAst {
@@ -1758,6 +1781,220 @@ fn test_precollect_rejects_impl_target_for_cond_clauses_builtin_type() {
     assert!(err
         .message
         .contains("impl target `Global::CondClauses` must be a standard type owner or a struct/enum defined in the current stage"));
+}
+
+#[test]
+fn test_precollect_accepts_canonical_do_intrinsic_surface() {
+    let module_stages = staged_do_intrinsic_contract(
+        "Bootstrap",
+        "@intrinsic def do::<Monad>(block: DoBlock<$Result>) -> Monad<$Result>",
+    );
+
+    precollect_declaration_index(&module_stages)
+        .expect("canonical Bootstrap::do surface must match compiler metadata");
+}
+
+#[test]
+fn test_precollect_rejects_noncanonical_do_intrinsic_surfaces() {
+    let cases = [
+        (
+            "Kernel",
+            "@intrinsic def do::<Monad>(block: DoBlock<$Result>) -> Monad<$Result>",
+        ),
+        (
+            "Bootstrap",
+            "@intrinsic def do::<Applicative>(block: DoBlock<$Result>) -> Monad<$Result>",
+        ),
+        (
+            "Bootstrap",
+            "@intrinsic def do(block: DoBlock<$Result>) -> Monad<$Result>",
+        ),
+        (
+            "Bootstrap",
+            "@intrinsic def do::<Monad, Alternative>(block: DoBlock<$Result>) -> Monad<$Result>",
+        ),
+        (
+            "Bootstrap",
+            "@intrinsic def do::<Monad>(block: CondClauses<$Result>) -> Monad<$Result>",
+        ),
+        (
+            "Bootstrap",
+            "@intrinsic def do::<Monad>(block: DoBlock<$Result>, extra: Int) -> Monad<$Result>",
+        ),
+        (
+            "Bootstrap",
+            "@intrinsic def do::<Monad>(block: DoBlock<$Result>) -> Monad<$Other>",
+        ),
+        (
+            "Bootstrap",
+            "@intrinsic def do::<Monad>(block: DoBlock<Int>) -> Monad<Int>",
+        ),
+    ];
+
+    for (module_path, source) in cases {
+        let module_stages = staged_do_intrinsic_contract(module_path, source);
+        let err = precollect_declaration_index(&module_stages)
+            .expect_err("noncanonical do intrinsic surface must fail closed");
+        assert!(
+            err.message.contains(
+                "the `do` intrinsic declaration does not match its compiler-owned contract"
+            ),
+            "unexpected error for {source}: {}",
+            err.message
+        );
+        assert_eq!(
+            err.diagnostic.reason,
+            crate::error::ResolveErrorReason::InvalidIntrinsicSurfaceContract,
+            "unexpected reason for {source}"
+        );
+    }
+}
+
+#[test]
+fn test_precollect_rejects_do_surface_without_canonical_owner_trait_or_marker() {
+    let source = "@intrinsic def do::<Monad>(block: DoBlock<$Result>) -> Monad<$Result>";
+    let cases = [
+        vec![vec![staged_module(
+            "Bootstrap",
+            parse_module_ast(source, "Bootstrap"),
+        )]],
+        {
+            let mut bootstrap = staged_module("Bootstrap", parse_module_ast(source, "Bootstrap"));
+            bootstrap.owner = Some(OwnerDescriptor::new(
+                "Bootstrap".to_string(),
+                bootstrap.ast[0].span().clone(),
+                OwnerSourceForm::Defmod,
+            ));
+            vec![vec![bootstrap]]
+        },
+        {
+            let support = staged_module("", parse_module_ast("@builtin type DoBlock<$Result>", ""));
+            let mut bootstrap = staged_module("Bootstrap", parse_module_ast(source, "Bootstrap"));
+            bootstrap.owner = Some(OwnerDescriptor::new(
+                "Bootstrap".to_string(),
+                bootstrap.ast[0].span().clone(),
+                OwnerSourceForm::Defmod,
+            ));
+            vec![vec![support, bootstrap]]
+        },
+        {
+            let support = staged_module(
+                "",
+                parse_module_ast(
+                    r#"deftrait Monad
+where
+  Self: Type<$A>
+{
+  def bind(self: Self<$A>, mapper: ($A -> Self<$B>)) -> Self<$B>
+}"#,
+                    "",
+                ),
+            );
+            let mut bootstrap = staged_module("Bootstrap", parse_module_ast(source, "Bootstrap"));
+            bootstrap.owner = Some(OwnerDescriptor::new(
+                "Bootstrap".to_string(),
+                bootstrap.ast[0].span().clone(),
+                OwnerSourceForm::Defmod,
+            ));
+            vec![vec![support, bootstrap]]
+        },
+        {
+            let support = staged_module(
+                "",
+                parse_module_ast(
+                    r#"@builtin type DoBlock<$Result>
+defstruct Monad { value: Int }"#,
+                    "",
+                ),
+            );
+            let mut bootstrap = staged_module("Bootstrap", parse_module_ast(source, "Bootstrap"));
+            bootstrap.owner = Some(OwnerDescriptor::new(
+                "Bootstrap".to_string(),
+                bootstrap.ast[0].span().clone(),
+                OwnerSourceForm::Defmod,
+            ));
+            vec![vec![support, bootstrap]]
+        },
+        {
+            let support = staged_module(
+                "",
+                parse_module_ast(
+                    r#"@builtin type DoBlock<$Result>
+deftrait Monad
+where
+  Self: Type<$A>
+{
+  def bind(self: Self<$A>, mapper: ($A -> Self<$B>)) -> Self<$B>
+}
+defstruct Bootstrap { value: Int }"#,
+                    "",
+                ),
+            );
+            let bootstrap = staged_module("Bootstrap", parse_module_ast(source, "Bootstrap"));
+            vec![vec![support, bootstrap]]
+        },
+    ];
+
+    for module_stages in cases {
+        let err = precollect_declaration_index(&module_stages)
+            .expect_err("do surface requires canonical owner, Monad Trait, and DoBlock marker");
+        assert_eq!(
+            err.diagnostic.reason,
+            crate::error::ResolveErrorReason::InvalidIntrinsicSurfaceContract
+        );
+    }
+}
+
+fn precollect_do_block_error(source: &str) -> ResolveError {
+    let module_stages = vec![vec![staged_module("", parse_module_ast(source, ""))]];
+    precollect_declaration_index(&module_stages)
+        .expect_err("DoBlock declaration and every impl target must be reserved")
+}
+
+#[test]
+fn test_precollect_rejects_do_block_declaration_at_declaration_span() {
+    let source = "defstruct DoBlock { value: Int }";
+    let err = precollect_do_block_error(source);
+    assert_eq!(
+        err.diagnostic.reason,
+        crate::error::ResolveErrorReason::ReservedIntrinsicMarkerDeclaration
+    );
+    assert_eq!(
+        err.span,
+        Span {
+            start: 0,
+            end: source.len()
+        }
+    );
+}
+
+#[test]
+fn test_precollect_rejects_do_block_inherent_impl_at_target_span() {
+    let err = precollect_do_block_error("impl DoBlock { def noop(self: Self) -> Self { self } }");
+    assert_eq!(
+        err.diagnostic.reason,
+        crate::error::ResolveErrorReason::ReservedIntrinsicMarkerImpl
+    );
+    assert_eq!(err.span, Span { start: 5, end: 12 });
+}
+
+#[test]
+fn test_precollect_rejects_do_block_trait_impl_at_target_span() {
+    let source = r#"deftrait Marker { def mark(self: Self) -> Int }
+impl Marker for DoBlock<Int> { def mark(self: Self) -> Int { 1 } }"#;
+    let target_start = source.find("DoBlock").expect("DoBlock target");
+    let err = precollect_do_block_error(source);
+    assert_eq!(
+        err.diagnostic.reason,
+        crate::error::ResolveErrorReason::ReservedIntrinsicMarkerImpl
+    );
+    assert_eq!(
+        err.span,
+        Span {
+            start: target_start,
+            end: target_start + "DoBlock<Int>".len(),
+        }
+    );
 }
 
 #[test]

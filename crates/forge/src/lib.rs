@@ -210,9 +210,15 @@ mod tests {
                         process_spec: Some(process_spec),
                     });
                 }
-                Ast::ImplDef(span, target, methods, attrs) => {
+                Ast::ImplDef(span, target, target_span, methods, attrs) => {
                     let mut module_ast = shared_imports.clone();
-                    module_ast.push(Ast::ImplDef(span, target.clone(), methods, attrs.clone()));
+                    module_ast.push(Ast::ImplDef(
+                        span,
+                        target.clone(),
+                        target_span,
+                        methods,
+                        attrs.clone(),
+                    ));
                     lowered.push(sigil::StagedModuleAst {
                         source_index: 0,
                         module_path: target,

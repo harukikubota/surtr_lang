@@ -628,7 +628,7 @@ fn parse_tolerant_plain_impl(
 ) -> Result<Ast, ParseError> {
     let sp = parser.peek_span();
     parser.expect(&Token::Impl)?;
-    let (head, trait_args) = parser.parse_trait_impl_head()?;
+    let (head, head_span, trait_args) = parser.parse_trait_impl_head()?;
     if !trait_args.is_empty() || matches!(parser.peek(), Token::For) {
         return Err(ParseError::syntax(
             crate::error::ParseErrorReason::ExpressionSyntax,
@@ -646,6 +646,7 @@ fn parse_tolerant_plain_impl(
             end: end.end,
         },
         head,
+        head_span,
         body,
         DeclAttrs::default(),
     ))
@@ -905,7 +906,7 @@ fn outline_item_from_ast(node: &Ast) -> Option<SyntaxOutlineItem> {
             span,
             outline_from_ast(body),
         ),
-        Ast::ImplDef(span, name, body, _) => (
+        Ast::ImplDef(span, name, _, body, _) => (
             SyntaxOutlineKind::Impl,
             Some(name.clone()),
             span,

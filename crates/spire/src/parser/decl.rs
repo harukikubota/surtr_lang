@@ -223,7 +223,7 @@ fn ast_decl_attrs(ast: &Ast) -> Option<&DeclAttrs> {
         | Ast::Defsupervisor(_, _, _, _, attrs)
         | Ast::DefdynamicSupervisor(_, _, _, _, attrs)
         | Ast::TraitDef(_, _, _, _, _, attrs)
-        | Ast::ImplDef(_, _, _, attrs)
+        | Ast::ImplDef(_, _, _, _, attrs)
         | Ast::TraitImplDef(_, _, _, _, _, _, attrs) => Some(attrs),
         _ => None,
     }
@@ -1668,8 +1668,10 @@ impl Parser<'_> {
         self.parse_trait_def_with_attrs(DeclAttrs::default(), None)
     }
 
-    pub(super) fn parse_trait_impl_head(&mut self) -> Result<(Symbol, Vec<AstTy>), ParseError> {
-        let (trait_name, _) = self.expect_qualified_ident(2, "trait")?;
+    pub(super) fn parse_trait_impl_head(
+        &mut self,
+    ) -> Result<(Symbol, Span, Vec<AstTy>), ParseError> {
+        let (trait_name, trait_span) = self.expect_qualified_ident(2, "trait")?;
         let trait_args = if matches!(self.peek(), Token::Lt) {
             self.advance();
             self.skip_newlines();
@@ -1691,7 +1693,7 @@ impl Parser<'_> {
         } else {
             Vec::new()
         };
-        Ok((trait_name, trait_args))
+        Ok((trait_name, trait_span, trait_args))
     }
 
     pub(super) fn parse_impl_def(&mut self) -> Result<Ast, ParseError> {
@@ -1705,7 +1707,7 @@ impl Parser<'_> {
     ) -> Result<Ast, ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Impl)?;
-        let (head, trait_args) = self.parse_trait_impl_head()?;
+        let (head, head_span, trait_args) = self.parse_trait_impl_head()?;
         let start = start.unwrap_or(sp.start);
         self.skip_newlines();
 
@@ -1840,6 +1842,7 @@ impl Parser<'_> {
                 end: end.end,
             },
             head,
+            head_span,
             methods,
             attrs,
         ))
@@ -5595,9 +5598,61 @@ impl Parser<'_> {
             }
         };
 
-        while !matches!(self.peek(), Token::Newline | Token::Eof | Token::LBrace) {
+        let return_type_arguments = self.parse_return_type_arguments_for_context(None, false)?;
+        let mut value_parameters = Vec::new();
+        if matches!(self.peek(), Token::Unit) {
             self.advance();
+        } else {
+            self.expect(&Token::LParen)?;
+            self.skip_newlines();
+            if !matches!(self.peek(), Token::RParen) {
+                loop {
+                    if matches!(self.peek(), Token::Eof) {
+                        return Err(ParseError::incomplete(")", self.peek_span()));
+                    }
+                    let (parameter_name, parameter_span) = self.expect_ident()?;
+                    self.ensure_non_const_identifier(
+                        &parameter_name,
+                        parameter_span.clone(),
+                        "Function parameter",
+                    )?;
+                    self.expect(&Token::Colon)?;
+                    let mode = if matches!(self.peek(), Token::Star) {
+                        self.advance();
+                        ValueParameterMode::Variadic
+                    } else {
+                        ValueParameterMode::PositionalOrNamed
+                    };
+                    let ty = self.parse_direct_signature_parameter_type(None)?;
+                    value_parameters.push(ValueParameter {
+                        name: parameter_name,
+                        mode,
+                        ty,
+                        span: parameter_span,
+                    });
+                    self.skip_newlines();
+                    if matches!(self.peek(), Token::Comma) {
+                        self.advance();
+                        self.skip_newlines();
+                        if matches!(self.peek(), Token::RParen) {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            }
+            self.expect(&Token::RParen)?;
         }
+
+        let return_type = if matches!(self.peek(), Token::Arrow) {
+            self.advance();
+            self.skip_newlines();
+            Some(self.parse_direct_signature_return_type(None)?)
+        } else {
+            None
+        };
+        let where_clause = self.parse_optional_where_clause(WhereClauseContext::function())?;
 
         if matches!(self.peek(), Token::LBrace) {
             return Err(ParseError::syntax(
@@ -5630,12 +5685,18 @@ impl Parser<'_> {
         } else {
             start
         };
-        let signature = self.source_text_for_span(&Span { start, end });
+        let raw = self.source_text_for_span(&Span { start, end });
 
         Ok(Ast::IntrinsicDecl(
             Span { start, end },
             name,
-            signature,
+            IntrinsicSignature {
+                raw,
+                return_type_arguments,
+                value_parameters,
+                return_type,
+                where_clause,
+            },
             attrs,
         ))
     }

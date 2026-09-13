@@ -7120,7 +7120,7 @@ impl ReplEngine {
                     .iter()
                     .find(|stmt| !matches!(stmt, Ast::Import(_, _, _)));
                 match first_non_import {
-                    Some(Ast::ImplDef(_, _, _, _) | Ast::TraitImplDef(..)) => {
+                    Some(Ast::ImplDef(_, _, _, _, _) | Ast::TraitImplDef(..)) => {
                         member_auto_import_modules.insert(module.module_path.clone());
                     }
                     _ => {
@@ -8763,7 +8763,7 @@ fn ast_span(stmt: &Ast) -> Option<&Span> {
         | Ast::Defsupervisor(span, _, _, _, _)
         | Ast::DefdynamicSupervisor(span, _, _, _, _)
         | Ast::Namespace(span, _, _)
-        | Ast::ImplDef(span, _, _, _)
+        | Ast::ImplDef(span, _, _, _, _)
         | Ast::TraitDef(span, ..)
         | Ast::TraitImplDef(span, ..)
         | Ast::Import(span, _, _)
@@ -8889,6 +8889,9 @@ fn resolve_diagnostic_reason(
         R::Declaration => D::Declaration,
         R::SpecialForm => D::SpecialForm,
         R::SourcePolicy => D::SourcePolicy,
+        R::InvalidIntrinsicSurfaceContract => D::InvalidIntrinsicSurfaceContract,
+        R::ReservedIntrinsicMarkerDeclaration => D::ReservedIntrinsicMarkerDeclaration,
+        R::ReservedIntrinsicMarkerImpl => D::ReservedIntrinsicMarkerImpl,
         R::CompilerInvariant => D::CompilerInvariant,
     }
 }

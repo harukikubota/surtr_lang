@@ -921,7 +921,7 @@ fn module_body_for_ast(node: &Ast) -> Option<&[Ast]> {
         | Ast::Defgenserver(_, _, body, ..)
         | Ast::Defsupervisor(_, _, body, ..)
         | Ast::DefdynamicSupervisor(_, _, body, ..)
-        | Ast::ImplDef(_, _, body, _) => Some(body),
+        | Ast::ImplDef(_, _, _, body, _) => Some(body),
         _ => None,
     }
 }
@@ -1647,7 +1647,7 @@ impl User {
         ));
         assert!(matches!(
             module.ast.get(1),
-            Some(spire::ast::Ast::ImplDef(_, _, _, _))
+            Some(spire::ast::Ast::ImplDef(_, _, _, _, _))
         ));
     }
 }
