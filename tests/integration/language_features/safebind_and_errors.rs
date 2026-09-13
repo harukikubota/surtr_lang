@@ -187,7 +187,7 @@ fn safebind_top_ok_pattern_requires_nested_result() {
     assert_compile_error(
         r#"value: Result<Int> = Ok(5)
 Ok(num) =? value"#,
-        "`Ok(...)` pattern requires Result",
+        "Constructor pattern requires an enum or Result RHS",
     );
 }
 
@@ -200,7 +200,7 @@ print(to_string(num + 1))"#,
     );
 }
 
-fn safebind_nested_result_err_propagates() {
+fn safebind_nested_result_err_is_a_normal_pattern_mismatch() {
     let (stdout, stderr) = run_surtr_with_stderr(
         r#"deferror Oops {
   "oops"
@@ -212,7 +212,10 @@ print("after")"#,
     )
     .expect("Pipeline failed");
     assert_eq!(stdout, Vec::<String>::new());
-    assert_eq!(stderr, vec!["Error: Oops: oops"]);
+    assert_eq!(
+        stderr,
+        vec!["Error: PatternMismatch: Pattern did not match."]
+    );
 }
 
 fn safebind_list_pattern_empty_propagates_empty_list() {
@@ -391,11 +394,68 @@ print("after")"#,
     assert_eq!(stderr, vec!["Error: Oops: oops"]);
 }
 
-fn safebind_allows_total_plain_rhs() {
+fn safebind_rejects_total_plain_rhs() {
+    assert_compile_error(
+        "num =? 10",
+        "Int is not a SafeBind target; it is not a Monad, and only a Result RHS can be decomposed by `=?`.",
+    );
+}
+
+fn safebind_partial_option_constructor_checks_the_whole_rhs() {
     assert_output(
-        r#"num =? 10
+        r#"value: Option<Int> = Option::Some(1)
+Option::Some(num) =? value
 print(to_string(num))"#,
-        &["10"],
+        &["1"],
+    );
+}
+
+fn safebind_partial_option_none_constructor_checks_the_whole_rhs() {
+    assert_output(
+        r#"value: Option<Int> = Option::None
+Option::None =? value
+print("matched")"#,
+        &["matched"],
+    );
+}
+
+fn safebind_partial_user_enum_constructor_binds_all_payloads() {
+    assert_output(
+        r#"defenum Pair<$A, $B> {
+  Both($A, $B),
+}
+
+pair: Pair<Int, String> = Pair::Both(7, "ok")
+Pair::Both(num, label) =? pair
+print(to_string(num) ++ ":" ++ label)"#,
+        &["7:ok"],
+    );
+}
+
+fn safebind_partial_option_mismatch_uses_normal_pattern_failure() {
+    let (stdout, stderr) = run_surtr_with_stderr(
+        r#"value: Option<Int> = Option::None
+Option::Some(num) =? value
+print("after")"#,
+    )
+    .expect("Pipeline failed");
+    assert_eq!(stdout, Vec::<String>::new());
+    assert_eq!(
+        stderr,
+        vec!["Error: PatternMismatch: Pattern did not match."]
+    );
+}
+
+fn safebind_nested_err_constructor_binds_instead_of_propagating() {
+    assert_output(
+        r#"deferror Oops {
+  "oops"
+}
+
+value: Result<Result<Int>> = Ok(Err(Oops))
+Err(error) =? value
+print(Error::kind(error))"#,
+        &["Oops"],
     );
 }
 
@@ -682,8 +742,8 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             safebind_top_ok_pattern_allows_nested_result as fn(),
         ),
         (
-            "safebind_nested_result_err_propagates",
-            safebind_nested_result_err_propagates as fn(),
+            "safebind_nested_result_err_is_a_normal_pattern_mismatch",
+            safebind_nested_result_err_is_a_normal_pattern_mismatch as fn(),
         ),
         (
             "safebind_list_pattern_empty_propagates_empty_list",
@@ -718,8 +778,28 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             safebind_script_error_eprints as fn(),
         ),
         (
-            "safebind_allows_total_plain_rhs",
-            safebind_allows_total_plain_rhs as fn(),
+            "safebind_rejects_total_plain_rhs",
+            safebind_rejects_total_plain_rhs as fn(),
+        ),
+        (
+            "safebind_partial_option_constructor_checks_the_whole_rhs",
+            safebind_partial_option_constructor_checks_the_whole_rhs as fn(),
+        ),
+        (
+            "safebind_partial_option_none_constructor_checks_the_whole_rhs",
+            safebind_partial_option_none_constructor_checks_the_whole_rhs as fn(),
+        ),
+        (
+            "safebind_partial_user_enum_constructor_binds_all_payloads",
+            safebind_partial_user_enum_constructor_binds_all_payloads as fn(),
+        ),
+        (
+            "safebind_partial_option_mismatch_uses_normal_pattern_failure",
+            safebind_partial_option_mismatch_uses_normal_pattern_failure as fn(),
+        ),
+        (
+            "safebind_nested_err_constructor_binds_instead_of_propagating",
+            safebind_nested_err_constructor_binds_instead_of_propagating as fn(),
         ),
         (
             "safebind_requires_result_return_function",

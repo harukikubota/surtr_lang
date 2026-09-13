@@ -46,6 +46,8 @@ pub enum TypeDiagnosticReason {
     IfBranchTypeMismatch,
     MatchArmTypeMismatch,
     CondBranchTypeMismatch,
+    SafeBindTotalPatternNonMonadRhs,
+    SafeBindTotalPatternNonResultMonadRhs,
 }
 
 impl TypeDiagnosticReason {
@@ -89,6 +91,8 @@ impl TypeDiagnosticReason {
             Self::IfBranchTypeMismatch => "IfBranchTypeMismatch",
             Self::MatchArmTypeMismatch => "MatchArmTypeMismatch",
             Self::CondBranchTypeMismatch => "CondBranchTypeMismatch",
+            Self::SafeBindTotalPatternNonMonadRhs => "SafeBindTotalPatternNonMonadRhs",
+            Self::SafeBindTotalPatternNonResultMonadRhs => "SafeBindTotalPatternNonResultMonadRhs",
         }
     }
 }
@@ -448,6 +452,9 @@ pub struct BranchAssertionData {
 pub struct SafeBindRelationData {
     pub lhs_type: String,
     pub rhs_type: String,
+    pub lhs_is_total: bool,
+    pub rhs_is_canonical_result: bool,
+    pub monad_capability: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

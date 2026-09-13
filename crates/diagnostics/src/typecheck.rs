@@ -156,6 +156,22 @@ pub fn type_error_spec_from_structured(input: &StructuredDiagnostic) -> Diagnost
 
 fn structured_headline(input: &StructuredDiagnostic) -> String {
     match input.reason {
+        TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs => {
+            if let DiagnosticData::SafeBindRelation(value) = &input.data {
+                return format!(
+                    "{} is not a SafeBind target; it is not a Monad, and only a Result RHS can be decomposed by `=?`.",
+                    value.rhs_type
+                );
+            }
+        }
+        TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs => {
+            if let DiagnosticData::SafeBindRelation(value) = &input.data {
+                return format!(
+                    "{} is not a SafeBind target; `=?` propagates Result-style failures, not values from another Monad. Only a Result RHS can be decomposed by `=?`.",
+                    value.rhs_type
+                );
+            }
+        }
         TypeDiagnosticReason::ConcreteReturnTypeArgumentInDefinition => {
             return "Definition return type arguments must introduce type inputs".into()
         }

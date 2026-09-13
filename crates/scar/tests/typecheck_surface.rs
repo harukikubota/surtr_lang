@@ -2,8 +2,9 @@
 
 use scar::env::TypeKind;
 use scar::typed::{
-    OperatorTraitOp, TraitCallOrigin, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode,
-    TypedPattern, TypedProgram, TypedWhereConstraintRhs,
+    OperatorTraitOp, SafeBindFailureTarget, SafeBindRhsProjection, TraitCallOrigin,
+    TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode, TypedPattern, TypedProgram,
+    TypedWhereConstraintRhs,
 };
 use scar::types::Ty;
 use sigil::resolved::{
@@ -77,8 +78,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         match_bool_qualified_constructor_patterns_require_exhaustive_arms as fn(),
     ),
     (
-        "safebind_total_pattern_accepts_plain_rhs",
-        safebind_total_pattern_accepts_plain_rhs as fn(),
+        "safebind_total_pattern_rejects_plain_non_monad_rhs",
+        safebind_total_pattern_rejects_plain_non_monad_rhs as fn(),
     ),
     (
         "dbg_special_form_typechecks_to_unit",
@@ -112,6 +113,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         "safebind_top_ok_pattern_accepts_nested_result_rhs",
         safebind_top_ok_pattern_accepts_nested_result_rhs as fn(),
     ),
+    surface_case!(safebind_partial_option_constructor_checks_the_whole_rhs),
+    surface_case!(safebind_total_option_rhs_uses_non_result_monad_reason),
+    surface_case!(safebind_annotation_mismatch_precedes_total_rhs_classification),
+    surface_case!(safebind_unbound_generic_rhs_keeps_capability_failure),
     (
         "safebind_list_pattern_accepts_plain_list_rhs",
         safebind_list_pattern_accepts_plain_list_rhs as fn(),
@@ -1345,7 +1350,7 @@ fn typed_bind_rhs<'a>(typed: &'a [TypedNode], name: &str) -> &'a TypedNode {
         .iter()
         .find_map(|node| match &node.node {
             TypedInner::Bind(TypedPattern::Var(_, id), rhs)
-            | TypedInner::SafeBind(TypedPattern::Var(_, id), rhs)
+            | TypedInner::SafeBind(TypedPattern::Var(_, id), rhs, _, _)
                 if id.name == name =>
             {
                 Some(rhs.as_ref())
@@ -1554,13 +1559,18 @@ print(match flag {
     assert!(err.message.contains("Non-exhaustive match. Missing: False"));
 }
 
-fn safebind_total_pattern_accepts_plain_rhs() {
+fn safebind_total_pattern_rejects_plain_non_monad_rhs() {
     let resolved = resolve_with_builtin_prelude("num =? 10");
-    let typed = typecheck(resolved).expect("typecheck should succeed");
-    assert!(matches!(
-        typed.last().map(|node| &node.node),
-        Some(TypedInner::SafeBind(_, _))
-    ));
+    let err = typecheck(resolved).expect_err("total non-Result scalar should be rejected");
+    assert_eq!(
+        err.message,
+        "Int is not a SafeBind target; it is not a Monad, and only a Result RHS can be decomposed by `=?`."
+    );
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs)
+    );
+    assert!(err.hint.is_none());
 }
 
 fn dbg_special_form_typechecks_to_unit() {
@@ -1647,7 +1657,9 @@ fn safebind_top_ok_pattern_requires_nested_result_rhs() {
 Ok(num) =? value"#,
     );
     let err = typecheck(resolved).expect_err("typecheck should fail");
-    assert!(err.message.contains("`Ok(...)` pattern requires Result"));
+    assert!(err
+        .message
+        .contains("Constructor pattern requires an enum or Result RHS"));
 }
 
 fn safebind_top_ok_pattern_accepts_nested_result_rhs() {
@@ -1658,7 +1670,88 @@ Ok(num) =? value"#,
     let typed = typecheck(resolved).expect("typecheck should succeed");
     assert!(matches!(
         typed.last().map(|node| &node.node),
-        Some(TypedInner::SafeBind(_, _))
+        Some(TypedInner::SafeBind(
+            _,
+            _,
+            SafeBindRhsProjection::CanonicalResultOnce { .. },
+            SafeBindFailureTarget::TopLevel,
+        ))
+    ));
+}
+
+fn safebind_partial_option_constructor_checks_the_whole_rhs() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"value: Option<Int> = Option::Some(1)
+Option::Some(num) =? value"#,
+    );
+    let typed = typecheck(resolved).expect("partial Option pattern should inspect the whole RHS");
+    assert!(matches!(
+        typed.last().map(|node| &node.node),
+        Some(TypedInner::SafeBind(
+            _,
+            _,
+            SafeBindRhsProjection::PassThroughNonResultPartial { .. },
+            SafeBindFailureTarget::TopLevel,
+        ))
+    ));
+}
+
+fn safebind_total_option_rhs_uses_non_result_monad_reason() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"value: Option<Int> = Option::Some(1)
+saved =? value"#,
+    );
+    let err = typecheck(resolved).expect_err("total Option SafeBind should be rejected");
+    assert_eq!(
+        err.message,
+        "Option<Int> is not a SafeBind target; `=?` propagates Result-style failures, not values from another Monad. Only a Result RHS can be decomposed by `=?`."
+    );
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs)
+    );
+    let diagnostic = err
+        .structured
+        .expect("SafeBind rejection should be structured");
+    let diagnostics::DiagnosticData::SafeBindRelation(data) = diagnostic.data else {
+        panic!("expected SafeBindRelation data");
+    };
+    assert!(data.lhs_is_total);
+    assert!(!data.rhs_is_canonical_result);
+    assert_eq!(data.monad_capability, "satisfied");
+    assert!(err.hint.is_none());
+}
+
+fn safebind_annotation_mismatch_precedes_total_rhs_classification() {
+    let resolved = resolve_with_builtin_prelude("num: Int =? Option::Some(10)");
+    let err = typecheck(resolved).expect_err("the ordinary pattern relation should fail first");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::AnnotationTypeMismatch)
+    );
+    assert!(!err.message.contains("SafeBind target"));
+    assert!(!err.message.contains("Result RHS"));
+}
+
+fn safebind_unbound_generic_rhs_keeps_capability_failure() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def reject(value: $A) -> Result<$A> {
+  saved =? value
+  Ok(saved)
+}"#,
+    );
+    let err =
+        typecheck(resolved).expect_err("an unbound rigid RHS must not be classified by impl count");
+    assert_eq!(
+        err.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingGenericBound)
+    );
+    assert!(!matches!(
+        err.reason(),
+        Some(
+            diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs
+                | diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs
+        )
     ));
 }
 
@@ -1670,7 +1763,7 @@ fn safebind_list_pattern_accepts_plain_list_rhs() {
     let typed = typecheck(resolved).expect("typecheck should succeed");
     assert!(matches!(
         typed.last().map(|node| &node.node),
-        Some(TypedInner::SafeBind(_, _))
+        Some(TypedInner::SafeBind(_, _, _, _))
     ));
 }
 
@@ -1682,7 +1775,7 @@ fn safebind_string_pattern_accepts_plain_string_rhs() {
     let typed = typecheck(resolved).expect("typecheck should succeed");
     assert!(matches!(
         typed.last().map(|node| &node.node),
-        Some(TypedInner::SafeBind(_, _))
+        Some(TypedInner::SafeBind(_, _, _, _))
     ));
 }
 
@@ -1770,7 +1863,7 @@ fn safebind_list_pattern_accepts_nested_constructor_literals() {
     let typed = typecheck(resolved).expect("typecheck should succeed");
     assert!(matches!(
         typed.last().map(|node| &node.node),
-        Some(TypedInner::SafeBind(_, _))
+        Some(TypedInner::SafeBind(_, _, _, _))
     ));
 }
 
@@ -7407,7 +7500,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             }
             TypedInner::Block(stmts) => stmts.iter().any(has_pending_trait_call),
             TypedInner::Bind(_, rhs)
-            | TypedInner::SafeBind(_, rhs)
+            | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
             TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
@@ -7521,7 +7614,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             }
             TypedInner::Block(stmts) => stmts.iter().any(has_pending_trait_call),
             TypedInner::Bind(_, rhs)
-            | TypedInner::SafeBind(_, rhs)
+            | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
             TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
@@ -8117,7 +8210,7 @@ fn collect_decode_trait_calls(node: &TypedNode, calls: &mut Vec<(String, Option<
                 collect_decode_trait_calls(stmt, calls);
             }
         }
-        TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs) => {
+        TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs, _, _) => {
             collect_decode_trait_calls(rhs, calls);
         }
         TypedInner::Def(_, _, _, _, _, _, body, _)

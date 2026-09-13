@@ -142,6 +142,17 @@ def load_pair(a: String, b: String) -> Result<Int> {
 }
 ```
 
+SafeBind が自動分解する RHS は canonical `Result` の外側一段だけです。Result 以外の値は、
+partial pattern が値全体を明示的に検査するときだけ利用できます。
+
+```surtr
+Option::Some(value) =? Option::Some(1) # value は Int
+```
+
+`value =? Option::Some(1)` や `value =? 1` のような total pattern + non-Result RHS は
+compile errorです。Optionや他のMonadからpayloadを暗黙に取り出す規則はありません。
+また、`Ok(inner) =? Ok(Err(error))` は内側のErrを再伝播せず、通常のconstructor不一致になります。
+
 概念的には左から順に `match` が入れ子になります。
 
 ```surtr

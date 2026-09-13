@@ -4041,9 +4041,31 @@ impl Checker {
                 self.resolve_typed_pattern(pattern),
                 Box::new(self.resolve_typed_node(*rhs)),
             ),
-            TypedInner::SafeBind(pattern, rhs) => TypedInner::SafeBind(
+            TypedInner::SafeBind(pattern, rhs, projection, failure_target) => TypedInner::SafeBind(
                 self.resolve_typed_pattern(pattern),
                 Box::new(self.resolve_typed_node(*rhs)),
+                match projection {
+                    SafeBindRhsProjection::CanonicalResultOnce {
+                        payload_ty,
+                        error_ty,
+                    } => SafeBindRhsProjection::CanonicalResultOnce {
+                        payload_ty: self.resolve_ty(&payload_ty),
+                        error_ty: self.resolve_ty(&error_ty),
+                    },
+                    SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
+                        SafeBindRhsProjection::PassThroughNonResultPartial {
+                            pattern_input_ty: self.resolve_ty(&pattern_input_ty),
+                        }
+                    }
+                },
+                match failure_target {
+                    SafeBindFailureTarget::EnclosingResult { error_ty } => {
+                        SafeBindFailureTarget::EnclosingResult {
+                            error_ty: self.resolve_ty(&error_ty),
+                        }
+                    }
+                    SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
+                },
             ),
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
@@ -4349,10 +4371,25 @@ impl Checker {
                     .map(|item| self.resolve_typed_pattern(item))
                     .collect(),
             ),
-            TypedPattern::ResultOk(ty, inner) => TypedPattern::ResultOk(
-                self.resolve_ty(&ty),
-                Box::new(self.resolve_typed_pattern(*inner)),
-            ),
+            TypedPattern::Constructor {
+                ty,
+                tag,
+                field_tys,
+                fields,
+                field_offset,
+            } => TypedPattern::Constructor {
+                ty: self.resolve_ty(&ty),
+                tag,
+                field_tys: field_tys
+                    .into_iter()
+                    .map(|ty| self.resolve_ty(&ty))
+                    .collect(),
+                fields: fields
+                    .into_iter()
+                    .map(|field| self.resolve_typed_pattern(field))
+                    .collect(),
+                field_offset,
+            },
             TypedPattern::Extractor {
                 input_ty,
                 extractor,

@@ -21,9 +21,8 @@ TypeCtorTraitのcall-site ReturnTypeArgumentにおける完全・部分型applic
 carrier 指定、自然言語 message の再解析を追加してはならない。具象データ型固有の failure route は原則として
 追加しないが、既存 SafeBind の Result-style failure を保存する [8節](#8-safebindとの統合) の限定規則だけは例外とする。
 
-本書のSafeBindはN06完了後の契約を再利用し、N06着手前の
-[`SafeBind total pattern / RHS分類 訂正提案`](safebind_total_pattern_rhs_correction_proposal.md)を入力に含める。
-N01–N05は完了、N06–N11は未実装である。
+本書のSafeBindは[`diagnostics_cleanup_spec.md`](diagnostics_cleanup_spec.md) §§3–4で実装済みの契約を再利用する。
+N01–N05とN06のSafeBind RHS訂正は完了し、N06の残作業とN07–N11は未実装である。
 Extractorは現行の`Option<T>`返却を前提とし、更改タスクへの依存はない。
 以下の`Result<R, E>`は内部型関係の説明表記であり、doの変数注釈やRTAに二引数Result構文を追加しない。
 現行のerror値はabstract `Error`へ収束するため、独立したcaptured error parameterを新設しない。
@@ -846,7 +845,7 @@ message: Int is not a SafeBind target; it is not a Monad, and only a Result RHS 
 ```
 
 ```text
-message: Option is not a SafeBind target; `=?` propagates Result-style failures, not optional values. Only a Result RHS can be decomposed by `=?`.
+message: Option<Int> is not a SafeBind target; `=?` propagates Result-style failures, not values from another Monad. Only a Result RHS can be decomposed by `=?`.
 ```
 
 前者はcanonical Monad capabilityがないRHS、後者はResult以外のMonad RHSである。型名はclosed typed dataからrenderし、

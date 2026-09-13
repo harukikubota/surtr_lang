@@ -344,7 +344,7 @@ fn collect_missing_singleton_calls(
             }
         }
         TypedInner::Bind(_, rhs)
-        | TypedInner::SafeBind(_, rhs)
+        | TypedInner::SafeBind(_, rhs, _, _)
         | TypedInner::FieldAccess(rhs, _)
         | TypedInner::Semi(rhs) => collect_missing_singleton_calls(
             rhs,
@@ -2217,9 +2217,10 @@ mod tests {
     use crate::opcode::Opcode;
     use scar::typed::TypedProcessHandlerUid;
     use scar::typed::{
-        ComposeFlavor, TypedDbgArg, TypedFacetPath, TypedFacetPathKind, TypedFacetSegment,
-        TypedInner, TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern, TypedProcessSpec,
-        TypedProgram, TypedReturnTypeArgument, TypedValueParameter,
+        ComposeFlavor, SafeBindFailureTarget, SafeBindRhsProjection, TypedDbgArg, TypedFacetPath,
+        TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedMatchArm, TypedMatchPattern,
+        TypedNode, TypedPattern, TypedProcessSpec, TypedProgram, TypedReturnTypeArgument,
+        TypedValueParameter,
     };
     use scar::types::{NominalType, Ty};
     use sigil::resolved::ResolvedId;
@@ -3613,6 +3614,11 @@ mod tests {
                     40,
                     Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error)),
                 )),
+                SafeBindRhsProjection::CanonicalResultOnce {
+                    payload_ty: Ty::Int,
+                    error_ty: Ty::Error,
+                },
+                SafeBindFailureTarget::TopLevel,
             ),
         };
 
@@ -3664,7 +3670,14 @@ mod tests {
         let node = TypedNode {
             ty: Ty::Unit,
             span: span(1, 16),
-            node: TypedInner::SafeBind(pattern, Box::new(local_var("values", 81, list_ty))),
+            node: TypedInner::SafeBind(
+                pattern,
+                Box::new(local_var("values", 81, list_ty.clone())),
+                SafeBindRhsProjection::PassThroughNonResultPartial {
+                    pattern_input_ty: list_ty,
+                },
+                SafeBindFailureTarget::TopLevel,
+            ),
         };
 
         gene.emit_node(&node)
@@ -4498,7 +4511,7 @@ fn collect_stmt_meta(
     function_defs: &mut Vec<String>,
 ) {
     match &stmt.node {
-        TypedInner::Bind(pat, rhs) | TypedInner::SafeBind(pat, rhs) => {
+        TypedInner::Bind(pat, rhs) | TypedInner::SafeBind(pat, rhs, _, _) => {
             let rhs = rhs.as_ref();
             collect_pattern_binding_infos(
                 pat,
@@ -4684,16 +4697,18 @@ fn collect_pattern_binding_infos(
                 facet_info,
             );
         }
-        TypedPattern::ResultOk(_, inner) => {
-            collect_pattern_binding_infos(
-                inner,
-                slot_map,
-                out,
-                callable_kind,
-                callable_display,
-                callable_captures,
-                facet_info,
-            );
+        TypedPattern::Constructor { fields, .. } => {
+            for field in fields {
+                collect_pattern_binding_infos(
+                    field,
+                    slot_map,
+                    out,
+                    callable_kind,
+                    callable_display.clone(),
+                    callable_captures,
+                    facet_info.clone(),
+                );
+            }
         }
         TypedPattern::Extractor { items, .. } => {
             for item in items {
@@ -4798,7 +4813,7 @@ fn typed_pattern_sequence_items(pattern: &TypedPattern) -> Option<Vec<&TypedPatt
         TypedPattern::Tuple(_, items) | TypedPattern::Extractor { items, .. } => {
             Some(items.iter().collect())
         }
-        TypedPattern::ResultOk(_, inner) => Some(vec![inner]),
+        TypedPattern::Constructor { fields, .. } => Some(fields.iter().collect()),
         TypedPattern::ListCons(..) => {
             let mut items = Vec::new();
             flatten_typed_list_pattern(pattern, &mut items);
@@ -5140,7 +5155,7 @@ struct PatternDecompChild {
 enum PatternDecomp {
     None,
     Tuple(Vec<PatternDecompChild>),
-    ResultOk(Box<PatternDecompChild>),
+    Constructor(Vec<PatternDecompChild>),
     ListCons {
         head: Box<PatternDecompChild>,
         tail: Box<PatternDecompChild>,
@@ -5182,6 +5197,7 @@ struct Codegen {
     pending_inject_calls: Vec<PendingInjectCall>,
     in_function: bool,
     top_level_returns_result: bool,
+    safe_bind_failure_target: Option<SafeBindFailureTarget>,
     constant_dedup_start: usize,
 }
 
@@ -5201,6 +5217,7 @@ impl Codegen {
             pending_inject_calls: Vec::new(),
             in_function: false,
             top_level_returns_result: false,
+            safe_bind_failure_target: None,
             constant_dedup_start: 0,
         }
     }
@@ -6718,8 +6735,8 @@ impl Codegen {
                 self.emit(Opcode::LoadConst(unit_idx));
             }
 
-            TypedInner::SafeBind(pat, rhs) => {
-                self.emit_safebind(pat, rhs)?;
+            TypedInner::SafeBind(pat, rhs, projection, failure_target) => {
+                self.emit_safebind(pat, rhs, projection, failure_target)?;
             }
 
             TypedInner::SupervisorSpawn {
@@ -8419,8 +8436,37 @@ impl Codegen {
         self.emit(Opcode::StructNew { field_count: 1 });
     }
 
-    fn emit_safebind(&mut self, pat: &TypedPattern, rhs: &TypedNode) -> Result<(), CodegenError> {
-        if !matches!(rhs.ty, Ty::Result(_, _)) {
+    fn emit_safebind(
+        &mut self,
+        pat: &TypedPattern,
+        rhs: &TypedNode,
+        projection: &SafeBindRhsProjection,
+        failure_target: &SafeBindFailureTarget,
+    ) -> Result<(), CodegenError> {
+        let previous_target = self
+            .safe_bind_failure_target
+            .replace(failure_target.clone());
+        let result = self.emit_safebind_with_target(pat, rhs, projection);
+        self.safe_bind_failure_target = previous_target;
+        result
+    }
+
+    fn emit_safebind_with_target(
+        &mut self,
+        pat: &TypedPattern,
+        rhs: &TypedNode,
+        projection: &SafeBindRhsProjection,
+    ) -> Result<(), CodegenError> {
+        if matches!(
+            projection,
+            SafeBindRhsProjection::PassThroughNonResultPartial { .. }
+        ) {
+            if matches!(rhs.ty, Ty::Result(_, _)) {
+                return Err(CodegenError {
+                    message: "Internal invariant broken: non-Result SafeBind projection received Result RHS".into(),
+                    span: rhs.span.clone(),
+                });
+            }
             if matches!(rhs.ty, Ty::List(_)) {
                 return self.emit_safebind_from_list(pat, rhs);
             }
@@ -8444,6 +8490,15 @@ impl Codegen {
             let unit_idx = self.add_constant(Constant::Unit);
             self.emit(Opcode::LoadConst(unit_idx));
             return Ok(());
+        }
+
+        if !matches!(rhs.ty, Ty::Result(_, _)) {
+            return Err(CodegenError {
+                message:
+                    "Internal invariant broken: Result SafeBind projection received non-Result RHS"
+                        .into(),
+                span: rhs.span.clone(),
+            });
         }
 
         self.emit_node(rhs)?;
@@ -8741,7 +8796,21 @@ impl Codegen {
         message: &str,
         span: Span,
     ) -> Result<(), CodegenError> {
-        if self.in_function {
+        if matches!(
+            self.safe_bind_failure_target,
+            Some(SafeBindFailureTarget::EnclosingResult { .. })
+        ) {
+            let tag_const = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit_error_value(kind, message, &span);
+            self.emit(Opcode::StructNew { field_count: 1 });
+            self.emit(Opcode::Return);
+        } else if matches!(
+            self.safe_bind_failure_target,
+            Some(SafeBindFailureTarget::TopLevel)
+        ) {
+            self.emit_top_level_pattern_failure(kind, message, span)?;
+        } else if self.in_function {
             let tag_const = self.add_constant(Constant::Tag(1));
             self.emit(Opcode::LoadConst(tag_const));
             self.emit_error_value(kind, message, &span);
@@ -8770,12 +8839,82 @@ impl Codegen {
         Ok(())
     }
 
+    fn emit_top_level_pattern_failure(
+        &mut self,
+        kind: &str,
+        message: &str,
+        span: Span,
+    ) -> Result<(), CodegenError> {
+        if self.top_level_returns_result {
+            let tag_const = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit_error_value(kind, message, &span);
+            self.emit(Opcode::StructNew { field_count: 1 });
+            self.emit(Opcode::Halt);
+        } else {
+            self.emit_error_value(kind, message, &span);
+            let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
+                message: "Unknown builtin: eprint".into(),
+                span: span.clone(),
+            })?;
+            self.emit(Opcode::CallBuiltin {
+                builtin_id: eprint_id,
+                arity: 1,
+                span_start: span.start as u32,
+                span_end: span.end as u32,
+            });
+            self.emit(Opcode::Halt);
+        }
+        Ok(())
+    }
+
     fn emit_pattern_failure_from_message_stack(
         &mut self,
         kind: &str,
         span: Span,
     ) -> Result<(), CodegenError> {
-        if self.in_function {
+        if matches!(
+            self.safe_bind_failure_target,
+            Some(SafeBindFailureTarget::EnclosingResult { .. })
+        ) {
+            let msg_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::StoreLocal(msg_slot));
+            let tag_const = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag_const));
+            self.emit(Opcode::LoadLocal(msg_slot));
+            self.emit_error_value_from_stack(kind, &span);
+            self.emit(Opcode::StructNew { field_count: 1 });
+            self.emit(Opcode::Return);
+        } else if matches!(
+            self.safe_bind_failure_target,
+            Some(SafeBindFailureTarget::TopLevel)
+        ) {
+            if self.top_level_returns_result {
+                let msg_slot = self.state.next_slot;
+                self.state.next_slot += 1;
+                self.emit(Opcode::StoreLocal(msg_slot));
+                let tag_const = self.add_constant(Constant::Tag(1));
+                self.emit(Opcode::LoadConst(tag_const));
+                self.emit(Opcode::LoadLocal(msg_slot));
+                self.emit_error_value_from_stack(kind, &span);
+                self.emit(Opcode::StructNew { field_count: 1 });
+                self.emit(Opcode::Halt);
+            } else {
+                self.emit_error_value_from_stack(kind, &span);
+                let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
+                    message: "Unknown builtin: eprint".into(),
+                    span: span.clone(),
+                })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id: eprint_id,
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                self.emit(Opcode::Halt);
+            }
+        } else if self.in_function {
             let msg_slot = self.state.next_slot;
             self.state.next_slot += 1;
             self.emit(Opcode::StoreLocal(msg_slot));
@@ -9085,39 +9224,40 @@ impl Codegen {
                 err_span,
                 propagate_result_error,
             )?,
-            TypedPattern::ResultOk(_, inner) => {
+            TypedPattern::Constructor {
+                tag,
+                fields,
+                field_offset,
+                ..
+            } => {
                 self.emit(Opcode::LoadLocal(slot));
                 self.emit(Opcode::GetTag);
-                let expected_tag = if propagate_result_error { 1 } else { 0 };
-                let tag_const = self.add_constant(Constant::Tag(expected_tag));
+                let tag_const = self.add_constant(Constant::Tag(*tag));
                 self.emit(Opcode::LoadConst(tag_const));
                 self.emit(Opcode::EqTag);
-
-                if propagate_result_error {
-                    let inner_ok = self.fresh_label();
-                    self.emit_jump_if_false(inner_ok);
-                    self.emit_propagate_result_from_local(slot, err_span.clone())?;
-                    self.patch_label(inner_ok);
-                } else {
-                    self.emit_jump_if_false(fail_label);
+                self.emit_jump_if_false(fail_label);
+                let mut children = Vec::with_capacity(fields.len());
+                for (index, field) in fields.iter().enumerate() {
+                    let field_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::LoadLocal(slot));
+                    self.emit(Opcode::GetField {
+                        field_index: *field_offset + index as u32,
+                    });
+                    self.emit(Opcode::StoreLocal(field_slot));
+                    let decomp = self.emit_pattern_test_from_local_with_mode(
+                        field,
+                        field_slot,
+                        fail_label,
+                        err_span,
+                        propagate_result_error,
+                    )?;
+                    children.push(PatternDecompChild {
+                        slot: field_slot,
+                        decomp,
+                    });
                 }
-
-                let inner_slot = self.state.next_slot;
-                self.state.next_slot += 1;
-                self.emit(Opcode::LoadLocal(slot));
-                self.emit(Opcode::GetField { field_index: 0 });
-                self.emit(Opcode::StoreLocal(inner_slot));
-                let inner_decomp = self.emit_pattern_test_from_local_with_mode(
-                    inner,
-                    inner_slot,
-                    fail_label,
-                    err_span,
-                    propagate_result_error,
-                )?;
-                PatternDecomp::ResultOk(Box::new(PatternDecompChild {
-                    slot: inner_slot,
-                    decomp: inner_decomp,
-                }))
+                PatternDecomp::Constructor(children)
             }
             TypedPattern::Extractor {
                 input_ty,
@@ -9326,19 +9466,34 @@ impl Codegen {
             TypedPattern::ListCons(_, _, _) => {
                 self.emit_list_cons_pattern_bind_from_local(pat, slot, decomp, err_span)?;
             }
-            TypedPattern::ResultOk(_, inner) => {
-                let (inner_slot, inner_decomp) = match decomp {
-                    Some(PatternDecomp::ResultOk(child)) => (child.slot, Some(child.decomp)),
-                    _ => {
-                        let inner_slot = self.state.next_slot;
+            TypedPattern::Constructor {
+                fields,
+                field_offset,
+                ..
+            } => {
+                let cached = match decomp {
+                    Some(PatternDecomp::Constructor(children)) => Some(children),
+                    _ => None,
+                };
+                for (index, field) in fields.iter().enumerate() {
+                    let (field_slot, field_decomp) = if let Some(children) = &cached {
+                        let child = children.get(index).ok_or_else(|| CodegenError {
+                            message: "Internal invariant broken: constructor pattern decomp arity mismatch".into(),
+                            span: err_span.clone(),
+                        })?;
+                        (child.slot, Some(child.decomp.clone()))
+                    } else {
+                        let field_slot = self.state.next_slot;
                         self.state.next_slot += 1;
                         self.emit(Opcode::LoadLocal(slot));
-                        self.emit(Opcode::GetField { field_index: 0 });
-                        self.emit(Opcode::StoreLocal(inner_slot));
-                        (inner_slot, None)
-                    }
-                };
-                self.emit_pattern_bind_from_local(inner, inner_slot, inner_decomp, err_span)?;
+                        self.emit(Opcode::GetField {
+                            field_index: *field_offset + index as u32,
+                        });
+                        self.emit(Opcode::StoreLocal(field_slot));
+                        (field_slot, None)
+                    };
+                    self.emit_pattern_bind_from_local(field, field_slot, field_decomp, err_span)?;
+                }
             }
             TypedPattern::Extractor {
                 input_ty,
@@ -9517,7 +9672,32 @@ impl Codegen {
         span: Span,
     ) -> Result<(), CodegenError> {
         self.emit(Opcode::LoadLocal(result_slot));
-        if self.in_function {
+        if matches!(
+            self.safe_bind_failure_target,
+            Some(SafeBindFailureTarget::EnclosingResult { .. })
+        ) {
+            self.emit(Opcode::Return);
+        } else if matches!(
+            self.safe_bind_failure_target,
+            Some(SafeBindFailureTarget::TopLevel)
+        ) {
+            if self.top_level_returns_result {
+                self.emit(Opcode::Halt);
+            } else {
+                self.emit(Opcode::GetField { field_index: 0 });
+                let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
+                    message: "Unknown builtin: eprint".into(),
+                    span: span.clone(),
+                })?;
+                self.emit(Opcode::CallBuiltin {
+                    builtin_id: eprint_id,
+                    arity: 1,
+                    span_start: span.start as u32,
+                    span_end: span.end as u32,
+                });
+                self.emit(Opcode::Halt);
+            }
+        } else if self.in_function {
             self.emit(Opcode::Return);
         } else if self.top_level_returns_result {
             self.emit(Opcode::Halt);

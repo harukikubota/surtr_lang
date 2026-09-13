@@ -241,22 +241,23 @@ REPL では入力自体は受理しますが、失敗時はエラーを表示し
 value: Int =? try_from::<Int>("1")
 [head, ..tail] =? [1, 2, 3]
 [first, ..rest] =? "source"
+Option::Some(saved) =? Option::Some(1)
 ```
 
-現時点での対象は次です。
+自動的に外側を分解する RHS は canonical `Result` だけで、一段だけです。
+Result 以外の RHS は、constructor、literal、list/string、Extractor などの partial pattern が
+値全体を明示検査するときだけそのまま渡されます。Monad payload の暗黙取り出しはありません。
 
-- `Result`
-- `List`
-- `String`
-
-`Option` は `=?` の対象外なので、必要なら `from::<Result>(value)` で `Result` へ変換してから使います。
-たとえば `num: Int =? Option::Some(1)` はエラーです。
+`Option::Some(saved) =? Option::Some(1)` は Option 全体を明示的に検査するため有効です。
+一方、`saved =? Option::Some(1)` のような total pattern は、RHS が Result 以外の Monad なので
+compile error です。`saved =? 1` も非Monad RHSとして拒否されます。
 
 `=?` も trait 演算子ではなく、language-level binding form です。
 
 SafeBind の流れは次です。
 
 - RHS が `Err(...)` ならその `Err(...)` を早期リターンします
+- nested Result は再帰的に分解せず、内側の `Ok` / `Err` は通常 constructor pattern として照合します
 - LHS のマッチ結果が `NoMatch` なら error 化して早期リターンします
 - LHS には `uncons`、literal match、Extractor を再帰的に書けます
 - 上のチェックが全部成功したときだけ変数が束縛されて続行します

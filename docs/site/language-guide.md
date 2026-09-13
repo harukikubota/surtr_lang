@@ -486,14 +486,14 @@ def pick() -> Result<Int> {
 これは「`Ok` なら束縛し、`Err` なら現在の評価を中断して伝播する」という糖衣構文です。  
 例外送出ではなく、`Either` 的な分岐を短く書くための記法だと考えると追いやすくなります。
 
-`=?` は Result 専用というより、Surtr では「失敗を伝播する束縛」の入口です。  
-通常の user code では `Result<T>` を返す関数の中で使います。
-現在きちんと使える対象は `Result`、`List`、`String` です。
-`Option` は標準 enum として存在しますが、`=?` や Result 文脈の関数演算子では特別扱いしません。
-必要な場合は `from::<Result>(value)` で明示的に `Result` へ変換します。
-欠損を field として持ちつつ Result パイプへそのまま流したい場合は、
-`Option<T>` より `T?` を使う方が自然です。
-そのため `num: Int =? Option::Some(1)` はエラーです。
+`=?` は「Result-style の失敗を伝播しながら pattern を適用する束縛」の入口です。
+通常の user code では `Result<T>` を返す関数の中で使います。canonical `Result` RHSだけを
+外側一段分解し、`Err`を早期伝播します。Result以外のRHSは、値全体を明示検査するpartial patternに
+だけ渡されます。Monadのpayloadを暗黙に取り出す規則はありません。
+
+たとえば`Option::Some(num) =? Option::Some(1)`はOption全体をconstructor patternで検査するため有効です。
+一方、`num =? Option::Some(1)`はtotal pattern + non-Result Monad RHSとして拒否されます。
+`num: Int =? Option::Some(1)`も通常のpattern型不一致です。
 
 ```surtr
 [head, ..tail] =? [1, 2, 3]
@@ -505,6 +505,11 @@ print(to_string(tail))
 [first, ..tail] =? "source"
 print(first)   # => "s"
 print(tail)    # => "ource"
+```
+
+```surtr
+Option::Some(value) =? Option::Some(1)
+print(to_string(value)) # => "1"
 ```
 
 LHS には list/string 分解、literal match、Extractor を再帰的に書けます。  

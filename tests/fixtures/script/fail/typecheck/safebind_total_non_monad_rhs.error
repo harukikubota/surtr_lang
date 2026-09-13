@@ -1,0 +1,9 @@
+phase: typecheck
+contains: Int is not a SafeBind target; it is not a Monad
+contains: only a Result RHS can be decomposed by `=?`.
+json: /reason = "SafeBindTotalPatternNonMonadRhs"
+json: /origin/kind = "Intrinsic"
+json: /data/kind = "SafeBindRelation"
+json: /data/lhs_is_total = true
+json: /data/rhs_is_canonical_result = false
+json: /data/monad_capability = "unsatisfied"
