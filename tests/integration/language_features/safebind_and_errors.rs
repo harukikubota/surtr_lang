@@ -394,6 +394,81 @@ print("after")"#,
     assert_eq!(stderr, vec!["Error: Oops: oops"]);
 }
 
+fn do_safebind_result_preserves_err_and_skips_continuation() {
+    assert_output(
+        r#"deferror Oops {
+  "oops"
+}
+
+def source() -> Result<Int, Oops> {
+  print("rhs")
+  Err(Oops)
+}
+
+result: Result<Int> = do::<Result> {
+  value =? source()
+  print("after")
+  Ok(value + 1)
+}
+
+print(inspect(result))"#,
+        &["rhs", "Err(Oops(\"oops\"))"],
+    );
+}
+
+fn do_safebind_option_overrides_result_err_with_none() {
+    assert_output(
+        r#"deferror Oops {
+  "oops"
+}
+
+def source() -> Result<Int, Oops> {
+  print("rhs")
+  Err(Oops)
+}
+
+result: Option<Int> = do::<Option> {
+  value =? source()
+  print("after")
+  Option::Some(value + 1)
+}
+
+print(inspect(result))"#,
+        &["rhs", "Option::None"],
+    );
+}
+
+fn do_safebind_option_pattern_failure_uses_empty() {
+    assert_output(
+        r#"result: Option<Int> = do::<Option> {
+  1 =? 1
+  2 =? 1
+  print("after")
+  Option::Some(3)
+}
+
+print(inspect(result))"#,
+        &["Option::None"],
+    );
+}
+
+fn do_safebind_success_evaluates_rhs_once() {
+    assert_output(
+        r#"def source() -> Result<Int> {
+  print("rhs")
+  Ok(1)
+}
+
+result: Option<Int> = do::<Option> {
+  value =? source()
+  Option::Some(value + 1)
+}
+
+print(inspect(result))"#,
+        &["rhs", "Option::Some(2)"],
+    );
+}
+
 fn safebind_rejects_total_plain_rhs() {
     assert_compile_error(
         "num =? 10",
@@ -787,6 +862,22 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "safebind_script_error_eprints",
             safebind_script_error_eprints as fn(),
+        ),
+        (
+            "do_safebind_result_preserves_err_and_skips_continuation",
+            do_safebind_result_preserves_err_and_skips_continuation as fn(),
+        ),
+        (
+            "do_safebind_option_overrides_result_err_with_none",
+            do_safebind_option_overrides_result_err_with_none as fn(),
+        ),
+        (
+            "do_safebind_option_pattern_failure_uses_empty",
+            do_safebind_option_pattern_failure_uses_empty as fn(),
+        ),
+        (
+            "do_safebind_success_evaluates_rhs_once",
+            do_safebind_success_evaluates_rhs_once as fn(),
         ),
         (
             "safebind_rejects_total_plain_rhs",

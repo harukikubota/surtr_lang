@@ -369,6 +369,13 @@ impl Checker {
                 }
                 result
             }
+            TypedInner::DoSafeBind(control) => {
+                let mut local = bindings.clone();
+                let source = self.source_provenance(&control.rhs, bindings);
+                let success = self.safebind_source_provenance(&source);
+                self.pattern_provenance_bindings(&control.pattern, &success, &mut local);
+                self.value_provenance(&control.continuation, &local)
+            }
             _ => Provenance::RequiresProof,
         }
     }

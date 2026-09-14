@@ -6,7 +6,14 @@ use super::Parser;
 
 impl Parser<'_> {
     pub(super) fn parse_do_pattern_statement(&mut self) -> Result<AstDoStatement, ParseError> {
-        let pat = self.parse_bind_pattern()?;
+        let mut pat = self.parse_bind_pattern()?;
+        if let AstPattern::Var(name_span, name) = &pat {
+            if matches!(self.peek(), Token::Colon) {
+                self.advance();
+                let ty = self.parse_type()?;
+                pat = AstPattern::Annotated(name_span.clone(), name.clone(), ty);
+            }
+        }
         let operator = self.peek().clone();
         if !matches!(operator, Token::LeftArrow | Token::SafeBind) {
             return Err(ParseError::syntax(

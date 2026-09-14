@@ -7,7 +7,7 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- N01–N09は実装済み。N10以降は未着手である。
+- N01–N10は完了。N11以降は未着手である。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
@@ -52,7 +52,7 @@ N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け
 | N07 | do compiler-owned contract | N06 | [x] 完了 | 旧Task 11 |
 | N08 | do syntax・AST・resolver・scope | N07 | [x] 完了 | 旧Task 12 |
 | N09 | do carrier推論・core lowering | N08 | [x] 完了 | 旧Task 13 |
-| N10 | do SafeBind・Forge lowering | N09 | [ ] 未着手 | 旧Task 14 |
+| N10 | do SafeBind・Forge lowering | N09 | [x] 完了 | 旧Task 14 |
 | N11 | do診断・全carrier統合検証 | N10 | [ ] 未着手 | 旧Task 15 |
 | N12 | Generator core改修 | G-I01/G-I02確定。独立Task | [ ] 未着手 | 新規 |
 | N13 | Generator adapter・言語機能接続 | N12。do確認はN11 | [ ] 未着手 | 新規 |
@@ -106,7 +106,9 @@ dirtyなメインworktreeは変更せず、専用worktreeで文書だけを整�
 | 同 Task 10 | 完了履歴 | SafeBind旧制限、diagnostic heuristic、builtin surface allowlistをN06で撤去 | `docs/dev/diagnostics.md`、`diagnostics_cleanup_spec.md` / N06 |
 | 同 Task 11 | 実装済み | Sindrの`DoIntrinsicContract` / `DoBlock` / `IntrinsicId::Do`、標準surfaceの構造検証、reserved marker拒否を実装 | `do_intrinsic_spec.md` / N07 |
 | 同 Task 12 | 実装済み | `Token::Do` / `Ast::Do` / `Resolved::Do`、RTA・statement span、RHS-first scope resolution | `do_intrinsic_spec.md` / N08 |
-| 同 Task 13–15 | 確定未実装 | carrier推論、typed lowering、SafeBind failure target、Forge lowering、全carrier受入検証なし | `do_intrinsic_spec.md` / N09–N11 |
+| 同 Task 13 | 実装済み | do-local carrier推論、Monad / 条件付きAlternative、core typed loweringを実装 | `do_intrinsic_spec.md` / N09 |
+| 同 Task 14 | 実装済み | SafeBind failure targetとForge loweringを実装・検証 | `do_intrinsic_spec.md` / N10 |
+| 同 Task 15 | 確定未実装 | 診断整備と全carrier受入検証なし | `do_intrinsic_spec.md` / N11 |
 | 同 Task 16 | implementation plan | 最終監査はdo/Generator等の完了後 | N14 |
 | `signature_level_type_constructor_inference_draft.md` | draft | import前後のblob hash一致を確認 | 本文を変更せず`doc/`に保持 |
 
@@ -380,7 +382,7 @@ raw signatureの再解析、通常callable scheme化、runtime function / opcode
   再レビューはfindings 0件。Astra顧問も一般AST span保持を採用すべきと確認し、CI初回timeoutを
   binary fingerprint変更後のProject prefix cold並列構築と切り分けた。
 
-N09まで実装済み。N10のSafeBind / Forge lowering以降は未実装。commitは未作成。
+N10まで完了。N11の診断・全carrier統合検証以降は未実装。commitは未作成。
 
 ### N08: syntax / AST / resolver / scope
 
@@ -446,6 +448,38 @@ fail closedを維持する。
 N06で合法と確定したSafeBindを再利用し、do carrierがcanonical ResultならError保存、それ以外は同じcarrierのemptyへ
 失敗先を変更する。total non-Result RHSの入力判定をN10で緩和・再実装しない。Error生成・RHS評価回数・source originを維持する。
 do専用VM opcodeを追加しない。
+
+状態: 完了。Scarはdo内SafeBindを専用のboxed typed controlへ正規化し、RHS projection、
+後続continuation、source origin、およびcanonical Resultのerror保存または具体化済み`Alternative::empty` dispatchを保持する。
+SafeBind RHSの型検査substitutionはcarrier推論へ混ぜず、後続文から確定したcarrierに対してfailure targetを選択する。
+Forgeはtyped targetごとの式内joinへlowerし、enclosing functionの`Return`やtop-levelの`Halt`へ依存しない。
+Result以外ではfailure payloadを生成・観測せず、一つのfailure handlerから保存済みempty callへ進む。
+do専用opcodeとEldr変更は追加していない。
+
+実装中、inline typed payloadによるScarのdebug stack frame増大を既存回帰テストが検出した。
+Astra顧問のframe比較を受け、payload全体をbox化しspecialization rewriteを専用helperへ分離した。
+既存の8 MiB stack regressionはテスト条件を変更せずGreenへ復帰した。
+
+独立レビューで検出したtyped visitor、Result payload specialization、session function-index再配置、
+複数SafeBind / SafeBind後の`<-`におけるresult origin、semantic cache schema、未知Extractor tagのfailure吸収を
+回帰テストから修正した。未知tagはnon-Result doの`empty`へ丸めず`InvalidMatchResult`としてfail closedにし、
+旧typed IRを含むstdlib semantic cacheはschema mismatchで再構築する。`TypedInner::DoSafeBind`の保存済みoriginを
+既存の末尾return診断へ投影するvisitor拡張は、N11のdiagnostics / acceptanceへ引き継ぐ。
+
+検証（2026-09-14）:
+
+- TDD Red: obligation未走査、Result全体へのpattern具体化、pin dispatchのstale function index、未知Extractor tagの
+  `Alternative::empty`吸収を直接テストし、4件が狙った理由で失敗することを確認後にGreen化した。
+- `rtk cargo nextest run -p spire -p sigil -p scar -p forge -p xldr`: 1121 passed、78 skipped。
+- `rtk cargo nextest run -p rune --test integration language_features`: 8 passed、123 skipped。
+- `rtk cargo nextest run -p scar --test typecheck_surface typecheck_surface`: 8 passed、1 skipped。
+- `cargo check --workspace`、`cargo run -- test --quiet --all`: 成功。
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace`: 最終差分で2回連続各1919 passed。
+- `cargo fmt --all -- --check`、`git diff --check`: 成功。
+- 独立サブエージェントの最終再レビューはN10 blocker findings 0件。Astra顧問のstack frame比較を採用した後も、
+  do専用opcode / Eldr変更、旧failure経路、曖昧なcarrier fallbackは追加していない。
+
+N10の未検証範囲はない。commitは未作成。
 
 ### N11: diagnostics / acceptance
 

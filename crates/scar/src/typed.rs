@@ -418,6 +418,10 @@ pub enum TypedInner {
         SafeBindRhsProjection,
         SafeBindFailureTarget,
     ),
+    /// SafeBind normalized as expression-local control flow inside a `do` block.
+    /// Both failure routes produce the do carrier value without escaping the
+    /// enclosing callable or relying on codegen context.
+    DoSafeBind(Box<TypedDoSafeBind>),
     BinOp(BinOp, Box<TypedNode>, Box<TypedNode>),
     Pipe(Box<TypedNode>, Box<TypedNode>),
     Compose(ComposeFlavor, Box<TypedNode>, Box<TypedNode>),
@@ -628,6 +632,27 @@ pub enum SafeBindRhsProjection {
 pub enum SafeBindFailureTarget {
     EnclosingResult { error_ty: Ty },
     TopLevel,
+    DoResult { error_ty: Ty },
+    DoAlternative { empty: Box<TypedNode> },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TypedDoSafeBind {
+    pub pattern: TypedPattern,
+    pub rhs: Box<TypedNode>,
+    pub projection: SafeBindRhsProjection,
+    pub failure_target: SafeBindFailureTarget,
+    pub continuation: Box<TypedNode>,
+    pub origins: DoSafeBindOrigins,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DoSafeBindOrigins {
+    pub do_span: Span,
+    pub operator_span: Span,
+    pub pattern_span: Span,
+    pub rhs_span: Span,
+    pub result_span: Span,
 }
 
 /// Match pattern (typed).

@@ -1932,6 +1932,35 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_pattern(pattern, rewrites);
                 Self::rewrite_fun_indices_in_node(rhs, rewrites);
             }
+            TypedInner::DoSafeBind(control) => {
+                Self::rewrite_fun_indices_in_pattern(&mut control.pattern, rewrites);
+                Self::rewrite_fun_indices_in_node(&mut control.rhs, rewrites);
+                match &mut control.projection {
+                    SafeBindRhsProjection::CanonicalResultOnce {
+                        payload_ty,
+                        error_ty,
+                    } => {
+                        Self::rewrite_fun_indices_in_ty(payload_ty, rewrites);
+                        Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
+                    }
+                    SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
+                        Self::rewrite_fun_indices_in_ty(pattern_input_ty, rewrites);
+                    }
+                }
+                match &mut control.failure_target {
+                    SafeBindFailureTarget::DoResult { error_ty } => {
+                        Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
+                    }
+                    SafeBindFailureTarget::DoAlternative { empty } => {
+                        Self::rewrite_fun_indices_in_node(empty, rewrites);
+                    }
+                    SafeBindFailureTarget::EnclosingResult { error_ty } => {
+                        Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
+                    }
+                    SafeBindFailureTarget::TopLevel => {}
+                }
+                Self::rewrite_fun_indices_in_node(&mut control.continuation, rewrites);
+            }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
@@ -2069,8 +2098,11 @@ impl ScarSession {
 
     fn rewrite_fun_indices_in_pattern(pattern: &mut TypedPattern, rewrites: &HashMap<u32, u32>) {
         match pattern {
+            TypedPattern::Pin(ty, _, dispatch) => {
+                Self::rewrite_fun_indices_in_ty(ty, rewrites);
+                Self::rewrite_fun_indices_in_dispatch(dispatch, rewrites);
+            }
             TypedPattern::Var(ty, _)
-            | TypedPattern::Pin(ty, _, _)
             | TypedPattern::As(ty, _, _)
             | TypedPattern::Wildcard(ty)
             | TypedPattern::ListNil(ty)
@@ -2274,6 +2306,82 @@ mod specialization_state_tests {
             .specialization_fun_idxs
             .insert(specialization_key(), old_fun_idx);
         session
+    }
+
+    #[test]
+    fn do_safebind_fun_index_rewrite_covers_metadata_and_pin_dispatch() {
+        let callable_ty = user_func_ty(40);
+        let mut node = TypedNode {
+            ty: callable_ty.clone(),
+            span: test_span(),
+            node: TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
+                pattern: TypedPattern::Pin(
+                    callable_ty.clone(),
+                    resolved_id("expected", "Global::expected", 91_300),
+                    TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                        name: "Global::Eq::eq".into(),
+                        fun_idx: 40,
+                    }),
+                ),
+                rhs: Box::new(TypedNode {
+                    ty: callable_ty.clone(),
+                    span: test_span(),
+                    node: TypedInner::Lit(Lit::Unit),
+                }),
+                projection: SafeBindRhsProjection::CanonicalResultOnce {
+                    payload_ty: callable_ty.clone(),
+                    error_ty: callable_ty.clone(),
+                },
+                failure_target: SafeBindFailureTarget::DoResult {
+                    error_ty: callable_ty.clone(),
+                },
+                continuation: Box::new(TypedNode {
+                    ty: callable_ty,
+                    span: test_span(),
+                    node: TypedInner::Lit(Lit::Unit),
+                }),
+                origins: DoSafeBindOrigins {
+                    do_span: test_span(),
+                    operator_span: test_span(),
+                    pattern_span: test_span(),
+                    rhs_span: test_span(),
+                    result_span: test_span(),
+                },
+            })),
+        };
+
+        ScarSession::rewrite_fun_indices_in_node(&mut node, &HashMap::from([(40, 140)]));
+
+        let TypedInner::DoSafeBind(control) = &node.node else {
+            panic!("expected DoSafeBind")
+        };
+        let TypedPattern::Pin(
+            Ty::UserFunc {
+                fun_idx: pattern_ty,
+                ..
+            },
+            _,
+            TraitDispatch::Static(TraitDispatchTarget::UserFunction {
+                fun_idx: dispatch, ..
+            }),
+        ) = &control.pattern
+        else {
+            panic!("expected rewritten pin pattern")
+        };
+        assert_eq!((*pattern_ty, *dispatch), (140, 140));
+        assert!(matches!(
+            &control.projection,
+            SafeBindRhsProjection::CanonicalResultOnce {
+                payload_ty: Ty::UserFunc { fun_idx: 140, .. },
+                error_ty: Ty::UserFunc { fun_idx: 140, .. },
+            }
+        ));
+        assert!(matches!(
+            &control.failure_target,
+            SafeBindFailureTarget::DoResult {
+                error_ty: Ty::UserFunc { fun_idx: 140, .. }
+            }
+        ));
     }
 
     #[test]
@@ -3031,6 +3139,13 @@ impl Checker {
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::FieldAccess(rhs, _)
             | TypedInner::Semi(rhs) => self.collect_unused_value_warnings_in_node(rhs),
+            TypedInner::DoSafeBind(control) => {
+                self.collect_unused_value_warnings_in_node(&control.rhs);
+                if let SafeBindFailureTarget::DoAlternative { empty } = &control.failure_target {
+                    self.collect_unused_value_warnings_in_node(empty);
+                }
+                self.collect_unused_value_warnings_in_node(&control.continuation);
+            }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)

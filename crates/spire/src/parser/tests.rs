@@ -7115,6 +7115,31 @@ fn do_expression_preserves_carrier_and_statement_kinds() {
 }
 
 #[test]
+fn do_expression_preserves_annotated_safebind_pattern() {
+    let source = r#"result = do::<Result> {
+  value: Int =? source
+  Result::Ok(value)
+}"#;
+    let ast = parse(source).expect("annotated do SafeBind should parse");
+    let Ast::Bind(_, _, rhs) = &ast[0] else {
+        panic!("expected outer binding");
+    };
+    let Ast::Do(_, _, statements) = rhs.as_ref() else {
+        panic!("expected do expression");
+    };
+    assert!(matches!(
+        statements.as_slice(),
+        [
+            AstDoStatement::SafeBind {
+                pattern: AstPattern::Annotated(_, name, AstTy::Named(_, ty)),
+                ..
+            },
+            AstDoStatement::Statement(_),
+        ] if name == "value" && ty == "Int"
+    ));
+}
+
+#[test]
 fn do_expression_accepts_omitted_hole_head_and_full_carriers() {
     for source in [
         "do { finish() }",
