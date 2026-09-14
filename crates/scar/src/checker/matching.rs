@@ -1,3 +1,4 @@
+use super::expr::ExpectedTypeRelation;
 use super::*;
 use diagnostics::{DiagnosticOrigin, PatternKind, SourceRole, TypeDiagnosticReason};
 
@@ -32,6 +33,7 @@ impl Checker {
         scrutinee: &Resolved,
         arms: &[ResolvedMatchArm],
         expected: Option<&Ty>,
+        expected_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedNode, TypeError> {
         // A polymorphic constructor used as the scrutinee (for example
         // `Err(NoneError)`) cannot be inferred in isolation: without an
@@ -52,8 +54,14 @@ impl Checker {
 
         let scrutinee_provenance = self.constructor_capability_for_node(&typed_scrut);
         for (ordinal, arm) in arms.iter().enumerate() {
-            let mut typed_arm =
-                self.check_match_arm(arm, &typed_scrut.ty, &scrutinee_provenance, span, expected)?;
+            let mut typed_arm = self.check_match_arm(
+                arm,
+                &typed_scrut.ty,
+                &scrutinee_provenance,
+                span,
+                expected,
+                expected_relation,
+            )?;
             if let Some(ref rt) = result_ty {
                 let coerce = self.with_type_relation_probe(
                     &[rt, &typed_arm.body.ty, &typed_scrut.ty],
@@ -445,6 +453,7 @@ impl Checker {
         scrutinee_provenance: &ConstructorCapabilityProvenance,
         _span: &Span,
         expected: Option<&Ty>,
+        expected_relation: Option<&ExpectedTypeRelation>,
     ) -> Result<TypedMatchArm, TypeError> {
         let profile = self.profiler.start();
         self.env.push_var_scope();
@@ -475,7 +484,13 @@ impl Checker {
                 None
             };
             let typed_body = match expected {
-                Some(expected) => self.check_node_with_expected(&arm.body, Some(expected))?,
+                Some(expected) if expected_relation.is_some() => self
+                    .check_node_with_expected_relation(
+                        &arm.body,
+                        Some(expected),
+                        expected_relation,
+                    )?,
+                Some(expected) => self.check_branch_node_with_expected(&arm.body, expected)?,
                 None => self.check_node(&arm.body)?,
             };
             // Do not normalize env bindings or typed guard/body subtrees in this
@@ -1124,7 +1139,7 @@ impl Checker {
         arms: &[ResolvedMatchArm],
         expected: Option<&Ty>,
     ) -> Result<TypedNode, TypeError> {
-        self.check_match(span, scrutinee, arms, expected)
+        self.check_match(span, scrutinee, arms, expected, None)
             .map_err(|mut error| {
                 if let Some(diagnostic) = &mut error.structured {
                     if diagnostic.reason == TypeDiagnosticReason::MatchArmTypeMismatch

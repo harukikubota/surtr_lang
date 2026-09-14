@@ -147,7 +147,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
             collect_node_usage(rhs, usage);
             collect_pattern_usage(pattern, usage);
         }
-        Resolved::Do(_, _, _, statements) => {
+        Resolved::Do(_, _, _, _, statements) => {
             for statement in statements {
                 match statement {
                     ResolvedDoStatement::Extract { pattern, rhs, .. }

@@ -516,6 +516,24 @@ LHS には list/string 分解、literal match、Extractor を再帰的に書け�
 途中で `Err(...)` が出ればそのまま早期伝播し、`NoMatch` は error として返されます。  
 REPL ではその失敗を表示しますが、セッション自体は継続します。
 
+### `do` による Monad の逐次処理
+
+Monad の値を順に処理するには `do` を使います。`<-` で payload を取り出し、最後の式が同じ carrier の値を返します。
+carrier は `do::<Option>` のように指定するか、式や期待される型から推論できます。
+
+```surtr
+result: Option<Int> = do::<Option> {
+  first <- Option::Some(20)
+  second <- Option::Some(first + 1)
+  Option::Some(second * 2)
+}
+print(inspect(result)) # => Option::Some(42)
+```
+
+通常のMonad処理には`Monad` capabilityが必要です。部分patternで値を取り出す場合は失敗先として同じcarrierの
+`Alternative`も必要です。Transformerも通常のMonad carrierとして使えますが、base carrierの値を自動でliftしません。
+必要な値には`MonadT::lift`を明示してください。
+
 `Result` の内部表現は enum-like な 2 分岐の tagged value ですが、Surtr の言語仕様では `defenum` と同一 contract にはしません。  
 あくまで `Result` は dedicated な失敗表現であり、`Ok` / `Err` もその専用 constructor として見せます。
 

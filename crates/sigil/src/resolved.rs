@@ -58,6 +58,16 @@ pub struct ResolvedSignatureTy {
     pub direct_constructor_trait: Option<ResolvedId>,
 }
 
+/// Exact Trait identities used by the compiler-owned `do` contract.
+///
+/// Sigil owns name resolution, so later phases must consume these identities
+/// instead of rediscovering canonical Traits from display names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedDoContract {
+    pub monad_trait: Option<ResolvedId>,
+    pub alternative_trait: Option<ResolvedId>,
+}
+
 impl ResolvedSignatureTy {
     pub fn syntax(&self) -> &AstTy {
         &self.syntax
@@ -151,6 +161,7 @@ pub enum Resolved {
     Do(
         Span,
         IntrinsicId,
+        ResolvedDoContract,
         Vec<ResolvedReturnTypeArgument>,
         Vec<ResolvedDoStatement>,
     ),

@@ -291,8 +291,8 @@ call-site ReturnTypeArgumentは定義側に対応位置がある場合だけ指�
 - user function、Trait helper、builtinのsignatureを同じwell-formedness、型推論、trait obligation routeへ載せる。
 - Forgeへは具体化済みcall/dispatchだけを渡し、ReturnTypeArgument専用metadataを新設しない。
 - `do` 構文intrinsicは、完了済みのSafeBind・diagnostics cleanupゲートを前提に追加する。do-local
-  carrier推論、core lowering、SafeBind failure targetとForge loweringは実装済みで、診断整備と全carrier
-  受入検証はN11で行う。
+  carrier推論、core lowering、SafeBind failure target、Forge lowering、診断整備、全carrier受入検証は
+  N11までに実装・検証済みである。
 
 互換用の二重field、旧用語alias、旧経路fallbackを追加してはならない。serialized cacheやfixture更新が
 必要な場合も一括更新し、旧形式を読み戻すcompatibility layerは設けない。

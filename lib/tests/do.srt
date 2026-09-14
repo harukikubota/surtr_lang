@@ -1,0 +1,190 @@
+import Test;
+import Function::apply;
+
+defstruct DoProbe<$A> {
+  value: $A,
+}
+
+impl DoProbe {
+  def new(value: $A) -> DoProbe<$A> {
+    DoProbe { value }
+  }
+}
+
+impl Functor for DoProbe<$T> {
+  def fmap(self: DoProbe<$A>, mapper: ($A -> $B)) -> DoProbe<$B> {
+    DoProbe { value: mapper(self.value) }
+  }
+}
+
+impl Applicative for DoProbe<$T> {
+  def pure::<DoProbe<$T>>(value: $A) -> DoProbe<$A> {
+    DoProbe { value }
+  }
+
+  def ap(mapper: DoProbe<($A -> $B)>, value: DoProbe<$A>) -> DoProbe<$B> {
+    DoProbe { value: apply(mapper.value, value.value) }
+  }
+}
+
+impl Monad for DoProbe<$T> {
+  def return::<DoProbe<$T>>(value: $A) -> DoProbe<$A> {
+    DoProbe { value }
+  }
+
+  def bind(self: DoProbe<$A>, mapper: ($A -> DoProbe<$B>)) -> DoProbe<$B> {
+    mapper(self.value)
+  }
+}
+
+test("do carrier integration") {
+  describe("standard carriers") {
+    it("matches the Option pipeline") {
+      source: Option<Int> = Option::Some(3)
+      pipeline: Option<Int> = source |>= {|value| Option::Some(value + 1)}
+      sequenced: Option<Int> = do::<Option> {
+        value <- source
+        Option::Some(value + 1)
+      }
+      assert_eq(pipeline, sequenced)
+    }
+
+    it("matches the Result pipeline") {
+      source: Result<Int> = Result::Ok(3)
+      pipeline: Result<Int> = source |>= {|value| Result::Ok(value + 1)}
+      sequenced: Result<Int> = do::<Result> {
+        value <- source
+        Result::Ok(value + 1)
+      }
+      assert_eq(pipeline, sequenced)
+    }
+
+    it("matches the List pipeline") {
+      source: List<Int> = [1, 2, 3]
+      pipeline: List<Int> = source |>= {|value| [value + 1]}
+      sequenced: List<Int> = do::<List> {
+        value <- source
+        [value + 1]
+      }
+      assert_eq(pipeline, sequenced)
+    }
+
+    it("keeps Either captured arguments fixed") {
+      source: Either<String, Int> = Either<String, Int>::Right(3)
+      pipeline: Either<String, Int> = source |>= {|value| Either<String, Int>::Right(value + 1)}
+      sequenced: Either<String, Int> = do::<Either<String, _>> {
+        value <- source
+        Either<String, Int>::Right(value + 1)
+      }
+      assert_eq(pipeline, sequenced)
+    }
+  }
+
+  describe("Identity, Reader, and State") {
+    it("matches the Identity pipeline") {
+      source: Identity<Int> = Identity::new(3)
+      pipeline: Identity<Int> = source |>= {|value| Identity::new(value + 1)}
+      sequenced: Identity<Int> = do::<Identity> {
+        value <- source
+        Identity::new(value + 1)
+      }
+      assert_eq(pipeline, sequenced)
+    }
+
+    it("matches the Reader pipeline at the same environment") {
+      source: Reader<Int, Int> = Reader::new({|environment| environment + 1})
+      pipeline: Reader<Int, Int> = source |>= {|value|
+        Reader::new({|environment| value + environment})
+      }
+      sequenced: Reader<Int, Int> = do::<Reader> {
+        value <- source
+        Reader::new({|environment| value + environment})
+      }
+      assert_eq(Reader::run(pipeline, 5), Reader::run(sequenced, 5))
+    }
+
+    it("matches the State pipeline and threads the returned state") {
+      source: State<Int, Int> = State::new({|state| (state + 1, state + 1)})
+      pipeline: State<Int, Int> = source |>= {|value|
+        State::new({|state| (value + state, state + 1)})
+      }
+      sequenced: State<Int, Int> = do::<State> {
+        value <- source
+        State::new({|state| (value + state, state + 1)})
+      }
+      assert_eq(State::run(pipeline, 4), State::run(sequenced, 4))
+      assert_eq((10, 6), State::run(sequenced, 4))
+    }
+  }
+
+  describe("MonadT carriers") {
+    it("matches OptionT with an applied carrier RTA") {
+      source: OptionT<Identity, Int> = OptionT::some::<Identity>(3)
+      pipeline: OptionT<Identity, Int> = source |>= {|value| OptionT::some::<Identity>(value + 1)}
+      sequenced: OptionT<Identity, Int> = do::<OptionT<Identity, _>> {
+        value <- source
+        OptionT::some::<Identity>(value + 1)
+      }
+      assert_eq(Identity::run(OptionT::run(pipeline)), Identity::run(OptionT::run(sequenced)))
+    }
+
+    it("matches EitherT while preserving its fixed error slot") {
+      source: EitherT<String, Identity, Int> = EitherT::right::<String, Identity>(3)
+      pipeline: EitherT<String, Identity, Int> = source |>= {|value|
+        EitherT::right::<String, Identity>(value + 1)
+      }
+      sequenced: EitherT<String, Identity, Int> = do::<EitherT<String, Identity, _>> {
+        value <- source
+        EitherT::right::<String, Identity>(value + 1)
+      }
+      assert_eq(Identity::run(EitherT::run(pipeline)), Identity::run(EitherT::run(sequenced)))
+    }
+
+    it("matches ReaderT in one environment") {
+      source: ReaderT<Int, Identity, Int> = ReaderT::new({|environment|
+        Identity::new(environment + 1)
+      })
+      pipeline: ReaderT<Int, Identity, Int> = source |>= {|value|
+        ReaderT::new({|environment| Identity::new(value + environment)})
+      }
+      sequenced: ReaderT<Int, Identity, Int> = do::<ReaderT<Int, Identity, _>> {
+        value <- source
+        ReaderT::new({|environment| Identity::new(value + environment)})
+      }
+      assert_eq(
+        Identity::run(ReaderT::run(pipeline, 5)),
+        Identity::run(ReaderT::run(sequenced, 5)),
+      )
+    }
+
+    it("matches StateT while threading the returned state") {
+      source: StateT<Int, Identity, Int> = StateT::new({|state|
+        Identity::new((state + 1, state + 1))
+      })
+      pipeline: StateT<Int, Identity, Int> = source |>= {|value|
+        StateT::new({|state| Identity::new((value + state, state + 1))})
+      }
+      sequenced: StateT<Int, Identity, Int> = do::<StateT<Int, Identity, _>> {
+        value <- source
+        StateT::new({|state| Identity::new((value + state, state + 1))})
+      }
+      assert_eq(
+        Identity::run(StateT::run(pipeline, 4)),
+        Identity::run(StateT::run(sequenced, 4)),
+      )
+      assert_eq((10, 6), Identity::run(StateT::run(sequenced, 4)))
+    }
+  }
+
+  describe("user-defined carrier") {
+    it("uses the ordinary Monad implementation") {
+      source: DoProbe<Int> = DoProbe::new(3)
+      pipeline: DoProbe<Int> = source |>= {|value| DoProbe::new(value + 1)}
+      sequenced: DoProbe<Int> = do::<DoProbe> {
+        value <- source
+        DoProbe::new(value + 1)
+      }
+      assert_eq(pipeline, sequenced)
+    }
+  }
+}

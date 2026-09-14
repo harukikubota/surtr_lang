@@ -1,0 +1,4 @@
+result: StateT<Int, Identity, Int> = do::<StateT<Int, Identity, _>> {
+  Option::Some(value) =? Option::Some(1)
+  StateT::new({|state| Identity::new((value, state))})
+}

@@ -1,0 +1,8 @@
+source: StateT<Int, Identity, Option<Int>> = StateT::new({|state|
+  Identity::new((Option::Some(1), state))
+})
+
+result: StateT<Int, Identity, Int> = do::<StateT<Int, Identity, _>> {
+  Option::Some(value) <- source
+  StateT::new({|state| Identity::new((value, state))})
+}

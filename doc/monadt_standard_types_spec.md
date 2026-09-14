@@ -34,11 +34,11 @@ N05で採用したAPIと非採用境界を、型関係・責務・RTAが分か�
 | §§5–8（各意味・最小API・採用helper） | 実装済み・移管済み | `../lib/types/monad_transformer/{option_t,either_t,reader_t,state_t}.srt`、`../lib/tests/monad_transformers.srt` |
 | §§9–9.2 | 実装済み・移管済み | 本follow-upで標準sourceの`@doc`と`../docs/site/monad-transformers.md`へmultiplicity、eager評価、同一初期状態、rollback非保証を明記 |
 | §10.1 | 実装済み・移管済み | 本follow-upで`../crates/xldr/tests/repl_core.rs`の同一owner成功とcross-nominal拒否を対にして固定 |
-| §§10.2–10.3 | 未実装・後続Task | `do` / SafeBind接続はN06–N11。MT-S14だけをN11の受け入れ条件として残す |
+| §§10.2–10.3 | 実装済み・移管済み | `do` / SafeBind接続を実装。4 TransformerのMonad carrier利用を`../lib/tests/do.srt`でpipelineと実行比較 |
 | §10.4 | 実装済み・移管済み | 標準sourceの通常関数・closure実装と本書§9、利用者文書の評価順説明 |
 | §11 MT-SI01–04 | 実装済み・移管済み | N05で採用interfaceを固定。`map_inner` / `map_t`は非採用境界 |
 | §12 MT-S01–13、MT-S15–18 | 実装済み・移管済み | `../lib/tests/monad_transformers.srt`、script pass/fail fixtures、Scar / Xldrテスト。対応表は実装計画§10 |
-| §12 MT-S14 | 未実装・後続Task | N11でpipelineと`do`の型・観測結果を比較する |
+| §12 MT-S14 | 実装済み・移管済み | OptionT / EitherT / ReaderT / StateTの`do`とpipelineの観測結果を`../lib/tests/do.srt`で比較 |
 | §13 | 実装済み・移管済み | 本follow-upで標準source、利用者文書、実装計画、実テストへ対応を固定。入力文書は今回は削除しない |
 
 状態名は本follow-up仕様の分類に従う。着手時に「実装済み・追加移管あり」だった箇所は、
@@ -439,7 +439,7 @@ StateTのrun結果変換: M<(A,S)> -> N<(B,S)>
 | MT-S11 | 実装済み・移管済み | 本follow-upで、通常field・関数・collection・Facetで値を保持・更新する検証先を固定 |
 | MT-S12 | 実装済み・移管済み | REPLでnew/lift/fmap/runを別入力として具象型で扱える |
 | MT-S13 | 実装済み・移管済み | carrier指定が曖昧な呼び出しを候補数から補完しない |
-| MT-S14 | 未実装・後続Task | do導入後、pipelineと同じ型・観測結果を得る |
+| MT-S14 | 実装済み・移管済み | 4 Transformerについてdo結果をpipelineと比較する。検証先は`../lib/tests/do.srt` |
 | MT-S15 | 実装済み・移管済み | 本follow-upで、型正しいユーザ定義base/Transformerにも同じ経路が使える例と検証先を補強 |
 | MT-S16 | 実装済み・移管済み | 有限・純粋な観測テストでMonad則とliftのpure/bind保存を確認する |
 | MT-S17 | 実装済み・移管済み | IdentityT・抽象Transformer引数API・runtime辞書を追加しない |
@@ -453,4 +453,4 @@ StateTのrun結果変換: M<(A,S)> -> N<(B,S)>
 
 N05では4型と各Trait implの`@doc`を標準sourceへ置き、利用者向けAPI、base失敗との区別、
 条件付き`Alternative`、明示`lift`の境界を`../docs/site/monad-transformers.md`へ移管した。
-MT-S14の`do`確認だけは計画どおりN11へ残す。
+N11で確定したTransformerの`do`接続も同ページと`../lib/tests/do.srt`へ反映した。

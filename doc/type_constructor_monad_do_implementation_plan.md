@@ -7,7 +7,7 @@
 - 基準commitの旧計画にもTask 9の完了・追修正後の検証記録がある。
 - 本計画は残作業を再編した新しい管理ファイル。旧Taskのチェックボックスを継続しない。
 - 新Taskは `N01`–`N14` と呼び、旧Task 9等と混同しない。
-- N01–N10は完了。N11以降は未着手である。
+- N01–N11は実装済み。N12以降を残作業として管理する。
 
 旧Task 1–9の手順を再実装タスクとしてコピーしない。ただし新しい変更による退行を検出するため、既存テストは引き続き実行する。
 
@@ -53,7 +53,7 @@ N02 の旧入力 `monad_instances_spec.md` も実装と `@doc`・利用者向け
 | N08 | do syntax・AST・resolver・scope | N07 | [x] 完了 | 旧Task 12 |
 | N09 | do carrier推論・core lowering | N08 | [x] 完了 | 旧Task 13 |
 | N10 | do SafeBind・Forge lowering | N09 | [x] 完了 | 旧Task 14 |
-| N11 | do診断・全carrier統合検証 | N10 | [ ] 未着手 | 旧Task 15 |
+| N11 | do診断・全carrier統合検証 | N10 | [x] 完了 | 旧Task 15 |
 | N12 | Generator core改修 | G-I01/G-I02確定。独立Task | [ ] 未着手 | 新規 |
 | N13 | Generator adapter・言語機能接続 | N12。do確認はN11 | [ ] 未着手 | 新規 |
 | N14 | 最終監査・文書移管確認 | 上記全Task | [ ] 未着手 | 旧Task 16を拡張 |
@@ -98,7 +98,7 @@ dirtyなメインworktreeは変更せず、専用worktreeで文書だけを整�
 | `signature_diagnostics_unification.md` §§1–5.7 | 実装済み | `crates/diagnostics/src/{data.rs,projection.rs,render.rs,typecheck.rs}`、structured diagnostics tests | `docs/dev/diagnostics.md`のstructured contract・stable reason・typed data |
 | 同 §§6–9 | 実装済み | SafeBindのResult一段射影、通常pattern優先、全phase producerのclosed reason、message heuristic撤去を実装 | `docs/dev/diagnostics.md`、実装入力・履歴は`diagnostics_cleanup_spec.md` |
 | 同 §§10–11 | 実装済み | JSON typed projection、phase ownership、Rune/Xldr adapterをstructured producer入力へ統一 | `docs/dev/diagnostics.md` |
-| 同 §§12–15 | 実装済み範囲と後続入力 | Task 9とN06のSafeBind・diagnostics cleanupは完了。doだけを未実装として分離 | `docs/dev/diagnostics.md`、`do_intrinsic_spec.md`、N07–N11 |
+| 同 §§12–15 | 実装済み | Task 9とN06のSafeBind・diagnostics cleanup、およびN07–N11のdo実装・受け入れ検証を完了 | `docs/dev/diagnostics.md`、`do_intrinsic_spec.md`、N07–N11 |
 | `type_constructor_signature_unification_task4_fallback_remediation_scope.md`の完了部分 | 実装済み | arity事前検査、canonical signature必須化、candidate rollback、RTA ambiguity tests | `docs/dev/Trait_system_spec.md` §§2.1, 3.2, 7、`docs/dev/diagnostics.md` |
 | 同 canonical Trait / constructor application残件 | 実装済み | Sigilのcanonical Trait identityを保持し、constructor projectionは`Deferred`/`Rejected`の理由を保持。実行可能な未解決`SelfApp`はScar境界で構造化診断として拒否 | `docs/dev/Trait_system_spec.md` §§0.5–0.7, 2–3, 7–8 |
 | 同 builtin / diagnostic残件 | 実装済み | source surfaceとcompiler-generated declaration identityを`BUILTIN_METAS`の構造データへ統合し、message heuristicと外部allowlistを撤去 | `docs/dev/diagnostics.md`、実装履歴は`diagnostics_cleanup_spec.md` §8.1・DC-14 |
@@ -108,7 +108,7 @@ dirtyなメインworktreeは変更せず、専用worktreeで文書だけを整�
 | 同 Task 12 | 実装済み | `Token::Do` / `Ast::Do` / `Resolved::Do`、RTA・statement span、RHS-first scope resolution | `do_intrinsic_spec.md` / N08 |
 | 同 Task 13 | 実装済み | do-local carrier推論、Monad / 条件付きAlternative、core typed loweringを実装 | `do_intrinsic_spec.md` / N09 |
 | 同 Task 14 | 実装済み | SafeBind failure targetとForge loweringを実装・検証 | `do_intrinsic_spec.md` / N10 |
-| 同 Task 15 | 確定未実装 | 診断整備と全carrier受入検証なし | `do_intrinsic_spec.md` / N11 |
+| 同 Task 15 | 実装済み | 診断整備と全carrier受け入れ検証をN11で完了 | `do_intrinsic_spec.md` / N11 |
 | 同 Task 16 | implementation plan | 最終監査はdo/Generator等の完了後 | N14 |
 | `signature_level_type_constructor_inference_draft.md` | draft | import前後のblob hash一致を確認 | 本文を変更せず`doc/`に保持 |
 
@@ -292,7 +292,7 @@ Either / EitherT API 追加後の検証（2026-09-13）:
 | N05 / MT-S01–10 | 4 Transformerのrepresentation round-trip、Functor / Applicative / Monad / lift、短絡、base failure、State threading、条件付きAlternativeを観測する | `lib/tests/monad_transformers.srt`、`tests/fixtures/script/pass/stdmod/monad_transformers.srt`、`tests/fixtures/script/fail/typecheck/{either_t_has_no_alternative,option_t_requires_monad_base,reader_t_alternative_requires_base_capability,state_t_alternative_requires_base_capability}.*` |
 | N05 / MT-S11–13、MT-S15 | 通常field・collection・Facet・REPLで具象値を扱い、ambiguityを拒否し、user-defined base / Transformerを実行する | `lib/tests/monad_transformers.srt`、`tests/fixtures/script/pass/stdmod/user_defined_monad_transformer.srt`、`tests/fixtures/script/fail/typecheck/monad_transformer_lift_ambiguous.*`、`crates/xldr/tests/repl_core.rs` |
 | N05 / MT-S16–18 | 有限Monad / lift law、EitherT mapping helperのslot / base failure保持、非採用API・runtime経路の不在を固定する | `lib/tests/monad_transformers.srt`、`lib/tests/either.srt`、`tests/fixtures/script/pass/stdmod/user_defined_monad_transformer.srt` |
-| N11 / MT-L22、MT-S14 | `do::<Either<String, _>>`を通常のTypeCtorTrait RTA経路へ接続し、pipelineと型・観測結果を比較する | **未実装**。`do_intrinsic_spec.md`に従いN07–N11で追加する |
+| N11 / MT-L22、MT-S14 | `do::<Either<String, _>>`を通常のTypeCtorTrait RTA経路へ接続し、pipelineと型・観測結果を比較する | `lib/tests/do.srt`でEitherと4 Transformerを含む全carrierのpipeline比較を実行 |
 
 N14ではこの表を起点に受け入れ条件と実テストを再照合する。generic `defrecord` / constructor
 parameterはN03–N05に含めず、`open-issues.md` OI-035で別仕様を待つ。
@@ -382,7 +382,7 @@ raw signatureの再解析、通常callable scheme化、runtime function / opcode
   再レビューはfindings 0件。Astra顧問も一般AST span保持を採用すべきと確認し、CI初回timeoutを
   binary fingerprint変更後のProject prefix cold並列構築と切り分けた。
 
-N10まで完了。N11の診断・全carrier統合検証以降は未実装。commitは未作成。
+N10は完了。N11の診断・全carrier統合検証を実装し、全件検証を終えた。commitは未作成。
 
 ### N08: syntax / AST / resolver / scope
 
@@ -486,6 +486,24 @@ N10の未検証範囲はない。commitは未作成。
 既存Option/List/Result/Either、N02のIdentity/Reader/State、N05のTransformer、ユーザ定義carrierを検証する。通常関数・pipeline・doの型と結果を比較する。
 
 MI-15、CI-13/14、MT-S14をここで完了する。通常Identity/Reader/StateへAlternativeを追加しないまま、必要能力不足の拒否も確認する。Facetのsource scopeとcompiler生成closureを混同して合法な操作を誤拒否しない。
+
+実装: `lib/tests/do.srt`でOption / Result / List / applied `Either<String, _>`、Identity / Reader / State、
+OptionT / EitherT / ReaderT / StateT、ユーザ定義Monad carrierについて、通常pipelineと`do`の実行値を比較する。
+Scarのsurface testsでIdentity / Reader / Stateのpartial `<-` とSafeBindがAlternativeなしで拒否されること、
+SafeBind末尾値の型不一致が保存済みresult spanを使うこと、生成bind closure内のFacet path消費が許可されることを固定する。
+`tail_expr_span`は`TypedDoSafeBind.origins.result_span`を直接参照し、node span配置へ依存しない。
+
+検証（2026-09-15）:
+
+- `rtk cargo nextest run -p scar`: 281 passed。
+- `rtk cargo nextest run -p diagnostics`: 47 passed。
+- `rtk cargo nextest run -p rune --test integration run_srt`: 11 passed、120 skipped。
+- `cargo run -- test --quiet do`: 成功（12 cases）。
+- `SURTR_TEST_CACHE=1 rtk cargo nextest run --profile ci --workspace`: 最終差分で2回連続各1922 passed。
+- `cargo run -- test --quiet --all`: 成功。
+- `cargo fmt --all -- --check`、`git diff --check`: 成功。
+- `cargo nextest run -p rune --bin surtr do_return_diagnostic_keeps_the_same_source_facts_in_human_and_json`: 1 passed。human表示とJSONのdiagnostic reason / message / primary span、source factsを照合。
+- 独立レビュー: 初回のdiagnostic owner / span、具象non-Monad reason、生成partial matchとuser branch優先順位の指摘を修正し、最終blocking findings 0件。human/JSON診断の直接比較テストも追加。
 
 ## 13. N12 — Generator core
 

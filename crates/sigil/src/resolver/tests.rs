@@ -7978,7 +7978,7 @@ result = do::<Option> {
     let Resolved::Bind(_, _, rhs) = &resolved[2] else {
         panic!("expected result binding");
     };
-    let Resolved::Do(_, intrinsic_id, return_type_arguments, statements) = rhs.as_ref() else {
+    let Resolved::Do(_, intrinsic_id, _, return_type_arguments, statements) = rhs.as_ref() else {
         panic!("expected resolved do expression");
     };
     assert_eq!(*intrinsic_id, sindr::intrinsic::IntrinsicId::Do);
@@ -8128,7 +8128,7 @@ result = do::<Result> {
     let Resolved::Bind(_, _, rhs) = resolved.last().expect("result binding") else {
         panic!("expected result binding");
     };
-    let Resolved::Do(_, _, _, statements) = rhs.as_ref() else {
+    let Resolved::Do(_, _, _, _, statements) = rhs.as_ref() else {
         panic!("expected resolved do");
     };
     let [ResolvedDoStatement::Extract {
