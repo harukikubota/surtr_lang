@@ -24,7 +24,7 @@ carrier 指定、自然言語 message の再解析を追加してはならない
 本書のSafeBindは[`diagnostics_cleanup_spec.md`](diagnostics_cleanup_spec.md) §§3–4で実装済みの契約を再利用する。
 N01–N07は完了し、compiler-owned contract、`DoBlock`、surface validationまで実装済みである。
 N08のdo構文・AST・resolver・scopeと、N09のcarrier推論・core loweringは実装済みである。
-N10のSafeBind / Forge loweringとN11の診断・全carrier統合検証は未着手である。
+N10のSafeBind / Forge loweringまで実装済みであり、N11の診断・全carrier統合検証は未着手である。
 Extractorは現行の`Option<T>`返却を前提とし、更改タスクへの依存はない。
 以下の`Result<R, E>`は内部型関係の説明表記であり、doの変数注釈やRTAに二引数Result構文を追加しない。
 現行のerror値はabstract `Error`へ収束するため、独立したcaptured error parameterを新設しない。

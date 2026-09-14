@@ -4155,8 +4155,61 @@ impl Checker {
                         }
                     }
                     SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
+                    SafeBindFailureTarget::DoResult { error_ty } => {
+                        SafeBindFailureTarget::DoResult {
+                            error_ty: self.resolve_ty(&error_ty),
+                        }
+                    }
+                    SafeBindFailureTarget::DoAlternative { empty } => {
+                        SafeBindFailureTarget::DoAlternative {
+                            empty: Box::new(self.resolve_typed_node(*empty)),
+                        }
+                    }
                 },
             ),
+            TypedInner::DoSafeBind(control) => {
+                let TypedDoSafeBind {
+                    pattern,
+                    rhs,
+                    projection,
+                    failure_target,
+                    continuation,
+                    origins,
+                } = *control;
+                TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
+                    pattern: self.resolve_typed_pattern(pattern),
+                    rhs: Box::new(self.resolve_typed_node(*rhs)),
+                    projection: match projection {
+                        SafeBindRhsProjection::CanonicalResultOnce {
+                            payload_ty,
+                            error_ty,
+                        } => SafeBindRhsProjection::CanonicalResultOnce {
+                            payload_ty: self.resolve_ty(&payload_ty),
+                            error_ty: self.resolve_ty(&error_ty),
+                        },
+                        SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
+                            SafeBindRhsProjection::PassThroughNonResultPartial {
+                                pattern_input_ty: self.resolve_ty(&pattern_input_ty),
+                            }
+                        }
+                    },
+                    failure_target: match failure_target {
+                        SafeBindFailureTarget::DoResult { error_ty } => {
+                            SafeBindFailureTarget::DoResult {
+                                error_ty: self.resolve_ty(&error_ty),
+                            }
+                        }
+                        SafeBindFailureTarget::DoAlternative { empty } => {
+                            SafeBindFailureTarget::DoAlternative {
+                                empty: Box::new(self.resolve_typed_node(*empty)),
+                            }
+                        }
+                        other => other,
+                    },
+                    continuation: Box::new(self.resolve_typed_node(*continuation)),
+                    origins,
+                }))
+            }
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
                 Box::new(self.resolve_typed_node(*left)),

@@ -443,7 +443,7 @@ impl CompilationPrefixSnapshot {
     }
 }
 
-const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 14;
+const STDLIB_SEMANTIC_CACHE_SCHEMA: u32 = 15;
 const TEST_SEMANTIC_PREFIX_CACHE_SCHEMA: u32 = 8;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1177,6 +1177,39 @@ defmod B {
         let loaded = load_cached_stdlib_semantic_snapshot(&cache_path, "expected-key");
 
         assert!(loaded.is_none());
+        let _ = std::fs::remove_file(cache_path);
+    }
+
+    #[test]
+    fn stdlib_semantic_cache_rejects_pre_do_typed_ir_schema() {
+        let cache_path = std::env::temp_dir().join(format!(
+            "surtr-pre-do-typed-ir-cache-{}.semantic",
+            std::process::id()
+        ));
+        let compile_prefix = CompilationPrefixSnapshot::from_parts(
+            sigil::DeclarationIndex::new(),
+            sigil::ResolveResumeState { next_local_id: 7 },
+            scar::ScarSession::new().checkpoint(),
+            forge::bytecode::Bytecode::default(),
+        );
+        let envelope = CachedStdlibSemanticEnvelope {
+            schema: 14,
+            key: "expected-key".into(),
+            payload: CachedStdlibSemanticPayload {
+                compile_prefix,
+                docs: Vec::new(),
+                signatures: Vec::new(),
+                auto_import_modules: BTreeSet::new(),
+                default_stage_count: 0,
+            },
+        };
+        std::fs::write(
+            &cache_path,
+            bincode::serialize(&envelope).expect("old envelope should serialize"),
+        )
+        .expect("old envelope should be writable");
+
+        assert!(load_cached_stdlib_semantic_snapshot(&cache_path, "expected-key").is_none());
         let _ = std::fs::remove_file(cache_path);
     }
 

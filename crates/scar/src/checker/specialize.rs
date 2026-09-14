@@ -308,6 +308,12 @@ impl Checker {
             | TypedInner::Semi(rhs)
             | TypedInner::EagerBoundary(rhs)
             | TypedInner::FieldAccess(rhs, _) => visit(rhs),
+            TypedInner::DoSafeBind(control) => visit(&control.rhs)
+                .or_else(|| match &control.failure_target {
+                    SafeBindFailureTarget::DoAlternative { empty } => visit(empty),
+                    _ => None,
+                })
+                .or_else(|| visit(&control.continuation)),
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
@@ -426,6 +432,83 @@ impl Checker {
         let mut vars = Vec::new();
         Self::collect_ty_vars(&self.resolve_ty(ty), &mut vars);
         allowed.extend(vars);
+    }
+
+    fn rewrite_do_safebind_specializations(
+        &mut self,
+        control: Box<TypedDoSafeBind>,
+        span: &Span,
+        defs_by_fun_idx: &HashMap<u32, TypedNode>,
+        bound_tyvars_by_fun_idx: &HashMap<u32, Vec<u32>>,
+        needs_specialization: &HashSet<u32>,
+        specialization_fun_idxs: &mut HashMap<CallableInstantiationKey, u32>,
+        generated_defs: &mut Vec<TypedNode>,
+    ) -> Result<Box<TypedDoSafeBind>, Box<TypeError>> {
+        let TypedDoSafeBind {
+            pattern,
+            rhs,
+            projection,
+            failure_target,
+            continuation,
+            origins,
+        } = *control;
+        let rhs = self.rewrite_specializations_in_node(
+            *rhs,
+            defs_by_fun_idx,
+            bound_tyvars_by_fun_idx,
+            needs_specialization,
+            specialization_fun_idxs,
+            generated_defs,
+        )?;
+        let pattern_input_ty = match &projection {
+            SafeBindRhsProjection::CanonicalResultOnce { payload_ty, .. } => payload_ty,
+            SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
+                pattern_input_ty
+            }
+        };
+        let pattern = self.concretize_specialized_typed_pattern(
+            pattern,
+            Some(pattern_input_ty),
+            span,
+            &mut SpecializationContext {
+                defs_by_fun_idx,
+                bound_tyvars_by_fun_idx,
+                needs_specialization,
+                specialization_fun_idxs,
+                generated_defs,
+            },
+        )?;
+        let failure_target = match failure_target {
+            SafeBindFailureTarget::DoAlternative { empty } => {
+                SafeBindFailureTarget::DoAlternative {
+                    empty: self.rewrite_specializations_in_node(
+                        *empty,
+                        defs_by_fun_idx,
+                        bound_tyvars_by_fun_idx,
+                        needs_specialization,
+                        specialization_fun_idxs,
+                        generated_defs,
+                    )?,
+                }
+            }
+            other => other,
+        };
+        let continuation = self.rewrite_specializations_in_node(
+            *continuation,
+            defs_by_fun_idx,
+            bound_tyvars_by_fun_idx,
+            needs_specialization,
+            specialization_fun_idxs,
+            generated_defs,
+        )?;
+        Ok(Box::new(TypedDoSafeBind {
+            pattern,
+            rhs,
+            projection,
+            failure_target,
+            continuation,
+            origins,
+        }))
     }
 
     // Keep both sides of the recursive result pointer-sized. In an unoptimized
@@ -885,6 +968,17 @@ impl Checker {
                     },
                 )?;
                 TypedInner::SafeBind(pattern, rhs, projection, failure_target)
+            }
+            TypedInner::DoSafeBind(control) => {
+                TypedInner::DoSafeBind(self.rewrite_do_safebind_specializations(
+                    control,
+                    &span,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?)
             }
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
@@ -2379,6 +2473,17 @@ impl Checker {
             | TypedInner::Semi(rhs) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(rhs, ordered, seen)
             }
+            TypedInner::DoSafeBind(control) => {
+                self.collect_pending_trait_receiver_tyvars_in_node(&control.rhs, ordered, seen);
+                if let SafeBindFailureTarget::DoAlternative { empty } = &control.failure_target {
+                    self.collect_pending_trait_receiver_tyvars_in_node(empty, ordered, seen);
+                }
+                self.collect_pending_trait_receiver_tyvars_in_node(
+                    &control.continuation,
+                    ordered,
+                    seen,
+                );
+            }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
@@ -2530,6 +2635,13 @@ impl Checker {
             TypedInner::Bind(_, rhs)
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs) => self.collect_bound_tyvars_in_node(rhs, ordered, seen),
+            TypedInner::DoSafeBind(control) => {
+                self.collect_bound_tyvars_in_node(&control.rhs, ordered, seen);
+                if let SafeBindFailureTarget::DoAlternative { empty } = &control.failure_target {
+                    self.collect_bound_tyvars_in_node(empty, ordered, seen);
+                }
+                self.collect_bound_tyvars_in_node(&control.continuation, ordered, seen);
+            }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right) => {
@@ -2871,8 +2983,68 @@ impl Checker {
                         }
                     }
                     SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
+                    SafeBindFailureTarget::DoResult { error_ty } => {
+                        SafeBindFailureTarget::DoResult {
+                            error_ty: self.substitute_ty_with_mapping(&error_ty, mapping),
+                        }
+                    }
+                    SafeBindFailureTarget::DoAlternative { empty } => {
+                        SafeBindFailureTarget::DoAlternative {
+                            empty: Box::new(
+                                self.substitute_typed_node_with_mapping(*empty, mapping),
+                            ),
+                        }
+                    }
                 },
             ),
+            TypedInner::DoSafeBind(control) => {
+                let TypedDoSafeBind {
+                    pattern,
+                    rhs,
+                    projection,
+                    failure_target,
+                    continuation,
+                    origins,
+                } = *control;
+                TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
+                    pattern: self.substitute_typed_pattern_with_mapping(pattern, mapping),
+                    rhs: Box::new(self.substitute_typed_node_with_mapping(*rhs, mapping)),
+                    projection: match projection {
+                        SafeBindRhsProjection::CanonicalResultOnce {
+                            payload_ty,
+                            error_ty,
+                        } => SafeBindRhsProjection::CanonicalResultOnce {
+                            payload_ty: self.substitute_ty_with_mapping(&payload_ty, mapping),
+                            error_ty: self.substitute_ty_with_mapping(&error_ty, mapping),
+                        },
+                        SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
+                            SafeBindRhsProjection::PassThroughNonResultPartial {
+                                pattern_input_ty: self
+                                    .substitute_ty_with_mapping(&pattern_input_ty, mapping),
+                            }
+                        }
+                    },
+                    failure_target: match failure_target {
+                        SafeBindFailureTarget::DoResult { error_ty } => {
+                            SafeBindFailureTarget::DoResult {
+                                error_ty: self.substitute_ty_with_mapping(&error_ty, mapping),
+                            }
+                        }
+                        SafeBindFailureTarget::DoAlternative { empty } => {
+                            SafeBindFailureTarget::DoAlternative {
+                                empty: Box::new(
+                                    self.substitute_typed_node_with_mapping(*empty, mapping),
+                                ),
+                            }
+                        }
+                        other => other,
+                    },
+                    continuation: Box::new(
+                        self.substitute_typed_node_with_mapping(*continuation, mapping),
+                    ),
+                    origins,
+                }))
+            }
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
                 Box::new(self.substitute_typed_node_with_mapping(*left, mapping)),
@@ -4106,6 +4278,13 @@ impl Checker {
                 Self::typed_pattern_has_pending_dispatch(pattern)
                     || Self::typed_node_has_pending_trait_call(rhs)
             }
+            TypedInner::DoSafeBind(control) => {
+                Self::typed_pattern_has_pending_dispatch(&control.pattern)
+                    || Self::typed_node_has_pending_trait_call(&control.rhs)
+                    || matches!(&control.failure_target, SafeBindFailureTarget::DoAlternative { empty }
+                        if Self::typed_node_has_pending_trait_call(empty))
+                    || Self::typed_node_has_pending_trait_call(&control.continuation)
+            }
             TypedInner::Semi(rhs) => Self::typed_node_has_pending_trait_call(rhs),
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
@@ -4392,6 +4571,53 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn do_safebind_specializes_pattern_against_projected_payload() {
+        let mut checker = Checker::new(TypecheckContext::default());
+        let result_ty = Ty::Result(Box::new(Ty::Int), Box::new(Ty::Error));
+        let control = Box::new(TypedDoSafeBind {
+            pattern: TypedPattern::Wildcard(Ty::Var(91_200)),
+            rhs: Box::new(TypedNode {
+                ty: result_ty.clone(),
+                span: test_span(),
+                node: TypedInner::Lit(Lit::Unit),
+            }),
+            projection: SafeBindRhsProjection::CanonicalResultOnce {
+                payload_ty: Ty::Int,
+                error_ty: Ty::Error,
+            },
+            failure_target: SafeBindFailureTarget::DoResult {
+                error_ty: Ty::Error,
+            },
+            continuation: Box::new(TypedNode {
+                ty: result_ty,
+                span: test_span(),
+                node: TypedInner::Lit(Lit::Unit),
+            }),
+            origins: DoSafeBindOrigins {
+                do_span: test_span(),
+                operator_span: test_span(),
+                pattern_span: test_span(),
+                rhs_span: test_span(),
+                result_span: test_span(),
+            },
+        });
+
+        let rewritten = checker
+            .rewrite_do_safebind_specializations(
+                control,
+                &test_span(),
+                &HashMap::new(),
+                &HashMap::new(),
+                &HashSet::new(),
+                &mut HashMap::new(),
+                &mut Vec::new(),
+            )
+            .expect("do SafeBind specialization should succeed");
+
+        assert!(matches!(rewritten.pattern, TypedPattern::Wildcard(Ty::Int)));
     }
 
     #[test]

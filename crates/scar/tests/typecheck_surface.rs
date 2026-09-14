@@ -3,8 +3,8 @@
 use scar::env::TypeKind;
 use scar::typed::{
     OperatorTraitOp, SafeBindFailureTarget, SafeBindRhsProjection, TraitCallOrigin,
-    TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode, TypedPattern, TypedProgram,
-    TypedWhereConstraintRhs,
+    TypedDoSafeBind, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode, TypedPattern,
+    TypedProgram, TypedWhereConstraintRhs,
 };
 use scar::types::Ty;
 use sigil::resolved::{
@@ -564,6 +564,8 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(do_partial_extract_requires_alternative),
     surface_case!(do_ordinary_binding_is_not_a_monadic_origin),
     surface_case!(do_final_expression_still_requires_monad),
+    surface_case!(do_safebind_selects_typed_failure_targets),
+    surface_case!(do_safebind_preserves_n06_and_carrier_boundaries),
     (
         "trailing_block_calls_typecheck_inside_script_module_scope",
         trailing_block_calls_typecheck_inside_script_module_scope as fn(),
@@ -5866,6 +5868,228 @@ fn do_final_expression_still_requires_monad() {
     );
 }
 
+fn do_safebind_selects_typed_failure_targets() {
+    let result_source = r#"result: Result<Int> = do::<Result> {
+  value =? Result::Ok(1)
+  Result::Ok(value)
+}"#;
+    let typed = typecheck_with_builtin_prelude_in_script_module(result_source);
+    let result = typed_bind_rhs(&typed, "result");
+    let TypedInner::DoSafeBind(control) = &result.node else {
+        panic!("Result do SafeBind must remain explicit typed control: {result:?}")
+    };
+    let TypedDoSafeBind {
+        rhs,
+        projection,
+        failure_target,
+        continuation,
+        origins,
+        ..
+    } = control.as_ref();
+    assert!(matches!(rhs.ty, Ty::Result(_, _)));
+    assert!(matches!(
+        projection,
+        SafeBindRhsProjection::CanonicalResultOnce { .. }
+    ));
+    assert!(matches!(
+        failure_target,
+        SafeBindFailureTarget::DoResult {
+            error_ty: Ty::Error
+        }
+    ));
+    assert_eq!(continuation.ty, result.ty);
+    assert_eq!(
+        origins.do_span.start,
+        result_source.find("do::<Result>").unwrap()
+    );
+    assert_eq!(
+        origins.operator_span.start,
+        result_source.find("=?").unwrap()
+    );
+    assert_eq!(
+        origins.pattern_span.start,
+        result_source.find("value =?").unwrap()
+    );
+    assert_eq!(
+        origins.rhs_span.start,
+        result_source.find("Result::Ok(1)").unwrap()
+    );
+    assert_eq!(
+        origins.result_span.start,
+        result_source.rfind("Result::Ok(value)").unwrap()
+    );
+
+    let option_source = r#"result: Option<Int> = do::<Option> {
+  Option::Some(value) =? Option::Some(1)
+  Option::Some(value)
+}"#;
+    let typed = typecheck_with_builtin_prelude_in_script_module(option_source);
+    let result = typed_bind_rhs(&typed, "result");
+    let TypedInner::DoSafeBind(control) = &result.node else {
+        panic!("Option do SafeBind must remain explicit typed control: {result:?}")
+    };
+    let TypedDoSafeBind {
+        projection,
+        failure_target,
+        continuation,
+        origins,
+        ..
+    } = control.as_ref();
+    assert!(matches!(
+        projection,
+        SafeBindRhsProjection::PassThroughNonResultPartial { .. }
+    ));
+    let SafeBindFailureTarget::DoAlternative { empty } = failure_target else {
+        panic!("Option do SafeBind must use Alternative empty: {failure_target:?}")
+    };
+    assert!(matches!(
+        &empty.node,
+        TypedInner::TraitCall {
+            trait_name,
+            method_name,
+            dispatch: scar::typed::TraitDispatch::Static(_),
+            ..
+        } if trait_name == "Alternative" && method_name == "empty"
+    ));
+    assert_eq!(empty.ty, result.ty);
+    assert_eq!(continuation.ty, result.ty);
+    assert_eq!(
+        origins.do_span.start,
+        option_source.find("do::<Option>").unwrap()
+    );
+    assert_eq!(
+        origins.operator_span.start,
+        option_source.find("=?").unwrap()
+    );
+    assert_eq!(
+        origins.pattern_span.start,
+        option_source.find("Option::Some(value) =?").unwrap()
+    );
+    assert_eq!(
+        origins.rhs_span.start,
+        option_source.find("Option::Some(1)").unwrap()
+    );
+    assert_eq!(
+        origins.result_span.start,
+        option_source.rfind("Option::Some(value)").unwrap()
+    );
+
+    let nested_source = r#"result: Result<Int> = do::<Result> {
+  first: Int =? Result::Ok(1)
+  [second] =? [first]
+  Result::Ok(second)
+}"#;
+    let typed = typecheck_with_builtin_prelude_in_script_module(nested_source);
+    let result = typed_bind_rhs(&typed, "result");
+    let final_start = nested_source.rfind("Result::Ok(second)").unwrap();
+    let TypedInner::DoSafeBind(first) = &result.node else {
+        panic!("first SafeBind must remain explicit typed control: {result:?}")
+    };
+    assert_eq!(first.origins.result_span.start, final_start);
+    let first_pattern_start = nested_source.find("first: Int").unwrap();
+    assert_eq!(
+        first.origins.pattern_span,
+        spire::ast::Span {
+            start: first_pattern_start,
+            end: first_pattern_start + "first: Int".len(),
+        }
+    );
+    let TypedInner::DoSafeBind(second) = &first.continuation.node else {
+        panic!("second SafeBind must remain explicit typed control")
+    };
+    assert_eq!(second.origins.result_span.start, final_start);
+    let second_pattern_start = nested_source.find("[second]").unwrap();
+    assert_eq!(
+        second.origins.pattern_span,
+        spire::ast::Span {
+            start: second_pattern_start,
+            end: second_pattern_start + "[second]".len(),
+        }
+    );
+
+    let extract_after_safebind = r#"result: Result<Int> = do::<Result> {
+  first =? Result::Ok(1)
+  second <- Result::Ok(first + 1)
+  Result::Ok(second)
+}"#;
+    let typed = typecheck_with_builtin_prelude_in_script_module(extract_after_safebind);
+    let result = typed_bind_rhs(&typed, "result");
+    let TypedInner::DoSafeBind(control) = &result.node else {
+        panic!("SafeBind before extract must remain explicit typed control: {result:?}")
+    };
+    assert_eq!(
+        control.origins.result_span.start,
+        extract_after_safebind.rfind("Result::Ok(second)").unwrap()
+    );
+}
+
+fn do_safebind_preserves_n06_and_carrier_boundaries() {
+    for (source, expected) in [
+        (
+            r#"result: Option<Int> = do::<Option> {
+  value =? Option::Some(1)
+  Option::Some(value)
+}"#,
+            diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs,
+        ),
+        (
+            r#"result: Option<Int> = do::<Option> {
+  value =? 1
+  Option::Some(value)
+}"#,
+            diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs,
+        ),
+    ] {
+        let error = typecheck_with_rules(source, RuntimeSourcePolicy::script())
+            .expect_err("do must reuse N06 total non-Result rejection");
+        assert_eq!(error.reason(), Some(expected), "{error:?}");
+    }
+
+    let pattern_error = typecheck_with_rules(
+        r#"result: Option<Int> = do::<Option> {
+  value: Int =? Option::Some(1)
+  Option::Some(value)
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("ordinary pattern checking must precede SafeBind policy");
+    assert!(!matches!(
+        pattern_error.reason(),
+        Some(
+            diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonMonadRhs
+                | diagnostics::TypeDiagnosticReason::SafeBindTotalPatternNonResultMonadRhs
+        )
+    ));
+
+    let missing_alternative = typecheck_with_rules(
+        r#"result: Identity<Int> = do::<Identity> {
+  1 =? 1
+  Identity::new(1)
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("non-Result do SafeBind must require Alternative on the same carrier");
+    assert_eq!(
+        missing_alternative.reason(),
+        Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
+        "{missing_alternative:?}"
+    );
+
+    let ambiguous = typecheck_with_rules(
+        r#"result = do {
+  value =? Result::Ok(1)
+  Monad::return(value)
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect_err("SafeBind RHS must not infer the do carrier");
+    assert_eq!(
+        ambiguous.reason(),
+        Some(diagnostics::TypeDiagnosticReason::AmbiguousReturnTypeArgument),
+        "{ambiguous:?}"
+    );
+}
+
 fn trailing_block_calls_typecheck_inside_script_module_scope() {
     let typed = typecheck_with_builtin_prelude_in_script_module(
         r#"def take(flag: Boolean, value: (-> Int)) -> Int {
@@ -7828,6 +8052,12 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+            TypedInner::DoSafeBind(control) => {
+                has_pending_trait_call(&control.rhs)
+                    || matches!(&control.failure_target, SafeBindFailureTarget::DoAlternative { empty }
+                        if has_pending_trait_call(empty))
+                    || has_pending_trait_call(&control.continuation)
+            }
             TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),
@@ -7943,6 +8173,12 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
+            TypedInner::DoSafeBind(control) => {
+                has_pending_trait_call(&control.rhs)
+                    || matches!(&control.failure_target, SafeBindFailureTarget::DoAlternative { empty }
+                        if has_pending_trait_call(empty))
+                    || has_pending_trait_call(&control.continuation)
+            }
             TypedInner::EagerBoundary(inner) => has_pending_trait_call(inner),
             TypedInner::ProcessContextHandler { .. } => false,
             TypedInner::SupervisorSpawn { init, .. } => has_pending_trait_call(init),

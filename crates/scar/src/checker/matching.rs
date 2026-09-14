@@ -2,7 +2,7 @@ use super::*;
 use diagnostics::{DiagnosticOrigin, PatternKind, SourceRole, TypeDiagnosticReason};
 
 impl Checker {
-    fn resolved_pattern_span(pattern: &ResolvedPattern) -> Span {
+    pub(super) fn resolved_pattern_span(pattern: &ResolvedPattern) -> Span {
         match pattern {
             ResolvedPattern::Var(id)
             | ResolvedPattern::Annotated(id, _)

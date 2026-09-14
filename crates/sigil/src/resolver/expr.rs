@@ -30,6 +30,35 @@ fn ast_ty_owner_head(ty: &AstTy) -> Option<&str> {
     }
 }
 
+fn do_pattern_span(pattern: &AstPattern) -> Span {
+    match pattern {
+        AstPattern::Annotated(span, _, ty) => Span {
+            start: span.start,
+            end: match ty {
+                AstTy::Named(ty_span, _)
+                | AstTy::ImplTrait(ty_span, _)
+                | AstTy::Generic(ty_span, _, _)
+                | AstTy::Tuple(ty_span, _)
+                | AstTy::Func(ty_span, _, _) => ty_span.end,
+            },
+        },
+        AstPattern::Var(span, _)
+        | AstPattern::Pin(span, _)
+        | AstPattern::Wildcard(span)
+        | AstPattern::ListNil(span)
+        | AstPattern::ListCons(span, _, _)
+        | AstPattern::IntLit(span, _)
+        | AstPattern::StrLit(span, _)
+        | AstPattern::BoolLit(span, _)
+        | AstPattern::DurationLit(span, _)
+        | AstPattern::Constructor(span, _, _)
+        | AstPattern::Call(span, _, _)
+        | AstPattern::Tuple(span, _)
+        | AstPattern::Or(span, _)
+        | AstPattern::As(span, _, _, _, _) => span.clone(),
+    }
+}
+
 fn synthetic_builtin_symbol_uid(name: &str, info: &SymbolIdentityInfo) -> Option<u32> {
     let name = global_surface_name(name);
     match (name, info.capabilities.facet_root_path) {
@@ -2738,11 +2767,13 @@ impl Resolver {
                                 pattern,
                                 rhs,
                             } => {
+                                let pattern_span = do_pattern_span(&pattern);
                                 let resolved_rhs = child.resolve_node(rhs)?;
                                 let resolved_pattern = child.resolve_pattern(pattern)?;
                                 Ok(ResolvedDoStatement::Extract {
                                     span,
                                     operator_span,
+                                    pattern_span,
                                     pattern: resolved_pattern,
                                     rhs: resolved_rhs,
                                 })
@@ -2753,11 +2784,13 @@ impl Resolver {
                                 pattern,
                                 rhs,
                             } => {
+                                let pattern_span = do_pattern_span(&pattern);
                                 let resolved_rhs = child.resolve_node(rhs)?;
                                 let resolved_pattern = child.resolve_pattern(pattern)?;
                                 Ok(ResolvedDoStatement::SafeBind {
                                     span,
                                     operator_span,
+                                    pattern_span,
                                     pattern: resolved_pattern,
                                     rhs: resolved_rhs,
                                 })

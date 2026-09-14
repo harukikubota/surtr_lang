@@ -399,12 +399,14 @@ pub enum ResolvedDoStatement {
     Extract {
         span: Span,
         operator_span: Span,
+        pattern_span: Span,
         pattern: ResolvedPattern,
         rhs: Resolved,
     },
     SafeBind {
         span: Span,
         operator_span: Span,
+        pattern_span: Span,
         pattern: ResolvedPattern,
         rhs: Resolved,
     },

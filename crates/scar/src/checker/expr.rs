@@ -22,6 +22,14 @@ struct PreparedFacetInput {
     path: TypedFacetPath,
 }
 
+struct CheckedSafeBindInput {
+    typed_pattern: TypedPattern,
+    pattern_ty: Ty,
+    typed_rhs: TypedNode,
+    projection: SafeBindRhsProjection,
+    propagated_error_tys: Vec<Ty>,
+}
+
 #[derive(Clone, Copy)]
 enum ExpectedCallableSlot {
     Plain,
@@ -236,6 +244,12 @@ impl Checker {
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
             | TypedInner::EagerBoundary(rhs) => recurse(rhs),
+            TypedInner::DoSafeBind(control) => recurse(&control.rhs)
+                .or_else(|| match &control.failure_target {
+                    SafeBindFailureTarget::DoAlternative { empty } => recurse(empty),
+                    _ => None,
+                })
+                .or_else(|| recurse(&control.continuation)),
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
@@ -638,6 +652,17 @@ impl Checker {
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => self.first_pending_trait_helper(rhs),
+            TypedInner::DoSafeBind(control) => {
+                self.first_pending_trait_helper(&control.rhs).or_else(|| {
+                    match &control.failure_target {
+                        SafeBindFailureTarget::DoAlternative { empty } => {
+                            self.first_pending_trait_helper(empty)
+                        }
+                        _ => None,
+                    }
+                    .or_else(|| self.first_pending_trait_helper(&control.continuation))
+                })
+            }
             TypedInner::BinOp(_, left, right)
             | TypedInner::Pipe(left, right)
             | TypedInner::Compose(_, left, right)
@@ -754,6 +779,14 @@ impl Checker {
                         collect(key, obligations);
                         collect(value, obligations);
                     }
+                }
+                TypedInner::DoSafeBind(control) => {
+                    collect(&control.rhs, obligations);
+                    if let SafeBindFailureTarget::DoAlternative { empty } = &control.failure_target
+                    {
+                        collect(empty, obligations);
+                    }
+                    collect(&control.continuation, obligations);
                 }
                 TypedInner::Bind(_, rhs)
                 | TypedInner::SafeBind(_, rhs, _, _)
@@ -963,6 +996,31 @@ impl Checker {
                 projection,
                 failure_target,
             ),
+            TypedInner::DoSafeBind(control) => {
+                let TypedDoSafeBind {
+                    pattern,
+                    rhs,
+                    projection,
+                    failure_target,
+                    continuation,
+                    origins,
+                } = *control;
+                TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
+                    pattern,
+                    rhs: Box::new(self.concretize_pending_trait_calls(*rhs)?),
+                    projection,
+                    failure_target: match failure_target {
+                        SafeBindFailureTarget::DoAlternative { empty } => {
+                            SafeBindFailureTarget::DoAlternative {
+                                empty: Box::new(self.concretize_pending_trait_calls(*empty)?),
+                            }
+                        }
+                        other => other,
+                    },
+                    continuation: Box::new(self.concretize_pending_trait_calls(*continuation)?),
+                    origins,
+                }))
+            }
             TypedInner::BinOp(op, left, right) => TypedInner::BinOp(
                 op,
                 Box::new(self.concretize_pending_trait_calls(*left)?),
@@ -3157,20 +3215,27 @@ impl Checker {
             ResolvedDoStatement::Extract {
                 span,
                 operator_span: _,
+                pattern_span: _,
                 pattern,
                 rhs,
             } => self.check_do_extract(do_span, intrinsic, span, pattern, rhs, rest, carrier_hint),
-            ResolvedDoStatement::SafeBind { span, .. } => Err(self.policy_error(
-                TypeDiagnosticReason::CompilePolicyViolation,
-                diagnostics::TypePolicy::CompileUnitAvailability,
-                Some("do SafeBind failure-target lowering is implemented in N10".into()),
-                None,
-                None,
-                Some("N09".into()),
-                None,
+            ResolvedDoStatement::SafeBind {
                 span,
-                None,
-            )),
+                operator_span,
+                pattern_span,
+                pattern,
+                rhs,
+            } => self.check_do_safebind(
+                do_span,
+                intrinsic,
+                span,
+                operator_span,
+                pattern_span,
+                pattern,
+                rhs,
+                rest,
+                carrier_hint,
+            ),
             ResolvedDoStatement::Statement(statement)
                 if matches!(
                     statement,
@@ -3376,6 +3441,195 @@ impl Checker {
         let closure =
             Resolved::Closure(statement_span.clone(), parameters, captures, Box::new(body));
         self.check_do_bind_invocation(do_span, rhs, closure, carrier_hint)
+    }
+
+    fn do_safebind_failure_method(
+        &self,
+        span: &Span,
+    ) -> Result<sindr::intrinsic::CanonicalTraitMethodIdentity, TypeError> {
+        let contract = sindr::intrinsic::do_intrinsic_contract();
+        let action = contract.lowering.safe_bind_failure.otherwise_action;
+        let sindr::intrinsic::SafeBindFailureAction::OverrideWith(method) = action else {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("do SafeBind non-Result failure action".into()),
+                None,
+                None,
+                None,
+                None,
+                span,
+                None,
+            ));
+        };
+        let has_matching_rule = contract.capability_rules.iter().any(|rule| {
+            rule.predicate
+                == sindr::intrinsic::DoCapabilityPredicate::HasLegalSafeBindAndCarrierIsNot(
+                    contract.lowering.safe_bind_failure.canonical_result,
+                )
+                && rule.capability == method.trait_identity()
+                && rule.same_carrier == contract.do_local_carrier
+        });
+        if has_matching_rule {
+            Ok(method)
+        } else {
+            Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("do SafeBind capability and lowering contract".into()),
+                None,
+                None,
+                None,
+                None,
+                span,
+                None,
+            ))
+        }
+    }
+
+    fn check_do_safebind(
+        &mut self,
+        do_span: &Span,
+        intrinsic: sindr::intrinsic::IntrinsicId,
+        statement_span: &Span,
+        operator_span: &Span,
+        pattern_span: &Span,
+        pattern: &ResolvedPattern,
+        rhs: &Resolved,
+        rest: &[ResolvedDoStatement],
+        carrier_hint: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let inherited_substitutions = self.substitutions.clone();
+        let mut checked = self.check_safebind_input(statement_span, pattern, rhs)?;
+        checked.typed_pattern = self.resolve_typed_pattern(checked.typed_pattern);
+        checked.pattern_ty = self.resolve_ty(&checked.pattern_ty);
+        checked.typed_rhs = self.resolve_typed_node(checked.typed_rhs);
+        checked.projection = match checked.projection {
+            SafeBindRhsProjection::CanonicalResultOnce {
+                payload_ty,
+                error_ty,
+            } => SafeBindRhsProjection::CanonicalResultOnce {
+                payload_ty: self.resolve_ty(&payload_ty),
+                error_ty: self.resolve_ty(&error_ty),
+            },
+            SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
+                SafeBindRhsProjection::PassThroughNonResultPartial {
+                    pattern_input_ty: self.resolve_ty(&pattern_input_ty),
+                }
+            }
+        };
+        checked.propagated_error_tys = checked
+            .propagated_error_tys
+            .into_iter()
+            .map(|ty| self.resolve_ty(&ty))
+            .collect();
+        self.substitutions = inherited_substitutions;
+        self.bind_typed_pattern(&checked.typed_pattern, &checked.pattern_ty);
+        self.bind_constructor_provenance(
+            &checked.typed_pattern,
+            self.result_constructor_provenance(&checked.typed_rhs),
+        );
+
+        let result_span = match rest.last() {
+            Some(ResolvedDoStatement::Statement(final_expression)) => {
+                self.resolved_span(final_expression).clone()
+            }
+            _ => {
+                return Err(self.policy_error(
+                    TypeDiagnosticReason::TypecheckInvariantViolation,
+                    diagnostics::TypePolicy::ProducerContract,
+                    Some("final do expression origin".into()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    do_span,
+                    None,
+                ));
+            }
+        };
+        let continuation = self.check_do_statements(do_span, intrinsic, rest, carrier_hint)?;
+        let continuation_ty = self.resolve_ty(&continuation.ty);
+        let failure_target = match &continuation_ty {
+            Ty::Result(_, expected_error_ty) => {
+                let contract = sindr::intrinsic::do_intrinsic_contract();
+                if contract.lowering.safe_bind_failure.canonical_result_action
+                    != sindr::intrinsic::SafeBindFailureAction::PreserveExistingSafeBindFailure
+                {
+                    return Err(self.policy_error(
+                        TypeDiagnosticReason::TypecheckInvariantViolation,
+                        diagnostics::TypePolicy::ProducerContract,
+                        Some("do SafeBind canonical Result failure action".into()),
+                        None,
+                        None,
+                        None,
+                        None,
+                        operator_span,
+                        None,
+                    ));
+                }
+                self.collect_pattern_result_error_types(
+                    &checked.typed_pattern,
+                    &mut checked.propagated_error_tys,
+                );
+                for propagated in &checked.propagated_error_tys {
+                    if !self.types_compatible(expected_error_ty, propagated) {
+                        return Err(self.policy_error(
+                            TypeDiagnosticReason::SafeBindErrorTypeMismatch,
+                            diagnostics::TypePolicy::SafeBindFailureTarget,
+                            Some("=?".into()),
+                            Some(expected_error_ty),
+                            Some(propagated),
+                            None,
+                            None,
+                            &checked.typed_rhs.span,
+                            None,
+                        ));
+                    }
+                }
+                SafeBindFailureTarget::DoResult {
+                    error_ty: expected_error_ty.as_ref().clone(),
+                }
+            }
+            _ => {
+                let failure = self.do_safebind_failure_method(operator_span)?;
+                let trait_key =
+                    self.canonical_do_trait_key(failure.trait_identity(), operator_span)?;
+                let empty = self.check_trait_invocation(
+                    operator_span,
+                    &trait_key,
+                    failure.method_name(),
+                    &[],
+                    None,
+                    Some(&continuation_ty),
+                    None,
+                    None,
+                    None,
+                )?;
+                SafeBindFailureTarget::DoAlternative {
+                    empty: Box::new(empty),
+                }
+            }
+        };
+        let rhs_span = checked.typed_rhs.span.clone();
+        Ok(TypedNode {
+            ty: continuation_ty,
+            span: statement_span.clone(),
+            node: TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
+                pattern: checked.typed_pattern,
+                rhs: Box::new(checked.typed_rhs),
+                projection: checked.projection,
+                failure_target,
+                continuation: Box::new(continuation),
+                origins: DoSafeBindOrigins {
+                    do_span: do_span.clone(),
+                    operator_span: operator_span.clone(),
+                    pattern_span: pattern_span.clone(),
+                    rhs_span,
+                    result_span,
+                },
+            })),
+        })
     }
 
     fn check_do_bare_or_plain_statement(
@@ -3604,12 +3858,12 @@ impl Checker {
         }
     }
 
-    pub(super) fn check_safebind(
+    fn check_safebind_input(
         &mut self,
         span: &Span,
         pat: &ResolvedPattern,
         rhs: &Resolved,
-    ) -> Result<TypedNode, TypeError> {
+    ) -> Result<CheckedSafeBindInput, TypeError> {
         let typed_rhs = self.check_node(rhs)?;
         if matches!(typed_rhs.ty, Ty::Facet(..)) {
             return Err(self.policy_error(
@@ -3713,6 +3967,22 @@ impl Checker {
             }));
         }
         self.ensure_self_rebinding_types(&typed_pat, span)?;
+        Ok(CheckedSafeBindInput {
+            typed_pattern: typed_pat,
+            pattern_ty: pat_ty,
+            typed_rhs,
+            projection: rhs_projection,
+            propagated_error_tys: propagated_err_tys,
+        })
+    }
+
+    pub(super) fn check_safebind(
+        &mut self,
+        span: &Span,
+        pat: &ResolvedPattern,
+        rhs: &Resolved,
+    ) -> Result<TypedNode, TypeError> {
+        let mut checked = self.check_safebind_input(span, pat, rhs)?;
         let failure_target = if let Some(ret_ty) = self.function_return_ty.clone() {
             let fn_err_ty = match ret_ty {
                 Ty::Result(_, fn_err_ty) => fn_err_ty,
@@ -3731,9 +4001,12 @@ impl Checker {
                 }
             };
 
-            self.collect_pattern_result_error_types(&typed_pat, &mut propagated_err_tys);
+            self.collect_pattern_result_error_types(
+                &checked.typed_pattern,
+                &mut checked.propagated_error_tys,
+            );
 
-            for propagated in propagated_err_tys {
+            for propagated in checked.propagated_error_tys {
                 if !self.types_compatible(fn_err_ty.as_ref(), &propagated) {
                     return Err(self.policy_error(
                         TypeDiagnosticReason::SafeBindErrorTypeMismatch,
@@ -3743,7 +4016,7 @@ impl Checker {
                         Some(&propagated),
                         None,
                         None,
-                        &typed_rhs.span,
+                        &checked.typed_rhs.span,
                         None,
                     ));
                 }
@@ -3755,19 +4028,19 @@ impl Checker {
             SafeBindFailureTarget::TopLevel
         };
 
-        self.bind_typed_pattern(&typed_pat, &pat_ty);
+        self.bind_typed_pattern(&checked.typed_pattern, &checked.pattern_ty);
         self.bind_constructor_provenance(
-            &typed_pat,
-            self.result_constructor_provenance(&typed_rhs),
+            &checked.typed_pattern,
+            self.result_constructor_provenance(&checked.typed_rhs),
         );
 
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
             node: TypedInner::SafeBind(
-                typed_pat,
-                Box::new(typed_rhs),
-                rhs_projection,
+                checked.typed_pattern,
+                Box::new(checked.typed_rhs),
+                checked.projection,
                 failure_target,
             ),
         })
@@ -14258,6 +14531,65 @@ mod tests {
             symbol_info: None,
             span: test_span(),
         }
+    }
+
+    fn pending_trait_call(trait_id: &str, receiver: Ty) -> TypedNode {
+        TypedNode {
+            ty: receiver.clone(),
+            span: test_span(),
+            node: TypedInner::TraitCall {
+                trait_name: trait_id.rsplit("::").next().unwrap_or(trait_id).into(),
+                method_name: "method".into(),
+                receiver_ty: receiver.clone(),
+                obligation: TraitObligation {
+                    trait_id: trait_id.into(),
+                    trait_args: Vec::new(),
+                    receiver,
+                },
+                dispatch: TraitDispatch::Pending,
+                origin: TraitCallOrigin::Explicit,
+                args: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn full_trait_obligations_enters_do_safebind_control() {
+        let node = TypedNode {
+            ty: Ty::Int,
+            span: test_span(),
+            node: TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
+                pattern: TypedPattern::Wildcard(Ty::Int),
+                rhs: Box::new(pending_trait_call("Global::RhsTrait", Ty::Int)),
+                projection: SafeBindRhsProjection::PassThroughNonResultPartial {
+                    pattern_input_ty: Ty::Int,
+                },
+                failure_target: SafeBindFailureTarget::DoAlternative {
+                    empty: Box::new(pending_trait_call("Global::EmptyTrait", Ty::Int)),
+                },
+                continuation: Box::new(pending_trait_call("Global::NextTrait", Ty::Int)),
+                origins: DoSafeBindOrigins {
+                    do_span: test_span(),
+                    operator_span: test_span(),
+                    pattern_span: test_span(),
+                    rhs_span: test_span(),
+                    result_span: test_span(),
+                },
+            })),
+        };
+
+        let obligations = Checker::full_trait_obligations(&node);
+        assert_eq!(
+            obligations
+                .iter()
+                .map(|obligation| obligation.trait_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Global::RhsTrait",
+                "Global::EmptyTrait",
+                "Global::NextTrait"
+            ]
+        );
     }
 
     #[test]
