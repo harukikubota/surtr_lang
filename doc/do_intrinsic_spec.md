@@ -24,7 +24,8 @@ carrier 指定、自然言語 message の再解析を追加してはならない
 本書のSafeBindは[`diagnostics_cleanup_spec.md`](diagnostics_cleanup_spec.md) §§3–4で実装済みの契約を再利用する。
 N01–N07は完了し、compiler-owned contract、`DoBlock`、surface validationまで実装済みである。
 N08のdo構文・AST・resolver・scopeと、N09のcarrier推論・core loweringは実装済みである。
-N10のSafeBind / Forge loweringまで実装済みであり、N11の診断・全carrier統合検証は未着手である。
+N10のSafeBind / Forge loweringと、N11の診断・全carrier統合検証まで実装済みである。N11は末尾SafeBindのreturn診断に保存済みresult spanを使い、
+標準carrier・Transformer・ユーザ定義carrierをpipelineと実行比較し、Alternative不足とFacet source scopeの境界を検証する。
 Extractorは現行の`Option<T>`返却を前提とし、更改タスクへの依存はない。
 以下の`Result<R, E>`は内部型関係の説明表記であり、doの変数注釈やRTAに二引数Result構文を追加しない。
 現行のerror値はabstract `Error`へ収束するため、独立したcaptured error parameterを新設しない。
@@ -95,26 +96,18 @@ DoIntrinsicContract {
       NonMonad | NonResultMonad,
     ),
   ],
-  capability_rules: [
-    Always(Monad, SameCarrier(ReturnTypeArgument(0))),
-    Conditional(
-      HasPartialExtractPattern,
-      Alternative,
-      SameCarrier(ReturnTypeArgument(0)),
-    ),
-    Conditional(
-      HasLegalSafeBindAndCarrierIsNot(CanonicalType(Result)),
-      Alternative,
-      SameCarrier(ReturnTypeArgument(0)),
-    ),
-  ],
-  lowering_contracts: [
-    Sequence(Monad::bind),
-    PartialFailure(Alternative::empty),
-    SafeBindFailure(
-      CanonicalType(Result) => PreserveExistingSafeBindFailure,
-      Otherwise => OverrideWith(Alternative::empty),
-    ),
+  routes: [
+    Always => Monad + SameCarrier(ReturnTypeArgument(0))
+      + Sequence(Monad::bind),
+    HasPartialExtractPattern => Alternative
+      + SameCarrier(ReturnTypeArgument(0))
+      + Failure(Alternative::empty),
+    HasLegalSafeBindAndCarrierIsNot(CanonicalType(Result)) => Alternative
+      + SameCarrier(ReturnTypeArgument(0))
+      + SafeBindFailure(
+          CanonicalType(Result) => PreserveExistingSafeBindFailure,
+          Otherwise => OverrideWith(Alternative::empty),
+        ),
   ],
 }
 ```
@@ -176,9 +169,9 @@ raw signature 文字列を解析しない。
 
 条件付き`Alternative`、SafeBind failure policy、lowering contractはsource callable signatureだけでは表現しない
 compiler-owned部分である。
-Scarは`do`名やpattern種別ごとの散在したhardcodeからTrait名を選ばず、`capability_rules`のpredicateをpattern totality、
-SafeBindの有無、確定済みcarrier identityへ評価してobligationを生成し、`lowering_contracts`のcanonical method identityを
-具体化する。
+Scarは`do`名やpattern種別ごとの散在したhardcodeからTrait名を選ばず、`routes`のpredicateをpattern totality、
+SafeBindの有無、確定済みcarrier identityへ評価する。一つのrouteからcapability obligation、same-carrier制約、
+canonical lowering method identityを一体として具体化する。
 
 宣言側の `::<Monad>` と call-site の `::<Carrier>` は ReturnTypeArgument である。do 内部で使う block-local
 carrier inference variable は `DoIntrinsicContract.return_type_arguments[0]` を instantiate した結果であり、
@@ -403,10 +396,11 @@ body形状からcarrierを選ばず、そのsignatureが生成したconstraint�
 as-pattern、要素がすべてtotalなtupleはtotalである。literal、pin、list/string分解、constructor、Extractor、
 or-patternなどno-matchし得るpatternはpartialである。
 
-total patternは`Monad`だけを要求する。partial patternは、`DoIntrinsicContract`の
-`Conditional(HasPartialExtractPattern, Alternative, SameCarrier(ReturnTypeArgument(0)))`を成立させ、成功継続に加えて
-failure branchを生成するため、同じcarrierへ`Alternative` obligationを追加する。failure resultのpayloadはblock最終結果`R`であり、
-resolved `Alternative::empty` dispatchをexpected `F<R>` の下で具体化する。
+total patternは`Monad`だけを要求する。partial patternは、`DoIntrinsicContract.routes`の
+`predicate = HasPartialExtractPattern`、`capability = Alternative`、
+`same_carrier = ReturnTypeArgument(0)`、`lowering = Failure(Alternative::empty)`から成る一つのrouteを成立させ、
+成功継続に加えてfailure branchを生成するため、同じcarrierへ`Alternative` obligationを追加する。
+failure resultのpayloadはblock最終結果`R`であり、resolved `Alternative::empty` dispatchをexpected `F<R>` の下で具体化する。
 
 `Monad`と`Alternative`のTrait identityが異なっても、contractは両obligationをReturnTypeArgument position 0へ
 明示的に結び付けるため同じcarrierを要求する。family所属だけをこの同一性の根拠にせず、異なるfamilyとして
@@ -449,7 +443,8 @@ pattern checkerが構築するfailureを、do式の`Result<R, E>`へ保存して
 
 ### 7.6 標準MonadとTransformerの接続
 
-以下は各標準型と`do`の実装後に検証する仕様例であり、現行compilerで実行済みの例ではない。
+以下は現行compilerで実行する仕様例である。全carrierのpipeline比較は`lib/tests/do.srt`、
+TransformerのAlternative不足は`tests/fixtures/script/fail/typecheck/do_state_t_*_requires_alternative.*`で固定する。
 Identity、Reader、Stateは通常のMonad carrierとして扱い、型名ごとのloweringを追加しない。
 
 ```surtr
@@ -703,7 +698,7 @@ runtime trait dictionary、runtime candidate selectionを追加しない。
 - Sindr metadataを起点に`DoBlock` builtin type identityと`IntrinsicId::Do`を登録する。
 - `lib/types/special_types.srt`の`DoBlock`宣言と`Bootstrap::do` surfaceをcompiler-owned metadataに対して構造検証する。
 - 標準ソースの`do` intrinsic identity、`Monad`、`Alternative`、TypeConstructor、通常callをcanonical identityへ解決する。
-- `Resolved::Do`にcall-site ReturnTypeArguments、各origin span、resolved pattern、resolved RHSを保持する。
+- `Resolved::Do`にSigil解決済みのcanonical Monad / Alternative Trait ID、call-site ReturnTypeArguments、各origin span、resolved pattern、resolved RHSを保持する。
 - `<-`と`=?`のRHSをpattern bindingより先にresolveし、patternが導入する名前を後続文だけのscopeへ入れる。
 - Extractor、constructor、pin、as-patternの既存MatchBlock resolutionを再利用する。
 - intrinsic identityを通常callableへ変換せず、`do`構文のownerとして保持する。
@@ -717,8 +712,8 @@ runtime trait dictionary、runtime candidate selectionを追加しない。
 - validated `DoIntrinsicContract`のReturnTypeArgument position 0をinstantiateし、一つのdo-local carrier入力を作る。
 - 明示ReturnTypeArgument、expected type、各monadic origin、最終式を一つのconstraint setへ集める。
 - 通常callには共通`CallableSignature`、role付き型リスト、expected propagationを使う。
-- pattern totalityとSafeBindの有無を判定し、`DoIntrinsicContract.capability_rules`からMonad常時／Alternative条件付きの
-  obligationを生成する。SafeBind policyはcanonical Result identityを先に判定し、それ以外をAlternative routeにする。
+- pattern totalityとSafeBindの有無を判定し、`DoIntrinsicContract.routes`からMonad常時／Alternative条件付きの
+  obligationとlowering先を同時に具体化する。SafeBind policyはcanonical Result identityを先に判定し、それ以外をAlternative routeにする。
 - SafeBind RHSがResultなら外側一段のpayload、それ以外ならRHS全体をexpected scrutineeとして通常MatchBlock pattern
   checkerへ渡す。static pattern errorを先に報告し、partial non-Resultだけをpass-throughし、total non-Resultは
   canonical Monad capability proofによりN06の二reasonへ分類する。Option名による先行拒否とSafeBind constructor patternの`Ok`限定を残さない。

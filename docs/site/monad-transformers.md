@@ -259,7 +259,14 @@ updated = Facet::put(OptionT.inner, x, Ok(Option::Some(2)))
 ```
 
 REPLでも `new`、`lift`、`fmap`、`run`を別々の通常入力として評価できます。各入力では型注釈または引数からcarrierを具体化してください。
-`do`のTransformer接続はこの標準型の契約には含めず、導入後もTransformerを自動発見・自動liftする規則は追加しません。
+Transformer自体もMonad carrierとして`do`で逐次処理できます。base carrierの値は自動liftされないため、必要な場合は`MonadT::lift`を明示します。
+
+```surtr
+result: EitherT<String, Identity, Int> = do::<EitherT<String, Identity, _>> {
+  value <- EitherT::right::<String, Identity>(20)
+  EitherT::right::<String, Identity>(value + 1)
+}
+```
 
 ## 境界
 

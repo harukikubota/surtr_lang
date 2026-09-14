@@ -965,6 +965,75 @@ mod tests {
     }
 
     #[test]
+    fn do_return_diagnostic_keeps_the_same_source_facts_in_human_and_json() {
+        let source = r#"def invalid() -> Result<String> {
+  do::<Result> {
+    value =? Result::Ok(1)
+    Result::Ok(value)
+  }
+}"#;
+        let path = "do_return_mismatch.srt";
+        let sources = collect_default_script_compile_sources(
+            ExecutionEnv::Check,
+            path,
+            source,
+            &[],
+            xldr::StdlibVariant::Default,
+        )
+        .unwrap();
+        let plan = prepare_script_compile_plan(path, source, None).unwrap();
+        let error = compile_source(ExecutionEnv::Check, &sources, &plan)
+            .expect_err("do result with a different payload type must fail");
+        let RuneError::Diagnostic { diagnostic, .. } = &error else {
+            panic!("expected structured type diagnostic, got {error:?}");
+        };
+        let final_start = source.rfind("Result::Ok(value)").unwrap();
+        let final_end = final_start + "Result::Ok(value)".len();
+        let return_start = source.find("Result<String>").unwrap();
+        let return_end = return_start + "Result<String>".len();
+        let structured = diagnostic
+            .spec
+            .structured
+            .as_ref()
+            .expect("do mismatch has typed diagnostic facts");
+        assert_eq!(
+            structured.primary.span,
+            Span {
+                start: final_start,
+                end: final_end
+            }
+        );
+        assert!(structured.related.iter().all(|fact| {
+            fact.source_id == diagnostic.source_id && fact.span.end <= source.chars().count()
+        }));
+
+        let human = diagnostics::render_error_by_id(
+            &diagnostic.sources,
+            diagnostic.source_id,
+            &diagnostic.spec,
+        );
+        assert!(human.contains("do_return_mismatch.srt:4:5"), "{human}");
+        assert!(human.contains("Result<Int, Error>"), "{human}");
+        let report = error.to_serializable_report();
+        let json = &report.errors[0];
+        assert_eq!(json.reason.as_deref(), Some("ReturnTypeMismatch"));
+        assert_eq!(json.message, diagnostic.spec.message);
+        assert_eq!(json.span, [final_start as u32, final_end as u32]);
+        assert!(
+            json.related.iter().any(|fact| {
+                fact.span == [return_start as u32, return_end as u32]
+                    && fact.ty.as_deref() == Some("Result<String, Error>")
+                    && fact.source_id == diagnostic.source_id.0
+            }),
+            "{json:?}"
+        );
+        assert!(json
+            .related
+            .iter()
+            .all(|fact| fact.span[1] <= source.chars().count() as u32));
+    }
+
+    #[test]
     fn script_compile_plan_extracts_include_directives() {
         let temp =
             std::env::temp_dir().join(format!("surtr_script_compile_plan_{}", std::process::id()));

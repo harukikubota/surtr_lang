@@ -556,16 +556,25 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     ),
     surface_case!(do_block_type_is_reserved_in_ordinary_type_positions),
     surface_case!(do_explicit_and_expected_carriers_typecheck),
+    surface_case!(do_resolved_contract_preserves_canonical_trait_ids),
     surface_case!(do_infers_carrier_from_each_monadic_origin),
     surface_case!(do_rejects_ambiguous_and_conflicting_carriers),
+    surface_case!(do_mismatch_reasons_follow_relation_owner),
+    surface_case!(do_generated_bind_closure_preserves_expected_relation_owner),
+    surface_case!(do_expected_relation_does_not_override_user_branch_mismatch),
     surface_case!(do_uses_generic_monad_capability_without_binding_rigid_carrier),
     surface_case!(do_extract_lowers_to_concrete_monad_dispatch),
     surface_case!(do_total_extract_allows_mapped_payload_changes),
     surface_case!(do_partial_extract_requires_alternative),
+    surface_case!(do_rigid_monad_requires_explicit_alternative_bound),
     surface_case!(do_ordinary_binding_is_not_a_monadic_origin),
     surface_case!(do_final_expression_still_requires_monad),
+    surface_case!(do_concrete_non_monad_reason_is_independent_of_origin),
     surface_case!(do_safebind_selects_typed_failure_targets),
     surface_case!(do_safebind_preserves_n06_and_carrier_boundaries),
+    surface_case!(do_safebind_return_mismatch_points_to_the_final_expression),
+    surface_case!(do_partial_extract_rejects_carriers_without_alternative),
+    surface_case!(do_generated_bind_closure_keeps_facet_source_scope),
     (
         "trailing_block_calls_typecheck_inside_script_module_scope",
         trailing_block_calls_typecheck_inside_script_module_scope as fn(),
@@ -5604,6 +5613,46 @@ fn do_explicit_and_expected_carriers_typecheck() {
     }
 }
 
+fn do_resolved_contract_preserves_canonical_trait_ids() {
+    let resolved = resolve_program_with_builtin_prelude(
+        "result: Option<Int> = do::<Option> { Option::Some(1) }",
+    );
+    let canonical_monad = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, ..) if id.name == "Monad" => Some(id),
+            _ => None,
+        })
+        .expect("canonical Monad declaration");
+    let canonical_alternative = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::TraitDef(_, id, ..) if id.name == "Alternative" => Some(id),
+            _ => None,
+        })
+        .expect("canonical Alternative declaration");
+    let contract = resolved
+        .iter()
+        .rev()
+        .find_map(|node| match node {
+            Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
+                Resolved::Do(_, _, contract, ..) => Some(contract),
+                _ => None,
+            },
+            _ => None,
+        })
+        .expect("resolved do contract");
+
+    assert_eq!(
+        contract.monad_trait.as_ref().map(|id| id.unique_id),
+        Some(canonical_monad.unique_id)
+    );
+    assert_eq!(
+        contract.alternative_trait.as_ref().map(|id| id.unique_id),
+        Some(canonical_alternative.unique_id)
+    );
+}
+
 fn do_infers_carrier_from_each_monadic_origin() {
     for source in [
         // The final expression is the only monadic origin.
@@ -5663,19 +5712,77 @@ fn do_rejects_ambiguous_and_conflicting_carriers() {
         Some(diagnostics::TypeDiagnosticReason::ReturnTypeArgumentMismatch),
         "{explicit_expected_mismatch:?}"
     );
+    let explicit_expected_diagnostic = explicit_expected_mismatch
+        .structured
+        .as_ref()
+        .expect("structured explicit/expected carrier mismatch");
+    let annotation_start = "result: Identity<Int>".find("Identity<Int>").unwrap();
+    assert!(explicit_expected_diagnostic.related.iter().any(|fact| {
+        fact.role == diagnostics::SourceRole::Annotation
+            && fact.span
+                == Span {
+                    start: annotation_start,
+                    end: annotation_start + "Identity<Int>".len(),
+                }
+    }));
 
-    let captured_mismatch = typecheck(resolve_with_builtin_prelude(
-        r#"result: Either<String, Int> = do::<Either<String, _>> {
+    let return_source = r#"def invalid() -> Option<Int> {
+  do::<Result> { Result::Ok(1) }
+}"#;
+    let return_mismatch = typecheck_with_rules(return_source, RuntimeSourcePolicy::script())
+        .expect_err("explicit do carrier must agree with the function return annotation");
+    assert_eq!(
+        return_mismatch.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ReturnTypeArgumentMismatch),
+        "{return_mismatch:?}"
+    );
+    let return_annotation_start = return_source.find("Option<Int>").unwrap();
+    assert!(return_mismatch
+        .structured
+        .as_ref()
+        .expect("structured return/RTA mismatch")
+        .related
+        .iter()
+        .any(|fact| {
+            fact.role == diagnostics::SourceRole::Expected
+                && fact.span
+                    == Span {
+                        start: return_annotation_start,
+                        end: return_annotation_start + "Option<Int>".len(),
+                    }
+        }));
+
+    let captured_source = r#"result: Either<String, Int> = do::<Either<String, _>> {
   value <- Either<Int, Int>::Right(1)
   Either<String, Int>::Right(value)
-}"#,
-    ))
-    .expect_err("captured carrier arguments must remain fixed inside do");
+}"#;
+    let captured_mismatch = typecheck(resolve_with_builtin_prelude(captured_source))
+        .expect_err("captured carrier arguments must remain fixed inside do");
     assert_eq!(
         captured_mismatch.reason(),
-        Some(diagnostics::TypeDiagnosticReason::ReturnTypeMismatch),
+        Some(diagnostics::TypeDiagnosticReason::ReturnTypeArgumentMismatch),
         "{captured_mismatch:?}"
     );
+    let explicit_start = captured_source.find("Either<String, _>").unwrap();
+    assert_eq!(
+        captured_mismatch.span,
+        Span {
+            start: explicit_start,
+            end: explicit_start + "Either<String, _>".len(),
+        }
+    );
+    let rhs_start = captured_source.find("Either<Int, Int>::Right(1)").unwrap();
+    assert!(captured_mismatch
+        .structured
+        .as_ref()
+        .expect("structured RTA mismatch")
+        .related
+        .iter()
+        .any(|fact| fact.span
+            == Span {
+                start: rhs_start,
+                end: rhs_start + "Either<Int, Int>::Right(1)".len(),
+            }));
 
     let order_reasons = [
         r#"result = do {
@@ -5695,6 +5802,173 @@ fn do_rejects_ambiguous_and_conflicting_carriers() {
             .reason()
     });
     assert_eq!(order_reasons[0], order_reasons[1]);
+}
+
+fn do_mismatch_reasons_follow_relation_owner() {
+    for (source, expected_reason) in [
+        (
+            "result: Result<String> = do::<Result> { Result::Ok(1) }",
+            diagnostics::TypeDiagnosticReason::AnnotationTypeMismatch,
+        ),
+        (
+            "result = do::<Option> { Identity::new(1) }",
+            diagnostics::TypeDiagnosticReason::ReturnTypeArgumentMismatch,
+        ),
+        (
+            r#"def consume(value: Result<String>) -> Unit { () }
+consume(do::<Result> { Result::Ok(1) })"#,
+            diagnostics::TypeDiagnosticReason::TypePayloadMismatch,
+        ),
+        (
+            r#"def consume(value: Result<Int>) -> Unit { () }
+consume(do { Identity::new(1) })"#,
+            diagnostics::TypeDiagnosticReason::TypeConstructorFamilyMismatch,
+        ),
+    ] {
+        let error = typecheck_with_rules(source, RuntimeSourcePolicy::script())
+            .expect_err("do mismatch must retain the owner of its expected relation");
+        assert_eq!(error.reason(), Some(expected_reason), "{source}: {error:?}");
+    }
+}
+
+fn do_generated_bind_closure_preserves_expected_relation_owner() {
+    let annotation_source = r#"result: Result<String> = do::<Result> {
+  value <- Result::Ok(1)
+  Result::Ok(value)
+}"#;
+    let annotation_error = typecheck_with_rules(annotation_source, RuntimeSourcePolicy::script())
+        .expect_err("generated bind continuation must retain its binding annotation owner");
+    assert_eq!(
+        annotation_error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::AnnotationTypeMismatch),
+        "{annotation_error:?}"
+    );
+    let annotation_start = annotation_source.find("Result<String>").unwrap();
+    assert!(annotation_error
+        .structured
+        .as_ref()
+        .expect("structured annotation mismatch")
+        .related
+        .iter()
+        .any(|fact| {
+            fact.role == diagnostics::SourceRole::Annotation
+                && fact.span
+                    == Span {
+                        start: annotation_start,
+                        end: annotation_start + "Result<String>".len(),
+                    }
+        }));
+
+    let return_source = r#"def invalid() -> Result<String> {
+  do::<Result> {
+    value <- Result::Ok(1)
+    Result::Ok(value)
+  }
+}"#;
+    let return_error = typecheck_with_rules(return_source, RuntimeSourcePolicy::script())
+        .expect_err("generated bind continuation must retain its function return owner");
+    assert_eq!(
+        return_error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ReturnTypeMismatch),
+        "{return_error:?}"
+    );
+    let return_start = return_source.find("Result<String>").unwrap();
+    assert!(return_error
+        .structured
+        .as_ref()
+        .expect("structured return mismatch")
+        .related
+        .iter()
+        .any(|fact| {
+            fact.role == diagnostics::SourceRole::Expected
+                && fact.span
+                    == Span {
+                        start: return_start,
+                        end: return_start + "Result<String>".len(),
+                    }
+        }));
+
+    let partial_annotation_source = r#"result: Option<String> = do::<Option> {
+  Option::Some(value) <- Option::Some(Option::Some(1))
+  Option::Some(value)
+}"#;
+    let partial_annotation_error =
+        typecheck_with_rules(partial_annotation_source, RuntimeSourcePolicy::script())
+            .expect_err("partial bind continuation must retain its binding annotation owner");
+    assert_eq!(
+        partial_annotation_error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::AnnotationTypeMismatch),
+        "{partial_annotation_error:?}"
+    );
+    let partial_annotation_start = partial_annotation_source.find("Option<String>").unwrap();
+    assert!(partial_annotation_error
+        .structured
+        .as_ref()
+        .expect("structured partial annotation mismatch")
+        .related
+        .iter()
+        .any(|fact| {
+            fact.role == diagnostics::SourceRole::Annotation
+                && fact.span
+                    == Span {
+                        start: partial_annotation_start,
+                        end: partial_annotation_start + "Option<String>".len(),
+                    }
+        }));
+
+    let partial_return_source = r#"def invalid() -> Option<String> {
+  do::<Option> {
+    Option::Some(value) <- Option::Some(Option::Some(1))
+    Option::Some(value)
+  }
+}"#;
+    let partial_return_error =
+        typecheck_with_rules(partial_return_source, RuntimeSourcePolicy::script())
+            .expect_err("partial bind continuation must retain its function return owner");
+    assert_eq!(
+        partial_return_error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ReturnTypeMismatch),
+        "{partial_return_error:?}"
+    );
+    let partial_return_start = partial_return_source.find("Option<String>").unwrap();
+    assert!(partial_return_error
+        .structured
+        .as_ref()
+        .expect("structured partial return mismatch")
+        .related
+        .iter()
+        .any(|fact| {
+            fact.role == diagnostics::SourceRole::Expected
+                && fact.span
+                    == Span {
+                        start: partial_return_start,
+                        end: partial_return_start + "Option<String>".len(),
+                    }
+        }));
+}
+
+fn do_expected_relation_does_not_override_user_branch_mismatch() {
+    for (source, expected_reason) in [
+        (
+            r#"def invalid() -> Option<String> {
+  if(True, do::<Option> { Option::Some(1) }, Option::Some("ok"))
+}"#,
+            diagnostics::TypeDiagnosticReason::IfBranchTypeMismatch,
+        ),
+        (
+            r#"def invalid() -> Option<String> {
+  match True {
+    True => do::<Option> { Option::Some(1) },
+    False => Option::Some("ok"),
+  }
+}"#,
+            diagnostics::TypeDiagnosticReason::MatchArmTypeMismatch,
+        ),
+    ] {
+        let error = typecheck_with_rules(source, RuntimeSourcePolicy::script())
+            .expect_err("user branch agreement must precede the outer expected relation");
+        assert_eq!(error.reason(), Some(expected_reason), "{source}: {error:?}");
+    }
 }
 
 fn do_uses_generic_monad_capability_without_binding_rigid_carrier() {
@@ -5719,15 +5993,9 @@ result = retain(Identity::new(1))"#,
         RuntimeSourcePolicy::script(),
     )
     .expect_err("do must require Monad rather than accepting only Applicative");
-    assert!(
-        matches!(
-            error.reason(),
-            Some(
-                diagnostics::TypeDiagnosticReason::MissingGenericBound
-                    | diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability
-                    | diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation
-            )
-        ),
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingGenericBound),
         "{error:?}"
     );
 }
@@ -5838,6 +6106,52 @@ fn do_partial_extract_requires_alternative() {
     );
 }
 
+fn do_rigid_monad_requires_explicit_alternative_bound() {
+    let partial_source = r#"def partial(value: $M<Option<Int>>) -> $M<Int> where $M: Monad {
+  do {
+    Option::Some(item) <- value
+    Monad::return(item)
+  }
+}"#;
+    let partial_error = typecheck_with_rules(partial_source, RuntimeSourcePolicy::script())
+        .expect_err("a partial extract on a rigid Monad must require Alternative explicitly");
+    assert_eq!(
+        partial_error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingGenericBound),
+        "{partial_error:?}"
+    );
+    let pattern_start = partial_source.find("Option::Some(item)").unwrap();
+    assert_eq!(
+        partial_error.span,
+        Span {
+            start: pattern_start,
+            end: pattern_start + "Option::Some(item)".len(),
+        }
+    );
+
+    let safe_bind_source = r#"def partial(value: $M<Int>) -> $M<Int> where $M: Monad {
+  do {
+    1 =? 1
+    Monad::return(1)
+  }
+}"#;
+    let safe_bind_error = typecheck_with_rules(safe_bind_source, RuntimeSourcePolicy::script())
+        .expect_err("SafeBind on a rigid Monad must require Alternative explicitly");
+    assert_eq!(
+        safe_bind_error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingGenericBound),
+        "{safe_bind_error:?}"
+    );
+    let operator_start = safe_bind_source.find("=?").unwrap();
+    assert_eq!(
+        safe_bind_error.span,
+        Span {
+            start: operator_start,
+            end: operator_start + "=?".len(),
+        }
+    );
+}
+
 fn do_ordinary_binding_is_not_a_monadic_origin() {
     for source in [
         r#"result: Option<Option<Int>> = do::<Option> {
@@ -5848,6 +6162,10 @@ fn do_ordinary_binding_is_not_a_monadic_origin() {
   saved = Option::Some(1)
   Identity::new(saved)
 }"#,
+        r#"result: Option<Int> = do::<Option> {
+  print("ordinary effect")
+  Option::Some(1)
+}"#,
     ] {
         typecheck_with_builtin_prelude_in_script_module(source);
     }
@@ -5856,16 +6174,46 @@ fn do_ordinary_binding_is_not_a_monadic_origin() {
 fn do_final_expression_still_requires_monad() {
     let error = typecheck_with_rules("result: Int = do { 1 }", RuntimeSourcePolicy::script())
         .expect_err("a final-expression-only do still requires Monad");
-    assert!(
-        matches!(
-            error.reason(),
-            Some(
-                diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability
-                    | diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation
-            )
-        ),
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
         "{error:?}"
     );
+}
+
+fn do_concrete_non_monad_reason_is_independent_of_origin() {
+    for (source, offending_expression) in [
+        (
+            r#"defenum Box<$A> { Box($A) }
+result: Box<Int> = do::<Box> { Box::Box(1) }"#,
+            "Box::Box(1)",
+        ),
+        (
+            r#"defenum Box<$A> { Box($A) }
+result: Box<Int> = do::<Box> {
+  value <- Box::Box(1)
+  Box::Box(value)
+}"#,
+            "Box::Box(1)",
+        ),
+    ] {
+        let error = typecheck_with_rules(source, RuntimeSourcePolicy::script())
+            .expect_err("a concrete carrier without Monad must be rejected uniformly");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::MissingTypeConstructorCapability),
+            "{source}: {error:?}"
+        );
+        let offending_start = source.find(offending_expression).unwrap();
+        assert_eq!(
+            error.span,
+            Span {
+                start: offending_start,
+                end: offending_start + offending_expression.len(),
+            },
+            "{source}: {error:?}"
+        );
+    }
 }
 
 fn do_safebind_selects_typed_failure_targets() {
@@ -6088,6 +6436,129 @@ fn do_safebind_preserves_n06_and_carrier_boundaries() {
         Some(diagnostics::TypeDiagnosticReason::AmbiguousReturnTypeArgument),
         "{ambiguous:?}"
     );
+}
+
+fn do_safebind_return_mismatch_points_to_the_final_expression() {
+    let source = r#"def invalid() -> Result<String> {
+  do::<Result> {
+    value =? Result::Ok(1)
+    Result::Ok(value)
+  }
+}"#;
+    let error = typecheck_with_rules(source, RuntimeSourcePolicy::script())
+        .expect_err("do's Result value must still be checked against the declared return type");
+    let final_start = source.rfind("Result::Ok(value)").unwrap();
+    let return_start = source.find("Result<String>").unwrap();
+    assert_eq!(error.span.start, final_start, "{error:?}");
+    assert_eq!(
+        error.span.end,
+        final_start + "Result::Ok(value)".len(),
+        "{error:?}"
+    );
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::ReturnTypeMismatch),
+        "{error:?}"
+    );
+    let structured = error.structured.as_ref().expect("structured do diagnostic");
+    assert_eq!(structured.primary.span.start, final_start);
+    assert_eq!(
+        structured.primary.span.end,
+        final_start + "Result::Ok(value)".len()
+    );
+    assert!(
+        structured.related.iter().any(|fact| {
+            fact.ty.as_deref() == Some("Result<String, Error>")
+                && fact.span.start == return_start
+                && fact.span.end == return_start + "Result<String>".len()
+        }),
+        "{structured:?}"
+    );
+}
+
+fn do_partial_extract_rejects_carriers_without_alternative() {
+    for (result_ty, rta, rhs, last) in [
+        (
+            "Identity<Int>",
+            "Identity",
+            "Identity::new(Option::Some(1))",
+            "Identity::new(value)",
+        ),
+        (
+            "Reader<Int, Int>",
+            "Reader",
+            "Reader::new({|environment| Option::Some(1)})",
+            "Reader::new({|environment| value})",
+        ),
+        (
+            "State<Int, Int>",
+            "State",
+            "State::new({|state| (Option::Some(1), state)})",
+            "State::new({|state| (value, state)})",
+        ),
+    ] {
+        let source = format!(
+            "result: {result_ty} = do::<{rta}> {{\n  Option::Some(value) <- {rhs}\n  {last}\n}}"
+        );
+        let error = typecheck_with_rules(&source, RuntimeSourcePolicy::script())
+            .expect_err("partial pattern extraction requires Alternative on the carrier");
+        let pattern_start = source.find("Option::Some(value)").unwrap();
+        assert_eq!(error.span.start, pattern_start, "{result_ty}: {error:?}");
+        assert_eq!(
+            error.span.end,
+            pattern_start + "Option::Some(value)".len(),
+            "{result_ty}: {error:?}"
+        );
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
+            "{result_ty}: {error:?}"
+        );
+    }
+
+    for (result_ty, rta, last) in [
+        ("Identity<Int>", "Identity", "Identity::new(value)"),
+        (
+            "Reader<Int, Int>",
+            "Reader",
+            "Reader::new({|environment| value})",
+        ),
+        (
+            "State<Int, Int>",
+            "State",
+            "State::new({|state| (value, state)})",
+        ),
+    ] {
+        let source = format!(
+            "result: {result_ty} = do::<{rta}> {{\n  Option::Some(value) =? Option::Some(1)\n  {last}\n}}"
+        );
+        let error = typecheck_with_rules(&source, RuntimeSourcePolicy::script())
+            .expect_err("partial SafeBind requires Alternative on the carrier");
+        let operator_start = source.find("=?").unwrap();
+        assert_eq!(error.span.start, operator_start, "{result_ty}: {error:?}");
+        assert_eq!(error.span.end, operator_start + 2, "{result_ty}: {error:?}");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::NoApplicableTraitImplementation),
+            "{result_ty}: {error:?}"
+        );
+    }
+}
+
+fn do_generated_bind_closure_keeps_facet_source_scope() {
+    typecheck_with_rules(
+        r#"defrecord User(name: String)
+user = User("alice")
+facet = User.name
+result: Identity<String> = do::<Identity> {
+  scoped_user <- Identity::new(user)
+  name = Facet::view(facet, scoped_user)
+  length <- Identity::new(String::len(name))
+  Identity::new(to_string(length))
+}"#,
+        RuntimeSourcePolicy::script(),
+    )
+    .expect("compiler-generated bind closures must not create a source Facet scope boundary");
 }
 
 fn trailing_block_calls_typecheck_inside_script_module_scope() {

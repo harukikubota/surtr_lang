@@ -4698,6 +4698,7 @@ impl Checker {
                 self.tail_expr_span(inner)
                     .unwrap_or_else(|| inner.span.clone()),
             ),
+            TypedInner::DoSafeBind(control) => Some(control.origins.result_span.clone()),
             _ => Some(node.span.clone()),
         }
     }
@@ -4723,6 +4724,42 @@ mod tests {
             parents: Vec::new(),
             methods: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn do_safebind_tail_span_uses_the_final_expression_origin() {
+        let final_span = Span { start: 30, end: 42 };
+        let safe_bind = TypedNode {
+            ty: Ty::Unit,
+            span: Span { start: 5, end: 50 },
+            node: TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
+                pattern: TypedPattern::Wildcard(Ty::Int),
+                rhs: Box::new(TypedNode {
+                    ty: Ty::Int,
+                    span: Span { start: 15, end: 20 },
+                    node: TypedInner::Lit(Lit::Int(1.into())),
+                }),
+                projection: SafeBindRhsProjection::PassThroughNonResultPartial {
+                    pattern_input_ty: Ty::Int,
+                },
+                failure_target: SafeBindFailureTarget::TopLevel,
+                continuation: Box::new(TypedNode {
+                    ty: Ty::Unit,
+                    span: final_span.clone(),
+                    node: TypedInner::Lit(Lit::Unit),
+                }),
+                origins: DoSafeBindOrigins {
+                    do_span: Span { start: 5, end: 50 },
+                    operator_span: Span { start: 10, end: 12 },
+                    pattern_span: Span { start: 13, end: 14 },
+                    rhs_span: Span { start: 15, end: 20 },
+                    result_span: final_span.clone(),
+                },
+            })),
+        };
+        let checker = Checker::new(TypecheckContext::default());
+
+        assert_eq!(checker.tail_expr_span(&safe_bind), Some(final_span));
     }
 
     #[test]

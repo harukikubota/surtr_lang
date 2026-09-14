@@ -1,9 +1,9 @@
 use sindr::builtin::builtin_type_meta_by_name;
 use sindr::intrinsic::{
     do_intrinsic_contract, CanonicalTraitIdentity, CanonicalTraitMethodIdentity,
-    DoCapabilityPredicate, IntrinsicCarrierSource, IntrinsicId, IntrinsicOwner, IntrinsicType,
-    ReturnTypeArgumentRole, SafeBindFailureAction, SafeBindInputAction, SafeBindInputMatcher,
-    SafeBindRejection,
+    DoCapabilityPredicate, DoRouteLowering, IntrinsicCarrierSource, IntrinsicId, IntrinsicOwner,
+    IntrinsicType, ReturnTypeArgumentRole, SafeBindFailureAction, SafeBindInputAction,
+    SafeBindInputMatcher, SafeBindRejection,
 };
 use sindr::names::{builtin_type_name, builtin_type_usage_policy, BuiltinTypeUsage, TypeName};
 
@@ -58,48 +58,42 @@ fn do_contract_closes_signature_carrier_capabilities_and_lowering() {
         }
     );
 
-    assert_eq!(contract.capability_rules.len(), 3);
+    assert_eq!(contract.routes.len(), 3);
+    assert_eq!(contract.routes[0].predicate, DoCapabilityPredicate::Always);
+    assert_eq!(contract.routes[0].capability, CanonicalTraitIdentity::Monad);
     assert_eq!(
-        contract.capability_rules[0].predicate,
-        DoCapabilityPredicate::Always
-    );
-    assert_eq!(
-        contract.capability_rules[0].capability,
-        CanonicalTraitIdentity::Monad
-    );
-    assert_eq!(
-        contract.capability_rules[1].predicate,
+        contract.routes[1].predicate,
         DoCapabilityPredicate::HasPartialExtractPattern
     );
     assert_eq!(
-        contract.capability_rules[2].predicate,
+        contract.routes[2].predicate,
         DoCapabilityPredicate::HasLegalSafeBindAndCarrierIsNot(TypeName::Result)
     );
-    for rule in contract.capability_rules {
+    for route in contract.routes {
         assert_eq!(
-            rule.same_carrier,
+            route.same_carrier,
             IntrinsicCarrierSource::ReturnTypeArgument(0)
         );
     }
 
     assert_eq!(
-        contract.lowering.sequence,
-        CanonicalTraitMethodIdentity::MonadBind
+        contract.routes[0].lowering,
+        DoRouteLowering::Sequence(CanonicalTraitMethodIdentity::MonadBind)
     );
     assert_eq!(
-        contract.lowering.partial_failure,
-        CanonicalTraitMethodIdentity::AlternativeEmpty
+        contract.routes[1].lowering,
+        DoRouteLowering::Failure(CanonicalTraitMethodIdentity::AlternativeEmpty)
     );
+    let DoRouteLowering::SafeBindFailure(failure) = contract.routes[2].lowering else {
+        panic!("SafeBind route must own its failure lowering")
+    };
+    assert_eq!(failure.canonical_result, TypeName::Result);
     assert_eq!(
-        contract.lowering.safe_bind_failure.canonical_result,
-        TypeName::Result
-    );
-    assert_eq!(
-        contract.lowering.safe_bind_failure.canonical_result_action,
+        failure.canonical_result_action,
         SafeBindFailureAction::PreserveExistingSafeBindFailure
     );
     assert_eq!(
-        contract.lowering.safe_bind_failure.otherwise_action,
+        failure.otherwise_action,
         SafeBindFailureAction::OverrideWith(CanonicalTraitMethodIdentity::AlternativeEmpty)
     );
 }

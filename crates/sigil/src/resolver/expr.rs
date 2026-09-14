@@ -2753,6 +2753,7 @@ impl Resolver {
             }
 
             Ast::Do(span, return_type_arguments, statements) => {
+                let resolved_contract = self.resolve_do_contract(&span);
                 let resolved_return_type_arguments = return_type_arguments
                     .into_iter()
                     .map(|argument| self.resolve_return_type_argument(argument))
@@ -2804,6 +2805,7 @@ impl Resolver {
                 Ok(Resolved::Do(
                     span,
                     sindr::intrinsic::do_intrinsic_contract().identity,
+                    resolved_contract,
                     resolved_return_type_arguments,
                     resolved_statements,
                 ))
@@ -4474,6 +4476,34 @@ impl Resolver {
             syntax,
             direct_constructor_trait,
         })
+    }
+
+    fn resolve_do_contract(&self, span: &Span) -> ResolvedDoContract {
+        let resolve_trait = |identity: sindr::intrinsic::CanonicalTraitIdentity| {
+            let name = identity.surface_name();
+            let unique_id = self.declaration_uids.get(name).copied()?;
+            if !matches!(
+                self.declaration_uid_kinds.get(&unique_id),
+                Some(DeclarationKind::Trait)
+            ) {
+                return None;
+            }
+            let qualified_name = self
+                .declaration_fq_name_for_uid(unique_id)
+                .unwrap_or_else(|| name.to_string());
+            Some(ResolvedId {
+                name: name.to_string(),
+                qualified_name: Some(qualified_name),
+                unique_id,
+                compiler_generated: true,
+                symbol_info: self.symbol_info_for_declaration(name, &DeclarationKind::Trait, None),
+                span: span.clone(),
+            })
+        };
+        ResolvedDoContract {
+            monad_trait: resolve_trait(sindr::intrinsic::CanonicalTraitIdentity::Monad),
+            alternative_trait: resolve_trait(sindr::intrinsic::CanonicalTraitIdentity::Alternative),
+        }
     }
 
     fn direct_constructor_trait_for_signature_type(&self, ty: &AstTy) -> Option<ResolvedId> {

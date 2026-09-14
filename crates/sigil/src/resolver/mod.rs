@@ -697,7 +697,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
             rebase_pattern(pattern, base, offset);
             rebase_resolved_node(rhs, base, offset);
         }
-        Resolved::Do(_, _, _, statements) => {
+        Resolved::Do(_, _, _, _, statements) => {
             for statement in statements {
                 match statement {
                     ResolvedDoStatement::Extract { pattern, rhs, .. }

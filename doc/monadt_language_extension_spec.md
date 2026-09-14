@@ -31,7 +31,7 @@
 | §10 | 実装済み・移管済み | 本follow-upで`../docs/site/{facet,monad-transformers}.md`、`../crates/xldr/tests/repl_core.rs`のnominal owner成功・拒否境界を補強 |
 | §11 | 実装済み・移管済み | `../docs/dev/Trait_system_spec.md`、`../docs/site/trait-impls.md`、`do_intrinsic_spec.md` |
 | §12 MT-L01–21、MT-L23–24 | 実装済み・移管済み | N03–N04の対応表と実テストは`type_constructor_monad_do_implementation_plan.md` §§8–9を参照 |
-| §12 MT-L22 | 未実装・後続Task | N07–N11、`do_intrinsic_spec.md`。`do::<Either<String, _>>`を通常のTypeCtorTrait RTA経路で検証する |
+| §12 MT-L22 | 実装済み・移管済み | `do::<Either<String, _>>`を通常のTypeCtorTrait RTA経路で使用し、pipelineとの実行結果を`../lib/tests/do.srt`で比較 |
 | §13 | 実装済み・移管済み | 本follow-upで上記正本、実テスト、実装計画へ対応を固定。入力文書はN11完了まで保持する |
 
 状態名は本follow-up仕様の分類に従う。着手時に「実装済み・追加移管あり」だった箇所は、
@@ -425,7 +425,7 @@ MT-I01 は、以下の確定内容により **CLOSED** とする。
 | MT-L19 | 実装済み・移管済み | 通常関数・Trait methodを含むRTA内の `_` をそのslotの推論委譲として扱い、通常型注釈の `Hole` と区別する |
 | MT-L20 | 実装済み・移管済み | `OptionT<_, Int>` を constructor inference として受理しない |
 | MT-L21 | 実装済み・移管済み | constructor headのみのRTAは全captured/mapped argumentが導出可能な場合だけ成功する |
-| MT-L22 | 未実装・後続Task | `do::<Either<String, _>>` が通常のTypeCtorTrait RTA解決経路を使用する |
+| MT-L22 | 実装済み・移管済み | `do::<Either<String, _>>`が通常のTypeCtorTrait RTA解決経路を使い、pipelineと実行結果を比較 |
 | MT-L23 | 実装済み・移管済み | `Alternative::empty::<Option<Int>>()` からmapped slotを取得し、payload用の追加RTAを要求しない |
 | MT-L24 | 実装済み・移管済み | user-defined `Alternative` impl の `empty` 生成方法を標準型・representationで制限しない |
 
@@ -437,4 +437,5 @@ N03 の MT-I01/03 と MT-L01–06・MT-L13–15 該当部分は、2026-09-09 に
 `docs/dev/Trait_system_spec.md`、`docs/site/{language-reference,structs,type-annotations,facet}.md`へ移管した。
 N04 の MT-I02/04 と MT-L07–12・MT-L16–21・MT-L23–24 は、2026-09-10 に
 `docs/dev/{Trait_system_spec,diagnostics,テスト方針}.md`、`doc/do_intrinsic_spec.md`、
-`docs/site/`の関連利用者文書へ移管した。MT-L22だけはdo実装後のN07–N11受入として残す。
+`docs/site/`の関連利用者文書へ移管した。MT-L22はN11で`lib/tests/do.srt`に固定し、利用者向け構文とTransformer接続を
+`docs/site/{language-guide,monad-transformers}.md`へ反映した。

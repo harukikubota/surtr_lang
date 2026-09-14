@@ -1,0 +1,5 @@
+phase: typecheck
+contains: Alternative
+json: /reason = "NoApplicableTraitImplementation"
+json: /span/0 = 92
+json: /span/1 = 94

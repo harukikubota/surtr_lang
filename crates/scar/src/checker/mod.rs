@@ -557,6 +557,18 @@ enum ConstructorCarrierOutcome {
     },
 }
 
+#[derive(Debug, Clone)]
+enum ConstructorCarrierRelation {
+    SameCarrier,
+    DifferentCarrier,
+    Deferred {
+        waiting_on: Vec<u32>,
+    },
+    Rejected {
+        failures: Vec<ConstructorProjectionFailure>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 enum ConstructorApplicationOutcome {
     Applied(Ty),
@@ -4140,7 +4152,7 @@ impl Checker {
                 self.validate_constructor_pattern(pattern, constructor_traits)?;
                 self.validate_constructor_body_positions(rhs, constructor_traits)?;
             }
-            Resolved::Do(_, _, _, statements) => {
+            Resolved::Do(_, _, _, _, statements) => {
                 for statement in statements {
                     match statement {
                         sigil::resolved::ResolvedDoStatement::Extract { pattern, rhs, .. }

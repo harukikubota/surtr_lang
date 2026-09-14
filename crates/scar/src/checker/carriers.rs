@@ -552,6 +552,54 @@ impl Checker {
         self.canonical_constructor_carrier_projection(trait_key, ty, false)
     }
 
+    pub(super) fn constructor_carrier_relation(
+        &self,
+        trait_key: &str,
+        left: &Ty,
+        right: &Ty,
+    ) -> ConstructorCarrierRelation {
+        match (
+            self.canonical_constructor_carrier(trait_key, left),
+            self.canonical_constructor_carrier(trait_key, right),
+        ) {
+            (
+                ConstructorCarrierOutcome::Projected(left),
+                ConstructorCarrierOutcome::Projected(right),
+            ) if left == right => ConstructorCarrierRelation::SameCarrier,
+            (ConstructorCarrierOutcome::Projected(_), ConstructorCarrierOutcome::Projected(_)) => {
+                ConstructorCarrierRelation::DifferentCarrier
+            }
+            (
+                ConstructorCarrierOutcome::Deferred { mut waiting_on },
+                ConstructorCarrierOutcome::Deferred {
+                    waiting_on: right_waiting,
+                },
+            ) => {
+                waiting_on.extend(right_waiting);
+                waiting_on.sort_unstable();
+                waiting_on.dedup();
+                ConstructorCarrierRelation::Deferred { waiting_on }
+            }
+            (ConstructorCarrierOutcome::Deferred { waiting_on }, _)
+            | (_, ConstructorCarrierOutcome::Deferred { waiting_on }) => {
+                ConstructorCarrierRelation::Deferred { waiting_on }
+            }
+            (
+                ConstructorCarrierOutcome::Rejected { mut failures },
+                ConstructorCarrierOutcome::Rejected {
+                    failures: right_failures,
+                },
+            ) => {
+                failures.extend(right_failures);
+                ConstructorCarrierRelation::Rejected { failures }
+            }
+            (ConstructorCarrierOutcome::Rejected { failures }, _)
+            | (_, ConstructorCarrierOutcome::Rejected { failures }) => {
+                ConstructorCarrierRelation::Rejected { failures }
+            }
+        }
+    }
+
     pub(super) fn contextual_constructor_carrier(
         &self,
         trait_key: &str,

@@ -1,5 +1,8 @@
 # MonadT N05 文書移管・境界テスト follow-up 仕様
 
+> 履歴文書: 以下はN05着手時の対象・除外・移管手順を記録したもので、現行の実装状態を表さない。
+> 現行契約は`monadt_language_extension_spec.md`、`monadt_standard_types_spec.md`、`../docs/site/monad-transformers.md`を参照する。
+
 ## 1. 状態と目的
 
 - 対象 branch: `codex/type-constructor-monad-do-n05`

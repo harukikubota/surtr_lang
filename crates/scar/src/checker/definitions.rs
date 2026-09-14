@@ -53,6 +53,7 @@ mod contextual_capability_tests {
                 method_tyvars.clone(),
                 Checker::signature_tyvar_ids(&method_tyvars),
                 Ty::Unit,
+                &span,
                 "unused".into(),
                 None,
                 false,
@@ -1153,6 +1154,7 @@ impl Checker {
         local_annotation_tyvars: HashMap<String, Ty>,
         rigid_tyvars: HashSet<u32>,
         function_return_ty: Ty,
+        function_return_span: &Span,
         function_symbol: String,
         impl_target: Option<String>,
         in_extractor_body: bool,
@@ -1206,7 +1208,8 @@ impl Checker {
         // definition. Check the body now, but defer subtree normalization to the
         // single resolve_typed_node pass in check_program.
         let profile = self.profiler.start();
-        let result = self.check_node_with_expected(body, Some(&function_return_ty));
+        let result =
+            self.check_node_with_return_expected(body, &function_return_ty, function_return_span);
         for (deferred, checked) in deferred_capabilities.iter_mut().zip(
             self.active_capabilities
                 .iter()
@@ -1574,6 +1577,10 @@ impl Checker {
             tyvars.clone(),
             Self::signature_tyvar_ids(&tyvars),
             expected_ret.clone(),
+            ret_ty
+                .as_ref()
+                .map(|ty| Self::ast_ty_span(ty.syntax()))
+                .unwrap_or(span),
             current_symbol,
             impl_target,
             false,
@@ -1798,6 +1805,7 @@ impl Checker {
             tyvars.clone(),
             Self::signature_tyvar_ids(&tyvars),
             expected_ret.clone(),
+            Self::ast_ty_span(ret_ty),
             current_symbol,
             impl_target,
             true,
@@ -2094,6 +2102,11 @@ impl Checker {
                 method_tyvars.clone(),
                 type_params.iter().copied().collect(),
                 expected_ret.clone(),
+                method
+                    .ret_ty
+                    .as_ref()
+                    .map(|ty| Self::ast_ty_span(ty.syntax()))
+                    .unwrap_or_else(|| Self::ast_ty_span(trait_method.ret_ty.syntax())),
                 method.function_id.name.clone(),
                 impl_target,
                 false,

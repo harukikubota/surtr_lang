@@ -89,7 +89,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(rhs, bound, free);
             collect_bind_pattern_bindings(pat, bound);
         }
-        Resolved::Do(_, _, _, statements) => {
+        Resolved::Do(_, _, _, _, statements) => {
             let mut local_bound = bound.clone();
             for statement in statements {
                 match statement {

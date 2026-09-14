@@ -146,10 +146,11 @@ pub enum DoCapabilityPredicate {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DoCapabilityRule {
+pub struct DoRouteContract {
     pub predicate: DoCapabilityPredicate,
     pub capability: CanonicalTraitIdentity,
     pub same_carrier: IntrinsicCarrierSource,
+    pub lowering: DoRouteLowering,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -166,10 +167,10 @@ pub struct SafeBindFailureContract {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DoLoweringContract {
-    pub sequence: CanonicalTraitMethodIdentity,
-    pub partial_failure: CanonicalTraitMethodIdentity,
-    pub safe_bind_failure: SafeBindFailureContract,
+pub enum DoRouteLowering {
+    Sequence(CanonicalTraitMethodIdentity),
+    Failure(CanonicalTraitMethodIdentity),
+    SafeBindFailure(SafeBindFailureContract),
 }
 
 /// Canonical compiler-owned `do` contract.
@@ -182,8 +183,7 @@ pub struct DoIntrinsicContract {
     pub return_type: IntrinsicType,
     pub do_local_carrier: IntrinsicCarrierSource,
     pub safe_bind_input: &'static [SafeBindInputRule],
-    pub capability_rules: &'static [DoCapabilityRule],
-    pub lowering: DoLoweringContract,
+    pub routes: &'static [DoRouteContract],
 }
 
 const DO_CARRIER: IntrinsicCarrierSource = IntrinsicCarrierSource::ReturnTypeArgument(0);
@@ -218,21 +218,30 @@ const DO_SAFE_BIND_INPUT: &[SafeBindInputRule] = &[
     },
 ];
 
-const DO_CAPABILITY_RULES: &[DoCapabilityRule] = &[
-    DoCapabilityRule {
+const DO_ROUTES: &[DoRouteContract] = &[
+    DoRouteContract {
         predicate: DoCapabilityPredicate::Always,
         capability: CanonicalTraitIdentity::Monad,
         same_carrier: DO_CARRIER,
+        lowering: DoRouteLowering::Sequence(CanonicalTraitMethodIdentity::MonadBind),
     },
-    DoCapabilityRule {
+    DoRouteContract {
         predicate: DoCapabilityPredicate::HasPartialExtractPattern,
         capability: CanonicalTraitIdentity::Alternative,
         same_carrier: DO_CARRIER,
+        lowering: DoRouteLowering::Failure(CanonicalTraitMethodIdentity::AlternativeEmpty),
     },
-    DoCapabilityRule {
+    DoRouteContract {
         predicate: DoCapabilityPredicate::HasLegalSafeBindAndCarrierIsNot(TypeName::Result),
         capability: CanonicalTraitIdentity::Alternative,
         same_carrier: DO_CARRIER,
+        lowering: DoRouteLowering::SafeBindFailure(SafeBindFailureContract {
+            canonical_result: TypeName::Result,
+            canonical_result_action: SafeBindFailureAction::PreserveExistingSafeBindFailure,
+            otherwise_action: SafeBindFailureAction::OverrideWith(
+                CanonicalTraitMethodIdentity::AlternativeEmpty,
+            ),
+        }),
     },
 ];
 
@@ -247,18 +256,7 @@ pub const DO_INTRINSIC_CONTRACT: DoIntrinsicContract = DoIntrinsicContract {
     },
     do_local_carrier: DO_CARRIER,
     safe_bind_input: DO_SAFE_BIND_INPUT,
-    capability_rules: DO_CAPABILITY_RULES,
-    lowering: DoLoweringContract {
-        sequence: CanonicalTraitMethodIdentity::MonadBind,
-        partial_failure: CanonicalTraitMethodIdentity::AlternativeEmpty,
-        safe_bind_failure: SafeBindFailureContract {
-            canonical_result: TypeName::Result,
-            canonical_result_action: SafeBindFailureAction::PreserveExistingSafeBindFailure,
-            otherwise_action: SafeBindFailureAction::OverrideWith(
-                CanonicalTraitMethodIdentity::AlternativeEmpty,
-            ),
-        },
-    },
+    routes: DO_ROUTES,
 };
 
 pub const fn do_intrinsic_contract() -> &'static DoIntrinsicContract {
