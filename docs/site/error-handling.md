@@ -111,7 +111,10 @@ def render_bool(text: String) -> String {
 
 ## `=?` SafeBind と早期リターン
 
-`=?` は「`Ok` を取り出し、`Err` ならその場で返す」ための束縛です。
+`=?` は「`Ok` を取り出し、`Err` ならその場で返す」ための束縛です。通常は
+canonical `Result` を返す関数で使いますが、`@result_effect` が有効な
+Result-effect carrier を返す関数でも使えます。その場合は `Err(error)` を
+carrier の最終 failure として保持します。
 
 ```surtr
 def parse_and_increment(text: String) -> Result<Int> {
@@ -144,6 +147,23 @@ def load_pair(a: String, b: String) -> Result<Int> {
 
 SafeBind が自動分解する RHS は canonical `Result` の外側一段だけです。Result 以外の値は、
 partial pattern が値全体を明示的に検査するときだけ利用できます。
+
+RHS の自動分解と failure target の選択は別の規則です。`OptionT<Result, A>` の
+ような Result-effect carrier でも、RHS が `OptionT` なら payload を暗黙に取り出し
+ません。SafeBind が外側一段を自動分解するのは canonical `Result` だけです。
+
+Result-effect carrier の SafeBind では、RHS の `Err(error)`、pattern failure、
+Extractor の `Option::None` から作られた共通 `PatternMismatch` error を
+`inner: Err(error)` として保持します。Result effect がない carrier では、同じ
+failure は `Alternative::empty()` へ変換されます。failureMatcher となる partial
+`<-` も同じ規則で、ResultContext の能力判定は `Result effect > Alternative > Monad`
+です。ただし `Monad` 単独では failure target を構築できないため、SafeBind / partial
+`<-` では capability error になります。total `<-` の sequencing は `Monad` のみを
+要求します。
+
+`guard` はこの規則の対象外です。通常の `Alternative` 関数なので、
+`OptionT<Result, A>` でも `guard(False)` は `OptionT::empty()`（`Ok(None)`）となり、
+Result の `Err` を保持しません。
 
 ```surtr
 Option::Some(value) =? Option::Some(1) # value は Int

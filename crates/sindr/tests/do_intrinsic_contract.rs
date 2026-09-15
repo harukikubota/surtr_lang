@@ -1,8 +1,8 @@
 use sindr::builtin::builtin_type_meta_by_name;
 use sindr::intrinsic::{
     do_intrinsic_contract, CanonicalTraitIdentity, CanonicalTraitMethodIdentity,
-    DoCapabilityPredicate, DoRouteLowering, IntrinsicCarrierSource, IntrinsicId, IntrinsicOwner,
-    IntrinsicType, ReturnTypeArgumentRole, SafeBindFailureAction, SafeBindInputAction,
+    DoCapabilityPredicate, DoRouteLowering, FailureEffectAction, IntrinsicCarrierSource,
+    IntrinsicId, IntrinsicOwner, IntrinsicType, ReturnTypeArgumentRole, SafeBindInputAction,
     SafeBindInputMatcher, SafeBindRejection,
 };
 use sindr::names::{builtin_type_name, builtin_type_usage_policy, BuiltinTypeUsage, TypeName};
@@ -67,7 +67,7 @@ fn do_contract_closes_signature_carrier_capabilities_and_lowering() {
     );
     assert_eq!(
         contract.routes[2].predicate,
-        DoCapabilityPredicate::HasLegalSafeBindAndCarrierIsNot(TypeName::Result)
+        DoCapabilityPredicate::HasLegalSafeBind
     );
     for route in contract.routes {
         assert_eq!(
@@ -82,19 +82,28 @@ fn do_contract_closes_signature_carrier_capabilities_and_lowering() {
     );
     assert_eq!(
         contract.routes[1].lowering,
-        DoRouteLowering::Failure(CanonicalTraitMethodIdentity::AlternativeEmpty)
+        DoRouteLowering::FailureEffect(sindr::intrinsic::FailureEffectContract {
+            result_effect_action: FailureEffectAction::PreserveResultEffectFailure,
+            fallback_capability: CanonicalTraitIdentity::Alternative,
+            fallback_action: FailureEffectAction::OverrideWith(
+                CanonicalTraitMethodIdentity::AlternativeEmpty,
+            ),
+        })
     );
-    let DoRouteLowering::SafeBindFailure(failure) = contract.routes[2].lowering else {
+    let DoRouteLowering::FailureEffect(failure) = contract.routes[2].lowering else {
         panic!("SafeBind route must own its failure lowering")
     };
-    assert_eq!(failure.canonical_result, TypeName::Result);
     assert_eq!(
-        failure.canonical_result_action,
-        SafeBindFailureAction::PreserveExistingSafeBindFailure
+        failure.result_effect_action,
+        FailureEffectAction::PreserveResultEffectFailure
     );
     assert_eq!(
-        failure.otherwise_action,
-        SafeBindFailureAction::OverrideWith(CanonicalTraitMethodIdentity::AlternativeEmpty)
+        failure.fallback_capability,
+        CanonicalTraitIdentity::Alternative
+    );
+    assert_eq!(
+        failure.fallback_action,
+        FailureEffectAction::OverrideWith(CanonicalTraitMethodIdentity::AlternativeEmpty)
     );
 }
 

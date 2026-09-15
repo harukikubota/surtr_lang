@@ -2039,6 +2039,7 @@ impl Parser<'_> {
                 builtin: attrs.builtin,
                 compiler_generated: attrs.compiler_generated,
                 derives: attrs.derives,
+                result_effect: attrs.result_effect,
                 facet_path_kind: attrs.facet_path_kind,
                 auto_import: attrs.auto_import,
                 hidden: attrs.hidden,
@@ -3892,6 +3893,23 @@ impl Parser<'_> {
                         }
                     }
                 }
+                "result_effect" => {
+                    if attrs.result_effect.is_some() {
+                        return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
+                            "@result_effect may only appear once before a declaration",
+                            annotator_span,
+                        ));
+                    }
+                    if matches!(self.peek(), Token::LParen) {
+                        return Err(ParseError::syntax(
+                            crate::error::ParseErrorReason::DeclarationSyntax,
+                            "@result_effect does not accept arguments",
+                            annotator_span,
+                        ));
+                    }
+                    attrs.result_effect = Some(annotator_span);
+                }
                 "FacetPathKind" => {
                     if saw_facet_path_kind {
                         return Err(ParseError::syntax(
@@ -4034,6 +4052,16 @@ impl Parser<'_> {
             .as_ref()
             .map(|span| span.start)
             .unwrap_or_else(|| self.peek_span().start);
+
+        if let Some(annotation_span) = attrs.result_effect.as_ref() {
+            if !matches!(self.peek(), Token::Defstruct) {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "@result_effect may only annotate `defstruct` declarations",
+                    annotation_span.clone(),
+                ));
+            }
+        }
 
         if saw_facet_path_kind {
             if saw_builtin || saw_intrinsic {

@@ -3045,7 +3045,7 @@ impl Resolver {
                     rid,
                     resolved_type_params,
                     rfields,
-                    resolve_decl_attrs(&attrs),
+                    self.resolve_result_effect_decl_attrs(&attrs),
                 ))
             }
 
@@ -4504,6 +4504,46 @@ impl Resolver {
             monad_trait: resolve_trait(sindr::intrinsic::CanonicalTraitIdentity::Monad),
             alternative_trait: resolve_trait(sindr::intrinsic::CanonicalTraitIdentity::Alternative),
         }
+    }
+
+    /// Resolve a compiler-owned Trait by its canonical declaration identity.
+    /// A display-name lookup is insufficient here: an annotation must retain
+    /// the exact predeclared id that Scar will later compare with Trait impls.
+    fn resolve_canonical_constructor_trait(&self, name: &str, span: &Span) -> Option<ResolvedId> {
+        let unique_id = self.declaration_uids.get(name).copied()?;
+        if !matches!(
+            self.declaration_uid_kinds.get(&unique_id),
+            Some(DeclarationKind::Trait)
+        ) {
+            return None;
+        }
+        let owner = self.owner_registry.get(name)?;
+        if owner.canonical_key != name
+            || owner.kind != OwnerKind::Trait
+            || owner.identity != TypeIdentity::TypeConstructor
+        {
+            return None;
+        }
+        let qualified_name = self.declaration_fq_name_for_uid(unique_id)?;
+        Some(ResolvedId {
+            name: name.to_string(),
+            qualified_name: Some(qualified_name),
+            unique_id,
+            compiler_generated: true,
+            symbol_info: self.symbol_info_for_declaration(name, &DeclarationKind::Trait, None),
+            span: span.clone(),
+        })
+    }
+
+    fn resolve_result_effect_decl_attrs(&self, attrs: &DeclAttrs) -> ResolvedDeclAttrs {
+        let mut resolved = resolve_decl_attrs(attrs);
+        if let Some(result_effect) = resolved.result_effect.as_mut() {
+            result_effect.monad_trait =
+                self.resolve_canonical_constructor_trait("Monad", &result_effect.annotation_span);
+            result_effect.monad_t_trait =
+                self.resolve_canonical_constructor_trait("MonadT", &result_effect.annotation_span);
+        }
+        resolved
     }
 
     fn direct_constructor_trait_for_signature_type(&self, ty: &AstTy) -> Option<ResolvedId> {

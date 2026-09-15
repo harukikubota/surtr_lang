@@ -1,7 +1,12 @@
 @doc """
 Standard `OptionT<$M, $A>` transformer.
 The representation is a base computation producing `Option<$A>`.
+
+When `$M` is canonical `Result`, SafeBind and failure-matcher `do` patterns
+preserve the base Error in `inner`. Other bases use OptionT's `Alternative`
+failure, while `guard` always keeps ordinary `Alternative` semantics.
 """
+@result_effect
 defstruct OptionT<$M, $A>
 where
   $M: Monad

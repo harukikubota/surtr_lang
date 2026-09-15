@@ -300,7 +300,7 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
         TypeDiagnosticReason::SafeBindRequiresResultTarget => {
             if let DiagnosticData::Policy(value) = &input.data {
                 return format!(
-                    "`=?` can only be used in functions returning Result<...>, got {}",
+                    "`=?` requires an enclosing ResultContext return type (canonical Result or a valid @result_effect carrier), got {}",
                     value
                         .actual_type
                         .as_deref()
@@ -385,6 +385,14 @@ fn structured_headline(input: &StructuredDiagnostic) -> String {
                         .expect("nominal declaration bound"),
                     value.stage.as_deref().expect("nominal type name")
                 );
+            }
+        }
+        TypeDiagnosticReason::InvalidResultEffectAnnotation => {
+            if let DiagnosticData::Policy(value) = &input.data {
+                return value
+                    .subject
+                    .clone()
+                    .expect("result effect annotation failure");
             }
         }
         TypeDiagnosticReason::TraitHelperCaptureNeedsExpectedType => {

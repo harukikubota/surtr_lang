@@ -19,7 +19,8 @@ TypeCtorTraitのcall-site ReturnTypeArgumentにおける完全・部分型applic
 
 本書と正本が衝突する場合は正本を優先し、本書を先に修正してから実装する。ReturnTypeArgument を使わない
 carrier 指定、自然言語 message の再解析を追加してはならない。具象データ型固有の failure route は原則として
-追加しないが、既存 SafeBind の Result-style failure を保存する [8節](#8-safebindとの統合) の限定規則だけは例外とする。
+追加しないが、canonical `Result` または検証済み Result effect carrierで既存 SafeBind の failure を保存する
+[8節](#8-safebindとの統合) の限定規則だけは例外とする。
 
 本書のSafeBindは[`diagnostics_cleanup_spec.md`](diagnostics_cleanup_spec.md) §§3–4で実装済みの契約を再利用する。
 N01–N07は完了し、compiler-owned contract、`DoBlock`、surface validationまで実装済みである。
@@ -66,15 +67,14 @@ focused testとworkspace testで確認してから後者へ進む。
 - block 内の全 monadic origin と block 結果は、同じdo-local carrier入力へ結び付く。
 - mapped payload は文ごとに通常どおり変化できる。
 - captured / fixed arguments を含む carrier identity は厳密に一致する。
-- partial pattern の `<-` が failure branch を必要とする場合だけ、同じ carrier に
-  `Alternative` capability を追加する。
-- SafeBind `=?` は do 内でも受理する。canonical `Result` carrier では既存 SafeBind failure を保持し、
-  それ以外の carrier では同じ carrier の `Alternative::empty` へ failure を上書きする。
+- partial pattern の `<-` は SafeBind/failureMatcher と共通の ResultContext を使う。Result effect があれば Error を保持し、
+  なければ同じ carrier の `Alternative::empty`、どちらもなければ capability error とする。
+- SafeBind `=?` は do 内でも受理する。ResultContext は `ResultEffect > Alternative > Monad` の順で解決し、canonical `Result` または検証済み `@result_effect` carrier では既存 SafeBind failure を保持する。Result effect がない carrierでは同じ carrier の `Alternative::empty` へ failure を上書きし、Monad 単独は failure target としない。
 - `guard`、`pure`、`return` は通常 call として検査し、`do` checker は名前で分岐しない。
-- partial `<-` と non-Result do の SafeBind failure は resolved `Alternative` dispatch から構築し、
-  do checker が具象データ型固有の failure 値を新規生成しない。
+- Result effect のない failureMatcher/partial `<-`/SafeBind failure は resolved `Alternative` dispatch から構築し、
+  Result effect がある場合は既存 Error を保持する。do checker が具象データ型固有の failure 値を新規生成しない。
 
-通常関数の `where` だけでは「`Monad` は常時、`Alternative` はpartial `<-`またはSafeBindを含むnon-Result do carrierの場合だけ」
+通常関数の `where` だけでは「`Monad` は常時、`Alternative` はResult effectのないfailureMatcher/SafeBindを含むdo carrierの場合だけ」
 という条件付き capability を表現できない。この条件付き obligation とSafeBind failure targetの選択が`do`を
 intrinsicにする理由である。
 
@@ -96,27 +96,27 @@ DoIntrinsicContract {
       NonMonad | NonResultMonad,
     ),
   ],
+  failure_effect: FailureEffectContract {
+    result_effect_action: PreserveResultEffectFailure,
+    fallback_capability: Alternative,
+    fallback_action: OverrideWith(Alternative::empty),
+  },
   routes: [
     Always => Monad + SameCarrier(ReturnTypeArgument(0))
       + Sequence(Monad::bind),
-    HasPartialExtractPattern => Alternative
-      + SameCarrier(ReturnTypeArgument(0))
-      + Failure(Alternative::empty),
-    HasLegalSafeBindAndCarrierIsNot(CanonicalType(Result)) => Alternative
-      + SameCarrier(ReturnTypeArgument(0))
-      + SafeBindFailure(
-          CanonicalType(Result) => PreserveExistingSafeBindFailure,
-          Otherwise => OverrideWith(Alternative::empty),
-        ),
+    HasPartialExtractPattern => Monad + SameCarrier(ReturnTypeArgument(0))
+      + FailureEffect(failure_effect),
+    HasLegalSafeBind => Monad + SameCarrier(ReturnTypeArgument(0))
+      + FailureEffect(failure_effect),
   ],
 }
 ```
 
 最終的な Rust 型名は既存 Sindr metadata の構造へ合わせてよい。必要な不変条件は、ReturnTypeArgument position 0、
-`DoBlock<$Result>` parameter、`Monad<$Result>` return、常時`Monad`、partial extractまたはSafeBindを含むnon-Result do carrierでだけ必要な
-`Alternative`、両能力とReturnTypeArgument position 0のsame-carrier関係、SafeBind policy、lowering先method identityが
+`DoBlock<$Result>` parameter、`Monad<$Result>` return、常時`Monad`、Result effectのないfailureMatcher/SafeBindを含むdo carrierでだけ必要な
+`Alternative`、Result effect metadata、両能力とReturnTypeArgument position 0のsame-carrier関係、共通 FailureEffect policy、lowering先method identityが
 文字列ではなくcanonical identityとcanonical type structureで保持されることである。`Result` の判定も表示名ではなく
-canonical builtin type identityで行う。Scar はこの validated contract を instantiate し、display-only
+canonical builtin type identityで行い、Result effect は検証済み `@result_effect` metadata と直接 base の identityから解決する。Scar はこの validated contract を instantiate し、display-only
 `IntrinsicDecl` や raw signature 文字列を callable scheme として扱わない。
 
 `safe_bind_input`はRHSのcanonical Result identityとLHS totalityを分類し、non-Resultの具体型を列挙しない。
@@ -150,8 +150,10 @@ The carrier may be supplied with `do::<Carrier>`, inferred from the block,
 or obtained from the expected block type.
 Inside `do`, SafeBind unwraps one outer Result layer only. Partial patterns may
 inspect other RHS values unchanged; total patterns reject non-Result RHS values.
-Result-do preserves SafeBind
-failures, while other carriers require Alternative and replace failure with empty.
+ResultContext is selected as ResultEffect > Alternative > Monad: canonical Result
+and validated Result-effect carriers preserve failureMatcher/SafeBind failures,
+while carriers without Result effect use Alternative::empty when available and
+otherwise report a capability error.
 """
 @intrinsic def do::<Monad>(block: DoBlock<$Result>) -> Monad<$Result>
 ```
@@ -287,8 +289,8 @@ bare expression の結果が TypeCtorTrait carrier か未確定な場合、Scar 
 原因となった通常callの `AmbiguousReturnTypeArgument` など既存の構造化failureを報告する。
 
 SafeBind RHSはResult一段分解／partial non-Result pass-through／total non-Result拒否規則で独立に型検査し、
-do carrierの推論元にはしない。合法なSafeBindの存在は、carrierがcanonical `Result`ならResult-preserving policy、
-それ以外なら`Alternative` obligationを選ぶためのconstraintになる。
+do carrierの推論元にはしない。合法なSafeBindの存在は、ResultContext（Result effect、次に`Alternative`、最後に
+`Monad`）を選ぶためのconstraintになる。Monad単独は failure target ではない。
 carrier未確定時にResultまたはAlternative実装一覧から逆決定せず、他のoriginによるcarrier確定までpolicy選択を
 `Deferred`にする。
 
@@ -390,17 +392,16 @@ do checkerは`guard`という名前を見て`Alternative`を追加しない。
 `pure(value)` と `return(value)` も通常のTrait helper callである。do checkerは名前、module、builtin ID、
 body形状からcarrierを選ばず、そのsignatureが生成したconstraintとdoのexpected carrierを統一する。
 
-### 7.3 partial patternとAlternative
+### 7.3 partial patternとFailureEffect
 
 `<-` のpattern totalityは既存のtotal binding判定を再利用する。variable、annotation、wildcard、totalな
 as-pattern、要素がすべてtotalなtupleはtotalである。literal、pin、list/string分解、constructor、Extractor、
 or-patternなどno-matchし得るpatternはpartialである。
 
-total patternは`Monad`だけを要求する。partial patternは、`DoIntrinsicContract.routes`の
-`predicate = HasPartialExtractPattern`、`capability = Alternative`、
-`same_carrier = ReturnTypeArgument(0)`、`lowering = Failure(Alternative::empty)`から成る一つのrouteを成立させ、
-成功継続に加えてfailure branchを生成するため、同じcarrierへ`Alternative` obligationを追加する。
-failure resultのpayloadはblock最終結果`R`であり、resolved `Alternative::empty` dispatchをexpected `F<R>` の下で具体化する。
+total patternは`Monad`だけを要求する。partial patternはSafeBind/failureMatcherと同じ共通 FailureEffect routeを使い、
+`ResultEffect > Alternative > Monad` の順で解決する。Result effectがあれば Error を保持し、なければ同じcarrierの
+`Alternative::empty`、どちらもなければ capability error とする。failure resultのpayloadはblock最終結果`R`であり、
+必要な dispatch は expected `F<R>` の下で具体化する。
 
 `Monad`と`Alternative`のTrait identityが異なっても、contractは両obligationをReturnTypeArgument position 0へ
 明示的に結び付けるため同じcarrierを要求する。family所属だけをこの同一性の根拠にせず、異なるfamilyとして
@@ -408,16 +409,20 @@ failure resultのpayloadはblock最終結果`R`であり、resolved `Alternative
 
 ### 7.4 SafeBindの条件付き能力
 
-N06のRHS / pattern入力検査を通過したSafeBindが一つ以上ある場合、carrier確定後に次の順序でfailure policyを選ぶ。
+N06のRHS / pattern入力検査を通過したSafeBindが一つ以上ある場合、carrier確定後に ResultContext を次の順序で
+選ぶ。
 
-1. do carrierがcanonical builtin type identityの`Result`なら、既存SafeBindのResult-style failureを保持する。
-   `Alternative` obligationは追加しない。
-2. それ以外なら、同じcarrierへ`Alternative` obligationを追加し、SafeBindのすべてのfailure exitを
+1. do carrierがcanonical builtin type identityの`Result`、または直接 base が canonical `Result` に具体化された
+   検証済み `@result_effect` carrierなら、既存SafeBindのResult-style failureを保持する。
+   `Alternative` obligationは failure target のためには追加しない。
+2. Result effect がない場合に限り、同じcarrierへ`Alternative` obligationを追加し、SafeBindのすべてのfailure exitを
    resolved `Alternative::empty` dispatchへ上書きする。
+3. Result effect も `Alternative` もない場合は capability error とする。`Monad` 単独は sequencing capability であり、
+   SafeBind/failureMatcher の failure target にはならない。
 
-1を先に判定する。将来`Result`へ`Alternative` implが追加されても、既存SafeBindの`Err`保存を暗黙に
-`empty`上書きへ変更しない。表示名`"Result"`、surface constructor名、implの登録順ではなくcanonical type identityで
-判定する。
+この順序を固定する。Result effect carrierが`Alternative` implも持っていても、SafeBind/failureMatcher/partial `<-` は
+Error を保持する。表示名、surface constructor名、field、implの登録順ではなく、canonical type identityと検証済み
+metadataで判定する。
 
 non-Result carrierがrigid constructor variableで、その宣言済みcapability viewに`Alternative`がなければ
 `MissingGenericBound`、concrete carrierに適用可能なimplがなければ`NoApplicableTraitImplementation`とする。
@@ -433,9 +438,9 @@ partial patternのfailureで次を直接生成してはならない。
 - `List` 固有の空list
 - `Either`その他の固有constructor
 
-failureは必ず選択済み`Alternative` implementationのconcrete dispatch targetから得る。
-`Result`など`Monad`だけを持ち`Alternative`を持たないcarrierは、total patternなら使用でき、partial patternなら
-capability errorになる。この規則は`<-`のpartial patternに適用し、SafeBindには7.4節の限定規則を適用する。
+Result effectがないfailureは選択済み`Alternative` implementationのconcrete dispatch targetから得る。Result effectも
+`Alternative`も持たないcarrierは、total patternなら使用でき、partial patternなら capability errorになる。この規則は
+`<-`のpartial patternとSafeBindに共通して適用する。
 
 SafeBindのcanonical `Result`分岐は新しいResult固有failureを作る経路ではない。RHSの既存`Err`値と、通常MatchBlock
 pattern checkerが構築するfailureを、do式の`Result<R, E>`へ保存して返す経路である。これ以外のdata type名を条件に
@@ -466,9 +471,9 @@ state_result: State<Int, Int> = do {
 ```
 
 Identity、Reader、Stateは標準`Alternative`を持たないため、totalな`<-`は使えるが、partial patternの`<-`と
-合法なSafeBindを含むnon-Result do carrierは必要capability不足として拒否する。都合のよいemptyやfailure valueをdo checkerが生成しない。
+合法なSafeBindを含むResult effectのないdo carrierは必要capability不足として拒否する。都合のよいemptyやfailure valueをdo checkerが生成しない。
 
-標準Transformerもrepresentationではなく、具体化された外側carrierのMonad/Alternative実装だけを使う。
+標準Transformerもrepresentationではなく、具体化された外側carrierのMonad/Alternative実装と検証済み Result effect metadata だけを使う。
 base Monadの値は自動liftしない。
 
 ```surtr
@@ -484,8 +489,9 @@ transformed: OptionT<Result, Int> = do {
 `OptionT<Result, _>`のdoへ`Result<_>`を直接monadic originとして混ぜる例はcarrier不一致で拒否する。
 明示的な`MonadT::lift`を要求するが、`do::<OptionT<Result, _>>`は通常のTypeCtorTrait RTAとして受理し、
 applied carrier専用のdo文法は追加しない。
-`StateT<S, Result, _>`のように外側carrierが`Alternative`を持たない構成では、partial `<-`と
-合法なSafeBindを含むnon-Result do carrierを同じcapability規則で拒否する。
+`StateT<S, Result, _>`のように外側carrierが`Alternative`を持たず、かつ有効な `@result_effect` を持たない構成では、
+partial `<-`と合法なSafeBindを含むdoを同じcapability規則で拒否する。MonadT の内部に Result があるだけでは effect に
+ならない。
 
 ## 8. SafeBindとの統合
 
@@ -532,19 +538,20 @@ do::<Option> {
 この通常pattern検査はfailure target選択とSafeBind固有RHS分類より先に型検査する。
 `num: Int =? Option::Some(10)`は通常のpattern型不一致TypeErrorであり、Result-only分解の説明を追加しない。
 partial patternが型として妥当でruntimeに不一致となった場合だけ、
-Result-doでは既存SafeBind error、non-Result Alternative-doでは`empty`へ進む。
+ResultContext-preserving doでは既存SafeBind error、Result effectのない Alternative-doでは`empty`へ進む。
 
 do は残りの文列を `Monad::bind` の synthetic continuationへlowerするため、SafeBindを無加工でclosure内へ移すと
 early-return targetが変わる。ScarはSafeBindのsuccess / failureを先にnormalized control flowとして表現し、failureを
 enclosing source functionではなく、現在のdo continuationが返す`F<R>`へ接続する。
 
-ここでreturn targetがsynthetic continuationになること自体は問題ではない。Result-doではcontinuationが返した`Err`を
-外側の`Result` bindがそのまま伝播し、non-Result doではcontinuationが`empty`を返して外側bindが後続を実行しない。
+ここでreturn targetがsynthetic continuationになること自体は問題ではない。ResultContext-preserving doではcontinuationが返した`Err`を
+外側の`Result` bindがそのまま伝播し、Result effectのないdoではcontinuationが`empty`を返して外側bindが後続を実行しない。
 問題になるのはtargetを暗黙のままにすることであり、次の二modeをtyped IRへ明示すればよい。
 
-### 8.2 Result-do
+### 8.2 ResultContext-preserving do
 
-do carrierがcanonical `Result`なら、N06完了後のSafeBind意味論を次のとおり保持する。
+do carrierがcanonical `Result`、または検証済み `@result_effect` を持ち直接 base が canonical `Result` の carrierなら、
+N06完了後のSafeBind意味論を次のとおり保持する。
 
 - RHSが`Err(error)`なら、その`error`を変更せずdo式の`Err(error)`として返し、後続文を評価しない。
 - Result payloadまたはpartial patternへ渡したnon-Result RHS全体に対するpattern不一致／Extractor failureは、N06完了後のSafeBindが選ぶ`PatternMismatch`、`EmptyList`、
@@ -554,7 +561,7 @@ do carrierがcanonical `Result`なら、N06完了後のSafeBind意味論を次�
 - Extractorの`Some`はpayloadを渡し、`None`はno-matchからpattern failureへ変換する。Extractor自身のErr返却・独自error伝播を前提にしない。
 
 最後の型関係は、通常関数内のSafeBindでenclosing returnのerror型と照合している既存共通relationを、
-do式のexpected `Result<R, E>`へ向け直したものである。衝突時はSafeBind固有の自由形式messageではなく、
+do式のResultContextのexpected error relationへ向け直したものである。衝突時はSafeBind固有の自由形式messageではなく、
 同じtyped type-relation failureと二つのoriginを使う。`Result`はこの経路では`Alternative`を実装していなくてもよい。
 
 ```surtr
@@ -564,14 +571,14 @@ do::<Result> {
 }
 ```
 
-### 8.3 non-Result Alternative-do
+### 8.3 Result effectのない Alternative-do
 
-do carrierがcanonical `Result`以外なら、SafeBindを含むdoは同じcarrierの`Alternative`を要求する。Result RHSの`Err`、
+do carrierにResult effectがなければ、failureMatcher/SafeBindを含むdoは同じcarrierの`Alternative`を要求する。Result RHSの`Err`、
 pattern不一致、Extractor failureなど、既存SafeBind contractがfailureとして分類したすべての出口を破棄し、
 expected `F<R>`で具体化した`Alternative::empty()`へ上書きする。failure payloadやfailure kindをcarrierへ変換する
 暗黙関数は導入しない。
 
-成功時はResult-doと同じくbindingを後続continuationへ導入する。したがって利用者から見た規則は「このdo carrierで
+成功時はResultContext-preserving doと同じくbindingを後続continuationへ導入する。したがって利用者から見た規則は「このdo carrierで
 SafeBindが失敗すれば、そのcarrierのemptyになる」であり、実装から見た規則は「一つのfailure handlerを
 resolved empty dispatchへ接続する」である。
 
@@ -586,16 +593,29 @@ do::<Option> {
 ### 8.4 選択と非目標
 
 policy選択はdo carrierが確定するまで`Deferred`にする。SafeBind RHSの型、可視なimpl数、expected error型から
-do carrierを逆推論しない。canonical `Result`を先に選び、それ以外では`Alternative`を要求する。
+do carrierを逆推論しない。ResultContext は Result effect を先に選び、なければ `Alternative`、それもなければ
+capability error とする。`Monad` 単独を failure target にしない。
 
-do外のSafeBindは従来どおりenclosing functionのResult-style failure targetを使う。本変更はSafeBindを一般Monad
-failureへ変更せず、do内だけでfailure targetを明示的に差し替える。
+ResultContext は現在の do-local carrier だけから決定し、外側の do や enclosing function の
+Result effect を借用・継承しない。
+
+```surtr
+do::<OptionT<Result, _>> {
+  do::<List> {
+    # このfailure policyはListの能力だけで解決する
+    ...
+  }
+}
+```
+
+do外のSafeBindは従来どおりenclosing functionのcanonical Resultまたは検証済み Result-effect carrierへ failureを
+接続する。本変更はSafeBindを一般Monad failureへ変更せず、do内だけで failure target を明示的に差し替える。
 
 ```text
-Result-do:
+ResultContext-preserving do:
   SafeBindFailure(error) => Result::Err(error)
 
-non-Result Alternative-do:
+Result effectのない Alternative-do:
   SafeBindFailure(_) => Alternative::empty()
 ```
 
@@ -618,7 +638,7 @@ partial pattern <- source
 bare source: F<A>
   => Monad::bind(source, {|_| next()})
 
-pattern =? source  # canonical Result-do
+pattern =? source  # ResultContext-preserving do
   => SafeBindControl(
        source,
        on_success: {|bindings| next()},
@@ -667,7 +687,8 @@ NormalizedDoSafeBind {
 total non-Resultは通常pattern検査後にcompile errorとなり、`NormalizedDoSafeBind`やForgeへ渡さない。
 
 `<-`とSafeBindのRHSは一度だけ評価する。`pattern <- source` のpatternは、合成closureが受け取った一時値へ適用する。
-partial `<-`のExtractorも既存MatchBlock contractに従い、no-matchだけがAlternative failure branchへ進む。
+partial `<-`のExtractorも既存MatchBlock contractに従い、no-matchは共通 FailureEffect route（Result effectならError保持、
+なければ Alternative::empty）へ進む。
 SafeBindではOption-returning Extractorの`None`をpattern failureへ変換し、8節で選択したfailure targetへ進む。
 Extractorの不正な返却型は静的診断であり、no-matchやemptyとして処理しない。
 型検査後に未知tag等の内部契約違反を検出した場合も、通常のno-matchに丸めない。
@@ -712,8 +733,9 @@ runtime trait dictionary、runtime candidate selectionを追加しない。
 - validated `DoIntrinsicContract`のReturnTypeArgument position 0をinstantiateし、一つのdo-local carrier入力を作る。
 - 明示ReturnTypeArgument、expected type、各monadic origin、最終式を一つのconstraint setへ集める。
 - 通常callには共通`CallableSignature`、role付き型リスト、expected propagationを使う。
-- pattern totalityとSafeBindの有無を判定し、`DoIntrinsicContract.routes`からMonad常時／Alternative条件付きの
-  obligationとlowering先を同時に具体化する。SafeBind policyはcanonical Result identityを先に判定し、それ以外をAlternative routeにする。
+- pattern totalityとfailureMatcher/SafeBindの有無を判定し、`DoIntrinsicContract.routes`からMonad常時と共通 FailureEffect
+  の obligation・lowering先を同時に具体化する。FailureEffectは `ResultEffect > Alternative > Monad` の順に選び、Monad単独を
+  failure targetにしない。
 - SafeBind RHSがResultなら外側一段のpayload、それ以外ならRHS全体をexpected scrutineeとして通常MatchBlock pattern
   checkerへ渡す。static pattern errorを先に報告し、partial non-Resultだけをpass-throughし、total non-Resultは
   canonical Monad capability proofによりN06の二reasonへ分類する。Option名による先行拒否とSafeBind constructor patternの`Ok`限定を残さない。
@@ -728,7 +750,7 @@ runtime trait dictionary、runtime candidate selectionを追加しない。
 
 - concrete `TraitDispatchTarget`と具体化済みclosure / match / blockだけを受け取る。
 - carrier推論、impl fallback、具象データ型固有failureの新規生成、runtime dictionary lookupを行わない。
-- Result-doのSafeBindにはScarが保存したResult-preserving target、non-Result doには具体化済みempty dispatchを受け取る。
+- ResultContext-preserving doのSafeBindにはScarが保存したResult-preserving target、Result effectのないdoには具体化済みempty dispatchを受け取る。
 - SafeBindのRHS failureと各pattern failure emitterは、暗黙の`in_function`判定ではなくtyped failure targetへ分岐する。
 - 既存のcall、closure、branch、pattern、return opcodeを使い、do専用opcodeを追加しない。
 
@@ -759,7 +781,7 @@ do固有の自然言語から原因を復元せず、既存の構造化failure�
 | `AmbiguousReturnTypeArgument` | typecheck / `TypeError` | boundaryまでcarrier headまたはcaptured argumentが未確定 | `do`またはblocking call |
 | `TypeConstructorFamilyMismatch` | typecheck / `TypeError` | 同じMonad familyで異なるconstructor headまたはcaptured / fixed argumentsを要求した | 後から衝突したorigin |
 | `MissingTypeConstructorCapability` | typecheck / `TypeError` | monadic originがcanonical Monad family capabilityを提供しない | 該当origin |
-| `MissingGenericBound` | typecheck / `TypeError` | rigid carrierにMonad、partial `<-`または合法なSafeBindを含むnon-Result do carrierにAlternative boundがない | do、partial pattern、またはSafeBind |
+| `MissingGenericBound` | typecheck / `TypeError` | rigid carrierにMonad、Result effectのないfailureMatcher/SafeBindを含むdo carrierにAlternative boundがない | do、partial pattern、またはSafeBind |
 | `NoApplicableTraitImplementation` | typecheck / `TypeError` | concrete carrierに必要Trait implがない | do、RHS、partial pattern、またはSafeBind |
 | `UnresolvedTraitMethodInstantiation` | typecheck / `TypeError` | bind / empty dispatchの型入力がboundaryまで未確定 | call origin |
 | `InvalidDoCarrierReturnTypeArgument` | parse / `ParseError` | call-site項目が外側constructor variableである（applied carrierは合法） | 不正な項目 |
@@ -767,6 +789,7 @@ do固有の自然言語から原因を復元せず、既存の構造化failure�
 | `ReservedIntrinsicMarkerDeclaration` | resolve / `ResolveError` | user sourceが`DoBlock`を宣言した | declaration head |
 | `ReservedIntrinsicMarkerImpl` | resolve / `ResolveError` | `DoBlock`をimpl targetまたはinherent impl receiverにした | impl target |
 | `ReservedIntrinsicMarkerUsage` | typecheck / `TypeError` | `DoBlock`をdo intrinsic signature以外のtype positionで使った | `DoBlock` type span |
+| `InvalidResultEffectAnnotation` | typecheck / `TypeError` | annotation assertion、canonical Trait identity、またはbase relationが成立しない | `@result_effect` annotation span |
 
 `do`というcontext名をheadlineやnoteに追加してよいが、通常callと別の型推論規則やdata type固有kindを作らない。
 明示ReturnTypeArgumentを含む衝突は`ReturnTypeArgumentMismatch`、RHS同士やRHSと最終式など推論origin同士の
@@ -805,7 +828,7 @@ typed fieldとnoteで示す。impl候補の登録順や内部inference variable�
 
 ### 11.4 capability
 
-partial patternによるAlternative不足はpattern span、SafeBindによる不足は`=?` spanをprimaryにし、必要ならdo carrierを
+Result effectもAlternativeもない failureMatcher による不足は pattern/`=?` spanをprimaryにし、必要ならdo carrierを
 related labelにする。
 compiler-generated wildcardや`Alternative::empty`のsynthetic spanをuser-facing primaryにしない。
 
@@ -818,13 +841,13 @@ help: use a total pattern, or use a carrier that implements `Alternative`
 
 具象carrierが何であるかによりheadlineを分岐しない。
 
-non-Result do carrierの合法なSafeBindによる不足は、同じtyped Trait obligation failureを次のcontextでrenderする。
+Result effectのないdo carrierの合法なSafeBindによる不足は、同じtyped Trait obligation failureを次のcontextでrenderする。
 
 ```text
 message: this do SafeBind requires `Alternative`
 label: this SafeBind can exit before the remaining do statements
-note: a non-Result do block replaces SafeBind failure with `Alternative::empty` in the same carrier
-help: use a carrier that implements `Alternative`, or use a Result do block to preserve SafeBind errors
+note: a do block without Result effect replaces SafeBind failure with `Alternative::empty` in the same carrier
+help: use a carrier that implements `Alternative`, or use a ResultContext-preserving do block to preserve SafeBind errors
 ```
 
 ### 11.5 SafeBind
@@ -849,21 +872,21 @@ message: Int is not a SafeBind target; it is not a Monad, and only a Result RHS 
 ```
 
 ```text
-message: Option<Int> is not a SafeBind target; `=?` propagates Result-style failures, not values from another Monad. Only a Result RHS can be decomposed by `=?`.
+message: Option<Int> is not a SafeBind target; `=?` propagates Result-context failures, not values from another Monad. Only a Result RHS can be decomposed by `=?`.
 ```
 
 前者はcanonical Monad capabilityがないRHS、後者はResult以外のMonad RHSである。型名はclosed typed dataからrenderし、
 Optionという表示名でreasonを決めない。どちらにも`Option::to_result`、`from::<Result>`などの変換helpを付けない。
 Monad proofが`Deferred`なら二reasonのどちらかへ早期分類しない。
 
-Result-doでRHS errorまたはpattern-generated errorがdo結果の既存Result error関係に適合しない場合は、共通type relation
+ResultContext-preserving doでRHS errorまたはpattern-generated errorがdo結果の既存Result error関係に適合しない場合は、共通type relation
 failureを使い、failure originとdo result originの二地点をlabelする。
 
 ```text
 message: SafeBind failure does not fit this Result do block
 label 1: this SafeBind failure originates here
 label 2: this do block requires a compatible Result failure
-note: Result-do preserves SafeBind errors instead of replacing them with `Alternative::empty`
+note: ResultContext-preserving do preserves SafeBind errors instead of replacing them with `Alternative::empty`
 help: make the Result error types agree or convert the SafeBind error explicitly
 ```
 
@@ -957,7 +980,7 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 - `DoBlock` identityがSindr builtin metadataから登録され、stdlib surface declarationから新規作成されないこと
 - `DoBlock`のuser declaration、通常parameter / return / field / binding、impl target / inherent implの拒否
 - `Bootstrap::do` surfaceのowner、ReturnTypeArgument、parameter、return、repeated payload relationの構造検証
-- `DoIntrinsicContract`がMonad常時、partial extractまたはSafeBindを含むnon-Result do carrierでのAlternative、position 0との
+- `DoIntrinsicContract`がMonad常時、Result effectのないfailureMatcher/SafeBindを含むdo carrierでのAlternative、position 0との
   same-carrier関係、Result一段分解／partial non-Result pass-through／total non-Result二診断 input policy、Result-preserving / Alternative-empty
   failure policy、`Monad::bind` / `Alternative::empty`のcanonical lowering identityを保持すること
 - display textやraw signature文字列の違いがcallable schemeまたはcall-site inferenceを作らないこと
@@ -1002,23 +1025,23 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 
 - 最終式だけのdoでもMonadを要求
 - total variable / annotation / wildcard / tuple / as-patternはMonadだけで成功
-- literal、pin、list/string分解、constructor、Extractor、or-patternはAlternativeを追加要求
-- Alternativeを持たないcarrierでtotal patternは成功、partial patternはcapability error
-- failure branchがresolved Alternative dispatchを使うこと
+- literal、pin、list/string分解、constructor、Extractor、or-patternは共通 FailureEffect routeを使う
+- Result effectもAlternativeも持たないcarrierでtotal patternはMonadだけで成功、partial patternはcapability error
+- Result effectのないfailure branchがresolved Alternative dispatchを使い、Result effectがあればErrorを保持すること
 - partial `<-`で`Result`、`Option`、`List`、`Either`固有failureをdo checkerが生成しないこと
-- non-Result do carrierの合法なSafeBind failureが具象型固有値ではなくresolved empty dispatchへ進むこと
+- Result effectのないdo carrierの合法なfailureMatcher/SafeBind failureが具象型固有値ではなくresolved empty dispatchへ進むこと
 - `guard`名をdo checkerが特別扱いしないこと
 - `pure` / `return`名をdo checkerが特別扱いしないこと
 - 各signature位置のcapability viewを超えないこと
 - Identity / Reader / Stateのtotal bindが通常のMonad dispatchで成功すること
-- Identity / Reader / Stateのpartial `<-`と、合法なSafeBindを含むdoが、標準`Alternative`不在により拒否されること
+- Identity / Reader / Stateのpartial `<-`と、Result effectのない合法なfailureMatcher/SafeBindを含むdoが、標準`Alternative`不在により拒否されること
 - OptionT等のTransformerで明示`lift`後の値を扱え、base Monad値の直接混在はcarrier mismatchになること
-- StateT等で外側`Alternative`がない構成のpartial `<-` / 合法なSafeBindを拒否すること
+- StateT等で外側`Alternative`も有効な Result effect もない構成のpartial `<-` / 合法なSafeBindを拒否すること
 
 ### 13.5 SafeBind / match / if
 
 - Result RHSだけを外側一段自動分解し、nested Resultを再帰分解しないこと
-- `Ok(x) =? Ok(Err(error))`は内側errorの伝播ではなくpattern no-matchになり、Result-doではPatternMismatch、他carrierではemptyとなること
+- `Ok(x) =? Ok(Err(error))`は内側errorの伝播ではなくpattern no-matchになり、ResultContext-preserving doではPatternMismatch、Result effectのないAlternative-doではemptyとなること
 - `Err(e) =? Ok(Err(error))`は成功し、二文のSafeBindで明示二段伝播できること
 - non-Result RHSはOption、List、String、user-defined型を含めて値／型全体を通常MatchBlock pattern検査へ渡し、partial patternだけをpass-throughすること
 - pattern型関係が成立するtotal non-Resultを、非Monad / Result以外のMonadの二reasonで拒否すること
@@ -1028,16 +1051,16 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 - `Option::Some(num: Int)`なら静的pattern type mismatchになり、empty routeへ進まないこと
 - `Option::Some(Option::Some(num))`なら`num: Int`になり、runtime no-matchだけがempty routeへ進むこと
 - Option名による先行RHS rejection、total non-Result pass-through、SafeBind constructor patternの`Ok`限定が残っていないこと
-- Result-doでSafeBind RHSの`Err(error)`が同じerrorを保持してdo結果から返り、後続を実行しないこと
-- Result-doでliteral、list/string分解、Extractorなどのpattern failure kind / detailが既存SafeBindと一致すること
-- Result-doのSafeBind成功時にbindingが後続文だけで利用できること
-- Result-doがAlternative implなしでSafeBindを受理すること
-- Result-doのRHS error / pattern-generated errorを現行のResult error relationで検査し、独立したcaptured error型を新設しないこと
-- non-Result Alternative-doで合法なSafeBindのRHS failure、pattern不一致、Extractor failureがすべて同じcarrierのemptyになること
-- non-Result Alternative-doで合法なSafeBindのfailure payloadを観測せず、後続を実行しないこと
+- ResultContext-preserving doでSafeBind RHSの`Err(error)`が同じerrorを保持してdo結果から返り、後続を実行しないこと
+- ResultContext-preserving doでliteral、list/string分解、Extractorなどのpattern failure kind / detailが既存SafeBindと一致すること
+- ResultContext-preserving doのSafeBind成功時にbindingが後続文だけで利用できること
+- ResultContext-preserving doがAlternative implなしでSafeBindを受理すること
+- ResultContext-preserving doのRHS error / pattern-generated errorを現行のResult error relationで検査し、独立したcaptured error型を新設しないこと
+- Result effectのないAlternative-doで合法なSafeBindのRHS failure、pattern不一致、Extractor failureがすべて同じcarrierのemptyになること
+- Result effectのないAlternative-doで合法なSafeBindのfailure payloadを観測せず、後続を実行しないこと
 - user-defined Monad + Alternative carrierでも同じempty routeを使うこと
 - non-ResultでAlternativeを持たないrigid / concrete carrierが`MissingGenericBound` / `NoApplicableTraitImplementation`になること
-- canonical Result policyがAlternative routeより先に選ばれ、impl追加で意味が変わらないこと
+- Result effect policyがAlternative routeより先に選ばれ、impl追加で意味が変わらないこと
 - SafeBindだけからcarrierをResultへdefaultせず、ambiguityを保持すること
 - do外のSafeBindが既存のenclosing-function failure targetと診断を保つこと
 - user `match` / `if`の内部branch mismatchが固有診断を保つこと
@@ -1053,7 +1076,7 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 - Alternative failure時に後続を評価しないこと
 - SafeBind RHSを一度だけ評価すること
 - Result-preserving SafeBindとAlternative-empty SafeBindがsynthetic closureのreturn targetへ依存しないこと
-- typed SafeBind failure targetがResult identity / expected error型またはconcrete empty dispatchとsource originsを保持すること
+- typed SafeBind failure targetがResult effect identity / expected error型またはconcrete empty dispatchとsource originsを保持すること
 - `Option`、`List`、`Either`、user-defined carrierの成功経路
 - concrete Trait dispatchだけがForgeへ渡ること
 - do専用opcodeとruntime candidate lookupがないこと
@@ -1063,11 +1086,11 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 - explicit ReturnTypeArgumentとRHSの二地点label
 - 二つのRHSまたはRHSとexpected typeの二地点label
 - ambiguityのReturnTypeArgument help
-- partial patternのpattern labelとAlternative note
-- non-Result do carrierのSafeBindに対する`=?` labelとAlternative note
+- partial patternのpattern labelとResult effect / Alternative capability note
+- Result effectのないdo carrierのSafeBindに対する`=?` labelとAlternative note
 - total non-Result RHS二reasonのResult-only説明と、変換helpがないこと
 - 通常pattern TypeErrorにSafeBind固有説明が混入しないこと
-- Result-do SafeBind error mismatchのRHS / patternとdo resultの二地点label
+- ResultContext-preserving SafeBind error mismatchのRHS / patternとdo resultの二地点label
 - `safe_bind_mode`、`safe_bind_rhs_projection`、pattern input型、failure origin、既知failure kindのJSON field
 - AriadneとJSONが同じtyped failureを参照
 - 内部variable ID、impl登録順、synthetic wildcard spanを表示しないこと
@@ -1080,7 +1103,7 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 - runtime Trait object、dictionary passing、dynamic dispatch
 - impl specialization、priority dispatch、negative bound
 - SafeBindを一般Monad failureへ変更すること
-- canonical Resultの既存SafeBind保存以外に、特定データ型向けの新しいdo failure規則を追加すること
+- 明示 annotation と canonical base の検証を経ない、特定データ型名・field・representation向けの新しいdo failure規則を追加すること
 - do専用opcodeまたはruntime carrier selection
 - Boolean expressionを暗黙に`guard` callへ変換すること
 
@@ -1089,7 +1112,7 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 1. 標準ソースの`do`は`@intrinsic`宣言と利用者向け`@doc`を持つ。
 2. canonical surfaceは`do::<Container> { ... }`であり、`do<Container>`を拒否する。
 3. Sindrの`DoIntrinsicContract`がReturnTypeArgument position 0、`DoBlock` parameter、Monad result、常時Monad、
-   partial extractまたはSafeBindを含むnon-Result do carrierでのAlternative、position 0とのsame-carrier関係、Result一段分解／
+   Result effectのないfailureMatcher/SafeBindを含むdo carrierでのAlternative、position 0とのsame-carrier関係、Result一段分解／
    partial non-Result pass-through／total non-Result二診断 input policy、SafeBind failure policy、`Monad::bind` / `Alternative::empty` lowering identityを
    canonical identityと構造で保持し、stdlib surfaceをそのcontractに対して検証する。
 4. `do { ... }`と`do::<_> { ... }`が同じconstraintを生成し、明示constructor headはposition 0を固定する。
@@ -1100,11 +1123,12 @@ SafeBindのnormalized control flowもsuccess / failureをcompilerが閉じるた
 7. 未確定carrierをimpl一覧から逆決定せず、Deferredをboundaryのambiguityまで保持する。
 8. 一つのdoはcontractが所有する一つのdo-local carrier入力と一つの具象carrierだけを使う。
 9. mapped payloadは文ごとに変化でき、captured / fixed argumentsは厳密一致する。
-10. Monadは常時、Alternativeはpartial `<-`または合法なSafeBindを含むnon-Result do carrierにだけintrinsic規則として追加される。
+10. Monadは常時、AlternativeはResult effectのないfailureMatcher/SafeBindを含むdo carrierにだけintrinsic規則として追加される。ResultContextは `ResultEffect > Alternative > Monad` とする。partial `<-`もfailureMatcherとしてこの順序で解決する。
 11. `guard`、`pure`、`return`は通常callであり、名前固有のchecker分岐がない。
-12. partial `<-` failureはresolved Alternative dispatchを使い、具象データ型固有routeがない。
-13. do block内のSafeBindを受理し、canonical Resultでは既存Err / pattern failureを保持し、それ以外では同じcarrierの
-    resolved `Alternative::empty`へ上書きする。SafeBind RHS自体はcarrier推論元にしない。
+12. failureMatcher/partial `<-` failureは共通 FailureEffect routeを使い、Result effectがあれば Error を保持し、なければ
+    resolved Alternative dispatch、どちらもなければ capability error とする。具象データ型固有routeはない。
+13. do block内のSafeBindを受理し、canonical Resultまたは検証済み Result effect carrierでは既存Err / pattern failureを保持し、
+    Result effectのないcarrierでは同じcarrierの resolved `Alternative::empty`へ上書きする。SafeBind RHS自体はcarrier推論元にしない。
 14. SafeBindはResult RHSだけを一段自動分解し、non-Result RHSは型と値を変更せず通常MatchBlock pattern検査へ渡す。
     static pattern errorを優先し、partial patternだけをpass-throughし、total patternは非Monad / Result以外のMonadで拒否する。
     AlternativeはRHS分解能力を追加せず、Option名による先行拒否とconstructor patternの`Ok`限定を持たない。

@@ -45,6 +45,14 @@ pub(super) fn resolve_decl_attrs(attrs: &DeclAttrs) -> ResolvedDeclAttrs {
         doc: attrs.doc.clone(),
         builtin: attrs.builtin,
         derives: attrs.derives.clone(),
+        result_effect: attrs
+            .result_effect
+            .as_ref()
+            .map(|annotation_span| ResolvedResultEffect {
+                annotation_span: annotation_span.clone(),
+                monad_trait: None,
+                monad_t_trait: None,
+            }),
         facet_path_kind: attrs.facet_path_kind.clone(),
         hidden: attrs.hidden,
         readonly: attrs.readonly,

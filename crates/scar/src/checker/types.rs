@@ -4049,6 +4049,20 @@ impl Checker {
         let node = match node.node {
             TypedInner::Lit(lit) => TypedInner::Lit(lit),
             TypedInner::Var(id) => TypedInner::Var(id),
+            TypedInner::ResultEffectFailure(mut target) => {
+                target.carrier_ty = self.resolve_ty(&target.carrier_ty);
+                target.error_ty = self.resolve_ty(&target.error_ty);
+                TypedInner::ResultEffectFailure(target)
+            }
+            TypedInner::DeferredDoFailure(mut deferred) => {
+                deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
+                deferred.propagated_error_tys = deferred
+                    .propagated_error_tys
+                    .iter()
+                    .map(|ty| self.resolve_ty(ty))
+                    .collect();
+                TypedInner::DeferredDoFailure(deferred)
+            }
             TypedInner::SupervisorSpawn {
                 supervisor_process,
                 worker_process,
@@ -4149,21 +4163,30 @@ impl Checker {
                     }
                 },
                 match failure_target {
-                    SafeBindFailureTarget::EnclosingResult { error_ty } => {
-                        SafeBindFailureTarget::EnclosingResult {
-                            error_ty: self.resolve_ty(&error_ty),
-                        }
+                    SafeBindFailureTarget::EnclosingResultContext(mut target) => {
+                        target.carrier_ty = self.resolve_ty(&target.carrier_ty);
+                        target.error_ty = self.resolve_ty(&target.error_ty);
+                        SafeBindFailureTarget::EnclosingResultContext(target)
                     }
                     SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
-                    SafeBindFailureTarget::DoResult { error_ty } => {
-                        SafeBindFailureTarget::DoResult {
-                            error_ty: self.resolve_ty(&error_ty),
-                        }
+                    SafeBindFailureTarget::DoResultContext(mut target) => {
+                        target.carrier_ty = self.resolve_ty(&target.carrier_ty);
+                        target.error_ty = self.resolve_ty(&target.error_ty);
+                        SafeBindFailureTarget::DoResultContext(target)
                     }
                     SafeBindFailureTarget::DoAlternative { empty } => {
                         SafeBindFailureTarget::DoAlternative {
                             empty: Box::new(self.resolve_typed_node(*empty)),
                         }
+                    }
+                    SafeBindFailureTarget::Deferred(mut deferred) => {
+                        deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
+                        deferred.propagated_error_tys = deferred
+                            .propagated_error_tys
+                            .iter()
+                            .map(|ty| self.resolve_ty(ty))
+                            .collect();
+                        SafeBindFailureTarget::Deferred(deferred)
                     }
                 },
             ),
@@ -4194,15 +4217,24 @@ impl Checker {
                         }
                     },
                     failure_target: match failure_target {
-                        SafeBindFailureTarget::DoResult { error_ty } => {
-                            SafeBindFailureTarget::DoResult {
-                                error_ty: self.resolve_ty(&error_ty),
-                            }
+                        SafeBindFailureTarget::DoResultContext(mut target) => {
+                            target.carrier_ty = self.resolve_ty(&target.carrier_ty);
+                            target.error_ty = self.resolve_ty(&target.error_ty);
+                            SafeBindFailureTarget::DoResultContext(target)
                         }
                         SafeBindFailureTarget::DoAlternative { empty } => {
                             SafeBindFailureTarget::DoAlternative {
                                 empty: Box::new(self.resolve_typed_node(*empty)),
                             }
+                        }
+                        SafeBindFailureTarget::Deferred(mut deferred) => {
+                            deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
+                            deferred.propagated_error_tys = deferred
+                                .propagated_error_tys
+                                .iter()
+                                .map(|ty| self.resolve_ty(ty))
+                                .collect();
+                            SafeBindFailureTarget::Deferred(deferred)
                         }
                         other => other,
                     },

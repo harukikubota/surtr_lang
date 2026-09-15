@@ -63,7 +63,7 @@ source span を必要としない説明や修正案を `labels` に置かない�
 | branch | `IfBranchTypeMismatch`, `MatchArmTypeMismatch`, `CondBranchTypeMismatch` |
 | SafeBind input | `SafeBindTotalPatternNonMonadRhs`, `SafeBindTotalPatternNonResultMonadRhs` |
 | pattern / Extractor | `PatternTypeMismatch`, `PatternShapeMismatch`, `PatternArityMismatch`, `NonTotalBindingPattern`, `NestedResultErrorPattern`, `MatchGuardTypeMismatch`, `ConstructorPatternRequiresEnumOrResultRhs`, `ExtractorInputTypeMismatch`, `ExtractorArityMismatch`, `NonExhaustiveMatch` |
-| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresResultTarget`, `ErrorValueMustBeWrapped`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
+| policy | `SafeBindErrorTypeMismatch`, `SafeBindRequiresResultTarget`, `InvalidResultEffectAnnotation`, `ErrorValueMustBeWrapped`, Facet / Process / source / compile policy reason、`NominalDeclarationConstraintViolation`, `TraitHelperCaptureNeedsExpectedType`, `ReservedIntrinsicMarkerUsage` |
 | producer contract | `TypecheckInvariantViolation` |
 
 `MissingGenericBound`はrigid genericの宣言済みproof不足、`MissingTraitCapability`は具象subjectの能力不足、
@@ -87,7 +87,7 @@ messageに合わせて変形させない。
 | `ConstraintSubject` / `TraitObligation` | subject/constraint、またはtrait name/arguments・subject type・position |
 | `TypeConstructorCarrier` | `family`, `family_id`, `expected_carrier`, `actual_carrier` |
 | `BranchAssertion` | `expected_type`, `actual_type`, `branch` |
-| `SafeBindRelation` | `lhs_type`, `rhs_type`, `lhs_is_total`, `rhs_is_canonical_result`, `monad_capability` |
+| `SafeBindRelation` | `lhs_type`, `rhs_type`, `lhs_is_total`, `rhs_is_canonical_result`, `monad_capability`, `result_effect`, `alternative_capability` |
 | `Pattern` / `Policy` / `Runtime` / `Parse` / `Resolve` / `Repl` | family固有の閉じた入力。`detail`は表示・追跡用であり、reason再分類には使わない |
 
 SafeBind固有reasonは、通常pattern型検査を通過したtotal pattern + non-Result RHSにだけ生成する。
@@ -95,6 +95,19 @@ canonical Monad proofが成立すれば`SafeBindTotalPatternNonResultMonadRhs`�
 不成立なら`SafeBindTotalPatternNonMonadRhs`とする。Deferred、rigid genericのbound不足、solverの
 既存structured failureをこの二reasonへ畳み込まない。どちらのheadlineもcanonical Resultだけが
 外側一段の自動分解対象であることを本文に含め、変換APIのhelpは生成しない。
+
+SafeBind/failureMatcher の ResultContext は `ResultEffect > Alternative > Monad` の順で解決する。
+canonical `Result` または検証済み `@result_effect` carrier は既存 Error を保持し、Result effect がない場合だけ
+`Alternative::empty` へ置換する。`Monad` 単独は sequencing capability であり failure target ではない。
+failureMatcher/partial `<-` は Result effect があれば Error を保持し、なければ `Alternative::empty`、どちらもなければ
+capability error とする。total `<-` は Monad のみを要求し、`guard` は Result effect を参照しない通常の Alternative
+call として扱う。annotation、carrier、policy が未確定な場合は `Deferred` を保持し、候補数や登録順で
+Result/Alternativeを選ばない。
+
+`InvalidResultEffectAnnotation` は annotation span を primary とし、sole field、visibility、canonical Monad / MonadT
+impl、captured base relation のうち失敗根拠となる宣言 span を related fact として保持する。必要 metadata の
+欠落を annotation 無視や `Alternative` route への切り替えで隠さない。SafeBind/failureMatcher では元の `=?`、
+pattern、RHS、return/do result span と Error の kind、message、location、cause を、Result-preserving target まで保持する。
 
 constructor-context経路の`CandidateFailureData`は候補ごとの型と失敗detailを保持する。通常のTrait候補選択は
 閉じた`CandidateRejection`からrelated factsとsummary noteを構築する。どちらも候補の失敗をtyped dataとして保持し、

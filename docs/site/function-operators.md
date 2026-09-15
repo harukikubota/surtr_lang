@@ -234,7 +234,9 @@ pipeline = &parse_int >=> &require_small
 ## `=?` SafeBind
 
 `=?` は失敗しうる値から成功側だけを束縛し、失敗はそのまま返す構文です。
-通常の user code では、`Result<T>` を返す関数の中でのみ使います。
+通常の user code では、`Result<T>` または有効な `@result_effect` carrier を返す
+関数の中で使います。Result effect がある場合、RHS の失敗と pattern failure は
+最終 carrier の Result failure として保持されます。
 REPL では入力自体は受理しますが、失敗時はエラーを表示してセッションを継続します。
 
 ```surtr
@@ -247,6 +249,17 @@ Option::Some(saved) =? Option::Some(1)
 自動的に外側を分解する RHS は canonical `Result` だけで、一段だけです。
 Result 以外の RHS は、constructor、literal、list/string、Extractor などの partial pattern が
 値全体を明示検査するときだけそのまま渡されます。Monad payload の暗黙取り出しはありません。
+
+`@result_effect` は Monad / `MonadT<$M>`、単一 public field、field の最外
+constructor と captured base `$M` の一致を満たす struct 宣言にだけ指定できます。
+具体化された base が canonical `Result` の場合だけ有効で、`T<U<Result, _>, A>` や
+annotation のない wrapper の内部から Result を探索することはありません。
+
+Result-context の failure target は `Result effect > Alternative > Monad` の順で
+判定されます。Result effect がなければ `Alternative::empty()` に進み、`Monad` 単独では
+failure target を構築できないため compile error です。`guard` は通常の `Alternative`
+関数なので、この選択に参加せず、Result effect carrier でも `guard(False)` はその
+carrier の `empty` になります。
 
 `Option::Some(saved) =? Option::Some(1)` は Option 全体を明示的に検査するため有効です。
 一方、`saved =? Option::Some(1)` のような total pattern は、RHS が Result 以外の Monad なので

@@ -295,7 +295,7 @@ fn safebind_closure_rejects_non_result_return() {
   value =? Ok(x)
   value
 }"#,
-        "can only be used in functions returning Result",
+        "requires an enclosing ResultContext return type",
     );
 }
 
@@ -469,6 +469,137 @@ print(inspect(result))"#,
     );
 }
 
+fn safebind_option_t_result_preserves_existing_error() {
+    assert_output(
+        r#"deferror Oops {
+  "oops"
+}
+
+def source() -> Result<Int, Oops> {
+  Err(Oops)
+}
+
+def wrapped() -> OptionT<Result, Int> {
+  value =? source()
+  OptionT::some::<Result>(value + 1)
+}
+
+print(inspect(OptionT::run(wrapped())))"#,
+        &["Err(Oops(\"oops\"))"],
+    );
+}
+
+fn do_safebind_option_t_result_preserves_existing_error() {
+    assert_output(
+        r#"deferror Oops {
+  "oops"
+}
+
+def source() -> Result<Int, Oops> {
+  Err(Oops)
+}
+
+result: OptionT<Result, Int> = do::<OptionT<Result, _>> {
+  value =? source()
+  OptionT::some::<Result>(value + 1)
+}
+
+print(inspect(OptionT::run(result)))"#,
+        &["Err(Oops(\"oops\"))"],
+    );
+}
+
+fn do_partial_bind_prefers_option_t_result_effect_over_alternative() {
+    assert_output(
+        r#"result: OptionT<Result, Int> = do::<OptionT<Result, _>> {
+  2 <- OptionT::some::<Result>(1)
+  OptionT::some::<Result>(3)
+}
+
+print(inspect(OptionT::run(result)))"#,
+        &["Err(PatternMismatch(\"Pattern did not match.\"))"],
+    );
+}
+
+fn do_partial_bind_option_t_list_falls_back_to_alternative() {
+    assert_output(
+        r#"result: OptionT<List, Int> = do::<OptionT<List, _>> {
+  2 <- OptionT::some::<List>(1)
+  OptionT::some::<List>(3)
+}
+
+print(inspect(OptionT::run(result)))"#,
+        &["[Option::None]"],
+    );
+}
+
+fn deferred_partial_bind_selects_result_effect_after_specialization() {
+    assert_output(
+        r#"def deferred_partial(value: $M<Int>) -> $M<Int>
+where
+  $M: Alternative
+  $M: Monad
+{
+  do {
+    2 <- value
+    value
+  }
+}
+
+source: OptionT<Result, Int> = OptionT::some::<Result>(1)
+result: OptionT<Result, Int> = deferred_partial(source)
+print(inspect(OptionT::run(result)))
+
+list_source: OptionT<List, Int> = OptionT::some::<List>(1)
+list_result: OptionT<List, Int> = deferred_partial(list_source)
+print(inspect(OptionT::run(list_result)))"#,
+        &[
+            "Err(PatternMismatch(\"Pattern did not match.\"))",
+            "[Option::None]",
+        ],
+    );
+}
+
+fn deferred_safebind_selects_result_effect_after_specialization() {
+    assert_output(
+        r#"def deferred_safebind(value: $M<Int>) -> $M<Int>
+where
+  $M: Alternative
+  $M: Monad
+{
+  do {
+    2 =? 1
+    value
+  }
+}
+
+source: OptionT<Result, Int> = OptionT::some::<Result>(3)
+result: OptionT<Result, Int> = deferred_safebind(source)
+print(inspect(OptionT::run(result)))"#,
+        &["Err(PatternMismatch(\"Pattern did not match.\"))"],
+    );
+}
+
+fn do_guard_keeps_option_t_result_alternative_semantics() {
+    assert_output(
+        r#"blocked: OptionT<Result, Unit> = guard(False)
+print(inspect(OptionT::run(blocked)))"#,
+        &["Ok(Option::None)"],
+    );
+}
+
+fn do_extractor_none_uses_common_pattern_mismatch_in_result_effect() {
+    assert_output(
+        r#"result: OptionT<Result, Int> = do::<OptionT<Result, _>> {
+  uncons(head, tail) <- OptionT::some::<Result>([])
+  OptionT::some::<Result>(head)
+}
+
+print(inspect(OptionT::run(result)))"#,
+        &["Err(PatternMismatch(\"Pattern did not match.\"))"],
+    );
+}
+
 fn safebind_rejects_total_plain_rhs() {
     assert_compile_error(
         "num =? 10",
@@ -540,7 +671,21 @@ fn safebind_requires_result_return_function() {
   num =? Ok(1)
   num
 }"#,
-        "can only be used in functions returning Result",
+        "requires an enclosing ResultContext return type",
+    );
+}
+
+fn safebind_does_not_infer_result_effect_from_reader_t_representation() {
+    assert_compile_error(
+        r#"def source() -> Result<Int> {
+  Err(NoneError)
+}
+
+def invalid() -> ReaderT<Int, Result, Int> {
+  value =? source()
+  ReaderT::new({|_| Ok(value)})
+}"#,
+        "requires an enclosing ResultContext return type",
     );
 }
 
@@ -880,6 +1025,38 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
             do_safebind_success_evaluates_rhs_once as fn(),
         ),
         (
+            "safebind_option_t_result_preserves_existing_error",
+            safebind_option_t_result_preserves_existing_error as fn(),
+        ),
+        (
+            "do_safebind_option_t_result_preserves_existing_error",
+            do_safebind_option_t_result_preserves_existing_error as fn(),
+        ),
+        (
+            "do_partial_bind_prefers_option_t_result_effect_over_alternative",
+            do_partial_bind_prefers_option_t_result_effect_over_alternative as fn(),
+        ),
+        (
+            "do_partial_bind_option_t_list_falls_back_to_alternative",
+            do_partial_bind_option_t_list_falls_back_to_alternative as fn(),
+        ),
+        (
+            "deferred_partial_bind_selects_result_effect_after_specialization",
+            deferred_partial_bind_selects_result_effect_after_specialization as fn(),
+        ),
+        (
+            "deferred_safebind_selects_result_effect_after_specialization",
+            deferred_safebind_selects_result_effect_after_specialization as fn(),
+        ),
+        (
+            "do_guard_keeps_option_t_result_alternative_semantics",
+            do_guard_keeps_option_t_result_alternative_semantics as fn(),
+        ),
+        (
+            "do_extractor_none_uses_common_pattern_mismatch_in_result_effect",
+            do_extractor_none_uses_common_pattern_mismatch_in_result_effect as fn(),
+        ),
+        (
             "safebind_rejects_total_plain_rhs",
             safebind_rejects_total_plain_rhs as fn(),
         ),
@@ -906,6 +1083,10 @@ pub(crate) fn run_bucket(bucket: usize, bucket_count: usize) -> usize {
         (
             "safebind_requires_result_return_function",
             safebind_requires_result_return_function as fn(),
+        ),
+        (
+            "safebind_does_not_infer_result_effect_from_reader_t_representation",
+            safebind_does_not_infer_result_effect_from_reader_t_representation as fn(),
         ),
         (
             "safebind_rejects_compile_time_facet_values",

@@ -294,6 +294,27 @@ call-site ReturnTypeArgumentは定義側に対応位置がある場合だけ指�
   carrier推論、core lowering、SafeBind failure target、Forge lowering、診断整備、全carrier受入検証は
   N11までに実装・検証済みである。
 
+`@result_effect` は MonadT の内部表現を探索する機能ではなく、宣言へ明示する compiler-owned assertion である。
+surface は引数を取らず、1つの `defstruct` 宣言へ一度だけ指定できる。重複、引数付き、または
+`defstruct` 以外への指定は parse error とする。
+
+annotation が付いた struct だけについて、次の assertion を宣言時にすべて検証する。
+
+1. canonical `Monad` 実装と canonical `MonadT<$M>` 実装がある。
+2. field は正確に1つで public である。
+3. sole field の最外 constructor は `MonadT<$M>` が capture する同一の `$M` である。
+4. field 型は通常の型形成規則を満たす。
+
+Trait 名の文字列や short-name lookup ではなく、Sigil が保持した canonical `ResolvedId` と resolved impl
+substitution で照合する。identity や必要 metadata が欠ける場合は別の同名 Trait、field layout、または
+`Alternative` へ fallback せず fail closed とする。annotation のない型では field 数・field 名・function field・
+内部の Result から effect を推論しない。
+
+検証済み carrier の直接 base が canonical `Result` の場合に Result effect を提供し、failure context は
+`ResultEffect > Alternative > Monad` の順で解決する。failureMatcher/partial `<-` は Result effect があれば Error を保持し、
+なければ Alternative の `empty`、どちらもなければ capability error とする。total `<-` は Monad のみを要求し、
+`guard` は常に通常の Alternative call とする。
+
 互換用の二重field、旧用語alias、旧経路fallbackを追加してはならない。serialized cacheやfixture更新が
 必要な場合も一括更新し、旧形式を読み戻すcompatibility layerは設けない。
 

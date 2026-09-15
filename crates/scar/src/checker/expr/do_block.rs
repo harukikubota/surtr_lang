@@ -1,6 +1,17 @@
 use super::*;
 
 impl Checker {
+    fn do_failure_carrier_is_rigid_variable(&self, carrier: &Ty) -> bool {
+        match self.resolve_ty(carrier) {
+            Ty::Var(variable) => self.rigid_tyvars.contains(&variable),
+            Ty::SelfApp(items) => Self::constructor_application_parts(&items)
+                .is_some_and(|(constructor, _)| {
+                    matches!(constructor, Ty::Var(variable) if self.rigid_tyvars.contains(variable))
+                }),
+            _ => false,
+        }
+    }
+
     fn canonical_do_trait_key(
         &self,
         contract: &sigil::resolved::ResolvedDoContract,
@@ -59,36 +70,6 @@ impl Checker {
         Ok(key)
     }
 
-    fn canonical_do_method_id(
-        &self,
-        contract: &sigil::resolved::ResolvedDoContract,
-        identity: sindr::intrinsic::CanonicalTraitMethodIdentity,
-        span: &Span,
-    ) -> Result<ResolvedId, TypeError> {
-        let trait_key = self.canonical_do_trait_key(contract, identity.trait_identity(), span)?;
-        self.traits[&trait_key]
-            .methods
-            .get(identity.method_name())
-            .map(|method| method.id.clone())
-            .ok_or_else(|| {
-                self.policy_error(
-                    TypeDiagnosticReason::TypecheckInvariantViolation,
-                    diagnostics::TypePolicy::ProducerContract,
-                    Some(format!(
-                        "canonical intrinsic method {}::{}",
-                        identity.trait_identity().surface_name(),
-                        identity.method_name()
-                    )),
-                    None,
-                    None,
-                    None,
-                    None,
-                    span,
-                    None,
-                )
-            })
-    }
-
     fn partial_do_failure_method(
         &self,
         span: &Span,
@@ -111,7 +92,7 @@ impl Checker {
                 None,
             ));
         };
-        let sindr::intrinsic::DoRouteLowering::Failure(method) = route.lowering else {
+        let sindr::intrinsic::DoRouteLowering::FailureEffect(failure) = route.lowering else {
             return Err(self.policy_error(
                 TypeDiagnosticReason::TypecheckInvariantViolation,
                 diagnostics::TypePolicy::ProducerContract,
@@ -124,7 +105,21 @@ impl Checker {
                 None,
             ));
         };
-        if route.capability != method.trait_identity() {
+        let sindr::intrinsic::FailureEffectAction::OverrideWith(method) = failure.fallback_action
+        else {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("do partial-extract fallback action".into()),
+                None,
+                None,
+                None,
+                None,
+                span,
+                None,
+            ));
+        };
+        if failure.fallback_capability != method.trait_identity() {
             return Err(self.policy_error(
                 TypeDiagnosticReason::TypecheckInvariantViolation,
                 diagnostics::TypePolicy::ProducerContract,
@@ -657,6 +652,18 @@ impl Checker {
         }];
         let continuation =
             self.synthetic_do_continuation(do_span, intrinsic, resolved_contract, rest);
+        let failure_placeholder = if Self::is_total_bind_pattern(pattern) {
+            None
+        } else {
+            Some(ResolvedId {
+                name: "__do_failure_effect".into(),
+                qualified_name: None,
+                symbol_info: None,
+                unique_id: Self::next_synthetic_range_uid(),
+                compiler_generated: true,
+                span: pattern_span.clone(),
+            })
+        };
         let body = if Self::is_total_bind_pattern(pattern) {
             Resolved::Block(
                 statement_span.clone(),
@@ -670,8 +677,9 @@ impl Checker {
                 ],
             )
         } else {
-            let failure = self.partial_do_failure_method(pattern_span)?;
-            let empty_id = self.canonical_do_method_id(resolved_contract, failure, pattern_span)?;
+            let placeholder = failure_placeholder
+                .as_ref()
+                .expect("partial bind placeholder");
             Resolved::Match(
                 statement_span.clone(),
                 Box::new(Resolved::Var(statement_span.clone(), parameter_id.clone())),
@@ -684,26 +692,212 @@ impl Checker {
                     ResolvedMatchArm {
                         pattern: ResolvedPattern::Wildcard(statement_span.clone()),
                         guard: None,
-                        body: Resolved::App(
-                            pattern_span.clone(),
-                            Box::new(Resolved::Var(pattern_span.clone(), empty_id)),
-                            Vec::new(),
-                        ),
+                        body: Resolved::Var(pattern_span.clone(), placeholder.clone()),
                     },
                 ],
             )
         };
-        let captures = sigil::collect_resolved_closure_captures(&body, &parameters);
+        let mut captures = sigil::collect_resolved_closure_captures(&body, &parameters);
+        if let Some(placeholder) = &failure_placeholder {
+            captures.retain(|capture| capture.unique_id != placeholder.unique_id);
+        }
         let closure =
             Resolved::Closure(statement_span.clone(), parameters, captures, Box::new(body));
-        self.check_do_bind_invocation(
+        if let Some(placeholder) = &failure_placeholder {
+            let placeholder_ty = self.env.fresh_tyvar();
+            self.env.push_var_scope();
+            self.env.bind_var(placeholder.unique_id, placeholder_ty);
+        }
+        let checked = self.check_do_bind_invocation(
             do_span,
             resolved_contract,
             rhs,
             closure,
             carrier_hint,
             carrier_relation,
-        )
+        );
+        if failure_placeholder.is_some() {
+            self.env.pop_var_scope();
+        }
+        let mut checked = checked?;
+        let Some(placeholder) = failure_placeholder else {
+            return Ok(checked);
+        };
+        let carrier_ty = self.resolve_ty(&checked.ty);
+        let replacement = match self.resolve_result_effect(&carrier_ty) {
+            ResultEffectResolution::Preserve(target) => {
+                if !self.types_compatible(&target.error_ty, &Ty::Error) {
+                    return Err(self.policy_error(
+                        TypeDiagnosticReason::SafeBindErrorTypeMismatch,
+                        diagnostics::TypePolicy::SafeBindFailureTarget,
+                        Some("do partial pattern".into()),
+                        Some(&target.error_ty),
+                        Some(&Ty::Error),
+                        None,
+                        None,
+                        pattern_span,
+                        None,
+                    ));
+                }
+                TypedNode {
+                    ty: target.carrier_ty.clone(),
+                    span: pattern_span.clone(),
+                    node: TypedInner::ResultEffectFailure(Box::new(target)),
+                }
+            }
+            ResultEffectResolution::Unavailable => {
+                let failure = self.partial_do_failure_method(pattern_span)?;
+                let trait_key = self.canonical_do_trait_key(
+                    resolved_contract,
+                    failure.trait_identity(),
+                    pattern_span,
+                )?;
+                self.check_trait_invocation(
+                    pattern_span,
+                    &trait_key,
+                    failure.method_name(),
+                    &[],
+                    None,
+                    Some(&carrier_ty),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )?
+            }
+            ResultEffectResolution::Deferred => {
+                let failure = self.partial_do_failure_method(pattern_span)?;
+                let trait_key = self.canonical_do_trait_key(
+                    resolved_contract,
+                    failure.trait_identity(),
+                    pattern_span,
+                )?;
+                if self.do_failure_carrier_is_rigid_variable(&carrier_ty) {
+                    let _ = self.check_trait_invocation(
+                        pattern_span,
+                        &trait_key,
+                        failure.method_name(),
+                        &[],
+                        None,
+                        Some(&carrier_ty),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )?;
+                }
+                TypedNode {
+                    ty: carrier_ty.clone(),
+                    span: pattern_span.clone(),
+                    node: TypedInner::DeferredDoFailure(Box::new(DeferredDoFailureTarget {
+                        carrier_ty: carrier_ty.clone(),
+                        alternative_trait_key: trait_key,
+                        alternative_method_name: failure.method_name().into(),
+                        propagated_error_tys: vec![Ty::Error],
+                        failure_span: pattern_span.clone(),
+                    })),
+                }
+            }
+            ResultEffectResolution::InvalidMetadata(subject) => {
+                return Err(self.policy_error(
+                    TypeDiagnosticReason::TypecheckInvariantViolation,
+                    diagnostics::TypePolicy::ProducerContract,
+                    Some(subject.into()),
+                    None,
+                    Some(&carrier_ty),
+                    None,
+                    None,
+                    pattern_span,
+                    None,
+                ));
+            }
+        };
+        let TypedInner::TraitCall { args, .. } = &mut checked.node else {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("do partial-bind Monad::bind call".into()),
+                None,
+                Some(&carrier_ty),
+                None,
+                None,
+                statement_span,
+                None,
+            ));
+        };
+        let Some(closure) = args.get_mut(1) else {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("do partial-bind mapper closure".into()),
+                None,
+                Some(&carrier_ty),
+                None,
+                None,
+                statement_span,
+                None,
+            ));
+        };
+        let TypedInner::Closure(_, captures, body) = &mut closure.node else {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("do partial-bind typed mapper closure".into()),
+                None,
+                Some(&carrier_ty),
+                None,
+                None,
+                statement_span,
+                None,
+            ));
+        };
+        captures.retain(|capture| capture.unique_id != placeholder.unique_id);
+        let TypedInner::Match(_, arms) = &mut body.node else {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("do partial-bind typed failure match".into()),
+                None,
+                Some(&carrier_ty),
+                None,
+                None,
+                statement_span,
+                None,
+            ));
+        };
+        let Some(failure_arm) = arms.last_mut() else {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("do partial-bind failure arm".into()),
+                None,
+                Some(&carrier_ty),
+                None,
+                None,
+                statement_span,
+                None,
+            ));
+        };
+        if !matches!(&failure_arm.body.node, TypedInner::Var(id) if id.unique_id == placeholder.unique_id)
+        {
+            return Err(self.policy_error(
+                TypeDiagnosticReason::TypecheckInvariantViolation,
+                diagnostics::TypePolicy::ProducerContract,
+                Some("do partial-bind failure placeholder".into()),
+                None,
+                Some(&carrier_ty),
+                None,
+                None,
+                statement_span,
+                None,
+            ));
+        }
+        failure_arm.body = replacement;
+        Ok(self.resolve_typed_node(checked))
     }
 
     fn do_safebind_failure_method(
@@ -715,14 +909,12 @@ impl Checker {
             .routes
             .iter()
             .find_map(|route| match route.lowering {
-                sindr::intrinsic::DoRouteLowering::SafeBindFailure(failure)
+                sindr::intrinsic::DoRouteLowering::FailureEffect(failure)
                     if route.predicate
-                        == sindr::intrinsic::DoCapabilityPredicate::HasLegalSafeBindAndCarrierIsNot(
-                            failure.canonical_result,
-                        )
+                        == sindr::intrinsic::DoCapabilityPredicate::HasLegalSafeBind
                         && route.same_carrier == contract.do_local_carrier =>
                 {
-                    Some((route.capability, failure))
+                    Some(failure)
                 }
                 _ => None,
             })
@@ -739,8 +931,8 @@ impl Checker {
                     None,
                 )
             })?;
-        let action = failure.1.otherwise_action;
-        let sindr::intrinsic::SafeBindFailureAction::OverrideWith(method) = action else {
+        let sindr::intrinsic::FailureEffectAction::OverrideWith(method) = failure.fallback_action
+        else {
             return Err(self.policy_error(
                 TypeDiagnosticReason::TypecheckInvariantViolation,
                 diagnostics::TypePolicy::ProducerContract,
@@ -753,7 +945,7 @@ impl Checker {
                 None,
             ));
         };
-        if failure.0 == method.trait_identity() {
+        if failure.fallback_capability == method.trait_identity() {
             Ok(method)
         } else {
             Err(self.policy_error(
@@ -826,46 +1018,19 @@ impl Checker {
             carrier_relation,
         )?;
         let continuation_ty = self.resolve_ty(&continuation.ty);
-        let failure_target = match &continuation_ty {
-            Ty::Result(_, expected_error_ty) => {
-                let contract = sindr::intrinsic::do_intrinsic_contract();
-                let failure = contract
-                    .routes
-                    .iter()
-                    .find_map(|route| match route.lowering {
-                        sindr::intrinsic::DoRouteLowering::SafeBindFailure(failure) => {
-                            Some(failure)
-                        }
-                        _ => None,
-                    });
-                if failure.map(|failure| failure.canonical_result_action)
-                    != Some(
-                        sindr::intrinsic::SafeBindFailureAction::PreserveExistingSafeBindFailure,
-                    )
-                {
-                    return Err(self.policy_error(
-                        TypeDiagnosticReason::TypecheckInvariantViolation,
-                        diagnostics::TypePolicy::ProducerContract,
-                        Some("do SafeBind canonical Result failure action".into()),
-                        None,
-                        None,
-                        None,
-                        None,
-                        operator_span,
-                        None,
-                    ));
-                }
+        let failure_target = match self.resolve_result_effect(&continuation_ty) {
+            ResultEffectResolution::Preserve(target) => {
                 self.collect_pattern_result_error_types(
                     &checked.typed_pattern,
                     &mut checked.propagated_error_tys,
                 );
                 for propagated in &checked.propagated_error_tys {
-                    if !self.types_compatible(expected_error_ty, propagated) {
+                    if !self.types_compatible(&target.error_ty, propagated) {
                         return Err(self.policy_error(
                             TypeDiagnosticReason::SafeBindErrorTypeMismatch,
                             diagnostics::TypePolicy::SafeBindFailureTarget,
                             Some("=?".into()),
-                            Some(expected_error_ty),
+                            Some(&target.error_ty),
                             Some(propagated),
                             None,
                             None,
@@ -874,11 +1039,9 @@ impl Checker {
                         ));
                     }
                 }
-                SafeBindFailureTarget::DoResult {
-                    error_ty: expected_error_ty.as_ref().clone(),
-                }
+                SafeBindFailureTarget::DoResultContext(Box::new(target))
             }
-            _ => {
+            ResultEffectResolution::Unavailable => {
                 let failure = self.do_safebind_failure_method(operator_span)?;
                 let trait_key = self.canonical_do_trait_key(
                     resolved_contract,
@@ -902,6 +1065,54 @@ impl Checker {
                 SafeBindFailureTarget::DoAlternative {
                     empty: Box::new(empty),
                 }
+            }
+            ResultEffectResolution::Deferred => {
+                self.collect_pattern_result_error_types(
+                    &checked.typed_pattern,
+                    &mut checked.propagated_error_tys,
+                );
+                let failure = self.do_safebind_failure_method(operator_span)?;
+                let trait_key = self.canonical_do_trait_key(
+                    resolved_contract,
+                    failure.trait_identity(),
+                    operator_span,
+                )?;
+                if self.do_failure_carrier_is_rigid_variable(&continuation_ty) {
+                    let _ = self.check_trait_invocation(
+                        operator_span,
+                        &trait_key,
+                        failure.method_name(),
+                        &[],
+                        None,
+                        Some(&continuation_ty),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )?;
+                }
+                SafeBindFailureTarget::Deferred(Box::new(DeferredDoFailureTarget {
+                    carrier_ty: continuation_ty.clone(),
+                    alternative_trait_key: trait_key,
+                    alternative_method_name: failure.method_name().into(),
+                    propagated_error_tys: checked.propagated_error_tys.clone(),
+                    failure_span: operator_span.clone(),
+                }))
+            }
+            ResultEffectResolution::InvalidMetadata(subject) => {
+                return Err(self.policy_error(
+                    TypeDiagnosticReason::TypecheckInvariantViolation,
+                    diagnostics::TypePolicy::ProducerContract,
+                    Some(subject.into()),
+                    None,
+                    Some(&continuation_ty),
+                    None,
+                    None,
+                    operator_span,
+                    None,
+                ));
             }
         };
         let rhs_span = checked.typed_rhs.span.clone();

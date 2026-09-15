@@ -2,9 +2,9 @@
 
 use scar::env::TypeKind;
 use scar::typed::{
-    OperatorTraitOp, SafeBindFailureTarget, SafeBindRhsProjection, TraitCallOrigin,
-    TypedDoSafeBind, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode, TypedPattern,
-    TypedProgram, TypedWhereConstraintRhs,
+    OperatorTraitOp, ResultPreserveConstruction, SafeBindFailureTarget, SafeBindRhsProjection,
+    TraitCallOrigin, TypedDoSafeBind, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedNode,
+    TypedPattern, TypedProgram, TypedWhereConstraintRhs,
 };
 use scar::types::Ty;
 use sigil::resolved::{
@@ -575,6 +575,9 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(do_safebind_return_mismatch_points_to_the_final_expression),
     surface_case!(do_partial_extract_rejects_carriers_without_alternative),
     surface_case!(do_generated_bind_closure_keeps_facet_source_scope),
+    surface_case!(result_effect_annotation_validates_canonical_monad_t_shape),
+    surface_case!(result_effect_annotation_rejects_invalid_structure_and_capabilities),
+    surface_case!(result_effect_annotation_rejects_noncanonical_trait_metadata),
     (
         "trailing_block_calls_typecheck_inside_script_module_scope",
         trailing_block_calls_typecheck_inside_script_module_scope as fn(),
@@ -1620,7 +1623,7 @@ fn safebind_function_requires_result_return_type() {
     let err = typecheck(resolved).expect_err("typecheck should fail");
     assert!(err
         .message
-        .contains("can only be used in functions returning Result"));
+        .contains("requires an enclosing ResultContext return type"));
 }
 
 fn safebind_result_closure_uses_nearest_callable_return_type() {
@@ -1643,7 +1646,7 @@ fn safebind_non_result_closure_is_rejected() {
     let err = typecheck(resolved).expect_err("non-Result closure should reject SafeBind");
     assert!(err
         .message
-        .contains("can only be used in functions returning Result"));
+        .contains("requires an enclosing ResultContext return type"));
 }
 
 fn safebind_result_returning_annotated_closure_allows_safebind() {
@@ -1669,7 +1672,7 @@ fn safebind_non_result_closure_rejects_safebind() {
     let err = typecheck(resolved).expect_err("non-Result closure should fail");
     assert!(err
         .message
-        .contains("can only be used in functions returning Result"));
+        .contains("requires an enclosing ResultContext return type"));
 }
 
 fn safebind_top_ok_pattern_requires_nested_result_rhs() {
@@ -6241,9 +6244,9 @@ fn do_safebind_selects_typed_failure_targets() {
     ));
     assert!(matches!(
         failure_target,
-        SafeBindFailureTarget::DoResult {
-            error_ty: Ty::Error
-        }
+        SafeBindFailureTarget::DoResultContext(target)
+            if target.error_ty == Ty::Error
+                && target.construction == ResultPreserveConstruction::CanonicalResult
     ));
     assert_eq!(continuation.ty, result.ty);
     assert_eq!(
@@ -6559,6 +6562,190 @@ result: Identity<String> = do::<Identity> {
         RuntimeSourcePolicy::script(),
     )
     .expect("compiler-generated bind closures must not create a source Facet scope boundary");
+}
+
+const RESULT_EFFECT_CARRIER_SOURCE: &str = r#"@result_effect
+defstruct TransparentT<$M, $A>
+where
+  $M: Monad
+{
+  inner: __FIELD__,
+}
+
+impl TransparentT {
+  def new(inner: $M<$A>) -> TransparentT<$M, $A>
+  where
+    $M: Monad
+  {
+    TransparentT { inner }
+  }
+}
+
+impl Functor for TransparentT<$M, $T>
+where
+  $M: Monad
+  $T: Functor.$A
+{
+  def fmap(self: TransparentT<$M, $A>, mapper: ($A -> $B)) -> TransparentT<$M, $B> {
+    TransparentT::new(Functor::fmap(self.inner, mapper))
+  }
+}
+
+impl Applicative for TransparentT<$M, $T>
+where
+  $M: Monad
+  $T: Applicative.$A
+{
+  def pure::<TransparentT<$M, $T>>(value: $A) -> TransparentT<$M, $A> {
+    TransparentT::new(Applicative::pure(value))
+  }
+
+  def ap(
+    mapper: TransparentT<$M, ($A -> $B)>,
+    value: TransparentT<$M, $A>,
+  ) -> TransparentT<$M, $B> {
+    TransparentT::new(Applicative::ap(mapper.inner, value.inner))
+  }
+}
+
+impl Monad for TransparentT<$M, $T>
+where
+  $M: Monad
+  $T: Monad.$A
+{
+  def return::<TransparentT<$M, $T>>(value: $A) -> TransparentT<$M, $A> {
+    TransparentT::new(Monad::return(value))
+  }
+
+  def bind(
+    self: TransparentT<$M, $A>,
+    mapper: ($A -> TransparentT<$M, $B>),
+  ) -> TransparentT<$M, $B> {
+    TransparentT::new(Monad::bind(self.inner, {|item| mapper(item).inner}))
+  }
+}
+
+impl MonadT<$M> for TransparentT<$M, $T>
+where
+  $M: Monad
+  $T: MonadT.$A
+{
+  def lift::<TransparentT<$M, $T>>(value: $M<$A>) -> TransparentT<$M, $A> {
+    TransparentT::new(value)
+  }
+}
+"#;
+
+fn result_effect_annotation_validates_canonical_monad_t_shape() {
+    let source = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "$M<$A>");
+    typecheck_with_rules(&source, RuntimeSourcePolicy::script()).expect(
+        "a canonical MonadT with one public direct-base field should accept @result_effect",
+    );
+}
+
+fn result_effect_annotation_rejects_invalid_structure_and_capabilities() {
+    for (source, expected) in [
+        (
+            "@result_effect\ndefstruct EmptyT<$M, $A> where $M: Monad {}",
+            "exactly one field",
+        ),
+        (
+            "@result_effect\ndefstruct PairT<$M, $A> where $M: Monad { left: $M<$A>, right: $M<$A> }",
+            "exactly one field",
+        ),
+        (
+            "@result_effect\ndefstruct PrivateT<$M, $A> where $M: Monad { private inner: $M<$A> }",
+            "sole field to be public",
+        ),
+        (
+            "@result_effect\ndefstruct Wrapper<$A> { value: $A }",
+            "canonical Monad implementation",
+        ),
+    ] {
+        let error = typecheck_with_rules(source, RuntimeSourcePolicy::script())
+            .expect_err("invalid @result_effect structure must fail closed");
+        assert_eq!(
+            error.reason(),
+            Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
+            "{source}: {error:?}"
+        );
+        assert!(error.message.contains(expected), "{source}: {error:?}");
+        assert_eq!(error.span.start, source.find("@result_effect").unwrap());
+        let structured = error.structured.expect("annotation rejection must be structured");
+        assert_eq!(structured.primary.role, diagnostics::SourceRole::Annotation);
+    }
+
+    let wrong_field = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "Option<$A>");
+    let error = typecheck_with_rules(&wrong_field, RuntimeSourcePolicy::script())
+        .expect_err("the sole field must use the captured MonadT base constructor");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
+        "{error:?}"
+    );
+    assert!(error.message.contains("outer constructor"), "{error:?}");
+
+    let valid_shape = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "$M<$A>");
+    let missing_monad_t = valid_shape
+        .split("impl MonadT")
+        .next()
+        .expect("fixture contains MonadT implementation");
+    let error = typecheck_with_rules(missing_monad_t, RuntimeSourcePolicy::script())
+        .expect_err("@result_effect requires a canonical MonadT implementation");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
+        "{error:?}"
+    );
+    assert!(
+        error.message.contains("canonical MonadT implementation"),
+        "{error:?}"
+    );
+}
+
+fn result_effect_annotation_rejects_noncanonical_trait_metadata() {
+    let source = RESULT_EFFECT_CARRIER_SOURCE.replace("__FIELD__", "$M<$A>");
+    let mut resolved = resolve_with_builtin_prelude(&source);
+    let shadow_identity = resolved.iter().find_map(|node| match node {
+        Resolved::TraitImplDef(_, _, id, ..) if id.name == "Functor" => Some(id.clone()),
+        _ => None,
+    });
+    let shadow_identity = shadow_identity.expect("standard Functor identity should be resolved");
+    let shadow_identity = ResolvedId {
+        name: "Monad".into(),
+        unique_id: shadow_identity.unique_id,
+        compiler_generated: true,
+        ..shadow_identity
+    };
+    let mut replaced = false;
+    for node in &mut resolved {
+        let Resolved::StructDef(_, _id, _, _, attrs) = node else {
+            continue;
+        };
+        let result_effect = attrs
+            .result_effect
+            .as_mut()
+            .expect("annotated carrier should retain result effect metadata");
+        result_effect.monad_trait = Some(shadow_identity.clone());
+        replaced = true;
+    }
+    assert!(
+        replaced,
+        "annotated carrier should be present in resolved nodes"
+    );
+
+    let error = typecheck(resolved).expect_err("noncanonical metadata must fail closed");
+    assert_eq!(
+        error.reason(),
+        Some(diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation),
+        "{error:?}"
+    );
+    assert!(
+        error
+            .message
+            .contains("canonical Monad identity is invalid"),
+        "{error:?}"
+    );
 }
 
 fn trailing_block_calls_typecheck_inside_script_module_scope() {
@@ -8597,6 +8784,8 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             | TypedInner::CaptureClosure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
+            | TypedInner::ResultEffectFailure(_)
+            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::DeferrorDef(..)
             | TypedInner::EnumDef(..)
@@ -8718,6 +8907,8 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             | TypedInner::CaptureClosure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
+            | TypedInner::ResultEffectFailure(_)
+            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::DeferrorDef(..)
             | TypedInner::EnumDef(..)

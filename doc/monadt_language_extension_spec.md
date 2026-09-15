@@ -59,7 +59,7 @@
 | 再利用 | 型変数導入元、既存 constructor slot、canonical type、role付き型リスト、substitution、solver |
 | 再利用 | `Self` の mapped-slot 置換、coherence、applicability、parent coverage、static dispatch |
 | 追加しない | 型 lambda、任意の高階型関数の推論、associated type、新しい parameterized `where` RHS |
-| 追加しない | property 名・field 構造から MonadT impl や base carrier を自動発見する仕組み |
+| 追加しない | property 名・field 構造から MonadT impl や base carrier を自動発見する仕組み（明示 `@result_effect` assertion の宣言時検証を除く） |
 | 追加しない | MonadT 実装型だけの Facet/パターン/REPL特例 |
 
 これは限定された constructor polymorphism の拡張である。「型機能の拡張が一切ない」とは扱わない。ただし、既存 TypeCtorTrait の適用と構造的照合で必要な能力に閉じる。
@@ -260,6 +260,19 @@ impl MonadT<M> for OptionT<N,A>
 OptionT の `inner: M<Option<A>>`、ReaderT の `R -> M<A>`、StateT の `S -> M<(A,S)>` は各通常型の宣言で検査する。
 
 MonadT impl の検査では、field 名 `inner` / `run_state`、field 数、body の特定形状を正しさの根拠にしない。`lift` が `M<A> -> Self<A>` を型正しく実装するかを通常の method body 検査で確認する。
+
+### 8.3 明示 `@result_effect` assertion
+
+`@result_effect` は、representation から MonadT や base carrier を発見する規則ではない。annotation がある宣言に
+限り、対象 struct の Monad / MonadT 実装、sole public field、field 最外 constructor と MonadT の captured base
+`$M` の一致を compiler-owned metadata として検証する。annotation のない型の field 数・field 名・function field・
+内部の Result は effect 判定に使わない。
+
+検証済み型の直接 base が canonical `Result` に具体化された場合だけ Result effect を提供する。nested type、wrapper、
+または impl 数・登録順による推論は行わない。SafeBind/failureMatcher の ResultContext は
+`ResultEffect > Alternative > Monad` とし、Monad 単独は failure target ではない。failureMatcher/partial `<-` は effect
+carrierなら Error を保持し、なければ Alternative の `empty`、どちらもなければ capability error とする。total `<-` は
+Monad のみを要求し、`guard` は常に通常の Alternative call として扱う。
 
 型の合法性と法則の成立は別である。Monad / lift の法則は標準実装のテスト契約とし、ユーザの任意実装をコンパイラが証明したとは扱わない。
 

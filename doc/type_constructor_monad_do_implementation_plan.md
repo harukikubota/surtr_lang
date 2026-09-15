@@ -416,14 +416,15 @@ N08では型推論・loweringを行わず、`Resolved::Do`はScar入口でstruct
 
 ### N09: carrier inference / core lowering
 
-monadic originを一つのdo-local carrierへ結び付け、payloadを別型として扱う。常時Monad、partial `<-` はAlternative。通常 `=` の値保存を自動bindしない。
+N09時点では、monadic originを一つのdo-local carrierへ結び付け、payloadを別型として扱う。常時Monad、partial `<-` はAlternative。通常 `=` の値保存を自動bindしない。
 
 状態: 完了。Scarはvalidated `DoIntrinsicContract`のReturnTypeArgument position 0、expected result、`<-` RHS、
 bare monadic expression、通常callのRTA推論、最終式を、通常のTypeCtorTrait / Trait dispatch経路で一つのcarrierへ統一する。
 mapped payloadは各bindで独立に変化でき、captured / fixed argumentは同じcarrier identityとして固定する。
 
-total `<-` とbare monadic expressionはconcrete `Monad::bind`、partial `<-` はwildcard failure armを持つmatchと
-同じcarrierのconcrete `Alternative::empty`へ、Scar内で既存のTraitCall / Closure / Block / Matchへlowerする。
+N09時点ではtotal `<-` とbare monadic expressionをconcrete `Monad::bind`、partial `<-` をwildcard failure armを持つmatchと
+同じcarrierのconcrete `Alternative::empty`へ、Scar内で既存のTraitCall / Closure / Block / Matchへlowerした。
+現在のpartial `<-` failureは`ResultEffect > Alternative > Monad`で選択し、Result effectがあるcarrierではErrorを保持する。
 生成closureのcaptureはSigilのresolved capture collectorを再利用する。通常 `=` は値保存のまま、最終式だけのdoにも
 Monadを要求する。do内SafeBindはN10のfailure target / Forge loweringが入るまでstructured `CompilePolicyViolation`として
 fail closedを維持する。
@@ -445,15 +446,17 @@ fail closedを維持する。
 
 ### N10: SafeBind / Forge lowering
 
-N06で合法と確定したSafeBindを再利用し、do carrierがcanonical ResultならError保存、それ以外は同じcarrierのemptyへ
-失敗先を変更する。total non-Result RHSの入力判定をN10で緩和・再実装しない。Error生成・RHS評価回数・source originを維持する。
+N06で合法と確定したSafeBindを再利用する。N10時点ではdo carrierがcanonical ResultならError保存、それ以外は
+同じcarrierのemptyへ失敗先を変更したが、現在は[`do_intrinsic_spec.md`](do_intrinsic_spec.md)と
+[`Trait_system_spec.md`](../docs/dev/Trait_system_spec.md) の現行契約により `ResultEffect > Alternative > Monad`へ置換済みである。total non-Result RHSの入力判定を緩和・再実装しない。
+Error生成・RHS評価回数・source originを維持する。
 do専用VM opcodeを追加しない。
 
 状態: 完了。Scarはdo内SafeBindを専用のboxed typed controlへ正規化し、RHS projection、
-後続continuation、source origin、およびcanonical Resultのerror保存または具体化済み`Alternative::empty` dispatchを保持する。
+後続continuation、source origin、およびResult effectのerror保存または具体化済み`Alternative::empty` dispatchを保持する。
 SafeBind RHSの型検査substitutionはcarrier推論へ混ぜず、後続文から確定したcarrierに対してfailure targetを選択する。
 Forgeはtyped targetごとの式内joinへlowerし、enclosing functionの`Return`やtop-levelの`Halt`へ依存しない。
-Result以外ではfailure payloadを生成・観測せず、一つのfailure handlerから保存済みempty callへ進む。
+Result effectを持たないcarrierではfailure payloadを生成・観測せず、一つのfailure handlerから保存済みempty callへ進む。
 do専用opcodeとEldr変更は追加していない。
 
 実装中、inline typed payloadによるScarのdebug stack frame増大を既存回帰テストが検出した。

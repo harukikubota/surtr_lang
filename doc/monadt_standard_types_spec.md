@@ -370,15 +370,74 @@ y: OptionT<Result, Int> = do {
 
 ### 10.3 SafeBindとliftは別
 
-canonical Result以外のdoでSafeBindを使う場合は、既存do仕様のAlternative empty方針に従う。
+Result effect の標準初期適用対象は `OptionT` だけとする。`EitherT`、`ReaderT`、`StateT` には
+内部表現を根拠に暗黙適用しない。user-defined MonadT も宣言に明示 annotation がある場合だけ対象とする。
+
+`@result_effect` は compiler-owned annotation であり、`Monad` と
+`MonadT<$M>` を実装する struct にだけ指定できる。対象は field がちょうど一つで
+public、その field の最外 constructor が `MonadT<$M>` の同じ captured base `$M` で
+ある場合に限る。annotation のない Transformer、非 Monad wrapper、複数 field の
+struct、関数を保持する `ReaderT` / `StateT` は Result effect の対象にならない。
+
+annotation が有効でも、具体化された base が canonical `Result` のときだけ
+Result effect を持つ。内部のどこかに `Result` があるだけでは有効にならない。
+
+```text
+OptionT<Result, A> -> Result effect を持つ
+OptionT<List, A>   -> Result effect を持たない
+T<Result, A>        -> 有効
+T<U<Result, _>, A>  -> 無効（base の直接適用ではない）
+```
+
+SafeBind、failureMatcher となる partial `<-`、およびその他の ResultContext の
+failure は、次の優先順位で処理する。
+
+```text
+Result effect > Alternative > Monad
+```
+
+Result effect があれば Error を保持した最終 carrier を構築し、なければ
+`Alternative::empty` へ変換する。両方がなければ capability error になる。
+ResultContext の能力判定全体は `Result effect > Alternative > Monad` だが、
+`Monad` 単独では failure target を構築できないため、SafeBind / failureMatcher
+では capability error になる。total `<-` は従来どおり `Monad` bind のみを要求する。
+`guard` は通常関数として
+常に `Alternative` semantics を使い、Result effect を参照しない。
 
 ```text
 OptionT<Result,_> のdo:
   x <- lift(result)  はbase ResultのErrを保持する。
-  x =? result       はSafeBind失敗をOptionT自身のemptyへ変える。
+  x =? result       はSafeBind失敗のErrorをinner: Err(error)として保持する。
+  partial <- ...    もfailureMatcherのErrorをinner: Err(error)として保持する。
+  guard(False)      はOptionT自身のempty（Ok(None)）へ進む。
+OptionT<List,_> のdo:
+  x =? ... / partial <- ... はAlternative::emptyへ進む。
 ```
 
-後者はrun後にOk(None)であり、Err保存とは異なる。StateT<S,Result,_>ではAlternativeがないため、必要なResultは明示的なliftなど通常の接続で扱う。
+`OptionT<Result, R>` の Result-preserving failure は、次の一意な構築で最終 carrier へ接続する。
+
+```text
+error
+  -> Err(error): Result<Option<R>>
+  -> OptionT { inner: Err(error) }
+  -> OptionT<Result, R>
+```
+
+これは通常の `MonadT::lift` 呼び出しではなく、compiler が検証済み sole public field と
+最終 carrier 型から行う failure lowering である。一般の struct construction や Facet の可視性・path
+規則は緩和しない。
+
+`OptionT<Result,_>` の `guard(False)` による `Ok(None)` は、SafeBind や partial
+`<-` が保持する `Err(error)` とは異なる。`MonadT::lift` は引き続き明示的な
+base 接続であり、SafeBind RHS の自動分解を拡張しない。
+
+SafeBind が自動的に外側を分解する RHS は canonical `Result` の一段だけである。
+`OptionT<Result, A>` を `Result<Option<A>>` として暗黙に flatten したり、nested
+Result を再帰的に分解したりしない。Transformer の値分解は Extractor、`run`、
+`Monad::bind` など明示的な API に委ねる。
+
+`StateT<S,Result,_>` では Alternative がないため、Result effect annotation が
+なければ必要な Result は明示的な `lift` など通常の接続で扱う。
 
 ### 10.4 評価タイミング
 

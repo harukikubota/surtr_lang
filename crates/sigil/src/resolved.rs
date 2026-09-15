@@ -10,6 +10,7 @@ pub struct ResolvedDeclAttrs {
     pub doc: Option<String>,
     pub builtin: bool,
     pub derives: Vec<String>,
+    pub result_effect: Option<ResolvedResultEffect>,
     pub facet_path_kind: Option<Vec<String>>,
     pub hidden: bool,
     pub readonly: bool,
@@ -18,12 +19,26 @@ pub struct ResolvedDeclAttrs {
     pub user_callable: bool,
 }
 
+/// Compiler-owned metadata attached to an `@result_effect` declaration.
+///
+/// The annotation span is retained for diagnostics.  The two Trait ids are
+/// resolved by Sigil from the canonical standard declarations; later phases
+/// must not rediscover them from display names.  `None` is representable so a
+/// malformed or incomplete resolved node fails closed in Scar.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedResultEffect {
+    pub annotation_span: Span,
+    pub monad_trait: Option<ResolvedId>,
+    pub monad_t_trait: Option<ResolvedId>,
+}
+
 impl Default for ResolvedDeclAttrs {
     fn default() -> Self {
         Self {
             doc: None,
             builtin: false,
             derives: Vec::new(),
+            result_effect: None,
             facet_path_kind: None,
             hidden: false,
             readonly: false,

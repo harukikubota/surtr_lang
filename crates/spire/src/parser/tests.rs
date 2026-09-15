@@ -2484,6 +2484,34 @@ fn test_derive_annotation_rejects_non_data_declarations() {
 }
 
 #[test]
+fn test_result_effect_annotation_is_struct_only_and_argument_free() {
+    let ast = parse("@result_effect\ndefstruct Wrapper<$M, $A> where $M: Monad { inner: $M<$A> }")
+        .expect("compiler-owned result effect annotation should parse on a struct");
+    let [Ast::StructDef(_, _, _, _, attrs)] = ast.as_slice() else {
+        panic!("expected annotated struct")
+    };
+    assert_eq!(attrs.result_effect, Some(Span { start: 0, end: 14 }));
+
+    let duplicate = parse(
+        "@result_effect\n@result_effect\ndefstruct Wrapper<$M, $A> where $M: Monad { inner: $M<$A> }",
+    )
+    .expect_err("duplicate result effect annotation must be rejected");
+    assert!(duplicate.message().contains("may only appear once"));
+
+    let arguments = parse(
+        "@result_effect(Result)\ndefstruct Wrapper<$M, $A> where $M: Monad { inner: $M<$A> }",
+    )
+    .expect_err("result effect annotation must not accept a path argument");
+    assert!(arguments.message().contains("does not accept arguments"));
+
+    let non_struct = parse("@result_effect\ndef make() -> Int { 1 }")
+        .expect_err("result effect annotation must reject non-struct declarations");
+    assert!(non_struct
+        .message()
+        .contains("may only annotate `defstruct`"));
+}
+
+#[test]
 fn test_binop() {
     let ast = parse("x = 10 + 5").unwrap();
     match &ast[0] {

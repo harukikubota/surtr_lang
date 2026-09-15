@@ -422,6 +422,12 @@ pub enum TypedInner {
     /// Both failure routes produce the do carrier value without escaping the
     /// enclosing callable or relying on codegen context.
     DoSafeBind(Box<TypedDoSafeBind>),
+    /// Compiler-owned failure value for a Result effect. This is introduced
+    /// only after Scar has resolved and validated the exact carrier metadata.
+    ResultEffectFailure(Box<ResultPreserveTarget>),
+    /// A do-local failure whose ResultEffect/Alternative policy is waiting on
+    /// carrier specialization. This never reaches Forge unresolved.
+    DeferredDoFailure(Box<DeferredDoFailureTarget>),
     BinOp(BinOp, Box<TypedNode>, Box<TypedNode>),
     Pipe(Box<TypedNode>, Box<TypedNode>),
     Compose(ComposeFlavor, Box<TypedNode>, Box<TypedNode>),
@@ -629,11 +635,34 @@ pub enum SafeBindRhsProjection {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ResultPreserveConstruction {
+    CanonicalResult,
+    AnnotatedStruct { tag: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResultPreserveTarget {
+    pub carrier_ty: Ty,
+    pub error_ty: Ty,
+    pub construction: ResultPreserveConstruction,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeferredDoFailureTarget {
+    pub carrier_ty: Ty,
+    pub alternative_trait_key: String,
+    pub alternative_method_name: String,
+    pub propagated_error_tys: Vec<Ty>,
+    pub failure_span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SafeBindFailureTarget {
-    EnclosingResult { error_ty: Ty },
+    EnclosingResultContext(Box<ResultPreserveTarget>),
     TopLevel,
-    DoResult { error_ty: Ty },
+    DoResultContext(Box<ResultPreserveTarget>),
     DoAlternative { empty: Box<TypedNode> },
+    Deferred(Box<DeferredDoFailureTarget>),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

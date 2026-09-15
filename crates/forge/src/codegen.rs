@@ -203,6 +203,8 @@ fn collect_missing_singleton_calls(
     match &node.node {
         TypedInner::Lit(_)
         | TypedInner::Var(_)
+        | TypedInner::ResultEffectFailure(_)
+        | TypedInner::DeferredDoFailure(_)
         | TypedInner::ListNil
         | TypedInner::ProcessContextHandler { .. }
         | TypedInner::FacetPath(_)
@@ -2245,10 +2247,11 @@ mod tests {
     use crate::opcode::Opcode;
     use scar::typed::TypedProcessHandlerUid;
     use scar::typed::{
-        ComposeFlavor, DoSafeBindOrigins, SafeBindFailureTarget, SafeBindRhsProjection,
-        TraitCallOrigin, TraitDispatch, TraitDispatchTarget, TraitObligation, TypedDbgArg,
-        TypedDoSafeBind, TypedFacetPath, TypedFacetPathKind, TypedFacetSegment, TypedInner,
-        TypedMatchArm, TypedMatchPattern, TypedNode, TypedPattern, TypedProcessSpec, TypedProgram,
+        ComposeFlavor, DeferredDoFailureTarget, DoSafeBindOrigins, ResultPreserveConstruction,
+        ResultPreserveTarget, SafeBindFailureTarget, SafeBindRhsProjection, TraitCallOrigin,
+        TraitDispatch, TraitDispatchTarget, TraitObligation, TypedDbgArg, TypedDoSafeBind,
+        TypedFacetPath, TypedFacetPathKind, TypedFacetSegment, TypedInner, TypedMatchArm,
+        TypedMatchPattern, TypedNode, TypedPattern, TypedProcessSpec, TypedProgram,
         TypedReturnTypeArgument, TypedValueParameter,
     };
     use scar::types::{NominalType, Ty};
@@ -3780,9 +3783,13 @@ mod tests {
                     payload_ty: Ty::Int,
                     error_ty: Ty::Error,
                 },
-                failure_target: SafeBindFailureTarget::DoResult {
-                    error_ty: Ty::Error,
-                },
+                failure_target: SafeBindFailureTarget::DoResultContext(Box::new(
+                    ResultPreserveTarget {
+                        carrier_ty: result_ty.clone(),
+                        error_ty: Ty::Error,
+                        construction: ResultPreserveConstruction::CanonicalResult,
+                    },
+                )),
                 continuation: Box::new(TypedNode {
                     ty: result_ty,
                     span: span(24, 36),
@@ -3892,6 +3899,49 @@ mod tests {
             Opcode::CallBuiltin { builtin_id, .. } if *builtin_id == inspect_id
         )));
         assert!(state.error_templates.is_empty());
+    }
+
+    #[test]
+    fn emit_do_safebind_rejects_deferred_failure_target() {
+        let mut gene = Codegen::new();
+        gene.state.slot_map.insert(184, 0);
+        gene.state.next_slot = 1;
+        let carrier_ty = Ty::Enum("Global::Option".into(), vec![Ty::Int]);
+        let node = TypedNode {
+            ty: carrier_ty.clone(),
+            span: span(1, 36),
+            node: TypedInner::DoSafeBind(Box::new(TypedDoSafeBind {
+                pattern: TypedPattern::IntLit(Ty::Int, 1.into()),
+                rhs: Box::new(local_var("value", 184, Ty::Int)),
+                projection: SafeBindRhsProjection::PassThroughNonResultPartial {
+                    pattern_input_ty: Ty::Int,
+                },
+                failure_target: SafeBindFailureTarget::Deferred(Box::new(
+                    DeferredDoFailureTarget {
+                        carrier_ty: carrier_ty.clone(),
+                        alternative_trait_key: "Global::Alternative".into(),
+                        alternative_method_name: "empty".into(),
+                        propagated_error_tys: vec![Ty::Error],
+                        failure_span: span(10, 12),
+                    },
+                )),
+                continuation: Box::new(TypedNode {
+                    ty: carrier_ty,
+                    span: span(24, 36),
+                    node: TypedInner::ConstructorCall(1, vec![]),
+                }),
+                origins: do_safebind_origins(),
+            })),
+        };
+
+        let error = gene
+            .emit_node(&node)
+            .expect_err("Deferred SafeBind policy must not reach Forge");
+        assert!(
+            error.message.contains("deferred do failure policy"),
+            "{error:?}"
+        );
+        assert_eq!(error.span, span(10, 12));
     }
 
     #[test]
@@ -7063,6 +7113,23 @@ impl Codegen {
                 self.emit(Opcode::LoadLocal(slot));
             }
 
+            TypedInner::ResultEffectFailure(target) => {
+                self.emit_result_effect_error_value(
+                    target,
+                    "PatternMismatch",
+                    "Pattern did not match.",
+                    &node.span,
+                );
+            }
+
+            TypedInner::DeferredDoFailure(_) => {
+                return Err(CodegenError {
+                    message: "Internal invariant broken: deferred do failure policy reached Forge"
+                        .into(),
+                    span: node.span.clone(),
+                });
+            }
+
             TypedInner::EagerBoundary(inner) => self.emit_node(inner)?,
 
             TypedInner::Bind(pat, rhs) => {
@@ -8845,7 +8912,9 @@ impl Codegen {
     ) -> Result<(), CodegenError> {
         if matches!(
             failure_target,
-            SafeBindFailureTarget::DoResult { .. } | SafeBindFailureTarget::DoAlternative { .. }
+            SafeBindFailureTarget::DoResultContext(_)
+                | SafeBindFailureTarget::DoAlternative { .. }
+                | SafeBindFailureTarget::Deferred(_)
         ) {
             return Err(CodegenError {
                 message: "Internal invariant broken: do-local SafeBind target requires DoSafeBind control"
@@ -8869,9 +8938,16 @@ impl Codegen {
         failure_target: &SafeBindFailureTarget,
         continuation: &TypedNode,
     ) -> Result<(), CodegenError> {
+        if let SafeBindFailureTarget::Deferred(deferred) = failure_target {
+            return Err(CodegenError {
+                message: "Internal invariant broken: deferred do failure policy reached Forge"
+                    .into(),
+                span: deferred.failure_span.clone(),
+            });
+        }
         if !matches!(
             failure_target,
-            SafeBindFailureTarget::DoResult { .. } | SafeBindFailureTarget::DoAlternative { .. }
+            SafeBindFailureTarget::DoResultContext(_) | SafeBindFailureTarget::DoAlternative { .. }
         ) {
             return Err(CodegenError {
                 message: "Internal invariant broken: DoSafeBind requires a do-local failure target"
@@ -9179,15 +9255,6 @@ impl Codegen {
                 };
                 self.emit_empty_list_failure(input_source, span)
             }
-            TypedPattern::Extractor {
-                input_ty,
-                extractor_ty,
-                ..
-            } if matches!(extractor_ty, Ty::BuiltinFunc { name, .. } if name == "uncons")
-                && matches!(input_ty, Ty::List(_)) =>
-            {
-                self.emit_empty_list_failure("List", span)
-            }
             TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
             | TypedPattern::BoolLit(_, _)
@@ -9345,6 +9412,74 @@ impl Codegen {
         self.emit_pattern_failure("PatternMismatch", "Pattern did not match.", span)
     }
 
+    fn emit_result_effect_error_value(
+        &mut self,
+        target: &ResultPreserveTarget,
+        kind: &str,
+        message: &str,
+        span: &Span,
+    ) {
+        if let ResultPreserveConstruction::AnnotatedStruct { tag } = target.construction {
+            let outer_tag = self.add_constant(Constant::Tag(tag));
+            self.emit(Opcode::LoadConst(outer_tag));
+        }
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit_error_value(kind, message, span);
+        self.emit(Opcode::StructNew { field_count: 1 });
+        if matches!(
+            target.construction,
+            ResultPreserveConstruction::AnnotatedStruct { .. }
+        ) {
+            self.emit(Opcode::StructNew { field_count: 1 });
+        }
+    }
+
+    fn emit_result_effect_error_value_from_message_stack(
+        &mut self,
+        target: &ResultPreserveTarget,
+        kind: &str,
+        span: &Span,
+        diagnostic: Option<sindr::ir::RuntimeErrorDiagnosticTemplate>,
+    ) {
+        let msg_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(msg_slot));
+        if let ResultPreserveConstruction::AnnotatedStruct { tag } = target.construction {
+            let outer_tag = self.add_constant(Constant::Tag(tag));
+            self.emit(Opcode::LoadConst(outer_tag));
+        }
+        let err_tag = self.add_constant(Constant::Tag(1));
+        self.emit(Opcode::LoadConst(err_tag));
+        self.emit(Opcode::LoadLocal(msg_slot));
+        self.emit_error_value_from_stack_with_diagnostic(kind, span, diagnostic);
+        self.emit(Opcode::StructNew { field_count: 1 });
+        if matches!(
+            target.construction,
+            ResultPreserveConstruction::AnnotatedStruct { .. }
+        ) {
+            self.emit(Opcode::StructNew { field_count: 1 });
+        }
+    }
+
+    fn emit_result_effect_from_result_local(
+        &mut self,
+        target: &ResultPreserveTarget,
+        result_slot: u32,
+    ) {
+        if let ResultPreserveConstruction::AnnotatedStruct { tag } = target.construction {
+            let outer_tag = self.add_constant(Constant::Tag(tag));
+            self.emit(Opcode::LoadConst(outer_tag));
+        }
+        self.emit(Opcode::LoadLocal(result_slot));
+        if matches!(
+            target.construction,
+            ResultPreserveConstruction::AnnotatedStruct { .. }
+        ) {
+            self.emit(Opcode::StructNew { field_count: 1 });
+        }
+    }
+
     fn emit_pattern_failure(
         &mut self,
         kind: &str,
@@ -9354,27 +9489,19 @@ impl Codegen {
         if self.emit_do_alternative_failure_jump(&span)? {
             return Ok(());
         }
-        if matches!(
-            self.safe_bind_failure_target,
-            Some(SafeBindFailureTarget::DoResult { .. })
-        ) {
+        if let Some(SafeBindFailureTarget::DoResultContext(target)) =
+            self.safe_bind_failure_target.clone()
+        {
             let end_label = self.do_safebind_end_label.ok_or_else(|| CodegenError {
                 message: "Internal invariant broken: do Result SafeBind has no local join".into(),
                 span: span.clone(),
             })?;
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit_error_value(kind, message, &span);
-            self.emit(Opcode::StructNew { field_count: 1 });
+            self.emit_result_effect_error_value(&target, kind, message, &span);
             self.emit_jump(end_label);
-        } else if matches!(
-            self.safe_bind_failure_target,
-            Some(SafeBindFailureTarget::EnclosingResult { .. })
-        ) {
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit_error_value(kind, message, &span);
-            self.emit(Opcode::StructNew { field_count: 1 });
+        } else if let Some(SafeBindFailureTarget::EnclosingResultContext(target)) =
+            self.safe_bind_failure_target.clone()
+        {
+            self.emit_result_effect_error_value(&target, kind, message, &span);
             self.emit(Opcode::Return);
         } else if matches!(
             self.safe_bind_failure_target,
@@ -9451,35 +9578,29 @@ impl Codegen {
         ) {
             self.emit(Opcode::Pop);
             self.emit_do_alternative_failure_jump(&span)?;
-        } else if matches!(
-            self.safe_bind_failure_target,
-            Some(SafeBindFailureTarget::DoResult { .. })
-        ) {
+        } else if let Some(SafeBindFailureTarget::DoResultContext(target)) =
+            self.safe_bind_failure_target.clone()
+        {
             let end_label = self.do_safebind_end_label.ok_or_else(|| CodegenError {
                 message: "Internal invariant broken: do Result SafeBind has no local join".into(),
                 span: span.clone(),
             })?;
-            let msg_slot = self.state.next_slot;
-            self.state.next_slot += 1;
-            self.emit(Opcode::StoreLocal(msg_slot));
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit(Opcode::LoadLocal(msg_slot));
-            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic.clone());
-            self.emit(Opcode::StructNew { field_count: 1 });
+            self.emit_result_effect_error_value_from_message_stack(
+                &target,
+                kind,
+                &span,
+                diagnostic.clone(),
+            );
             self.emit_jump(end_label);
-        } else if matches!(
-            self.safe_bind_failure_target,
-            Some(SafeBindFailureTarget::EnclosingResult { .. })
-        ) {
-            let msg_slot = self.state.next_slot;
-            self.state.next_slot += 1;
-            self.emit(Opcode::StoreLocal(msg_slot));
-            let tag_const = self.add_constant(Constant::Tag(1));
-            self.emit(Opcode::LoadConst(tag_const));
-            self.emit(Opcode::LoadLocal(msg_slot));
-            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic.clone());
-            self.emit(Opcode::StructNew { field_count: 1 });
+        } else if let Some(SafeBindFailureTarget::EnclosingResultContext(target)) =
+            self.safe_bind_failure_target.clone()
+        {
+            self.emit_result_effect_error_value_from_message_stack(
+                &target,
+                kind,
+                &span,
+                diagnostic.clone(),
+            );
             self.emit(Opcode::Return);
         } else if matches!(
             self.safe_bind_failure_target,
@@ -10277,25 +10398,25 @@ impl Codegen {
         if self.emit_do_alternative_failure_jump(&span)? {
             return Ok(());
         }
-        self.emit(Opcode::LoadLocal(result_slot));
-        if matches!(
-            self.safe_bind_failure_target,
-            Some(SafeBindFailureTarget::DoResult { .. })
-        ) {
+        if let Some(SafeBindFailureTarget::DoResultContext(target)) =
+            self.safe_bind_failure_target.clone()
+        {
+            self.emit_result_effect_from_result_local(&target, result_slot);
             let end_label = self.do_safebind_end_label.ok_or_else(|| CodegenError {
                 message: "Internal invariant broken: do Result SafeBind has no local join".into(),
                 span: span.clone(),
             })?;
             self.emit_jump(end_label);
-        } else if matches!(
-            self.safe_bind_failure_target,
-            Some(SafeBindFailureTarget::EnclosingResult { .. })
-        ) {
+        } else if let Some(SafeBindFailureTarget::EnclosingResultContext(target)) =
+            self.safe_bind_failure_target.clone()
+        {
+            self.emit_result_effect_from_result_local(&target, result_slot);
             self.emit(Opcode::Return);
         } else if matches!(
             self.safe_bind_failure_target,
             Some(SafeBindFailureTarget::TopLevel)
         ) {
+            self.emit(Opcode::LoadLocal(result_slot));
             if self.top_level_returns_result {
                 self.emit(Opcode::Halt);
             } else {
@@ -10313,10 +10434,13 @@ impl Codegen {
                 self.emit(Opcode::Halt);
             }
         } else if self.in_function {
+            self.emit(Opcode::LoadLocal(result_slot));
             self.emit(Opcode::Return);
         } else if self.top_level_returns_result {
+            self.emit(Opcode::LoadLocal(result_slot));
             self.emit(Opcode::Halt);
         } else {
+            self.emit(Opcode::LoadLocal(result_slot));
             self.emit(Opcode::GetField { field_index: 0 });
             let eprint_id = Self::builtin_id("eprint").ok_or_else(|| CodegenError {
                 message: "Unknown builtin: eprint".into(),

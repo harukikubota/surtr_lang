@@ -315,6 +315,14 @@ fn input(reason: TypeDiagnosticReason) -> StructuredDiagnostic {
             stage: Some("OptionT".into()),
             entrypoint: None,
         }),
+        InvalidResultEffectAnnotation => DiagnosticData::Policy(PolicyData {
+            policy: TypePolicy::ResultEffectAnnotation,
+            subject: Some("@result_effect requires one public base field".into()),
+            expected_type: Some("MonadT base field".into()),
+            actual_type: Some("invalid declaration".into()),
+            stage: Some("Wrapper".into()),
+            entrypoint: None,
+        }),
         TraitHelperCaptureNeedsExpectedType => DiagnosticData::Policy(PolicyData {
             policy: TypePolicy::TraitHelperCaptureInference,
             subject: Some("concat".into()),

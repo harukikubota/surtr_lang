@@ -18,7 +18,7 @@ use sindr::warning::{
 };
 use spire::ast::{AstTy, BinOp, Lit, Span};
 
-use crate::env::{TypeEnv, TypeKind};
+use crate::env::{ResultEffectTypeInfo, TypeEnv, TypeKind};
 use crate::error::TypeError;
 use crate::typed::*;
 use crate::types::{NominalType, Ty};
@@ -57,6 +57,14 @@ enum ProfileEvent {
     MatchArm,
     ClosureBody,
     NormalizeEnvBindings,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum ResultEffectResolution {
+    Preserve(ResultPreserveTarget),
+    Unavailable,
+    Deferred,
+    InvalidMetadata(&'static str),
 }
 
 #[cfg(test)]
@@ -1878,6 +1886,16 @@ impl ScarSession {
         Self::rewrite_fun_indices_in_ty(&mut node.ty, rewrites);
         match &mut node.node {
             TypedInner::Lit(_) | TypedInner::Var(_) | TypedInner::ListNil => {}
+            TypedInner::ResultEffectFailure(target) => {
+                Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
+                Self::rewrite_fun_indices_in_ty(&mut target.error_ty, rewrites);
+            }
+            TypedInner::DeferredDoFailure(deferred) => {
+                Self::rewrite_fun_indices_in_ty(&mut deferred.carrier_ty, rewrites);
+                for error_ty in &mut deferred.propagated_error_tys {
+                    Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
+                }
+            }
             TypedInner::SupervisorSpawn { init, .. } => {
                 Self::rewrite_fun_indices_in_node(init, rewrites);
             }
@@ -1960,14 +1978,22 @@ impl ScarSession {
                     }
                 }
                 match &mut control.failure_target {
-                    SafeBindFailureTarget::DoResult { error_ty } => {
-                        Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
+                    SafeBindFailureTarget::DoResultContext(target) => {
+                        Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
+                        Self::rewrite_fun_indices_in_ty(&mut target.error_ty, rewrites);
                     }
                     SafeBindFailureTarget::DoAlternative { empty } => {
                         Self::rewrite_fun_indices_in_node(empty, rewrites);
                     }
-                    SafeBindFailureTarget::EnclosingResult { error_ty } => {
-                        Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
+                    SafeBindFailureTarget::Deferred(deferred) => {
+                        Self::rewrite_fun_indices_in_ty(&mut deferred.carrier_ty, rewrites);
+                        for error_ty in &mut deferred.propagated_error_tys {
+                            Self::rewrite_fun_indices_in_ty(error_ty, rewrites);
+                        }
+                    }
+                    SafeBindFailureTarget::EnclosingResultContext(target) => {
+                        Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
+                        Self::rewrite_fun_indices_in_ty(&mut target.error_ty, rewrites);
                     }
                     SafeBindFailureTarget::TopLevel => {}
                 }
@@ -2344,9 +2370,13 @@ mod specialization_state_tests {
                     payload_ty: callable_ty.clone(),
                     error_ty: callable_ty.clone(),
                 },
-                failure_target: SafeBindFailureTarget::DoResult {
-                    error_ty: callable_ty.clone(),
-                },
+                failure_target: SafeBindFailureTarget::DoResultContext(Box::new(
+                    ResultPreserveTarget {
+                        carrier_ty: callable_ty.clone(),
+                        error_ty: callable_ty.clone(),
+                        construction: ResultPreserveConstruction::CanonicalResult,
+                    },
+                )),
                 continuation: Box::new(TypedNode {
                     ty: callable_ty,
                     span: test_span(),
@@ -2390,9 +2420,12 @@ mod specialization_state_tests {
         ));
         assert!(matches!(
             &control.failure_target,
-            SafeBindFailureTarget::DoResult {
-                error_ty: Ty::UserFunc { fun_idx: 140, .. }
-            }
+            SafeBindFailureTarget::DoResultContext(target)
+                if matches!(target.as_ref(), ResultPreserveTarget {
+                carrier_ty: Ty::UserFunc { fun_idx: 140, .. },
+                error_ty: Ty::UserFunc { fun_idx: 140, .. },
+                construction: ResultPreserveConstruction::CanonicalResult,
+            })
         ));
     }
 
@@ -3240,6 +3273,8 @@ impl Checker {
             }
             TypedInner::Lit(_)
             | TypedInner::Var(_)
+            | TypedInner::ResultEffectFailure(_)
+            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -4473,6 +4508,8 @@ impl Checker {
             if let Some(start) = t {
                 predeclare_functions_dur = start.elapsed();
             }
+
+            self.validate_result_effect_annotations(&stmts)?;
 
             self.validate_process_state_contracts()?;
 

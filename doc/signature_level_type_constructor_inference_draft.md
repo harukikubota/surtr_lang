@@ -427,9 +427,10 @@ runtime policy は型推論後の別責任として残せる。これらを cons
 通常の関数 `where` では次の条件付き capability を表現できないためである。
 
 - `Monad` は常に必要
-- partial `<-` など failure branch を生成する構文がある場合だけ `Alternative` が必要
+- Result effect のない carrier で partial `<-` など failure branch を生成する構文がある場合だけ `Alternative` が必要
 
-この条件付き規則は `do` intrinsic の唯一の特別契約として文書化する。
+現行のfailure branchは [`do_intrinsic_spec.md`](do_intrinsic_spec.md) の ResultContext 規則に従い、
+`ResultEffect > Alternative > Monad` の順で解決する。`Monad` 単独では failure target を構築しない。
 
 ### carrier inference
 
@@ -685,8 +686,8 @@ Trait identity が必要な判定を名前文字列だけで行わない。
 - 異なる carrier の二地点診断
 - `Either` の固定引数一致／不一致
 - total pattern は Monad だけで成功
-- partial pattern は Alternative を追加要求
-- Alternative を持たない carrier の capability error
+- partial pattern は Result effect を優先し、ない場合だけ Alternative を追加要求
+- Result effect も Alternative も持たない carrier の capability error
 - `guard` 名を do checker が特別扱いしていないこと
 - `Result` 固有 failure を do checker が生成しないこと
 
