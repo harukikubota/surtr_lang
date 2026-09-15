@@ -386,6 +386,8 @@ impl Checker {
             } => recurse(source).or_else(|| recurse(update_fun)),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
+            | TypedInner::ResultEffectFailure(_)
+            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -832,6 +834,8 @@ impl Checker {
                 .or_else(|| self.first_pending_trait_helper(update_fun)),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
+            | TypedInner::ResultEffectFailure(_)
+            | TypedInner::DeferredDoFailure(_)
             | TypedInner::ListNil
             | TypedInner::ProcessContextHandler { .. }
             | TypedInner::SupervisorStatus { .. }
@@ -1063,6 +1067,15 @@ impl Checker {
                     args,
                 }
             }
+            TypedInner::DeferredDoFailure(mut deferred) => {
+                deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
+                deferred.propagated_error_tys = deferred
+                    .propagated_error_tys
+                    .iter()
+                    .map(|ty| self.resolve_ty(ty))
+                    .collect();
+                TypedInner::DeferredDoFailure(deferred)
+            }
             TypedInner::App(func, args) => TypedInner::App(
                 Box::new(self.concretize_pending_trait_calls(*func)?),
                 args.into_iter()
@@ -1115,6 +1128,15 @@ impl Checker {
                             SafeBindFailureTarget::DoAlternative {
                                 empty: Box::new(self.concretize_pending_trait_calls(*empty)?),
                             }
+                        }
+                        SafeBindFailureTarget::Deferred(mut deferred) => {
+                            deferred.carrier_ty = self.resolve_ty(&deferred.carrier_ty);
+                            deferred.propagated_error_tys = deferred
+                                .propagated_error_tys
+                                .iter()
+                                .map(|ty| self.resolve_ty(ty))
+                                .collect();
+                            SafeBindFailureTarget::Deferred(deferred)
                         }
                         other => other,
                     },
@@ -3450,15 +3472,28 @@ impl Checker {
     ) -> Result<TypedNode, TypeError> {
         let mut checked = self.check_safebind_input(span, pat, rhs)?;
         let failure_target = if let Some(ret_ty) = self.function_return_ty.clone() {
-            let fn_err_ty = match ret_ty {
-                Ty::Result(_, fn_err_ty) => fn_err_ty,
-                other => {
+            let target = match self.resolve_result_effect(&ret_ty) {
+                ResultEffectResolution::Preserve(target) => target,
+                ResultEffectResolution::Unavailable | ResultEffectResolution::Deferred => {
                     return Err(self.policy_error(
                         TypeDiagnosticReason::SafeBindRequiresResultTarget,
                         diagnostics::TypePolicy::SafeBindRequiresResultTarget,
                         Some("=?".into()),
                         None,
-                        Some(&other),
+                        Some(&ret_ty),
+                        None,
+                        None,
+                        span,
+                        None,
+                    ));
+                }
+                ResultEffectResolution::InvalidMetadata(subject) => {
+                    return Err(self.policy_error(
+                        TypeDiagnosticReason::TypecheckInvariantViolation,
+                        diagnostics::TypePolicy::ProducerContract,
+                        Some(subject.into()),
+                        None,
+                        Some(&ret_ty),
                         None,
                         None,
                         span,
@@ -3473,12 +3508,12 @@ impl Checker {
             );
 
             for propagated in checked.propagated_error_tys {
-                if !self.types_compatible(fn_err_ty.as_ref(), &propagated) {
+                if !self.types_compatible(&target.error_ty, &propagated) {
                     return Err(self.policy_error(
                         TypeDiagnosticReason::SafeBindErrorTypeMismatch,
                         diagnostics::TypePolicy::SafeBindFailureTarget,
                         Some("=?".into()),
-                        Some(fn_err_ty.as_ref()),
+                        Some(&target.error_ty),
                         Some(&propagated),
                         None,
                         None,
@@ -3487,9 +3522,7 @@ impl Checker {
                     ));
                 }
             }
-            SafeBindFailureTarget::EnclosingResult {
-                error_ty: fn_err_ty.as_ref().clone(),
-            }
+            SafeBindFailureTarget::EnclosingResultContext(Box::new(target))
         } else {
             SafeBindFailureTarget::TopLevel
         };
@@ -5062,7 +5095,7 @@ impl Checker {
         }
     }
 
-    fn check_trait_invocation(
+    pub(super) fn check_trait_invocation(
         &mut self,
         span: &Span,
         trait_name: &str,

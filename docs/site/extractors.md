@@ -36,7 +36,14 @@ print(match 1 {
 })
 ```
 
-この例では `never(...)` が常に `NoMatch` を返すため、fallback 側に流れます。
+この例では `never(...)` が常に `Option::None` を返すため、fallback 側に流れます。
+
+Extractor は `Option<$A>` を返し、`Option::Some(payload)` は子 pattern の照合へ進み、
+`Option::None` は no-match になります。各 Extractor occurrence は到達時に一度だけ
+評価されます。`match` では `None` の場合に現在の arm を打ち切り、次の arm を
+試します。SafeBind `=?` では共通 `PatternMismatch` Error を構築して現在の
+failure target へ渡します。Result effect ではその Error を保持し、Alternative route では
+破棄して `empty` へ進みます。Extractor 定義ごとの Error payload、kind、message はありません。
 
 ## ルール
 

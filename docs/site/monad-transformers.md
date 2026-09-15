@@ -31,6 +31,37 @@ Transformerは通常のnominal型なので、field、関数引数、戻り値、
 `M`とpayload `A`が型注釈や引数から決まらない呼び出しは、標準型の候補数や登録順で補完されず、ambiguityとして拒否されます。
 通常の型注釈では完全なcarrierを書き、call-siteのReturnTypeArgumentでは既存のbare head、完全・部分型application、`_`を使います。
 
+### Result effect と failure target
+
+`@result_effect` は引数を取らず、`defstruct` の直前に一度だけ書ける
+compiler-owned annotation です。`Monad` と `MonadT<$M>` を
+実装する struct にだけ指定でき、field がちょうど一つで public、その field の最外
+constructor が captured base `$M` と一致する必要があります。annotation のない型、
+非 Monad wrapper、複数 field の struct、関数 field を持つ `ReaderT` / `StateT` に
+Result effect を暗黙付与しません。
+標準型では `OptionT` だけが明示的な適用対象です。`EitherT`、`ReaderT`、`StateT`、
+および user-defined MonadT は、宣言に有効な `@result_effect` がなければ対象になりません。
+
+annotation が有効になるのは base Monad が canonical `Result` に直接具体化された
+場合だけです。内部のどこかに `Result` があるだけでは対象になりません。
+
+```text
+OptionT<Result, A> -> Result effect
+OptionT<List, A>   -> Result effect なし
+T<U<Result, _>, A> -> Result effect なし
+```
+
+SafeBind `=?` と failureMatcher となる partial `<-` の failure target は
+`Result effect > Alternative > Monad` の優先順位で選ばれます。`OptionT<Result, A>`
+では `Err(error)` を `inner: Err(error)` として保持し、`OptionT<List, A>` では
+`Alternative::empty()` に進みます。`guard` は通常の `Alternative` 関数なので、
+`OptionT<Result, A>` でも `guard(False)` は `OptionT::empty()`（`Ok(None)`）です。
+
+この規則は SafeBind RHS の分解規則を変更しません。RHS を自動的に外側一段だけ
+分解するのは canonical `Result` だけで、`OptionT<Result, A>` を暗黙に flatten
+したり、nested Result を再帰的に分解したりしません。必要な base 接続には引き続き
+`MonadT::lift`、`run`、Extractor などを明示します。
+
 ### ユーザ定義のbaseとTransformer
 
 `MonadT`は標準4型のallowlistではありません。通常の`Functor` / `Applicative` / `Monad`を満たす
@@ -260,6 +291,7 @@ updated = Facet::put(OptionT.inner, x, Ok(Option::Some(2)))
 
 REPLでも `new`、`lift`、`fmap`、`run`を別々の通常入力として評価できます。各入力では型注釈または引数からcarrierを具体化してください。
 Transformer自体もMonad carrierとして`do`で逐次処理できます。base carrierの値は自動liftされないため、必要な場合は`MonadT::lift`を明示します。
+Result effect の適用は do-local carrier ごとに決まり、外側の do や関数から継承しません。
 
 ```surtr
 result: EitherT<String, Identity, Int> = do::<EitherT<String, Identity, _>> {

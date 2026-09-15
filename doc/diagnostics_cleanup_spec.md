@@ -97,12 +97,12 @@ Extractorの返却値からErrorを取り出すのではない。通常matchは�
 
 各RHSは一回、各Extractor occurrenceは到達したとき一回だけ評価し、成功検査と束縛で再実行しない。
 既存MatchBlockの段階的評価順・payload arity・pin/as-pattern・scopeを維持し、失敗後の子patternと後続文を評価しない。
-Facetのcompile-time値を`=?`で束縛する禁止、nearest callableへの早期return、closureのResult戻り値要求、
+Facetのcompile-time値を`=?`で束縛する禁止、nearest callableへの早期return、closureのcanonical ResultまたはResult effect戻り値要求、
 REPL top-levelで診断後にセッションを継続する境界も維持する。partial non-Result pass-throughはこれらの独立したpolicyを解除しない。
 
 ## 4. failure target
 
-do外のSafeBindは、既存のenclosing functionのResult-shaped return targetに失敗を接続する。RHSのError、patternが生成する失敗、期待Error型の関係を共通の型関係検査で確認する。
+do外のSafeBindは、既存のenclosing functionのcanonical `Result` または検証済み `@result_effect` carrier return targetに失敗を接続する。RHSのError、patternが生成する失敗、期待Error型の関係を共通の型関係検査で確認する。
 
 typed IRには少なくとも次の意味を保持する。Rustの最終型名を新規の別体系として強制するものではない。
 
@@ -127,14 +127,17 @@ total non-Resultはtyped controlへ到達する前にcompile errorとなる。do
 
 ## 5. do側で維持する規則
 
-| 操作 | canonical Resultのdo | それ以外のdo |
+| 操作 | ResultContext-preserving do | Result effectのないdo |
 |---|---|---|
 | total patternの `<-` | Monad | Monad |
-| partial patternの `<-` | 同じcarrierのAlternativeが必要 | 同じcarrierのAlternativeが必要 |
+| partial patternの `<-` | Errorを保持 | Alternativeがあれば`empty`、なければcapability error |
 | 合法な`=?` の失敗 | 既存のErrorを保持 | 同じcarrierのAlternative::emptyへ置換 |
 | 通常のguard | 通常のsignatureに従う | 通常のsignatureに従う |
 
-ResultのSafeBind特例をpartial `<-`まで拡張しない。ResultT/EitherT/StateT等の名前やrepresentationを見て特例を増やさない。
+failureMatcher/partial `<-` と SafeBind は共通の ResultContext を使う。Result effect があれば Error を保持し、なければ Alternative::empty、どちらもなければ capability error とする。ResultT/EitherT/StateT等の名前やrepresentationを見て特例を増やさない。
+
+failure target の ResultContext は `ResultEffect > Alternative > Monad` の順で解決する。Monad 単独は sequencing capability
+であり、SafeBind/failureMatcher の failure target にはならない。`guard` は Result effect を参照しない通常の Alternative call である。
 
 SafeBind RHSをdo carrierの推論源にしない。carrier確定前に失敗方針が必要ならDeferredにし、候補数からResult/Option等を選択しない。
 total non-Result RHSはdo carrierの種類やAlternative capabilityにかかわらず、§3.1の二分類で先に拒否する。

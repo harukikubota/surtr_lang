@@ -142,7 +142,7 @@ pub struct SafeBindInputRule {
 pub enum DoCapabilityPredicate {
     Always,
     HasPartialExtractPattern,
-    HasLegalSafeBindAndCarrierIsNot(TypeName),
+    HasLegalSafeBind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -154,23 +154,22 @@ pub struct DoRouteContract {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SafeBindFailureAction {
-    PreserveExistingSafeBindFailure,
+pub enum FailureEffectAction {
+    PreserveResultEffectFailure,
     OverrideWith(CanonicalTraitMethodIdentity),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SafeBindFailureContract {
-    pub canonical_result: TypeName,
-    pub canonical_result_action: SafeBindFailureAction,
-    pub otherwise_action: SafeBindFailureAction,
+pub struct FailureEffectContract {
+    pub result_effect_action: FailureEffectAction,
+    pub fallback_capability: CanonicalTraitIdentity,
+    pub fallback_action: FailureEffectAction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DoRouteLowering {
     Sequence(CanonicalTraitMethodIdentity),
-    Failure(CanonicalTraitMethodIdentity),
-    SafeBindFailure(SafeBindFailureContract),
+    FailureEffect(FailureEffectContract),
 }
 
 /// Canonical compiler-owned `do` contract.
@@ -227,18 +226,24 @@ const DO_ROUTES: &[DoRouteContract] = &[
     },
     DoRouteContract {
         predicate: DoCapabilityPredicate::HasPartialExtractPattern,
-        capability: CanonicalTraitIdentity::Alternative,
+        capability: CanonicalTraitIdentity::Monad,
         same_carrier: DO_CARRIER,
-        lowering: DoRouteLowering::Failure(CanonicalTraitMethodIdentity::AlternativeEmpty),
+        lowering: DoRouteLowering::FailureEffect(FailureEffectContract {
+            result_effect_action: FailureEffectAction::PreserveResultEffectFailure,
+            fallback_capability: CanonicalTraitIdentity::Alternative,
+            fallback_action: FailureEffectAction::OverrideWith(
+                CanonicalTraitMethodIdentity::AlternativeEmpty,
+            ),
+        }),
     },
     DoRouteContract {
-        predicate: DoCapabilityPredicate::HasLegalSafeBindAndCarrierIsNot(TypeName::Result),
-        capability: CanonicalTraitIdentity::Alternative,
+        predicate: DoCapabilityPredicate::HasLegalSafeBind,
+        capability: CanonicalTraitIdentity::Monad,
         same_carrier: DO_CARRIER,
-        lowering: DoRouteLowering::SafeBindFailure(SafeBindFailureContract {
-            canonical_result: TypeName::Result,
-            canonical_result_action: SafeBindFailureAction::PreserveExistingSafeBindFailure,
-            otherwise_action: SafeBindFailureAction::OverrideWith(
+        lowering: DoRouteLowering::FailureEffect(FailureEffectContract {
+            result_effect_action: FailureEffectAction::PreserveResultEffectFailure,
+            fallback_capability: CanonicalTraitIdentity::Alternative,
+            fallback_action: FailureEffectAction::OverrideWith(
                 CanonicalTraitMethodIdentity::AlternativeEmpty,
             ),
         }),

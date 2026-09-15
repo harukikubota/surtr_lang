@@ -2982,6 +2982,60 @@ fn test_builtin_decl_resolution() {
 }
 
 #[test]
+fn result_effect_attrs_keep_canonical_traits_across_source_order() {
+    let resolved = parse_and_resolve(
+        r#"@result_effect
+defstruct Carrier<$M, $A>
+where
+  $M: Monad
+{
+  inner: $M<$A>
+}
+
+deftrait Monad
+where
+  Self: Type<$A>
+{}
+
+deftrait MonadT<$M>
+where
+  Self: Monad
+{}"#,
+    )
+    .expect("source should resolve");
+
+    let attrs = resolved.iter().find_map(|node| match node {
+        Resolved::StructDef(_, id, _, _, attrs) if id.name == "Global::Carrier" => Some(attrs),
+        _ => None,
+    });
+    let attrs = attrs.expect("annotated struct should resolve");
+    let result_effect = attrs
+        .result_effect
+        .as_ref()
+        .expect("result effect metadata should be retained");
+    assert_eq!(result_effect.annotation_span.start, 0);
+    assert_eq!(result_effect.annotation_span.end, 14);
+    assert_eq!(
+        result_effect
+            .monad_trait
+            .as_ref()
+            .and_then(|id| id.qualified_name.as_deref()),
+        Some("Monad")
+    );
+    assert_eq!(
+        result_effect
+            .monad_t_trait
+            .as_ref()
+            .and_then(|id| id.qualified_name.as_deref()),
+        Some("MonadT")
+    );
+    assert_ne!(
+        result_effect.monad_trait.as_ref().map(|id| id.unique_id),
+        result_effect.monad_t_trait.as_ref().map(|id| id.unique_id)
+    );
+}
+
+#[test]
 fn test_hidden_builtin_decl_resolution_preserves_hidden_attr() {
     let ast = spire::parse_with_context(
         "@hidden\n@builtin def __process_sleep(duration: Duration) -> Result<Unit>",

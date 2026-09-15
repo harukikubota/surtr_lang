@@ -1,6 +1,54 @@
 use super::*;
 
 impl Checker {
+    pub(super) fn resolve_result_effect(&self, carrier: &Ty) -> ResultEffectResolution {
+        let carrier = self.resolve_ty(carrier);
+        if let Ty::Result(_, error_ty) = &carrier {
+            return ResultEffectResolution::Preserve(ResultPreserveTarget {
+                carrier_ty: carrier.clone(),
+                error_ty: error_ty.as_ref().clone(),
+                construction: ResultPreserveConstruction::CanonicalResult,
+            });
+        }
+        let Ty::Struct(name, nominal) = &carrier else {
+            return if type_contains_unresolved_vars(&carrier) {
+                ResultEffectResolution::Deferred
+            } else {
+                ResultEffectResolution::Unavailable
+            };
+        };
+        let Some(definition) = self.env.lookup_type_def(name) else {
+            return ResultEffectResolution::Unavailable;
+        };
+        let Some(annotation) = definition.result_effect.as_ref() else {
+            return ResultEffectResolution::Unavailable;
+        };
+        let Some(base) = nominal.arguments.get(annotation.base_parameter_index) else {
+            return ResultEffectResolution::InvalidMetadata(
+                "validated Result effect base argument is missing",
+            );
+        };
+        let base = self.resolve_ty(base);
+        if type_contains_unresolved_vars(&base) && !matches!(base, Ty::Result(_, _)) {
+            return ResultEffectResolution::Deferred;
+        }
+        if !matches!(base, Ty::Result(_, _)) {
+            return ResultEffectResolution::Unavailable;
+        }
+        let Some((_, Ty::Result(_, field_error_ty))) = nominal.fields.first() else {
+            return ResultEffectResolution::InvalidMetadata(
+                "validated Result effect field is not instantiated as canonical Result",
+            );
+        };
+        let error_ty = self.resolve_ty(field_error_ty);
+        let tag = definition.tag;
+        ResultEffectResolution::Preserve(ResultPreserveTarget {
+            carrier_ty: carrier,
+            error_ty,
+            construction: ResultPreserveConstruction::AnnotatedStruct { tag },
+        })
+    }
+
     pub(super) fn constructor_projection_failures_are_metadata(
         failures: &[ConstructorProjectionFailure],
     ) -> bool {

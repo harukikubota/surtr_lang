@@ -4,6 +4,297 @@ use sindr::builtin::{builtin_type_meta_by_name, builtin_type_supports_inherent_i
 const SYNTHETIC_DEFAULT_METHOD_UID_BASE: u32 = 0x6000_0000;
 
 impl Checker {
+    fn invalid_result_effect_annotation(
+        &self,
+        annotation_span: &Span,
+        type_name: &str,
+        message: impl Into<String>,
+        related: Vec<diagnostics::SourceFact>,
+    ) -> TypeError {
+        TypeError::from_structured(diagnostics::StructuredDiagnostic {
+            reason: diagnostics::TypeDiagnosticReason::InvalidResultEffectAnnotation.into(),
+            origin: diagnostics::DiagnosticOrigin::Annotation,
+            data: diagnostics::DiagnosticData::Policy(diagnostics::PolicyData {
+                policy: diagnostics::TypePolicy::ResultEffectAnnotation,
+                subject: Some(message.into()),
+                expected_type: Some("MonadT with one public direct-base field".into()),
+                actual_type: Some(Self::surface_name(type_name).into()),
+                stage: Some("declaration".into()),
+                entrypoint: None,
+            }),
+            primary: diagnostics::SourceFact::untyped(
+                diagnostics::SourceRole::Annotation,
+                diagnostics::SourceId(0),
+                annotation_span.clone(),
+            ),
+            related,
+            remediation: None,
+        })
+    }
+
+    fn result_effect_target_matches(&self, target: &Ty, expected_tag: u32) -> bool {
+        let Ty::Struct(name, _) = target else {
+            return false;
+        };
+        self.env
+            .lookup_type_def(name)
+            .is_some_and(|definition| definition.tag == expected_tag)
+    }
+
+    fn canonical_result_effect_trait_key(
+        &self,
+        resolved: &ResolvedId,
+        expected_name: &str,
+    ) -> Option<String> {
+        if !resolved.compiler_generated || resolved.name != expected_name {
+            return None;
+        }
+        let key = self.trait_key(resolved);
+        self.traits
+            .get(&key)
+            .filter(|registered| {
+                registered.id.unique_id == resolved.unique_id
+                    && registered.id.name == expected_name
+                    && self.trait_key(&registered.id) == key
+            })
+            .map(|_| key)
+    }
+
+    pub(super) fn validate_result_effect_annotations(
+        &mut self,
+        stmts: &[Resolved],
+    ) -> Result<(), TypeError> {
+        let annotated = stmts
+            .iter()
+            .filter_map(|statement| match statement {
+                Resolved::StructDef(_, id, _, fields, attrs) => attrs
+                    .result_effect
+                    .as_ref()
+                    .map(|effect| (id, fields.as_slice(), effect)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if annotated.is_empty() {
+            return Ok(());
+        }
+
+        for (id, fields, result_effect) in annotated {
+            let annotation_span = &result_effect.annotation_span;
+            let Some(monad_trait) = result_effect.monad_trait.as_ref() else {
+                return Err(self.invalid_result_effect_annotation(
+                    annotation_span,
+                    &id.name,
+                    "@result_effect canonical Monad identity is missing",
+                    vec![diagnostics::SourceFact::untyped(
+                        diagnostics::SourceRole::Declaration,
+                        diagnostics::SourceId(0),
+                        id.span.clone(),
+                    )],
+                ));
+            };
+            let Some(monad_t_trait) = result_effect.monad_t_trait.as_ref() else {
+                return Err(self.invalid_result_effect_annotation(
+                    annotation_span,
+                    &id.name,
+                    "@result_effect canonical MonadT identity is missing",
+                    vec![diagnostics::SourceFact::untyped(
+                        diagnostics::SourceRole::Declaration,
+                        diagnostics::SourceId(0),
+                        id.span.clone(),
+                    )],
+                ));
+            };
+            let monad_key = self
+                .canonical_result_effect_trait_key(monad_trait, "Monad")
+                .ok_or_else(|| {
+                    self.invalid_result_effect_annotation(
+                        annotation_span,
+                        &id.name,
+                        "@result_effect canonical Monad identity is invalid",
+                        vec![diagnostics::SourceFact::untyped(
+                            diagnostics::SourceRole::Declaration,
+                            diagnostics::SourceId(0),
+                            id.span.clone(),
+                        )],
+                    )
+                })?;
+            let monad_t_key = self
+                .canonical_result_effect_trait_key(monad_t_trait, "MonadT")
+                .ok_or_else(|| {
+                    self.invalid_result_effect_annotation(
+                        annotation_span,
+                        &id.name,
+                        "@result_effect canonical MonadT identity is invalid",
+                        vec![diagnostics::SourceFact::untyped(
+                            diagnostics::SourceRole::Declaration,
+                            diagnostics::SourceId(0),
+                            id.span.clone(),
+                        )],
+                    )
+                })?;
+
+            let definition = self.env.lookup_type_def(&id.name).cloned().ok_or_else(|| {
+                self.invalid_result_effect_annotation(
+                    annotation_span,
+                    &id.name,
+                    "@result_effect target metadata is missing",
+                    vec![],
+                )
+            })?;
+            let declaration_fact = diagnostics::SourceFact::untyped(
+                diagnostics::SourceRole::Declaration,
+                diagnostics::SourceId(0),
+                id.span.clone(),
+            );
+            if fields.len() != 1 {
+                return Err(self.invalid_result_effect_annotation(
+                    annotation_span,
+                    &id.name,
+                    format!(
+                        "@result_effect requires exactly one field; {} has {}",
+                        Self::surface_name(&id.name),
+                        fields.len()
+                    ),
+                    vec![declaration_fact],
+                ));
+            }
+            let field = &fields[0];
+            let field_fact = diagnostics::SourceFact::untyped(
+                diagnostics::SourceRole::Other,
+                diagnostics::SourceId(0),
+                field.span.clone(),
+            );
+            if field.visibility != spire::ast::Visibility::Public {
+                return Err(self.invalid_result_effect_annotation(
+                    annotation_span,
+                    &id.name,
+                    "@result_effect requires its sole field to be public",
+                    vec![declaration_fact, field_fact],
+                ));
+            }
+
+            let has_monad_impl = self.trait_impls.values().any(|implementation| {
+                self.trait_key(&implementation.trait_id) == monad_key
+                    && self.result_effect_target_matches(&implementation.target_ty, definition.tag)
+            });
+            if !has_monad_impl {
+                return Err(self.invalid_result_effect_annotation(
+                    annotation_span,
+                    &id.name,
+                    "@result_effect requires a canonical Monad implementation for its target",
+                    vec![declaration_fact, field_fact],
+                ));
+            }
+
+            let monad_t_impls = self
+                .trait_impls
+                .values()
+                .filter(|implementation| {
+                    self.trait_key(&implementation.trait_id) == monad_t_key
+                        && self
+                            .result_effect_target_matches(&implementation.target_ty, definition.tag)
+                })
+                .collect::<Vec<_>>();
+            if monad_t_impls.is_empty() {
+                return Err(self.invalid_result_effect_annotation(
+                    annotation_span,
+                    &id.name,
+                    "@result_effect requires a canonical MonadT implementation for its target",
+                    vec![declaration_fact, field_fact],
+                ));
+            }
+            let mut resolved_base_parameter_index = None;
+            for monad_t_impl in monad_t_impls {
+                let Ty::Struct(_, target_nominal) = &monad_t_impl.target_ty else {
+                    unreachable!("result effect target was matched as a struct")
+                };
+                let [base_monad] = monad_t_impl.trait_arg_tys.as_slice() else {
+                    return Err(self.invalid_result_effect_annotation(
+                        annotation_span,
+                        &id.name,
+                        "@result_effect requires MonadT to expose one base Monad parameter",
+                        vec![declaration_fact, field_fact],
+                    ));
+                };
+                let base_positions = target_nominal
+                    .arguments
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, argument)| (argument == base_monad).then_some(index))
+                    .collect::<Vec<_>>();
+                let [base_parameter_index] = base_positions.as_slice() else {
+                    return Err(self.invalid_result_effect_annotation(
+                        annotation_span,
+                        &id.name,
+                        "@result_effect requires MonadT to capture one declaration parameter as its base Monad",
+                        vec![
+                            declaration_fact,
+                            field_fact,
+                            diagnostics::SourceFact::untyped(
+                                diagnostics::SourceRole::Impl,
+                                diagnostics::SourceId(0),
+                                Self::ast_ty_span(&monad_t_impl.target_ast_ty).clone(),
+                            ),
+                        ],
+                    ));
+                };
+                if resolved_base_parameter_index
+                    .is_some_and(|resolved| resolved != *base_parameter_index)
+                {
+                    return Err(self.invalid_result_effect_annotation(
+                        annotation_span,
+                        &id.name,
+                        "@result_effect MonadT implementations disagree on the captured base Monad parameter",
+                        vec![declaration_fact, field_fact],
+                    ));
+                }
+                resolved_base_parameter_index = Some(*base_parameter_index);
+            }
+            let base_parameter_index =
+                resolved_base_parameter_index.expect("non-empty MonadT implementation set");
+            let Some(base_parameter_var) = definition.type_param_vars.get(base_parameter_index)
+            else {
+                return Err(self.invalid_result_effect_annotation(
+                    annotation_span,
+                    &id.name,
+                    "@result_effect base parameter metadata is incomplete",
+                    vec![declaration_fact, field_fact],
+                ));
+            };
+            let Some((Ty::Var(field_constructor), _)) =
+                definition.fields.first().and_then(|(_, ty)| match ty {
+                    Ty::SelfApp(items) => Self::constructor_application_parts(items),
+                    _ => None,
+                })
+            else {
+                return Err(self.invalid_result_effect_annotation(
+                    annotation_span,
+                    &id.name,
+                    "@result_effect requires the sole field's outer constructor to be the MonadT base parameter",
+                    vec![declaration_fact, field_fact],
+                ));
+            };
+            if field_constructor != base_parameter_var {
+                return Err(self.invalid_result_effect_annotation(
+                    annotation_span,
+                    &id.name,
+                    "@result_effect requires the sole field's outer constructor to be the same parameter captured by MonadT",
+                    vec![declaration_fact, field_fact],
+                ));
+            }
+
+            self.env
+                .lookup_type_def_mut(&id.name)
+                .expect("validated result effect type remains registered")
+                .result_effect = Some(ResultEffectTypeInfo {
+                base_parameter_index,
+                annotation_span: annotation_span.clone(),
+                field_span: field.span.clone(),
+            });
+        }
+        Ok(())
+    }
+
     fn validate_type_shape_clause(
         clause: Option<&ResolvedWhereClause>,
         trait_definition: bool,

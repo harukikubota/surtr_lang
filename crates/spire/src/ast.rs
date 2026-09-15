@@ -26,6 +26,10 @@ pub struct DeclAttrs {
     pub compiler_generated: bool,
     /// Traits requested by a single `@derive` annotation.
     pub derives: Vec<Symbol>,
+    /// Compiler-owned marker for MonadT declarations that transparently
+    /// preserve failures when their direct base carrier is canonical Result.
+    /// The annotation span is retained for declaration diagnostics.
+    pub result_effect: Option<Span>,
     /// Compiler declaration for a Facet path kind. These declarations are
     /// accepted only from the canonical standard-library Facet source.
     pub facet_path_kind: Option<Vec<Symbol>>,
@@ -46,6 +50,7 @@ impl Default for DeclAttrs {
             builtin: false,
             compiler_generated: false,
             derives: Vec::new(),
+            result_effect: None,
             facet_path_kind: None,
             auto_import: false,
             hidden: false,

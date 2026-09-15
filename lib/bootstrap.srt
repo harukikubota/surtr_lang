@@ -97,16 +97,17 @@ defmod Bootstrap {
 
   `=?` is a language-provided binding form for failure-aware destructuring.
   In user functions it may be used only when the current evaluation returns
-  `Result<T>`.
+  canonical `Result<T>` or a validated `@result_effect` carrier.
   The REPL accepts the syntax, reports the resulting error message, and keeps
   the session alive.
 
   `=?` evaluates the right-hand side once. A canonical `Result` RHS is
   decomposed by one outer layer only, and its `Ok` payload is passed to the
   left-hand MatchBlock pattern. If it produces `Err(error)`, that value is
-  returned immediately.
-  If matching produces `MatchBlock::NoMatch`, the runtime converts it into an
-  error and returns it immediately.
+  propagated to the current failure target. If matching or an Extractor
+  produces no match, the compiler constructs the shared `PatternMismatch`
+  error. A Result-effect target preserves that error; an Alternative target
+  discards it and returns `empty`.
 
   `=?` is not a trait-dispatched operator.
   A non-Result RHS is passed through unchanged only for a partial MatchBlock
@@ -134,10 +135,10 @@ defmod Bootstrap {
 
   ## Notes
   - `=?` returns `()`
-  - `=?` is valid only in functions that return `Result<T>`
+  - `=?` requires a canonical `Result<T>` or validated Result-effect return target
   - only a canonical `Result` RHS is decomposed, by one outer layer
-  - RHS `Err(...)` returns early
-  - `MatchBlock::NoMatch` becomes an error and returns early
+  - RHS `Err(...)` is propagated to the current failure target
+  - pattern no-match becomes a shared `PatternMismatch` failure
   - a non-Result RHS requires a partial pattern that inspects the whole value
   """
   @intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
@@ -242,8 +243,11 @@ defmod Bootstrap {
   or obtained from the expected block type.
   Inside `do`, SafeBind unwraps one outer Result layer only. Partial patterns may
   inspect other RHS values unchanged; total patterns reject non-Result RHS values.
-  Result-do preserves SafeBind failures, while other carriers require Alternative
-  and replace failure with empty.
+  Failure contexts resolve as ResultEffect, then Alternative, then Monad.
+  Canonical Result and validated Result-effect carriers preserve SafeBind and
+  failure-matcher errors. Carriers without Result effect use Alternative::empty;
+  Monad alone cannot provide a failure target. `guard` remains an ordinary
+  Alternative call.
   """
   @intrinsic def do::<Monad>(block: DoBlock<$Result>) -> Monad<$Result>
 

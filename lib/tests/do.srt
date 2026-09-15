@@ -37,6 +37,19 @@ impl Monad for DoProbe<$T> {
   }
 }
 
+deferror DoResultEffectStop {
+  "do result effect stop"
+}
+
+def do_result_effect_source() -> Result<Int, DoResultEffectStop> {
+  Err(DoResultEffectStop)
+}
+
+def option_t_result_safebind_failure() -> OptionT<Result, Int> {
+  value =? do_result_effect_source()
+  OptionT::some::<Result>(value + 1)
+}
+
 test("do carrier integration") {
   describe("standard carriers") {
     it("matches the Option pipeline") {
@@ -126,6 +139,46 @@ test("do carrier integration") {
         OptionT::some::<Identity>(value + 1)
       }
       assert_eq(Identity::run(OptionT::run(pipeline)), Identity::run(OptionT::run(sequenced)))
+    }
+
+    it("preserves Result errors through OptionT SafeBind") {
+      actual: Result<Option<Int>> = OptionT::run(option_t_result_safebind_failure())
+      assert_eq("Err(DoResultEffectStop(\"do result effect stop\"))", inspect(actual))
+    }
+
+    it("prefers the OptionT Result effect for do SafeBind") {
+      result: OptionT<Result, Int> = do::<OptionT<Result, _>> {
+        value =? do_result_effect_source()
+        OptionT::some::<Result>(value + 1)
+      }
+      assert_eq(
+        "Err(DoResultEffectStop(\"do result effect stop\"))",
+        inspect(OptionT::run(result)),
+      )
+    }
+
+    it("prefers the OptionT Result effect for partial do patterns") {
+      result: OptionT<Result, Int> = do::<OptionT<Result, _>> {
+        2 <- OptionT::some::<Result>(1)
+        OptionT::some::<Result>(3)
+      }
+      assert_eq(
+        "Err(PatternMismatch(\"Pattern did not match.\"))",
+        inspect(OptionT::run(result)),
+      )
+    }
+
+    it("uses OptionT Alternative when the base is not Result") {
+      result: OptionT<List, Int> = do::<OptionT<List, _>> {
+        2 <- OptionT::some::<List>(1)
+        OptionT::some::<List>(3)
+      }
+      assert_eq([Option::None], OptionT::run(result))
+    }
+
+    it("keeps guard on ordinary OptionT Alternative semantics") {
+      blocked: OptionT<Result, Unit> = guard(False)
+      assert_eq("Ok(Option::None)", inspect(OptionT::run(blocked)))
     }
 
     it("matches EitherT while preserving its fixed error slot") {

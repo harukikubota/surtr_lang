@@ -1808,7 +1808,8 @@ fn shift_match_pattern(pat: AstPattern, delta: usize) -> AstPattern {
     shift_pattern(pat, delta)
 }
 
-fn shift_decl_attrs(attrs: DeclAttrs) -> DeclAttrs {
+fn shift_decl_attrs(mut attrs: DeclAttrs, delta: usize) -> DeclAttrs {
+    attrs.result_effect = attrs.result_effect.map(|span| shift_span(span, delta));
     attrs
 }
 
@@ -2189,7 +2190,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     readonly: f.readonly,
                 })
                 .collect(),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::RecordDef(span, name, fields, attrs) => Ast::RecordDef(
             shift_span(span, delta),
@@ -2204,7 +2205,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     readonly: f.readonly,
                 })
                 .collect(),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::StructLit(span, name, fields) => Ast::StructLit(
             shift_span(span, delta),
@@ -2253,7 +2254,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 })
                 .collect(),
             Box::new(shift_ast_span(*show_expr, delta)),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::EnumDef(span, name, type_params, variants, attrs) => Ast::EnumDef(
             shift_span(span, delta),
@@ -2279,7 +2280,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     span: shift_span(variant.span, delta),
                 })
                 .collect(),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::Def(span, name, return_type_arguments, params, ret_ty, where_clause, body, attrs) => {
             Ast::Def(
@@ -2296,7 +2297,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 ret_ty.map(|ty| shift_ast_ty(ty, delta)),
                 where_clause.map(|clause| shift_where_clause(clause, delta)),
                 Box::new(shift_ast_span(*body, delta)),
-                shift_decl_attrs(attrs),
+                shift_decl_attrs(attrs, delta),
             )
         }
         Ast::ConstDef(span, name, ty, value, attrs) => Ast::ConstDef(
@@ -2304,7 +2305,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             name,
             ty.map(|ty| shift_ast_ty(ty, delta)),
             Box::new(shift_ast_span(*value, delta)),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::SupervisorInit(span, spec) => Ast::SupervisorInit(
             shift_span(span, delta),
@@ -2398,7 +2399,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 shift_extractor_param(param, delta),
                 shift_ast_ty(ret_ty, delta),
                 Box::new(shift_ast_span(*body, delta)),
-                shift_decl_attrs(attrs),
+                shift_decl_attrs(attrs, delta),
             )
         }
         Ast::BuiltinDecl(
@@ -2422,7 +2423,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             ret_ty.map(|ty| shift_ast_ty(ty, delta)),
             where_clause.map(|clause| shift_where_clause(clause, delta)),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::IntrinsicDecl(span, name, signature, attrs) => Ast::IntrinsicDecl(
             shift_span(span, delta),
@@ -2444,19 +2445,19 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     .where_clause
                     .map(|clause| shift_where_clause(clause, delta)),
             },
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::BuiltinExtractorDecl(span, name, param, ret_ty, attrs) => Ast::BuiltinExtractorDecl(
             shift_span(span, delta),
             name,
             shift_extractor_param(param, delta),
             shift_ast_ty(ret_ty, delta),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::BuiltinTypeDecl(span, head, attrs) => Ast::BuiltinTypeDecl(
             shift_span(span, delta),
             shift_builtin_type_head(head, delta),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::TypeAlias(span, name, type_params, rhs) => Ast::TypeAlias(
             shift_span(span, delta),
@@ -2476,34 +2477,34 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
             name,
             shift_ast_ty(param_ty, delta),
             shift_ast_ty(ret_ty, delta),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::Defmod(span, name, body, attrs) => Ast::Defmod(
             shift_span(span, delta),
             name,
             body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::Defagent(span, name, body, process_spec, attrs) => Ast::Defagent(
             shift_span(span, delta),
             name,
             body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
             shift_process_spec(process_spec, delta),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::Defgenserver(span, name, body, process_spec, attrs) => Ast::Defgenserver(
             shift_span(span, delta),
             name,
             body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
             shift_process_spec(process_spec, delta),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::Defsupervisor(span, name, body, process_spec, attrs) => Ast::Defsupervisor(
             shift_span(span, delta),
             name,
             body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
             shift_process_spec(process_spec, delta),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::DefdynamicSupervisor(span, name, body, process_spec, attrs) => {
             Ast::DefdynamicSupervisor(
@@ -2511,7 +2512,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 name,
                 body.into_iter().map(|n| shift_ast_span(n, delta)).collect(),
                 shift_process_spec(process_spec, delta),
-                shift_decl_attrs(attrs),
+                shift_decl_attrs(attrs, delta),
             )
         }
         Ast::ImplDef(span, target, target_span, methods, attrs) => Ast::ImplDef(
@@ -2522,7 +2523,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .into_iter()
                 .map(|method| shift_ast_span(method, delta))
                 .collect(),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::TraitDef(span, name, type_params, where_clause, methods, attrs) => Ast::TraitDef(
             shift_span(span, delta),
@@ -2566,11 +2567,11 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     body: method
                         .body
                         .map(|body| Box::new(shift_ast_span(*body, delta))),
-                    attrs: shift_decl_attrs(method.attrs),
+                    attrs: shift_decl_attrs(method.attrs, delta),
                     span: shift_span(method.span, delta),
                 })
                 .collect(),
-            shift_decl_attrs(attrs),
+            shift_decl_attrs(attrs, delta),
         ),
         Ast::TraitImplDef(span, trait_name, trait_args, target, where_clause, methods, attrs) => {
             Ast::TraitImplDef(
@@ -2586,7 +2587,7 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                     .into_iter()
                     .map(|method| shift_ast_span(method, delta))
                     .collect(),
-                shift_decl_attrs(attrs),
+                shift_decl_attrs(attrs, delta),
             )
         }
         Ast::Import(span, path, spec) => {

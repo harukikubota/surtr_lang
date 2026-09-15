@@ -1,11 +1,14 @@
-# Extractor 返り値契約の更改仕様（実装待ち）
+# Extractor 返り値契約の更改案（未採用）
 
 ## 1. 状態と入力
 
-- 状態: 仕様決定済み、実装待ち。
+- 状態: 未採用・保留。本文は現行仕様ではない。
 - 入力: Extractor の失敗時に定義側が Error と message を返し、SafeBind がその Error を保持できるようにする。
 - level: 4。Extractor の型規則、pattern の評価規則、SafeBind の failure target、Scar / Forge 間の契約を変更する。
-- 現行実装: `Option<T>` の `Some` / `None` 契約。本書の契約は実装と正本文書の移管が完了するまで利用可能な機能として説明しない。
+- 現行実装・正本: `Option<T>` の `Some` / `None` 契約。`None` は SafeBind で共通
+  `PatternMismatch` Error になり、Result effect では保持、Alternative route では破棄する。
+  実装依頼時は本案ではなく `doc/要件定義v9.md`、`doc/diagnostics_cleanup_spec.md`、
+  `docs/site/extractors.md` を使う。本案を再開するには新たな仕様決定を必要とする。
 - 過去実装の参照点: `3990b2f9c4727d9bc925048835faee92cf9d8517^`。削除直前の型制約、Extractor body 制約、completion、typed pattern、lowering を復元時の比較対象にする。
 
 本書は既存の N06–N14、do、MonadT、Generator と独立して実装する。これらの着手・完了条件は変更せず、実装時点で増えている consumer と仕様を再監査する。
