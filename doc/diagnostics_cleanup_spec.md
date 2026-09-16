@@ -8,7 +8,7 @@
 - 旧 Task 9 は完了済み。reason/origin/typed data の基盤を作り直さない。
 - N01–N05完了後のN06実装入力。§§3–5のSafeBind RHS射影・pattern・failure target契約、§§6–9のdiagnostic family、heuristic撤去、builtin metadata統合まで実装済みである。
 - level4（型・評価規則とフェーズ間契約の変更）。本書整理時は文書検証のみ行い、実装時に全体検証と独立レビューを行う。
-- Extractorは現行の`Option<T>`返却を維持する。Extractor更改は独立した別タスクであり、本書の前提・成果・do開始ゲートに含めない。
+- Extractorは現行の`Option<T>`返却を維持する。
 
 SafeBind RHS訂正は本書、恒久文書、標準`@doc`、実装とテストへ反映済みである。旧記述の「すべてのnon-Result RHSを
 pass-throughする」「total patternでOption全体を束縛できる」は実装入力として使用しない。訂正元の一時提案書は、

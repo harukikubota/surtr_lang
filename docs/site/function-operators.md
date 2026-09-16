@@ -255,11 +255,13 @@ constructor と captured base `$M` の一致を満たす struct 宣言にだけ�
 具体化された base が canonical `Result` の場合だけ有効で、`T<U<Result, _>, A>` や
 annotation のない wrapper の内部から Result を探索することはありません。
 
-Result-context の failure target は `Result effect > Alternative > Monad` の順で
+`do` 内の Result-context failure target は `Result effect > Alternative > Monad` の順で
 判定されます。Result effect がなければ `Alternative::empty()` に進み、`Monad` 単独では
-failure target を構築できないため compile error です。`guard` は通常の `Alternative`
-関数なので、この選択に参加せず、Result effect carrier でも `guard(False)` はその
-carrier の `empty` になります。
+failure target を構築できないため compile error です。`do` 外の SafeBind は enclosing
+callable 自身に canonical `Result` または有効な Result-effect return target を要求し、
+通常の `Alternative` returnへは接続しません。`guard` は通常の `Alternative` 関数なので、
+この選択に参加せず、Result effect carrier でも `guard(False)` はその carrier の `empty`
+になります。
 
 `Option::Some(saved) =? Option::Some(1)` は Option 全体を明示的に検査するため有効です。
 一方、`saved =? Option::Some(1)` のような total pattern は、RHS が Result 以外の Monad なので
@@ -269,9 +271,9 @@ compile error です。`saved =? 1` も非Monad RHSとして拒否されます�
 
 SafeBind の流れは次です。
 
-- RHS が `Err(...)` ならその `Err(...)` を早期リターンします
+- RHS が `Err(...)` なら現在の failure target に従い、errorを保持するか`empty`へ接続して早期終了します
 - nested Result は再帰的に分解せず、内側の `Ok` / `Err` は通常 constructor pattern として照合します
-- LHS のマッチ結果が `NoMatch` なら error 化して早期リターンします
+- Extractor の `Option::None` と一般の pattern mismatch は共通 `PatternMismatch` Error にし、構造 pattern 固有の failure kind は維持します
 - LHS には `uncons`、literal match、Extractor を再帰的に書けます
 - 上のチェックが全部成功したときだけ変数が束縛されて続行します
 

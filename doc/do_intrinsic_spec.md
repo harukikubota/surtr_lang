@@ -27,7 +27,7 @@ N01–N07は完了し、compiler-owned contract、`DoBlock`、surface validation
 N08のdo構文・AST・resolver・scopeと、N09のcarrier推論・core loweringは実装済みである。
 N10のSafeBind / Forge loweringと、N11の診断・全carrier統合検証まで実装済みである。N11は末尾SafeBindのreturn診断に保存済みresult spanを使い、
 標準carrier・Transformer・ユーザ定義carrierをpipelineと実行比較し、Alternative不足とFacet source scopeの境界を検証する。
-Extractorは現行の`Option<T>`返却を前提とし、更改タスクへの依存はない。
+Extractorは現行の`Option<T>`返却を前提とする。
 以下の`Result<R, E>`は内部型関係の説明表記であり、doの変数注釈やRTAに二引数Result構文を追加しない。
 現行のerror値はabstract `Error`へ収束するため、独立したcaptured error parameterを新設しない。
 
@@ -429,22 +429,25 @@ non-Result carrierがrigid constructor variableで、その宣言済みcapabilit
 SafeBindがあることを理由に未確定carrierを`Result`へdefaultしたり、`Alternative`実装一覧から候補を選んだりしてはならない。
 total non-Result RHSはこのfailure policyへ到達する前に拒否し、Alternativeの有無で合法化しない。
 
-### 7.5 具象データ型固有routeの禁止と例外
+### 7.5 具象データ型固有routeの禁止とResult effect
 
-partial patternのfailureで次を直接生成してはならない。
+partial `<-` のpattern不一致は、Result effect routeでは共通の`PatternMismatch`を構築して
+最終carrierへ保持する。Alternative routeではError値を構築せず、選択済みimplementationの
+concrete `empty` dispatchへ直接進む。
 
-- `Result` 固有の`Err`またはno-match error
-- `Option` 固有の`None`
-- `List` 固有の空list
-- `Either`その他の固有constructor
+SafeBind `=?` のfailureはこれと区別する。RHSの`Err(error)`はそのerrorを伝播し、pattern照合で
+生じた`PatternMismatch`、`EmptyList`、`IndexOutOfBounds`等は既存のfailure kind / detailを保つ。
+そのうえで、選択済みFailureEffectが次の行き先を決める。
 
-Result effectがないfailureは選択済み`Alternative` implementationのconcrete dispatch targetから得る。Result effectも
-`Alternative`も持たないcarrierは、total patternなら使用でき、partial patternなら capability errorになる。この規則は
-`<-`のpartial patternとSafeBindに共通して適用する。
+- Result effectなら、canonical `Result`または検証済みannotated structの構築metadataで
+  Errorを最終carrierへ保持する。
+- Alternativeなら、Errorを保持せずconcrete `empty` dispatchへ進む。
+- どちらもなければcapability errorとする。
 
-SafeBindのcanonical `Result`分岐は新しいResult固有failureを作る経路ではない。RHSの既存`Err`値と、通常MatchBlock
-pattern checkerが構築するfailureを、do式の`Result<R, E>`へ保存して返す経路である。これ以外のdata type名を条件に
-例外を追加してはならない。
+do carrierの表示名から`Result::Err`、`Option::None`、空List、`Either`その他の
+固有constructorを選んではならない。annotated structの再構築は、型名による特例ではなく
+検証済み`@result_effect` metadataによるResult effect routeである。この規則はpartial
+`<-`とSafeBindに共通して適用する。
 
 ### 7.6 標準MonadとTransformerの接続
 
@@ -544,8 +547,9 @@ do は残りの文列を `Monad::bind` の synthetic continuationへlowerする�
 early-return targetが変わる。ScarはSafeBindのsuccess / failureを先にnormalized control flowとして表現し、failureを
 enclosing source functionではなく、現在のdo continuationが返す`F<R>`へ接続する。
 
-ここでreturn targetがsynthetic continuationになること自体は問題ではない。ResultContext-preserving doではcontinuationが返した`Err`を
-外側の`Result` bindがそのまま伝播し、Result effectのないdoではcontinuationが`empty`を返して外側bindが後続を実行しない。
+ここでreturn targetがsynthetic continuationになること自体は問題ではない。ResultContext-preserving doでは
+failure targetがcanonical `Result::Err(error)`またはannotated structのsole fieldに同じ`Err(error)`を保持した
+最終carrierを構築する。Result effectのないdoではcontinuationが`empty`を返し、外側bindが後続を実行しない。
 問題になるのはtargetを暗黙のままにすることであり、次の二modeをtyped IRへ明示すればよい。
 
 ### 8.2 ResultContext-preserving do
@@ -553,9 +557,10 @@ enclosing source functionではなく、現在のdo continuationが返す`F<R>`�
 do carrierがcanonical `Result`、または検証済み `@result_effect` を持ち直接 base が canonical `Result` の carrierなら、
 N06完了後のSafeBind意味論を次のとおり保持する。
 
-- RHSが`Err(error)`なら、その`error`を変更せずdo式の`Err(error)`として返し、後続文を評価しない。
-- Result payloadまたはpartial patternへ渡したnon-Result RHS全体に対するpattern不一致／Extractor failureは、N06完了後のSafeBindが選ぶ`PatternMismatch`、`EmptyList`、
-  `IndexOutOfBounds`などのfailure kind / detailを保持し、do式の`Err`として返す。
+- RHSが`Err(error)`なら、その`error`を変更せずdo式の最終carrier failureとして返し、後続文を評価しない。
+- SafeBindのResult payloadまたはpartial patternへ渡したnon-Result RHS全体に対するpattern不一致／Extractor failureは、
+  `PatternMismatch`、`EmptyList`、`IndexOutOfBounds`などのfailure kind / detailを保持し、同じ最終carrier failureとして返す。
+- partial `<-` のpattern不一致は、pattern形状によらず共通の`PatternMismatch`を同じ最終carrier failureとして返す。
 - 成功時はpattern bindingを後続continuationのscopeへ導入する。
 - do結果の既存Result error関係は、RHSから伝播するerrorとpatternが生成し得るerrorをすべて受理しなければならない。
 - Extractorの`Some`はpayloadを渡し、`None`はno-matchからpattern failureへ変換する。Extractor自身のErr返却・独自error伝播を前提にしない。
@@ -613,7 +618,7 @@ do外のSafeBindは従来どおりenclosing functionのcanonical Resultまたは
 
 ```text
 ResultContext-preserving do:
-  SafeBindFailure(error) => Result::Err(error)
+  SafeBindFailure(error) => construct_result_effect_failure(carrier, error)
 
 Result effectのない Alternative-do:
   SafeBindFailure(_) => Alternative::empty()
@@ -631,7 +636,11 @@ partial pattern <- source
   => Monad::bind(source, {|value|
        match value {
          pattern => next(),
-         _ => Alternative::empty(),
+         _ => selected_failure_effect(
+                ResultEffect => construct_result_effect_failure(
+                                  F<R>, PatternMismatch("Pattern did not match.")),
+                Alternative  => Alternative::empty(),
+              ),
        }
      })
 
@@ -642,7 +651,7 @@ pattern =? source  # ResultContext-preserving do
   => SafeBindControl(
        source,
        on_success: {|bindings| next()},
-       on_failure: {|failure| Result::Err(failure)},
+       on_failure: {|failure| construct_result_effect_failure(F<R>, failure)},
      )
 
 pattern =? source  # non-Result Alternative-do
@@ -674,7 +683,13 @@ NormalizedDoSafeBind {
     | PassThroughNonResultPartial,
   continuation_result_type: F<R>,
   failure_target:
-    PreserveResult { canonical_result_identity, expected_error_type }
+    PreserveResultEffect {
+      carrier_type: F<R>,
+      expected_error_type,
+      construction:
+        CanonicalResult
+        | AnnotatedStruct { tag },
+    }
     | AlternativeEmpty { dispatch: TraitDispatchTarget },
   origins: { do_span, operator_span, pattern_span, rhs_span, result_origin },
 }
@@ -682,8 +697,8 @@ NormalizedDoSafeBind {
 
 最終的なRust enum名は既存typed IRへ合わせてよい。`SafeBindControl` / `NormalizedDoSafeBind`はdo専用runtime opcodeを
 意味せず、既存`TypedInner::SafeBind`へfailure targetを追加しても、Scarで明示branch graphへ展開してもよい。
-必要な不変条件は、Forge到達時にmode、result型、Result identityまたはempty dispatchが具体化済みで、元source originを
-保持することである。
+必要な不変条件は、Forge到達時にmode、最終carrier型、Error型、canonical Resultまたはannotated structの
+構築metadata、もしくはempty dispatchが具体化済みで、元source originを保持することである。
 total non-Resultは通常pattern検査後にcompile errorとなり、`NormalizedDoSafeBind`やForgeへ渡さない。
 
 `<-`とSafeBindのRHSは一度だけ評価する。`pattern <- source` のpatternは、合成closureが受け取った一時値へ適用する。

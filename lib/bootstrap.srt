@@ -96,18 +96,20 @@ defmod Bootstrap {
   SafeBind special form.
 
   `=?` is a language-provided binding form for failure-aware destructuring.
-  In user functions it may be used only when the current evaluation returns
-  canonical `Result<T>` or a validated `@result_effect` carrier.
+  Outside `do`, it may be used only when the current evaluation returns
+  canonical `Result<T>` or a validated `@result_effect` carrier. Inside `do`,
+  the do-local carrier supplies either a Result-effect or Alternative target.
   The REPL accepts the syntax, reports the resulting error message, and keeps
   the session alive.
 
   `=?` evaluates the right-hand side once. A canonical `Result` RHS is
   decomposed by one outer layer only, and its `Ok` payload is passed to the
   left-hand MatchBlock pattern. If it produces `Err(error)`, that value is
-  propagated to the current failure target. If matching or an Extractor
-  produces no match, the compiler constructs the shared `PatternMismatch`
-  error. A Result-effect target preserves that error; an Alternative target
-  discards it and returns `empty`.
+  propagated to the current failure target. Extractor `Option::None` and a
+  general mismatch produce the shared `PatternMismatch` error; structural
+  patterns retain their existing errors such as `EmptyList` or
+  `IndexOutOfBounds`. A Result-effect target preserves that error; a do-local
+  Alternative target discards it and returns `empty`.
 
   `=?` is not a trait-dispatched operator.
   A non-Result RHS is passed through unchanged only for a partial MatchBlock
@@ -135,10 +137,11 @@ defmod Bootstrap {
 
   ## Notes
   - `=?` returns `()`
-  - `=?` requires a canonical `Result<T>` or validated Result-effect return target
+  - outside `do`, `=?` requires a canonical `Result<T>` or validated Result-effect return target
+  - inside `do`, the current carrier may instead provide an Alternative target
   - only a canonical `Result` RHS is decomposed, by one outer layer
   - RHS `Err(...)` is propagated to the current failure target
-  - pattern no-match becomes a shared `PatternMismatch` failure
+  - Extractor `None` and general mismatch become shared `PatternMismatch`; structural pattern errors keep their kind
   - a non-Result RHS requires a partial pattern that inspects the whole value
   """
   @intrinsic def =?(pattern: $Pattern, value: $A) -> Unit
@@ -248,6 +251,11 @@ defmod Bootstrap {
   failure-matcher errors. Carriers without Result effect use Alternative::empty;
   Monad alone cannot provide a failure target. `guard` remains an ordinary
   Alternative call.
+
+  ## REPL
+  xldr(1)> result: Option<Int> = do::<Option> { value <- Option::Some(1); Option::Some(value + 1) }
+  xldr(2)> result
+  Option::Some(2)
   """
   @intrinsic def do::<Monad>(block: DoBlock<$Result>) -> Monad<$Result>
 

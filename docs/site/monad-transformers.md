@@ -62,6 +62,35 @@ SafeBind `=?` と failureMatcher となる partial `<-` の failure target は
 したり、nested Result を再帰的に分解したりしません。必要な base 接続には引き続き
 `MonadT::lift`、`run`、Extractor などを明示します。
 
+次の三例では、同じ `OptionT<Result, _>` でも失敗の起点によって結果が分かれます。
+
+```surtr
+deferror Stop { "stop" }
+
+def source() -> Result<Int, Stop> {
+  Err(Stop)
+}
+
+def wrapped() -> OptionT<Result, Int> {
+  value =? source()
+  OptionT::some::<Result>(value + 1)
+}
+
+OptionT::run(wrapped()) # => Err(Stop("stop"))
+
+mismatch: OptionT<Result, Int> = do::<OptionT<Result, _>> {
+  2 <- OptionT::some::<Result>(1)
+  OptionT::some::<Result>(3)
+}
+OptionT::run(mismatch) # => Err(PatternMismatch("Pattern did not match."))
+
+blocked: OptionT<Result, Unit> = guard(False)
+OptionT::run(blocked) # => Ok(Option::None)
+```
+
+通常関数のSafeBindとdoのfailure matcherはResult effectを使うためErrorを保持します。
+一方、`guard`はOptionT自身の`Alternative`を使うためabsenceを返します。
+
 ### ユーザ定義のbaseとTransformer
 
 `MonadT`は標準4型のallowlistではありません。通常の`Functor` / `Applicative` / `Monad`を満たす
@@ -94,6 +123,7 @@ impl Monad for UserBase<$T> {
   }
 }
 
+@result_effect
 defstruct UserWrap<$M, $A>
 where
   $M: Monad
@@ -176,6 +206,8 @@ print(to_string(UserBase::run(UserWrap::run(mapped))))
 `lifted`ではexpected type、`explicit`では明示RTAが出力carrierを決めます。compilerは標準型名、
 impl数・登録順、field名・representationからbaseや出力carrierを推測しません。この定義にもruntime
 Trait dictionary、暗黙lift、Transformer専用runtime値はなく、通常のnominal値とstatic dispatchだけを使います。
+`@result_effect`は`UserWrap<UserBase, _>`では有効化されず、baseをcanonical `Result`へ
+具体化したときだけResult effectを提供します。
 
 ### `Applicative::ap` の評価順
 

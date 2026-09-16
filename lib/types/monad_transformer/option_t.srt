@@ -5,6 +5,11 @@ The representation is a base computation producing `Option<$A>`.
 When `$M` is canonical `Result`, SafeBind and failure-matcher `do` patterns
 preserve the base Error in `inner`. Other bases use OptionT's `Alternative`
 failure, while `guard` always keeps ordinary `Alternative` semantics.
+
+## REPL
+xldr(1)> result: OptionT<Result, Int> = do::<OptionT<Result, _>> { 2 <- OptionT::some::<Result>(1); OptionT::some::<Result>(3) }
+xldr(2)> OptionT::run(result)
+Err(PatternMismatch("Pattern did not match."))
 """
 @result_effect
 defstruct OptionT<$M, $A>

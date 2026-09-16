@@ -87,7 +87,7 @@ messageに合わせて変形させない。
 | `ConstraintSubject` / `TraitObligation` | subject/constraint、またはtrait name/arguments・subject type・position |
 | `TypeConstructorCarrier` | `family`, `family_id`, `expected_carrier`, `actual_carrier` |
 | `BranchAssertion` | `expected_type`, `actual_type`, `branch` |
-| `SafeBindRelation` | `lhs_type`, `rhs_type`, `lhs_is_total`, `rhs_is_canonical_result`, `monad_capability`, `result_effect`, `alternative_capability` |
+| `SafeBindRelation` | `lhs_type`, `rhs_type`, `lhs_is_total`, `rhs_is_canonical_result`, `monad_capability` |
 | `Pattern` / `Policy` / `Runtime` / `Parse` / `Resolve` / `Repl` | family固有の閉じた入力。`detail`は表示・追跡用であり、reason再分類には使わない |
 
 SafeBind固有reasonは、通常pattern型検査を通過したtotal pattern + non-Result RHSにだけ生成する。

@@ -514,7 +514,8 @@ print(to_string(value)) # => "1"
 ```
 
 LHS には list/string 分解、literal match、Extractor を再帰的に書けます。  
-途中で `Err(...)` が出ればそのまま早期伝播し、`NoMatch` は error として返されます。  
+途中で `Err(...)` が出れば現在の failure targetへ早期伝播し、Extractor の
+`Option::None` は共通 `PatternMismatch` Error として扱われます。
 REPL ではその失敗を表示しますが、セッション自体は継続します。
 
 ### `do` による Monad の逐次処理

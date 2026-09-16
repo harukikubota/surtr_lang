@@ -64,6 +64,11 @@ impl Show for Int {
 }
 ```
 
+`@result_effect` は `Monad` と `MonadT<$M>` を実装する `defstruct` にだけ指定できる
+compiler-owned annotationです。対象は単一のpublic fieldを持ち、そのfieldの最外
+constructorが`MonadT`のcaptured base `$M`と一致しなければなりません。具体化された
+baseがcanonical `Result`へ直接一致する場合だけResult effectを提供します。
+
 ### 制御構造
 
 ```surtr
@@ -74,7 +79,15 @@ match expr {
   pattern => expr,
   ...
 }
+
+do::<Carrier> {
+  pattern <- monadic_expr
+  final_monadic_expr
+}
 ```
+
+`do` の carrier は `::<Carrier>` で指定するか、RHS・最終式・期待型から推論します。
+`<-` の束縛は後続文だけで見え、最終式は同じ carrier の Monad 値を返します。
 
 ## 2. 型
 
@@ -372,7 +385,29 @@ Option::Some(saved) =? Option::Some(1)
 - Result 以外の RHS は値と型を変えず、constructor / literal / list / string / Extractor などの partial patternが値全体を明示検査するときだけ受理する
 - total pattern + non-Result RHS は、非MonadとResult以外のMonadを区別したSafeBind compile errorにする
 - 通常patternのannotation / constructor arity / Extractor契約エラーはSafeBind固有分類より先に報告する
+- `do` 外では、enclosing callableがcanonical `Result`または有効なResult-effect carrierを返す必要がある
+- `do` 内では、do-local carrierのResult effectを優先し、なければ`Alternative::empty`、どちらもなければcapability errorにする
+- Extractorの`Option::None`と一般の不一致は共通`PatternMismatch` Errorになり、list/string等の構造pattern固有Errorは維持する
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
+
+#### `do` と failure matcher
+
+`do` は一つのMonad carrierを左から右へsequenceします。
+
+```surtr
+result: Option<Int> = do::<Option> {
+  first <- Option::Some(20)
+  Option::Some(first + 1)
+}
+```
+
+- total patternの`<-`は`Monad`だけを要求する
+- literal、constructor、list/string、Extractor等のpartial patternを使う`<-`はfailure matcherになる
+- failure targetは`Result effect > Alternative > Monad`の順で選び、`Monad`単独ではfailure targetを提供しない
+- SafeBind `=?` もdo-local failure targetを使うが、RHSだけからdo carrierを推論しない
+- `guard`は通常の`Alternative`関数であり、Result effectを参照しない
+- base Monad値をTransformerへ暗黙liftせず、`MonadT::lift`を明示する
+- nested `do` はそれぞれ自身のcarrierだけでfailure targetを決める
 
 #### range literal
 

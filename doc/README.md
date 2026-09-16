@@ -14,7 +14,7 @@
 | 実装済み標準 API・履歴 | [標準 MonadT 型](./monadt_standard_types_spec.md) | N05の正本は`../lib/traits/monad_t.srt`と`../lib/types/monad_transformer/`、利用者向け説明は[`../docs/site/monad-transformers.md`](../docs/site/monad-transformers.md)。MT-S14はN11で実装・検証済み |
 | 実装済み仕様・履歴 | [SafeBind / diagnostics cleanup](./diagnostics_cleanup_spec.md) | N06でSafeBind境界、全phaseのstructured producer、heuristic撤去、builtin metadata統合を完了。N07以降のdo実装は別入力 |
 | 実装済み仕様・履歴 | [`do` intrinsic](./do_intrinsic_spec.md) | N07–N11で実装・検証済み。現行契約と受け入れ境界を保持 |
-| 実装済み契約 | [Trait / Result effect](../docs/dev/Trait_system_spec.md) / [`do` intrinsic](./do_intrinsic_spec.md) / [diagnostics](../docs/dev/diagnostics.md) | `@result_effect` と `ResultEffect > Alternative > Monad` を実装済み。入力仕様は正本へ移管して削除 |
+| 実装済み契約・文書移管履歴 | [Trait / Result effect](../docs/dev/Trait_system_spec.md) / [`do` intrinsic](./do_intrinsic_spec.md) / [diagnostics](../docs/dev/diagnostics.md) / [公開文書 follow-up](./do_user_documentation_followup_spec.md) | `@result_effect` と `ResultEffect > Alternative > Monad` を実装済み。恒久契約と利用者向け説明へ移管済み |
 | 仕様決定・実装待ち | [Generator](./generator_spec.md) | N12–N13 の入力。未確定 API は本文の確認ゲートに従う |
 | implementation plan | [N01–N14 implementation plan](./type_constructor_monad_do_implementation_plan.md) | 作業順・受け入れ条件・進捗だけを管理 |
 | 未採用・保留 | [Extractor更改案](./extractor_revision_draft.md) | 現行は `Option` 返却。`None` は SafeBind で共通 `PatternMismatch` に接続する |

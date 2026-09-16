@@ -154,12 +154,15 @@ RHS の自動分解と failure target の選択は別の規則です。`OptionT<
 
 Result-effect carrier の SafeBind では、RHS の `Err(error)`、pattern failure、
 Extractor の `Option::None` から作られた共通 `PatternMismatch` error を
-`inner: Err(error)` として保持します。Result effect がない carrier では、同じ
-failure は `Alternative::empty()` へ変換されます。failureMatcher となる partial
-`<-` も同じ規則で、ResultContext の能力判定は `Result effect > Alternative > Monad`
-です。ただし `Monad` 単独では failure target を構築できないため、SafeBind / partial
-`<-` では capability error になります。total `<-` の sequencing は `Monad` のみを
-要求します。
+`inner: Err(error)` として保持します。
+
+`do` 内では、Result effect がない carrier の同じ failure を
+`Alternative::empty()` へ変換します。failureMatcher となる partial `<-` も同じ規則で、
+do-local ResultContext の能力判定は `Result effect > Alternative > Monad` です。
+ただし `Monad` 単独では failure target を構築できないため、SafeBind / partial `<-` では
+capability error になります。total `<-` の sequencing は `Monad` のみを要求します。
+`do` 外の SafeBind は、enclosing callable 自身に canonical `Result` または有効な
+Result-effect return target を要求し、通常の `Alternative` returnへは接続しません。
 
 `guard` はこの規則の対象外です。通常の `Alternative` 関数なので、
 `OptionT<Result, A>` でも `guard(False)` は `OptionT::empty()`（`Ok(None)`）となり、
