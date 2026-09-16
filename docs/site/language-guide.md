@@ -520,6 +520,8 @@ REPL ではその失敗を表示しますが、セッション自体は継続し
 
 ### `do` による Monad の逐次処理
 
+Result / Optionの導入例とfailure matcherの比較は[do](./do.md)、構文の一覧は[言語リファレンス](./language-reference.md)を参照してください。
+
 Monad の値を順に処理するには `do` を使います。`<-` で payload を取り出し、最後の式が同じ carrier の値を返します。
 carrier は `do::<Option>` のように指定するか、式や期待される型から推論できます。
 

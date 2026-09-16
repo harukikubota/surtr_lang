@@ -126,6 +126,13 @@ reason を決めない。
 
 ## 実装規則
 
+doのcarrier衝突は明示RTA、expected result、RHS等の元source factsを保持する。
+partial `<-`の能力不足はpattern、SafeBindの能力不足は`=?`をprimaryにする。
+末尾SafeBindのreturn不一致は`TypedDoSafeBind.origins.result_span`を使い、synthetic control nodeのspanへ依存しない。
+生成matchのexhaustivenessではなく、user patternやbranch自体の診断を保持する。
+human / JSONは同じreason、message、primary span、related source factsを投影し、
+do専用の未採用JSON fieldを一般診断schemaへ混入させない。詳細は[do intrinsic](./Do_intrinsic_spec.md)を参照する。
+
 - `labels` の各 `span` は、表示する本文と対応するソース範囲を指す。関連ファイルの定義は `source_id` を設定する。
 - headline だけで十分な診断に無理な source label を追加しない。
 - `kind`、`phase`、`primary_span`、`expected`、`got`、`hint` の意味を表示文の改善目的で変更しない。

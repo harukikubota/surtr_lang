@@ -10,7 +10,7 @@ runtime 最適化を導入するための実装入力である。
 - 言語全体の意味論: [`要件定義v9.md`](./要件定義v9.md)
 - VM と execution context: [`../docs/dev/EldrVM_spec.md`](../docs/dev/EldrVM_spec.md)
 - TypeConstructor / Monad dispatch: [`../docs/dev/Trait_system_spec.md`](../docs/dev/Trait_system_spec.md)
-- `do` intrinsic: [`do_intrinsic_spec.md`](./do_intrinsic_spec.md)
+- `do` intrinsic: [`Do_intrinsic_spec.md`](../docs/dev/Do_intrinsic_spec.md)
 - テスト配置: [`../docs/dev/テスト方針.md`](../docs/dev/テスト方針.md)
 - user-facing diagnostics: [`../docs/dev/diagnostics.md`](../docs/dev/diagnostics.md)
 
@@ -47,7 +47,7 @@ List の型、順序、pattern matching、永続性は変更しない。`Packed`
 runtime-only implementation detail とし、user code、型検査、`.eldr` の Value 種別へ
 新しい surface type を追加しない。
 
-`do` は本改修の実装対象に含めない。将来 `do` が導入されたときも、初期実装は
+`do` は本改修の実装対象に含めない。現行doは
 正本どおり resolved `Monad::bind` へ generic lowering し、List 専用 opcode、専用 frame、
 nested-builder fusion は追加しない。
 
@@ -71,15 +71,14 @@ nested-builder fusion は追加しない。
   `Vec<Value>` に flatten してから `ListHandle::from_items` する類似処理が存在する。
 - REPL は別の List interpreter を持たず、compile した chunk を `InteractiveVm` / Eldr で
   実行する。
-- `do` surface はまだ実装されておらず、`do_intrinsic_spec.md` の開始条件を満たした後に
-  generic lowering として追加する計画である。
+- `do` surfaceとgeneric loweringは実装済みである。現行契約は`docs/dev/Do_intrinsic_spec.md`を参照する。
 
 したがって `flat_map` builtin 化の主目的は、計算量クラスの改善ではない。主目的は、
 
 - intermediate cons node allocation の削減
 - 連続 buffer を使った局所性の改善
 - Rust runtime 内にすでにある List flatten 処理との共通化
-- 将来の generic `do -> Monad::bind -> List::flat_map` 経路の一定化
+- generic `do -> Monad::bind -> List::flat_map` 経路の一定化
 
 である。
 
@@ -401,7 +400,7 @@ do::<List> { ... }
 
 `do` checker は List 名、`flat_map` 名、builtin ID、Builder の存在を検査しない。
 carrier inference、partial pattern、SafeBind、`Alternative::empty` は
-`do_intrinsic_spec.md` の generic contract だけで解決する。
+`docs/dev/Do_intrinsic_spec.md` の generic contract だけで解決する。
 
 nested `do` も通常の関数結果境界を使う。inner computation が返すのは完成済み `ListHandle` であり、
 inner Builder を outer computation と共有しない。この性質は専用の escape analysis ではなく、各
@@ -467,10 +466,10 @@ serialization、deep copy のいずれを使うかを ProcessRuntime spec 側で
 4. retained Packed prefix と heavy-builtin scheduler latency を測定する。
 5. `map` / `filter` / `reverse` の builtin 化は、結果を見て別タスクで判断する。
 
-### Phase 4: `do`（別タスク）
+### `do`との関係（実装済み）
 
-`do_intrinsic_spec.md` の開始条件を満たした後、generic lowering を実装する。本書の List 改修を
-`do` 実装の開始条件にはしない。また、`do` 実装を Packed 導入の開始条件にもしない。
+generic do loweringは実装済みで、List改修の実装タスクには含めない。
+`docs/dev/Do_intrinsic_spec.md`の契約を保持し、Packed導入へdo専用loweringを混入させない。
 
 ## 14. 主な変更対象
 
@@ -581,5 +580,5 @@ cargo nextest run --workspace
 - List 専用 `do` specialization
 
 List 専用 `do` specialization を検討する場合でも、先に generic `do` と同じ値、evaluation order、
-callback count、failure、source trace を differential test で固定する。また `do_intrinsic_spec.md` と
+callback count、failure、source trace を differential test で固定する。また `docs/dev/Do_intrinsic_spec.md` と
 `EldrVM_spec.md` の正本を更新してから opcode / frame を追加する。

@@ -326,6 +326,9 @@ def require_port(text: String) -> Result<Int> {
 
 ## 使い分けの目安
 
+複数のMonad値を順に扱う場合は[do](./do.md)を使います。Result / Result-effect carrierではErrorを保持し、
+Result effectのないAlternative carrierではfailure matcher / SafeBindのErrorを破棄してそのcarrierのemptyになります。
+
 - 分岐を明示したいときは `match`
 - 失敗をそのまま流したいときは `=?`
 - 直線的な pipeline は `|*>`, `|*|`, `|>=`, `>*`, `>=>`

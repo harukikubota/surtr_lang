@@ -292,7 +292,7 @@ call-site ReturnTypeArgumentは定義側に対応位置がある場合だけ指�
 - Forgeへは具体化済みcall/dispatchだけを渡し、ReturnTypeArgument専用metadataを新設しない。
 - `do` 構文intrinsicは、完了済みのSafeBind・diagnostics cleanupゲートを前提に追加する。do-local
   carrier推論、core lowering、SafeBind failure target、Forge lowering、診断整備、全carrier受入検証は
-  N11までに実装・検証済みである。
+  実装・検証済みである。現行の詳細契約は[do intrinsic](./Do_intrinsic_spec.md)に置く。
 
 `@result_effect` は MonadT の内部表現を探索する機能ではなく、宣言へ明示する compiler-owned assertion である。
 surface は引数を取らず、1つの `defstruct` 宣言へ一度だけ指定できる。重複、引数付き、または

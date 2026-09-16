@@ -1,5 +1,7 @@
 # Monad transformers
 
+`do`による逐次処理の入口は[do](./do.md)を参照してください。
+
 `OptionT`、`EitherT`、`ReaderT`、`StateT` は、base の `Monad` を通常の
 Surtr 値として包む標準型です。compiler 専用の runtime 値ではなく、構造体、関数、
 List、Facet の値として扱えます。
@@ -87,6 +89,9 @@ OptionT::run(mismatch) # => Err(PatternMismatch("Pattern did not match."))
 blocked: OptionT<Result, Unit> = guard(False)
 OptionT::run(blocked) # => Ok(Option::None)
 ```
+
+partial `<-`のError出力は仕様上の期待値です。現行REPLにはErrorのkind/messageが崩れる
+[既知の問題](../../doc/do_result_effect_repl_error_followup_spec.md)があります。SafeBindとは区別してください。
 
 通常関数のSafeBindとdoのfailure matcherはResult effectを使うためErrorを保持します。
 一方、`guard`はOptionT自身の`Alternative`を使うためabsenceを返します。

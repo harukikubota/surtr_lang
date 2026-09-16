@@ -85,9 +85,9 @@ cargo clean
   - [Type annotations](./docs/site/type-annotations.md)
   - [Trait system](./docs/site/trait-system.md)
   - [Trait impls](./docs/site/trait-impls.md)
-  - [Lens](./docs/site/lens.md)
+  - [Facet](./docs/site/facet.md)
   - [Kernel](./docs/site/kernel.md)
-  - [Agents](./docs/site/agents.md)
+  - [Process](./docs/site/process.md)
   - [Pattern matching](./docs/site/pattern-matching.md)
   - [Extractors](./docs/site/extractors.md)
   - [Language features](./docs/site/language-features.md)
@@ -100,7 +100,6 @@ cargo clean
   - [Diagnostics contract](./docs/dev/diagnostics.md)
   - [Test policy entry](./docs/dev/テスト方針.md)
 - Canonical specs and internal design notes in `doc/`
-  - [Working specifications and plans](./doc/README.md)
   - [Requirements (V9, Japanese)](./doc/要件定義v9.md)
   - [Open issues](./doc/open-issues.md)
 - Internal docs index

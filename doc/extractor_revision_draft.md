@@ -7,11 +7,11 @@
 - level: 4。Extractor の型規則、pattern の評価規則、SafeBind の failure target、Scar / Forge 間の契約を変更する。
 - 現行実装・正本: `Option<T>` の `Some` / `None` 契約。`None` は SafeBind で共通
   `PatternMismatch` Error になり、Result effect では保持、Alternative route では破棄する。
-  実装依頼時は本案ではなく `doc/要件定義v9.md`、`doc/diagnostics_cleanup_spec.md`、
+  実装依頼時は本案ではなく `doc/要件定義v9.md`、`docs/dev/diagnostics.md`、
   `docs/site/extractors.md` を使う。本案を再開するには新たな仕様決定を必要とする。
 - 過去実装の参照点: `3990b2f9c4727d9bc925048835faee92cf9d8517^`。削除直前の型制約、Extractor body 制約、completion、typed pattern、lowering を復元時の比較対象にする。
 
-本書は既存の N06–N14、do、MonadT、Generator と独立して実装する。これらの着手・完了条件は変更せず、実装時点で増えている consumer と仕様を再監査する。
+本案は実装済みのdo / MonadT契約およびGenerator再設計から独立して保留する。再開する場合は、実装時点のconsumerと現行正本を再監査する。
 
 ## 2. 変更理由
 

@@ -23,6 +23,12 @@ contract を持っています。
 
 たとえば `Hole` は `_` という surface marker の背後にある internal type です。
 
+## Compiler専用marker `DoBlock`
+
+`DoBlock<$Result>`は`do`のintrinsic signature専用です。通常の値型ではなく、利用者による宣言、
+field / parameter / return / annotation、inherent / Trait impl targetでの利用は拒否されます。
+Monadの逐次処理には[do式](./do.md)を書いてください。
+
 ## `Unit`
 
 `Unit` は special type の中では、もっとも ordinary な型です。

@@ -2,7 +2,8 @@
 
 ## 1. 状態・根拠・変更範囲
 
-- 分類: `/doc` に置く、仕様決定・実装待ちのGenerator改修入力。
+- 状態: 旧設計案・再設計待ち。以下の本文は過去案であり、実装入力として採用しない。
+- 範囲: 実装済みdo / MonadTの完了条件から分離する。再開時は新しい仕様を決定する。
 - 基準 commit: `f1986a27d84728e1e7a88de457a1d6b55cfe5ab8`。
 - 根拠: 本会話の不変な進行状態に関する決定、入力メモ「Surtr Monad / do / State / Generator 検討メモ」§11–13、基準commitの `lib/types/generator.srt`。
 - 今回はGenerator自体へのMonad実装を追加しない。

@@ -392,6 +392,11 @@ Option::Some(saved) =? Option::Some(1)
 
 #### `do` と failure matcher
 
+実行例とResult / Option / MonadTのfailure比較は[do](./do.md)を参照してください。
+`do::<Carrier>`、`do::<_>`、`do {}`を使えます。文は改行または`;`で区切り、最後には同じcarrierのMonad式が必要です。
+空blockや末尾bindingだけのblockは拒否します。通常`=`はpayloadを取り出さず、途中のbare Monad式はpayloadを捨ててsequenceします。
+pattern bindingはRHS解決後に後続文だけへ公開し、block外へ漏れません。captured/fixed引数はblock全体で一致し、payload型は変化できます。
+
 `do` は一つのMonad carrierを左から右へsequenceします。
 
 ```surtr
