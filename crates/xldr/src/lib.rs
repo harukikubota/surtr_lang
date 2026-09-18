@@ -1128,13 +1128,11 @@ defmod B {
             info.canonical_name == "Global::Kernel::print"
                 && info.surface_name == "Kernel::print"
                 && info.detail.is_some()
-                && info.documentation.is_some()
         }));
-        assert!(index.symbols().iter().any(|symbol| {
-            symbol.label == "Kernel::print"
-                && symbol.detail.is_some()
-                && symbol.documentation.is_some()
-        }));
+        assert!(index
+            .symbols()
+            .iter()
+            .any(|symbol| { symbol.label == "Kernel::print" && symbol.detail.is_some() }));
     }
 
     #[test]

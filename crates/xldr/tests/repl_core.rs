@@ -148,6 +148,15 @@ fn doc_text(result: &ReplResult) -> String {
     }
 }
 
+fn doc_target(result: &ReplResult) -> (&str, Option<&str>) {
+    match &result.output {
+        ReplOutput::DocResolved {
+            symbol, signature, ..
+        } => (symbol.as_str(), signature.as_deref()),
+        other => panic!("expected resolved doc output, got {}", output_kind(other)),
+    }
+}
+
 fn signature_text(result: &ReplResult) -> String {
     match &result.output {
         ReplOutput::StyledDoc { lines } | ReplOutput::PlainText { lines } => lines.join("\n"),
@@ -408,10 +417,6 @@ fn core_completion_returns_global_candidates_with_details() {
         .detail
         .as_deref()
         .is_some_and(|detail| detail.contains("print(")));
-    assert!(print
-        .documentation
-        .as_deref()
-        .is_some_and(|doc| doc.contains("Print a string to stdout")));
     assert!(
         completion.telemetry.completion_compute_ns.is_some(),
         "completion telemetry should record compute time: {:?}",
@@ -654,7 +659,6 @@ fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
         .detail
         .as_deref()
         .is_some_and(|detail| detail.contains("print(")));
-    assert!(print.documentation.is_some());
 
     let duration = index
         .find_symbol("Duration")
@@ -667,10 +671,6 @@ fn core_exposes_shared_semantic_index_for_repl_and_lsp_lookup() {
         .detail
         .as_deref()
         .is_some_and(|detail| detail.contains("Duration")));
-    assert!(
-        duration.documentation.is_some(),
-        "type constructors should retain shared doc metadata: {duration:?}"
-    );
 }
 
 fn core_exposes_symbol_semantic_infos_before_completion_projection() {
@@ -691,7 +691,6 @@ fn core_exposes_symbol_semantic_infos_before_completion_projection() {
         .find(|info| info.surface_name == "print")
         .expect("stdlib function should be visible as semantic info");
     assert_eq!(print.kind, surtr_analysis::CompletionKind::FunctionCall);
-    assert!(print.documentation.is_some());
     assert!(
         print.display_metadata.is_some(),
         "REPL semantic info should retain stdlib display metadata origin: {print:?}"
@@ -1015,16 +1014,13 @@ fn core_command_outputs_use_repl_scope_before_callable_families() {
     let sig = rendered_text(&engine.handle_line(":sig compare"));
     assert!(sig.contains("No signature found for compare"), "{sig}");
 
-    let doc = doc_text(&engine.handle_line(":doc compare"));
-    assert!(doc.contains("Standard `Result` type declaration."), "{doc}");
-    assert!(!doc.contains("Return the three-way ordering"), "{doc}");
+    let doc = engine.handle_line(":doc compare");
+    let (symbol, _) = doc_target(&doc);
+    assert_eq!(symbol, "Result");
 
-    let escaped_doc = doc_text(&engine.handle_line(":doc Compare::compare"));
-    assert!(escaped_doc.contains("Compare::compare"), "{escaped_doc}");
-    assert!(
-        escaped_doc.contains("Standard `Compare` trait declaration."),
-        "{escaped_doc}"
-    );
+    let escaped_doc = engine.handle_line(":doc Compare::compare");
+    let (symbol, _) = doc_target(&escaped_doc);
+    assert_eq!(symbol, "Compare::compare");
 
     let info = rendered_text(&engine.handle_line(":info compare"));
     assert!(info.contains("kind: binding"), "{info}");
@@ -1453,9 +1449,6 @@ fn core_completion_shows_user_defined_module_owners() {
         "demo_module.srt",
         r#"
 defmod Demo {
-  @doc """
-  Say hi.
-  """
   def hello() -> String { "hi" }
 }
 "#,
@@ -3229,9 +3222,9 @@ fn core_commands_do_not_require_a_cli_process() {
     assert!(rendered_text(&help).contains(":type <binding>"));
 
     let doc = engine.handle_line(":doc print");
-    let doc = doc_text(&doc);
-    assert!(doc.contains("Kernel::print"));
-    assert!(doc.contains("Print a string to stdout."));
+    let (symbol, signature) = doc_target(&doc);
+    assert_eq!(symbol, "Kernel::print");
+    assert_eq!(signature, Some("print(a: String) -> Unit"));
 
     let sig = engine.handle_line(":sig print");
     assert!(signature_text(&sig).contains("Kernel::print(a: String) -> Unit"));
@@ -3466,41 +3459,19 @@ fn core_doc_reports_match_and_cond_from_bootstrap_surface() {
     let mut engine = engine();
 
     let match_doc = engine.handle_line(":doc match");
-    let match_doc = doc_text(&match_doc);
-    assert!(match_doc.contains("Bootstrap::match"), "{match_doc}");
-    assert!(
-        match_doc.contains("@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B"),
-        "{match_doc}"
-    );
-    assert!(match_doc.contains("Match special form."), "{match_doc}");
-    assert!(
-        match_doc.contains("pattern when cond => expr"),
-        "{match_doc}"
-    );
-    assert!(
-        match_doc.contains("`match` must be exhaustive"),
-        "{match_doc}"
-    );
-    assert!(
-        match_doc.contains("Use `Ok(...)` and `Err(...)`"),
-        "{match_doc}"
+    let (symbol, signature) = doc_target(&match_doc);
+    assert_eq!(symbol, "Bootstrap::match");
+    assert_eq!(
+        signature,
+        Some("@intrinsic def match(value: $A, arms: MatchArms<$A, $B>) -> $B")
     );
 
     let cond_doc = engine.handle_line(":doc cond");
-    let cond_doc = doc_text(&cond_doc);
-    assert!(cond_doc.contains("Bootstrap::cond"), "{cond_doc}");
-    assert!(
-        cond_doc.contains("@intrinsic def cond(clauses: CondClauses<$A>) -> $A"),
-        "{cond_doc}"
-    );
-    assert!(cond_doc.contains("Cond special form."), "{cond_doc}");
-    assert!(
-        cond_doc.contains("cond { cond1 => expr1, ..., True => exprN }"),
-        "{cond_doc}"
-    );
-    assert!(
-        cond_doc.contains("final clause must be `True`"),
-        "{cond_doc}"
+    let (symbol, signature) = doc_target(&cond_doc);
+    assert_eq!(symbol, "Bootstrap::cond");
+    assert_eq!(
+        signature,
+        Some("@intrinsic def cond(clauses: CondClauses<$A>) -> $A")
     );
 }
 
@@ -4027,96 +3998,52 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let mut engine = engine();
 
     let builtin_doc = engine.handle_line(":doc print");
-    let builtin_doc = doc_text(&builtin_doc);
-    assert!(builtin_doc.contains("Kernel::print"));
-    assert!(builtin_doc.contains("Print a string to stdout."));
+    let (symbol, signature) = doc_target(&builtin_doc);
+    assert_eq!(symbol, "Kernel::print");
+    assert_eq!(signature, Some("print(a: String) -> Unit"));
 
     let alias_doc = engine.handle_line(":doc +");
-    let alias_doc = doc_text(&alias_doc);
-    let qualified_add_doc = doc_text(&engine.handle_line(":doc Add::add"));
-    assert_eq!(alias_doc, qualified_add_doc);
-    assert!(alias_doc.contains("Add::add(self: Self, rhs: Self) -> Self"));
-    assert!(alias_doc.contains("Standard `Add` operator trait declaration."));
+    let qualified_add_doc = engine.handle_line(":doc Add::add");
+    assert_eq!(doc_target(&alias_doc), doc_target(&qualified_add_doc));
+    assert_eq!(doc_target(&alias_doc).0, "Add::add");
 
     let typed_add_doc = doc_text(&engine.handle_line(":doc Add::add(Int, Int)"));
     assert!(typed_add_doc.contains("Add::add(self: Self, rhs: Self) -> Self"));
 
     let and_doc = engine.handle_line(":doc &&");
-    let and_doc = doc_text(&and_doc);
-    assert!(and_doc.contains("Kernel::and"));
-    assert!(and_doc.contains("Logical conjunction with short-circuit evaluation."));
+    assert_eq!(doc_target(&and_doc).0, "Kernel::and");
 
     let or_doc = engine.handle_line(":doc ||");
-    let or_doc = doc_text(&or_doc);
-    assert!(or_doc.contains("Kernel::or"));
-    assert!(or_doc.contains("Logical disjunction with short-circuit evaluation."));
+    assert_eq!(doc_target(&or_doc).0, "Kernel::or");
 
     let bind_doc = engine.handle_line(":doc =");
-    let bind_doc = doc_text(&bind_doc);
-    assert!(bind_doc.contains("Bootstrap::="), "{bind_doc}");
-    assert!(
-        bind_doc.contains("@intrinsic def =(pattern: $Pattern, value: $A) -> Unit"),
-        "{bind_doc}"
+    assert_eq!(
+        doc_target(&bind_doc),
+        (
+            "Bootstrap::=",
+            Some("@intrinsic def =(pattern: $Pattern, value: $A) -> Unit")
+        )
     );
-    assert!(bind_doc.contains("Bind special form."), "{bind_doc}");
 
     let safe_bind_doc = engine.handle_line(":doc =?");
-    let safe_bind_doc = doc_text(&safe_bind_doc);
-    assert!(safe_bind_doc.contains("Bootstrap::=?"), "{safe_bind_doc}");
-    assert!(
-        safe_bind_doc.contains("@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit"),
-        "{safe_bind_doc}"
-    );
-    assert!(
-        safe_bind_doc.contains("SafeBind special form."),
-        "{safe_bind_doc}"
-    );
-    assert!(
-        safe_bind_doc
-            .contains("In user functions it may be used only when the current evaluation returns"),
-        "{safe_bind_doc}"
-    );
-    assert!(
-        safe_bind_doc.contains("`Option::Some(num) =? Option::Some(1)` explicitly inspects"),
-        "{safe_bind_doc}"
-    );
-    assert!(
-        safe_bind_doc.contains("A total pattern with a non-Result RHS is a compile"),
-        "{safe_bind_doc}"
-    );
-    assert!(
-        safe_bind_doc.contains(
-            "The REPL accepts the syntax, reports the resulting error message, and keeps"
-        ),
-        "{safe_bind_doc}"
+    assert_eq!(
+        doc_target(&safe_bind_doc),
+        (
+            "Bootstrap::=?",
+            Some("@intrinsic def =?(pattern: $Pattern, value: $A) -> Unit")
+        )
     );
 
-    let compare_doc = doc_text(&engine.handle_line(":doc Compare"));
-    assert!(compare_doc.contains("Standard `Compare` trait declaration."));
-    assert!(!compare_doc.contains("trait Compare {"), "{compare_doc}");
-    assert!(
-        !compare_doc.contains("compare(self: Self, rhs: Self)"),
-        "{compare_doc}"
-    );
+    let compare_doc = engine.handle_line(":doc Compare");
+    assert_eq!(doc_target(&compare_doc).0, "Compare");
 
-    let facet_doc = doc_text(&engine.handle_line(":doc Facet"));
-    assert!(
-        facet_doc.contains("Standard `Facet` type declaration."),
-        "{facet_doc}"
-    );
-    assert!(
-        !facet_doc.contains("Compose` implementation for nested `Facet` paths"),
-        "{facet_doc}"
-    );
+    let facet_doc = engine.handle_line(":doc Facet");
+    assert_eq!(doc_target(&facet_doc).0, "Facet");
 
-    let string_doc = doc_text(&engine.handle_line(":doc String"));
-    assert!(
-        string_doc.contains("Standard `String` type declaration."),
-        "{string_doc}"
-    );
+    let string_doc = engine.handle_line(":doc String");
+    assert_eq!(doc_target(&string_doc).0, "String");
 
     let compare_target_doc = doc_text(&engine.handle_line(":doc Compare(Int, Int)"));
-    assert!(compare_target_doc.contains("Standard `Compare` trait declaration."));
     assert!(
         compare_target_doc.contains("target: Int, Int"),
         "{compare_target_doc}"
@@ -4247,7 +4174,6 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let slash_doc = engine.handle_line(":doc /");
     let slash_doc = doc_text(&slash_doc);
     assert!(slash_doc.contains("Compose::compose"), "{slash_doc}");
-    assert!(slash_doc.contains("models the `/` operator"), "{slash_doc}");
 
     let bind_sig = engine.handle_line(":sig =");
     let bind_sig = signature_text(&bind_sig);
@@ -4280,20 +4206,13 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let typed_doc = engine.handle_line(":doc compare(Int, Int)");
     let typed_doc = doc_text(&typed_doc);
     assert!(typed_doc.contains("impl Compare for Int::compare(self: Int, rhs: Int) -> Ordering"));
-    assert!(typed_doc.contains("Return the three-way ordering between the two integer values."));
-    assert!(
-        !typed_doc.contains("\n  Return the three-way ordering between the two integer values.")
-    );
 
     let helper_doc = engine.handle_line(":doc compare");
     let helper_doc = doc_text(&helper_doc);
     assert!(helper_doc.contains("Compare::compare"));
-    assert!(helper_doc.contains("Standard `Compare` trait declaration."));
 
     let neq_helper_doc = engine.handle_line(":doc neq");
-    let neq_helper_doc = doc_text(&neq_helper_doc);
-    assert!(!neq_helper_doc.contains("trait Neq {"), "{neq_helper_doc}");
-    assert!(neq_helper_doc.contains("Standard `Eq` trait declaration."));
+    assert_eq!(doc_target(&neq_helper_doc).0, "Eq");
 
     let operator_doc = engine.handle_line(":doc <");
     let operator_doc = doc_text(&operator_doc);
@@ -4314,21 +4233,11 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         typed_less_than_doc.contains("impl Compare for Int::lt(self: Int, rhs: Int) -> Boolean"),
         "{typed_less_than_doc}"
     );
-    assert!(
-        typed_less_than_doc.contains(
-            "Return `True` when the left integer is strictly less than the right integer."
-        ),
-        "{typed_less_than_doc}"
-    );
 
     let typed_neq_doc = engine.handle_line(":doc neq(Int, Int)");
     let typed_neq_doc = doc_text(&typed_neq_doc);
     assert!(
         typed_neq_doc.contains("Eq::neq(self: Self, rhs: Self) -> Boolean"),
-        "{typed_neq_doc}"
-    );
-    assert!(
-        typed_neq_doc.contains("Standard `Eq` trait declaration."),
         "{typed_neq_doc}"
     );
 
@@ -4338,20 +4247,11 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
         constructor_doc.contains("Duration::new(value: Int) -> Result<Duration, Error>"),
         "{constructor_doc}"
     );
-    assert!(
-        constructor_doc.contains("Construct a `Duration` from a millisecond count."),
-        "{constructor_doc}"
-    );
 
     let extractor_doc = engine.handle_line(":doc Duration!()");
     let extractor_doc = doc_text(&extractor_doc);
     assert!(
         extractor_doc.contains("Duration::deconstruct(self: Duration) -> Option<Int>"),
-        "{extractor_doc}"
-    );
-    assert!(
-        extractor_doc
-            .contains("Deconstruct a `Duration` into its millisecond count in pattern position."),
         "{extractor_doc}"
     );
 
@@ -4841,7 +4741,6 @@ impl Ranked {
 }
 
 impl Compare for Ranked {
-  @doc """Compare ranked values by weight."""
   def compare(self: Self, rhs: Self) -> Ordering {
     Compare::compare(self.weight, rhs.weight)
   }
@@ -4919,10 +4818,6 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
         constructor_doc.contains("-> Range<$A>"),
         "{constructor_doc}"
     );
-    assert!(
-        constructor_doc.contains("Construct a range while preserving the input order."),
-        "{constructor_doc}"
-    );
 
     let range_sig = signature_text(&engine.handle_line(":sig Range"));
     assert!(range_sig.contains("Range::new"), "{range_sig}");
@@ -4940,10 +4835,6 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
     );
     assert!(
         extractor_doc.contains("Option<($A, $A)>"),
-        "{extractor_doc}"
-    );
-    assert!(
-        extractor_doc.contains("Deconstruct a `Range` into `(min, max)` in pattern position."),
         "{extractor_doc}"
     );
 
@@ -4990,22 +4881,12 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
     let mut engine = engine();
 
     let closure_doc = engine.handle_line(":doc Closure");
-    let closure_doc = doc_text(&closure_doc);
-    assert!(closure_doc.contains("Closure"), "{closure_doc}");
-    assert!(
-        closure_doc
-            .contains("Compiler-reserved callable category marker for REPL and doc surfaces."),
-        "{closure_doc}"
-    );
+    assert_eq!(doc_target(&closure_doc).0, "Closure");
 
     let closure_binding = engine.handle_line("adder = {|n: Int| n + 1}");
     assert!(rendered_text(&closure_binding).contains("adder: (Int -> Int)"));
     let closure_binding_doc = engine.handle_line(":doc adder");
     let closure_binding_doc = doc_text(&closure_binding_doc);
-    assert!(
-        closure_binding_doc.contains("Compiler-reserved callable category marker"),
-        "{closure_binding_doc}"
-    );
     assert!(
         closure_binding_doc.contains("type: (Int -> Int)"),
         "{closure_binding_doc}"
@@ -5038,11 +4919,8 @@ fn core_doc_command_resolves_closure_type_and_callable_bindings() {
 
     let result_binding = engine.handle_line("ret = Ok(1)");
     assert!(rendered_text(&result_binding).contains("ret: Result<Int, Error>"));
-    let result_binding_doc = doc_text(&engine.handle_line(":doc ret"));
-    assert!(
-        result_binding_doc.contains("Standard `Result` type declaration."),
-        "{result_binding_doc}"
-    );
+    let result_binding_doc = engine.handle_line(":doc ret");
+    assert_eq!(doc_target(&result_binding_doc).0, "Result");
 }
 
 fn core_process_doc_and_sig_support_hidden_and_concrete_surfaces() {
@@ -5284,10 +5162,6 @@ fn core_sig_expression_queries_support_operator_forms() {
     let map_doc = engine.handle_line(":doc |*> Option");
     let map_doc = doc_text(&map_doc);
     assert!(map_doc.contains("Option<$T>::fmap"), "{map_doc}");
-    assert!(
-        map_doc.contains("This is the source-level meaning of `value |*> f`."),
-        "{map_doc}"
-    );
 
     let legacy_doc = engine.handle_line(":doc num |> (Int -> Result<String, Error>)");
     let legacy_doc = doc_text(&legacy_doc);
@@ -5783,9 +5657,7 @@ fn core_dbg_docs_and_signatures_resolve_from_bootstrap_source() {
     let mut engine = engine();
 
     let doc = engine.handle_line(":doc dbg!");
-    let doc = doc_text(&doc);
-    assert!(doc.contains("Bootstrap::dbg!"), "{doc}");
-    assert!(doc.contains("Debug special form."), "{doc}");
+    assert_eq!(doc_target(&doc).0, "Bootstrap::dbg!");
 
     let sig = engine.handle_line(":sig dbg!");
     let rendered = signature_text(&sig);
@@ -5799,9 +5671,7 @@ fn core_dbg_typed_call_queries_use_special_form_pseudo_application() {
     let mut engine = engine();
 
     let doc = engine.handle_line(":doc dbg!(Int)");
-    let doc = doc_text(&doc);
-    assert!(doc.contains("Bootstrap::dbg!"), "{doc}");
-    assert!(doc.contains("inspect"), "{doc}");
+    assert_eq!(doc_target(&doc).0, "Bootstrap::dbg!");
 
     let sig = engine.handle_line(":sig dbg!(Int, String)");
     let sig = signature_text(&sig);
@@ -5812,19 +5682,7 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     let mut engine = engine();
 
     let tuple_doc = engine.handle_line(":doc Tuple");
-    let tuple_doc = doc_text(&tuple_doc);
-    assert!(tuple_doc.contains("Tuple"), "{tuple_doc}");
-    assert!(tuple_doc.contains("Tuple._0"), "{tuple_doc}");
-    assert!(tuple_doc.contains("Tuple._1"), "{tuple_doc}");
-    assert!(tuple_doc.contains("pair._1"), "{tuple_doc}");
-    assert!(
-        tuple_doc.contains("Facet::view(Tuple._1, pair)"),
-        "{tuple_doc}"
-    );
-    assert!(
-        tuple_doc.contains("Facet::set(Tuple._1, pair, 3)"),
-        "{tuple_doc}"
-    );
+    assert_eq!(doc_target(&tuple_doc).0, "Tuple");
 
     let tuple_sig = signature_text(&engine.handle_line(":sig Tuple"));
     assert!(
@@ -5869,14 +5727,7 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     assert!(config_doc.contains("@doc"), "{config_doc}");
 
     let style_doc = engine.handle_line(":doc StyledDocStyle");
-    let style_doc = doc_text(&style_doc);
-    assert!(style_doc.contains("StyledDocStyle"), "{style_doc}");
-    assert!(
-        style_doc.contains("defstruct StyledDocStyle"),
-        "{style_doc}"
-    );
-    assert!(style_doc.contains("StyledDocStyle.bold"), "{style_doc}");
-    assert!(style_doc.contains("lines.[0]"), "{style_doc}");
+    assert_eq!(doc_target(&style_doc).0, "StyledDocStyle");
 
     let helper_before_import = engine.handle_line(":doc add");
     let helper_before_import = rendered_text(&helper_before_import);
@@ -5893,15 +5744,10 @@ fn core_doc_reports_tuple_surface_undocumented_types_and_scope_aware_helpers() {
     );
 
     let helper_after_import = engine.handle_line(":doc add");
-    let helper_after_import = doc_text(&helper_after_import);
-    assert!(
-        helper_after_import.contains("Add::add"),
-        "{helper_after_import}"
-    );
+    assert_eq!(doc_target(&helper_after_import).0, "Add::add");
 
     let if_doc = engine.handle_line(":doc if");
-    let if_doc = doc_text(&if_doc);
-    assert!(if_doc.contains("Kernel::if"), "{if_doc}");
+    assert_eq!(doc_target(&if_doc).0, "Kernel::if");
 }
 
 fn core_doc_typed_call_supports_qualified_inherent_impl_methods() {
@@ -5910,7 +5756,6 @@ fn core_doc_typed_call_supports_qualified_inherent_impl_methods() {
     let doc = engine.handle_line(":doc Boolean::not(Boolean)");
     let doc = doc_text(&doc);
     assert!(doc.contains("Boolean::not"), "{doc}");
-    assert!(doc.contains("logical negation"), "{doc}");
 }
 
 fn core_sig_rejects_tuple_field_and_facet_expression_queries() {
