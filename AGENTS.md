@@ -25,7 +25,7 @@ Surtr は Rust で実装する静的型付き関数型の Hobby 言語。
 - フェーズ間は公開型とフェーズ固有のエラーで接続し、他クレートの内部実装に依存しない。
 - builtin の正本は `crates/sindr/src/builtin.rs` の `BUILTIN_METAS`。ID は定義順。Eldr の `BUILTIN_IMPLS` と対応させ、各フェーズに名前・ID を直書きしない。`@builtin` は宣言層。
 - 通常の Surtr 関数で表せる機能は標準定義で合成する。runtime が必要な多相・副作用処理は builtin、専用 Opcode は単相・頻出・副作用なしの処理を候補にする。
-- 名前解決は Sigil、型・フィールド解決は Scar、命令生成は Forge に置く。遅延評価が必要な `if` を通常呼び出しへ落とさない。
+- 名前解決は Sigil、型・フィールド解決は Scar、命令生成は Forge に置く。
 - `import` は module member を file scope に入れる。型名は flat namespace で解決し、型や `new` を import 対象にしない。同名衝突を曖昧に解決しない。
 - `Int` は BigInt、`Float` は finite-only。固定幅の内部 ID（tag / builtin_id / fun_idx）と利用者の `Int` を分離する。
 
