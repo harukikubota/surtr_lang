@@ -3547,6 +3547,40 @@ fn test_capture_placeholder_and_tuple_field_access_parse() {
 }
 
 #[test]
+fn test_capture_placeholder_index_is_limited_to_sixteen() {
+    let ast =
+        parse("captured = &f(&16)").expect("the maximum capture placeholder index should parse");
+    assert!(matches!(
+        &ast[0],
+        Ast::Bind(_, _, rhs)
+            if matches!(rhs.as_ref(), Ast::Capture(_, _, args)
+                if matches!(args.as_slice(), [Ast::CapturePlaceholder(_, 16)]))
+    ));
+
+    let error = parse("captured = &f(&17)")
+        .expect_err("capture placeholder indices above sixteen must be rejected");
+    assert_eq!(error.reason(), ParseErrorReason::ExpressionSyntax);
+    assert_eq!(error.span(), &Span { start: 15, end: 17 });
+    assert!(error
+        .detail()
+        .contains("capture placeholder index must be between &1 and &16"));
+
+    let error =
+        parse("captured = &f(&0)").expect_err("capture placeholder indices must remain one-based");
+    assert_eq!(error.reason(), ParseErrorReason::ExpressionSyntax);
+    assert!(error
+        .detail()
+        .contains("capture placeholder index must be between &1 and &16"));
+
+    let error = parse("captured = &f(&999999999999999999999999999999999999)")
+        .expect_err("oversized capture placeholder indices must be rejected");
+    assert_eq!(error.reason(), ParseErrorReason::ExpressionSyntax);
+    assert!(error
+        .detail()
+        .contains("capture placeholder index must be between &1 and &16"));
+}
+
+#[test]
 fn test_identity_anonymous_capture_reports_id_hint() {
     let err = parse("f = &(&1)").expect_err("identity anonymous capture must fail");
     assert!(err.message().contains("use `&id` instead"));

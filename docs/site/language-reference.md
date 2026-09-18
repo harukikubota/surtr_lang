@@ -444,6 +444,7 @@ result: Option<Int> = do::<Option> {
 - `&`name`` / `&`Type::method`` はそれぞれ通常の capture と同義
 - `&`op`` は 2 引数 callable に lower される
 - `&`op`(args...)`` は placeholder capture 規約で lower される
+- capture placeholder は `&1` から `&16` までとし、`&0` と `&17` 以上は parse error とする
 - bare capture を `inspect` / `to_string` すると、metadata があれば
   `FnCapture(module: M, name: f, sig: sig)` 形式で表示する
 - callable の表示は `Result` などの tagged value、struct / record field、List、HashMap、tuple の内部にも再帰適用する

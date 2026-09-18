@@ -28,6 +28,8 @@ enum FlowOpKind {
     Choice,
 }
 
+const MAX_CAPTURE_PLACEHOLDER_INDEX: usize = 16;
+
 impl Parser<'_> {
     pub(super) fn assignment_ast(
         assign_tok: Token,
@@ -2450,14 +2452,20 @@ impl Parser<'_> {
             let Some(index) = n.to_usize() else {
                 return Err(ParseError::syntax(
                     crate::error::ParseErrorReason::ExpressionSyntax,
-                    "capture placeholder index must be a positive integer",
+                    format!(
+                        "capture placeholder index must be between &1 and &{}",
+                        MAX_CAPTURE_PLACEHOLDER_INDEX
+                    ),
                     span,
                 ));
             };
-            if index == 0 {
+            if !(1..=MAX_CAPTURE_PLACEHOLDER_INDEX).contains(&index) {
                 return Err(ParseError::syntax(
                     crate::error::ParseErrorReason::ExpressionSyntax,
-                    "capture placeholder index starts at &1",
+                    format!(
+                        "capture placeholder index must be between &1 and &{}",
+                        MAX_CAPTURE_PLACEHOLDER_INDEX
+                    ),
                     span,
                 ));
             }

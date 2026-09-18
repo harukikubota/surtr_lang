@@ -2,10 +2,10 @@
 
 ## 1. 状態・目的・範囲
 
-- 状態: 未実装の統合仕様。旧 Extractor 返却更改案、Matcher / projection 案、事前引数差分案を本書へ統合した。本書だけで変更後の契約を読めるものとし、削除する原案や添付には依存しない。
+- 状態: 段階実装中の統合仕様。旧 Extractor 返却更改案、Matcher / projection 案、事前引数差分案を本書へ統合した。本書だけで変更後の契約を読めるものとし、削除する原案や添付には依存しない。実施済みの範囲は 1.1 に記録する。
 - level: 4。構文、型規則、評価規則、SafeBind の失敗返却先、フェーズ間契約を変更する。
 - 現行動作の正本: [要件定義v9.md](要件定義v9.md)、[do intrinsic](../docs/dev/Do_intrinsic_spec.md)、[診断](../docs/dev/diagnostics.md)。本書と異なる現行契約は、実装に先立つ仕様反映で本書へ整合させる。文書作成だけで実装済みと扱わない。
-- 今回の作業は仕様文書の統合と参照整理まで。製品コード、実行可能なテスト、現行動作の説明は変更しない。
+- 実装は依存順に1機能ずつ進め、完了範囲だけを 1.1 に追記する。未掲載の機能は未実装として扱う。
 
 1つの修正タスクとして次を実施する。
 
@@ -20,7 +20,11 @@
 
 Pattern AST は第一級の値にしない。一般関数の partial application、通常 Closure との暗黙変換、独自の capture / lifetime 規則、MatchResult の Monad 化、専用 Opcode の追加は本タスクの機能要件に含めない。一般の Option / Result API は維持する。
 
-本書のコードは変更後の仕様例であり、現行 REPL で動く例ではない。
+本書のコードは変更後の仕様例であり、実施済み項目を除いて現行 REPL で動く例ではない。
+
+### 1.1 実施済み項目
+
+- 2026-09-19: capture placeholder の index を `1..=16` に制限した。Spire が `&16` を受理し、`&0`、`&17` 以上、整数表現範囲を超える巨大 index を `ExpressionSyntax` で拒否する。`doc/要件定義v9.md`、`docs/dev/diagnostics.md`、`docs/site/capture-operator.md`、`docs/site/language-reference.md` と parser 回帰テストを同じ境界へ整合した。projection `_N` は未実装であり、この完了項目には含めない。
 
 ## 2. 現状と変更後
 
