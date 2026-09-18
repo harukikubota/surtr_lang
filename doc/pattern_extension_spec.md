@@ -25,6 +25,7 @@ Pattern AST は第一級の値にしない。一般関数の partial application
 ### 1.1 実施済み項目
 
 - 2026-09-19: capture placeholder の index を `1..=16` に制限した。Spire が `&16` を受理し、`&0`、`&17` 以上、整数表現範囲を超える巨大 index を `ExpressionSyntax` で拒否する。`doc/要件定義v9.md`、`docs/dev/diagnostics.md`、`docs/site/capture-operator.md`、`docs/site/language-reference.md` と parser 回帰テストを同じ境界へ整合した。projection `_N` は未実装であり、この完了項目には含めない。
+- 2026-09-19: 既存 Pattern surface の OR 文脈を明確化した。`match` と、変数テーブルへ書き込まない `is_match` は root / nested OR を許可する。`is_match` の全 alternative に通常 bind / as alias を禁止する既存規則は維持する。`=` / `=?`、do `<-` / `=?` の root / nested OR を Spire が `PatternSyntax` と `|` の span で拒否する。`if_let` / `if_let_then` は既存 Expr 文法による構文拒否を維持する。match の root OR 展開・guard 共有・nested OR と、input / RHS の通常 match 内 OR は維持した。MatchResult / ExtractorClosure / apply_pattern は未実装であり、本項目に含めない。
 
 ## 2. 現状と変更後
 
@@ -385,7 +386,7 @@ direct = *{|value: Int|
 
 旧名 apply_matcher は consumer 名 / 予約語 / alias として残さない。旧 builtin entry や名前による特殊処理があれば削除する。同名の通常 user function があっても、その引数を Pattern と解釈する compatibility route は設けない。
 
-OR Pattern `p1 | p2` は match arm 内だけに許可する。apply_pattern、if_let、if_let_then、is_match、Bind、SafeBind、do binding では nested OR も拒否する。match には既存の arm body 型と bind scope 規則を適用する。apply_pattern に OR の projection slot 統一規則は追加しない。
+OR Pattern `p1 | p2` は `match` arm と、変数テーブルへ書き込まない Pattern consumer（本仕様では `is_match`）に許可する。両者で nested OR も許可する。`is_match` は全 alternative の通常 bind / as alias を引き続き禁止する。apply_pattern、if_let、if_let_then、Bind、SafeBind、do binding では nested OR も拒否する。`if_let` の alternative 間で binding variable list が一致する場合も例外を設けない。match には既存の arm body 型と bind scope 規則を適用する。apply_pattern に OR の projection slot 統一規則は追加しない。
 
 ```surtr
 value |> apply_pattern(Bounds::between(0, 10, _1: Int))
@@ -431,6 +432,16 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 
 ### 10.2 実装順序
 
+#### 独立した先行単位: 既存 Pattern surface の OR 文脈制限
+
+§9 の OR 制限は返却 carrier 更改に依存しないため、capture index と同様に独立して実装する。level 4。対象は Spire の Pattern 文脈と正本・診断・利用者説明であり、Extractor の Option 契約や match の既存 OR engine は変更しない。
+
+1. parser 直接テストで `=` / `=?`、do `<-` / `=?` の root / nested OR が `PatternSyntax` と `|` の span で拒否されることを Red にする。既存 Expr 文法で拒否される `if_let` / `if_let_then` も固定する。
+2. 共通 Pattern 文法で LHS 全体を解析し、binding operator を確認した境界で root / nested OR を拒否する。OR / alias / 型注釈 / operator 間の改行を独自の token 走査で再解釈しない。statement の Expr 再解析で確定済み binding の拒否診断を失わないようにする。
+3. bare / qualified `is_match` の root / nested OR を許可し、全 alternative の binding 禁止を維持する。match の root OR 展開・guard 共有・nested OR と、RHS / consumer input の通常 match 内 OR を維持する。`rtk cargo nextest run -p spire` で確認し、独立レビュー後に §11.2 の CI / 標準テスト全件を実行する。
+
+未実装の `apply_pattern` と ExtractorClosure への接続は本単位に含めず、各機能実装時に同じ制限を適用する。
+
 各段階は同じ修正タスクの依存順序であり、旧 Option 契約と新 MatchResult 契約を並存させる公開段階を設けない。
 
 1. 正本の仕様を本書へ整合させ、canonical type / variant / consumer metadata と旧経路の削除対象を確定する。
@@ -472,7 +483,7 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 10. 通常 Result target と MatchResult 本文 target の SafeBind が RHS Result.Err、LHS Extractor.Err、nested Err、通常 Pattern Error の kind / message / location / cause を保持して早期 return する。失敗後の本文は未評価で、成功終端には明示 constructor を必要とする。
 11. Result RHS は外側一段だけ射影する。non-Result partial pass-through、total non-Result 拒否と型エラー優先を維持する。apply_pattern は Result input を自動射影しない。
 12. nested 通常 Closure / ExtractorClosure / do の failure target が最も近い正しい境界を指す。do の Result-effect 保存、Alternative empty、Monad 単独拒否、REPL Error 表示と継続を維持する。
-13. 通常 bind が外へ漏れず、事前引数 / pin は同じ Pattern 内の新規 bind を参照しない。OR の match 限定、予約語 shadowing 拒否、既存 Regex::is_match の qualified 通常 call / capture、pipe と projection の分離、通常 Expr 内の _N 残存と宣言 / bind / shadow の拒否が成立する。
+13. 通常 bind が外へ漏れず、事前引数 / pin は同じ Pattern 内の新規 bind を参照しない。OR を match と binding-free な is_match で許可し、binding consumer で拒否する。is_match は全 alternative の binding を拒否する。予約語 shadowing 拒否、既存 Regex::is_match の qualified 通常 call / capture、pipe と projection の分離、通常 Expr 内の _N 残存と宣言 / bind / shadow の拒否が成立する。
 14. list / string uncons の成功と空入力 Error、builtin / user-defined / local の consumer 一貫性、不正 tag / metadata の内部 failure を検証する。
 15. 旧専用経路と互換 fallback が残らず、正本・標準 @doc・実装・テストが同じ契約を示す。
 16. Extractor::from_result が単一入力の Result-returning callable を受理し、単値 / tuple / Unit payload を維持する。生成時は本体未評価、各 occurrence 到達時は一回評価とし、元 Error の保持、Result payload の追加 unwrap なし、通常 Closure の capture、Option / raw payload / 入力 arity 不一致の静的拒否を確認する。

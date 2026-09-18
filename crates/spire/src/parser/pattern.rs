@@ -6,7 +6,7 @@ use super::Parser;
 
 impl Parser<'_> {
     pub(super) fn parse_do_pattern_statement(&mut self) -> Result<AstDoStatement, ParseError> {
-        let mut pat = self.parse_bind_pattern()?;
+        let mut pat = self.parse_pattern()?;
         if let AstPattern::Var(name_span, name) = &pat {
             if matches!(self.peek(), Token::Colon) {
                 self.advance();
@@ -22,6 +22,7 @@ impl Parser<'_> {
                 self.peek_span(),
             ));
         }
+        self.reject_binding_or(&pat)?;
         let operator_span = self.advance().span;
         let rhs = self.parse_expr()?;
         self.ensure_non_associative_assignment(&rhs)?;
@@ -47,8 +48,13 @@ impl Parser<'_> {
     }
 
     pub(super) fn parse_pattern_bind_stmt(&mut self) -> Result<Ast, ParseError> {
-        let pat = self.parse_bind_pattern()?;
+        let pat = self.parse_pattern()?;
         let assign_tok = self.peek().clone();
+        // Recognize the full LHS before applying the binding restriction.
+        // `<-` also commits an OR rejection if do lookahead stopped at a newline.
+        if matches!(assign_tok, Token::Bind | Token::SafeBind | Token::LeftArrow) {
+            self.reject_binding_or(&pat)?;
+        }
         if !matches!(assign_tok, Token::Bind | Token::SafeBind) {
             return Err(ParseError::syntax(
                 crate::error::ParseErrorReason::PatternSyntax,
@@ -102,7 +108,7 @@ impl Parser<'_> {
                 }));
             }
 
-            let first = parser.parse_bind_pattern()?;
+            let first = parser.parse_pattern()?;
             parser.skip_newlines();
             let end = if matches!(parser.peek(), Token::Comma) {
                 parser.advance();
@@ -110,7 +116,7 @@ impl Parser<'_> {
                 if matches!(parser.peek(), Token::DotDot) {
                     parser.advance();
                     parser.skip_newlines();
-                    let tail = parser.parse_bind_pattern()?;
+                    let tail = parser.parse_pattern()?;
                     parser.skip_newlines();
                     let end = parser.expect(&Token::RBrack)?;
                     return Ok(AstPattern::ListCons(
@@ -128,14 +134,14 @@ impl Parser<'_> {
                     let end = parser.expect(&Token::RBrack)?;
                     return Ok(super::fixed_bind_list_pattern(sp.start, end.end, items));
                 }
-                items.push(parser.parse_bind_pattern()?);
+                items.push(parser.parse_pattern()?);
                 while matches!(parser.peek(), Token::Comma) {
                     parser.advance();
                     parser.skip_newlines();
                     if matches!(parser.peek(), Token::RBrack) {
                         break;
                     }
-                    items.push(parser.parse_bind_pattern()?);
+                    items.push(parser.parse_pattern()?);
                 }
                 parser.skip_newlines();
                 let end = parser.expect(&Token::RBrack)?;
@@ -152,7 +158,7 @@ impl Parser<'_> {
         })
     }
 
-    fn parse_bind_pattern(&mut self) -> Result<AstPattern, ParseError> {
+    pub(super) fn parse_pattern(&mut self) -> Result<AstPattern, ParseError> {
         let mut alts = vec![self.parse_bind_pattern_atom()?];
         loop {
             self.skip_newlines();
@@ -357,7 +363,7 @@ impl Parser<'_> {
                         parser.skip_newlines();
                         let mut inners = Vec::new();
                         if !matches!(parser.peek(), Token::RParen) {
-                            inners.push(parser.parse_bind_pattern()?);
+                            inners.push(parser.parse_pattern()?);
                             parser.skip_newlines();
                             while matches!(parser.peek(), Token::Comma) {
                                 parser.advance();
@@ -365,7 +371,7 @@ impl Parser<'_> {
                                 if matches!(parser.peek(), Token::RParen) {
                                     break;
                                 }
-                                inners.push(parser.parse_bind_pattern()?);
+                                inners.push(parser.parse_pattern()?);
                                 parser.skip_newlines();
                             }
                         }
@@ -433,7 +439,7 @@ impl Parser<'_> {
             Token::LParen => self.with_parse_nesting(sp.clone(), |parser| {
                 parser.advance();
                 parser.skip_newlines();
-                let first = parser.parse_bind_pattern()?;
+                let first = parser.parse_pattern()?;
                 parser.skip_newlines();
                 if matches!(parser.peek(), Token::Comma) {
                     parser.advance();
@@ -448,7 +454,7 @@ impl Parser<'_> {
                             },
                         ));
                     }
-                    let mut items = vec![first, parser.parse_bind_pattern()?];
+                    let mut items = vec![first, parser.parse_pattern()?];
                     parser.skip_newlines();
                     while matches!(parser.peek(), Token::Comma) {
                         parser.advance();
@@ -456,7 +462,7 @@ impl Parser<'_> {
                         if matches!(parser.peek(), Token::RParen) {
                             break;
                         }
-                        items.push(parser.parse_bind_pattern()?);
+                        items.push(parser.parse_pattern()?);
                         parser.skip_newlines();
                     }
                     let end = parser.expect(&Token::RParen)?;
@@ -481,9 +487,52 @@ impl Parser<'_> {
         }
     }
 
-    /// Match pattern now reuses the same grammar as bind/safe-bind patterns.
-    pub(super) fn parse_match_pattern(&mut self) -> Result<AstPattern, ParseError> {
-        self.parse_bind_pattern()
+    fn reject_binding_or(&self, pattern: &AstPattern) -> Result<(), ParseError> {
+        let Some(or_span) = pattern_or_span(pattern) else {
+            return Ok(());
+        };
+        let pipe = self
+            .tokens
+            .iter()
+            .find(|sp| {
+                matches!(sp.token, Token::Pipe)
+                    && or_span.start <= sp.span.start
+                    && sp.span.end <= or_span.end
+            })
+            .ok_or_else(|| {
+                ParseError::syntax(
+                    crate::error::ParseErrorReason::CompilerInvariant,
+                    "OR Pattern has no source pipe token",
+                    or_span.clone(),
+                )
+            })?;
+        Err(ParseError::syntax(
+            crate::error::ParseErrorReason::PatternSyntax,
+            "OR patterns are not allowed in binding patterns",
+            pipe.span.clone(),
+        ))
+    }
+}
+
+fn pattern_or_span(pattern: &AstPattern) -> Option<&Span> {
+    match pattern {
+        AstPattern::Or(span, _) => Some(span),
+        AstPattern::As(_, inner, _, _, _) => pattern_or_span(inner),
+        AstPattern::ListCons(_, head, tail) => {
+            pattern_or_span(head).or_else(|| pattern_or_span(tail))
+        }
+        AstPattern::Constructor(_, _, items)
+        | AstPattern::Call(_, _, items)
+        | AstPattern::Tuple(_, items) => items.iter().find_map(pattern_or_span),
+        AstPattern::Var(_, _)
+        | AstPattern::Annotated(_, _, _)
+        | AstPattern::Wildcard(_)
+        | AstPattern::Pin(_, _)
+        | AstPattern::ListNil(_)
+        | AstPattern::IntLit(_, _)
+        | AstPattern::StrLit(_, _)
+        | AstPattern::BoolLit(_, _)
+        | AstPattern::DurationLit(_, _) => None,
     }
 }
 

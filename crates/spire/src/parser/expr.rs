@@ -2007,7 +2007,7 @@ impl Parser<'_> {
         }
         self.advance();
         self.skip_newlines();
-        let pattern = self.parse_match_pattern()?;
+        let pattern = self.parse_pattern()?;
         self.skip_newlines();
         if matches!(self.peek(), Token::Comma) {
             return Err(ParseError::syntax(
@@ -2693,11 +2693,11 @@ impl Parser<'_> {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             self.skip_newlines();
-            let mut patterns = expand_top_level_or_pattern(self.parse_match_pattern()?);
+            let mut patterns = expand_top_level_or_pattern(self.parse_pattern()?);
             while matches!(self.peek(), Token::Pipe) {
                 self.advance();
                 self.skip_newlines();
-                patterns.extend(expand_top_level_or_pattern(self.parse_match_pattern()?));
+                patterns.extend(expand_top_level_or_pattern(self.parse_pattern()?));
             }
             let guard = if matches!(self.peek(), Token::When) {
                 self.advance();

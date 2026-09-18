@@ -98,8 +98,16 @@ impl Parser<'_> {
                                 && self.stmt_has_top_level_at_from(save);
                             let looks_like_bind =
                                 starts_structural_bind || starts_annotated_ident_bind;
+                            // The Pattern parser has recognized a complete LHS
+                            // and its operator, independent of newline lookahead.
+                            let rejected_pattern_binding = err.reason()
+                                == crate::error::ParseErrorReason::PatternSyntax
+                                && matches!(
+                                    self.peek(),
+                                    Token::Bind | Token::SafeBind | Token::LeftArrow
+                                );
                             self.pos = save;
-                            if looks_like_bind {
+                            if looks_like_bind || rejected_pattern_binding {
                                 return Err(err);
                             }
                         }

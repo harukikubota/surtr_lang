@@ -5187,6 +5187,195 @@ fn test_match_or_pattern_expands_into_multiple_arms() {
 }
 
 #[test]
+fn test_or_pattern_is_rejected_in_binding_contexts() {
+    for pattern in [
+        "1 | 2",
+        "1 |\n2",
+        "1\n| 2",
+        "1 | 2\n",
+        "1 |\n2\n",
+        "value | _",
+        "value |\n_",
+        "_ | _",
+        "True | False",
+        "\"a\" | \"b\"",
+        "(1 | 2)",
+        "(1 | 2, _)",
+        "[1 | 2]",
+        "[_, ..tail | _]",
+        "Some(1 | 2)",
+        "extract(1 | 2)",
+        "Matchers::extract(1 | 2)",
+        "(1 | 2) @ whole",
+        "1 | 2\n@ whole\n",
+        "Some(1 | 2)\n@ whole\n",
+        "(1 | 2) @ whole\n: Int\n",
+    ] {
+        for operator in ["=", "=?"] {
+            let source = format!("{pattern} {operator} input");
+            let error = parse(&source).expect_err(&source);
+            assert_eq!(error.reason(), ParseErrorReason::PatternSyntax, "{source}");
+            assert!(
+                error
+                    .message()
+                    .contains("OR patterns are not allowed in binding patterns"),
+                "{source}: {error:?}"
+            );
+            assert_eq!(
+                &source[error.span().start..error.span().end],
+                "|",
+                "{source}"
+            );
+        }
+        for operator in ["<-", "=?"] {
+            let source = format!("do {{ {pattern} {operator} input\n Ok(()) }}");
+            let error = parse(&source).expect_err(&source);
+            assert_eq!(error.reason(), ParseErrorReason::PatternSyntax, "{source}");
+            assert!(
+                error
+                    .message()
+                    .contains("OR patterns are not allowed in binding patterns"),
+                "{source}: {error:?}"
+            );
+            assert_eq!(
+                &source[error.span().start..error.span().end],
+                "|",
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_is_match_accepts_root_and_nested_or_without_bindings() {
+    for consumer in ["is_match", "Kernel::is_match"] {
+        for pattern in [
+            "1 | 2",
+            "True | False",
+            "_ | _",
+            "\"a\" | \"b\"",
+            "(1 | 2, _)",
+            "[1 | 2]",
+            "[_, .._ | _]",
+            "Some(1 | 2)",
+            "extract(1 | 2)",
+            "Err(Timeout | ConnectionReset)",
+        ] {
+            let source = format!("{consumer}(input, {pattern})");
+            let ast = parse(&source).expect(&source);
+            let Ast::Match(_, _, arms) = &ast[0] else {
+                panic!("Expected predicate match lowering: {source}");
+            };
+            assert_eq!(arms.len(), 2, "{source}");
+            assert!(
+                matches!(arms[0].body, Ast::Lit(_, Lit::Bool(true))),
+                "{source}"
+            );
+            assert!(
+                matches!(arms[1].body, Ast::Lit(_, Lit::Bool(false))),
+                "{source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_is_match_or_still_rejects_all_binding_positions() {
+    for consumer in ["is_match", "Kernel::is_match"] {
+        for pattern in [
+            "value | _",
+            "_ | value",
+            "Some(value | _)",
+            "[_, ..tail | _]",
+            "(1 | 2) @ whole",
+        ] {
+            let source = format!("{consumer}(input, {pattern})");
+            let error = parse(&source).expect_err(&source);
+            assert!(
+                error.message().contains("does not allow binding variables"),
+                "{source}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_match_nested_or_patterns_are_preserved() {
+    fn contains_or(pattern: &AstPattern) -> bool {
+        match pattern {
+            AstPattern::Or(_, _) => true,
+            AstPattern::Tuple(_, items)
+            | AstPattern::Constructor(_, _, items)
+            | AstPattern::Call(_, _, items) => items.iter().any(contains_or),
+            AstPattern::ListCons(_, head, tail) => contains_or(head) || contains_or(tail),
+            AstPattern::As(_, inner, _, _, _) => contains_or(inner),
+            _ => false,
+        }
+    }
+    for pattern in [
+        "(1 | 2, _)",
+        "[1 | 2]",
+        "[_, ..tail | _]",
+        "Some(1 | 2)",
+        "extract(1 | 2)",
+        "Err(Timeout | ConnectionReset @ error: Error)",
+        "(1 | 2) @ whole",
+    ] {
+        let source = format!("match input {{ {pattern} => 1, _ => 0, }}");
+        let ast = parse(&source).expect(&source);
+        let Ast::Match(_, _, arms) = &ast[0] else {
+            panic!("Expected Match: {source}");
+        };
+        assert_eq!(
+            arms.len(),
+            2,
+            "nested OR must not expand outer arms: {source}"
+        );
+        assert!(contains_or(&arms[0].pattern), "{source}");
+    }
+    for source in [
+        "value = match input { 1 | 2 => 1, _ => 0, }",
+        "value =? Ok(match input { 1 | 2 => 1, _ => 0, })",
+        "do { value <- Ok(match input { 1 | 2 => 1, _ => 0, })\n Ok(value) }",
+        "do { value =? Ok(match input { 1 | 2 => 1, _ => 0, })\n Ok(value) }",
+        "is_match(match input { 1 | 2 => 1, _ => 0, }, _)",
+        "if_let(input, _, match input { 1 | 2 => 1, _ => 0, }, 0)",
+        "if_let_then(input, _, print(match input { 1 | 2 => 1, _ => 0, }))",
+        "Regex::is_match(regex, input)",
+        "predicate = &Regex::is_match",
+    ] {
+        parse(source).expect(source);
+    }
+}
+
+#[test]
+fn test_if_let_or_patterns_remain_syntax_errors() {
+    for consumer in [
+        "if_let",
+        "Kernel::if_let",
+        "if_let_then",
+        "Kernel::if_let_then",
+    ] {
+        for pattern in [
+            "1 | 2",
+            "Some(1 | 2)",
+            "[1 | 2]",
+            "(1 | 2, _)",
+            "value | value",
+            "Some(value) | Some(value)",
+        ] {
+            let branches = if consumer.ends_with("then") {
+                ", ()"
+            } else {
+                ", 1, 0"
+            };
+            let source = format!("{consumer}(input, {pattern}{branches})");
+            parse(&source).expect_err(&source);
+        }
+    }
+}
+
+#[test]
 fn test_match_guard_is_parsed_on_each_expanded_or_arm() {
     let ast = parse(
         r#"x = match n {

@@ -38,6 +38,8 @@ pattern position の `[head, ..tail]` は sequence decomposition として読ま
 
 ## guard と exhaustiveness
 
+OR Pattern `p1 | p2` は `match` arm と、変数を束縛しない `is_match` で使えます。子 Pattern に入れ子にすることもできます。`is_match` はすべての alternative で変数束縛を禁止します。`=` / `=?`、do binding、`if_let` / `if_let_then` の Pattern では、入れ子の OR も構文エラーになります。`if_let` は alternative 間で束縛変数が一致していても OR を許可しません。これらの input / RHS にある通常の `match` では OR を使えます。
+
 - `match` は網羅性が必要
 - guard があっても、全体として取りこぼしがあると compile error
 - `Boolean`, `Result`, enum では特に exhaustiveness が重要
