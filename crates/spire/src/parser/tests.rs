@@ -5157,7 +5157,7 @@ fn test_match_as_and_annotated_pattern_is_accepted() {
 }
 
 #[test]
-fn test_match_or_pattern_expands_into_multiple_arms() {
+fn test_match_or_pattern_remains_in_single_arm() {
     let ast = parse(
         r#"x = match value {
   "a" | "b" => 1,
@@ -5169,16 +5169,15 @@ fn test_match_or_pattern_expands_into_multiple_arms() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
-                assert_eq!(arms.len(), 3);
+                assert_eq!(arms.len(), 2);
                 assert!(matches!(
                     &arms[0].pattern,
-                    AstPattern::StrLit(_, s) if s == "a"
+                    AstPattern::Or(_, alternatives)
+                        if alternatives.len() == 2
+                            && matches!(&alternatives[0], AstPattern::StrLit(_, s) if s == "a")
+                            && matches!(&alternatives[1], AstPattern::StrLit(_, s) if s == "b")
                 ));
-                assert!(matches!(
-                    &arms[1].pattern,
-                    AstPattern::StrLit(_, s) if s == "b"
-                ));
-                assert!(matches!(&arms[2].pattern, AstPattern::Wildcard(_)));
+                assert!(matches!(&arms[1].pattern, AstPattern::Wildcard(_)));
             }
             _ => panic!("Expected Match"),
         },
@@ -5349,7 +5348,19 @@ fn test_match_nested_or_patterns_are_preserved() {
 }
 
 #[test]
-fn test_if_let_or_patterns_remain_syntax_errors() {
+fn test_if_let_or_patterns_use_pattern_grammar() {
+    fn contains_or(pattern: &AstPattern) -> bool {
+        match pattern {
+            AstPattern::Or(..) => true,
+            AstPattern::Constructor(_, _, children)
+            | AstPattern::Call(_, _, children)
+            | AstPattern::Tuple(_, children) => children.iter().any(contains_or),
+            AstPattern::ListCons(_, head, tail) => contains_or(head) || contains_or(tail),
+            AstPattern::As(_, inner, _, _, _) => contains_or(inner),
+            _ => false,
+        }
+    }
+
     for consumer in [
         "if_let",
         "Kernel::if_let",
@@ -5370,13 +5381,22 @@ fn test_if_let_or_patterns_remain_syntax_errors() {
                 ", 1, 0"
             };
             let source = format!("{consumer}(input, {pattern}{branches})");
-            parse(&source).expect_err(&source);
+            let ast = parse(&source).expect(&source);
+            let call = &ast[0];
+            let Ast::App(_, _, args) = call else {
+                panic!("expected call: {source}");
+            };
+            let RecordLitArg::Positional(Ast::Match(_, _, arms)) = &args[1] else {
+                panic!("expected pattern carrier: {source}");
+            };
+            assert_eq!(arms.len(), 1, "{source}");
+            assert!(contains_or(&arms[0].pattern), "{source}");
         }
     }
 }
 
 #[test]
-fn test_match_guard_is_parsed_on_each_expanded_or_arm() {
+fn test_match_guard_is_shared_by_or_alternatives() {
     let ast = parse(
         r#"x = match n {
   1 | 2 when 0 < n `and` n < 10 => n,
@@ -5388,10 +5408,12 @@ fn test_match_guard_is_parsed_on_each_expanded_or_arm() {
     match &ast[0] {
         Ast::Bind(_, _, rhs) => match rhs.as_ref() {
             Ast::Match(_, _, arms) => {
-                assert_eq!(arms.len(), 3);
+                assert_eq!(arms.len(), 2);
+                assert!(
+                    matches!(&arms[0].pattern, AstPattern::Or(_, alternatives) if alternatives.len() == 2)
+                );
                 assert!(arms[0].guard.is_some());
-                assert!(arms[1].guard.is_some());
-                assert!(arms[2].guard.is_none());
+                assert!(arms[1].guard.is_none());
             }
             _ => panic!("Expected Match"),
         },

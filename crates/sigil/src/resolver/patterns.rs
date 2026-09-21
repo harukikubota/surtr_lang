@@ -7,7 +7,7 @@ impl Resolver {
         &mut self,
         pat: AstPattern,
     ) -> Result<ResolvedPattern, ResolveError> {
-        if let Some(error) = duplicate_pattern_binding_error(&pat) {
+        if let Some(error) = duplicate_pattern_binding_error(&pat)? {
             return Err(error);
         }
         let mut seen = HashMap::<String, Span>::new();
@@ -279,12 +279,51 @@ impl Resolver {
                     .map(|item| self.resolve_pattern_inner(item, seen))
                     .collect::<Result<Vec<_>, _>>()?,
             )),
-            AstPattern::Or(_, items) => Ok(ResolvedPattern::Or(
-                items
-                    .into_iter()
-                    .map(|item| self.resolve_pattern_inner(item, seen))
-                    .collect::<Result<Vec<_>, _>>()?,
-            )),
+            AstPattern::Or(span, items) => {
+                let mut resolved_items = Vec::with_capacity(items.len());
+                let mut common_ids = HashMap::<String, u32>::new();
+                let mut common_bindings = Vec::<(String, Span)>::new();
+                for (index, item) in items.into_iter().enumerate() {
+                    let mut alternative_seen = seen.clone();
+                    let mut bindings = Vec::new();
+                    collect_pattern_bindings_preorder(&item, &mut bindings)?;
+                    let (mut resolved, ids) = self.with_child_scope(|child| {
+                        let resolved = child.resolve_pattern_inner(item, &mut alternative_seen)?;
+                        let ids = bindings
+                            .iter()
+                            .map(|(name, _)| {
+                                child.scope.lookup(name).ok_or_else(|| ResolveError {
+                                    message: format!(
+                                        "Internal invariant broken: OR binding `{name}` was not defined"
+                                    ),
+                                    span: span.clone(),
+                                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                                        reason: crate::error::ResolveErrorReason::Pattern,
+                                        subject: None,
+                                    },
+                                    related_labels: Vec::new(),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        Ok((resolved, ids))
+                    })?;
+                    if index == 0 {
+                        for ((name, _), id) in bindings.iter().zip(ids) {
+                            common_ids.insert(name.clone(), id);
+                        }
+                        common_bindings = bindings;
+                    } else {
+                        remap_or_pattern_bindings(&mut resolved, &common_ids)?;
+                    }
+                    resolved_items.push(resolved);
+                }
+                for (name, span) in common_bindings {
+                    seen.insert(name.clone(), span);
+                    let id = common_ids[&name];
+                    self.scope.define_with_id(&name, id);
+                }
+                Ok(ResolvedPattern::Or(resolved_items))
+            }
             AstPattern::As(_span, inner, alias, alias_ty, alias_span) => {
                 let resolved_inner = self.resolve_pattern_inner(*inner, seen)?;
                 let alias_id = self.define_pattern_binding(alias, alias_span, seen)?;
@@ -317,10 +356,77 @@ impl Resolver {
     }
 }
 
-fn duplicate_pattern_binding_error(pat: &AstPattern) -> Option<ResolveError> {
-    let mut occurrences = Vec::new();
-    collect_pattern_bindings_preorder(pat, &mut occurrences);
+fn remap_or_pattern_bindings(
+    pattern: &mut ResolvedPattern,
+    common_ids: &HashMap<String, u32>,
+) -> Result<(), ResolveError> {
+    match pattern {
+        ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
+            id.unique_id = common_ids
+                .get(&id.name)
+                .copied()
+                .ok_or_else(|| ResolveError {
+                    message: format!(
+                        "Internal invariant broken: OR binding `{}` has no common identity",
+                        id.name
+                    ),
+                    span: id.span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Pattern,
+                        subject: None,
+                    },
+                    related_labels: Vec::new(),
+                })?;
+        }
+        ResolvedPattern::As(inner, alias, _) => {
+            remap_or_pattern_bindings(inner, common_ids)?;
+            alias.unique_id = common_ids
+                .get(&alias.name)
+                .copied()
+                .ok_or_else(|| ResolveError {
+                    message: format!(
+                        "Internal invariant broken: OR alias `{}` has no common identity",
+                        alias.name
+                    ),
+                    span: alias.span.clone(),
+                    diagnostic: crate::error::ResolveErrorDiagnostic {
+                        reason: crate::error::ResolveErrorReason::Pattern,
+                        subject: None,
+                    },
+                    related_labels: Vec::new(),
+                })?;
+        }
+        ResolvedPattern::Constructor(_, items)
+        | ResolvedPattern::Extractor(_, items)
+        | ResolvedPattern::Tuple(items)
+        | ResolvedPattern::Or(items) => {
+            for item in items {
+                remap_or_pattern_bindings(item, common_ids)?;
+            }
+        }
+        ResolvedPattern::ListCons(head, tail) => {
+            remap_or_pattern_bindings(head, common_ids)?;
+            remap_or_pattern_bindings(tail, common_ids)?;
+        }
+        ResolvedPattern::Pin(_)
+        | ResolvedPattern::Wildcard(_)
+        | ResolvedPattern::ListNil(_)
+        | ResolvedPattern::IntLit(_, _)
+        | ResolvedPattern::StrLit(_, _)
+        | ResolvedPattern::BoolLit(_, _)
+        | ResolvedPattern::DurationLit(_, _) => {}
+    }
+    Ok(())
+}
 
+fn duplicate_pattern_binding_error(pat: &AstPattern) -> Result<Option<ResolveError>, ResolveError> {
+    let mut occurrences = Vec::new();
+    collect_pattern_bindings_preorder(pat, &mut occurrences)?;
+
+    Ok(duplicate_binding_occurrences_error(occurrences))
+}
+
+fn duplicate_binding_occurrences_error(occurrences: Vec<(String, Span)>) -> Option<ResolveError> {
     let mut by_name = HashMap::<String, Vec<Span>>::new();
     let mut duplicate_name = None;
     for (name, span) in occurrences {
@@ -355,30 +461,63 @@ fn duplicate_pattern_binding_error(pat: &AstPattern) -> Option<ResolveError> {
     })
 }
 
-fn collect_pattern_bindings_preorder(pat: &AstPattern, out: &mut Vec<(String, Span)>) {
+fn collect_pattern_bindings_preorder(
+    pat: &AstPattern,
+    out: &mut Vec<(String, Span)>,
+) -> Result<(), ResolveError> {
     match pat {
         AstPattern::Var(span, name) | AstPattern::Annotated(span, name, _) => {
             out.push((name.clone(), span.clone()));
         }
         AstPattern::As(_, inner, alias, _, alias_span) => {
             if let Some(items) = pattern_sequence_items(inner) {
-                collect_as_sequence_bindings(items, alias, alias_span, out);
+                collect_as_sequence_bindings(items, alias, alias_span, out)?;
             } else {
-                collect_pattern_bindings_preorder(inner, out);
+                collect_pattern_bindings_preorder(inner, out)?;
                 out.push((alias.clone(), alias_span.clone()));
             }
         }
         AstPattern::ListCons(_, head, tail) => {
-            collect_pattern_bindings_preorder(head, out);
-            collect_pattern_bindings_preorder(tail, out);
+            collect_pattern_bindings_preorder(head, out)?;
+            collect_pattern_bindings_preorder(tail, out)?;
         }
         AstPattern::Constructor(_, _, inners)
         | AstPattern::Call(_, _, inners)
-        | AstPattern::Tuple(_, inners)
-        | AstPattern::Or(_, inners) => {
+        | AstPattern::Tuple(_, inners) => {
             for inner in inners {
-                collect_pattern_bindings_preorder(inner, out);
+                collect_pattern_bindings_preorder(inner, out)?;
             }
+        }
+        AstPattern::Or(span, alternatives) => {
+            let mut common = None::<Vec<(String, Span)>>;
+            for alternative in alternatives {
+                let mut bindings = Vec::new();
+                collect_pattern_bindings_preorder(alternative, &mut bindings)?;
+                if let Some(error) = duplicate_binding_occurrences_error(bindings.clone()) {
+                    return Err(error);
+                }
+                if let Some(expected) = &common {
+                    let expected_names = expected.iter().map(|(name, _)| name).collect::<Vec<_>>();
+                    let actual_names = bindings.iter().map(|(name, _)| name).collect::<Vec<_>>();
+                    if expected_names != actual_names {
+                        return Err(ResolveError {
+                            message: format!(
+                                "OR pattern alternatives must bind the same binding names in the same order: expected {:?}, got {:?}",
+                                expected_names, actual_names
+                            ),
+                            span: span.clone(),
+                            diagnostic: crate::error::ResolveErrorDiagnostic {
+                                reason: crate::error::ResolveErrorReason::Pattern,
+                                subject: None,
+                            },
+                            related_labels: Vec::new(),
+                        });
+                    }
+                } else {
+                    common = Some(bindings);
+                }
+            }
+            out.extend(common.unwrap_or_default());
         }
         AstPattern::Pin(_, _)
         | AstPattern::Wildcard(_)
@@ -388,6 +527,7 @@ fn collect_pattern_bindings_preorder(pat: &AstPattern, out: &mut Vec<(String, Sp
         | AstPattern::BoolLit(_, _)
         | AstPattern::DurationLit(_, _) => {}
     }
+    Ok(())
 }
 
 fn collect_as_sequence_bindings(
@@ -395,7 +535,7 @@ fn collect_as_sequence_bindings(
     alias: &str,
     alias_span: &Span,
     out: &mut Vec<(String, Span)>,
-) {
+) -> Result<(), ResolveError> {
     // Binding order contract: direct bindings of an as-pattern sequence come
     // first, followed by the parent alias, direct child aliases, and then
     // recursively deferred child patterns. `pattern_sequence_items` flattens
@@ -407,7 +547,7 @@ fn collect_as_sequence_bindings(
     for item in items {
         match item {
             AstPattern::Var(..) | AstPattern::Annotated(..) => {
-                collect_pattern_bindings_preorder(item, out);
+                collect_pattern_bindings_preorder(item, out)?;
             }
             AstPattern::As(_, child, child_alias, _, child_alias_span)
                 if matches!(
@@ -415,7 +555,7 @@ fn collect_as_sequence_bindings(
                     AstPattern::Var(..) | AstPattern::Annotated(..)
                 ) =>
             {
-                collect_pattern_bindings_preorder(child, out);
+                collect_pattern_bindings_preorder(child, out)?;
                 deferred_aliases.push((child_alias.clone(), child_alias_span.clone()));
             }
             _ => deferred_patterns.push(item),
@@ -425,8 +565,9 @@ fn collect_as_sequence_bindings(
     out.push((alias.to_string(), alias_span.clone()));
     out.extend(deferred_aliases);
     for item in deferred_patterns {
-        collect_pattern_bindings_preorder(item, out);
+        collect_pattern_bindings_preorder(item, out)?;
     }
+    Ok(())
 }
 
 fn pattern_sequence_items(pattern: &AstPattern) -> Option<Vec<&AstPattern>> {

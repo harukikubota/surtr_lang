@@ -246,10 +246,9 @@ impl Checker {
 
         previous_arms.iter().any(|prev_arm| {
             prev_arm.guard.is_none()
-                && matches!(
-                    prev_arm.pattern,
-                    TypedMatchPattern::Constructor { tag: 0, .. }
-                )
+                && Self::match_or_alternative_matches(&prev_arm.pattern, &|pattern| {
+                    matches!(pattern, TypedMatchPattern::Constructor { tag: 0, .. })
+                })
         })
     }
 
@@ -273,11 +272,15 @@ impl Checker {
             Ty::Result(_, _) => {
                 let has_ok = arms.iter().any(|arm| {
                     arm.guard.is_none()
-                        && matches!(&arm.pattern, TypedMatchPattern::Constructor { tag: 0, .. })
+                        && Self::match_or_alternative_matches(&arm.pattern, &|pattern| {
+                            matches!(pattern, TypedMatchPattern::Constructor { tag: 0, .. })
+                        })
                 });
                 let has_err = arms.iter().any(|arm| {
                     arm.guard.is_none()
-                        && matches!(&arm.pattern, TypedMatchPattern::Constructor { tag: 1, .. })
+                        && Self::match_or_alternative_matches(&arm.pattern, &|pattern| {
+                            matches!(pattern, TypedMatchPattern::Constructor { tag: 1, .. })
+                        })
                 });
 
                 if has_ok && has_err {
@@ -308,10 +311,16 @@ impl Checker {
             }
             Ty::List(_) => {
                 let has_nil = arms.iter().any(|arm| {
-                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::ListNil)
+                    arm.guard.is_none()
+                        && Self::match_or_alternative_matches(&arm.pattern, &|pattern| {
+                            matches!(pattern, TypedMatchPattern::ListNil)
+                        })
                 });
                 let has_cons = arms.iter().any(|arm| {
-                    arm.guard.is_none() && matches!(&arm.pattern, TypedMatchPattern::ListCons(_, _))
+                    arm.guard.is_none()
+                        && Self::match_or_alternative_matches(&arm.pattern, &|pattern| {
+                            matches!(pattern, TypedMatchPattern::ListCons(_, _))
+                        })
                 });
                 if has_nil && has_cons {
                     Ok(())
@@ -339,19 +348,23 @@ impl Checker {
             Ty::Str => {
                 let has_empty = arms.iter().any(|arm| {
                     arm.guard.is_none()
-                        && matches!(&arm.pattern, TypedMatchPattern::StrLit(value) if value.is_empty())
+                        && Self::match_or_alternative_matches(&arm.pattern, &|pattern| {
+                            matches!(pattern, TypedMatchPattern::StrLit(value) if value.is_empty())
+                        })
                 });
                 let has_cons = arms.iter().any(|arm| {
                     arm.guard.is_none()
-                        && matches!(
-                            &arm.pattern,
-                            TypedMatchPattern::Extractor {
-                                input_ty,
-                                extractor,
-                                ..
-                            } if extractor.name == "uncons"
-                                && matches!(self.resolve_ty(input_ty), Ty::Str)
-                        )
+                        && Self::match_or_alternative_matches(&arm.pattern, &|pattern| {
+                            matches!(
+                                pattern,
+                                TypedMatchPattern::Extractor {
+                                    input_ty,
+                                    extractor,
+                                    ..
+                                } if extractor.name == "uncons"
+                                    && matches!(self.resolve_ty(input_ty), Ty::Str)
+                            )
+                        })
                 });
                 if has_empty && has_cons {
                     Ok(())
@@ -437,12 +450,25 @@ impl Checker {
         pattern: &TypedMatchPattern,
         variant: &crate::env::EnumVariantInfo,
     ) -> bool {
-        match pattern {
+        Self::match_or_alternative_matches(pattern, &|pattern| match pattern {
             TypedMatchPattern::Constructor { tag, .. } => *tag == variant.tag,
             TypedMatchPattern::BoolLit(value) if Self::surface_name(enum_name) == "Boolean" => {
                 variant.short_name == if *value { "True" } else { "False" }
             }
             _ => false,
+        })
+    }
+
+    fn match_or_alternative_matches(
+        pattern: &TypedMatchPattern,
+        predicate: &impl Fn(&TypedMatchPattern) -> bool,
+    ) -> bool {
+        match pattern {
+            TypedMatchPattern::Or(items) => items
+                .iter()
+                .any(|item| Self::match_or_alternative_matches(item, predicate)),
+            TypedMatchPattern::As(inner, _) => Self::match_or_alternative_matches(inner, predicate),
+            other => predicate(other),
         }
     }
 
@@ -710,25 +736,80 @@ impl Checker {
                     ));
                 }
                 let mut typed_items = Vec::with_capacity(items.len());
+                let mut common_bindings: Option<Vec<(ResolvedId, Ty)>> = None;
                 for item in items {
-                    let typed_item = self.check_match_subpattern(item, expected_ty)?;
-                    if self.match_pattern_has_bindings(&typed_item) {
-                        let span = Self::resolved_pattern_span(item);
-                        return Err(self
-                            .pattern_error(
-                                TypeDiagnosticReason::PatternShapeMismatch,
-                                PatternKind::Other,
-                                Some("pattern alternatives".into()),
-                                Some("patterns without direct bindings".into()),
-                                Some(expected_ty),
-                                None,
-                                None,
-                                Vec::new(),
-                                &span,
-                            )
-                            .with_hint("Use an outer as-pattern such as `A | B @ err: Error`."));
+                    self.env.push_var_scope();
+                    let checked = (|| {
+                        let typed_item = self.check_match_subpattern(item, expected_ty)?;
+                        let mut ids = Vec::new();
+                        Self::collect_or_binding_ids(item, &mut ids);
+                        let bindings = ids
+                            .into_iter()
+                            .map(|id| {
+                                let ty = self.env.lookup_var(id.unique_id).cloned().ok_or_else(
+                                    || {
+                                        self.typecheck_invariant_error(
+                                            format!(
+                                                "OR alternative binding `{}` has no inferred type",
+                                                id.name
+                                            ),
+                                            &id.span,
+                                        )
+                                    },
+                                )?;
+                                Ok((id, ty))
+                            })
+                            .collect::<Result<Vec<_>, TypeError>>()?;
+                        Ok((typed_item, bindings))
+                    })();
+                    self.env.pop_var_scope();
+                    let (typed_item, bindings) = checked?;
+                    if let Some(common) = &common_bindings {
+                        if common.len() != bindings.len() {
+                            return Err(self.typecheck_invariant_error(
+                                "resolved OR alternatives have different binding counts",
+                                &Self::resolved_pattern_span(item),
+                            ));
+                        }
+                        for (expected_id, expected_ty) in common {
+                            let (id, actual_ty) = bindings
+                                .iter()
+                                .find(|(id, _)| id.unique_id == expected_id.unique_id)
+                                .ok_or_else(|| {
+                                    self.typecheck_invariant_error(
+                                        "resolved OR alternatives do not share binding identities",
+                                        &Self::resolved_pattern_span(item),
+                                    )
+                                })?;
+                            if expected_id.name != id.name {
+                                return Err(self.typecheck_invariant_error(
+                                    "resolved OR alternatives do not share binding names",
+                                    &id.span,
+                                ));
+                            }
+                            if !self.types_compatible(expected_ty, actual_ty)
+                                || self.resolve_ty(expected_ty) != self.resolve_ty(actual_ty)
+                            {
+                                return Err(self.pattern_error(
+                                    TypeDiagnosticReason::PatternTypeMismatch,
+                                    PatternKind::Other,
+                                    Some(format!("OR pattern binding `{}`", id.name)),
+                                    Some(self.ty_name(&self.resolve_ty(expected_ty))),
+                                    Some(actual_ty),
+                                    None,
+                                    None,
+                                    Vec::new(),
+                                    &id.span,
+                                ));
+                            }
+                        }
+                    } else {
+                        common_bindings = Some(bindings);
                     }
                     typed_items.push(typed_item);
+                }
+                for (id, ty) in common_bindings.unwrap_or_default() {
+                    self.env.bind_var(id.unique_id, self.resolve_ty(&ty));
                 }
                 Ok(TypedMatchPattern::Or(typed_items))
             }
@@ -1103,30 +1184,36 @@ impl Checker {
         }
     }
 
-    fn match_pattern_has_bindings(&self, pat: &TypedMatchPattern) -> bool {
+    fn collect_or_binding_ids(pat: &ResolvedPattern, out: &mut Vec<ResolvedId>) {
         match pat {
-            TypedMatchPattern::Binding(_) => true,
-            TypedMatchPattern::As(_, _) => true,
-            TypedMatchPattern::Tuple(items) | TypedMatchPattern::Or(items) => items
-                .iter()
-                .any(|item| self.match_pattern_has_bindings(item)),
-            TypedMatchPattern::Constructor { fields, .. } => fields
-                .iter()
-                .any(|item| self.match_pattern_has_bindings(item)),
-            TypedMatchPattern::ListCons(head, tail) => {
-                self.match_pattern_has_bindings(head) || self.match_pattern_has_bindings(tail)
+            ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => out.push(id.clone()),
+            ResolvedPattern::As(inner, alias, _) => {
+                Self::collect_or_binding_ids(inner, out);
+                out.push(alias.clone());
             }
-            TypedMatchPattern::Extractor { items, .. } => items
-                .iter()
-                .any(|item| self.match_pattern_has_bindings(item)),
-            TypedMatchPattern::Wildcard
-            | TypedMatchPattern::Pin { .. }
-            | TypedMatchPattern::BoolLit(_)
-            | TypedMatchPattern::IntLit(_)
-            | TypedMatchPattern::StrLit(_)
-            | TypedMatchPattern::DurationLit(_)
-            | TypedMatchPattern::ErrorKind(_)
-            | TypedMatchPattern::ListNil => false,
+            ResolvedPattern::Or(items) => {
+                if let Some(first) = items.first() {
+                    Self::collect_or_binding_ids(first, out);
+                }
+            }
+            ResolvedPattern::Tuple(items)
+            | ResolvedPattern::Constructor(_, items)
+            | ResolvedPattern::Extractor(_, items) => {
+                for item in items {
+                    Self::collect_or_binding_ids(item, out);
+                }
+            }
+            ResolvedPattern::ListCons(head, tail) => {
+                Self::collect_or_binding_ids(head, out);
+                Self::collect_or_binding_ids(tail, out);
+            }
+            ResolvedPattern::Pin(_)
+            | ResolvedPattern::Wildcard(_)
+            | ResolvedPattern::ListNil(_)
+            | ResolvedPattern::IntLit(_, _)
+            | ResolvedPattern::StrLit(_, _)
+            | ResolvedPattern::BoolLit(_, _)
+            | ResolvedPattern::DurationLit(_, _) => {}
         }
     }
 }

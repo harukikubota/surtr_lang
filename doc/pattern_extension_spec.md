@@ -26,6 +26,7 @@ Pattern AST は第一級の値にしない。一般関数の partial application
 
 - 2026-09-19: capture placeholder の index を `1..=16` に制限した。Spire が `&16` を受理し、`&0`、`&17` 以上、整数表現範囲を超える巨大 index を `ExpressionSyntax` で拒否する。`doc/要件定義v9.md`、`docs/dev/diagnostics.md`、`docs/site/capture-operator.md`、`docs/site/language-reference.md` と parser 回帰テストを同じ境界へ整合した。projection `_N` は未実装であり、この完了項目には含めない。
 - 2026-09-19: 既存 Pattern surface の OR 文脈を明確化した。`match` と、変数テーブルへ書き込まない `is_match` は root / nested OR を許可する。`is_match` の全 alternative に通常 bind / as alias を禁止する既存規則は維持する。`=` / `=?`、do `<-` / `=?` の root / nested OR を Spire が `PatternSyntax` と `|` の span で拒否する。`if_let` / `if_let_then` は既存 Expr 文法による構文拒否を維持する。match の root OR 展開・guard 共有・nested OR と、input / RHS の通常 match 内 OR は維持した。MatchResult / ExtractorClosure / apply_pattern は未実装であり、本項目に含めない。
+- 2026-09-21: branch consumer の OR を拡張した。`match` の root / nested OR は同一 arm 内に保持し、`if_let` / `if_let_then` の第2引数も共通 Pattern 文法で解析する。OR alternative の bind 名・順序と canonical 型を一致させ、共通 scope / slot へ合流する。`match` の guard は OR 全体の照合成功後に一度だけ評価し、`if_let` 系は全候補失敗時だけ fallback へ進む。`is_match` の bind 禁止、binding operator の OR 拒否、未実装の `apply_pattern` は変更していない。
 
 ## 2. 現状と変更後
 
@@ -308,8 +309,8 @@ result = apply_pattern([10, 20], [temporary, _1: Int])
 | consumer | OK 後に子 Pattern も成功 | Extractor の Err / 子 Pattern の不一致 |
 |---|---|---|
 | `match` arm | arm body | Error を破棄し、次の alternative / arm |
-| `if_let` | then branch | Error を破棄し、else branch |
-| `if_let_then` | branch | Error を破棄し、branch 未評価で Unit |
+| `if_let` | then branch | Error を破棄し、次の OR alternative。全候補失敗で else branch |
+| `if_let_then` | branch | Error を破棄し、次の OR alternative。全候補失敗で branch 未評価の Unit |
 | `is_match` | True | Error を破棄し、False |
 | SafeBind `=?` | bind して続行 | 現在の failure target の preserve / discard policy |
 | `apply_pattern` | projection の Result::Ok | 元の Error を保持した Result::Err |
@@ -386,7 +387,19 @@ direct = *{|value: Int|
 
 旧名 apply_matcher は consumer 名 / 予約語 / alias として残さない。旧 builtin entry や名前による特殊処理があれば削除する。同名の通常 user function があっても、その引数を Pattern と解釈する compatibility route は設けない。
 
-OR Pattern `p1 | p2` は `match` arm と、変数テーブルへ書き込まない Pattern consumer（本仕様では `is_match`）に許可する。両者で nested OR も許可する。`is_match` は全 alternative の通常 bind / as alias を引き続き禁止する。apply_pattern、if_let、if_let_then、Bind、SafeBind、do binding では nested OR も拒否する。`if_let` の alternative 間で binding variable list が一致する場合も例外を設けない。match には既存の arm body 型と bind scope 規則を適用する。apply_pattern に OR の projection slot 統一規則は追加しない。
+OR Pattern `p1 | p2` は target のホワイトリストで許可する。対象は `match` arm、`if_let`、`if_let_then`、`is_match` のみで、いずれも root / nested OR を許可する。`=` / `=?`、do `<-` / `=?`、`apply_pattern` は binding 数が 0 でも OR を拒否する。`apply_pattern` に OR の projection slot 統一規則や複数の失敗 Error の選択規則を追加しない。
+
+`match` / `if_let` / `if_let_then` の同一 OR 内では、各 alternative の `bind_result_list = [(変数名, canonical な解決済み型), ...]` が、個数・名前・型・順序まで完全一致しなければならない。型表記の一致や暗黙 coercion で代用しない。空 list 同士は一致する。外側にある bind はその OR の比較対象に含めない。alternative 内の重複 bind は拒否する。成功した alternative の値だけを共通 binding に確定し、全 Pattern 成功前の部分 bind は guard / 成功 branch へ公開しない。各 OR は左から順に照合し、最初の成功で停止する。`match` の guard / arm body と `if_let` 系の成功 branch は共有し、一度だけ評価する。
+
+`if_let` / `if_let_then` は入力を一回評価し、各 alternative の失敗時は次の alternative を試す。全候補失敗時だけ else branch / Unit へ進む。`match` の網羅性検査を要求せず、従来の暗黙 wildcard fallback を維持する。`is_match` は全 alternative の通常 bind / as alias を引き続き禁止するため、空の `bind_result_list` だけを許す。`if_let` 系の OR 受理は canonical Kernel consumer identity に限定し、同名の通常 call を Pattern と再解釈しない。
+
+`match` の OR は一つの arm の Pattern である。いずれかの alternative が成功したら、その arm の guard を一度だけ評価する。guard が `False` なら同じ OR の残り候補へ戻らず次の arm へ進む。網羅性判定では guard のない arm の OR alternatives を同じ arm の被覆として集計する。
+
+```surtr
+if_let(pair, (1, x) | (2, x), x, 0)             # 許可: 両候補とも x の型が一致
+if_let_then(pair, (1, x) | (2, x), print(x))  # 許可: 成功時だけ実行
+if_let(pair, (1, x) | (2, y), x, 0)             # 拒否: binding 名が異なる
+```
 
 ```surtr
 value |> apply_pattern(Bounds::between(0, 10, _1: Int))
@@ -442,6 +455,15 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 
 未実装の `apply_pattern` と ExtractorClosure への接続は本単位に含めず、各機能実装時に同じ制限を適用する。
 
+#### 独立した後続単位: branch consumer の binding OR
+
+前項の実施済み範囲を履歴として維持し、`match` / `if_let` / `if_let_then` の root / nested OR を共通 binding 契約へ統一する。level 4。`is_match` の binding 禁止、binding operator と `apply_pattern` の OR 拒否は変更しない。旧 root OR arm 展開と `if_let` 系の Expr 引数からの Pattern 再構築を、新しい OR 経路と並存させない。
+
+1. Spire / Sigil の直接テストを先に Red にする。`if_let` 系の第2引数を共通 Pattern 文法で解析し、canonical consumer identity に接続する。match root OR を単一 arm 内の OR として保持し、alternative ごとの binding 名・順序と共有 scope を解決する。
+2. Scar のテストで同名異型・異名・個数不一致を拒否し、同一の canonical 型 list を受理する。match root OR の網羅性を alternative ごとに集計し、guard は arm 単位で判定する。`if_let` 系の暗黙 fallback は維持し、網羅性要求を増やさない。
+3. Forge のテストで各 alternative の分解・bind を共通 slot に合流させ、guard / 成功 branch の一回評価、左から右への短絡、失敗後の binding 非公開を検証する。outer Extractor の再実行を招く全 Pattern の直積展開はしない。
+4. script 成功・拒否 fixture と利用者説明・診断を更新し、独立レビュー後に §11.2 の CI / 標準テスト全件を実行する。
+
 各段階は同じ修正タスクの依存順序であり、旧 Option 契約と新 MatchResult 契約を並存させる公開段階を設けない。
 
 1. 正本の仕様を本書へ整合させ、canonical type / variant / consumer metadata と旧経路の削除対象を確定する。
@@ -483,7 +505,7 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 10. 通常 Result target と MatchResult 本文 target の SafeBind が RHS Result.Err、LHS Extractor.Err、nested Err、通常 Pattern Error の kind / message / location / cause を保持して早期 return する。失敗後の本文は未評価で、成功終端には明示 constructor を必要とする。
 11. Result RHS は外側一段だけ射影する。non-Result partial pass-through、total non-Result 拒否と型エラー優先を維持する。apply_pattern は Result input を自動射影しない。
 12. nested 通常 Closure / ExtractorClosure / do の failure target が最も近い正しい境界を指す。do の Result-effect 保存、Alternative empty、Monad 単独拒否、REPL Error 表示と継続を維持する。
-13. 通常 bind が外へ漏れず、事前引数 / pin は同じ Pattern 内の新規 bind を参照しない。OR を match と binding-free な is_match で許可し、binding consumer で拒否する。is_match は全 alternative の binding を拒否する。予約語 shadowing 拒否、既存 Regex::is_match の qualified 通常 call / capture、pipe と projection の分離、通常 Expr 内の _N 残存と宣言 / bind / shadow の拒否が成立する。
+13. 通常 bind が外へ漏れず、事前引数 / pin は同じ Pattern 内の新規 bind を参照しない。OR は match / if_let / if_let_then で各 alternative の binding 名・canonical 型・順序が一致する場合に許可する。空 list の OR も同じ規則で扱う。if_let 系は全候補失敗時だけ fallback に進み、網羅性要求を持たない。is_match は OR を許可するが全 alternative の binding を拒否する。`=` / `=?`、do binding、apply_pattern は bind 数にかかわらず OR を拒否する。予約語 shadowing 拒否、既存 Regex::is_match の qualified 通常 call / capture、pipe と projection の分離、通常 Expr 内の _N 残存と宣言 / bind / shadow の拒否が成立する。
 14. list / string uncons の成功と空入力 Error、builtin / user-defined / local の consumer 一貫性、不正 tag / metadata の内部 failure を検証する。
 15. 旧専用経路と互換 fallback が残らず、正本・標準 @doc・実装・テストが同じ契約を示す。
 16. Extractor::from_result が単一入力の Result-returning callable を受理し、単値 / tuple / Unit payload を維持する。生成時は本体未評価、各 occurrence 到達時は一回評価とし、元 Error の保持、Result payload の追加 unwrap なし、通常 Closure の capture、Option / raw payload / 入力 arity 不一致の静的拒否を確認する。

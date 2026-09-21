@@ -474,9 +474,9 @@ result: Option<Int> = do::<Option> {
 - `String` リテラル
 - list pattern
 - 入れ子になった constructor pattern
-- OR Pattern `p1 | p2`（`match` arm と binding-free な `is_match`。子 Pattern 内でも使用可能）
+- OR Pattern `p1 | p2`（`match` arm、`if_let`、`if_let_then`、binding-free な `is_match`。子 Pattern 内でも使用可能）
 
-`is_match` は全 alternative で変数束縛を禁止します。`=` / `=?`、do binding、`if_let` / `if_let_then` の Pattern では、入れ子の OR も構文エラーです。`if_let` は alternative 間で束縛変数が一致していても OR を許可しません。これらの input / RHS にある通常 `match` の arm 内 OR は許可されます。
+`match` / `if_let` / `if_let_then` の同一 OR 内では、全 alternative の束縛変数名・解決済み型・順序が一致する必要があります。`if_let` 系は全候補失敗時に fallback へ進み、網羅性を要求しません。`is_match` は全 alternative で変数束縛を禁止します。`=` / `=?`、do binding の Pattern では、入れ子の OR も構文エラーです。これらの input / RHS にある通常 `match` の arm 内 OR は許可されます。
 
 構造体の constructor pattern は attached extractor `Type::deconstruct(...)` を通ります。  
 詳細は `./structs.md` と `./extractors.md` を参照してください。

@@ -1296,6 +1296,48 @@ impl Checker {
                 bindings.insert(id.unique_id, source.clone());
                 self.match_provenance_bindings(inner, source, bindings);
             }
+            TypedMatchPattern::Or(items) => {
+                let alternatives = items
+                    .iter()
+                    .map(|item| {
+                        let mut local = bindings.clone();
+                        self.match_provenance_bindings(item, source, &mut local);
+                        local
+                    })
+                    .collect::<Vec<_>>();
+                let Some(first) = alternatives.first() else {
+                    return;
+                };
+                let binding_ids = first
+                    .keys()
+                    .filter(|id| !bindings.contains_key(id))
+                    .copied()
+                    .collect::<HashSet<_>>();
+                for alternative in &alternatives {
+                    let ids = alternative
+                        .keys()
+                        .filter(|id| !bindings.contains_key(id))
+                        .copied()
+                        .collect::<HashSet<_>>();
+                    assert_eq!(
+                        ids, binding_ids,
+                        "typed OR alternatives must publish identical binding IDs"
+                    );
+                }
+                for id in binding_ids {
+                    let sources = alternatives
+                        .iter()
+                        .map(|alternative| {
+                            alternative
+                                .get(&id)
+                                .cloned()
+                                .expect("typed OR alternative must publish shared binding")
+                        })
+                        .collect::<Vec<_>>();
+                    let ty = sources[0].1.clone();
+                    bindings.insert(id, (self.common_constructor_provenance(&sources), ty));
+                }
+            }
             TypedMatchPattern::Tuple(items) => {
                 for (index, item) in items.iter().enumerate() {
                     self.match_provenance_bindings(
@@ -1339,5 +1381,52 @@ impl Checker {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn or_binding_joins_constructor_provenance_from_all_alternatives() {
+        let checker = Checker::new(TypecheckContext::default());
+        let binding = ResolvedId {
+            name: "value".into(),
+            qualified_name: None,
+            unique_id: 42,
+            compiler_generated: false,
+            symbol_info: None,
+            span: Span { start: 0, end: 5 },
+        };
+        let pattern = TypedMatchPattern::Or(vec![
+            TypedMatchPattern::Constructor {
+                tag: 1,
+                fields: vec![TypedMatchPattern::Binding(binding.clone())],
+                field_offset: 0,
+            },
+            TypedMatchPattern::Constructor {
+                tag: 2,
+                fields: vec![TypedMatchPattern::Binding(binding.clone())],
+                field_offset: 0,
+            },
+        ]);
+        let source = (
+            Provenance::Variants(vec![
+                (1, vec![(Provenance::constrained("A".into()), Ty::Int)]),
+                (2, vec![(Provenance::constrained("B".into()), Ty::Int)]),
+            ]),
+            Ty::Enum("Choice".into(), Vec::new()),
+        );
+        let mut bindings = Bindings::new();
+        checker.match_provenance_bindings(&pattern, &source, &mut bindings);
+
+        let (provenance, _) = bindings
+            .get(&binding.unique_id)
+            .expect("OR must publish its shared binding");
+        assert!(matches!(provenance, Provenance::Intersection(sources)
+            if sources.len() == 2
+                && sources.iter().any(|source| source.0 == Provenance::constrained("A".into()))
+                && sources.iter().any(|source| source.0 == Provenance::constrained("B".into()))));
     }
 }

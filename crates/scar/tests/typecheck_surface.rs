@@ -77,6 +77,10 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         "match_bool_qualified_constructor_patterns_require_exhaustive_arms",
         match_bool_qualified_constructor_patterns_require_exhaustive_arms as fn(),
     ),
+    surface_case!(match_root_or_contributes_to_exhaustiveness),
+    surface_case!(match_root_or_as_alias_contributes_to_exhaustiveness),
+    surface_case!(if_let_or_shares_binding_type),
+    surface_case!(if_let_or_rejects_different_binding_types),
     (
         "safebind_total_pattern_rejects_plain_non_monad_rhs",
         safebind_total_pattern_rejects_plain_non_monad_rhs as fn(),
@@ -822,6 +826,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         "result_match_wildcard_self_after_ok_can_change_ok_payload_type",
         result_match_wildcard_self_after_ok_can_change_ok_payload_type as fn(),
     ),
+    surface_case!(result_match_wildcard_self_after_ok_or_can_change_ok_payload_type),
     (
         "result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape",
         result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape as fn(),
@@ -1581,6 +1586,54 @@ print(match flag {
     let err = typecheck(resolved)
         .expect_err("qualified Boolean constructor patterns should use enum exhaustiveness");
     assert!(err.message.contains("Non-exhaustive match. Missing: False"));
+}
+
+fn match_root_or_contributes_to_exhaustiveness() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"flag = True
+result = match flag { True | False => 1 }"#,
+    );
+    typecheck(resolved).expect("both Boolean alternatives cover the match");
+}
+
+fn match_root_or_as_alias_contributes_to_exhaustiveness() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"flag = True
+result = match flag { (True | False) @ whole => whole }"#,
+    );
+    typecheck(resolved).expect("OR alternatives remain exhaustive under an outer as-pattern");
+}
+
+fn if_let_or_shares_binding_type() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"pair = (1, 42)
+result = if_let(pair, (1, x) | (2, x), x, 0)
+if_let_then(pair, (1, x) | (2, x), print(to_string(x)))"#,
+    );
+    typecheck(resolved).expect("matching OR alternatives share one binding type");
+}
+
+fn if_let_or_rejects_different_binding_types() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"defenum Mixed { IntCase(Int), TextCase(String) }
+value: Mixed = Mixed::IntCase(1)
+result = if_let(value, Mixed::IntCase(x) | Mixed::TextCase(x), 1, 0)"#,
+    );
+    let error = typecheck(resolved).expect_err("OR binding types must match");
+    let diagnostic = error
+        .structured
+        .expect("OR type mismatch has structured data");
+    assert_eq!(
+        diagnostic.reason,
+        diagnostics::DiagnosticReason::Type(diagnostics::TypeDiagnosticReason::PatternTypeMismatch)
+    );
+    assert!(
+        matches!(&diagnostic.data, diagnostics::DiagnosticData::Pattern(data)
+            if data.name.as_deref() == Some("OR pattern binding `x`")
+                && data.expected_type.as_deref() == Some("Int")
+                && data.actual_type.as_deref() == Some("String")),
+        "{diagnostic:?}"
+    );
 }
 
 fn safebind_total_pattern_rejects_plain_non_monad_rhs() {
@@ -7950,6 +8003,19 @@ fn result_match_wildcard_self_after_ok_can_change_ok_payload_type() {
     assert!(typed
         .iter()
         .any(|node| matches!(node.node, TypedInner::Def(..))));
+}
+
+fn result_match_wildcard_self_after_ok_or_can_change_ok_payload_type() {
+    let resolved = resolve_with_builtin_prelude(
+        r#"def remap(value: Result<Int>) -> Result<String> {
+  match value {
+    Ok(inner) | Ok(inner) => Ok(to_string(inner)),
+    _ => value,
+  }
+}"#,
+    );
+
+    typecheck(resolved).expect("OR Ok arm should preserve Err-proven wildcard coercion");
 }
 
 fn result_match_wildcard_self_after_ok_can_keep_err_for_bind_shape() {

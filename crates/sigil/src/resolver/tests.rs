@@ -3537,6 +3537,141 @@ fn test_if_let_then_conversion() {
 }
 
 #[test]
+fn test_if_let_or_alternatives_share_one_binding_identity() {
+    let resolved = parse_and_resolve("result = if_let((1, 2), (1, value) | (value, 2), value, 0)")
+        .expect("both alternatives bind the same name");
+    let Resolved::Bind(_, _, rhs) = &resolved[0] else {
+        panic!("expected result binding");
+    };
+    let Resolved::IfLet(_, _, arms) = rhs.as_ref() else {
+        panic!("expected if_let, got {rhs:?}");
+    };
+    let ResolvedPattern::Or(alternatives) = &arms[0].pattern else {
+        panic!("expected one OR pattern in the success arm");
+    };
+    let [ResolvedPattern::Tuple(first), ResolvedPattern::Tuple(second)] = alternatives.as_slice()
+    else {
+        panic!("expected tuple alternatives");
+    };
+    let ResolvedPattern::Var(first_id) = &first[1] else {
+        panic!("expected first binding");
+    };
+    let ResolvedPattern::Var(second_id) = &second[0] else {
+        panic!("expected second binding");
+    };
+    let Resolved::Var(_, body_id) = &arms[0].body else {
+        panic!("expected bound value in then branch");
+    };
+    assert_eq!(first_id.unique_id, second_id.unique_id);
+    assert_eq!(first_id.unique_id, body_id.unique_id);
+}
+
+#[test]
+fn test_if_let_nested_or_alternatives_share_one_binding_identity() {
+    let resolved =
+        parse_and_resolve("result = if_let((1, (2, 3)), (1, (value, 3) | (2, value)), value, 0)")
+            .expect("nested alternatives bind the same name");
+    let Resolved::Bind(_, _, rhs) = &resolved[0] else {
+        panic!("expected result binding");
+    };
+    let Resolved::IfLet(_, _, arms) = rhs.as_ref() else {
+        panic!("expected if_let, got {rhs:?}");
+    };
+    let ResolvedPattern::Tuple(outer) = &arms[0].pattern else {
+        panic!("expected outer tuple");
+    };
+    let ResolvedPattern::Or(alternatives) = &outer[1] else {
+        panic!("expected nested OR");
+    };
+    let [ResolvedPattern::Tuple(first), ResolvedPattern::Tuple(second)] = alternatives.as_slice()
+    else {
+        panic!("expected tuple alternatives");
+    };
+    let ResolvedPattern::Var(first_id) = &first[0] else {
+        panic!("expected first binding");
+    };
+    let ResolvedPattern::Var(second_id) = &second[1] else {
+        panic!("expected second binding");
+    };
+    let Resolved::Var(_, body_id) = &arms[0].body else {
+        panic!("expected bound value in then branch");
+    };
+    assert_eq!(first_id.unique_id, second_id.unique_id);
+    assert_eq!(first_id.unique_id, body_id.unique_id);
+}
+
+#[test]
+fn test_if_let_then_or_binding_is_visible_in_success_block() {
+    let resolved =
+        parse_and_resolve("result = if_let_then((1, 2), (1, value) | (value, 2), print(value))")
+            .expect("if_let_then should resolve the common binding");
+    let Resolved::Bind(_, _, rhs) = &resolved[0] else {
+        panic!("expected result binding");
+    };
+    let Resolved::Match(_, _, arms) = rhs.as_ref() else {
+        panic!("expected lowered match");
+    };
+    let ResolvedPattern::Or(alternatives) = &arms[0].pattern else {
+        panic!("expected OR in the success arm");
+    };
+    let ResolvedPattern::Tuple(first) = &alternatives[0] else {
+        panic!("expected first tuple");
+    };
+    let ResolvedPattern::Var(bound_id) = &first[1] else {
+        panic!("expected bound value");
+    };
+    let Resolved::Block(_, body) = &arms[0].body else {
+        panic!("expected success block");
+    };
+    let Resolved::App(_, _, args) = &body[0] else {
+        panic!("expected print call");
+    };
+    let ResolvedRecordLitArg::Positional(Resolved::Var(_, used_id)) = &args[0] else {
+        panic!("expected bound value argument");
+    };
+    assert_eq!(bound_id.unique_id, used_id.unique_id);
+}
+
+#[test]
+fn test_if_let_or_alternatives_require_same_ordered_binding_names() {
+    for pattern in ["(1, left) | (right, 2)", "(left, right) | (right, left)"] {
+        let source = format!("result = if_let((1, 2), {pattern}, 1, 0)");
+        let error = parse_and_resolve(&source).expect_err(&source);
+        assert!(
+            error
+                .message
+                .contains("same binding names in the same order"),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn test_or_alternatives_do_not_resolve_pins_from_previous_alternative() {
+    let error = parse_and_resolve(
+        "result = match (1, 2) { (value, 1) | (^value, value) => value, _ => 0 }",
+    )
+    .expect_err("a pin may not see another alternative's binding");
+    assert!(
+        error
+            .message
+            .contains("Pinned pattern requires an existing value"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn test_or_duplicate_binding_in_one_alternative_keeps_related_labels() {
+    let error =
+        parse_and_resolve("result = match (1, 2) { (value, value) | (value, 2) => 0, _ => 0 }")
+            .expect_err("duplicate binding within one alternative must fail");
+    assert!(error
+        .message
+        .contains("Duplicate binding in pattern: value"));
+    assert_eq!(error.related_labels.len(), 2);
+}
+
+#[test]
 fn test_is_match_conversion() {
     let resolved = parse_and_resolve("x = is_match(Ok(1), Ok(_))").unwrap();
     match &resolved[0] {

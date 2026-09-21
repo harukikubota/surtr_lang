@@ -1,0 +1,4 @@
+phase: typecheck
+contains: Pattern type mismatch: expected Int, got String
+json: /reason = "PatternTypeMismatch"
+json: /data/name = "OR pattern binding `x`"

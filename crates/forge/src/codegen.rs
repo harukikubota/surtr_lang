@@ -3094,6 +3094,111 @@ mod tests {
     }
 
     #[test]
+    fn emit_match_or_binds_selected_constructor_payload_to_shared_slot() {
+        let mut gene = Codegen::new();
+        let binding = resolved_id("value", None, 201);
+        let source_ty = Ty::Int;
+        gene.state.slot_map.insert(200, 0);
+        gene.state.next_slot = 1;
+
+        gene.emit_match(
+            &local_var("source", 200, source_ty.clone()),
+            &[TypedMatchArm {
+                pattern: TypedMatchPattern::Or(vec![
+                    TypedMatchPattern::Constructor {
+                        tag: 1,
+                        fields: vec![TypedMatchPattern::Binding(binding.clone())],
+                        field_offset: 0,
+                    },
+                    TypedMatchPattern::Constructor {
+                        tag: 2,
+                        fields: vec![TypedMatchPattern::Binding(binding.clone())],
+                        field_offset: 0,
+                    },
+                ]),
+                guard: None,
+                body: local_var("value", binding.unique_id, Ty::Int),
+            }],
+        )
+        .expect("selected OR alternative should bind the shared variable");
+
+        let (opcodes, state) = gene.finalize().expect("labels should resolve");
+        assert_eq!(
+            opcodes
+                .iter()
+                .filter(|opcode| matches!(opcode, Opcode::GetField { field_index: 0 }))
+                .count(),
+            2,
+            "each alternative must reuse its test-time decomposition for binding"
+        );
+        let binding_slot = state.slot_map[&binding.unique_id];
+        assert_eq!(
+            opcodes
+                .iter()
+                .filter(|opcode| matches!(opcode,
+                    Opcode::StoreLocal(slot) if *slot == binding_slot
+                ) || matches!(opcode,
+                    Opcode::CopyLocal { dst_local_idx, .. } if *dst_local_idx == binding_slot
+                ))
+                .count(),
+            2,
+            "each successful alternative writes the same binding slot"
+        );
+    }
+
+    #[test]
+    fn emit_nested_match_or_binds_before_shared_guard_and_body() {
+        let mut gene = Codegen::new();
+        let binding = resolved_id("value", None, 211);
+        gene.state.slot_map.insert(210, 0);
+        gene.state.next_slot = 1;
+
+        gene.emit_match(
+            &local_var("source", 210, Ty::Tuple(vec![Ty::Int, Ty::Bool])),
+            &[TypedMatchArm {
+                pattern: TypedMatchPattern::Tuple(vec![
+                    TypedMatchPattern::IntLit(7.into()),
+                    TypedMatchPattern::Or(vec![
+                        TypedMatchPattern::As(
+                            Box::new(TypedMatchPattern::BoolLit(true)),
+                            binding.clone(),
+                        ),
+                        TypedMatchPattern::As(
+                            Box::new(TypedMatchPattern::BoolLit(false)),
+                            binding.clone(),
+                        ),
+                    ]),
+                ]),
+                guard: Some(local_var("value", binding.unique_id, Ty::Bool)),
+                body: local_var("value", binding.unique_id, Ty::Bool),
+            }],
+        )
+        .expect("nested OR bindings should be available to shared guard and body");
+
+        let (opcodes, state) = gene.finalize().expect("labels should resolve");
+        assert_eq!(
+            opcodes
+                .iter()
+                .filter(|opcode| matches!(opcode, Opcode::GetTupleField { .. }))
+                .count(),
+            2,
+            "outer tuple decomposition must not be repeated by OR binding"
+        );
+        let binding_slot = state.slot_map[&binding.unique_id];
+        assert_eq!(
+            opcodes
+                .iter()
+                .filter(|opcode| matches!(opcode,
+                    Opcode::StoreLocal(slot) if *slot == binding_slot
+                ) || matches!(opcode,
+                    Opcode::CopyLocal { dst_local_idx, .. } if *dst_local_idx == binding_slot
+                ))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
     fn stale_match_tuple_decomp_returns_codegen_error() {
         let mut gene = Codegen::new();
         let pat = TypedMatchPattern::Tuple(vec![
@@ -11401,7 +11506,8 @@ impl Codegen {
                 let success_label = self.fresh_label();
                 for item in items {
                     let next_label = self.fresh_label();
-                    self.emit_match_pattern_test(item, slot, next_label, err_span)?;
+                    let decomp = self.emit_match_pattern_test(item, slot, next_label, err_span)?;
+                    self.emit_match_pattern_bind(item, slot, Some(decomp), err_span)?;
                     self.emit_jump(success_label);
                     self.patch_label(next_label);
                 }

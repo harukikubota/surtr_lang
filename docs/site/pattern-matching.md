@@ -38,7 +38,14 @@ pattern position の `[head, ..tail]` は sequence decomposition として読ま
 
 ## guard と exhaustiveness
 
-OR Pattern `p1 | p2` は `match` arm と、変数を束縛しない `is_match` で使えます。子 Pattern に入れ子にすることもできます。`is_match` はすべての alternative で変数束縛を禁止します。`=` / `=?`、do binding、`if_let` / `if_let_then` の Pattern では、入れ子の OR も構文エラーになります。`if_let` は alternative 間で束縛変数が一致していても OR を許可しません。これらの input / RHS にある通常の `match` では OR を使えます。
+OR Pattern `p1 | p2` は `match` arm、`if_let`、`if_let_then`、変数を束縛しない `is_match` で使えます。子 Pattern に入れ子にすることもできます。`match` / `if_let` / `if_let_then` では、同じ OR の全候補が同じ順序で同じ名前・型の変数を束縛する必要があります。`is_match` はすべての候補で変数束縛を禁止します。`=` / `=?`、do binding の Pattern では、束縛数が 0 でも入れ子の OR を含めて構文エラーになります。これらの input / RHS にある通常の `match` では OR を使えます。
+
+```surtr
+pair = (2, 42)
+print(to_string(if_let(pair, (1, x) | (2, x), x, 0)))
+```
+
+`if_let` / `if_let_then` は左から最初に成功した候補の束縛を成功側で使い、全候補が失敗したときだけ else 側 / `Unit` に進みます。`match` の網羅性は要求しません。`match` では OR 全体が一つの arm なので、候補が成功した後の guard は一度だけ評価され、guard が `False` なら同じ OR の残り候補ではなく次の arm へ進みます。
 
 - `match` は網羅性が必要
 - guard があっても、全体として取りこぼしがあると compile error

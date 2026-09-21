@@ -7,3 +7,6 @@ print(to_string(is_match([2, 3], [1 | 2, 3])))
 print(to_string(is_match([2, 4], [1 | 2, 3])))
 print(to_string(is_match(Ok(2), Ok(1 | 2))))
 print(to_string(is_match(Ok(3), Ok(1 | 2))))
+empty: List<Int> = []
+print(to_string(is_match([1], Kernel::uncons(_head, _tail) | _all_match)))
+print(to_string(is_match(empty, Kernel::uncons(_head, _tail) | _all_match)))

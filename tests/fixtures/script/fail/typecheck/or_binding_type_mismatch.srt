@@ -1,0 +1,7 @@
+defenum Mixed {
+  Number(Int),
+  Text(String),
+}
+
+value: Mixed = Mixed::Number(1)
+print(to_string(if_let(value, Mixed::Number(x) | Mixed::Text(x), 1, 0)))

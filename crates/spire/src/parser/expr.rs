@@ -1556,6 +1556,8 @@ impl Parser<'_> {
                 self.advance();
                 let args = if path_name == "Kernel::is_match" {
                     self.parse_is_match_args()?
+                } else if matches!(path_name.as_str(), "Kernel::if_let" | "Kernel::if_let_then") {
+                    self.parse_if_let_args()?
                 } else {
                     self.parse_call_args()?
                 };
@@ -1772,6 +1774,8 @@ impl Parser<'_> {
             self.advance();
             let args = if name == "is_match" {
                 self.parse_is_match_args()?
+            } else if matches!(name.as_str(), "if_let" | "if_let_then") {
+                self.parse_if_let_args()?
             } else {
                 self.parse_call_args()?
             };
@@ -2007,7 +2011,7 @@ impl Parser<'_> {
         }
         self.advance();
         self.skip_newlines();
-        let pattern = self.parse_pattern()?;
+        let pattern_arg = self.parse_pattern_arg()?;
         self.skip_newlines();
         if matches!(self.peek(), Token::Comma) {
             return Err(ParseError::syntax(
@@ -2016,16 +2020,45 @@ impl Parser<'_> {
                 self.peek_span(),
             ));
         }
-        let pattern_expr = Ast::Match(
-            super::pattern_span(&pattern).clone(),
-            Box::new(Ast::Lit(super::pattern_span(&pattern).clone(), Lit::Unit)),
+        Ok(vec![term, pattern_arg])
+    }
+
+    fn parse_if_let_args(&mut self) -> Result<Vec<RecordLitArg>, ParseError> {
+        self.skip_newlines();
+        if matches!(self.peek(), Token::RParen) {
+            return Ok(Vec::new());
+        }
+        let mut args = vec![self.parse_record_lit_arg()?];
+        self.skip_newlines();
+        if !matches!(self.peek(), Token::Comma) {
+            return Ok(args);
+        }
+        self.advance();
+        self.skip_newlines();
+        args.push(self.parse_pattern_arg()?);
+        while matches!(self.peek(), Token::Comma) {
+            self.advance();
+            self.skip_newlines();
+            if matches!(self.peek(), Token::RParen) {
+                break;
+            }
+            args.push(self.parse_record_lit_arg()?);
+        }
+        Ok(args)
+    }
+
+    fn parse_pattern_arg(&mut self) -> Result<RecordLitArg, ParseError> {
+        let pattern = self.parse_pattern()?;
+        let span = super::pattern_span(&pattern).clone();
+        Ok(RecordLitArg::Positional(Ast::Match(
+            span.clone(),
+            Box::new(Ast::Lit(span.clone(), Lit::Unit)),
             vec![AstMatchArm {
                 pattern,
                 guard: None,
-                body: Ast::Lit(self.peek_span(), Lit::Unit),
+                body: Ast::Lit(span, Lit::Unit),
             }],
-        );
-        Ok(vec![term, RecordLitArg::Positional(pattern_expr)])
+        )))
     }
 
     fn finish_is_match_special_form(
@@ -2693,12 +2726,7 @@ impl Parser<'_> {
                 return Err(ParseError::incomplete("}", self.peek_span()));
             }
             self.skip_newlines();
-            let mut patterns = expand_top_level_or_pattern(self.parse_pattern()?);
-            while matches!(self.peek(), Token::Pipe) {
-                self.advance();
-                self.skip_newlines();
-                patterns.extend(expand_top_level_or_pattern(self.parse_pattern()?));
-            }
+            let pattern = self.parse_pattern()?;
             let guard = if matches!(self.peek(), Token::When) {
                 self.advance();
                 self.skip_newlines();
@@ -2708,13 +2736,11 @@ impl Parser<'_> {
             };
             self.expect(&Token::FatArrow)?;
             let body = self.parse_match_arm_body()?;
-            for pattern in patterns {
-                arms.push(AstMatchArm {
-                    pattern,
-                    guard: guard.clone(),
-                    body: body.clone(),
-                });
-            }
+            arms.push(AstMatchArm {
+                pattern,
+                guard,
+                body,
+            });
             self.skip_newlines();
             if matches!(self.peek(), Token::Comma) {
                 self.advance();
@@ -3103,13 +3129,6 @@ impl Parser<'_> {
     /// Match pattern now reuses the same grammar as bind/safe-bind patterns.
     pub(super) fn is_true_literal(expr: &Ast) -> bool {
         matches!(expr, Ast::Lit(_, Lit::Bool(true)))
-    }
-}
-
-fn expand_top_level_or_pattern(pattern: AstPattern) -> Vec<AstPattern> {
-    match pattern {
-        AstPattern::Or(_, patterns) => patterns,
-        pattern => vec![pattern],
     }
 }
 

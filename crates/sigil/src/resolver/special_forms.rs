@@ -172,7 +172,7 @@ impl Resolver {
         let [term, pattern_expr, then_expr, else_expr] =
             collect_fixed_positional_args(span.clone(), args, "if_let", 4)?;
 
-        let pattern = self.ast_expr_to_pattern(pattern_expr, "if_let")?;
+        let pattern = Self::pattern_from_parser_carrier(pattern_expr, "if_let")?;
         let fallback = AstPattern::Wildcard(span.clone());
 
         self.resolve_node(Ast::Match(
@@ -205,7 +205,7 @@ impl Resolver {
         let [term, pattern_expr, then_expr] =
             collect_fixed_positional_args(span.clone(), args, "if_let_then", 3)?;
 
-        let pattern = self.ast_expr_to_pattern(pattern_expr, "if_let_then")?;
+        let pattern = Self::pattern_from_parser_carrier(pattern_expr, "if_let_then")?;
         let unit_lit = Ast::Lit(span.clone(), Lit::Unit);
         let then_block = Ast::Block(
             span.clone(),
@@ -237,7 +237,7 @@ impl Resolver {
     ) -> Result<Resolved, ResolveError> {
         let [term, pattern_expr] =
             collect_fixed_positional_args(span.clone(), args, "is_match", 2)?;
-        let pattern = self.ast_expr_to_pattern(pattern_expr, "is_match")?;
+        let pattern = Self::pattern_from_parser_carrier(pattern_expr, "is_match")?;
 
         if pattern_has_binding_vars(&pattern) {
             return Err(ResolveError {
@@ -266,175 +266,22 @@ impl Resolver {
         ))
     }
 
-    fn ast_expr_to_pattern(
-        &self,
+    fn pattern_from_parser_carrier(
         expr: Ast,
         callee_name: &str,
     ) -> Result<AstPattern, ResolveError> {
-        match expr {
-            Ast::Var(span, name) => {
-                if name.starts_with('_') {
-                    Ok(AstPattern::Wildcard(span))
-                } else if Self::is_constructor_style_head(&name) {
-                    Ok(AstPattern::Constructor(span, name, Vec::new()))
-                } else {
-                    Ok(AstPattern::Var(span, name))
-                }
-            }
-            Ast::Path(span, path) => {
-                let full_name = path.segments.join("::");
-                if Self::is_constructor_style_head(&full_name) {
-                    Ok(AstPattern::Constructor(span, full_name, Vec::new()))
-                } else {
-                    Err(ResolveError {
-                        message: "Qualified patterns support constructor forms only".into(),
-                        span,
-                        diagnostic: crate::error::ResolveErrorDiagnostic {
-                            reason: crate::error::ResolveErrorReason::SpecialForm,
-                            subject: None,
-                        },
-                        related_labels: Vec::new(),
-                    })
-                }
-            }
-            Ast::Lit(span, lit) => match lit {
-                Lit::Int(n) => Ok(AstPattern::IntLit(span, n)),
-                Lit::Str(s) => Ok(AstPattern::StrLit(span, s)),
-                Lit::Bool(b) => Ok(AstPattern::BoolLit(span, b)),
-                Lit::Float(_) | Lit::Unit => Err(ResolveError {
-                    message: format!(
-                        "{} pattern only supports Int/String/Boolean literals",
-                        callee_name
-                    ),
-                    span,
-                    diagnostic: crate::error::ResolveErrorDiagnostic {
-                        reason: crate::error::ResolveErrorReason::SpecialForm,
-                        subject: None,
-                    },
-                    related_labels: Vec::new(),
-                }),
-            },
-            Ast::ListNil(span) => Ok(AstPattern::ListNil(span)),
-            Ast::ListCons(span, head, tail) => Ok(AstPattern::ListCons(
-                span,
-                Box::new(self.ast_expr_to_pattern(*head, callee_name)?),
-                Box::new(self.ast_expr_to_pattern(*tail, callee_name)?),
-            )),
-            Ast::ListLiteral(span, items) => {
-                let pats = items
-                    .into_iter()
-                    .map(|item| self.ast_expr_to_pattern(item, callee_name))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(fixed_pattern_list(span, pats))
-            }
-            Ast::TupleLiteral(span, items) => {
-                if items.len() == 1 {
-                    return Err(ResolveError {
-                        message: "1-tuple patterns are not supported".into(),
-                        span,
-                        diagnostic: crate::error::ResolveErrorDiagnostic {
-                            reason: crate::error::ResolveErrorReason::SpecialForm,
-                            subject: None,
-                        },
-                        related_labels: Vec::new(),
-                    });
-                }
-                let pats = items
-                    .into_iter()
-                    .map(|item| self.ast_expr_to_pattern(item, callee_name))
-                    .collect::<Result<Vec<_>, _>>()?;
-                Ok(AstPattern::Tuple(span, pats))
-            }
-            Ast::ConstructorCall(span, name, args) => {
-                let mut inners = Vec::with_capacity(args.len());
-                for arg in args {
-                    match arg {
-                        RecordLitArg::Positional(expr) => {
-                            inners.push(self.ast_expr_to_pattern(expr, callee_name)?)
-                        }
-                        RecordLitArg::Named(name, _) => {
-                            return Err(ResolveError {
-                                message: format!(
-                                    "{} pattern does not accept named argument '{}'",
-                                    callee_name, name
-                                ),
-                                span,
-                                diagnostic: crate::error::ResolveErrorDiagnostic {
-                                    reason: crate::error::ResolveErrorReason::SpecialForm,
-                                    subject: None,
-                                },
-                                related_labels: Vec::new(),
-                            });
-                        }
-                    }
-                }
-                if inners.is_empty() {
-                    Ok(AstPattern::Constructor(span, name, Vec::new()))
-                } else {
-                    Ok(AstPattern::Call(span, name, inners))
-                }
-            }
-            Ast::App(span, func, args) => {
-                let head_name = match *func {
-                    Ast::Var(_, name) => name,
-                    Ast::Path(_, path) => path.segments.join("::"),
-                    other => {
-                        return Err(ResolveError {
-                            message: format!(
-                                "{} pattern head must be an identifier or constructor path",
-                                callee_name
-                            ),
-                            span: other.span().clone(),
-                            diagnostic: crate::error::ResolveErrorDiagnostic {
-                                reason: crate::error::ResolveErrorReason::SpecialForm,
-                                subject: None,
-                            },
-                            related_labels: Vec::new(),
-                        });
-                    }
-                };
-                let mut inners = Vec::with_capacity(args.len());
-                for arg in args {
-                    match arg {
-                        RecordLitArg::Positional(expr) => {
-                            inners.push(self.ast_expr_to_pattern(expr, callee_name)?)
-                        }
-                        RecordLitArg::Named(name, _) => {
-                            return Err(ResolveError {
-                                message: format!(
-                                    "{} pattern does not accept named argument '{}'",
-                                    callee_name, name
-                                ),
-                                span,
-                                diagnostic: crate::error::ResolveErrorDiagnostic {
-                                    reason: crate::error::ResolveErrorReason::SpecialForm,
-                                    subject: None,
-                                },
-                                related_labels: Vec::new(),
-                            });
-                        }
-                    }
-                }
-
-                if inners.is_empty() && Self::is_constructor_style_head(&head_name) {
-                    Ok(AstPattern::Constructor(span, head_name, Vec::new()))
-                } else {
-                    Ok(AstPattern::Call(span, head_name, inners))
-                }
-            }
-            other => Err(ResolveError {
-                message: format!(
-                    "{} pattern supports `_`, literals, tuple/list patterns, constructors, and extractor-style calls",
-                    callee_name
-                ),
-                span: other.span().clone(),
-                diagnostic: crate::error::ResolveErrorDiagnostic {
-                    reason: crate::error::ResolveErrorReason::SpecialForm,
-                    subject: None,
-                },
-                related_labels: Vec::new(),
-            }),
+        let span = expr.span().clone();
+        let Ast::Match(_, scrutinee, arms) = expr else {
+            return Err(pattern_argument_invariant_error(callee_name, span));
+        };
+        if !matches!(scrutinee.as_ref(), Ast::Lit(_, Lit::Unit)) || arms.len() != 1 {
+            return Err(pattern_argument_invariant_error(callee_name, span));
         }
+        let arm = arms.into_iter().next().expect("one pattern carrier arm");
+        if arm.guard.is_some() || !matches!(arm.body, Ast::Lit(_, Lit::Unit)) {
+            return Err(pattern_argument_invariant_error(callee_name, span));
+        }
+        Ok(arm.pattern)
     }
 
     pub(super) fn resolve_logic_call(
@@ -532,13 +379,18 @@ fn collect_fixed_positional_args<const N: usize>(
     })
 }
 
-fn fixed_pattern_list(span: Span, items: Vec<AstPattern>) -> AstPattern {
-    items
-        .into_iter()
-        .rev()
-        .fold(AstPattern::ListNil(span.clone()), |tail, head| {
-            AstPattern::ListCons(span.clone(), Box::new(head), Box::new(tail))
-        })
+fn pattern_argument_invariant_error(callee_name: &str, span: Span) -> ResolveError {
+    ResolveError {
+        message: format!(
+            "Internal invariant broken: `{callee_name}` Pattern argument lacks its parser carrier"
+        ),
+        span,
+        diagnostic: crate::error::ResolveErrorDiagnostic {
+            reason: crate::error::ResolveErrorReason::SpecialForm,
+            subject: None,
+        },
+        related_labels: Vec::new(),
+    }
 }
 
 fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {

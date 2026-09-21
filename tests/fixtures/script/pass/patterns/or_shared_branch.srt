@@ -1,0 +1,24 @@
+defenum Choice {
+  Left(Int),
+  Right(Int),
+  Empty,
+}
+
+def guard() -> Boolean { print("guard"); False }
+
+choice: Choice = Choice::Right(7)
+print(to_string(match choice {
+  Choice::Left(x) | Choice::Right(x) => x,
+  Choice::Empty => 0,
+}))
+print(to_string(if_let(choice, Choice::Left(x) | Choice::Right(x), x, 0)))
+if_let_then(choice, Choice::Left(x) | Choice::Right(x), print(to_string(x)))
+print(to_string(if_let(Choice::Empty, Choice::Left(x) | Choice::Right(x), x, 0)))
+if_let_then(Choice::Empty, Choice::Left(x) | Choice::Right(x), print("unreachable"))
+
+print(to_string(if_let((3, (2, 9)), (3, (1, x) | (2, x)), x, 0)))
+
+print(match 1 {
+  1 | 1 when guard() => "unreachable",
+  _ => "next arm",
+})
