@@ -4546,12 +4546,15 @@ impl Checker {
                             bound: param.bound,
                         })
                         .collect(),
-                    TypedValueParameter {
-                        id: param.id,
-                        mode: param.mode,
-                        ty: self.resolve_ty(&param.ty),
-                        span: param.span,
-                    },
+                    param
+                        .into_iter()
+                        .map(|param| TypedValueParameter {
+                            id: param.id,
+                            mode: param.mode,
+                            ty: self.resolve_ty(&param.ty),
+                            span: param.span,
+                        })
+                        .collect(),
                     self.resolve_ty(&ret_ty),
                     Box::new(self.resolve_typed_node(*body)),
                     visibility,
@@ -4560,7 +4563,7 @@ impl Checker {
             TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {
                 TypedInner::BuiltinExtractorDecl(
                     id,
-                    self.resolve_ty(&param_ty),
+                    param_ty.iter().map(|ty| self.resolve_ty(ty)).collect(),
                     self.resolve_ty(&ret_ty),
                 )
             }
@@ -4663,6 +4666,7 @@ impl Checker {
                 input_ty,
                 extractor,
                 extractor_ty,
+                pre_args,
                 success_tag,
                 err_tag,
                 seq_tys,
@@ -4671,6 +4675,10 @@ impl Checker {
                 input_ty: self.resolve_ty(&input_ty),
                 extractor,
                 extractor_ty: self.resolve_ty(&extractor_ty),
+                pre_args: pre_args
+                    .into_iter()
+                    .map(|arg| self.resolve_typed_node(arg))
+                    .collect(),
                 success_tag,
                 err_tag,
                 seq_tys: seq_tys.into_iter().map(|ty| self.resolve_ty(&ty)).collect(),
@@ -4735,6 +4743,7 @@ impl Checker {
                 input_ty,
                 extractor,
                 extractor_ty,
+                pre_args,
                 success_tag,
                 err_tag,
                 seq_tys,
@@ -4743,6 +4752,10 @@ impl Checker {
                 input_ty: self.resolve_ty(&input_ty),
                 extractor,
                 extractor_ty: self.resolve_ty(&extractor_ty),
+                pre_args: pre_args
+                    .into_iter()
+                    .map(|arg| self.resolve_typed_node(arg))
+                    .collect(),
                 success_tag,
                 err_tag,
                 seq_tys: seq_tys.into_iter().map(|ty| self.resolve_ty(&ty)).collect(),

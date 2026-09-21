@@ -151,6 +151,60 @@ impl Parser<'_> {
         })
     }
 
+    fn parse_pattern_argument(&mut self) -> Result<AstPatternArgument, ParseError> {
+        let start = self.peek_span().start;
+        let mut expression_parser = self.clone();
+        let expression = expression_parser.parse_expr().and_then(|value| {
+            expression_parser.skip_newlines();
+            if matches!(expression_parser.peek(), Token::Comma | Token::RParen) {
+                Ok(value)
+            } else {
+                Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::ExpressionSyntax,
+                    "Expected the end of an application argument",
+                    expression_parser.peek_span(),
+                ))
+            }
+        });
+        let mut pattern_parser = self.clone();
+        let pattern = pattern_parser.parse_pattern().and_then(|value| {
+            pattern_parser.skip_newlines();
+            if matches!(pattern_parser.peek(), Token::Comma | Token::RParen) {
+                Ok(value)
+            } else {
+                Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::PatternSyntax,
+                    "Expected the end of a Pattern argument",
+                    pattern_parser.peek_span(),
+                ))
+            }
+        });
+        if expression.is_err() && pattern.is_err() {
+            return Err(pattern.unwrap_err());
+        }
+        if expression.is_ok() && pattern.is_ok() && expression_parser.pos != pattern_parser.pos {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::PatternSyntax,
+                "Application argument has inconsistent syntax boundaries",
+                self.peek_span(),
+            ));
+        }
+        let next = if pattern.is_ok() {
+            pattern_parser
+        } else {
+            expression_parser
+        };
+        let end = next.tokens[next.pos - 1].span.end;
+        *self = next;
+        Ok(AstPatternArgument {
+            span: Span { start, end },
+            expression_error: expression.as_ref().err().cloned(),
+            pattern_error: pattern.as_ref().err().cloned(),
+            expression: expression.ok().map(Box::new),
+            pattern: pattern.ok().map(Box::new),
+        })
+    }
+
     pub(super) fn parse_pattern(&mut self) -> Result<AstPattern, ParseError> {
         let mut alts = vec![self.parse_bind_pattern_atom()?];
         loop {
@@ -360,7 +414,7 @@ impl Parser<'_> {
                         parser.skip_newlines();
                         let mut inners = Vec::new();
                         if !matches!(parser.peek(), Token::RParen) {
-                            inners.push(parser.parse_pattern()?);
+                            inners.push(parser.parse_pattern_argument()?);
                             parser.skip_newlines();
                             while matches!(parser.peek(), Token::Comma) {
                                 parser.advance();
@@ -368,7 +422,7 @@ impl Parser<'_> {
                                 if matches!(parser.peek(), Token::RParen) {
                                     break;
                                 }
-                                inners.push(parser.parse_pattern()?);
+                                inners.push(parser.parse_pattern_argument()?);
                                 parser.skip_newlines();
                             }
                         }
@@ -391,7 +445,7 @@ impl Parser<'_> {
                     .unwrap_or(false);
                 // The lexer emits adjacent `()` as Unit. In a head application
                 // this denotes an empty argument list, not a Unit pattern.
-                if !is_ctor && matches!(self.peek(), Token::Unit) {
+                if matches!(self.peek(), Token::Unit) {
                     let end = self.advance().span;
                     return Ok(AstPattern::Call(
                         Span {
@@ -404,17 +458,6 @@ impl Parser<'_> {
                 }
                 if is_ctor {
                     let ctor_name = callee_name;
-                    if matches!(self.peek(), Token::Unit) {
-                        let end = self.advance().span.clone();
-                        return Ok(AstPattern::Constructor(
-                            Span {
-                                start: sp.start,
-                                end: end.end,
-                            },
-                            ctor_name,
-                            Vec::new(),
-                        ));
-                    }
                     return Ok(AstPattern::Constructor(
                         Span {
                             start: sp.start,
@@ -530,14 +573,18 @@ impl Parser<'_> {
 
 fn pattern_or_span(pattern: &AstPattern) -> Option<&Span> {
     match pattern {
+        AstPattern::Call(_, _, args) => args
+            .iter()
+            .filter_map(|arg| arg.pattern.as_deref())
+            .find_map(pattern_or_span),
         AstPattern::Or(span, _) => Some(span),
         AstPattern::As(_, inner, _, _, _) => pattern_or_span(inner),
         AstPattern::ListCons(_, head, tail) => {
             pattern_or_span(head).or_else(|| pattern_or_span(tail))
         }
-        AstPattern::Constructor(_, _, items)
-        | AstPattern::Call(_, _, items)
-        | AstPattern::Tuple(_, items) => items.iter().find_map(pattern_or_span),
+        AstPattern::Constructor(_, _, items) | AstPattern::Tuple(_, items) => {
+            items.iter().find_map(pattern_or_span)
+        }
         AstPattern::Var(_, _)
         | AstPattern::Annotated(_, _, _)
         | AstPattern::Wildcard(_)
@@ -553,13 +600,16 @@ fn pattern_or_span(pattern: &AstPattern) -> Option<&Span> {
 
 pub(super) fn pattern_contains_pin(pattern: &AstPattern) -> bool {
     match pattern {
+        AstPattern::Call(_, _, args) => args
+            .iter()
+            .filter_map(|arg| arg.pattern.as_deref())
+            .any(pattern_contains_pin),
         AstPattern::Pin(_, _) => true,
         AstPattern::As(_, inner, _, _, _) => pattern_contains_pin(inner),
         AstPattern::ListCons(_, head, tail) => {
             pattern_contains_pin(head) || pattern_contains_pin(tail)
         }
         AstPattern::Constructor(_, _, items)
-        | AstPattern::Call(_, _, items)
         | AstPattern::Tuple(_, items)
         | AstPattern::Or(_, items) => items.iter().any(pattern_contains_pin),
         AstPattern::Var(_, _)
@@ -576,6 +626,11 @@ pub(super) fn pattern_contains_pin(pattern: &AstPattern) -> bool {
 
 pub(super) fn pattern_contains_binding_var(pattern: &AstPattern) -> bool {
     match pattern {
+        AstPattern::Call(_, _, args) => args
+            .iter()
+            .filter(|arg| arg.expression.is_none())
+            .filter_map(|arg| arg.pattern.as_deref())
+            .any(pattern_contains_binding_var),
         AstPattern::Var(_, _) | AstPattern::Annotated(_, _, _) | AstPattern::As(_, _, _, _, _) => {
             true
         }
@@ -583,7 +638,6 @@ pub(super) fn pattern_contains_binding_var(pattern: &AstPattern) -> bool {
             pattern_contains_binding_var(head) || pattern_contains_binding_var(tail)
         }
         AstPattern::Constructor(_, _, items)
-        | AstPattern::Call(_, _, items)
         | AstPattern::Tuple(_, items)
         | AstPattern::Or(_, items) => items.iter().any(pattern_contains_binding_var),
         AstPattern::Wildcard(_)

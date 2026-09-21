@@ -267,6 +267,18 @@ impl Checker {
         allowed_vars: &HashSet<u32>,
         allowed_enum_constructor_vars: &HashSet<u32>,
     ) -> Option<UnresolvedExecutableTypeArgument> {
+        if let Some(pending) = Self::pattern_expression_nodes(node)
+            .into_iter()
+            .find_map(|expr| {
+                self.first_unresolved_executable_type_argument(
+                    expr,
+                    allowed_vars,
+                    allowed_enum_constructor_vars,
+                )
+            })
+        {
+            return Some(pending);
+        }
         if let TypedInner::ConstructorCall(tag, _) = &node.node {
             let enum_application = match self.resolve_ty(&node.ty) {
                 Ty::Enum(enum_name, arguments) => Some((enum_name, arguments)),
@@ -452,8 +464,10 @@ impl Checker {
                     allowed.insert(type_param.ty_var);
                     allowed_enum_constructors.insert(type_param.ty_var);
                 }
-                self.extend_allowed_vars(&param.ty, &mut allowed);
-                self.extend_allowed_vars(&param.ty, &mut allowed_enum_constructors);
+                for param in param {
+                    self.extend_allowed_vars(&param.ty, &mut allowed);
+                    self.extend_allowed_vars(&param.ty, &mut allowed_enum_constructors);
+                }
                 self.extend_allowed_vars(ret_ty, &mut allowed);
                 self.first_unresolved_executable_type_argument(
                     body,
@@ -832,10 +846,15 @@ impl Checker {
                                                 declared_ret,
                                                 ..,
                                             ) => (
-                                                vec![self.substitute_ty_with_mapping(
-                                                    &declared_param.ty,
-                                                    &call_site_mapping,
-                                                )],
+                                                declared_param
+                                                    .iter()
+                                                    .map(|param| {
+                                                        self.substitute_ty_with_mapping(
+                                                            &param.ty,
+                                                            &call_site_mapping,
+                                                        )
+                                                    })
+                                                    .collect(),
                                                 Box::new(self.substitute_ty_with_mapping(
                                                     declared_ret,
                                                     &call_site_mapping,
@@ -2306,12 +2325,15 @@ impl Checker {
                     specialized_fun_idx,
                     id,
                     Vec::new(),
-                    TypedValueParameter {
-                        id: param.id,
-                        mode: param.mode,
-                        ty: self.substitute_ty_with_mapping(&param.ty, mapping),
-                        span: param.span,
-                    },
+                    param
+                        .into_iter()
+                        .map(|param| TypedValueParameter {
+                            id: param.id,
+                            mode: param.mode,
+                            ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                            span: param.span,
+                        })
+                        .collect(),
                     self.substitute_ty_with_mapping(&ret_ty, mapping),
                     Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
                     visibility,
@@ -2359,7 +2381,9 @@ impl Checker {
                 .iter()
                 .map(|param| param.ty.clone())
                 .collect::<Vec<_>>(),
-            TypedInner::ExtractorDef(_, _, _, param, _, _, _) => vec![param.ty.clone()],
+            TypedInner::ExtractorDef(_, _, _, param, _, _, _) => {
+                param.iter().map(|param| param.ty.clone()).collect()
+            }
             other => {
                 return Err(TypeError {
                     structured: None,
@@ -2492,13 +2516,17 @@ impl Checker {
                         ordered.push(type_param.ty_var);
                     }
                 }
-                self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
+                for param in param {
+                    self.collect_bound_tyvars_in_ty(&param.ty, &mut ordered, &mut seen);
+                }
                 self.collect_bound_tyvars_in_ty(ret_ty, &mut ordered, &mut seen);
                 let mut signature_vars = type_params
                     .iter()
                     .map(|type_param| type_param.ty_var)
                     .collect::<Vec<_>>();
-                Self::collect_ty_vars(&param.ty, &mut signature_vars);
+                for param in param {
+                    Self::collect_ty_vars(&param.ty, &mut signature_vars);
+                }
                 Self::collect_ty_vars(ret_ty, &mut signature_vars);
                 let signature_vars = signature_vars.into_iter().collect::<HashSet<_>>();
                 let already_bound = seen.clone();
@@ -2522,6 +2550,9 @@ impl Checker {
         ordered: &mut Vec<u32>,
         seen: &mut HashSet<u32>,
     ) {
+        for expr in Self::pattern_expression_nodes(node) {
+            self.collect_pending_trait_receiver_tyvars_in_node(expr, ordered, seen);
+        }
         match &node.node {
             TypedInner::TraitCall {
                 dispatch,
@@ -2782,6 +2813,9 @@ impl Checker {
         ordered: &mut Vec<u32>,
         seen: &mut HashSet<u32>,
     ) {
+        for expr in Self::pattern_expression_nodes(node) {
+            self.collect_bound_tyvars_in_node(expr, ordered, seen);
+        }
         self.collect_bound_tyvars_in_ty(&node.ty, ordered, seen);
         match &node.node {
             TypedInner::App(func, args)
@@ -3496,12 +3530,15 @@ impl Checker {
                             bound: typed_param.bound,
                         })
                         .collect(),
-                    TypedValueParameter {
-                        id: param.id,
-                        mode: param.mode,
-                        ty: self.substitute_ty_with_mapping(&param.ty, mapping),
-                        span: param.span,
-                    },
+                    param
+                        .into_iter()
+                        .map(|param| TypedValueParameter {
+                            id: param.id,
+                            mode: param.mode,
+                            ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                            span: param.span,
+                        })
+                        .collect(),
                     self.substitute_ty_with_mapping(&ret_ty, mapping),
                     Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
                     visibility,
@@ -3510,7 +3547,10 @@ impl Checker {
             TypedInner::BuiltinExtractorDecl(id, param_ty, ret_ty) => {
                 TypedInner::BuiltinExtractorDecl(
                     id,
-                    self.substitute_ty_with_mapping(&param_ty, mapping),
+                    param_ty
+                        .iter()
+                        .map(|ty| self.substitute_ty_with_mapping(ty, mapping))
+                        .collect(),
                     self.substitute_ty_with_mapping(&ret_ty, mapping),
                 )
             }
@@ -3756,6 +3796,7 @@ impl Checker {
                 input_ty,
                 extractor,
                 extractor_ty,
+                pre_args,
                 success_tag,
                 err_tag,
                 seq_tys,
@@ -3764,6 +3805,10 @@ impl Checker {
                 input_ty: self.substitute_ty_with_mapping(&input_ty, mapping),
                 extractor,
                 extractor_ty: self.substitute_ty_with_mapping(&extractor_ty, mapping),
+                pre_args: pre_args
+                    .into_iter()
+                    .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
+                    .collect(),
                 success_tag,
                 err_tag,
                 seq_tys: seq_tys
@@ -3833,6 +3878,7 @@ impl Checker {
                 input_ty,
                 extractor,
                 extractor_ty,
+                pre_args,
                 success_tag,
                 err_tag,
                 seq_tys,
@@ -3841,6 +3887,10 @@ impl Checker {
                 input_ty: self.substitute_ty_with_mapping(&input_ty, mapping),
                 extractor,
                 extractor_ty: self.substitute_ty_with_mapping(&extractor_ty, mapping),
+                pre_args: pre_args
+                    .into_iter()
+                    .map(|arg| self.substitute_typed_node_with_mapping(arg, mapping))
+                    .collect(),
                 success_tag,
                 err_tag,
                 seq_tys: seq_tys
@@ -4172,6 +4222,27 @@ impl Checker {
         }
     }
 
+    fn specialize_extractor_pre_args(
+        &mut self,
+        args: Vec<TypedNode>,
+        context: &mut SpecializationContext<'_>,
+    ) -> Result<Vec<TypedNode>, TypeError> {
+        args.into_iter()
+            .map(|arg| {
+                self.rewrite_specializations_in_node(
+                    arg,
+                    context.defs_by_fun_idx,
+                    context.bound_tyvars_by_fun_idx,
+                    context.needs_specialization,
+                    context.specialization_fun_idxs,
+                    context.generated_defs,
+                )
+                .map(|node| *node)
+                .map_err(|error| *error)
+            })
+            .collect()
+    }
+
     fn validate_extractor_payload_shape(
         &self,
         extractor_ty: &Ty,
@@ -4343,6 +4414,7 @@ impl Checker {
                 input_ty,
                 extractor,
                 extractor_ty,
+                pre_args,
                 success_tag,
                 err_tag,
                 seq_tys,
@@ -4358,6 +4430,7 @@ impl Checker {
                     input_ty: self.resolve_ty(&input_ty),
                     extractor,
                     extractor_ty: self.resolve_ty(&extractor_ty),
+                    pre_args: self.specialize_extractor_pre_args(pre_args, context)?,
                     success_tag,
                     err_tag,
                     seq_tys: seq_tys.iter().map(|ty| self.resolve_ty(ty)).collect(),
@@ -4420,6 +4493,7 @@ impl Checker {
                 input_ty,
                 extractor,
                 extractor_ty,
+                pre_args,
                 success_tag,
                 err_tag,
                 seq_tys,
@@ -4435,6 +4509,7 @@ impl Checker {
                     input_ty,
                     extractor,
                     extractor_ty,
+                    pre_args: self.specialize_extractor_pre_args(pre_args, context)?,
                     success_tag,
                     err_tag,
                     seq_tys,
@@ -4536,6 +4611,12 @@ impl Checker {
     }
 
     fn typed_node_has_pending_trait_call(node: &TypedNode) -> bool {
+        if Self::pattern_expression_nodes(node)
+            .into_iter()
+            .any(Self::typed_node_has_pending_trait_call)
+        {
+            return true;
+        }
         match &node.node {
             TypedInner::TraitCall {
                 dispatch,

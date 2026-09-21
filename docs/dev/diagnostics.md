@@ -211,6 +211,10 @@ Extractor の戻り型は `MatchResult<P, Error>`（短縮 `MatchResult<P>`）�
 旧 Option / 通常 Result、第二型引数の非 abstract Error、一般の値位置、通常 Closure の
 返却・構築、abstract Error の手書き Err 再投入を静的拒否する。
 Unit payload の子 Pattern は0または1であり、arity / annotation 不一致は型エラーとする。
+入力の末尾を照合対象、それ以前を事前引数として検査する。signature から引数領域を
+確定し、総 arity の不足・余剰を拒否してから、事前引数の型と payload の子 Pattern を
+検査する。同じ Pattern で新しく束縛する名前は事前引数・pin・head の解決に使わず、
+Pattern 開始時の外側 scope に名前がない場合は名前解決エラーとする。
 SafeBind は元 Error の source facts を保持し、consumer や Extractor 名から message を作り直さない。
 未知 tag / 不正 field 数 / discriminant / Err payload は内部契約違反として停止し、
 Result の利用者エラー、通常不一致、Alternative empty に変換しない。

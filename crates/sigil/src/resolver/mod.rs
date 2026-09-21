@@ -834,7 +834,9 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         Resolved::ExtractorDef(_, id, type_params, param, _, body, _) => {
             rebase_resolved_id(id, base, offset);
             rebase_type_params(type_params, base, offset);
-            rebase_extractor_param(param, base, offset);
+            for param in param {
+                rebase_extractor_param(param, base, offset);
+            }
             rebase_resolved_node(body, base, offset);
         }
         Resolved::TraitDef(_, id, type_params, where_clause, methods, _) => {
@@ -882,7 +884,9 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         }
         Resolved::BuiltinExtractorDecl(_, id, param, _, _) => {
             rebase_resolved_id(id, base, offset);
-            rebase_extractor_param(param, base, offset);
+            for param in param {
+                rebase_extractor_param(param, base, offset);
+            }
         }
         Resolved::BuiltinTypeDecl(_, id, _, _) => rebase_resolved_id(id, base, offset),
         Resolved::TypeAlias(_, _, _, _, _) => {}
@@ -928,7 +932,16 @@ fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
             rebase_pattern(head, base, offset);
             rebase_pattern(tail, base, offset);
         }
-        ResolvedPattern::Constructor(id, inners) | ResolvedPattern::Extractor(id, inners) => {
+        ResolvedPattern::Extractor(id, pre_args, inners) => {
+            rebase_resolved_id(id, base, offset);
+            for arg in pre_args {
+                rebase_resolved_node(arg, base, offset);
+            }
+            for inner in inners {
+                rebase_pattern(inner, base, offset);
+            }
+        }
+        ResolvedPattern::Constructor(id, inners) => {
             rebase_resolved_id(id, base, offset);
             for inner in inners {
                 rebase_pattern(inner, base, offset);

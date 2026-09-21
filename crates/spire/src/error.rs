@@ -126,6 +126,22 @@ impl ParseError {
         self
     }
 
+    /// Relocates all source positions without collapsing the diagnostic cursor.
+    pub fn map_spans(mut self, mut map: impl FnMut(&Span) -> Span) -> Self {
+        match &mut self {
+            Self::Incomplete {
+                span, cursor_span, ..
+            }
+            | Self::SyntaxError {
+                span, cursor_span, ..
+            } => {
+                *span = map(span);
+                *cursor_span = map(cursor_span);
+            }
+        }
+        self
+    }
+
     pub fn with_span(mut self, span: Span) -> Self {
         match &mut self {
             Self::Incomplete {

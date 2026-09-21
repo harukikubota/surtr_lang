@@ -3,15 +3,102 @@ use super::*;
 const DUPLICATE_PATTERN_LABELS: [&str; 5] = ["first", "second", "third", "fourth", "fifth"];
 
 impl Resolver {
+    pub(super) fn select_pattern_argument_roles(
+        &self,
+        mut pattern: AstPattern,
+    ) -> Result<AstPattern, ResolveError> {
+        match &mut pattern {
+            AstPattern::Call(span, name, args) => {
+                let uid = self.scope.lookup(name).ok_or_else(|| {
+                    pattern_argument_error(
+                        format!("Undefined MatchBlock head: {name}"),
+                        span.clone(),
+                    )
+                })?;
+                let kind = self.declaration_uid_kinds.get(&uid);
+                let extractor_uid = match kind {
+                    Some(DeclarationKind::Extractor) => Some(uid),
+                    Some(DeclarationKind::Struct) => self
+                        .attached_extractor_for_struct(uid, name)
+                        .map(|(_, id, _)| id),
+                    _ => None,
+                };
+                let pre_count = if let Some(extractor_uid) = extractor_uid {
+                    self.declaration_entry_for_uid(extractor_uid)
+                        .and_then(|entry| entry.value_parameter_count)
+                        .and_then(|count| count.checked_sub(1))
+                        .ok_or_else(|| {
+                            pattern_argument_error(
+                                "Extractor signature must declare at least one input",
+                                span.clone(),
+                            )
+                        })?
+                } else {
+                    0
+                };
+                if args.len() < pre_count {
+                    return Err(pattern_argument_error(
+                        format!(
+                            "Extractor expects {pre_count} pre-arguments, got {} total arguments",
+                            args.len()
+                        ),
+                        span.clone(),
+                    ));
+                }
+                for (index, argument) in args.iter_mut().enumerate() {
+                    if index < pre_count {
+                        if argument.expression.is_none() {
+                            return Err(deferred_pattern_parse_error(
+                                argument.expression_error.clone(),
+                                "Extractor pre-argument must be an expression",
+                                argument.span.clone(),
+                            ));
+                        }
+                        argument.pattern = None;
+                    } else {
+                        let child = argument.pattern.take().ok_or_else(|| {
+                            deferred_pattern_parse_error(
+                                argument.pattern_error.clone(),
+                                "Extractor payload argument must be a Pattern",
+                                argument.span.clone(),
+                            )
+                        })?;
+                        argument.pattern =
+                            Some(Box::new(self.select_pattern_argument_roles(*child)?));
+                        argument.expression = None;
+                    }
+                }
+            }
+            AstPattern::Constructor(_, _, items)
+            | AstPattern::Tuple(_, items)
+            | AstPattern::Or(_, items) => {
+                for item in items {
+                    *item = self.select_pattern_argument_roles(item.clone())?;
+                }
+            }
+            AstPattern::ListCons(_, head, tail) => {
+                **head = self.select_pattern_argument_roles(*head.clone())?;
+                **tail = self.select_pattern_argument_roles(*tail.clone())?;
+            }
+            AstPattern::As(_, inner, _, _, _) => {
+                **inner = self.select_pattern_argument_roles(*inner.clone())?
+            }
+            _ => {}
+        }
+        Ok(pattern)
+    }
+
     pub(super) fn resolve_pattern(
         &mut self,
         pat: AstPattern,
     ) -> Result<ResolvedPattern, ResolveError> {
+        let outer = self.scope.clone();
+        let pat = self.select_pattern_argument_roles(pat)?;
         if let Some(error) = duplicate_pattern_binding_error(&pat)? {
             return Err(error);
         }
         let mut seen = HashMap::<String, Span>::new();
-        self.resolve_pattern_inner(pat, &mut seen)
+        self.resolve_pattern_inner(pat, &mut seen, &outer)
     }
 
     pub(super) fn define_pattern_binding(
@@ -50,6 +137,7 @@ impl Resolver {
         &mut self,
         pat: AstPattern,
         seen: &mut HashMap<String, Span>,
+        outer: &Scope,
     ) -> Result<ResolvedPattern, ResolveError> {
         match pat {
             AstPattern::Var(span, name) => Ok(ResolvedPattern::Var(
@@ -60,21 +148,7 @@ impl Resolver {
                 ty,
             )),
             AstPattern::Pin(span, name) => {
-                if seen.contains_key(&name) {
-                    return Err(ResolveError {
-                        message: format!(
-                            "Pinned pattern requires an existing value `{}` outside the same pattern",
-                            name
-                        ),
-                        span,
-                        diagnostic: crate::error::ResolveErrorDiagnostic {
-                            reason: crate::error::ResolveErrorReason::Pattern,
-                            subject: None,
-                        },
-                        related_labels: Vec::new(),
-                    });
-                }
-                let uid = self.scope.lookup(&name).ok_or_else(|| ResolveError {
+                let uid = outer.lookup(&name).ok_or_else(|| ResolveError {
                     message: format!("Pinned pattern requires an existing value `{}`", name),
                     span: span.clone(),
                     diagnostic: crate::error::ResolveErrorDiagnostic {
@@ -98,15 +172,15 @@ impl Resolver {
             }
             AstPattern::ListNil(span) => Ok(ResolvedPattern::ListNil(span)),
             AstPattern::ListCons(_, head, tail) => Ok(ResolvedPattern::ListCons(
-                Box::new(self.resolve_pattern_inner(*head, seen)?),
-                Box::new(self.resolve_pattern_inner(*tail, seen)?),
+                Box::new(self.resolve_pattern_inner(*head, seen, outer)?),
+                Box::new(self.resolve_pattern_inner(*tail, seen, outer)?),
             )),
             AstPattern::IntLit(span, n) => Ok(ResolvedPattern::IntLit(span, n)),
             AstPattern::StrLit(span, s) => Ok(ResolvedPattern::StrLit(span, s)),
             AstPattern::BoolLit(span, b) => Ok(ResolvedPattern::BoolLit(span, b)),
             AstPattern::DurationLit(span, n) => Ok(ResolvedPattern::DurationLit(span, n)),
             AstPattern::Constructor(span, ctor_name, inners) => {
-                let ctor_uid = self.scope.lookup(&ctor_name).ok_or_else(|| ResolveError {
+                let ctor_uid = outer.lookup(&ctor_name).ok_or_else(|| ResolveError {
                     message: format!("Undefined constructor: {}", ctor_name),
                     span: span.clone(),
                     diagnostic: crate::error::ResolveErrorDiagnostic {
@@ -127,12 +201,12 @@ impl Resolver {
                     },
                     inners
                         .into_iter()
-                        .map(|inner| self.resolve_pattern_inner(inner, seen))
+                        .map(|inner| self.resolve_pattern_inner(inner, seen, outer))
                         .collect::<Result<Vec<_>, _>>()?,
                 ))
             }
             AstPattern::Call(span, head_name, inners) => {
-                let head_uid = self.scope.lookup(&head_name).ok_or_else(|| ResolveError {
+                let head_uid = outer.lookup(&head_name).ok_or_else(|| ResolveError {
                     message: if Self::is_constructor_style_head(&head_name) {
                         format!("Undefined constructor: {}", head_name)
                     } else {
@@ -175,10 +249,30 @@ impl Resolver {
                     symbol_info: self.symbol_info_for_uid(&head_name, head_uid),
                     span: span.clone(),
                 };
-                let resolved_inners = inners
-                    .into_iter()
-                    .map(|inner| self.resolve_pattern_inner(inner, seen))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let mut pre_args = Vec::new();
+                let mut resolved_inners = Vec::new();
+                for argument in inners {
+                    match (argument.expression, argument.pattern) {
+                        (Some(expression), None) => {
+                            let next_id = self.scope.next_id();
+                            let resolved = self.with_child_scope(|child| {
+                                child.scope = outer.clone();
+                                child.scope.advance_next_id_to(next_id);
+                                child.resolve_node(*expression)
+                            })?;
+                            pre_args.push(resolved);
+                        }
+                        (None, Some(pattern)) => {
+                            resolved_inners.push(self.resolve_pattern_inner(*pattern, seen, outer)?)
+                        }
+                        _ => {
+                            return Err(pattern_argument_error(
+                                "Pattern argument role was not resolved",
+                                argument.span,
+                            ))
+                        }
+                    }
+                }
                 match head_kind {
                     DeclarationKind::Extractor => {
                         if Self::is_constructor_style_head(&head_name) {
@@ -195,7 +289,11 @@ impl Resolver {
                                 related_labels: Vec::new(),
                             });
                         }
-                        Ok(ResolvedPattern::Extractor(resolved_id, resolved_inners))
+                        Ok(ResolvedPattern::Extractor(
+                            resolved_id,
+                            pre_args,
+                            resolved_inners,
+                        ))
                     }
                     DeclarationKind::EnumVariant | DeclarationKind::ResultCtor => {
                         Ok(ResolvedPattern::Constructor(resolved_id, resolved_inners))
@@ -243,6 +341,7 @@ impl Resolver {
                                 ),
                                 span,
                             },
+                            pre_args,
                             resolved_inners,
                         ))
                     }
@@ -279,7 +378,7 @@ impl Resolver {
             AstPattern::Tuple(_, items) => Ok(ResolvedPattern::Tuple(
                 items
                     .into_iter()
-                    .map(|item| self.resolve_pattern_inner(item, seen))
+                    .map(|item| self.resolve_pattern_inner(item, seen, outer))
                     .collect::<Result<Vec<_>, _>>()?,
             )),
             AstPattern::Or(span, items) => {
@@ -291,7 +390,7 @@ impl Resolver {
                     let mut bindings = Vec::new();
                     collect_pattern_bindings_preorder(&item, &mut bindings)?;
                     let (mut resolved, ids) = self.with_child_scope(|child| {
-                        let resolved = child.resolve_pattern_inner(item, &mut alternative_seen)?;
+                        let resolved = child.resolve_pattern_inner(item, &mut alternative_seen, outer)?;
                         let ids = bindings
                             .iter()
                             .map(|(name, _)| {
@@ -328,7 +427,7 @@ impl Resolver {
                 Ok(ResolvedPattern::Or(resolved_items))
             }
             AstPattern::As(_span, inner, alias, alias_ty, alias_span) => {
-                let resolved_inner = self.resolve_pattern_inner(*inner, seen)?;
+                let resolved_inner = self.resolve_pattern_inner(*inner, seen, outer)?;
                 let alias_id = self.define_pattern_binding(alias, alias_span, seen)?;
                 Ok(ResolvedPattern::As(
                     Box::new(resolved_inner),
@@ -400,7 +499,7 @@ fn remap_or_pattern_bindings(
                 })?;
         }
         ResolvedPattern::Constructor(_, items)
-        | ResolvedPattern::Extractor(_, items)
+        | ResolvedPattern::Extractor(_, _, items)
         | ResolvedPattern::Tuple(items)
         | ResolvedPattern::Or(items) => {
             for item in items {
@@ -485,11 +584,14 @@ fn collect_pattern_bindings_preorder(
             collect_pattern_bindings_preorder(head, out)?;
             collect_pattern_bindings_preorder(tail, out)?;
         }
-        AstPattern::Constructor(_, _, inners)
-        | AstPattern::Call(_, _, inners)
-        | AstPattern::Tuple(_, inners) => {
+        AstPattern::Constructor(_, _, inners) | AstPattern::Tuple(_, inners) => {
             for inner in inners {
                 collect_pattern_bindings_preorder(inner, out)?;
+            }
+        }
+        AstPattern::Call(_, _, args) => {
+            for pattern in args.iter().filter_map(|arg| arg.pattern.as_deref()) {
+                collect_pattern_bindings_preorder(pattern, out)?;
             }
         }
         AstPattern::Or(span, alternatives) => {
@@ -577,9 +679,14 @@ fn collect_as_sequence_bindings(
 
 fn pattern_sequence_items(pattern: &AstPattern) -> Option<Vec<&AstPattern>> {
     match pattern {
-        AstPattern::Tuple(_, items)
-        | AstPattern::Constructor(_, _, items)
-        | AstPattern::Call(_, _, items) => Some(items.iter().collect()),
+        AstPattern::Tuple(_, items) | AstPattern::Constructor(_, _, items) => {
+            Some(items.iter().collect())
+        }
+        AstPattern::Call(_, _, args) => Some(
+            args.iter()
+                .filter_map(|arg| arg.pattern.as_deref())
+                .collect(),
+        ),
         AstPattern::ListCons(..) => {
             let mut items = Vec::new();
             flatten_list_pattern(pattern, &mut items);
@@ -597,5 +704,44 @@ fn flatten_list_pattern<'a>(pattern: &'a AstPattern, out: &mut Vec<&'a AstPatter
         }
         AstPattern::ListNil(_) => {}
         other => out.push(other),
+    }
+}
+
+fn pattern_argument_error(message: impl Into<String>, span: Span) -> ResolveError {
+    ResolveError {
+        message: message.into(),
+        span,
+        diagnostic: crate::error::ResolveErrorDiagnostic {
+            reason: crate::error::ResolveErrorReason::Pattern,
+            subject: None,
+        },
+        related_labels: Vec::new(),
+    }
+}
+
+fn deferred_pattern_parse_error(
+    error: Option<spire::error::ParseError>,
+    message: &str,
+    span: Span,
+) -> ResolveError {
+    let Some(error) = error else {
+        return ResolveError {
+            message: format!("Missing deferred parse diagnostic: {message}"),
+            span,
+            diagnostic: crate::error::ResolveErrorDiagnostic {
+                reason: crate::error::ResolveErrorReason::CompilerInvariant,
+                subject: None,
+            },
+            related_labels: Vec::new(),
+        };
+    };
+    ResolveError {
+        message: error.message().to_string(),
+        span: error.span().clone(),
+        diagnostic: crate::error::ResolveErrorDiagnostic {
+            reason: crate::error::ResolveErrorReason::DeferredParse(error),
+            subject: None,
+        },
+        related_labels: Vec::new(),
     }
 }

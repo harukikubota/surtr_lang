@@ -1,6 +1,6 @@
 use spire::ast::Span;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveErrorReason {
     NameResolution,
     Namespace,
@@ -15,6 +15,8 @@ pub enum ResolveErrorReason {
     ReservedIntrinsicMarkerDeclaration,
     ReservedIntrinsicMarkerImpl,
     CompilerInvariant,
+    /// Syntax rejected only after the application signature selects its argument role.
+    DeferredParse(spire::error::ParseError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

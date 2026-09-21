@@ -279,6 +279,12 @@ impl Checker {
         &self,
         node: &TypedNode,
     ) -> Option<(ConstructorApplicationOutcome, Span)> {
+        if let Some(pending) = Self::pattern_expression_nodes(node)
+            .into_iter()
+            .find_map(|expr| self.unresolved_executable_constructor_application(expr))
+        {
+            return Some(pending);
+        }
         let declaration_scheme_has_constructor_application =
             match &node.node {
                 TypedInner::TraitDef(..)
@@ -713,6 +719,12 @@ impl Checker {
         &self,
         node: &'a TypedNode,
     ) -> Option<(&'a str, &'a str, &'a Ty, &'a Span)> {
+        if let Some(pending) = Self::pattern_expression_nodes(node)
+            .into_iter()
+            .find_map(|expr| self.first_pending_trait_helper(expr))
+        {
+            return Some(pending);
+        }
         match &node.node {
             TypedInner::TraitCall {
                 trait_name,
@@ -855,6 +867,9 @@ impl Checker {
 
     pub(super) fn full_trait_obligations(node: &TypedNode) -> Vec<TraitObligation> {
         fn collect(node: &TypedNode, obligations: &mut Vec<TraitObligation>) {
+            for expr in Checker::pattern_expression_nodes(node) {
+                collect(expr, obligations);
+            }
             match &node.node {
                 TypedInner::TraitCall {
                     obligation, args, ..
@@ -981,8 +996,11 @@ impl Checker {
 
     pub(super) fn concretize_pending_trait_calls(
         &mut self,
-        node: TypedNode,
+        mut node: TypedNode,
     ) -> Result<TypedNode, TypeError> {
+        for expr in Self::pattern_expression_nodes_mut(&mut node) {
+            *expr = self.concretize_pending_trait_calls(expr.clone())?;
+        }
         let span = node.span.clone();
         let ty = self.resolve_ty(&node.ty);
         let node = match node.node {
@@ -7357,11 +7375,11 @@ impl Checker {
                 });
             }
         };
-        if params.len() != 1 {
+        if params.is_empty() {
             return Err(TypeError {
                 structured: None,
                 message: format!(
-                    "Extractor {} must accept exactly one input value, got {} parameter(s)",
+                    "Extractor {} must accept at least one input value, got {} parameter(s)",
                     extractor_id.name,
                     params.len()
                 ),
@@ -7369,7 +7387,7 @@ impl Checker {
                 hint: None,
             });
         }
-        let input_ty = params[0].clone();
+        let input_ty = params.last().expect("nonempty parameters checked").clone();
         let seq_tys = self.require_extractor_match_result_payload_ty(
             &self.resolve_ty(&ret),
             span,
@@ -7442,9 +7460,54 @@ impl Checker {
         &mut self,
         extractor_id: &ResolvedId,
         observed_ty: &Ty,
+        pre_args: &[Resolved],
         span: &Span,
-    ) -> Result<(Ty, Ty, Vec<Ty>, u32, u32), TypeError> {
+    ) -> Result<(Ty, Ty, Vec<TypedNode>, Vec<Ty>, u32, u32), TypeError> {
         let mut extractor_ty = self.extractor_callable_ty(extractor_id, span)?;
+        let params = match &extractor_ty {
+            Ty::UserFunc { params, .. } | Ty::BuiltinFunc { params, .. } | Ty::Func(params, _) => {
+                params.clone()
+            }
+            _ => {
+                return Err(TypeError::new(
+                    "Extractor head is not callable",
+                    span.clone(),
+                ))
+            }
+        };
+        let Some((input, expected_pre_args)) = params.split_last() else {
+            return Err(TypeError::new(
+                "Extractor requires at least one input",
+                span.clone(),
+            ));
+        };
+        if pre_args.len() != expected_pre_args.len() {
+            return Err(TypeError::new(
+                format!(
+                    "Extractor {} requires {} pre-argument(s), got {}",
+                    extractor_id.name,
+                    expected_pre_args.len(),
+                    pre_args.len()
+                ),
+                span.clone(),
+            ));
+        }
+        self.types_compatible(input, observed_ty);
+        let pre_args = pre_args
+            .iter()
+            .cloned()
+            .map(ResolvedRecordLitArg::Positional)
+            .collect::<Vec<_>>();
+        let typed_pre_args = self.typecheck_positional_call_args(
+            span,
+            &extractor_id.name,
+            expected_pre_args,
+            &pre_args,
+            None,
+            "Extractor pre-arguments must be positional".into(),
+        )?;
+        self.ensure_no_runtime_facet_args(&typed_pre_args, span, "Extractor pre-arguments")?;
+
         let (input_ty, seq_tys, success_tag, err_tag) = if self
             .function_ids_by_name
             .get("Kernel::uncons")
@@ -7460,21 +7523,14 @@ impl Checker {
             let (success_tag, err_tag) = self.match_result_variant_tags(span)?;
             (input_ty, seq_tys, success_tag, err_tag)
         } else {
-            // Instantiate once, then connect the observed input before choosing
-            // payload shape (in particular generic UnitOnly and tuple payloads).
-            if let Ty::UserFunc { params, .. }
-            | Ty::BuiltinFunc { params, .. }
-            | Ty::Func(params, _) = &extractor_ty
-            {
-                if let [input] = params.as_slice() {
-                    self.types_compatible(input, observed_ty);
-                }
-            }
+            // Input and prearguments share one instantiation. Resolve their
+            // constraints before choosing UnitOnly, tuple, or single-value shape.
             self.extractor_contract(extractor_id, &extractor_ty, span)?
         };
         Ok((
             self.resolve_ty(&input_ty),
             self.resolve_ty(&extractor_ty),
+            typed_pre_args,
             seq_tys,
             success_tag,
             err_tag,

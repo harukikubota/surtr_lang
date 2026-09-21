@@ -185,6 +185,77 @@ fn validate_required_singletons(
     Ok(())
 }
 
+fn collect_pattern_expressions<'a>(
+    pattern: &'a TypedPattern,
+    expressions: &mut Vec<&'a TypedNode>,
+) {
+    match pattern {
+        TypedPattern::Extractor {
+            pre_args, items, ..
+        } => {
+            expressions.extend(pre_args);
+            for item in items {
+                collect_pattern_expressions(item, expressions);
+            }
+        }
+        TypedPattern::As(_, inner, _) => collect_pattern_expressions(inner, expressions),
+        TypedPattern::ListCons(_, head, tail) => {
+            collect_pattern_expressions(head, expressions);
+            collect_pattern_expressions(tail, expressions);
+        }
+        TypedPattern::Tuple(_, items) | TypedPattern::Constructor { fields: items, .. } => {
+            for item in items {
+                collect_pattern_expressions(item, expressions);
+            }
+        }
+        TypedPattern::Var(..)
+        | TypedPattern::Pin(..)
+        | TypedPattern::Wildcard(..)
+        | TypedPattern::ListNil(..)
+        | TypedPattern::IntLit(..)
+        | TypedPattern::StrLit(..)
+        | TypedPattern::BoolLit(..)
+        | TypedPattern::DurationLit(..) => {}
+    }
+}
+
+fn collect_match_pattern_expressions<'a>(
+    pattern: &'a TypedMatchPattern,
+    expressions: &mut Vec<&'a TypedNode>,
+) {
+    match pattern {
+        TypedMatchPattern::Extractor {
+            pre_args, items, ..
+        } => {
+            expressions.extend(pre_args);
+            for item in items {
+                collect_match_pattern_expressions(item, expressions);
+            }
+        }
+        TypedMatchPattern::As(inner, _) => collect_match_pattern_expressions(inner, expressions),
+        TypedMatchPattern::ListCons(head, tail) => {
+            collect_match_pattern_expressions(head, expressions);
+            collect_match_pattern_expressions(tail, expressions);
+        }
+        TypedMatchPattern::Tuple(items)
+        | TypedMatchPattern::Or(items)
+        | TypedMatchPattern::Constructor { fields: items, .. } => {
+            for item in items {
+                collect_match_pattern_expressions(item, expressions);
+            }
+        }
+        TypedMatchPattern::Binding(..)
+        | TypedMatchPattern::Pin { .. }
+        | TypedMatchPattern::Wildcard
+        | TypedMatchPattern::ListNil
+        | TypedMatchPattern::IntLit(..)
+        | TypedMatchPattern::StrLit(..)
+        | TypedMatchPattern::BoolLit(..)
+        | TypedMatchPattern::DurationLit(..)
+        | TypedMatchPattern::ErrorKind(..) => {}
+    }
+}
+
 fn collect_missing_singleton_calls(
     node: &TypedNode,
     surface_to_process: &HashMap<String, String>,
@@ -192,6 +263,30 @@ fn collect_missing_singleton_calls(
     available_supervisors: &HashSet<String>,
     first_missing: &mut HashMap<String, Span>,
 ) {
+    let mut pattern_expressions = Vec::new();
+    match &node.node {
+        TypedInner::Bind(pattern, _) | TypedInner::SafeBind(pattern, _, _, _) => {
+            collect_pattern_expressions(pattern, &mut pattern_expressions);
+        }
+        TypedInner::DoSafeBind(control) => {
+            collect_pattern_expressions(&control.pattern, &mut pattern_expressions);
+        }
+        TypedInner::Match(_, arms) => {
+            for arm in arms {
+                collect_match_pattern_expressions(&arm.pattern, &mut pattern_expressions);
+            }
+        }
+        _ => {}
+    }
+    for expression in pattern_expressions {
+        collect_missing_singleton_calls(
+            expression,
+            surface_to_process,
+            available_singletons,
+            available_supervisors,
+            first_missing,
+        );
+    }
     if let Some(process_name) = singleton_required_by_call(node, surface_to_process) {
         if !available_singletons.contains(process_name.as_str()) {
             first_missing
@@ -3035,6 +3130,7 @@ mod tests {
                     },
                     success_tag: 100,
                     err_tag: 101,
+                    pre_args: vec![],
                     seq_tys: vec![Ty::Int],
                     items: vec![TypedPattern::Var(Ty::Int, resolved_id("value", None, 90))],
                 },
@@ -3080,6 +3176,7 @@ mod tests {
                 &ty,
                 10,
                 11,
+                &[],
                 &[Ty::Int],
                 1,
                 0,
@@ -3089,6 +3186,44 @@ mod tests {
             )
             .expect_err("invalid carrier must fail before execution");
         assert!(error.message.contains("Extractor callable contract"));
+    }
+
+    #[test]
+    fn extractor_codegen_rejects_stale_pre_argument_metadata() {
+        let ty = Ty::UserFunc {
+            fun_idx: 1,
+            type_params: vec![],
+            call_substitution: vec![],
+            params: vec![Ty::Int, Ty::Int],
+            ret: Box::new(Ty::MatchResult(Box::new(Ty::Int))),
+        };
+        for pre_args in [
+            vec![],
+            vec![local_var("one", 92, Ty::Int), local_var("two", 93, Ty::Int)],
+        ] {
+            let mut gene = Codegen::new();
+            seed_match_result_registry(&mut gene);
+            let fail = gene.fresh_label();
+            let error = gene
+                .emit_extractor_item_slots_from_local(
+                    &Ty::Int,
+                    &resolved_id("broken", None, 91),
+                    &ty,
+                    100,
+                    101,
+                    &pre_args,
+                    &[Ty::Int],
+                    1,
+                    0,
+                    fail,
+                    false,
+                    &span(1, 4),
+                )
+                .expect_err("missing or extra pre-arguments must fail before execution");
+            assert!(error
+                .message
+                .contains("input or payload shape metadata mismatch"));
+        }
     }
 
     #[test]
@@ -3110,6 +3245,7 @@ mod tests {
                 &ty,
                 101,
                 100,
+                &[],
                 &[Ty::Int],
                 1,
                 0,
@@ -4168,6 +4304,7 @@ mod tests {
                     extractor_ty,
                     success_tag: 100,
                     err_tag: 101,
+                    pre_args: vec![],
                     seq_tys: vec![Ty::Int],
                     items: vec![TypedPattern::Wildcard(Ty::Int)],
                 },
@@ -4633,7 +4770,7 @@ pub fn repl_facet_info_for_node(node: &TypedNode) -> Option<ReplFacetInfo> {
     let (path, source_is_result, operation) =
         match &node.node {
             TypedInner::FacetPath(_) | TypedInner::PendingFacetPath(_) => {
-                return facet_info_for_node(node)
+                return facet_info_for_node(node);
             }
             TypedInner::FacetView {
                 path,
@@ -7188,16 +7325,16 @@ impl Codegen {
     }
 
     fn emit_extractor_def(&mut self, node: &TypedNode) -> Result<(), CodegenError> {
-        let (fun_idx, id, param, ret_ty, body, visibility) = match &node.node {
+        let (fun_idx, id, params, ret_ty, body, visibility) = match &node.node {
             TypedInner::ExtractorDef(
                 fun_idx,
                 id,
                 _type_params,
-                param,
+                params,
                 ret_ty,
                 body,
                 visibility,
-            ) => (fun_idx, id, param, ret_ty, body, visibility),
+            ) => (fun_idx, id, params, ret_ty, body, visibility),
             _ => {
                 return Err(CodegenError {
                     message: "expected extractor definition".into(),
@@ -7211,8 +7348,19 @@ impl Codegen {
 
         self.state.slot_map = HashMap::new();
         self.state.next_slot = 0;
-        self.state.slot_map.insert(param.id.unique_id, 0);
-        self.state.next_slot = 1;
+        let arity = u8::try_from(params.len())
+            .ok()
+            .filter(|arity| *arity > 0)
+            .ok_or_else(|| CodegenError {
+                message:
+                    "Extractor input arity must fit the callable representation and be nonzero"
+                        .into(),
+                span: node.span.clone(),
+            })?;
+        for (index, param) in params.iter().enumerate() {
+            self.state.slot_map.insert(param.id.unique_id, index as u32);
+        }
+        self.state.next_slot = params.len() as u32;
 
         let entry_pc = self.current_pos() as u32;
         let prev_in_function = self.in_function;
@@ -7225,13 +7373,16 @@ impl Codegen {
             fun_idx: *fun_idx,
             entry_pc,
             num_locals: num_locals.into(),
-            arity: 1,
+            arity,
             qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
             signature: Some(format!(
-                "{}({}: {}) -> {}",
+                "{}({}) -> {}",
                 id.name,
-                param.id.name,
-                ty_to_string(&param.ty),
+                params
+                    .iter()
+                    .map(|param| format!("{}: {}", param.id.name, ty_to_string(&param.ty)))
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 ty_to_string(ret_ty)
             )),
             end_pc: 0,
@@ -10244,6 +10395,7 @@ impl Codegen {
                 extractor_ty,
                 success_tag,
                 err_tag,
+                pre_args,
                 seq_tys,
                 items,
                 ..
@@ -10254,6 +10406,7 @@ impl Codegen {
                     extractor_ty,
                     *success_tag,
                     *err_tag,
+                    pre_args,
                     seq_tys,
                     items.len(),
                     slot,
@@ -10729,6 +10882,7 @@ impl Codegen {
         extractor_ty: &Ty,
         success_tag: u32,
         err_tag: u32,
+        pre_args: &[TypedNode],
         seq_tys: &[Ty],
         child_count: usize,
         input_slot: u32,
@@ -10749,7 +10903,7 @@ impl Codegen {
                     message: "Invalid Extractor callable contract: expected a resolved callable"
                         .into(),
                     span: span.clone(),
-                })
+                });
             }
         };
         let Ty::MatchResult(payload) = ret.as_ref() else {
@@ -10763,38 +10917,48 @@ impl Codegen {
             Ty::Tuple(items) => items.as_slice(),
             other => std::slice::from_ref(other),
         };
-        if params.as_slice() != std::slice::from_ref(input_ty)
+        // Scar checks argument compatibility, including canonical nominal aliases
+        // and callable signatures. Forge validates the lowering structure here.
+        if params.len() != pre_args.len() + 1
+            || params.last() != Some(input_ty)
             || expected_items != seq_tys
             || !(child_count == seq_tys.len()
                 || (payload.as_ref() == &Ty::Unit && child_count == 0))
         {
             return Err(CodegenError {
-                message: format!("Invalid Extractor callable contract: input or payload shape metadata mismatch (input={input_ty:?}, params={params:?}, payload={payload:?}, slots={seq_tys:?}, children={child_count})"),
+                message: format!(
+                    "Invalid Extractor callable contract: input or payload shape metadata mismatch (input={input_ty:?}, params={params:?}, payload={payload:?}, slots={seq_tys:?}, children={child_count})"
+                ),
                 span: span.clone(),
             });
         }
         self.validate_match_result_tag(success_tag, sindr::builtin::MATCH_RESULT_OK_VARIANT, span)?;
         self.validate_match_result_tag(err_tag, sindr::builtin::MATCH_RESULT_ERR_VARIANT, span)?;
+        let arity = u8::try_from(params.len()).map_err(|_| CodegenError {
+            message: "Extractor input arity exceeds callable representation".into(),
+            span: span.clone(),
+        })?;
+        for argument in pre_args {
+            self.emit_node(argument)?;
+        }
         self.emit(Opcode::LoadLocal(input_slot));
         match extractor_ty {
-            Ty::UserFunc {
-                fun_idx, params, ..
-            } if params.len() == 1 => {
+            Ty::UserFunc { fun_idx, .. } => {
                 self.emit(Opcode::Call {
                     fun_idx: *fun_idx,
-                    arity: 1,
+                    arity,
                     span_start: extractor.span.start as u32,
                     span_end: extractor.span.end as u32,
                 });
             }
-            Ty::BuiltinFunc { name, params, .. } if params.len() == 1 => {
+            Ty::BuiltinFunc { name, .. } => {
                 let builtin_id = Self::builtin_id(name).ok_or_else(|| CodegenError {
                     message: format!("Missing runtime Extractor builtin: {name}"),
                     span: span.clone(),
                 })?;
                 self.emit(Opcode::CallBuiltin {
                     builtin_id,
-                    arity: 1,
+                    arity,
                     span_start: extractor.span.start as u32,
                     span_end: extractor.span.end as u32,
                 });
@@ -10806,7 +10970,7 @@ impl Codegen {
                         ty_to_string(extractor_ty)
                     ),
                     span: span.clone(),
-                })
+                });
             }
         }
         let result_slot = self.state.next_slot;
@@ -11655,6 +11819,7 @@ impl Codegen {
                 extractor_ty,
                 success_tag,
                 err_tag,
+                pre_args,
                 seq_tys,
                 items,
             } => {
@@ -11664,6 +11829,7 @@ impl Codegen {
                     extractor_ty,
                     *success_tag,
                     *err_tag,
+                    pre_args,
                     seq_tys,
                     items.len(),
                     slot,

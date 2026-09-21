@@ -531,16 +531,27 @@ impl Checker {
         &mut self,
         span: &Span,
         id: &ResolvedId,
-        param: &ResolvedExtractorParam,
+        params: &[ResolvedExtractorParam],
         ret_ty: &AstTy,
     ) -> Result<TypedNode, TypeError> {
         let mut tyvars = HashMap::new();
-        let param_ty = match &param.ty {
-            Some(ty) => {
-                self.resolve_builtin_ast_ty_in_context(ty, TypeSyntaxContext::General, &mut tyvars)?
-            }
-            None => self.env.fresh_tyvar(),
-        };
+        let param_tys = params
+            .iter()
+            .map(|param| match &param.ty {
+                Some(ty) => self.resolve_builtin_ast_ty_in_context(
+                    ty,
+                    TypeSyntaxContext::General,
+                    &mut tyvars,
+                ),
+                None => Ok(self.env.fresh_tyvar()),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if param_tys.is_empty() {
+            return Err(TypeError::new(
+                "Extractor requires at least one input",
+                span.clone(),
+            ));
+        }
         let ret = self.resolve_builtin_ast_ty_in_context(
             ret_ty,
             TypeSyntaxContext::ExtractorReturn,
@@ -548,7 +559,7 @@ impl Checker {
         )?;
         self.require_extractor_match_result_payload_ty(
             &ret,
-            &param.id.span,
+            span,
             &format!("Extractor {}", id.name),
         )?;
 
@@ -556,7 +567,7 @@ impl Checker {
             id.unique_id,
             Ty::BuiltinFunc {
                 name: id.name.clone(),
-                params: vec![param_ty.clone()],
+                params: param_tys.clone(),
                 ret: Box::new(ret.clone()),
             },
         );
@@ -564,7 +575,7 @@ impl Checker {
         Ok(TypedNode {
             ty: Ty::Unit,
             span: span.clone(),
-            node: TypedInner::BuiltinExtractorDecl(id.clone(), param_ty, ret),
+            node: TypedInner::BuiltinExtractorDecl(id.clone(), param_tys, ret),
         })
     }
 
@@ -1739,7 +1750,7 @@ impl Checker {
         span: &Span,
         id: &ResolvedId,
         type_params: &[ResolvedTypeParam],
-        param: &ResolvedExtractorParam,
+        params: &[ResolvedExtractorParam],
         ret_ty: &AstTy,
         body: &Resolved,
         attrs: &ResolvedDeclAttrs,
@@ -1747,31 +1758,39 @@ impl Checker {
         let mut tyvars = HashMap::new();
         self.seed_signature_type_params(type_params, &mut tyvars);
 
-        let param_ty = match &param.ty {
-            Some(ty) => self.resolve_signature_ast_ty_in_context(
-                ty,
-                TypeSyntaxContext::General,
-                &mut tyvars,
-            )?,
-            None => self.env.fresh_tyvar(),
-        };
-        if self.ty_contains_facet(&param_ty) {
-            return Err(TypeError {
-                structured: None,
-                message:
-                    "Facet is compile-time only in Stage1 and cannot appear in extractor parameter types"
-                        .into(),
+        if params.is_empty() {
+            return Err(TypeError::new(
+                "Extractor requires at least one input",
+                span.clone(),
+            ));
+        }
+        let mut typed_params = Vec::with_capacity(params.len());
+        for param in params {
+            let param_ty = match &param.ty {
+                Some(ty) => self.resolve_signature_ast_ty_in_context(
+                    ty,
+                    TypeSyntaxContext::General,
+                    &mut tyvars,
+                )?,
+                None => self.env.fresh_tyvar(),
+            };
+            if self.ty_contains_facet(&param_ty) {
+                return Err(TypeError::new(
+                    "Facet is compile-time only and cannot appear in extractor parameters",
+                    param.id.span.clone(),
+                ));
+            }
+            typed_params.push(TypedValueParameter {
+                id: param.id.clone(),
+                mode: spire::ast::ValueParameterMode::PositionalOrNamed,
+                ty: param_ty,
                 span: param.id.span.clone(),
-                hint: None,
             });
         }
-        let local_bindings = vec![(param.id.unique_id, param_ty.clone())];
-        let typed_param = TypedValueParameter {
-            id: param.id.clone(),
-            mode: spire::ast::ValueParameterMode::PositionalOrNamed,
-            ty: param_ty,
-            span: param.id.span.clone(),
-        };
+        let local_bindings = typed_params
+            .iter()
+            .map(|param| (param.id.unique_id, param.ty.clone()))
+            .collect::<Vec<_>>();
 
         let expected_ret = self.resolve_signature_ast_ty_in_context(
             ret_ty,
@@ -1790,7 +1809,7 @@ impl Checker {
         }
         self.require_extractor_match_result_payload_ty(
             &expected_ret,
-            &param.id.span,
+            span,
             &format!("Extractor {}", id.name),
         )?;
 
@@ -1873,12 +1892,13 @@ impl Checker {
                         _ => None,
                     })
                     .collect(),
-                TypedValueParameter {
-                    id: typed_param.id,
-                    mode: typed_param.mode,
-                    ty: self.resolve_ty(&typed_param.ty),
-                    span: typed_param.span,
-                },
+                typed_params
+                    .into_iter()
+                    .map(|param| TypedValueParameter {
+                        ty: self.resolve_ty(&param.ty),
+                        ..param
+                    })
+                    .collect(),
                 self.resolve_ty(&expected_ret),
                 Box::new(typed_body),
                 attrs.visibility,

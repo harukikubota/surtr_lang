@@ -1388,6 +1388,22 @@ impl ReplEngine {
                 .unwrap_or((fallback_source_id, span.clone()))
         };
         let (source_id, primary_span) = diagnostic_location(&error.span);
+        let reason = match resolve_diagnostic_reason(&error.diagnostic.reason) {
+            Ok(reason) => reason,
+            Err(parse_error) => {
+                let source = self
+                    .sources
+                    .source(source_id)
+                    .expect("resolved diagnostic source");
+                let local_error = parse_error
+                    .clone()
+                    .map_spans(|span| diagnostic_location(span).1);
+                return (
+                    source_id,
+                    diagnostics::parse_error_spec(source_id, source, &local_error),
+                );
+            }
+        };
         let labels = error
             .related_labels
             .iter()
@@ -1400,7 +1416,7 @@ impl ReplEngine {
             source_id,
             &error.message,
             primary_span,
-            resolve_diagnostic_reason(error.diagnostic.reason),
+            reason,
             error.diagnostic.subject.clone(),
             &labels,
         );
@@ -8891,11 +8907,11 @@ fn preload_script_diagnostic(
 }
 
 fn resolve_diagnostic_reason(
-    reason: sigil::error::ResolveErrorReason,
-) -> diagnostics::ResolveDiagnosticReason {
+    reason: &sigil::error::ResolveErrorReason,
+) -> Result<diagnostics::ResolveDiagnosticReason, &spire::error::ParseError> {
     use diagnostics::ResolveDiagnosticReason as D;
     use sigil::error::ResolveErrorReason as R;
-    match reason {
+    Ok(match reason {
         R::NameResolution => D::NameResolution,
         R::Namespace => D::Namespace,
         R::Visibility => D::Visibility,
@@ -8909,7 +8925,8 @@ fn resolve_diagnostic_reason(
         R::ReservedIntrinsicMarkerDeclaration => D::ReservedIntrinsicMarkerDeclaration,
         R::ReservedIntrinsicMarkerImpl => D::ReservedIntrinsicMarkerImpl,
         R::CompilerInvariant => D::CompilerInvariant,
-    }
+        R::DeferredParse(error) => return Err(error),
+    })
 }
 
 fn preload_resolve_error(
@@ -8917,6 +8934,24 @@ fn preload_resolve_error(
     error: &sigil::error::ResolveError,
 ) -> ReplLoadError {
     let source_id = diagnostic_source_id(compile_sources, &error.span);
+    let reason = match resolve_diagnostic_reason(&error.diagnostic.reason) {
+        Ok(reason) => reason,
+        Err(parse_error) => {
+            let source = compile_sources
+                .sources
+                .source(source_id)
+                .expect("resolved diagnostic source");
+            let local_error = parse_error
+                .clone()
+                .map_spans(|span| local_diagnostic_span(compile_sources, span));
+            return ReplLoadError::Diagnostic {
+                phase: "parse".to_string(),
+                sources: compile_sources.sources.clone(),
+                source_id,
+                spec: diagnostics::parse_error_spec(source_id, source, &local_error),
+            };
+        }
+    };
     let labels = error
         .related_labels
         .iter()
@@ -8932,7 +8967,7 @@ fn preload_resolve_error(
         source_id,
         &error.message,
         local_diagnostic_span(compile_sources, &error.span),
-        resolve_diagnostic_reason(error.diagnostic.reason),
+        reason,
         error.diagnostic.subject.clone(),
         &labels,
     );

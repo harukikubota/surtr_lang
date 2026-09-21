@@ -549,7 +549,7 @@ pub enum TypedInner {
         u32,
         ResolvedId,
         Vec<TypedTypeParam>,
-        TypedValueParameter,
+        Vec<TypedValueParameter>,
         Ty,
         Box<TypedNode>,
         Visibility,
@@ -562,7 +562,7 @@ pub enum TypedInner {
     TraitImplDef(String, String, Option<TypedWhereClause>),
 
     /// Builtin extractor declaration.
-    BuiltinExtractorDecl(ResolvedId, Ty, Ty),
+    BuiltinExtractorDecl(ResolvedId, Vec<Ty>, Ty),
 
     /// Closure literal — params + captures + body
     Closure(Vec<TypedClosureParam>, Vec<ResolvedId>, Box<TypedNode>),
@@ -619,6 +619,7 @@ pub enum TypedPattern {
         input_ty: Ty,
         extractor: ResolvedId,
         extractor_ty: Ty,
+        pre_args: Vec<TypedNode>,
         success_tag: u32,
         err_tag: u32,
         seq_tys: Vec<Ty>,
@@ -723,6 +724,7 @@ pub enum TypedMatchPattern {
         input_ty: Ty,
         extractor: ResolvedId,
         extractor_ty: Ty,
+        pre_args: Vec<TypedNode>,
         success_tag: u32,
         err_tag: u32,
         seq_tys: Vec<Ty>,

@@ -267,7 +267,9 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         }
         Resolved::ConstDef(_, _, _, value, _) => collect_node_usage(value, usage),
         Resolved::ExtractorDef(_, _, _, param, _, body, _) => {
-            usage.bind_id(&param.id);
+            for param in param {
+                usage.bind_id(&param.id);
+            }
             collect_node_usage(body, usage);
         }
         Resolved::TraitDef(_, _, _, _, methods, _) => {
@@ -325,7 +327,15 @@ fn collect_pattern_usage(pattern: &ResolvedPattern, usage: &mut WarningUsage) {
             collect_pattern_usage(head, usage);
             collect_pattern_usage(tail, usage);
         }
-        ResolvedPattern::Constructor(_, inners) | ResolvedPattern::Extractor(_, inners) => {
+        ResolvedPattern::Extractor(_, pre_args, inners) => {
+            for arg in pre_args {
+                collect_node_usage(arg, usage);
+            }
+            for inner in inners {
+                collect_pattern_usage(inner, usage);
+            }
+        }
+        ResolvedPattern::Constructor(_, inners) => {
             for inner in inners {
                 collect_pattern_usage(inner, usage);
             }

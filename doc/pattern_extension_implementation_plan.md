@@ -58,3 +58,5 @@ cargo run -- test --quiet --all
 
 - 第1単位: named / builtin MatchResult 更改、UnitOnly、本文 SafeBind を実装。独立レビュー完了（指摘は全件解消）。最終差分で `rtk cargo nextest run --profile ci --workspace` は1954件成功、`cargo run -- test --quiet --all` は終了コード0。作業用ビルドキャッシュには `CARGO_TARGET_DIR=/Users/haruca/work/rust/surtr/target`、CIには `SURTR_TEST_CACHE=1` を使用した。
 - 初回全体検証で検出した型queryのAnnotatedWildcard追従漏れ、REPL署名期待値、SafeBindの投影後入力型再注入、generic固定shapeの過剰拒否を修正し、最終全件Greenで確認した。
+
+- 第2単位: 複数入力、signature に基づく事前引数、外側 scope、遅延する構文診断を実装。レビューで見つかった通常 Closure の prearg capture 漏れと Forge の nominal 型表記差に対する過剰拒否を回帰テストとともに修正。最終 CI workspace 1962件成功（45 binaries）、標準 SRT 全件は終了コード0。旧診断期待2件と追加parserテストの入力を整合した後の最終差分で確認した。Extractor 標準テスト13件には複数事前引数・generic shape・capture・Unit・評価順・短絡を含む。

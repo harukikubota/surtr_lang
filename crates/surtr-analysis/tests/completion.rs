@@ -1437,6 +1437,7 @@ fn declaration_entry(
     user_callable: bool,
 ) -> DeclarationEntry {
     DeclarationEntry {
+        value_parameter_count: None,
         module_path: module_path.to_string(),
         name: name.to_string(),
         fq_name: fq_name.to_string(),

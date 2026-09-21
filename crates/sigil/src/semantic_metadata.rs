@@ -110,13 +110,17 @@ fn format_fun_signature(
 fn format_extractor_signature(
     name: &str,
     _type_params: &[TypeParam],
-    param: &ExtractorParam,
+    params: &[ExtractorParam],
     ret_ty: &AstTy,
 ) -> String {
-    let param = match &param.ty {
-        Some(ty) => format!("{}: {}", param.name, format_ast_ty(ty)),
-        None => param.name.clone(),
-    };
+    let param = params
+        .iter()
+        .map(|param| match &param.ty {
+            Some(ty) => format!("{}: {}", param.name, format_ast_ty(ty)),
+            None => param.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     format!("{name}({param}) -> {}", format_ast_ty(ret_ty))
 }
 
@@ -267,19 +271,23 @@ fn format_impl_extractor_signature(
     target: &str,
     name: &str,
     type_params: &[TypeParam],
-    param: &ExtractorParam,
+    params: &[ExtractorParam],
     ret_ty: &AstTy,
 ) -> String {
     let self_ty = AstTy::Named(spire::ast::Span { start: 0, end: 0 }, target.to_string());
     let type_params = format_type_params(type_params);
-    let param = match &param.ty {
-        Some(ty) => format!(
-            "{}: {}",
-            param.name,
-            format_ast_ty(&rewrite_self_ast_ty(ty, &self_ty))
-        ),
-        None => param.name.clone(),
-    };
+    let param = params
+        .iter()
+        .map(|param| match &param.ty {
+            Some(ty) => format!(
+                "{}: {}",
+                param.name,
+                format_ast_ty(&rewrite_self_ast_ty(ty, &self_ty))
+            ),
+            None => param.name.clone(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     let signature = format!(
         "{name}{type_params}({param}) -> {}",
         format_ast_ty(&rewrite_self_ast_ty(ret_ty, &self_ty))

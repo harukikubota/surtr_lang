@@ -2109,39 +2109,38 @@ impl Parser<'_> {
                 ));
             }
         };
-        let Ast::Match(_, _, mut arms) = pattern_expr else {
-            return Ok(Ast::App(
-                Span { start, end },
-                Box::new(Ast::Var(Span { start, end: start }, name.into())),
-                vec![
-                    RecordLitArg::Positional(term),
-                    RecordLitArg::Positional(pattern_expr),
-                ],
-            ));
-        };
-        let pattern = arms.remove(0).pattern;
-        if super::pattern::pattern_contains_binding_var(&pattern) {
-            return Err(ParseError::syntax(
-                crate::error::ParseErrorReason::ExpressionSyntax,
-                "`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.",
-                super::pattern_span(&pattern).clone(),
-            ));
+        if let Ast::Match(_, _, arms) = &pattern_expr {
+            if arms.len() != 1 {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::CompilerInvariant,
+                    "Invalid Pattern argument carrier",
+                    Span { start, end },
+                ));
+            }
+            if super::pattern::pattern_contains_binding_var(&arms[0].pattern) {
+                return Err(ParseError::syntax(crate::error::ParseErrorReason::ExpressionSyntax,
+                    "`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.",
+                    super::pattern_span(&arms[0].pattern).clone()));
+            }
         }
         let span = Span { start, end };
-        Ok(Ast::Match(
-            span.clone(),
-            Box::new(term),
+        let callee = if name.contains("::") {
+            Ast::Path(
+                span.clone(),
+                AstPath {
+                    span: span.clone(),
+                    segments: name.split("::").map(str::to_string).collect(),
+                },
+            )
+        } else {
+            Ast::Var(span.clone(), name.to_string())
+        };
+        Ok(Ast::App(
+            span,
+            Box::new(callee),
             vec![
-                AstMatchArm {
-                    pattern,
-                    guard: None,
-                    body: Ast::Lit(span.clone(), Lit::Bool(true)),
-                },
-                AstMatchArm {
-                    pattern: AstPattern::Wildcard(span.clone()),
-                    guard: None,
-                    body: Ast::Lit(span, Lit::Bool(false)),
-                },
+                RecordLitArg::Positional(term),
+                RecordLitArg::Positional(pattern_expr),
             ],
         ))
     }

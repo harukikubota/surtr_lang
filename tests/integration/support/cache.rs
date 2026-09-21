@@ -270,7 +270,7 @@ pub(super) fn cached_module_pipeline(
         parse_module_stages(compile_sources, compile_unit_kind_for_mode(mode))?
     };
     let declaration_index = sigil::precollect_declaration_index(&module_asts)
-        .map_err(|e| format!("phase=resolve; message={}", e))?;
+        .map_err(super::phase::format_resolve_failure)?;
     let pipeline = CachedModulePipeline {
         module_asts,
         declaration_index,
@@ -360,7 +360,7 @@ fn cached_script_compile_prefix(
         std_snapshot.default_stage_count,
         std_snapshot.resolve_state(),
     )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    .map_err(super::phase::format_resolve_failure)?;
     let resume_state = resolved.resume_state;
 
     let mut scar_session = scar::ScarSession::new();
@@ -481,7 +481,7 @@ pub(super) fn cached_compile_prefix(
                 &cached_modules.declaration_index,
                 None,
             )
-            .map_err(|e| format!("phase=resolve; message={}", e))?;
+            .map_err(super::phase::format_resolve_failure)?;
             let resume_state = resolved.resume_state;
             let mut scar_session = scar::ScarSession::new();
             let typed = scar_session

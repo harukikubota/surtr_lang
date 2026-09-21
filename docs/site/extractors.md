@@ -54,6 +54,26 @@ Extractor 本文でも SafeBind を使えます。失敗は本文自身の Match
 成功終端には明示的な MatchResult::OK が必要です。
 MatchResult は通常の変数・引数・field に保持できず、通常 Closure へ利用権限は継承されません。
 
+## 事前引数
+
+最後の入力が照合対象です。それ以前の入力は Pattern head の先頭に通常の式として書きます。
+
+```surtr
+deferror Outside { "outside range" }
+defmod Bounds {
+  defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
+    if(min <= value && value <= max, MatchResult::OK(value), MatchResult::Err(Outside))
+  }
+}
+# 利用側
+if_let(5, Bounds::between(0, 10, accepted), accepted, 0)
+# 5
+```
+
+事前引数はその occurrence に到達したときだけ左から一度ずつ評価します。
+同じ Pattern で新たに束縛する名前は参照できず、外側にある同名値を参照します。
+成功 payload が Unit なら、事前引数だけを書いて子 Pattern を省略できます。
+
 ## ルール
 
 - extractor 名は constructor-style の大文字始まりにしない

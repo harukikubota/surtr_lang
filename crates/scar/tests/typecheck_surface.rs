@@ -1260,6 +1260,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(match_result_extractor_uses_own_safebind_target),
     surface_case!(match_result_unitonly_rejects_wrong_child_shapes),
     surface_case!(match_result_payload_shape_must_be_resolved_before_execution),
+    surface_case!(extractor_prearguments_follow_signature_and_infer_payload_shape),
 ];
 
 #[test]
@@ -11020,4 +11021,38 @@ fn match_result_payload_shape_must_be_resolved_before_execution() {
     ] {
         typecheck(resolve_with_builtin_prelude(source)).expect("fixed payload shape permits generic children");
     }
+}
+
+fn extractor_prearguments_follow_signature_and_infer_payload_shape() {
+    let source = r#"impl Int {
+  defextractor choose(left: $A, right: Int, value: Int) -> MatchResult<$A> { MatchResult::OK(left) }
+  defextractor check(limit: Int, value: Int) -> MatchResult<Unit> { MatchResult::OK(()) }
+}
+limit = 10
+match 5 { Int::choose((1, "one"), limit + 1, number: Int, text: String) => text, _ => "miss" }
+match 5 { Int::check(limit) => 1, _ => 0 }
+match 5 { Int::check(limit, _: Unit) => 1, _ => 0 }
+"#;
+    typecheck(resolve_with_builtin_prelude(source))
+        .expect("preargument types determine payload shape");
+
+    let source = r#"impl Int {
+  defextractor accept(pre: $A, value: Int) -> MatchResult<Int> { MatchResult::OK(value) }
+}
+def doubled(value: $N) -> Boolean where $N: Add {
+  is_match(1, Int::accept(value + value, _))
+}
+doubled(21)
+doubled(1.5)
+"#;
+    let typed = typecheck(resolve_with_builtin_prelude(source))
+        .expect("generic trait calls in prearguments specialize with their enclosing function");
+    let specialized = typed
+        .iter()
+        .filter_map(|node| match &node.node {
+            TypedInner::Def(_, id, _, _, _, _, body, _) if id.name == "doubled" => Some(body),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(specialized.len(), 2);
 }

@@ -1791,7 +1791,7 @@ impl Resolver {
         })
     }
 
-    fn declaration_entry_for_uid(&self, uid: u32) -> Option<&DeclarationEntry> {
+    pub(super) fn declaration_entry_for_uid(&self, uid: u32) -> Option<&DeclarationEntry> {
         self.declaration_uids
             .iter()
             .find_map(|(fq_name, entry_uid)| (*entry_uid == uid).then_some(fq_name))
@@ -3128,6 +3128,12 @@ impl Resolver {
                 }
                 let mut show_resolver = Resolver::with_scope(error_scope);
                 show_resolver.declaration_uids = self.declaration_uids.clone();
+                show_resolver.declaration_entries = self
+                    .declaration_entries
+                    .iter()
+                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                    .map(|(key, entry)| (key.clone(), entry.clone()))
+                    .collect();
                 show_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 show_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 show_resolver.owner_registry = self.owner_registry.clone();
@@ -3229,6 +3235,12 @@ impl Resolver {
                 body_scope.define_with_id(&name, fun_uid);
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
+                body_resolver.declaration_entries = self
+                    .declaration_entries
+                    .iter()
+                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                    .map(|(key, entry)| (key.clone(), entry.clone()))
+                    .collect();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
@@ -3327,13 +3339,22 @@ impl Resolver {
                 body_scope.define_with_id(&name, fun_uid);
                 let mut body_resolver = Resolver::with_scope(body_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
+                body_resolver.declaration_entries = self
+                    .declaration_entries
+                    .iter()
+                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                    .map(|(key, entry)| (key.clone(), entry.clone()))
+                    .collect();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.owner_registry = self.owner_registry.clone();
                 body_resolver.current_module_path = self.current_module_path.clone();
                 body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
                 let resolved_type_params = self.resolve_type_params(type_params)?;
-                let resolved_param = body_resolver.resolve_extractor_param(param)?;
+                let resolved_param = param
+                    .into_iter()
+                    .map(|param| body_resolver.resolve_extractor_param(param))
+                    .collect::<Result<Vec<_>, _>>()?;
                 let resolved_body = body_resolver.resolve_node(*body)?;
 
                 self.scope.advance_next_id_to(body_resolver.scope.next_id());
@@ -3417,6 +3438,12 @@ impl Resolver {
                     } = method;
                     let mut method_resolver = Resolver::with_scope(trait_method_scope.clone());
                     method_resolver.declaration_uids = self.declaration_uids.clone();
+                    method_resolver.declaration_entries = self
+                        .declaration_entries
+                        .iter()
+                        .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                        .map(|(key, entry)| (key.clone(), entry.clone()))
+                        .collect();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
@@ -3629,6 +3656,12 @@ impl Resolver {
                     // Only declared trait members introduce a self-name alias.
                     let mut method_resolver = Resolver::with_scope(method_scope);
                     method_resolver.declaration_uids = self.declaration_uids.clone();
+                    method_resolver.declaration_entries = self
+                        .declaration_entries
+                        .iter()
+                        .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                        .map(|(key, entry)| (key.clone(), entry.clone()))
+                        .collect();
                     method_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                     method_resolver.declaration_hidden_by_uid =
                         self.declaration_hidden_by_uid.clone();
@@ -3752,6 +3785,12 @@ impl Resolver {
                     .unwrap_or_else(|| self.scope.reserve_id());
                 let mut decl_resolver = Resolver::with_scope(self.scope.clone());
                 decl_resolver.declaration_uids = self.declaration_uids.clone();
+                decl_resolver.declaration_entries = self
+                    .declaration_entries
+                    .iter()
+                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                    .map(|(key, entry)| (key.clone(), entry.clone()))
+                    .collect();
                 decl_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 decl_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 decl_resolver.trait_constructor_slots = self.trait_constructor_slots.clone();
@@ -3826,7 +3865,10 @@ impl Resolver {
                     symbol_info,
                     span: span.clone(),
                 };
-                let resolved_param = self.resolve_extractor_param(param)?;
+                let resolved_param = param
+                    .into_iter()
+                    .map(|param| self.resolve_extractor_param(param))
+                    .collect::<Result<Vec<_>, _>>()?;
                 Ok(Resolved::BuiltinExtractorDecl(
                     span,
                     rid,
@@ -3985,6 +4027,12 @@ impl Resolver {
 
                 let mut body_resolver = Resolver::with_scope(closure_scope);
                 body_resolver.declaration_uids = self.declaration_uids.clone();
+                body_resolver.declaration_entries = self
+                    .declaration_entries
+                    .iter()
+                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+                    .map(|(key, entry)| (key.clone(), entry.clone()))
+                    .collect();
                 body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
                 body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
                 body_resolver.owner_registry = self.owner_registry.clone();

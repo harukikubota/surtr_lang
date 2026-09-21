@@ -30,6 +30,9 @@ Pattern AST は第一級の値にしない。一般関数の partial application
 
 - 2026-09-21: named / builtin Extractor を二状態の `MatchResult<P, Error>` へ移行した（短縮 `MatchResult<P>` も受理）。通常値位置・通常 callable・constructor capture / Pattern 分解と旧 Option 返却を拒否し、具象 deferror の明示 Err と compiler-owned な SafeBind の元 Error 保持を分離した。UnitOnly の子0/1、bind / wildcard 注釈、generic payload shape、nested callable / do 境界を接続した。runtime uncons と標準 Duration / Range を移行し、Option 専用 lowering、no-match tag、Extractor 再実行 fallback を削除した。canonical tag / payload metadata と VM の不正 carrier 検査を追加し、最適化 tag opcode でも維持する。独立レビュー指摘を解消後、CI workspace 1954件と標準 SRT 全件が成功。事前引数、ExtractorClosure、apply_pattern / projection、Extractor::from_result は本項目に含めない。
 
+
+- 2026-09-21: named / builtin Extractor の複数入力・事前引数を実装した。最後の入力を照合対象とし、signature で Expr / 子 Pattern 領域を確定する。入力と事前引数の通常型統一後に payload shape と総 arity を検査し、不足・余剰を切り捨てない。事前引数・pin・head は Pattern 開始時の外側 scope で解決し、到達時に左から一度だけ評価する。Unit 事前引数、UnitOnly 省略、attached deconstruct の末尾 self、generic payload、通常 Closure の capture、OR と短絡を検証した。役割選択まで保存した構文エラーは元の ParseError と source facts を保持して返す。独立レビュー指摘を解消後、CI workspace 1962件と標準 SRT 全件が成功。ExtractorClosure、apply_pattern / projection、Extractor::from_result は本項目に含めない。
+
 ## 2. 現状と変更後
 
 本仕様の移行前の Extractor は一入力で `Option<Payload>` を返す。`Some(payload)` は子 Pattern の照合へ進み、`None` は不一致になる。SafeBind の `None` failure は共通 PatternMismatch Error となる。

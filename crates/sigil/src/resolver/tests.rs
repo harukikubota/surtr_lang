@@ -3697,12 +3697,9 @@ fn test_is_match_conversion() {
 
 #[test]
 fn test_is_match_rejects_binding_variable_pattern() {
-    let err = spire::parse_with_context(
-        "x = is_match(Ok(1), Ok(v))",
-        spire::ParserContext::project(0),
-    )
-    .expect_err("must fail");
-    assert!(err.message().contains("does not allow binding variables"));
+    let err = parse_and_resolve("x = is_match(Ok(1), Ok(v))")
+        .expect_err("must fail after argument roles are known");
+    assert!(err.message.contains("does not allow binding variables"));
 }
 
 #[test]
@@ -6051,6 +6048,7 @@ fn test_sigil_session_visible_entries_filter_hidden_surfaces_and_keep_visible_al
     declaration_index.insert(
         "Global::Helper::helper".to_string(),
         DeclarationEntry {
+            value_parameter_count: None,
             module_path: "Global::Helper".to_string(),
             name: "helper".to_string(),
             fq_name: "Global::Helper::helper".to_string(),
@@ -6066,6 +6064,7 @@ fn test_sigil_session_visible_entries_filter_hidden_surfaces_and_keep_visible_al
     declaration_index.insert(
         "Global::Kernel::hidden_pid".to_string(),
         DeclarationEntry {
+            value_parameter_count: None,
             module_path: "Global::Kernel".to_string(),
             name: "hidden_pid".to_string(),
             fq_name: "Global::Kernel::hidden_pid".to_string(),
@@ -8332,7 +8331,7 @@ result = do::<Result> {
         pattern: ResolvedPattern::As(constructor, whole, None),
         ..
     }, ResolvedDoStatement::Extract {
-        pattern: ResolvedPattern::Extractor(extractor, extracted_items),
+        pattern: ResolvedPattern::Extractor(extractor, _, extracted_items),
         ..
     }, ResolvedDoStatement::SafeBind {
         pattern: ResolvedPattern::Pin(pinned),
@@ -8395,4 +8394,107 @@ fn match_result_constructors_keep_qualified_identity_without_bare_aliases() {
     );
     assert!(resolver.scope.lookup("OK").is_none());
     assert_ne!(resolver.scope.lookup("Err"), Some(err));
+}
+
+fn preargument_test_modules() -> Vec<Vec<StagedModuleAst>> {
+    vec![vec![
+        staged_module("", parse_module_ast("@builtin defenum MatchResult<$T> { OK($T), Err(Error) }", "")),
+        staged_module("Bounds", parse_module_ast("defextractor offset(amount: Int, value: Int) -> MatchResult<Int> { MatchResult::OK(value) }\ndefextractor unit(value: Int) -> MatchResult<Unit> { MatchResult::OK(()) }", "Bounds")),
+    ]]
+}
+
+#[test]
+fn extractor_prearguments_and_pins_keep_outer_binding_identity() {
+    let resolved = resolve_user_with_modules(
+        "amount = 10\nresult = match (2, 3, 10) { (amount, Bounds::offset(amount, adjusted), ^amount) => (amount, adjusted), _ => (0, 0) }",
+        &preargument_test_modules()).unwrap();
+    let outer = resolved
+        .iter()
+        .find_map(|node| match node {
+            Resolved::Bind(_, ResolvedPattern::Var(id), _) if id.name == "amount" => {
+                Some(id.unique_id)
+            }
+            _ => None,
+        })
+        .unwrap();
+    let Resolved::Bind(_, _, rhs) = resolved.last().unwrap() else {
+        panic!("result binding");
+    };
+    let Resolved::Match(_, _, arms) = rhs.as_ref() else {
+        panic!("match");
+    };
+    let ResolvedPattern::Tuple(items) = &arms[0].pattern else {
+        panic!("tuple");
+    };
+    let [ResolvedPattern::Var(shadow), ResolvedPattern::Extractor(_, args, children), ResolvedPattern::Pin(pin)] =
+        items.as_slice()
+    else {
+        panic!("pattern contract");
+    };
+    assert_ne!(shadow.unique_id, outer);
+    assert_eq!(pin.unique_id, outer);
+    assert!(matches!(args.as_slice(), [Resolved::Var(_, id)] if id.unique_id == outer));
+    assert!(matches!(children.as_slice(), [ResolvedPattern::Var(id)] if id.name == "adjusted"));
+}
+
+#[test]
+fn extractor_prearguments_do_not_count_as_predicate_or_or_bindings() {
+    for source in [
+        "amount = 10\nis_match(1, Bounds::offset(amount, _))",
+        "amount = 10\nmatch 1 { Bounds::offset(amount, value) | Bounds::offset(0, value) => value, _ => 0 }",
+    ] {
+        resolve_user_with_modules(source, &preargument_test_modules()).expect(source);
+    }
+}
+
+#[test]
+fn extractor_preargument_and_pin_cannot_read_new_pattern_bindings() {
+    for source in [
+        "match (1, 2) { (fresh, Bounds::offset(fresh, _)) => 1, _ => 0 }",
+        "match (1, 2) { (fresh, ^fresh) => 1, _ => 0 }",
+    ] {
+        let error =
+            resolve_user_with_modules(source, &preargument_test_modules()).expect_err(source);
+        assert!(error.message.contains("fresh"), "{error:?}");
+    }
+}
+
+#[test]
+fn extractor_payload_unit_keeps_deferred_parser_error() {
+    let error = resolve_user_with_modules(
+        "match 1 { Bounds::unit(()) => 1, _ => 0 }",
+        &preargument_test_modules(),
+    )
+    .expect_err("Unit is not a Pattern");
+    let crate::error::ResolveErrorReason::DeferredParse(parser_error) = error.diagnostic.reason
+    else {
+        panic!("expected deferred parser error: {error:?}");
+    };
+    assert_eq!(
+        parser_error.reason(),
+        spire::error::ParseErrorReason::PatternSyntax
+    );
+    assert!(parser_error.message().contains("Unit type has no pattern"));
+}
+
+#[test]
+fn extractor_prearguments_capture_outer_values_in_closures() {
+    for body in [
+        "Bounds::offset(amount, out) =? Ok(value)\n Ok(out)",
+        "match value { Bounds::offset(amount, out) => out, _ => 0 }",
+        "if_let(value, Bounds::offset(amount, out), out, 0)",
+    ] {
+        let source = format!("amount = 10\nf = {{|value: Int| {body}}}");
+        let resolved = resolve_user_with_modules(&source, &preargument_test_modules()).expect(body);
+        let Resolved::Bind(_, _, rhs) = resolved.last().unwrap() else {
+            panic!("closure binding");
+        };
+        let Resolved::Closure(_, _, captures, _) = rhs.as_ref() else {
+            panic!("closure");
+        };
+        assert!(
+            matches!(captures.as_slice(), [id] if id.name == "amount"),
+            "{body}: {captures:?}"
+        );
+    }
 }

@@ -1,0 +1,9 @@
+defmod PreArgMatchers {
+  defextractor offset(amount: Int, value: Int) -> MatchResult<Int, Error> {
+    MatchResult::OK(value + amount)
+  }
+
+  defextractor guard(min: Int, value: Int) -> MatchResult<Unit, Error> {
+    if(value >= min, MatchResult::OK(()), MatchResult::Err(NoneError))
+  }
+}

@@ -1,7 +1,7 @@
 include "./schema/extractor_schema.srt"
 
 import Test;
-import ExtractorSchema::{result_checked, nested_checked, positive, run_result, run_nested};
+import ExtractorSchema::{result_checked, nested_checked, positive, run_result, run_nested, offset, supply, between, observed_between, at_least, note, with_unit, make_offset_bind, make_offset_match};
 
 test("Extractor result contract") {
   it("preserves the Result error chain and stops its own body") {
@@ -39,4 +39,89 @@ test("Extractor result contract") {
     assert_false(is_match(0, result_checked(_)))
     assert_eq([], capture_stdout())
   }
+
+  it("places the matched input after one or several pre-arguments") {
+    assert_true(is_match(3, ExtractorSchema::with_duration(1ms, _)))
+    increment = {|value: Int| value + 1}
+    assert_eq(4, if_let(3, ExtractorSchema::converted(increment, result), result, 0))
+    assert_eq(13, if_let(3, offset(10, result: Int), result, 0))
+    assert_eq(8, if_let(3, offset(2 + 3, result), result, 0))
+    assert_eq(13, if_let(ExtractorBox(3), ExtractorBox(10, result), result, 0))
+    assert_eq(5, if_let(5, between(2, 8, result), result, 0))
+    assert_false(is_match(9, between(2, 8, _)))
+    assert_true(is_match(5, at_least(2)))
+    assert_true(is_match(5, at_least(2, _)))
+    assert_eq((), if_let(5, at_least(2, unit: Unit), unit, ()))
+  }
+
+  it("evaluates reached pre-arguments and the body once in argument order") {
+    capture_stdout()
+    actual = match note("input", 5) {
+      observed_between(note("min", 2), note("max", 8), result) => result,
+      _ => 0,
+    }
+    assert_eq(5, actual)
+    assert_eq(["input", "min", "max", "body:5"], capture_stdout())
+  }
+
+  it("does not evaluate pre-arguments after a failed earlier child") {
+    capture_stdout()
+    assert_eq("fallback", match (0, 5) {
+      (positive(), observed_between(note("unreached-min", 2), note("unreached-max", 8), _)) => "unexpected",
+      _ => "fallback",
+    })
+    assert_eq([], capture_stdout())
+  }
+
+  it("evaluates each arm occurrence independently after child mismatch") {
+    capture_stdout()
+    actual = match 5 {
+      observed_between(note("first-min", 2), note("first-max", 8), 7) => 0,
+      observed_between(note("second-min", 2), note("second-max", 8), result) => result,
+      _ => 0,
+    }
+    assert_eq(5, actual)
+    assert_eq(["first-min", "first-max", "body:5", "second-min", "second-max", "body:5"], capture_stdout())
+  }
+
+  it("resolves pre-arguments and pins in the enclosing scope") {
+    amount = 10
+    assert_eq((2, 13), match (2, 3) {
+      (amount, offset(amount, adjusted)) => (amount, adjusted),
+      _ => (0, 0),
+    })
+    assert_eq(2, match (2, 10) {
+      (amount, ^amount) => amount,
+      _ => 0,
+    })
+    assert_eq(10, amount)
+  }
+
+  it("keeps variable pre-arguments outside branch bindings") {
+    low = 2
+    high = 8
+    assert_true(is_match(5, between(low, high, _)))
+    assert_eq(5, match 5 {
+      between(0, low, result) | between(low, high, result) => result,
+      _ => 0,
+    })
+  }
+
+  it("infers generic payload shape from its pre-argument") {
+    assert_eq("tag", if_let(1, supply("tag", result), result, "fallback"))
+    assert_eq(("tag", 5), if_let(1, supply(("tag", 5), name, count), (name, count), ("fallback", 0)))
+  }
+
+  it("captures enclosing values referenced only by pre-arguments") {
+    bind_closure = make_offset_bind(10)
+    match_closure = make_offset_match(10)
+    assert_eq("Ok(13)", inspect(bind_closure(3)))
+    assert_eq(13, match_closure(3))
+  }
+
+  it("accepts Unit as a pre-argument expression") {
+    assert_eq(3, if_let(3, with_unit((), value), value, 0))
+    assert_true(is_match(3, with_unit((), _)))
+  }
+
 }

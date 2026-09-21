@@ -2,6 +2,140 @@ use super::*;
 use diagnostics::{PatternKind, TypeDiagnosticReason};
 
 impl Checker {
+    /// Expression subtrees owned by patterns, including nested occurrences.
+    /// Expression visitors must include these as well as ordinary Expr children.
+    pub(super) fn pattern_expression_nodes(node: &TypedNode) -> Vec<&TypedNode> {
+        fn binding<'a>(pat: &'a TypedPattern, out: &mut Vec<&'a TypedNode>) {
+            match pat {
+                TypedPattern::Extractor {
+                    pre_args, items, ..
+                } => {
+                    out.extend(pre_args);
+                    for item in items {
+                        binding(item, out);
+                    }
+                }
+                TypedPattern::As(_, inner, _) => binding(inner, out),
+                TypedPattern::ListCons(_, head, tail) => {
+                    binding(head, out);
+                    binding(tail, out);
+                }
+                TypedPattern::Tuple(_, items) | TypedPattern::Constructor { fields: items, .. } => {
+                    for item in items {
+                        binding(item, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        fn matching<'a>(pat: &'a TypedMatchPattern, out: &mut Vec<&'a TypedNode>) {
+            match pat {
+                TypedMatchPattern::Extractor {
+                    pre_args, items, ..
+                } => {
+                    out.extend(pre_args);
+                    for item in items {
+                        matching(item, out);
+                    }
+                }
+                TypedMatchPattern::As(inner, _) => matching(inner, out),
+                TypedMatchPattern::ListCons(head, tail) => {
+                    matching(head, out);
+                    matching(tail, out);
+                }
+                TypedMatchPattern::Tuple(items)
+                | TypedMatchPattern::Or(items)
+                | TypedMatchPattern::Constructor { fields: items, .. } => {
+                    for item in items {
+                        matching(item, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        match &node.node {
+            TypedInner::Bind(pattern, _) | TypedInner::SafeBind(pattern, ..) => {
+                binding(pattern, &mut out)
+            }
+            TypedInner::DoSafeBind(control) => binding(&control.pattern, &mut out),
+            TypedInner::Match(_, arms) => {
+                for arm in arms {
+                    matching(&arm.pattern, &mut out);
+                }
+            }
+            _ => {}
+        }
+        out
+    }
+
+    /// Expression subtrees owned by patterns, including nested occurrences.
+    /// Expression visitors must include these as well as ordinary Expr children.
+    pub(super) fn pattern_expression_nodes_mut(node: &mut TypedNode) -> Vec<&mut TypedNode> {
+        fn binding<'a>(pat: &'a mut TypedPattern, out: &mut Vec<&'a mut TypedNode>) {
+            match pat {
+                TypedPattern::Extractor {
+                    pre_args, items, ..
+                } => {
+                    out.extend(pre_args);
+                    for item in items {
+                        binding(item, out);
+                    }
+                }
+                TypedPattern::As(_, inner, _) => binding(inner, out),
+                TypedPattern::ListCons(_, head, tail) => {
+                    binding(head, out);
+                    binding(tail, out);
+                }
+                TypedPattern::Tuple(_, items) | TypedPattern::Constructor { fields: items, .. } => {
+                    for item in items {
+                        binding(item, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        fn matching<'a>(pat: &'a mut TypedMatchPattern, out: &mut Vec<&'a mut TypedNode>) {
+            match pat {
+                TypedMatchPattern::Extractor {
+                    pre_args, items, ..
+                } => {
+                    out.extend(pre_args);
+                    for item in items {
+                        matching(item, out);
+                    }
+                }
+                TypedMatchPattern::As(inner, _) => matching(inner, out),
+                TypedMatchPattern::ListCons(head, tail) => {
+                    matching(head, out);
+                    matching(tail, out);
+                }
+                TypedMatchPattern::Tuple(items)
+                | TypedMatchPattern::Or(items)
+                | TypedMatchPattern::Constructor { fields: items, .. } => {
+                    for item in items {
+                        matching(item, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        match &mut node.node {
+            TypedInner::Bind(pattern, _) | TypedInner::SafeBind(pattern, ..) => {
+                binding(pattern, &mut out)
+            }
+            TypedInner::DoSafeBind(control) => binding(&mut control.pattern, &mut out),
+            TypedInner::Match(_, arms) => {
+                for arm in arms {
+                    matching(&mut arm.pattern, &mut out);
+                }
+            }
+            _ => {}
+        }
+        out
+    }
+
     pub(super) fn eq_dispatch_for_pattern_pin(
         &mut self,
         ty: &Ty,
@@ -96,7 +230,7 @@ impl Checker {
             | ResolvedPattern::BoolLit(_, _)
             | ResolvedPattern::DurationLit(_, _)
             | ResolvedPattern::Constructor(_, _)
-            | ResolvedPattern::Extractor(_, _) => false,
+            | ResolvedPattern::Extractor(_, _, _) => false,
         }
     }
 
@@ -302,8 +436,13 @@ impl Checker {
                     }
                     Ty::Str => {
                         let extractor_id = self.kernel_uncons_id(span)?;
-                        let (input_ty, extractor_ty, seq_tys, success_tag, err_tag) =
-                            self.extractor_contract_for_observed_ty(&extractor_id, &rhs_ty, span)?;
+                        let (input_ty, extractor_ty, pre_args, seq_tys, success_tag, err_tag) =
+                            self.extractor_contract_for_observed_ty(
+                                &extractor_id,
+                                &rhs_ty,
+                                &[],
+                                span,
+                            )?;
                         debug_assert_eq!(seq_tys.len(), 2);
                         let (typed_head, _) = self.check_pattern(head, &seq_tys[0], span)?;
                         let (typed_tail, _) = self.check_pattern(tail, &seq_tys[1], span)?;
@@ -312,6 +451,7 @@ impl Checker {
                                 input_ty,
                                 extractor: extractor_id,
                                 extractor_ty,
+                                pre_args,
                                 success_tag,
                                 err_tag,
                                 seq_tys,
@@ -564,12 +704,13 @@ impl Checker {
                     rhs_ty,
                 ))
             }
-            ResolvedPattern::Extractor(extractor_id, items) => {
+            ResolvedPattern::Extractor(extractor_id, pre_args, items) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
-                let (input_ty, extractor_ty, seq_tys, success_tag, err_tag) = self
+                let (input_ty, extractor_ty, pre_args, seq_tys, success_tag, err_tag) = self
                     .extractor_contract_for_observed_ty(
                         extractor_id,
                         &rhs_ty,
+                        pre_args,
                         &extractor_id.span,
                     )?;
                 if !self.types_compatible(&input_ty, &rhs_ty) {
@@ -627,6 +768,7 @@ impl Checker {
                         input_ty,
                         extractor: extractor_id.clone(),
                         extractor_ty,
+                        pre_args,
                         success_tag,
                         err_tag,
                         seq_tys,

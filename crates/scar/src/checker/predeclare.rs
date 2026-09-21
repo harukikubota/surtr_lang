@@ -4347,14 +4347,17 @@ impl Checker {
                 Resolved::BuiltinExtractorDecl(_, id, param, ret_ty, _) => {
                     self.register_function_id(id);
                     let mut tyvars = HashMap::new();
-                    let param_ty = match &param.ty {
-                        Some(ty) => self.resolve_builtin_ast_ty_in_context(
-                            ty,
-                            TypeSyntaxContext::General,
-                            &mut tyvars,
-                        )?,
-                        None => self.env.fresh_tyvar(),
-                    };
+                    let param_tys = param
+                        .iter()
+                        .map(|param| match &param.ty {
+                            Some(ty) => self.resolve_builtin_ast_ty_in_context(
+                                ty,
+                                TypeSyntaxContext::General,
+                                &mut tyvars,
+                            ),
+                            None => Ok(self.env.fresh_tyvar()),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                     let ret = self.resolve_builtin_ast_ty_in_context(
                         ret_ty,
                         TypeSyntaxContext::ExtractorReturn,
@@ -4364,7 +4367,7 @@ impl Checker {
                         id.unique_id,
                         Ty::BuiltinFunc {
                             name: id.name.clone(),
-                            params: vec![param_ty],
+                            params: param_tys,
                             ret: Box::new(ret),
                         },
                     );
@@ -4541,34 +4544,35 @@ impl Checker {
                     self.register_function_id(id);
                     let mut tyvars = HashMap::new();
                     self.seed_signature_type_params(type_params, &mut tyvars);
-                    let param_ty = match &param.ty {
-                        Some(ty) => self.resolve_signature_ast_ty_in_context(
-                            ty,
-                            TypeSyntaxContext::General,
-                            &mut tyvars,
-                        )?,
-                        None => self.env.fresh_tyvar(),
-                    };
+                    let param_tys = param
+                        .iter()
+                        .map(|param| match &param.ty {
+                            Some(ty) => self.resolve_signature_ast_ty_in_context(
+                                ty,
+                                TypeSyntaxContext::General,
+                                &mut tyvars,
+                            ),
+                            None => Ok(self.env.fresh_tyvar()),
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
                     let ret = self.resolve_signature_ast_ty_in_context(
                         ret_ty,
                         TypeSyntaxContext::ExtractorReturn,
                         &mut tyvars,
                     )?;
-                    self.validate_nominal_type_well_formed(&param_ty, span, false)?;
+                    for param_ty in &param_tys {
+                        self.validate_nominal_type_well_formed(param_ty, span, false)?;
+                    }
                     self.validate_nominal_type_well_formed(&ret, span, false)?;
-                    let type_params = Self::signature_type_param_vars(
-                        type_params,
-                        &tyvars,
-                        std::slice::from_ref(&param_ty),
-                        &ret,
-                    );
+                    let type_params =
+                        Self::signature_type_param_vars(type_params, &tyvars, &param_tys, &ret);
                     self.env.bind_var(
                         id.unique_id,
                         Ty::UserFunc {
                             fun_idx,
                             type_params,
                             call_substitution: Vec::new(),
-                            params: vec![param_ty],
+                            params: param_tys,
                             ret: Box::new(ret),
                         },
                     );

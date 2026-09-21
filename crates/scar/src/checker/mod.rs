@@ -2128,7 +2128,9 @@ impl ScarSession {
                 for type_param in type_params {
                     let _ = type_param;
                 }
-                Self::rewrite_fun_indices_in_value_parameter(param, rewrites);
+                for param in param {
+                    Self::rewrite_fun_indices_in_value_parameter(param, rewrites);
+                }
                 Self::rewrite_fun_indices_in_ty(ret_ty, rewrites);
                 Self::rewrite_fun_indices_in_node(body, rewrites);
             }
@@ -2195,7 +2197,12 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_pattern(item, rewrites);
                 }
             }
-            TypedPattern::Extractor { items, .. } => {
+            TypedPattern::Extractor {
+                pre_args, items, ..
+            } => {
+                for arg in pre_args {
+                    Self::rewrite_fun_indices_in_node(arg, rewrites);
+                }
                 for item in items {
                     Self::rewrite_fun_indices_in_pattern(item, rewrites);
                 }
@@ -2224,8 +2231,27 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_match_pattern(item, rewrites);
                 }
             }
-            TypedMatchPattern::Constructor { fields, .. }
-            | TypedMatchPattern::Extractor { items: fields, .. } => {
+            TypedMatchPattern::Extractor {
+                input_ty,
+                extractor_ty,
+                pre_args,
+                seq_tys,
+                items,
+                ..
+            } => {
+                Self::rewrite_fun_indices_in_ty(input_ty, rewrites);
+                Self::rewrite_fun_indices_in_ty(extractor_ty, rewrites);
+                for ty in seq_tys {
+                    Self::rewrite_fun_indices_in_ty(ty, rewrites);
+                }
+                for arg in pre_args {
+                    Self::rewrite_fun_indices_in_node(arg, rewrites);
+                }
+                for item in items {
+                    Self::rewrite_fun_indices_in_match_pattern(item, rewrites);
+                }
+            }
+            TypedMatchPattern::Constructor { fields, .. } => {
                 for field in fields {
                     Self::rewrite_fun_indices_in_match_pattern(field, rewrites);
                 }
@@ -2868,8 +2894,10 @@ impl Checker {
                 }
                 Resolved::ExtractorDef(_, id, type_params, param, ret_ty, _, _) => {
                     let mut used = HashSet::new();
-                    if let Some(param_ty) = &param.ty {
-                        Self::collect_ast_ty_type_params(param_ty, &mut used);
+                    for param in param {
+                        if let Some(param_ty) = &param.ty {
+                            Self::collect_ast_ty_type_params(param_ty, &mut used);
+                        }
                     }
                     Self::collect_ast_ty_type_params(ret_ty, &mut used);
                     self.warn_unused_type_params(type_params, &used, &id.name);
@@ -3174,6 +3202,9 @@ impl Checker {
     }
 
     fn collect_unused_value_warnings_in_node(&mut self, node: &TypedNode) {
+        for expr in Self::pattern_expression_nodes(node) {
+            self.collect_unused_value_warnings_in_node(expr);
+        }
         match &node.node {
             TypedInner::Block(stmts) => self.collect_unused_value_warnings_in_sequence(stmts),
             TypedInner::App(func, args)
@@ -4171,8 +4202,15 @@ impl Checker {
                 self.validate_constructor_pattern(head, constructor_traits)?;
                 self.validate_constructor_pattern(tail, constructor_traits)?;
             }
+            ResolvedPattern::Extractor(_, pre_args, items) => {
+                for arg in pre_args {
+                    self.validate_constructor_body_positions(arg, constructor_traits)?;
+                }
+                for item in items {
+                    self.validate_constructor_pattern(item, constructor_traits)?;
+                }
+            }
             ResolvedPattern::Constructor(_, items)
-            | ResolvedPattern::Extractor(_, items)
             | ResolvedPattern::Tuple(items)
             | ResolvedPattern::Or(items) => {
                 for item in items {
@@ -4411,15 +4449,19 @@ impl Checker {
                     }
                 }
                 Resolved::ExtractorDef(_, _, _, param, ret, body, _) => {
-                    if let Some(param) = &param.ty {
-                        self.validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                    for param in param {
+                        if let Some(param) = &param.ty {
+                            self.validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                        }
                     }
                     self.validate_constructor_ast_ty(ret, false, &constructor_traits)?;
                     self.validate_constructor_body_positions(body, &constructor_traits)?;
                 }
                 Resolved::BuiltinExtractorDecl(_, _, param, ret, _) => {
-                    if let Some(param) = &param.ty {
-                        self.validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                    for param in param {
+                        if let Some(param) = &param.ty {
+                            self.validate_constructor_ast_ty(param, false, &constructor_traits)?;
+                        }
                     }
                     self.validate_constructor_ast_ty(ret, false, &constructor_traits)?;
                 }

@@ -18,7 +18,7 @@ impl Checker {
             ResolvedPattern::ListCons(head, _) | ResolvedPattern::As(head, _, _) => {
                 Self::resolved_pattern_span(head)
             }
-            ResolvedPattern::Constructor(id, _) | ResolvedPattern::Extractor(id, _) => {
+            ResolvedPattern::Constructor(id, _) | ResolvedPattern::Extractor(id, _, _) => {
                 id.span.clone()
             }
             ResolvedPattern::Tuple(items) | ResolvedPattern::Or(items) => items
@@ -205,7 +205,7 @@ impl Checker {
             },
             // Extractor patterns need the scrutinee type supplied by the
             // extractor contract; they remain checked by the normal path.
-            ResolvedPattern::Extractor(_, _) => None,
+            ResolvedPattern::Extractor(_, _, _) => None,
         }
     }
 
@@ -1060,10 +1060,11 @@ impl Checker {
                 Ty::Str => {
                     let pattern_span = Self::resolved_pattern_span(pat);
                     let extractor_id = self.kernel_uncons_id(&pattern_span)?;
-                    let (input_ty, extractor_ty, seq_tys, success_tag, err_tag) = self
+                    let (input_ty, extractor_ty, pre_args, seq_tys, success_tag, err_tag) = self
                         .extractor_contract_for_observed_ty(
                             &extractor_id,
                             &Ty::Str,
+                            &[],
                             &extractor_id.span,
                         )?;
                     debug_assert_eq!(seq_tys.len(), 2);
@@ -1074,6 +1075,7 @@ impl Checker {
                         input_ty,
                         extractor: extractor_id,
                         extractor_ty,
+                        pre_args,
                         success_tag,
                         err_tag,
                         seq_tys,
@@ -1092,12 +1094,13 @@ impl Checker {
                     &Self::resolved_pattern_span(pat),
                 )),
             },
-            ResolvedPattern::Extractor(extractor_id, items) => {
+            ResolvedPattern::Extractor(extractor_id, pre_args, items) => {
                 let expected_ty = self.resolve_ty(expected_ty);
-                let (input_ty, extractor_ty, seq_tys, success_tag, err_tag) = self
+                let (input_ty, extractor_ty, pre_args, seq_tys, success_tag, err_tag) = self
                     .extractor_contract_for_observed_ty(
                         extractor_id,
                         &expected_ty,
+                        pre_args,
                         &extractor_id.span,
                     )?;
                 if !self.types_compatible(&input_ty, &expected_ty) {
@@ -1150,6 +1153,7 @@ impl Checker {
                     input_ty,
                     extractor: extractor_id.clone(),
                     extractor_ty,
+                    pre_args,
                     success_tag,
                     err_tag,
                     seq_tys,
@@ -1204,7 +1208,7 @@ impl Checker {
             }
             ResolvedPattern::Tuple(items)
             | ResolvedPattern::Constructor(_, items)
-            | ResolvedPattern::Extractor(_, items) => {
+            | ResolvedPattern::Extractor(_, _, items) => {
                 for item in items {
                     Self::collect_or_binding_ids(item, out);
                 }

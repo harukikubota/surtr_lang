@@ -56,7 +56,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                     }
                     Resolved::ExtractorDef(_, id, _, param, _, _, _) => {
                         local_bound.insert(id.unique_id);
-                        local_bound.insert(param.id.unique_id);
+                        for param in param {
+                            local_bound.insert(param.id.unique_id);
+                        }
                     }
                     Resolved::BuiltinDecl(_, id, _, params, _, _, _) => {
                         local_bound.insert(id.unique_id);
@@ -66,7 +68,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                     }
                     Resolved::BuiltinExtractorDecl(_, id, param, _, _) => {
                         local_bound.insert(id.unique_id);
-                        local_bound.insert(param.id.unique_id);
+                        for param in param {
+                            local_bound.insert(param.id.unique_id);
+                        }
                     }
                     Resolved::BuiltinTypeDecl(_, _, _, _) => {}
                     Resolved::TypeAlias(_, _, _, _, _) => {}
@@ -83,10 +87,12 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         }
         Resolved::Bind(_, pat, rhs) => {
             collect_captures_inner(rhs, bound, free);
+            collect_pattern_captures(pat, bound, free);
             collect_bind_pattern_bindings(pat, bound);
         }
         Resolved::SafeBind(_, pat, rhs) => {
             collect_captures_inner(rhs, bound, free);
+            collect_pattern_captures(pat, bound, free);
             collect_bind_pattern_bindings(pat, bound);
         }
         Resolved::Do(_, _, _, _, statements) => {
@@ -191,6 +197,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             collect_captures_inner(scrutinee, bound, free);
             for arm in arms {
                 let mut arm_bound = bound.clone();
+                collect_pattern_captures(&arm.pattern, &arm_bound, free);
                 collect_bind_pattern_bindings(&arm.pattern, &mut arm_bound);
                 if let Some(guard) = &arm.guard {
                     collect_captures_inner(guard, &mut arm_bound, free);
@@ -254,7 +261,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
         Resolved::ExtractorDef(_, id, _, param, _, body, _) => {
             let mut fun_bound = bound.clone();
             fun_bound.insert(id.unique_id);
-            fun_bound.insert(param.id.unique_id);
+            for param in param {
+                fun_bound.insert(param.id.unique_id);
+            }
             collect_captures_inner(body, &mut fun_bound, free);
         }
         Resolved::Closure(_, _, captures, _) | Resolved::CaptureClosure(_, _, captures, _) => {
@@ -290,9 +299,16 @@ fn collect_pattern_captures(
             }
         }
         ResolvedPattern::Constructor(_, inners)
-        | ResolvedPattern::Extractor(_, inners)
         | ResolvedPattern::Tuple(inners)
         | ResolvedPattern::Or(inners) => {
+            for inner in inners {
+                collect_pattern_captures(inner, bound, free);
+            }
+        }
+        ResolvedPattern::Extractor(_, pre_args, inners) => {
+            for arg in pre_args {
+                collect_captures_inner(arg, &mut bound.clone(), free);
+            }
             for inner in inners {
                 collect_pattern_captures(inner, bound, free);
             }
@@ -324,7 +340,7 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
                 collect_bind_pattern_bindings(inner, bound);
             }
         }
-        ResolvedPattern::Extractor(_, inners) => {
+        ResolvedPattern::Extractor(_, _, inners) => {
             for inner in inners {
                 collect_bind_pattern_bindings(inner, bound);
             }

@@ -329,7 +329,7 @@ pub enum AstPattern {
     /// `Ok(inner)` / `Color::Red` / `KeyInput::Arrow(dir)` in pattern position.
     Constructor(Span, Symbol, Vec<AstPattern>),
     /// `uncons(head, tail)` / `User(name, age)` in MatchBlock position.
-    Call(Span, Symbol, Vec<AstPattern>),
+    Call(Span, Symbol, Vec<AstPatternArgument>),
     /// `(head, tail, ...)`
     Tuple(Span, Vec<AstPattern>),
     /// `left | right` inside a pattern.
@@ -339,6 +339,20 @@ pub enum AstPattern {
     /// The final span is the alias identifier token, kept separately from
     /// the full as-pattern span for diagnostics and REPL binding metadata.
     As(Span, Box<AstPattern>, Symbol, Option<AstTy>, Span),
+}
+
+/// An application argument whose Expr / Pattern role is fixed by its signature.
+///
+/// Parsing preserves both legal interpretations, or the original diagnostic for
+/// a rejected interpretation. The resolver selects named Extractor roles from
+/// the declaration's input count; a rejected selected role remains a parse error.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AstPatternArgument {
+    pub span: Span,
+    pub expression: Option<Box<Ast>>,
+    pub pattern: Option<Box<AstPattern>>,
+    pub expression_error: Option<crate::error::ParseError>,
+    pub pattern_error: Option<crate::error::ParseError>,
 }
 
 /// Match arm: `pattern [when guard] => body`.
@@ -756,7 +770,7 @@ pub enum Ast {
         Span,
         Symbol,
         Vec<TypeParam>,
-        ExtractorParam,
+        Vec<ExtractorParam>,
         AstTy,
         Box<Ast>,
         DeclAttrs,
@@ -777,7 +791,7 @@ pub enum Ast {
     /// phases validate the structured signature against canonical metadata.
     IntrinsicDecl(Span, Symbol, IntrinsicSignature, DeclAttrs),
 
-    BuiltinExtractorDecl(Span, Symbol, ExtractorParam, AstTy, DeclAttrs),
+    BuiltinExtractorDecl(Span, Symbol, Vec<ExtractorParam>, AstTy, DeclAttrs),
 
     /// Builtin type declaration: `@builtin type Int`
     BuiltinTypeDecl(Span, BuiltinTypeHead, DeclAttrs),

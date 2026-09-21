@@ -49,6 +49,15 @@ impl std::fmt::Display for CompilePhaseFailure {
     }
 }
 
+pub(super) fn format_resolve_failure(error: sigil::error::ResolveError) -> String {
+    match &error.diagnostic.reason {
+        sigil::error::ResolveErrorReason::DeferredParse(parse_error) => {
+            format!("phase=parse; message={parse_error}")
+        }
+        _ => format!("phase=resolve; message={error}"),
+    }
+}
+
 fn resolve_sources_in_compile_order(
     compile_sources: &CompileSources,
     mode: TestCompileMode,
@@ -63,8 +72,7 @@ fn resolve_sources_in_compile_order(
     let declaration_index = if module_asts.len() == cached_modules.module_asts.len() {
         cached_modules.declaration_index.clone()
     } else {
-        sigil::precollect_declaration_index(&module_asts)
-            .map_err(|e| format!("phase=resolve; message={}", e))?
+        sigil::precollect_declaration_index(&module_asts).map_err(format_resolve_failure)?
     };
     let (start_stage_index, resume_state) = if matches!(mode, TestCompileMode::Script) {
         let std_snapshot = default_stdlib_snapshot()?;
@@ -79,7 +87,7 @@ fn resolve_sources_in_compile_order(
             &declaration_index,
             None,
         )
-        .map_err(|e| format!("phase=resolve; message={}", e))?;
+        .map_err(format_resolve_failure)?;
         (cached_modules.module_asts.len(), std_resolved.resume_state)
     };
     sigil::resolve_staged_program_from_state(
@@ -90,7 +98,7 @@ fn resolve_sources_in_compile_order(
         start_stage_index,
         resume_state,
     )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    .map_err(format_resolve_failure)?;
     Ok(())
 }
 
@@ -109,8 +117,7 @@ fn typecheck_sources_in_compile_order(
     let declaration_index = if module_asts.len() == compile_prefix.module_asts.len() {
         compile_prefix.declaration_index().clone()
     } else {
-        sigil::precollect_declaration_index(&module_asts)
-            .map_err(|e| format!("phase=resolve; message={}", e))?
+        sigil::precollect_declaration_index(&module_asts).map_err(format_resolve_failure)?
     };
     let resolved = sigil::resolve_staged_program_from_state(
         &module_asts,
@@ -120,7 +127,7 @@ fn typecheck_sources_in_compile_order(
         compile_prefix.module_asts.len(),
         compile_prefix.resolve_state(),
     )
-    .map_err(|e| format!("phase=resolve; message={}", e))?;
+    .map_err(format_resolve_failure)?;
     let mut scar_session = scar::ScarSession::new();
     scar_session.rollback(compile_prefix.scar_checkpoint().clone());
     scar_session
@@ -168,7 +175,9 @@ fn check_source_phase(
     match phase {
         CompileFailurePhase::Parse => {
             parse_user_source(source_name, source, mode)?;
-            Ok(())
+            let compile_sources =
+                super::sources::collect_script_compile_sources(source_name, source)?;
+            resolve_sources_in_compile_order(&compile_sources, mode)
         }
         CompileFailurePhase::Resolve => {
             let compile_sources =
@@ -209,7 +218,8 @@ fn check_sources_phase(
                 parse_module_stages(compile_sources, compile_unit_kind_for_mode(mode))?;
             }
             parse_user_program(compile_sources, mode)?;
-            Ok(())
+            // Application argument syntax is selected after the head signature.
+            resolve_sources_in_compile_order(compile_sources, mode)
         }
         CompileFailurePhase::Resolve => resolve_sources_in_compile_order(compile_sources, mode),
         CompileFailurePhase::Typecheck => typecheck_sources_in_compile_order(compile_sources, mode),

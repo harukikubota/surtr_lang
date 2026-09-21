@@ -1,0 +1,3 @@
+import PreArgMatchers::{offset, guard}
+
+print(to_string(is_match(3, guard())))

@@ -238,6 +238,7 @@ impl Resolver {
         let [term, pattern_expr] =
             collect_fixed_positional_args(span.clone(), args, "is_match", 2)?;
         let pattern = Self::pattern_from_parser_carrier(pattern_expr, "is_match")?;
+        let pattern = self.select_pattern_argument_roles(pattern)?;
 
         if pattern_has_binding_vars(&pattern) {
             return Err(ResolveError {
@@ -402,9 +403,12 @@ fn pattern_has_binding_vars(pattern: &AstPattern) -> bool {
             pattern_has_binding_vars(head) || pattern_has_binding_vars(tail)
         }
         AstPattern::Constructor(_, _, inners)
-        | AstPattern::Call(_, _, inners)
         | AstPattern::Tuple(_, inners)
         | AstPattern::Or(_, inners) => inners.iter().any(pattern_has_binding_vars),
+        AstPattern::Call(_, _, args) => args
+            .iter()
+            .filter_map(|arg| arg.pattern.as_deref())
+            .any(pattern_has_binding_vars),
         AstPattern::Wildcard(_)
         | AstPattern::AnnotatedWildcard(_, _)
         | AstPattern::Pin(_, _)

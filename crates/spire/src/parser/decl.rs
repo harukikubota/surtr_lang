@@ -3510,14 +3510,14 @@ impl Parser<'_> {
 
     pub(super) fn parse_extractor_signature(
         &mut self,
-    ) -> Result<(Span, Symbol, Vec<TypeParam>, ExtractorParam, AstTy), ParseError> {
+    ) -> Result<(Span, Symbol, Vec<TypeParam>, Vec<ExtractorParam>, AstTy), ParseError> {
         self.parse_extractor_signature_with_name_mode(false)
     }
 
     pub(super) fn parse_extractor_signature_with_name_mode(
         &mut self,
         allow_builtin_keyword_name: bool,
-    ) -> Result<(Span, Symbol, Vec<TypeParam>, ExtractorParam, AstTy), ParseError> {
+    ) -> Result<(Span, Symbol, Vec<TypeParam>, Vec<ExtractorParam>, AstTy), ParseError> {
         let sp = self.peek_span();
         self.expect(&Token::Defextractor)?;
         let (name, name_span) = if allow_builtin_keyword_name {
@@ -3549,18 +3549,59 @@ impl Parser<'_> {
         self.skip_newlines();
         self.expect(&Token::LParen)?;
         self.skip_newlines();
-        let (param_name, param_span) = self.expect_ident()?;
-        self.ensure_non_const_identifier(&param_name, param_span.clone(), "Extractor parameter")?;
-        self.skip_newlines();
-        let param_ty = if matches!(self.peek(), Token::Colon) {
+        let mut params = Vec::new();
+        loop {
+            let (param_name, param_span) = self.expect_ident()?;
+            self.ensure_non_const_identifier(
+                &param_name,
+                param_span.clone(),
+                "Extractor parameter",
+            )?;
+            if params
+                .iter()
+                .any(|param: &ExtractorParam| param.name == param_name)
+            {
+                return Err(ParseError::syntax(
+                    crate::error::ParseErrorReason::DeclarationSyntax,
+                    "Duplicate Extractor parameter",
+                    param_span,
+                ));
+            }
+            self.skip_newlines();
+            let param_ty = if matches!(self.peek(), Token::Colon) {
+                self.advance();
+                self.skip_newlines();
+                Some(self.parse_type()?)
+            } else {
+                None
+            };
+            params.push(ExtractorParam {
+                name: param_name,
+                ty: param_ty,
+                span: param_span,
+            });
+            self.skip_newlines();
+            if !matches!(self.peek(), Token::Comma) {
+                break;
+            }
             self.advance();
             self.skip_newlines();
-            Some(self.parse_type()?)
-        } else {
-            None
-        };
-        self.skip_newlines();
+            if matches!(self.peek(), Token::RParen) {
+                break;
+            }
+        }
         self.expect(&Token::RParen)?;
+        if let Some(param) = params
+            .iter()
+            .take(params.len().saturating_sub(1))
+            .find(|param| param.name == "self")
+        {
+            return Err(ParseError::syntax(
+                crate::error::ParseErrorReason::DeclarationSyntax,
+                "Extractor self parameter must be the final input",
+                param.span.clone(),
+            ));
+        }
         self.skip_newlines();
         self.expect(&Token::Arrow)?;
         self.skip_newlines();
@@ -3574,17 +3615,7 @@ impl Parser<'_> {
             .with_guidance(crate::error::ParseErrorGuidance::ReturnPositionImplTrait));
         }
         self.reject_where_clause()?;
-        Ok((
-            sp,
-            name,
-            type_params,
-            ExtractorParam {
-                name: param_name,
-                ty: param_ty,
-                span: param_span,
-            },
-            ret_ty,
-        ))
+        Ok((sp, name, type_params, params, ret_ty))
     }
 
     pub(super) fn reject_where_clause(&self) -> Result<(), ParseError> {
