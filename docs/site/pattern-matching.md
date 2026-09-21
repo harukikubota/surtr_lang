@@ -38,7 +38,7 @@ pattern position の `[head, ..tail]` は sequence decomposition として読ま
 
 ## guard と exhaustiveness
 
-OR Pattern `p1 | p2` は `match` arm、`if_let`、`if_let_then`、変数を束縛しない `is_match` で使えます。子 Pattern に入れ子にすることもできます。`match` / `if_let` / `if_let_then` では、同じ OR の全候補が同じ順序で同じ名前・型の変数を束縛する必要があります。`is_match` はすべての候補で変数束縛を禁止します。`=` / `=?`、do binding の Pattern では、束縛数が 0 でも入れ子の OR を含めて構文エラーになります。これらの input / RHS にある通常の `match` では OR を使えます。
+OR Pattern `p1 | p2` は `match` arm、`if_let`、`if_let_then`、変数を束縛しない `is_match` で使えます。子 Pattern に入れ子にすることもできます。`match` / `if_let` / `if_let_then` では、同じ OR の全候補が同じ順序で同じ名前・型の変数を束縛する必要があります。`is_match` はすべての候補で変数束縛を禁止します。`=` / `=?`、do binding、`apply_pattern` の Pattern では、束縛数が 0 でも入れ子の OR を含めて構文エラーになります。これらの input / RHS にある通常の `match` では OR を使えます。
 
 ```surtr
 pair = (2, 42)
@@ -52,6 +52,19 @@ print(to_string(if_let(pair, (1, x) | (2, x), x, 0)))
 - `Boolean`, `Result`, enum では特に exhaustiveness が重要
 
 具体例は `../../tests/fixtures/script/pass/control/` と `../../tests/fixtures/script/fail/exhaustiveness/` が参考になります。
+
+## projection を Result へ返す
+
+`apply_pattern(value, pattern)` は値全体を一度だけ照合し、成功した projection を `Ok`、失敗を `Err` にします。`_1`〜`_16` は1から連続・重複なしで指定し、番号順に返します。0個なら Unit、1個ならその値、複数なら tuple になります。
+
+```surtr
+apply_pattern(("label", 42), (_2: String, _1: Int))
+# Ok((42, "label"))
+apply_pattern(Ok(3), Ok(_1))
+# Ok(3)
+```
+
+list tail や `pattern @ _1: Type` の alias にも projection を書けます。型注釈は静的検査の対象です。Pattern 内の通常 binding は外側 scope に公開されず、事前引数・pin は Pattern 開始前の外側 scope を参照します。
 
 ## 関連ページ
 

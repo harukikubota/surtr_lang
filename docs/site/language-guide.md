@@ -890,3 +890,7 @@ value: Result<Int> = Ok(42)
 - 並列コンパイル
 
 細かい構文や外部契約を確認したい場合は、次に [言語リファレンス](./language-reference.md) を読むのがおすすめです。標準定義ソースの配置や `@doc` の約束を見たい場合は [標準ライブラリガイド](./standard-library.md) を参照してください。
+
+### Pattern の照合結果を受け取る
+
+`apply_pattern` は Pattern の成功・失敗を通常の Result にします。`apply_pattern([10, 20], [_, _1: Int])` は `Ok(20)` を返します。複数の `_N` は1から連続で指定し、番号順の tuple を返します。Extractor の失敗 Error はそのまま保持し、外側関数からの早期 return は行いません。詳しくは [Pattern Matching](./pattern-matching.md) と [Extractors](./extractors.md) を参照してください。

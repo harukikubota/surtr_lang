@@ -521,12 +521,25 @@ impl Checker {
                                 syntax: self.rewrite_inherent_signature_ast_ty(id, ty.syntax()),
                                 direct_constructor_trait: ty.direct_constructor_trait.clone(),
                             });
-                    super::signatures::validate_return_type_argument_definition(
-                        id.qualified_name.as_deref().unwrap_or(&id.name),
-                        &rewritten_return_type_arguments,
-                        &rewritten_value_parameters,
-                        rewritten_return_type.as_ref(),
-                    )?;
+                    // The canonical Pattern consumer derives its result from selected
+                    // projection slots; $Return is not a caller-supplied type argument.
+                    let pattern_result_slot = matches!(stmt, Resolved::BuiltinDecl(..))
+                        && Self::surface_qualified_name(id.qualified_name.as_deref())
+                            == Some("Kernel::apply_pattern")
+                        && return_type_arguments.is_empty()
+                        && clause.is_none()
+                        && super::definitions::special_form_shape_apply_pattern(
+                            value_parameters,
+                            &return_type.as_ref().map(|ty| ty.syntax.clone()),
+                        );
+                    if !pattern_result_slot {
+                        super::signatures::validate_return_type_argument_definition(
+                            id.qualified_name.as_deref().unwrap_or(&id.name),
+                            &rewritten_return_type_arguments,
+                            &rewritten_value_parameters,
+                            rewritten_return_type.as_ref(),
+                        )?;
+                    }
                     super::signatures::validate_constructor_variable_constraints(
                         &id.name,
                         &rewritten_return_type_arguments,

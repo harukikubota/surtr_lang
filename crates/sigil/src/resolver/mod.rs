@@ -22,6 +22,7 @@ mod declarations;
 mod derive;
 mod expr;
 mod imports;
+mod pattern_consumers;
 mod patterns;
 mod scope_init;
 mod session;
@@ -670,6 +671,10 @@ fn rebase_where_clause(clause: &mut ResolvedWhereClause, base: u32, offset: u32)
 
 fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
     match node {
+        Resolved::ApplyPattern(_, value, pattern) => {
+            rebase_resolved_node(value, base, offset);
+            rebase_pattern(pattern, base, offset);
+        }
         Resolved::Lit(..) | Resolved::ListNil(_) => {}
         Resolved::Var(_, id) => rebase_resolved_id(id, base, offset),
         Resolved::App(_, func, args) => {
@@ -919,6 +924,10 @@ fn rebase_record_arg(arg: &mut ResolvedRecordLitArg, base: u32, offset: u32) {
 
 fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
     match pattern {
+        ResolvedPattern::Projection { id, inner, .. } => {
+            rebase_resolved_id(id, base, offset);
+            rebase_pattern(inner, base, offset);
+        }
         ResolvedPattern::Deferred {
             pattern, bindings, ..
         } => {

@@ -99,6 +99,21 @@ Pattern head には bind 済みの名前を使います。`greater(12)` とい�
 head にする形、普通の Closure との暗黙変換は許可しません。local の名前が named Extractor を
 shadow した場合は、その local の型を検査します。
 
+## 値として結果を受け取る
+
+`apply_pattern` は照合の結果を通常の `Result` として返します。成功した値を `_1`〜`_16` で選び、複数なら番号順の tuple にします。番号は1から連続させ、同じ番号を二度使わないでください。型注釈は省略でき、書いた場合は静的に検査されます。
+
+```surtr
+apply_pattern([10, 20, 30], [_1: Int, .._2: List<Int>])
+# Ok((10, [20, 30]))
+12 |> apply_pattern(greater(_1: Int))
+# Ok(12)
+```
+
+Extractor の失敗は元の Error を保持した `Err` になります。普通の Pattern 不一致も `Err` になりますが、外側の関数から早期 return しません。入力が Result でもそのまま照合するので、成功 payload を取り出す場合は `apply_pattern(Ok(3), Ok(_1))` と書きます。Pattern 内の通常 binding は外へ公開されません。
+
+projection は `apply_pattern` の Pattern 内専用です。事前引数では使えず、OR Pattern もこの consumer では使えません。`_` や `_name` は値を取り出さない wildcard のままです。
+
 ## ルール
 
 - extractor 名は constructor-style の大文字始まりにしない

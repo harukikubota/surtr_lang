@@ -277,8 +277,53 @@ fn process_self_param(span: &Span, agent_name: &str) -> ValueParameter {
     }
 }
 
+fn rewrite_process_pattern_self_refs(pattern: &mut AstPattern) {
+    match pattern {
+        AstPattern::Call(_, _, args) => {
+            for arg in args {
+                if let Some(expr) = arg.expression.take() {
+                    arg.expression = Some(Box::new(rewrite_process_self_refs(*expr)));
+                }
+                if let Some(pattern) = &mut arg.pattern {
+                    rewrite_process_pattern_self_refs(pattern);
+                }
+            }
+        }
+        AstPattern::Projection { inner, .. } | AstPattern::As(_, inner, ..) => {
+            rewrite_process_pattern_self_refs(inner)
+        }
+        AstPattern::Constructor(_, _, children)
+        | AstPattern::Tuple(_, children)
+        | AstPattern::Or(_, children) => {
+            for child in children {
+                rewrite_process_pattern_self_refs(child);
+            }
+        }
+        AstPattern::ListCons(_, head, tail) => {
+            rewrite_process_pattern_self_refs(head);
+            rewrite_process_pattern_self_refs(tail);
+        }
+        _ => {}
+    }
+}
+
 fn rewrite_process_self_refs(node: Ast) -> Ast {
     match node {
+        Ast::PatternConsumerCall(span, callee, args) => Ast::PatternConsumerCall(
+            span,
+            Box::new(rewrite_process_self_refs(*callee)),
+            args.into_iter()
+                .map(|mut arg| {
+                    arg.expression = arg
+                        .expression
+                        .map(|expr| Box::new(rewrite_process_self_refs(*expr)));
+                    if let Some(pattern) = &mut arg.pattern {
+                        rewrite_process_pattern_self_refs(pattern);
+                    }
+                    arg
+                })
+                .collect(),
+        ),
         Ast::App(span, func, args) => {
             let rewritten_func = rewrite_process_self_refs(*func);
             let rewritten_args: Vec<RecordLitArg> = args
@@ -1523,7 +1568,7 @@ impl Parser<'_> {
             if matches!(self.peek(), Token::RBrace) {
                 break;
             }
-            let (name, _span) = self.expect_ident()?;
+            let (name, _span) = self.expect_member_ident()?;
             names.push(name);
             self.skip_newlines();
             if matches!(self.peek(), Token::Comma) {
@@ -1558,10 +1603,15 @@ impl Parser<'_> {
         let mut qualified = vec![(first_seg, first_span)];
         let mut saw_separator = false;
 
-        while self.has_path_separator() && matches!(self.peek_n(2), Some(Token::Ident(_))) {
+        while self.has_path_separator()
+            && matches!(
+                self.peek_n(2),
+                Some(Token::Ident(_) | Token::PatternConsumer(_))
+            )
+        {
             saw_separator = true;
             self.consume_path_separator()?;
-            let (seg, seg_span) = self.expect_ident()?;
+            let (seg, seg_span) = self.expect_member_ident()?;
             qualified.push((seg, seg_span));
         }
 

@@ -45,7 +45,9 @@ impl Resolver {
                 self.pattern_has_deferred_application(head)
                     || self.pattern_has_deferred_application(tail)
             }
-            AstPattern::As(_, inner, _, _, _) => self.pattern_has_deferred_application(inner),
+            AstPattern::As(_, inner, _, _, _) | AstPattern::Projection { inner, .. } => {
+                self.pattern_has_deferred_application(inner)
+            }
             _ => false,
         }
     }
@@ -139,7 +141,7 @@ impl Resolver {
                 **head = self.select_pattern_argument_roles(*head.clone())?;
                 **tail = self.select_pattern_argument_roles(*tail.clone())?;
             }
-            AstPattern::As(_, inner, _, _, _) => {
+            AstPattern::As(_, inner, _, _, _) | AstPattern::Projection { inner, .. } => {
                 **inner = self.select_pattern_argument_roles(*inner.clone())?
             }
             _ => {}
@@ -238,6 +240,28 @@ impl Resolver {
         outer: &Scope,
     ) -> Result<ResolvedPattern, ResolveError> {
         match pat {
+            AstPattern::Projection {
+                span,
+                index,
+                inner,
+                annotation,
+            } => {
+                let uid = self.scope.reserve_id();
+                let id = ResolvedId {
+                    name: format!("__projection_{index}_{uid}"),
+                    qualified_name: None,
+                    unique_id: uid,
+                    compiler_generated: true,
+                    symbol_info: None,
+                    span,
+                };
+                Ok(ResolvedPattern::Projection {
+                    index,
+                    id,
+                    inner: Box::new(self.resolve_pattern_inner(*inner, seen, outer)?),
+                    annotation,
+                })
+            }
             AstPattern::Var(span, name) => Ok(ResolvedPattern::Var(
                 self.define_pattern_binding(name, span, seen)?,
             )),
@@ -626,6 +650,7 @@ fn remap_or_pattern_bindings(
     common_ids: &HashMap<String, u32>,
 ) -> Result<(), ResolveError> {
     match pattern {
+        ResolvedPattern::Projection { inner, .. } => remap_or_pattern_bindings(inner, common_ids)?,
         ResolvedPattern::Deferred { .. } | ResolvedPattern::ExtractorApplication { .. } => {
             return Err(pattern_argument_error(
                 "Deferred Pattern reached eager OR remapping",
@@ -693,6 +718,7 @@ fn remap_or_pattern_bindings(
 
 fn collect_candidate_binding_names(pattern: &AstPattern, out: &mut Vec<(String, Span)>) {
     match pattern {
+        AstPattern::Projection { inner, .. } => collect_candidate_binding_names(inner, out),
         AstPattern::Var(span, name) | AstPattern::Annotated(span, name, _) => {
             out.push((name.clone(), span.clone()))
         }
@@ -767,6 +793,7 @@ fn collect_pattern_bindings_preorder(
     out: &mut Vec<(String, Span)>,
 ) -> Result<(), ResolveError> {
     match pat {
+        AstPattern::Projection { inner, .. } => collect_pattern_bindings_preorder(inner, out)?,
         AstPattern::Var(span, name) | AstPattern::Annotated(span, name, _) => {
             out.push((name.clone(), span.clone()));
         }
@@ -917,7 +944,7 @@ fn pattern_argument_error(message: impl Into<String>, span: Span) -> ResolveErro
     }
 }
 
-fn deferred_pattern_parse_error(
+pub(super) fn deferred_pattern_parse_error(
     error: Option<spire::error::ParseError>,
     message: &str,
     span: Span,

@@ -6,7 +6,8 @@ impl Checker {
     pub(super) fn resolved_pattern_span(pattern: &ResolvedPattern) -> Span {
         match pattern {
             ResolvedPattern::Deferred { pattern, .. } => Self::resolved_pattern_span(pattern),
-            ResolvedPattern::ExtractorApplication { head, .. } => head.span.clone(),
+            ResolvedPattern::ExtractorApplication { head, .. }
+            | ResolvedPattern::Projection { id: head, .. } => head.span.clone(),
             ResolvedPattern::Var(id)
             | ResolvedPattern::Annotated(id, _)
             | ResolvedPattern::Pin(id) => id.span.clone(),
@@ -153,9 +154,18 @@ impl Checker {
     /// Binding variables deliberately become fresh inference variables.  The
     /// arm body can then constrain them (e.g. `print(name)` constrains `name`
     /// to `String`) and that constraint flows back into the scrutinee type.
-    fn infer_match_pattern_ty(&mut self, pat: &ResolvedPattern) -> Option<Ty> {
+    pub(super) fn infer_match_pattern_ty(&mut self, pat: &ResolvedPattern) -> Option<Ty> {
         match pat {
             ResolvedPattern::Deferred { pattern, .. } => self.infer_match_pattern_ty(pattern),
+            ResolvedPattern::Projection {
+                inner, annotation, ..
+            } => annotation
+                .as_ref()
+                .and_then(|ty| {
+                    self.resolve_ast_ty_in_context(ty, self.local_type_syntax_context())
+                        .ok()
+                })
+                .or_else(|| self.infer_match_pattern_ty(inner)),
             ResolvedPattern::ExtractorApplication { .. } => None,
             ResolvedPattern::Var(_) | ResolvedPattern::Wildcard(_) | ResolvedPattern::Pin(_) => {
                 None
@@ -554,6 +564,11 @@ impl Checker {
             }
         }
         match pat {
+            ResolvedPattern::Projection { id, .. } => Err(self.projection_shape_error(
+                "the apply_pattern consumer",
+                "a projection outside apply_pattern",
+                &id.span,
+            )),
             ResolvedPattern::Deferred {
                 pattern,
                 bindings,

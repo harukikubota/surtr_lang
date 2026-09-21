@@ -1906,6 +1906,11 @@ impl ScarSession {
 
     fn rewrite_fun_indices_in_node(node: &mut TypedNode, rewrites: &HashMap<u32, u32>) {
         Self::rewrite_fun_indices_in_ty(&mut node.ty, rewrites);
+        if let TypedInner::ApplyPattern { projections, .. } = &mut node.node {
+            for (_, ty) in projections {
+                Self::rewrite_fun_indices_in_ty(ty, rewrites);
+            }
+        }
         match &mut node.node {
             TypedInner::Lit(_) | TypedInner::Var(_) | TypedInner::ListNil => {}
             TypedInner::ResultEffectFailure(target) => {
@@ -1980,7 +1985,13 @@ impl ScarSession {
                     Self::rewrite_fun_indices_in_node(value, rewrites);
                 }
             }
-            TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs, _, _) => {
+            TypedInner::Bind(pattern, rhs)
+            | TypedInner::SafeBind(pattern, rhs, _, _)
+            | TypedInner::ApplyPattern {
+                pattern,
+                value: rhs,
+                ..
+            } => {
                 Self::rewrite_fun_indices_in_pattern(pattern, rewrites);
                 Self::rewrite_fun_indices_in_node(rhs, rewrites);
             }
@@ -3239,6 +3250,7 @@ impl Checker {
                 }
             }
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::FieldAccess(rhs, _)
             | TypedInner::Semi(rhs) => self.collect_unused_value_warnings_in_node(rhs),
@@ -4212,6 +4224,14 @@ impl Checker {
         constructor_traits: &HashSet<String>,
     ) -> Result<(), TypeError> {
         match pattern {
+            ResolvedPattern::Projection {
+                inner, annotation, ..
+            } => {
+                if let Some(ty) = annotation {
+                    self.validate_constructor_ast_ty(ty, false, constructor_traits)?;
+                }
+                self.validate_constructor_pattern(inner, constructor_traits)?;
+            }
             ResolvedPattern::Deferred { pattern, .. } => {
                 self.validate_constructor_pattern(pattern, constructor_traits)?
             }
@@ -4261,7 +4281,9 @@ impl Checker {
         constructor_traits: &HashSet<String>,
     ) -> Result<(), TypeError> {
         match node {
-            Resolved::Bind(_, pattern, rhs) | Resolved::SafeBind(_, pattern, rhs) => {
+            Resolved::Bind(_, pattern, rhs)
+            | Resolved::SafeBind(_, pattern, rhs)
+            | Resolved::ApplyPattern(_, rhs, pattern) => {
                 self.validate_constructor_pattern(pattern, constructor_traits)?;
                 self.validate_constructor_body_positions(rhs, constructor_traits)?;
             }

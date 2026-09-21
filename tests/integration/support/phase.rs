@@ -106,7 +106,11 @@ fn resolve_sources_in_compile_order(
         resume_state,
     )
     .map_err(format_resolve_failure)?;
-    Ok(())
+    // Preserve the requested earlier-phase diagnostic before typechecking
+    // module prefixes. Local callable argument roles can defer a syntax/name
+    // failure until their signature is known, so successful resolution alone
+    // is not enough to conclude that a fixture has no such diagnostic.
+    typecheck_sources_in_compile_order(compile_sources, mode)
 }
 
 fn typecheck_sources_in_compile_order(
@@ -225,7 +229,8 @@ fn check_sources_phase(
                 parse_module_stages(compile_sources, compile_unit_kind_for_mode(mode))?;
             }
             parse_user_program(compile_sources, mode)?;
-            // Application argument syntax is selected after the head signature.
+            // Local callable argument roles are selected during typechecking.
+            // Deferred syntax/name errors keep their original producer phase.
             resolve_sources_in_compile_order(compile_sources, mode)
         }
         CompileFailurePhase::Resolve => resolve_sources_in_compile_order(compile_sources, mode),

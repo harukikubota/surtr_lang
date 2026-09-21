@@ -114,6 +114,18 @@ fn special_form_shape_is_match(params: &[ResolvedValueParameter], ret_ty: &Optio
             .is_some_and(|ty| Checker::is_named_type(ty, "Boolean"))
 }
 
+pub(super) fn special_form_shape_apply_pattern(
+    params: &[ResolvedValueParameter],
+    ret_ty: &Option<AstTy>,
+) -> bool {
+    params.len() == 2
+        && Checker::is_named_type(&params[0].ty, "$Value")
+        && Checker::is_named_type(&params[1].ty, "$Pattern")
+        && ret_ty
+            .as_ref()
+            .is_some_and(|ty| Checker::is_result_of_named(ty, "$Return"))
+}
+
 fn special_form_shape_assert(params: &[ResolvedValueParameter], ret_ty: &Option<AstTy>) -> bool {
     params.len() == 2
         && Checker::is_named_type(&params[0].ty, "Boolean")
@@ -704,6 +716,7 @@ impl Checker {
                 | "if_let"
                 | "if_let_then"
                 | "is_match"
+                | "apply_pattern"
                 | "assert"
                 | "ensure"
                 | "map_err"
@@ -739,6 +752,11 @@ impl Checker {
                 expected_qname: "Kernel::if_let_then",
                 expected_signature: "@builtin def if_let_then(value: $A, pattern: $Pattern, then_branch: Lazy<Unit>) -> Unit",
                 shape_ok: special_form_shape_if_let_then,
+            },
+            "apply_pattern" => SpecialFormContract {
+                expected_qname: "Kernel::apply_pattern",
+                expected_signature: "@builtin def apply_pattern(value: $Value, pattern: $Pattern) -> Result<$Return>",
+                shape_ok: special_form_shape_apply_pattern,
             },
             "is_match" => SpecialFormContract {
                 expected_qname: "Kernel::is_match",

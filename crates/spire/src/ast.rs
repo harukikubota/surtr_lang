@@ -304,6 +304,12 @@ pub enum WhereConstraintRhs {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AstPattern {
+    Projection {
+        span: Span,
+        index: u8,
+        inner: Box<AstPattern>,
+        annotation: Option<AstTy>,
+    },
     /// `x`
     Var(Span, Symbol),
     /// `x: Int`
@@ -625,6 +631,8 @@ pub enum ImportSpec {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ast {
+    PatternConsumerCall(Span, Box<Ast>, Vec<AstPatternArgument>),
+    NumberedPlaceholder(Span, u8),
     /// Literal value: `42`, `"hello"`, `True`, `()`
     Lit(Span, Lit),
 

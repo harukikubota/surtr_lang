@@ -1,0 +1,2 @@
+phase: resolve
+contains: apply_pattern expects exactly 2 positional arguments

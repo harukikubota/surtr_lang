@@ -5285,19 +5285,16 @@ fn test_is_match_accepts_root_and_nested_or_without_bindings() {
         ] {
             let source = format!("{consumer}(input, {pattern})");
             let ast = parse(&source).expect(&source);
-            let Ast::App(_, _, args) = &ast[0] else {
+            let Ast::PatternConsumerCall(_, _, args) = &ast[0] else {
                 panic!("Expected predicate consumer call: {source}");
             };
-            assert!(
-                matches!(&args[1], RecordLitArg::Positional(Ast::Match(_, _, arms)) if arms.len() == 1),
-                "{source}"
-            );
+            assert!(args[1].pattern.is_some(), "{source}");
         }
     }
 }
 
 #[test]
-fn test_is_match_or_still_rejects_all_binding_positions() {
+fn test_is_match_preserves_binding_candidates_for_identity_resolution() {
     for consumer in ["is_match", "Kernel::is_match"] {
         for pattern in [
             "value | _",
@@ -5307,10 +5304,9 @@ fn test_is_match_or_still_rejects_all_binding_positions() {
             "(1 | 2) @ whole",
         ] {
             let source = format!("{consumer}(input, {pattern})");
-            let error = parse(&source).expect_err(&source);
+            let ast = parse(&source).expect(&source);
             assert!(
-                error.message().contains("does not allow binding variables"),
-                "{source}: {error:?}"
+                matches!(&ast[0], Ast::PatternConsumerCall(_, _, args) if args[1].pattern.is_some())
             );
         }
     }
@@ -5409,14 +5405,13 @@ fn test_if_let_or_patterns_use_pattern_grammar() {
             let source = format!("{consumer}(input, {pattern}{branches})");
             let ast = parse(&source).expect(&source);
             let call = &ast[0];
-            let Ast::App(_, _, args) = call else {
+            let Ast::PatternConsumerCall(_, _, args) = call else {
                 panic!("expected call: {source}");
             };
-            let RecordLitArg::Positional(Ast::Match(_, _, arms)) = &args[1] else {
-                panic!("expected pattern carrier: {source}");
-            };
-            assert_eq!(arms.len(), 1, "{source}");
-            assert!(contains_or(&arms[0].pattern), "{source}");
+            assert!(
+                contains_or(args[1].pattern.as_deref().expect("Pattern candidate")),
+                "{source}"
+            );
         }
     }
 }
@@ -7612,5 +7607,17 @@ fn extractor_closure_literal_requires_explicit_nonempty_parameters() {
     ] {
         parse(source)
             .expect_err("anonymous expressions cannot be immediate callable or Pattern heads");
+    }
+}
+
+#[test]
+fn pattern_consumers_reserve_names_and_accept_projection_syntax() {
+    parse("apply_pattern([1, 2], [_1: Int, .._2: List<Int>])").expect("projection syntax");
+    for source in [
+        "is_match = 1",
+        "def apply_pattern(value: Int) -> Int { value }",
+        "f = {|if_let| if_let}",
+    ] {
+        parse(source).expect_err("Pattern consumer names are reserved");
     }
 }

@@ -337,6 +337,7 @@ impl Checker {
                 .iter()
                 .find_map(|(key, value)| recurse(key).or_else(|| recurse(value))),
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
@@ -776,6 +777,7 @@ impl Checker {
                     .or_else(|| self.first_pending_trait_helper(value))
             }),
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => self.first_pending_trait_helper(rhs),
@@ -922,6 +924,7 @@ impl Checker {
                     collect(&control.continuation, obligations);
                 }
                 TypedInner::Bind(_, rhs)
+                | TypedInner::ApplyPattern { value: rhs, .. }
                 | TypedInner::SafeBind(_, rhs, _, _)
                 | TypedInner::Semi(rhs)
                 | TypedInner::FieldAccess(rhs, _)
@@ -1136,6 +1139,15 @@ impl Checker {
                 pattern,
                 Box::new(self.concretize_pending_trait_calls(*rhs)?),
             ),
+            TypedInner::ApplyPattern {
+                value,
+                pattern,
+                projections,
+            } => TypedInner::ApplyPattern {
+                value: Box::new(self.concretize_pending_trait_calls(*value)?),
+                pattern,
+                projections,
+            },
             TypedInner::SafeBind(pattern, rhs, projection, failure_target) => TypedInner::SafeBind(
                 pattern,
                 Box::new(self.concretize_pending_trait_calls(*rhs)?),
@@ -1766,6 +1778,7 @@ impl Checker {
                 })
             }
 
+            Resolved::ApplyPattern(span, value, pattern) => self.check_apply_pattern(span, value, pattern, None),
             Resolved::SafeBind(span, pat, rhs) => self.check_safebind(span, pat, rhs),
             Resolved::Do(span, intrinsic, contract, return_type_arguments, statements) => self.check_do(
                 span,
@@ -2937,6 +2950,9 @@ impl Checker {
         match (node, expected) {
             (Resolved::Block(span, stmts), expected) => {
                 self.check_block(span, stmts, expected, expected_relation)
+            }
+            (Resolved::ApplyPattern(span, value, pattern), Some(expected_ty)) => {
+                self.check_apply_pattern(span, value, pattern, Some(expected_ty))
             }
             (Resolved::ExtractorClosure(span, params, captures, body), Some(expected_ty)) => self
                 .check_extractor_closure(
@@ -4247,6 +4263,7 @@ impl Checker {
             | Resolved::ReturnTypeArgumentApply(span, _, _)
             | Resolved::Block(span, _)
             | Resolved::Bind(span, _, _)
+            | Resolved::ApplyPattern(span, _, _)
             | Resolved::SafeBind(span, _, _)
             | Resolved::Do(span, _, _, _, _)
             | Resolved::BinOp(span, _, _, _)

@@ -36,6 +36,8 @@ Pattern AST は第一級の値にしない。一般関数の partial application
 
 - 2026-09-21: ExtractorClosure literal `*{|params...| body}` と専用 signature 型を実装した。通常推論、lexical capture、helper の引数・戻り値、同 signature の if / match 選択、generic trait API の受け渡しを接続した。local head は lexical identity で確定し、signature で選んだ引数候補だけを検査する。通常 call、即時 head、通常 Closure との暗黙変換を拒否し、nested callable / do の failure target を分離した。REPL の入力間 capture・型署名・doc target と、元 Parse / Resolve 診断の保持を検証した。独立レビューで検出した OR binding 順序と canonical 型の逆変換を修正し、Facet 動的パスの capture 回帰も解消した。最終 CI workspace 1968件、標準 SRT 全件が成功。apply_pattern / projection、Extractor::from_result は本項目に含めない。
 
+- 2026-09-22: `Kernel::apply_pattern` と projection を実装。入力全体を一度だけ照合し、番号順の0 / 1 / 複数slotを Result に返す。通常 Error 規則・Extractor 元 Error・scope / pin / 注釈・OR / pipe 制限を共通 Pattern engine へ接続した。4 consumer の予約名・canonical identity と Regex 通常 call / capture を分離し、Kernel consumer の値化・captureを拒否する。旧 fake Match carrier / surface-name consumer fallback を削除。独立レビュー完了、最終 CI 1972件と標準 SRT 全件が成功。`Extractor::from_result` と Extractor module の source @doc は次単位に残る。
+
 ## 2. 現状と変更後
 
 本仕様の移行前の Extractor は一入力で `Option<Payload>` を返す。`Some(payload)` は子 Pattern の照合へ進み、`None` は不一致になる。SafeBind の `None` failure は共通 PatternMismatch Error となる。

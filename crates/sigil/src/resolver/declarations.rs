@@ -1699,6 +1699,17 @@ fn rewrite_self_where_clause(
 
 fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
     match pat {
+        AstPattern::Projection {
+            span,
+            index,
+            inner,
+            annotation,
+        } => AstPattern::Projection {
+            span,
+            index,
+            inner: Box::new(rewrite_self_pattern(*inner, target)),
+            annotation: annotation.map(|ty| rewrite_self_type(ty, target)),
+        },
         AstPattern::Annotated(span, name, ty) => {
             AstPattern::Annotated(span, name, rewrite_self_type(ty, target))
         }
@@ -1755,6 +1766,21 @@ fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
 
 fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
     match node {
+        Ast::PatternConsumerCall(span, callee, args) => Ast::PatternConsumerCall(
+            span,
+            Box::new(rewrite_self_ast(*callee, target)),
+            args.into_iter()
+                .map(|mut arg| {
+                    arg.expression = arg
+                        .expression
+                        .map(|expr| Box::new(rewrite_self_ast(*expr, target)));
+                    arg.pattern = arg
+                        .pattern
+                        .map(|pat| Box::new(rewrite_self_pattern(*pat, target)));
+                    arg
+                })
+                .collect(),
+        ),
         Ast::Block(span, stmts) => Ast::Block(
             span,
             stmts

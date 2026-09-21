@@ -1,0 +1,1 @@
+def apply_pattern(value: Int) -> Int { value }

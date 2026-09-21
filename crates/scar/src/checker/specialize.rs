@@ -388,6 +388,7 @@ impl Checker {
             | TypedInner::ConstructorCall(_, args) => args.iter().find_map(visit),
             TypedInner::Block(stmts) => stmts.iter().find_map(visit),
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::EagerBoundary(rhs)
@@ -623,6 +624,56 @@ impl Checker {
             failure_target,
             continuation,
             origins,
+        }))
+    }
+
+    fn rewrite_bind_specializations(
+        &mut self,
+        pattern: TypedPattern,
+        rhs: Box<TypedNode>,
+        span: &Span,
+        context: &mut SpecializationContext<'_>,
+    ) -> Result<Box<TypedInner>, Box<TypeError>> {
+        let rhs = self.rewrite_specializations_in_node(
+            *rhs,
+            context.defs_by_fun_idx,
+            context.bound_tyvars_by_fun_idx,
+            context.needs_specialization,
+            context.specialization_fun_idxs,
+            context.generated_defs,
+        )?;
+        let pattern =
+            self.concretize_specialized_typed_pattern(pattern, Some(&rhs.ty), span, context)?;
+        Ok(Box::new(TypedInner::Bind(pattern, rhs)))
+    }
+
+    // Keep the large Pattern result and error temporaries out of every recursive
+    // specialization frame, including trees which never contain apply_pattern.
+    fn rewrite_apply_pattern_specializations(
+        &mut self,
+        value: Box<TypedNode>,
+        pattern: TypedPattern,
+        projections: Vec<(ResolvedId, Ty)>,
+        span: &Span,
+        context: &mut SpecializationContext<'_>,
+    ) -> Result<Box<TypedInner>, Box<TypeError>> {
+        let value = self.rewrite_specializations_in_node(
+            *value,
+            context.defs_by_fun_idx,
+            context.bound_tyvars_by_fun_idx,
+            context.needs_specialization,
+            context.specialization_fun_idxs,
+            context.generated_defs,
+        )?;
+        let pattern =
+            self.concretize_specialized_typed_pattern(pattern, Some(&value.ty), span, context)?;
+        Ok(Box::new(TypedInner::ApplyPattern {
+            value,
+            pattern,
+            projections: projections
+                .into_iter()
+                .map(|(id, ty)| (id, self.resolve_ty(&ty)))
+                .collect(),
         }))
     }
 
@@ -1071,29 +1122,35 @@ impl Checker {
                 }
                 TypedInner::Block(stmts)
             }
-            TypedInner::Bind(pattern, rhs) => {
-                let rhs = self.rewrite_specializations_in_node(
-                    *rhs,
+            TypedInner::Bind(pattern, rhs) => *self.rewrite_bind_specializations(
+                pattern,
+                rhs,
+                &span,
+                &mut SpecializationContext {
                     defs_by_fun_idx,
                     bound_tyvars_by_fun_idx,
                     needs_specialization,
                     specialization_fun_idxs,
                     generated_defs,
-                )?;
-                let pattern = self.concretize_specialized_typed_pattern(
-                    pattern,
-                    Some(&rhs.ty),
-                    &span,
-                    &mut SpecializationContext {
-                        defs_by_fun_idx,
-                        bound_tyvars_by_fun_idx,
-                        needs_specialization,
-                        specialization_fun_idxs,
-                        generated_defs,
-                    },
-                )?;
-                TypedInner::Bind(pattern, rhs)
-            }
+                },
+            )?,
+            TypedInner::ApplyPattern {
+                value,
+                pattern,
+                projections,
+            } => *self.rewrite_apply_pattern_specializations(
+                value,
+                pattern,
+                projections,
+                &span,
+                &mut SpecializationContext {
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                },
+            )?,
             TypedInner::SafeBind(pattern, rhs, projection, failure_target) => {
                 let rhs = self.rewrite_specializations_in_node(
                     *rhs,
@@ -2653,6 +2710,7 @@ impl Checker {
                 }
             }
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(rhs, ordered, seen)
@@ -2855,6 +2913,7 @@ impl Checker {
                 }
             }
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs) => self.collect_bound_tyvars_in_node(rhs, ordered, seen),
             TypedInner::DoSafeBind(control) => {
@@ -3204,6 +3263,18 @@ impl Checker {
                 self.substitute_typed_pattern_with_mapping(pattern, mapping),
                 Box::new(self.substitute_typed_node_with_mapping(*rhs, mapping)),
             ),
+            TypedInner::ApplyPattern {
+                value,
+                pattern,
+                projections,
+            } => TypedInner::ApplyPattern {
+                value: Box::new(self.substitute_typed_node_with_mapping(*value, mapping)),
+                pattern: self.substitute_typed_pattern_with_mapping(pattern, mapping),
+                projections: projections
+                    .into_iter()
+                    .map(|(id, ty)| (id, self.substitute_ty_with_mapping(&ty, mapping)))
+                    .collect(),
+            },
             TypedInner::SafeBind(pattern, rhs, projection, failure_target) => TypedInner::SafeBind(
                 self.substitute_typed_pattern_with_mapping(pattern, mapping),
                 Box::new(self.substitute_typed_node_with_mapping(*rhs, mapping)),
@@ -4672,7 +4743,13 @@ impl Checker {
                     || args.iter().any(Self::typed_node_has_pending_trait_call)
             }
             TypedInner::Block(stmts) => stmts.iter().any(Self::typed_node_has_pending_trait_call),
-            TypedInner::Bind(pattern, rhs) | TypedInner::SafeBind(pattern, rhs, _, _) => {
+            TypedInner::Bind(pattern, rhs)
+            | TypedInner::SafeBind(pattern, rhs, _, _)
+            | TypedInner::ApplyPattern {
+                pattern,
+                value: rhs,
+                ..
+            } => {
                 Self::typed_pattern_has_pending_dispatch(pattern)
                     || Self::typed_node_has_pending_trait_call(rhs)
             }

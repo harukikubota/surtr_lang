@@ -1,0 +1,1 @@
+print(apply_pattern(3, _17))

@@ -36,6 +36,19 @@ fn parse_and_resolve(src: &str) -> Result<Vec<Resolved>, ResolveError> {
     resolve(ast)
 }
 
+fn kernel_pattern_test_module() -> StagedModuleAst {
+    staged_auto_import_module("Kernel", parse_module_ast(
+        "@builtin def if_let(value: $A, pattern: $Pattern, yes: Lazy<$B>, no: Lazy<$B>) -> $B\n@builtin def if_let_then(value: $A, pattern: $Pattern, yes: Lazy<Unit>) -> Unit\n@builtin def is_match(value: $A, pattern: $Pattern) -> Boolean\n@builtin def apply_pattern(value: $A, pattern: $Pattern) -> Result<$B>", "Kernel"))
+}
+
+fn parse_and_resolve_pattern_consumers(src: &str) -> Result<Vec<Resolved>, ResolveError> {
+    let user_len = spire::parse_with_context(src, spire::ParserContext::project(0))
+        .unwrap()
+        .len();
+    let mut resolved = resolve_user_with_modules(src, &[vec![kernel_pattern_test_module()]])?;
+    Ok(resolved.split_off(resolved.len() - user_len))
+}
+
 fn parse_and_resolve_with_warnings(
     src: &str,
 ) -> Result<sindr::warning::PhaseOutput<Vec<Resolved>>, ResolveError> {
@@ -3511,7 +3524,7 @@ fn test_if_then_conversion() {
 
 #[test]
 fn test_if_let_conversion() {
-    let resolved = parse_and_resolve("x = if_let(Ok(1), Ok(v), v, 0)").unwrap();
+    let resolved = parse_and_resolve_pattern_consumers("x = if_let(Ok(1), Ok(v), v, 0)").unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::IfLet(_, _, arms) => {
@@ -3530,15 +3543,17 @@ fn test_if_let_conversion() {
 
 #[test]
 fn test_if_let_then_conversion() {
-    let resolved = parse_and_resolve("x = if_let_then(Ok(1), Ok(v), print(\"ok\"))").unwrap();
+    let resolved =
+        parse_and_resolve_pattern_consumers("x = if_let_then(Ok(1), Ok(v), print(\"ok\"))")
+            .unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
-            Resolved::Match(_, _, arms) => {
+            Resolved::IfLet(_, _, arms) => {
                 assert_eq!(arms.len(), 2);
                 assert!(matches!(&arms[0].body, Resolved::Block(_, _)));
                 assert!(matches!(&arms[1].body, Resolved::Lit(_, Lit::Unit)));
             }
-            other => panic!("Expected Match for if_let_then(...), got {:?}", other),
+            other => panic!("Expected IfLet for if_let_then(...), got {:?}", other),
         },
         _ => panic!("Expected Bind with Match"),
     }
@@ -3546,8 +3561,10 @@ fn test_if_let_then_conversion() {
 
 #[test]
 fn test_if_let_or_alternatives_share_one_binding_identity() {
-    let resolved = parse_and_resolve("result = if_let((1, 2), (1, value) | (value, 2), value, 0)")
-        .expect("both alternatives bind the same name");
+    let resolved = parse_and_resolve_pattern_consumers(
+        "result = if_let((1, 2), (1, value) | (value, 2), value, 0)",
+    )
+    .expect("both alternatives bind the same name");
     let Resolved::Bind(_, _, rhs) = &resolved[0] else {
         panic!("expected result binding");
     };
@@ -3576,9 +3593,10 @@ fn test_if_let_or_alternatives_share_one_binding_identity() {
 
 #[test]
 fn test_if_let_nested_or_alternatives_share_one_binding_identity() {
-    let resolved =
-        parse_and_resolve("result = if_let((1, (2, 3)), (1, (value, 3) | (2, value)), value, 0)")
-            .expect("nested alternatives bind the same name");
+    let resolved = parse_and_resolve_pattern_consumers(
+        "result = if_let((1, (2, 3)), (1, (value, 3) | (2, value)), value, 0)",
+    )
+    .expect("nested alternatives bind the same name");
     let Resolved::Bind(_, _, rhs) = &resolved[0] else {
         panic!("expected result binding");
     };
@@ -3610,14 +3628,15 @@ fn test_if_let_nested_or_alternatives_share_one_binding_identity() {
 
 #[test]
 fn test_if_let_then_or_binding_is_visible_in_success_block() {
-    let resolved =
-        parse_and_resolve("result = if_let_then((1, 2), (1, value) | (value, 2), print(value))")
-            .expect("if_let_then should resolve the common binding");
+    let resolved = parse_and_resolve_pattern_consumers(
+        "result = if_let_then((1, 2), (1, value) | (value, 2), print(value))",
+    )
+    .expect("if_let_then should resolve the common binding");
     let Resolved::Bind(_, _, rhs) = &resolved[0] else {
         panic!("expected result binding");
     };
-    let Resolved::Match(_, _, arms) = rhs.as_ref() else {
-        panic!("expected lowered match");
+    let Resolved::IfLet(_, _, arms) = rhs.as_ref() else {
+        panic!("expected lowered if_let");
     };
     let ResolvedPattern::Or(alternatives) = &arms[0].pattern else {
         panic!("expected OR in the success arm");
@@ -3644,7 +3663,7 @@ fn test_if_let_then_or_binding_is_visible_in_success_block() {
 fn test_if_let_or_alternatives_require_same_ordered_binding_names() {
     for pattern in ["(1, left) | (right, 2)", "(left, right) | (right, left)"] {
         let source = format!("result = if_let((1, 2), {pattern}, 1, 0)");
-        let error = parse_and_resolve(&source).expect_err(&source);
+        let error = parse_and_resolve_pattern_consumers(&source).expect_err(&source);
         assert!(
             error
                 .message
@@ -3681,7 +3700,7 @@ fn test_or_duplicate_binding_in_one_alternative_keeps_related_labels() {
 
 #[test]
 fn test_is_match_conversion() {
-    let resolved = parse_and_resolve("x = is_match(Ok(1), Ok(_))").unwrap();
+    let resolved = parse_and_resolve_pattern_consumers("x = is_match(Ok(1), Ok(_))").unwrap();
     match &resolved[0] {
         Resolved::Bind(_, _, rhs) => match rhs.as_ref() {
             Resolved::Match(_, _, arms) => {
@@ -3697,9 +3716,18 @@ fn test_is_match_conversion() {
 
 #[test]
 fn test_is_match_rejects_binding_variable_pattern() {
-    let err = parse_and_resolve("x = is_match(Ok(1), Ok(v))")
-        .expect_err("must fail after argument roles are known");
-    assert!(err.message.contains("does not allow binding variables"));
+    for source in [
+        "x = is_match(Ok(1), Ok(v))",
+        "x = is_match(Ok(1), Ok(v) | Ok(v))",
+        "x = is_match(Ok(1), Ok(_) @ value)",
+    ] {
+        let err = parse_and_resolve_pattern_consumers(source)
+            .expect_err("must fail after argument roles are known");
+        assert!(
+            err.message.contains("does not allow binding variables"),
+            "{source}: {err:?}"
+        );
+    }
 }
 
 #[test]
@@ -4506,6 +4534,61 @@ g = &print"#,
             _ => panic!("Expected Capture"),
         },
         _ => panic!("Expected Bind"),
+    }
+}
+
+#[test]
+fn canonical_pattern_consumers_cannot_be_values_or_captures() {
+    for consumer in sindr::pattern::PatternConsumer::ALL {
+        for source in [
+            format!("f = Kernel::{}", consumer.name()),
+            format!("f = &Kernel::{}", consumer.name()),
+            format!("f = &Kernel::{}(&1, 1)", consumer.name()),
+        ] {
+            let error = parse_and_resolve_pattern_consumers(&source)
+                .expect_err("canonical Pattern consumers are syntax, not callable values");
+            assert!(
+                error
+                    .message
+                    .contains("cannot be used as a value or capture"),
+                "{source}: {error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn capture_placeholders_inside_pattern_consumers_are_rewritten() {
+    for source in [
+        "g = &inspect(apply_pattern(&1, _1))",
+        "g = &inspect(apply_pattern(1, Bounds::offset(&1, _1: Int)))",
+    ] {
+        let resolved = resolve_user_with_modules(source, &preargument_test_modules())
+            .expect("outer capture placeholders must traverse consumer arguments");
+        assert!(matches!(resolved.last(), Some(Resolved::Bind(_, _, rhs))
+            if matches!(rhs.as_ref(), Resolved::CaptureClosure(_, params, _, _) if params.len() == 1)));
+    }
+}
+
+#[test]
+fn regex_is_match_keeps_expression_calls_and_captures() {
+    let modules = vec![vec![
+        kernel_pattern_test_module(),
+        staged_module(
+            "Regex",
+            parse_module_ast(
+                "@builtin def is_match(re: Regex, text: String) -> Boolean",
+                "Regex",
+            ),
+        ),
+    ]];
+    for source in [
+        "f = &Regex::is_match",
+        "f = &Regex::is_match(&1, \"text\")",
+        "f = &inspect(Regex::is_match(&1, \"text\"))",
+    ] {
+        resolve_user_with_modules(source, &modules)
+            .expect("Regex builtin remains a normal callable");
     }
 }
 
@@ -8398,6 +8481,7 @@ fn match_result_constructors_keep_qualified_identity_without_bare_aliases() {
 
 fn preargument_test_modules() -> Vec<Vec<StagedModuleAst>> {
     vec![vec![
+        kernel_pattern_test_module(),
         staged_module("", parse_module_ast("@builtin defenum MatchResult<$T> { OK($T), Err(Error) }", "")),
         staged_module("Bounds", parse_module_ast("defextractor offset(amount: Int, value: Int) -> MatchResult<Int> { MatchResult::OK(value) }\ndefextractor unit(value: Int) -> MatchResult<Unit> { MatchResult::OK(()) }", "Bounds")),
     ]]
@@ -8545,7 +8629,9 @@ fn local_extractor_argument_candidates_preserve_outer_and_provisional_identities
 
 #[test]
 fn local_extractor_predicate_defers_its_binding_prohibition() {
-    let resolved = parse_and_resolve("e = {|value| value}\nis_match(1, e(candidate))").unwrap();
+    let resolved =
+        parse_and_resolve_pattern_consumers("e = {|value| value}\nis_match(1, e(candidate))")
+            .unwrap();
     let Resolved::Match(_, _, arms) = resolved.last().unwrap() else {
         panic!("predicate match");
     };

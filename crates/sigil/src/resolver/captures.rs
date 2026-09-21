@@ -15,6 +15,10 @@ pub(super) fn collect_captures(
 
 fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut Vec<ResolvedId>) {
     match node {
+        Resolved::ApplyPattern(_, value, pattern) => {
+            collect_captures_inner(value, bound, free);
+            collect_pattern_captures(pattern, bound, free);
+        }
         Resolved::Lit(_, _) => {}
         Resolved::Var(_, id) => {
             if !bound.contains(&id.unique_id)
@@ -294,6 +298,7 @@ fn collect_pattern_captures(
     free: &mut Vec<ResolvedId>,
 ) {
     match pat {
+        ResolvedPattern::Projection { inner, .. } => collect_pattern_captures(inner, bound, free),
         // Signature-dependent captures are finalized from canonical Typed IDs.
         ResolvedPattern::Deferred { .. } | ResolvedPattern::ExtractorApplication { .. } => {}
         ResolvedPattern::Pin(id) => {
@@ -337,6 +342,7 @@ fn collect_pattern_captures(
 
 fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>) {
     match pat {
+        ResolvedPattern::Projection { inner, .. } => collect_bind_pattern_bindings(inner, bound),
         // Signature-dependent captures are finalized from canonical Typed IDs.
         ResolvedPattern::Deferred { .. } | ResolvedPattern::ExtractorApplication { .. } => {}
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {

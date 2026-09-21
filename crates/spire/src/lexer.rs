@@ -296,6 +296,17 @@ pub fn tokenize(source: &str) -> Result<Vec<Spanned<Token>>, ParseError> {
                 "const" => Token::Const,
                 "type" | "Type" => Token::Type,
                 "where" => Token::Where,
+                _ if sindr::pattern::PatternConsumer::from_name(&text).is_some() => {
+                    Token::PatternConsumer(
+                        sindr::pattern::PatternConsumer::from_name(&text).unwrap(),
+                    )
+                }
+                _ if text.starts_with('_')
+                    && text.len() > 1
+                    && text[1..].bytes().all(|ch| ch.is_ascii_digit()) =>
+                {
+                    Token::NumberedPlaceholder(text[1..].to_string())
+                }
                 _ => Token::Ident(text),
             };
             tokens.push(Spanned {

@@ -286,9 +286,35 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn expect_member_ident(&mut self) -> Result<(Symbol, Span), ParseError> {
+        if let Token::PatternConsumer(kind) = self.peek().clone() {
+            let span = self.advance().span;
+            return Ok((kind.name().to_string(), span));
+        }
+        self.expect_ident()
+    }
+
+    fn numbered_placeholder_index(digits: &str, span: Span) -> Result<u8, ParseError> {
+        digits
+            .parse::<u8>()
+            .ok()
+            .filter(|index| (1..=sindr::pattern::MAX_PROJECTION_INDEX).contains(index))
+            .ok_or_else(|| {
+                ParseError::syntax(
+                    crate::error::ParseErrorReason::PatternSyntax,
+                    "numbered placeholder index must be between _1 and _16",
+                    span,
+                )
+            })
+    }
+
     fn expect_builtin_decl_name(&mut self) -> Result<(Symbol, Span), ParseError> {
         let sp = self.peek_span();
         match self.peek().clone() {
+            Token::PatternConsumer(kind) => {
+                self.advance();
+                Ok((kind.name().to_string(), sp))
+            }
             Token::LParen
                 if matches!(
                     (self.peek_n(1), self.peek_n(2)),
@@ -375,7 +401,8 @@ impl<'a> Parser<'a> {
             | Ast::ExtractorClosure(_, _, _)
             | Ast::Grouped(_, _)
             | Ast::FacetSegmentAccess(_, _, _)
-            | Ast::App(_, _, _) => Some(stmt),
+            | Ast::App(_, _, _)
+            | Ast::PatternConsumerCall(..) => Some(stmt),
             _ => None,
         }
     }
@@ -978,6 +1005,22 @@ fn rewrite_process_owner_bulk_entries(
 
 fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast {
     match node {
+        Ast::PatternConsumerCall(span, callee, args) => Ast::PatternConsumerCall(
+            span,
+            Box::new(rewrite_process_owner_refs(*callee, old_name, new_name)),
+            args.into_iter()
+                .map(|mut arg| {
+                    arg.expression = arg.expression.map(|expr| {
+                        Box::new(rewrite_process_owner_refs(*expr, old_name, new_name))
+                    });
+                    arg.pattern = arg.pattern.map(|pattern| {
+                        Box::new(rewrite_process_owner_pattern(*pattern, old_name, new_name))
+                    });
+                    arg
+                })
+                .collect(),
+        ),
+
         Ast::App(span, func, args) => {
             let func = Box::new(rewrite_process_owner_refs(*func, old_name, new_name));
             let args = rewrite_process_owner_call_args(
@@ -1423,6 +1466,17 @@ fn rewrite_process_owner_pattern(
     new_name: &str,
 ) -> AstPattern {
     match pattern {
+        AstPattern::Projection {
+            span,
+            index,
+            inner,
+            annotation,
+        } => AstPattern::Projection {
+            span,
+            index,
+            inner: Box::new(rewrite_process_owner_pattern(*inner, old_name, new_name)),
+            annotation: annotation.map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+        },
         AstPattern::Constructor(span, name, args) => AstPattern::Constructor(
             span,
             rewrite_process_owner_symbol(name, old_name, new_name),
@@ -1642,6 +1696,7 @@ pub(super) fn ast_ty_span(ty: &AstTy) -> &Span {
 
 fn pattern_span(pat: &AstPattern) -> &Span {
     match pat {
+        AstPattern::Projection { span, .. } => span,
         AstPattern::Var(span, _)
         | AstPattern::Annotated(span, _, _)
         | AstPattern::Pin(span, _)
@@ -1675,7 +1730,9 @@ fn pattern_depth(pat: &AstPattern) -> usize {
                 .max()
                 .unwrap_or(0)
         }
-        AstPattern::As(_, inner, _, _, _) => 1 + pattern_depth(inner),
+        AstPattern::As(_, inner, _, _, _) | AstPattern::Projection { inner, .. } => {
+            1 + pattern_depth(inner)
+        }
         _ => 1,
     }
 }
@@ -1768,6 +1825,17 @@ fn shift_parse_error(mut error: ParseError, delta: usize) -> ParseError {
 
 fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
     match pat {
+        AstPattern::Projection {
+            span,
+            index,
+            inner,
+            annotation,
+        } => AstPattern::Projection {
+            span: shift_span(span, delta),
+            index,
+            inner: Box::new(shift_pattern(*inner, delta)),
+            annotation: annotation.map(|ty| shift_ast_ty(ty, delta)),
+        },
         AstPattern::Var(span, name) => AstPattern::Var(shift_span(span, delta), name),
         AstPattern::Annotated(span, name, ty) => {
             AstPattern::Annotated(shift_span(span, delta), name, shift_ast_ty(ty, delta))
@@ -2030,6 +2098,30 @@ fn shift_do_statements(statements: Vec<AstDoStatement>, delta: usize) -> Vec<Ast
 
 fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
     match ast {
+        Ast::NumberedPlaceholder(span, index) => {
+            Ast::NumberedPlaceholder(shift_span(span, delta), index)
+        }
+        Ast::PatternConsumerCall(span, callee, args) => Ast::PatternConsumerCall(
+            shift_span(span, delta),
+            Box::new(shift_ast_span(*callee, delta)),
+            args.into_iter()
+                .map(|arg| AstPatternArgument {
+                    span: shift_span(arg.span, delta),
+                    expression: arg
+                        .expression
+                        .map(|expr| Box::new(shift_ast_span(*expr, delta))),
+                    pattern: arg
+                        .pattern
+                        .map(|pattern| Box::new(shift_pattern(*pattern, delta))),
+                    expression_error: arg
+                        .expression_error
+                        .map(|error| shift_parse_error(error, delta)),
+                    pattern_error: arg
+                        .pattern_error
+                        .map(|error| shift_parse_error(error, delta)),
+                })
+                .collect(),
+        ),
         Ast::Lit(span, lit) => Ast::Lit(shift_span(span, delta), lit),
         Ast::Var(span, name) => Ast::Var(shift_span(span, delta), name),
         Ast::InternalVar(span, name) => Ast::InternalVar(shift_span(span, delta), name),
@@ -2712,7 +2804,9 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
 impl Ast {
     pub fn span(&self) -> &Span {
         match self {
-            Ast::Lit(s, _)
+            Ast::PatternConsumerCall(s, _, _)
+            | Ast::NumberedPlaceholder(s, _)
+            | Ast::Lit(s, _)
             | Ast::Var(s, _)
             | Ast::InternalVar(s, _)
             | Ast::Path(s, _)

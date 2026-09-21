@@ -4264,6 +4264,18 @@ impl Checker {
                 self.resolve_typed_pattern(pattern),
                 Box::new(self.resolve_typed_node(*rhs)),
             ),
+            TypedInner::ApplyPattern {
+                value,
+                pattern,
+                projections,
+            } => TypedInner::ApplyPattern {
+                value: Box::new(self.resolve_typed_node(*value)),
+                pattern: self.resolve_typed_pattern(pattern),
+                projections: projections
+                    .into_iter()
+                    .map(|(id, ty)| (id, self.resolve_ty(&ty)))
+                    .collect(),
+            },
             TypedInner::SafeBind(pattern, rhs, projection, failure_target) => TypedInner::SafeBind(
                 self.resolve_typed_pattern(pattern),
                 Box::new(self.resolve_typed_node(*rhs)),

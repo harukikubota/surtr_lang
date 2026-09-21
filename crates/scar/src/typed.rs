@@ -446,6 +446,12 @@ pub enum TypedInner {
     Cause(Box<TypedNode>, Box<TypedNode>),
     RecoverKind(Box<TypedNode>, Box<TypedNode>, Box<TypedNode>),
     Match(Box<TypedNode>, Vec<TypedMatchArm>),
+    /// Expression-local Pattern execution with projection results in slot order.
+    ApplyPattern {
+        value: Box<TypedNode>,
+        pattern: TypedPattern,
+        projections: Vec<(ResolvedId, Ty)>,
+    },
 
     /// Field access — field name resolved to index by Scar
     FieldAccess(Box<TypedNode>, u32),

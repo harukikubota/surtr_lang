@@ -39,6 +39,7 @@ impl Checker {
                 }
             }
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, ..)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _)
@@ -237,9 +238,9 @@ impl Checker {
                         reference(id, outer, out);
                     }
                 }
-                TypedInner::Bind(pattern, _) | TypedInner::SafeBind(pattern, ..) => {
-                    binding(pattern, outer, out)
-                }
+                TypedInner::Bind(pattern, _)
+                | TypedInner::SafeBind(pattern, ..)
+                | TypedInner::ApplyPattern { pattern, .. } => binding(pattern, outer, out),
                 TypedInner::DoSafeBind(control) => binding(&control.pattern, outer, out),
                 TypedInner::Match(_, arms) => {
                     for arm in arms {

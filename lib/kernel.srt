@@ -132,6 +132,26 @@ defmod Kernel {
   @builtin def is_match(value: $A, pattern: $Pattern) -> Boolean
 
   @doc """
+  Match the whole input and return the selected values in a Result.
+
+  Projection slots `_1` through `_16` belong to this Pattern only. Slots must
+  be unique and consecutive from `_1`; their numbers determine output order.
+  Zero slots return Unit, one returns its value, and multiple slots return a tuple.
+  Extractor failures preserve their original Error. Failure returns here without
+  returning from the enclosing function. Result inputs are not unwrapped.
+
+  ## REPL
+  xldr(1)> apply_pattern([10, 20], [_1: Int, .._2: List<Int>])
+  Ok((10, [20]))
+  xldr(2)> apply_pattern(Ok(3), Ok(_1))
+  Ok(3)
+  xldr(3)> [10, 20] |> apply_pattern([_, _1])
+  Ok(20)
+  """
+  @builtin def apply_pattern(value: $Value, pattern: $Pattern) -> Result<$Return>
+
+
+  @doc """
   Duplicate one value into a pair.
 
   ## REPL

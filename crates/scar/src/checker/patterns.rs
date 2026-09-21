@@ -2,6 +2,309 @@ use super::*;
 use diagnostics::{PatternKind, TypeDiagnosticReason};
 
 impl Checker {
+    pub(super) fn projection_shape_error(
+        &self,
+        expected: &str,
+        actual: impl Into<String>,
+        span: &Span,
+    ) -> TypeError {
+        TypeError::from_structured(diagnostics::StructuredDiagnostic {
+            reason: TypeDiagnosticReason::PatternShapeMismatch.into(),
+            origin: diagnostics::DiagnosticOrigin::Pattern,
+            data: diagnostics::DiagnosticData::Pattern(diagnostics::PatternDiagnosticData {
+                pattern_kind: PatternKind::Other,
+                name: Some("Projection".into()),
+                expected_type: Some(expected.into()),
+                actual_type: Some(actual.into()),
+                expected_count: None,
+                actual_count: None,
+                details: Vec::new(),
+            }),
+            primary: diagnostics::SourceFact::untyped(
+                diagnostics::SourceRole::Pattern,
+                diagnostics::SourceId(0),
+                span.clone(),
+            ),
+            related: Vec::new(),
+            remediation: None,
+        })
+    }
+
+    /// Resolve only Pattern argument roles. Preargument expressions remain expressions,
+    /// including any independent Pattern consumer calls they contain.
+    fn select_application_pattern(
+        &mut self,
+        pattern: &ResolvedPattern,
+    ) -> Result<ResolvedPattern, TypeError> {
+        Ok(match pattern {
+            ResolvedPattern::ExtractorApplication { head, args } => {
+                let selected = self.select_extractor_application(head, args)?;
+                return self.select_application_pattern(&selected);
+            }
+            ResolvedPattern::Deferred {
+                pattern,
+                bindings,
+                allow_bindings,
+            } => ResolvedPattern::Deferred {
+                pattern: Box::new(self.select_application_pattern(pattern)?),
+                bindings: bindings.clone(),
+                allow_bindings: *allow_bindings,
+            },
+            ResolvedPattern::Projection {
+                index,
+                id,
+                inner,
+                annotation,
+            } => ResolvedPattern::Projection {
+                index: *index,
+                id: id.clone(),
+                inner: Box::new(self.select_application_pattern(inner)?),
+                annotation: annotation.clone(),
+            },
+            ResolvedPattern::As(inner, id, annotation) => ResolvedPattern::As(
+                Box::new(self.select_application_pattern(inner)?),
+                id.clone(),
+                annotation.clone(),
+            ),
+            ResolvedPattern::ListCons(head, tail) => ResolvedPattern::ListCons(
+                Box::new(self.select_application_pattern(head)?),
+                Box::new(self.select_application_pattern(tail)?),
+            ),
+            ResolvedPattern::Tuple(items) => ResolvedPattern::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.select_application_pattern(item))
+                    .collect::<Result<_, _>>()?,
+            ),
+            ResolvedPattern::Constructor(id, items) => ResolvedPattern::Constructor(
+                id.clone(),
+                items
+                    .iter()
+                    .map(|item| self.select_application_pattern(item))
+                    .collect::<Result<_, _>>()?,
+            ),
+            ResolvedPattern::Extractor(id, args, items) => ResolvedPattern::Extractor(
+                id.clone(),
+                args.clone(),
+                items
+                    .iter()
+                    .map(|item| self.select_application_pattern(item))
+                    .collect::<Result<_, _>>()?,
+            ),
+            ResolvedPattern::Or(_) => {
+                return Err(self.projection_shape_error(
+                    "a Pattern without OR in apply_pattern",
+                    "OR Pattern",
+                    &Self::resolved_pattern_span(pattern),
+                ))
+            }
+            other => other.clone(),
+        })
+    }
+
+    fn lower_pattern_projections(
+        &self,
+        pattern: ResolvedPattern,
+        slots: &mut std::collections::BTreeMap<u8, ResolvedId>,
+    ) -> Result<ResolvedPattern, TypeError> {
+        Ok(match pattern {
+            ResolvedPattern::Projection {
+                index,
+                id,
+                inner,
+                annotation,
+            } => {
+                if !(1..=16).contains(&index) {
+                    return Err(self.projection_shape_error(
+                        "an index between _1 and _16",
+                        format!("_{}", index),
+                        &id.span,
+                    ));
+                }
+                if slots.insert(index, id.clone()).is_some() {
+                    return Err(self.projection_shape_error(
+                        "unique projection slots",
+                        format!("duplicate projection slot _{}", index),
+                        &id.span,
+                    ));
+                }
+                ResolvedPattern::As(
+                    Box::new(self.lower_pattern_projections(*inner, slots)?),
+                    id,
+                    annotation,
+                )
+            }
+            ResolvedPattern::Deferred {
+                pattern,
+                bindings,
+                allow_bindings,
+            } => ResolvedPattern::Deferred {
+                pattern: Box::new(self.lower_pattern_projections(*pattern, slots)?),
+                bindings,
+                allow_bindings,
+            },
+            ResolvedPattern::As(inner, id, annotation) => ResolvedPattern::As(
+                Box::new(self.lower_pattern_projections(*inner, slots)?),
+                id,
+                annotation,
+            ),
+            ResolvedPattern::ListCons(head, tail) => ResolvedPattern::ListCons(
+                Box::new(self.lower_pattern_projections(*head, slots)?),
+                Box::new(self.lower_pattern_projections(*tail, slots)?),
+            ),
+            ResolvedPattern::Tuple(items) => ResolvedPattern::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| self.lower_pattern_projections(item, slots))
+                    .collect::<Result<_, _>>()?,
+            ),
+            ResolvedPattern::Constructor(id, items) => ResolvedPattern::Constructor(
+                id,
+                items
+                    .into_iter()
+                    .map(|item| self.lower_pattern_projections(item, slots))
+                    .collect::<Result<_, _>>()?,
+            ),
+            ResolvedPattern::Extractor(id, args, items) => ResolvedPattern::Extractor(
+                id,
+                args,
+                items
+                    .into_iter()
+                    .map(|item| self.lower_pattern_projections(item, slots))
+                    .collect::<Result<_, _>>()?,
+            ),
+            other => other,
+        })
+    }
+
+    fn apply_pattern_input_hint(
+        &mut self,
+        pattern: &ResolvedPattern,
+        projection_types: &HashMap<u32, Ty>,
+    ) -> Option<Ty> {
+        match pattern {
+            ResolvedPattern::Deferred { pattern, .. } => {
+                self.apply_pattern_input_hint(pattern, projection_types)
+            }
+            ResolvedPattern::As(inner, id, annotation) => {
+                if let Some(ty) = annotation {
+                    self.resolve_ast_ty_in_context(ty, self.local_type_syntax_context())
+                        .ok()
+                } else {
+                    projection_types
+                        .get(&id.unique_id)
+                        .cloned()
+                        .or_else(|| self.apply_pattern_input_hint(inner, projection_types))
+                }
+            }
+            ResolvedPattern::Tuple(items) => Some(Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| {
+                        self.apply_pattern_input_hint(item, projection_types)
+                            .unwrap_or_else(|| self.env.fresh_tyvar())
+                    })
+                    .collect(),
+            )),
+            ResolvedPattern::Constructor(id, items)
+                if matches!(id.name.as_str(), "Ok" | "Result::Ok") && items.len() == 1 =>
+            {
+                Some(Ty::Result(
+                    Box::new(
+                        self.apply_pattern_input_hint(&items[0], projection_types)
+                            .unwrap_or_else(|| self.env.fresh_tyvar()),
+                    ),
+                    Box::new(Ty::Error),
+                ))
+            }
+            _ => self.infer_match_pattern_ty(pattern),
+        }
+    }
+
+    pub(super) fn check_apply_pattern(
+        &mut self,
+        span: &Span,
+        value: &Resolved,
+        pattern: &ResolvedPattern,
+        expected: Option<&Ty>,
+    ) -> Result<TypedNode, TypeError> {
+        let selected = self.select_application_pattern(pattern)?;
+        let mut slots = std::collections::BTreeMap::new();
+        let selected = self.lower_pattern_projections(selected, &mut slots)?;
+        for (offset, (index, id)) in slots.iter().enumerate() {
+            if usize::from(*index) != offset + 1 {
+                return Err(self.projection_shape_error(
+                    "projection slots contiguous from _1",
+                    format!("_{} before missing _{}", index, offset + 1),
+                    &id.span,
+                ));
+            }
+        }
+        self.env.push_var_scope();
+        let saved_aliases = self.pattern_binding_aliases.clone();
+        let result = (|| {
+            let mut projection_types = HashMap::new();
+            if let Some(Ty::Result(payload, _)) = expected.map(|ty| self.resolve_ty(ty)) {
+                let expected_slots = if slots.len() == 1 {
+                    vec![*payload]
+                } else if let Ty::Tuple(items) = *payload {
+                    items
+                } else {
+                    Vec::new()
+                };
+                if expected_slots.len() == slots.len() {
+                    for (id, ty) in slots.values().zip(expected_slots) {
+                        projection_types.insert(id.unique_id, ty);
+                    }
+                }
+            }
+            let input_hint = self.apply_pattern_input_hint(&selected, &projection_types);
+            let value = self.check_node_with_expected(value, input_hint.as_ref())?;
+            self.ensure_no_runtime_facet_args(std::slice::from_ref(&value), span, "apply_pattern")?;
+            let (pattern, _) = self.check_pattern(&selected, &value.ty, span)?;
+            self.bind_typed_pattern(&pattern, &value.ty);
+            let projections = slots
+                .into_values()
+                .map(|id| {
+                    let ty = self.env.lookup_var(id.unique_id).cloned().ok_or_else(|| {
+                        self.typecheck_invariant_error("Projection binding has no type", &id.span)
+                    })?;
+                    Ok((id, self.resolve_ty(&ty)))
+                })
+                .collect::<Result<Vec<_>, TypeError>>()?;
+            let payload = match projections.as_slice() {
+                [] => Ty::Unit,
+                [(_, ty)] => ty.clone(),
+                _ => Ty::Tuple(projections.iter().map(|(_, ty)| ty.clone()).collect()),
+            };
+            let ty = Ty::Result(Box::new(payload), Box::new(Ty::Error));
+            if let Some(expected) = expected {
+                self.assert_type_relation(
+                    expected,
+                    &ty,
+                    self.type_fact(diagnostics::SourceRole::Expected, span, expected),
+                    self.type_fact(diagnostics::SourceRole::Value, span, &ty),
+                    TypeDiagnosticReason::AnnotationTypeMismatch,
+                    diagnostics::DiagnosticOrigin::Annotation,
+                    "apply_pattern",
+                    0,
+                )?;
+            }
+            Ok(TypedNode {
+                ty: self.resolve_ty(&ty),
+                span: span.clone(),
+                node: TypedInner::ApplyPattern {
+                    value: Box::new(value),
+                    pattern,
+                    projections,
+                },
+            })
+        })();
+        self.env.pop_var_scope();
+        self.pattern_binding_aliases = saved_aliases;
+        result
+    }
+
     pub(super) fn deferred_pattern_error(
         message: impl Into<String>,
         id: &ResolvedId,
@@ -310,9 +613,9 @@ impl Checker {
         }
         let mut out = Vec::new();
         match &node.node {
-            TypedInner::Bind(pattern, _) | TypedInner::SafeBind(pattern, ..) => {
-                binding(pattern, &mut out)
-            }
+            TypedInner::Bind(pattern, _)
+            | TypedInner::SafeBind(pattern, ..)
+            | TypedInner::ApplyPattern { pattern, .. } => binding(pattern, &mut out),
             TypedInner::DoSafeBind(control) => binding(&control.pattern, &mut out),
             TypedInner::Match(_, arms) => {
                 for arm in arms {
@@ -377,9 +680,9 @@ impl Checker {
         }
         let mut out = Vec::new();
         match &mut node.node {
-            TypedInner::Bind(pattern, _) | TypedInner::SafeBind(pattern, ..) => {
-                binding(pattern, &mut out)
-            }
+            TypedInner::Bind(pattern, _)
+            | TypedInner::SafeBind(pattern, ..)
+            | TypedInner::ApplyPattern { pattern, .. } => binding(pattern, &mut out),
             TypedInner::DoSafeBind(control) => binding(&mut control.pattern, &mut out),
             TypedInner::Match(_, arms) => {
                 for arm in arms {
@@ -471,7 +774,9 @@ impl Checker {
     pub(super) fn is_total_bind_pattern(pat: &ResolvedPattern) -> bool {
         match pat {
             ResolvedPattern::Deferred { pattern, .. } => Self::is_total_bind_pattern(pattern),
-            ResolvedPattern::ExtractorApplication { .. } => false,
+            ResolvedPattern::ExtractorApplication { .. } | ResolvedPattern::Projection { .. } => {
+                false
+            }
             ResolvedPattern::Var(_)
             | ResolvedPattern::Annotated(_, _)
             | ResolvedPattern::AnnotatedWildcard(_, _)
@@ -505,6 +810,11 @@ impl Checker {
             }
         }
         match pat {
+            ResolvedPattern::Projection { id, .. } => Err(self.projection_shape_error(
+                "the apply_pattern consumer",
+                "a projection outside apply_pattern",
+                &id.span,
+            )),
             ResolvedPattern::Deferred {
                 pattern,
                 bindings,

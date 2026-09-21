@@ -476,7 +476,7 @@ result: Option<Int> = do::<Option> {
 - 入れ子になった constructor pattern
 - OR Pattern `p1 | p2`（`match` arm、`if_let`、`if_let_then`、binding-free な `is_match`。子 Pattern 内でも使用可能）
 
-`match` / `if_let` / `if_let_then` の同一 OR 内では、全 alternative の束縛変数名・解決済み型・順序が一致する必要があります。`if_let` 系は全候補失敗時に fallback へ進み、網羅性を要求しません。`is_match` は全 alternative で変数束縛を禁止します。`=` / `=?`、do binding の Pattern では、入れ子の OR も構文エラーです。これらの input / RHS にある通常 `match` の arm 内 OR は許可されます。
+`match` / `if_let` / `if_let_then` の同一 OR 内では、全 alternative の束縛変数名・解決済み型・順序が一致する必要があります。`if_let` 系は全候補失敗時に fallback へ進み、網羅性を要求しません。`is_match` は全 alternative で変数束縛を禁止します。`=` / `=?`、do binding、`apply_pattern` の Pattern では、入れ子の OR も構文エラーです。これらの input / RHS にある通常 `match` の arm 内 OR は許可されます。
 
 構造体の constructor pattern は attached extractor `Type::deconstruct(...)` を通ります。  
 詳細は `./structs.md` と `./extractors.md` を参照してください。
@@ -719,3 +719,12 @@ defmod Bootstrap {
 - 高度なモジュールシステム拡張
 
 Trait system の利用規則は [Trait システム](./trait-system.md) と [Trait Impls](./trait-impls.md) を正本とします。その他の全体要件は [要件定義v9](../../doc/要件定義v9.md) を参照してください。
+
+### apply_pattern
+
+- canonical surface は `Kernel::apply_pattern(value, pattern) -> Result<$Return>`。input が Result でも自動 unwrap しない
+- projection `_1`〜`_16` を番号順に返す。0個は Unit、1個は値、複数は tuple。番号は1から連続・重複なしとし、`_01` は1と同じ
+- 通常位置・alias・list tail の型注釈を許可する。通常 binding は内部限定で、全照合成功後にだけ投影結果を公開する
+- Extractor の元 Error と通常 Pattern の Error を `Err` に保持し、外側 callable から早期 return しない
+- OR、Pattern への pipe 注入、Pattern 引数の部分適用補完は拒否する。`value |> apply_pattern(pattern)` は第1 Expr 引数へ注入する
+- `if_let` / `if_let_then` / `is_match` / `apply_pattern` は予約 consumer 名。`Regex::is_match` は canonical identity により通常 call / capture として扱う

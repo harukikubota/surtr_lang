@@ -325,6 +325,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_sig_typed_call_queries_specialize_polymorphic_returns),
     repl_core_case!(core_sig_supports_closure_bindings_recapture_and_application),
     repl_core_case!(core_extractor_closure_keeps_capture_signature_and_identity_across_chunks),
+    repl_core_case!(core_apply_pattern_keeps_projection_local_and_resolves_canonical_queries),
     repl_core_case!(core_completion_shows_signature_for_callable_binding_calls),
     repl_core_case!(core_callable_refs_and_signature_errors_are_ui_independent),
     repl_core_case!(
@@ -5949,4 +5950,67 @@ fn core_extractor_closure_keeps_capture_signature_and_identity_across_chunks() {
     let (symbol, signature) = doc_target(&doc);
     assert_eq!(symbol, "ExtractorClosure");
     assert_eq!(signature, Some("type ExtractorClosure<$Signature>"));
+}
+
+fn core_apply_pattern_keeps_projection_local_and_resolves_canonical_queries() {
+    let mut engine = engine();
+    for source in [
+        "temporary = 99",
+        "offset = 10",
+        "ext = *{|value: Int| MatchResult::OK(value + offset)}",
+        "offset = 20",
+        "projected = apply_pattern((2, 3), (temporary, ext(_1)))",
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(result.output, ReplOutput::EvalSuccess { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+    }
+    for (source, expected) in [
+        ("projected", "Ok(13)"),
+        ("temporary", "99"),
+        ("3 |> apply_pattern(ext(_1))", "Ok(13)"),
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(result.output, ReplOutput::EvalSuccess { .. }),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+        assert!(
+            rendered_text(&result).contains(expected),
+            "{}",
+            rendered_text(&result)
+        );
+    }
+    let bad = engine.handle_line("apply_pattern((1, 2), (_1, _1))");
+    assert!(
+        matches!(
+            bad.output,
+            ReplOutput::Diagnostic { .. } | ReplOutput::EvalError { .. }
+        ),
+        "{}",
+        rendered_text(&bad)
+    );
+    let after = engine.handle_line("apply_pattern(4, ext(_1))");
+    assert!(
+        rendered_text(&after).contains("Ok(14)"),
+        "{}",
+        rendered_text(&after)
+    );
+    let signature = signature_text(&engine.handle_line(":sig apply_pattern"));
+    assert!(
+        signature.contains("$Pattern") && signature.contains("Result<$Return"),
+        "{signature}"
+    );
+    let doc = engine.handle_line(":doc apply_pattern");
+    let (symbol, signature) = doc_target(&doc);
+    assert_eq!(symbol, "Kernel::apply_pattern");
+    let signature = signature.expect("canonical consumer signature");
+    assert!(
+        signature.contains("$Pattern") && signature.contains("Result<$Return"),
+        "{signature}"
+    );
 }

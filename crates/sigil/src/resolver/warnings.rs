@@ -114,6 +114,10 @@ fn warning_span(span: &Span) -> WarningSpan {
 
 fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
     match node {
+        Resolved::ApplyPattern(_, value, pattern) => {
+            collect_node_usage(value, usage);
+            collect_pattern_usage(pattern, usage);
+        }
         Resolved::Lit(..)
         | Resolved::ListNil(_)
         | Resolved::InferredFacetCapture(_, _)
@@ -315,6 +319,7 @@ fn collect_record_arg_usage(arg: &ResolvedRecordLitArg, usage: &mut WarningUsage
 
 fn collect_pattern_usage(pattern: &ResolvedPattern, usage: &mut WarningUsage) {
     match pattern {
+        ResolvedPattern::Projection { inner, .. } => collect_pattern_usage(inner, usage),
         ResolvedPattern::Deferred {
             pattern, bindings, ..
         } => {

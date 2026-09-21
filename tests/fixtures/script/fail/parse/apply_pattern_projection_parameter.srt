@@ -1,0 +1,1 @@
+def identity(_1: Int) -> Int { 1 }

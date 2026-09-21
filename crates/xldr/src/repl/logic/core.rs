@@ -8782,7 +8782,9 @@ fn is_preload_declaration(stmt: &Ast) -> bool {
 
 fn ast_span(stmt: &Ast) -> Option<&Span> {
     match stmt {
-        Ast::Lit(span, _)
+        Ast::PatternConsumerCall(span, _, _)
+        | Ast::NumberedPlaceholder(span, _)
+        | Ast::Lit(span, _)
         | Ast::Var(span, _)
         | Ast::InternalVar(span, _)
         | Ast::Path(span, _)

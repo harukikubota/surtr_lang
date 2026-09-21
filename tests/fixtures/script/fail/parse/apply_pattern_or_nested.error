@@ -1,0 +1,2 @@
+phase: parse
+contains: OR patterns are not allowed in binding patterns

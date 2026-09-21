@@ -151,6 +151,7 @@ pub struct ResolvedHashMapLiteralEntry {
 /// Resolved AST — every identifier carries a unique_id.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Resolved {
+    ApplyPattern(Span, Box<Resolved>, ResolvedPattern),
     /// Literal value
     Lit(Span, Lit),
 
@@ -464,6 +465,12 @@ pub enum ResolvedInterpolatedPart {
 /// Pattern in a binding (resolved).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResolvedPattern {
+    Projection {
+        index: u8,
+        id: ResolvedId,
+        inner: Box<ResolvedPattern>,
+        annotation: Option<AstTy>,
+    },
     /// Signature-dependent bindings, selected by Scar before checking the continuation.
     Deferred {
         pattern: Box<ResolvedPattern>,

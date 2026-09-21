@@ -1,0 +1,2 @@
+ext = *{|amount: Int, value: Int| MatchResult::OK(amount + value)}
+print(apply_pattern(3, ext(_1, _1)))

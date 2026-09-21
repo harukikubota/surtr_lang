@@ -1262,6 +1262,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(match_result_payload_shape_must_be_resolved_before_execution),
     surface_case!(extractor_prearguments_follow_signature_and_infer_payload_shape),
     surface_case!(extractor_closure_inference_and_callable_boundaries),
+    surface_case!(apply_pattern_projection_types_and_boundaries),
 ];
 
 #[test]
@@ -3125,12 +3126,13 @@ impl Profile {
 }
 
 fn facet_standalone_tuple_root_is_rejected() {
-    let err = resolve_with_builtin_prelude_result(
+    let err = spire::parse_with_context(
         r#"pair = (1, "one")
 Facet::view(_0, pair)"#,
+        spire::ParserContext::project(0),
     )
-    .expect_err("standalone tuple root should fail during resolve");
-    assert!(err.message.contains("Undefined variable: _0"));
+    .expect_err("standalone _0 is outside the numbered-placeholder range");
+    assert!(err.message().contains("between _1 and _16"));
 }
 
 fn facet_bindings_can_be_reused_by_facet_intrinsics() {
@@ -8791,6 +8793,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             }
             TypedInner::Block(stmts) => stmts.iter().any(has_pending_trait_call),
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
@@ -8915,6 +8918,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             }
             TypedInner::Block(stmts) => stmts.iter().any(has_pending_trait_call),
             TypedInner::Bind(_, rhs)
+            | TypedInner::ApplyPattern { value: rhs, .. }
             | TypedInner::SafeBind(_, rhs, _, _)
             | TypedInner::Semi(rhs)
             | TypedInner::FieldAccess(rhs, _) => has_pending_trait_call(rhs),
@@ -9521,7 +9525,9 @@ fn collect_decode_trait_calls(node: &TypedNode, calls: &mut Vec<(String, Option<
                 collect_decode_trait_calls(stmt, calls);
             }
         }
-        TypedInner::Bind(_, rhs) | TypedInner::SafeBind(_, rhs, _, _) => {
+        TypedInner::Bind(_, rhs)
+        | TypedInner::ApplyPattern { value: rhs, .. }
+        | TypedInner::SafeBind(_, rhs, _, _) => {
             collect_decode_trait_calls(rhs, calls);
         }
         TypedInner::Def(_, _, _, _, _, _, body, _)
@@ -11111,6 +11117,73 @@ match 1 { ext(value) | ext(value) => value, _ => 0 }"#,
         r#"ext = *{|value: Int| f = {|nested: Int| True =? nested > 0; nested}; MatchResult::OK(value)}"#,
         r#"ext = *{|value: Int| Ok(value)}"#,
         r#"ext = {|value: Int| value}; match 1 { ext(bound) => bound, _ => 0 }"#,
+    ] {
+        assert!(
+            typecheck(resolve_with_builtin_prelude(source)).is_err(),
+            "{source}"
+        );
+    }
+}
+
+fn apply_pattern_projection_types_and_boundaries() {
+    let source =
+        r#"result: Result<(String, Int)> = apply_pattern((7, "value"), (_2: Int, _1: String))"#;
+    let typed = typecheck(resolve_with_builtin_prelude(source))
+        .expect("projection output follows number order");
+    let TypedInner::ApplyPattern { projections, .. } = &typed_bind_rhs(&typed, "result").node
+    else {
+        panic!("apply_pattern typed contract");
+    };
+    assert_eq!(
+        projections
+            .iter()
+            .map(|(_, ty)| ty.clone())
+            .collect::<Vec<_>>(),
+        vec![Ty::Str, Ty::Int]
+    );
+    for source in [
+        r#"result: Result<Unit> = apply_pattern(3, 3)"#,
+        r#"result: Result<Int> = apply_pattern(3, _1)"#,
+        r#"result: Result<(Int, List<(Int, Int)>, (Int, Int))> = apply_pattern([(1, 3)], [(_1: Int, 3) @ _3] @ _2)"#,
+        r#"result: Result<(Int, List<Int>)> = apply_pattern([1, 2, 3], [_1: Int, .._2: List<Int>])"#,
+        r#"whole: Result<Result<Int>> = apply_pattern(Ok(1), _1)
+payload: Result<Int> = apply_pattern(Ok(1), Ok(_1))
+failed: Result<Result<Int>> = apply_pattern(Err(NoneError), _1)
+constrained: Result<Int> = apply_pattern(Err(NoneError), Ok(_1: Int))"#,
+        r#"ext = *{|value| MatchResult::OK(value)}
+result: Result<(String, Int)> = apply_pattern((3, "text"), ext(_2, _1))"#,
+        r#"unknown = *{|value: Int| MatchResult::Err(NoneError)}
+result: Result<Int> = apply_pattern(1, unknown(_1))"#,
+        r#"def ordinary() -> Int { result = apply_pattern(3, _1); 7 }
+ordinary()"#,
+    ] {
+        typecheck(resolve_with_builtin_prelude(source))
+            .unwrap_or_else(|error| panic!("{source}\n{error:?}"));
+    }
+    for source in [
+        r#"apply_pattern((1, 2), (_1, _1))"#,
+        r#"apply_pattern((1, 2), (_01, _1))"#,
+        r#"apply_pattern(1, _2)"#,
+        r#"match 1 { _1 => 1 }"#,
+    ] {
+        let error = typecheck(resolve_with_builtin_prelude(source)).expect_err(source);
+        let diagnostic = error.structured.expect("Pattern producer diagnostic");
+        assert_eq!(
+            diagnostic.reason,
+            diagnostics::TypeDiagnosticReason::PatternShapeMismatch
+        );
+        assert_eq!(diagnostic.origin, diagnostics::DiagnosticOrigin::Pattern);
+        assert!(matches!(
+            diagnostic.data,
+            diagnostics::DiagnosticData::Pattern(_)
+        ));
+    }
+    for source in [
+        r#"apply_pattern((1, 2), (_1, _1))"#,
+        r#"apply_pattern((1, 2), (_01, _1))"#,
+        r#"apply_pattern(1, _2)"#,
+        r#"apply_pattern(1, _1: String)"#,
+        r#"result: Result<String> = apply_pattern(1, _1)"#,
     ] {
         assert!(
             typecheck(resolve_with_builtin_prelude(source)).is_err(),

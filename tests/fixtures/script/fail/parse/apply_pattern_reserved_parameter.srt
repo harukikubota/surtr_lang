@@ -1,0 +1,1 @@
+def identity(apply_pattern: Int) -> Int { 1 }

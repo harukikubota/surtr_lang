@@ -265,7 +265,9 @@ fn collect_missing_singleton_calls(
 ) {
     let mut pattern_expressions = Vec::new();
     match &node.node {
-        TypedInner::Bind(pattern, _) | TypedInner::SafeBind(pattern, _, _, _) => {
+        TypedInner::Bind(pattern, _)
+        | TypedInner::SafeBind(pattern, _, _, _)
+        | TypedInner::ApplyPattern { pattern, .. } => {
             collect_pattern_expressions(pattern, &mut pattern_expressions);
         }
         TypedInner::DoSafeBind(control) => {
@@ -442,6 +444,7 @@ fn collect_missing_singleton_calls(
         }
         TypedInner::Bind(_, rhs)
         | TypedInner::SafeBind(_, rhs, _, _)
+        | TypedInner::ApplyPattern { value: rhs, .. }
         | TypedInner::FieldAccess(rhs, _)
         | TypedInner::Semi(rhs) => collect_missing_singleton_calls(
             rhs,
@@ -3182,7 +3185,7 @@ mod tests {
                 1,
                 0,
                 fail,
-                false,
+                super::ExtractorFailurePolicy::Discard,
                 &span(1, 4),
             )
             .expect_err("invalid carrier must fail before execution");
@@ -3217,7 +3220,7 @@ mod tests {
                     1,
                     0,
                     fail,
-                    false,
+                    super::ExtractorFailurePolicy::Discard,
                     &span(1, 4),
                 )
                 .expect_err("missing or extra pre-arguments must fail before execution");
@@ -3251,7 +3254,7 @@ mod tests {
                 1,
                 0,
                 fail,
-                false,
+                super::ExtractorFailurePolicy::Discard,
                 &span(1, 4),
             )
             .expect_err("a selected local head cannot fall back to a named callable");
@@ -3282,7 +3285,7 @@ mod tests {
                 1,
                 0,
                 fail,
-                false,
+                super::ExtractorFailurePolicy::Discard,
                 &span(1, 4),
             )
             .expect_err("canonical OK and Err identities cannot be exchanged");
@@ -5871,6 +5874,21 @@ enum IrOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Label(u32);
 
+/// Consumer policy is threaded only through Pattern evaluation, never through
+/// the ordinary expressions used as Extractor pre-arguments.
+#[derive(Debug, Clone, Copy)]
+enum ExtractorFailurePolicy {
+    Discard,
+    Propagate,
+    ExpressionResult(Label),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PatternFailureDestination {
+    EnclosingConsumer,
+    ExpressionResult(Label),
+}
+
 #[derive(Debug, Clone)]
 struct PendingClosure {
     fun_idx: u32,
@@ -7556,6 +7574,14 @@ impl Codegen {
                 // Bind produces Unit
                 let unit_idx = self.add_constant(Constant::Unit);
                 self.emit(Opcode::LoadConst(unit_idx));
+            }
+
+            TypedInner::ApplyPattern {
+                value,
+                pattern,
+                projections,
+            } => {
+                self.emit_apply_pattern(value, pattern, projections, &node.span)?;
             }
 
             TypedInner::SafeBind(pat, rhs, projection, failure_target) => {
@@ -9415,7 +9441,12 @@ impl Codegen {
             self.emit_jump(success_label);
 
             self.patch_label(pattern_fail);
-            self.emit_safebind_pattern_failure(pat, payload_slot, rhs.span.clone())?;
+            self.emit_safebind_pattern_failure(
+                pat,
+                payload_slot,
+                rhs.span.clone(),
+                PatternFailureDestination::EnclosingConsumer,
+            )?;
 
             self.patch_label(success_label);
             let unit_idx = self.add_constant(Constant::Unit);
@@ -9470,6 +9501,7 @@ impl Codegen {
                 fail_long,
                 fail_mismatch,
                 &rhs.span,
+                ExtractorFailurePolicy::Propagate,
             )?;
             self.emit_pattern_bind_from_local(pat, payload_slot, Some(outcome.decomp), &rhs.span)?;
             let success_label = self.fresh_label();
@@ -9482,6 +9514,7 @@ impl Codegen {
                     rhs_len,
                     ">",
                     rhs.span.clone(),
+                    PatternFailureDestination::EnclosingConsumer,
                 )?;
             }
 
@@ -9490,6 +9523,7 @@ impl Codegen {
                 lhs_len,
                 outcome.rest_slot,
                 rhs.span.clone(),
+                PatternFailureDestination::EnclosingConsumer,
             )?;
 
             self.patch_label(fail_mismatch);
@@ -9499,6 +9533,7 @@ impl Codegen {
                 "fixed-length list elements must match",
                 Some("List"),
                 rhs.span.clone(),
+                PatternFailureDestination::EnclosingConsumer,
             )?;
 
             self.patch_label(success_label);
@@ -9515,7 +9550,12 @@ impl Codegen {
         self.emit_jump(success_label);
 
         self.patch_label(pattern_fail);
-        self.emit_safebind_pattern_failure(pat, payload_slot, rhs.span.clone())?;
+        self.emit_safebind_pattern_failure(
+            pat,
+            payload_slot,
+            rhs.span.clone(),
+            PatternFailureDestination::EnclosingConsumer,
+        )?;
 
         self.patch_label(success_label);
         if matches!(pat, TypedPattern::Wildcard(_)) {
@@ -9549,6 +9589,7 @@ impl Codegen {
                 fail_long,
                 fail_mismatch,
                 &rhs.span,
+                ExtractorFailurePolicy::Propagate,
             )?;
             self.emit_pattern_bind_from_local(pat, list_slot, Some(outcome.decomp), &rhs.span)?;
             let success_label = self.fresh_label();
@@ -9561,6 +9602,7 @@ impl Codegen {
                     rhs_len,
                     ">",
                     rhs.span.clone(),
+                    PatternFailureDestination::EnclosingConsumer,
                 )?;
             }
 
@@ -9569,6 +9611,7 @@ impl Codegen {
                 lhs_len,
                 outcome.rest_slot,
                 rhs.span.clone(),
+                PatternFailureDestination::EnclosingConsumer,
             )?;
 
             self.patch_label(fail_mismatch);
@@ -9578,6 +9621,7 @@ impl Codegen {
                 "fixed-length list elements must match",
                 Some("List"),
                 rhs.span.clone(),
+                PatternFailureDestination::EnclosingConsumer,
             )?;
 
             self.patch_label(success_label);
@@ -9593,7 +9637,12 @@ impl Codegen {
         self.emit_jump(success_label);
 
         self.patch_label(pattern_fail);
-        self.emit_safebind_pattern_failure(pat, list_slot, rhs.span.clone())?;
+        self.emit_safebind_pattern_failure(
+            pat,
+            list_slot,
+            rhs.span.clone(),
+            PatternFailureDestination::EnclosingConsumer,
+        )?;
 
         self.patch_label(success_label);
         let unit_idx = self.add_constant(Constant::Unit);
@@ -9605,6 +9654,7 @@ impl Codegen {
         &mut self,
         input_source: &'static str,
         span: Span,
+        destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
         self.emit_safebind_rule_failure(
             "EmptyList",
@@ -9612,6 +9662,7 @@ impl Codegen {
             &format!("head-tail list pattern requires a non-empty {input_source}"),
             Some(input_source),
             span,
+            destination,
         )
     }
 
@@ -9636,10 +9687,11 @@ impl Codegen {
         pat: &TypedPattern,
         value_slot: u32,
         span: Span,
+        destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
         match pat {
             TypedPattern::As(_, inner, _) => {
-                self.emit_safebind_pattern_failure(inner, value_slot, span)
+                self.emit_safebind_pattern_failure(inner, value_slot, span, destination)
             }
             TypedPattern::ListNil(ty) | TypedPattern::ListCons(ty, _, _) => {
                 let input_source = if matches!(ty, Ty::Str) {
@@ -9647,13 +9699,13 @@ impl Codegen {
                 } else {
                     "List"
                 };
-                self.emit_empty_list_failure(input_source, span)
+                self.emit_empty_list_failure(input_source, span, destination)
             }
             TypedPattern::IntLit(_, _)
             | TypedPattern::StrLit(_, _)
             | TypedPattern::BoolLit(_, _)
             | TypedPattern::DurationLit(_, _) => {
-                self.emit_literal_pattern_mismatch_failure(pat, value_slot, span)
+                self.emit_literal_pattern_mismatch_failure(pat, value_slot, span, destination)
             }
             _ => self.emit_safebind_rule_failure(
                 "PatternMismatch",
@@ -9661,6 +9713,7 @@ impl Codegen {
                 "pattern must match the SafeBind input",
                 None,
                 span,
+                destination,
             ),
         }
     }
@@ -9670,8 +9723,11 @@ impl Codegen {
         pat: &TypedPattern,
         value_slot: u32,
         span: Span,
+        destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
-        if self.emit_do_alternative_failure_jump(&span)? {
+        if matches!(destination, PatternFailureDestination::EnclosingConsumer)
+            && self.emit_do_alternative_failure_jump(&span)?
+        {
             return Ok(());
         }
         let Some(lhs_value) = literal_pattern_display(pat) else {
@@ -9681,6 +9737,7 @@ impl Codegen {
                 "literal pattern must equal the SafeBind input",
                 None,
                 span,
+                destination,
             );
         };
 
@@ -9703,6 +9760,7 @@ impl Codegen {
                     lhs: lhs_value,
                 },
             ),
+            destination,
         )
     }
 
@@ -9712,6 +9770,7 @@ impl Codegen {
         rhs_len: usize,
         op: &str,
         span: Span,
+        destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
         self.emit_safebind_rule_failure(
             "IndexOutOfBounds",
@@ -9719,6 +9778,7 @@ impl Codegen {
             "fixed-length list pattern requires List.len to match the pattern arity",
             Some("List"),
             span,
+            destination,
         )
     }
 
@@ -9727,8 +9787,11 @@ impl Codegen {
         lhs_len: usize,
         remainder_slot: u32,
         span: Span,
+        destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
-        if self.emit_do_alternative_failure_jump(&span)? {
+        if matches!(destination, PatternFailureDestination::EnclosingConsumer)
+            && self.emit_do_alternative_failure_jump(&span)?
+        {
             return Ok(());
         }
         let rem_count_slot = self.state.next_slot;
@@ -9774,6 +9837,7 @@ impl Codegen {
                     input_source: Some("List".into()),
                 },
             ),
+            destination,
         )
     }
 
@@ -9784,8 +9848,11 @@ impl Codegen {
         rule: &str,
         input_source: Option<&str>,
         span: Span,
+        destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
-        if self.emit_do_alternative_failure_jump(&span)? {
+        if matches!(destination, PatternFailureDestination::EnclosingConsumer)
+            && self.emit_do_alternative_failure_jump(&span)?
+        {
             return Ok(());
         }
         let message_idx = self.add_constant(Constant::Str(message.into()));
@@ -9799,6 +9866,7 @@ impl Codegen {
                     input_source: input_source.map(str::to_string),
                 },
             ),
+            destination,
         )
     }
 
@@ -10008,7 +10076,21 @@ impl Codegen {
         kind: &str,
         span: Span,
         diagnostic: Option<sindr::ir::RuntimeErrorDiagnosticTemplate>,
+        destination: PatternFailureDestination,
     ) -> Result<(), CodegenError> {
+        if let PatternFailureDestination::ExpressionResult(end) = destination {
+            let message_slot = self.state.next_slot;
+            self.state.next_slot += 1;
+            self.emit(Opcode::StoreLocal(message_slot));
+            let tag = self.add_constant(Constant::Tag(1));
+            self.emit(Opcode::LoadConst(tag));
+            self.emit(Opcode::LoadLocal(message_slot));
+            self.emit_error_value_from_stack_with_diagnostic(kind, &span, diagnostic);
+            self.emit(Opcode::StructNew { field_count: 1 });
+            self.emit_jump(end);
+            return Ok(());
+        }
+
         if matches!(
             self.safe_bind_failure_target,
             Some(SafeBindFailureTarget::DoAlternative { .. })
@@ -10233,6 +10315,7 @@ impl Codegen {
         fail_long: Label,
         fail_mismatch: Label,
         err_span: &Span,
+        failure_policy: ExtractorFailurePolicy,
     ) -> Result<ExactListPatternTestOutcome, CodegenError> {
         if fail_shorts.len() != items.len() {
             return Err(CodegenError {
@@ -10254,8 +10337,13 @@ impl Codegen {
             self.emit(Opcode::LoadLocal(current_slot));
             self.emit(Opcode::ListHead);
             self.emit(Opcode::StoreLocal(head_slot));
-            let head_decomp =
-                self.emit_pattern_test_from_local(item, head_slot, fail_mismatch, err_span)?;
+            let head_decomp = self.emit_pattern_test_from_local_with_mode(
+                item,
+                head_slot,
+                fail_mismatch,
+                err_span,
+                failure_policy,
+            )?;
 
             let next_slot = self.state.next_slot;
             self.state.next_slot += 1;
@@ -10288,6 +10376,97 @@ impl Codegen {
         })
     }
 
+    fn emit_apply_pattern(
+        &mut self,
+        value: &TypedNode,
+        pattern: &TypedPattern,
+        projections: &[(ResolvedId, Ty)],
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        if projections.len() > usize::from(sindr::pattern::MAX_PROJECTION_INDEX) {
+            return Err(CodegenError {
+                message:
+                    "Internal invariant broken: apply_pattern projection count exceeds its contract"
+                        .into(),
+                span: span.clone(),
+            });
+        }
+        self.emit_node(value)?;
+        let input_slot = self.state.next_slot;
+        self.state.next_slot += 1;
+        self.emit(Opcode::StoreLocal(input_slot));
+        let mismatch = self.fresh_label();
+        let end = self.fresh_label();
+        let policy = ExtractorFailurePolicy::ExpressionResult(end);
+        let destination = PatternFailureDestination::ExpressionResult(end);
+        let mut list_failures = None;
+        let decomposition = if let Some(items) = Self::collect_exact_list_pattern_items(pattern) {
+            let short = (0..items.len())
+                .map(|_| self.fresh_label())
+                .collect::<Vec<_>>();
+            let long = self.fresh_label();
+            let outcome = self.emit_exact_list_pattern_test_from_local(
+                &items, input_slot, &short, long, mismatch, span, policy,
+            )?;
+            list_failures = Some((items.len(), short, long, outcome.rest_slot));
+            outcome.decomp
+        } else {
+            self.emit_pattern_test_from_local_with_mode(
+                pattern, input_slot, mismatch, span, policy,
+            )?
+        };
+        self.emit_pattern_bind_from_local(pattern, input_slot, Some(decomposition), span)?;
+        let ok_tag = self.add_constant(Constant::Tag(0));
+        self.emit(Opcode::LoadConst(ok_tag));
+        for (id, _) in projections {
+            let slot = self.existing_slot_for_id(id, span)?;
+            self.emit(Opcode::LoadLocal(slot));
+        }
+        match projections.len() {
+            0 => {
+                let unit = self.add_constant(Constant::Unit);
+                self.emit(Opcode::LoadConst(unit));
+            }
+            1 => {}
+            len => self.emit(Opcode::TupleNew { len: len as u32 }),
+        }
+        self.emit(Opcode::StructNew { field_count: 1 });
+        self.emit_jump(end);
+        if let Some((lhs_len, short, long, rest_slot)) = list_failures {
+            for (rhs_len, label) in short.into_iter().enumerate() {
+                self.patch_label(label);
+                self.emit_list_len_mismatch_failure_concrete(
+                    lhs_len,
+                    rhs_len,
+                    ">",
+                    span.clone(),
+                    destination,
+                )?;
+            }
+            self.patch_label(long);
+            self.emit_list_len_mismatch_failure_rhs_long(
+                lhs_len,
+                rest_slot,
+                span.clone(),
+                destination,
+            )?;
+            self.patch_label(mismatch);
+            self.emit_safebind_rule_failure(
+                "PatternMismatch",
+                "Pattern did not match.",
+                "fixed-length list elements must match",
+                Some("List"),
+                span.clone(),
+                destination,
+            )?;
+        } else {
+            self.patch_label(mismatch);
+            self.emit_safebind_pattern_failure(pattern, input_slot, span.clone(), destination)?;
+        }
+        self.patch_label(end);
+        Ok(())
+    }
+
     fn emit_pattern_test_from_local(
         &mut self,
         pat: &TypedPattern,
@@ -10295,7 +10474,13 @@ impl Codegen {
         fail_label: Label,
         err_span: &Span,
     ) -> Result<PatternDecomp, CodegenError> {
-        self.emit_pattern_test_from_local_with_mode(pat, slot, fail_label, err_span, true)
+        self.emit_pattern_test_from_local_with_mode(
+            pat,
+            slot,
+            fail_label,
+            err_span,
+            ExtractorFailurePolicy::Propagate,
+        )
     }
 
     fn emit_pattern_test_from_local_for_bind(
@@ -10305,7 +10490,13 @@ impl Codegen {
         fail_label: Label,
         err_span: &Span,
     ) -> Result<PatternDecomp, CodegenError> {
-        self.emit_pattern_test_from_local_with_mode(pat, slot, fail_label, err_span, false)
+        self.emit_pattern_test_from_local_with_mode(
+            pat,
+            slot,
+            fail_label,
+            err_span,
+            ExtractorFailurePolicy::Discard,
+        )
     }
 
     fn emit_pattern_test_from_local_with_mode(
@@ -10314,7 +10505,7 @@ impl Codegen {
         slot: u32,
         fail_label: Label,
         err_span: &Span,
-        propagate_result_error: bool,
+        failure_policy: ExtractorFailurePolicy,
     ) -> Result<PatternDecomp, CodegenError> {
         let decomp = match pat {
             TypedPattern::Var(_, _) | TypedPattern::Wildcard(_) => PatternDecomp::None,
@@ -10329,7 +10520,7 @@ impl Codegen {
                 slot,
                 fail_label,
                 err_span,
-                propagate_result_error,
+                failure_policy,
             )?,
             TypedPattern::IntLit(_, n) => {
                 self.emit(Opcode::LoadLocal(slot));
@@ -10354,7 +10545,7 @@ impl Codegen {
                         item_slot,
                         fail_label,
                         err_span,
-                        propagate_result_error,
+                        failure_policy,
                     )?;
                     children.push(PatternDecompChild {
                         slot: item_slot,
@@ -10394,7 +10585,7 @@ impl Codegen {
                 slot,
                 fail_label,
                 err_span,
-                propagate_result_error,
+                failure_policy,
             )?,
             TypedPattern::Constructor {
                 tag,
@@ -10422,7 +10613,7 @@ impl Codegen {
                         field_slot,
                         fail_label,
                         err_span,
-                        propagate_result_error,
+                        failure_policy,
                     )?;
                     children.push(PatternDecompChild {
                         slot: field_slot,
@@ -10453,7 +10644,7 @@ impl Codegen {
                     items.len(),
                     slot,
                     fail_label,
-                    propagate_result_error,
+                    failure_policy,
                     err_span,
                 )?;
                 let mut children = Vec::with_capacity(items.len());
@@ -10463,7 +10654,7 @@ impl Codegen {
                         *item_slot,
                         fail_label,
                         err_span,
-                        propagate_result_error,
+                        failure_policy,
                     )?;
                     children.push(PatternDecompChild {
                         slot: *item_slot,
@@ -10703,7 +10894,7 @@ impl Codegen {
         slot: u32,
         fail_label: Label,
         err_span: &Span,
-        propagate_result_error: bool,
+        failure_policy: ExtractorFailurePolicy,
     ) -> Result<PatternDecomp, CodegenError> {
         let mut current_pat = pat;
         let mut current_slot = slot;
@@ -10724,7 +10915,7 @@ impl Codegen {
                 head_slot,
                 fail_label,
                 err_span,
-                propagate_result_error,
+                failure_policy,
             )?;
 
             let tail_slot = self.state.next_slot;
@@ -10743,7 +10934,7 @@ impl Codegen {
             current_slot,
             fail_label,
             err_span,
-            propagate_result_error,
+            failure_policy,
         )?;
         let decomp = links.into_iter().rev().fold(
             tail_decomp,
@@ -10929,7 +11120,7 @@ impl Codegen {
         child_count: usize,
         input_slot: u32,
         no_match_label: Label,
-        preserve_error: bool,
+        failure_policy: ExtractorFailurePolicy,
         span: &Span,
     ) -> Result<Vec<u32>, CodegenError> {
         if success_tag == err_tag {
@@ -11070,7 +11261,7 @@ impl Codegen {
         self.emit(Opcode::LoadConst(err));
         self.emit(Opcode::EqTag);
         self.emit_jump_if_false(invalid);
-        if preserve_error {
+        if !matches!(failure_policy, ExtractorFailurePolicy::Discard) {
             // The Result wrapper connects to the existing consumer failure target;
             // the Error value itself is passed through unchanged.
             let result_err = self.add_constant(Constant::Tag(1));
@@ -11078,10 +11269,16 @@ impl Codegen {
             self.emit(Opcode::LoadLocal(result_slot));
             self.emit(Opcode::GetField { field_index: 1 });
             self.emit(Opcode::StructNew { field_count: 1 });
-            let error_result_slot = self.state.next_slot;
-            self.state.next_slot += 1;
-            self.emit(Opcode::StoreLocal(error_result_slot));
-            self.emit_propagate_result_from_local(error_result_slot, span.clone())?;
+            match failure_policy {
+                ExtractorFailurePolicy::ExpressionResult(end) => self.emit_jump(end),
+                ExtractorFailurePolicy::Propagate => {
+                    let error_result_slot = self.state.next_slot;
+                    self.state.next_slot += 1;
+                    self.emit(Opcode::StoreLocal(error_result_slot));
+                    self.emit_propagate_result_from_local(error_result_slot, span.clone())?;
+                }
+                ExtractorFailurePolicy::Discard => unreachable!(),
+            }
         } else {
             self.emit_jump(no_match_label);
         }
@@ -11904,7 +12101,7 @@ impl Codegen {
                     items.len(),
                     slot,
                     fail_label,
-                    false,
+                    ExtractorFailurePolicy::Discard,
                     &extractor.span,
                 )?;
                 let mut children = Vec::with_capacity(items.len());

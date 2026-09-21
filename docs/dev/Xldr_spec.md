@@ -282,6 +282,8 @@ REPL command query は Surtr 式 parser ではなく、command query parser と 
 
 ---
 
+`apply_pattern` は通常の式と同様に chunk 間で評価できる。projection と照合内 binding を REPL の変数一覧へ公開せず、返却 Result を通常 binding へ代入した場合だけその変数を公開する。`:sig apply_pattern` / `:doc apply_pattern` は canonical Kernel consumer の公開 signature を示す。
+
 ## 7. 診断表示
 
 - 対話モードでは ariadne ベースの人間向け診断を標準とする
