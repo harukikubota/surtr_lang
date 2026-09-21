@@ -7598,3 +7598,19 @@ fn extractor_inputs_require_unique_names_and_a_final_self() {
     parse("defextractor read() -> MatchResult<Int> { MatchResult::OK(1) }")
         .expect_err("an Extractor must have a target input");
 }
+
+#[test]
+fn extractor_closure_literal_requires_explicit_nonempty_parameters() {
+    parse("extract = *{|value: Int| MatchResult::OK(value)}").expect("ExtractorClosure literal");
+    for source in ["*{1}", "*{|| MatchResult::OK(1)}"] {
+        parse(source).expect_err("ExtractorClosure needs at least one explicit parameter");
+    }
+    for source in [
+        "*{|value| MatchResult::OK(value)}(1)",
+        "match 1 { *{|value| MatchResult::OK(value)}(_) => 1, _ => 0 }",
+        "match 1 { (make())(_) => 1, _ => 0 }",
+    ] {
+        parse(source)
+            .expect_err("anonymous expressions cannot be immediate callable or Pattern heads");
+    }
+}

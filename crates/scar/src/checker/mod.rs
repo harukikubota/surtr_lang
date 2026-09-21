@@ -23,6 +23,7 @@ use crate::error::TypeError;
 use crate::typed::*;
 use crate::types::{NominalType, Ty};
 
+mod captures;
 mod carriers;
 mod definitions;
 mod expr;
@@ -413,6 +414,7 @@ enum CallableContext {
     Function,
     Closure,
     Extractor,
+    ExtractorClosure,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -733,9 +735,10 @@ pub fn typecheck_with_context_with_warnings(
 pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) => true,
-        Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
-            type_contains_unresolved_vars(inner)
-        }
+        Ty::List(inner)
+        | Ty::MatchResult(inner)
+        | Ty::ExtractorClosure(inner)
+        | Ty::Lazy(inner) => type_contains_unresolved_vars(inner),
         Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
             items.iter().any(type_contains_unresolved_vars)
         }
@@ -1214,6 +1217,7 @@ enum CanonicalTyKey {
     SelfApp(Vec<CanonicalTyKey>),
     List(Box<CanonicalTyKey>),
     MatchResult(Box<CanonicalTyKey>),
+    ExtractorClosure(Box<CanonicalTyKey>),
     Tuple(Vec<CanonicalTyKey>),
     Func {
         params: Vec<CanonicalTyKey>,
@@ -1289,6 +1293,7 @@ struct PersistentCheckerState {
     constructor_witness_traits: HashMap<u32, String>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
+    pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
 }
 
 impl PersistentCheckerState {
@@ -1312,6 +1317,7 @@ impl PersistentCheckerState {
             constructor_witness_traits: HashMap::new(),
             constructor_capabilities: HashMap::new(),
             signature_aliases: HashMap::new(),
+            pattern_binding_aliases: HashMap::new(),
         }
     }
 
@@ -1335,6 +1341,7 @@ impl PersistentCheckerState {
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             signature_aliases: self.signature_aliases.clone(),
+            pattern_binding_aliases: self.pattern_binding_aliases.clone(),
             process_specs,
         }
     }
@@ -1361,6 +1368,7 @@ impl From<ScarCheckpoint> for PersistentCheckerState {
             constructor_witness_traits: checkpoint.constructor_witness_traits,
             constructor_capabilities: checkpoint.constructor_capabilities,
             signature_aliases: checkpoint.signature_aliases,
+            pattern_binding_aliases: checkpoint.pattern_binding_aliases,
         }
     }
 }
@@ -1389,6 +1397,7 @@ pub struct ScarCheckpoint {
     constructor_witness_traits: HashMap<u32, String>,
     constructor_capabilities: HashMap<u32, ConstructorCapabilityProvenance>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
+    pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
     process_specs: Vec<TypedProcessSpec>,
 }
 
@@ -1748,9 +1757,10 @@ impl ScarSession {
 
     fn rewrite_fun_indices_in_ty(ty: &mut Ty, rewrites: &HashMap<u32, u32>) {
         match ty {
-            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
-                Self::rewrite_fun_indices_in_ty(inner, rewrites)
-            }
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => Self::rewrite_fun_indices_in_ty(inner, rewrites),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 for item in items {
                     Self::rewrite_fun_indices_in_ty(item, rewrites);
@@ -2134,7 +2144,9 @@ impl ScarSession {
                 Self::rewrite_fun_indices_in_ty(ret_ty, rewrites);
                 Self::rewrite_fun_indices_in_node(body, rewrites);
             }
-            TypedInner::Closure(params, _, body) | TypedInner::CaptureClosure(params, _, body) => {
+            TypedInner::Closure(params, _, body)
+            | TypedInner::ExtractorClosure(params, _, body)
+            | TypedInner::CaptureClosure(params, _, body) => {
                 for param in params {
                     Self::rewrite_fun_indices_in_closure_param(param, rewrites);
                 }
@@ -2626,6 +2638,7 @@ struct Checker {
     /// Constructor-trait identity for each signature-position witness.
     constructor_witness_traits: HashMap<u32, String>,
     signature_aliases: HashMap<String, SignatureAliasInfo>,
+    pattern_binding_aliases: HashMap<u32, Option<ResolvedId>>,
     alias_expansion_stack: Vec<String>,
     runtime_policy: RuntimeSourcePolicy,
     enforce_builtin_type_contracts: bool,
@@ -2764,6 +2777,7 @@ impl Checker {
             constructor_capabilities: state.constructor_capabilities,
             constructor_witness_traits: state.constructor_witness_traits,
             signature_aliases: state.signature_aliases,
+            pattern_binding_aliases: state.pattern_binding_aliases,
             alias_expansion_stack: Vec::new(),
             runtime_policy: context.runtime_policy,
             enforce_builtin_type_contracts: context.enforce_builtin_type_contracts,
@@ -3306,6 +3320,7 @@ impl Checker {
             | TypedInner::Def(_, _, _, _, _, _, show, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, show, _)
             | TypedInner::Closure(_, _, show)
+            | TypedInner::ExtractorClosure(_, _, show)
             | TypedInner::CaptureClosure(_, _, show) => {
                 self.collect_unused_value_warnings_in_node(show);
             }
@@ -3356,9 +3371,10 @@ impl Checker {
             Ty::Result(ok, err) => {
                 self.ty_contains_process_init(&ok) || self.ty_contains_process_init(&err)
             }
-            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
-                self.ty_contains_process_init(&inner)
-            }
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => self.ty_contains_process_init(&inner),
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 items.iter().any(|item| self.ty_contains_process_init(item))
             }
@@ -3782,9 +3798,10 @@ impl Checker {
                 self.ty_contains_handler_capability_pid(&ok, slots)
                     || self.ty_contains_handler_capability_pid(&err, slots)
             }
-            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
-                self.ty_contains_handler_capability_pid(&inner, slots)
-            }
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => self.ty_contains_handler_capability_pid(&inner, slots),
             Ty::Tuple(items) | Ty::SelfApp(items) => items
                 .iter()
                 .any(|item| self.ty_contains_handler_capability_pid(item, slots)),
@@ -3925,6 +3942,7 @@ impl Checker {
             constructor_witness_traits: self.constructor_witness_traits.clone(),
             constructor_capabilities: self.constructor_capabilities.clone(),
             signature_aliases: self.signature_aliases.clone(),
+            pattern_binding_aliases: self.pattern_binding_aliases.clone(),
         }
     }
 
@@ -3948,6 +3966,7 @@ impl Checker {
             constructor_witness_traits: self.constructor_witness_traits,
             constructor_capabilities: self.constructor_capabilities,
             signature_aliases: self.signature_aliases,
+            pattern_binding_aliases: self.pattern_binding_aliases,
         }
     }
 
@@ -4193,6 +4212,10 @@ impl Checker {
         constructor_traits: &HashSet<String>,
     ) -> Result<(), TypeError> {
         match pattern {
+            ResolvedPattern::Deferred { pattern, .. } => {
+                self.validate_constructor_pattern(pattern, constructor_traits)?
+            }
+            ResolvedPattern::ExtractorApplication { .. } => {}
             ResolvedPattern::Annotated(_, ty)
             | ResolvedPattern::AnnotatedWildcard(_, ty)
             | ResolvedPattern::As(_, _, Some(ty)) => {
@@ -4260,6 +4283,7 @@ impl Checker {
                 }
             }
             Resolved::Closure(_, params, _, body)
+            | Resolved::ExtractorClosure(_, params, _, body)
             | Resolved::CaptureClosure(_, params, _, body) => {
                 for param in params {
                     if let Some(ty) = &param.ty {

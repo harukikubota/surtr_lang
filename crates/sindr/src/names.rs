@@ -411,6 +411,7 @@ pub enum TypeName {
     // type identities remain stable across semantic snapshot revisions.
     DoBlock,
     MatchResult,
+    ExtractorClosure,
 }
 
 impl TypeName {
@@ -426,6 +427,7 @@ impl TypeName {
             Self::CondClauses => "CondClauses",
             Self::DoBlock => "DoBlock",
             Self::MatchResult => "MatchResult",
+            Self::ExtractorClosure => "ExtractorClosure",
             Self::BulkUpdateEntries => "BulkUpdateEntries",
             Self::Error => "Error",
             Self::Regex => "Regex",
@@ -458,6 +460,7 @@ impl TypeName {
                 | Self::CondClauses
                 | Self::DoBlock
                 | Self::MatchResult
+                | Self::ExtractorClosure
                 | Self::BulkUpdateEntries
                 | Self::StandbyInit
                 | Self::Lazy
@@ -499,6 +502,7 @@ pub fn builtin_type_name(name: &str) -> Option<TypeName> {
         "CondClauses" => Some(TypeName::CondClauses),
         "DoBlock" => Some(TypeName::DoBlock),
         "MatchResult" => Some(TypeName::MatchResult),
+        "ExtractorClosure" => Some(TypeName::ExtractorClosure),
         "BulkUpdateEntries" => Some(TypeName::BulkUpdateEntries),
         "Error" => Some(TypeName::Error),
         "Regex" => Some(TypeName::Regex),
@@ -536,6 +540,7 @@ pub const fn canonical_builtin_type_has_surface_declaration(type_name: TypeName)
             | TypeName::CondClauses
             | TypeName::DoBlock
             | TypeName::MatchResult
+            | TypeName::ExtractorClosure
             | TypeName::BulkUpdateEntries
             | TypeName::Error
             | TypeName::Regex

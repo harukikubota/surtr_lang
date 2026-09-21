@@ -645,6 +645,7 @@ fn collect_missing_singleton_calls(
         }
         TypedInner::DeferrorDef(_, _, _, _, body)
         | TypedInner::Closure(_, _, body)
+        | TypedInner::ExtractorClosure(_, _, body)
         | TypedInner::CaptureClosure(_, _, body)
         | TypedInner::Def(_, _, _, _, _, _, body, _)
         | TypedInner::ExtractorDef(_, _, _, _, _, body, _) => collect_missing_singleton_calls(
@@ -3227,6 +3228,37 @@ mod tests {
     }
 
     #[test]
+    fn extractor_closure_head_requires_its_lexical_slot() {
+        let mut gene = Codegen::new();
+        seed_match_result_registry(&mut gene);
+        gene.state
+            .callable_names
+            .insert("extract".into(), super::DirectCallableTarget::User(12));
+        let fail = gene.fresh_label();
+        let ty = Ty::ExtractorClosure(Box::new(Ty::Func(
+            vec![Ty::Int],
+            Box::new(Ty::MatchResult(Box::new(Ty::Int))),
+        )));
+        let error = gene
+            .emit_extractor_item_slots_from_local(
+                &Ty::Int,
+                &resolved_id("extract", None, 91),
+                &ty,
+                100,
+                101,
+                &[],
+                &[Ty::Int],
+                1,
+                0,
+                fail,
+                false,
+                &span(1, 4),
+            )
+            .expect_err("a selected local head cannot fall back to a named callable");
+        assert!(error.message.contains("no lexical value slot"));
+    }
+
+    #[test]
     fn extractor_codegen_rejects_swapped_canonical_tags() {
         let mut gene = Codegen::new();
         seed_match_result_registry(&mut gene);
@@ -5546,7 +5578,9 @@ fn flatten_typed_list_pattern<'a>(pattern: &'a TypedPattern, out: &mut Vec<&'a T
 fn callable_kind_for_node(node: &TypedNode) -> Option<ReplCallableKind> {
     match &node.node {
         TypedInner::CaptureClosure(..) => Some(ReplCallableKind::Capture),
-        TypedInner::Closure(..) => Some(ReplCallableKind::Closure),
+        TypedInner::Closure(..) | TypedInner::ExtractorClosure(..) => {
+            Some(ReplCallableKind::Closure)
+        }
         TypedInner::Capture(..) | TypedInner::InjectCall(..) => Some(ReplCallableKind::Capture),
         TypedInner::Semi(inner) => callable_kind_for_node(inner),
         _ => None,
@@ -5579,9 +5613,11 @@ fn callable_display_for_node(node: &TypedNode) -> Option<ReplCallableDisplay> {
                 sig: ty_to_string(&node.ty),
             })
         }
-        TypedInner::Closure(..) => Some(ReplCallableDisplay::Closure {
-            sig: ty_to_string(&node.ty),
-        }),
+        TypedInner::Closure(..) | TypedInner::ExtractorClosure(..) => {
+            Some(ReplCallableDisplay::Closure {
+                sig: ty_to_string(&node.ty),
+            })
+        }
         TypedInner::Semi(inner) => callable_display_for_node(inner),
         _ => None,
     }
@@ -5589,12 +5625,12 @@ fn callable_display_for_node(node: &TypedNode) -> Option<ReplCallableDisplay> {
 
 fn callable_capture_names(node: &TypedNode) -> Vec<String> {
     match &node.node {
-        TypedInner::Closure(_, captures, _) | TypedInner::CaptureClosure(_, captures, _) => {
-            captures
-                .iter()
-                .map(|capture| capture.name.to_string())
-                .collect()
-        }
+        TypedInner::Closure(_, captures, _)
+        | TypedInner::ExtractorClosure(_, captures, _)
+        | TypedInner::CaptureClosure(_, captures, _) => captures
+            .iter()
+            .map(|capture| capture.name.to_string())
+            .collect(),
         TypedInner::Semi(inner) => callable_capture_names(inner),
         _ => Vec::new(),
     }
@@ -5702,6 +5738,10 @@ fn ty_to_string_with_type_params(ty: &Ty, type_params: &[TypedTypeParam]) -> Str
                 .map(|arg| ty_to_string_with_type_params(arg, type_params))
                 .collect::<Vec<_>>()
                 .join(", ")
+        ),
+        Ty::ExtractorClosure(signature) => format!(
+            "ExtractorClosure<{}>",
+            ty_to_string_with_type_params(signature, type_params)
         ),
         Ty::MatchResult(payload) => format!(
             "MatchResult<{}, Error>",
@@ -6461,6 +6501,7 @@ impl Codegen {
                 Ok(self.direct_callable_target_for_ref(func)?.is_some())
             }
             TypedInner::Closure(params, captures, body)
+            | TypedInner::ExtractorClosure(params, captures, body)
             | TypedInner::CaptureClosure(params, captures, body) => {
                 let filtered_captures: Vec<ResolvedId> = captures
                     .iter()
@@ -8025,6 +8066,7 @@ impl Codegen {
             }
 
             TypedInner::Closure(params, captures, body)
+            | TypedInner::ExtractorClosure(params, captures, body)
             | TypedInner::CaptureClosure(params, captures, body) => {
                 let filtered_captures: Vec<ResolvedId> = captures
                     .iter()
@@ -10898,6 +10940,15 @@ impl Codegen {
         }
         let (params, ret) = match extractor_ty {
             Ty::UserFunc { params, ret, .. } | Ty::BuiltinFunc { params, ret, .. } => (params, ret),
+            Ty::ExtractorClosure(signature) => {
+                let Ty::Func(params, ret) = signature.as_ref() else {
+                    return Err(CodegenError {
+                        message: "Invalid ExtractorClosure signature metadata".into(),
+                        span: span.clone(),
+                    });
+                };
+                (params, ret)
+            }
             _ => {
                 return Err(CodegenError {
                     message: "Invalid Extractor callable contract: expected a resolved callable"
@@ -10938,11 +10989,30 @@ impl Codegen {
             message: "Extractor input arity exceeds callable representation".into(),
             span: span.clone(),
         })?;
+        if matches!(extractor_ty, Ty::ExtractorClosure(_)) {
+            let slot = self
+                .state
+                .slot_map
+                .get(&extractor.unique_id)
+                .copied()
+                .ok_or_else(|| CodegenError {
+                    message: "ExtractorClosure head has no lexical value slot".into(),
+                    span: extractor.span.clone(),
+                })?;
+            self.emit(Opcode::LoadLocal(slot));
+        }
         for argument in pre_args {
             self.emit_node(argument)?;
         }
         self.emit(Opcode::LoadLocal(input_slot));
         match extractor_ty {
+            Ty::ExtractorClosure(_) => {
+                self.emit(Opcode::CallClosure {
+                    arity,
+                    span_start: extractor.span.start as u32,
+                    span_end: extractor.span.end as u32,
+                });
+            }
             Ty::UserFunc { fun_idx, .. } => {
                 self.emit(Opcode::Call {
                     fun_idx: *fun_idx,

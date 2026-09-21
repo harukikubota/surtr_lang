@@ -2067,6 +2067,18 @@ fn rewrite_self_ast(node: Ast, target: &str) -> Ast {
                 .collect(),
             Box::new(rewrite_self_ast(*body, target)),
         ),
+        Ast::ExtractorClosure(span, params, body) => Ast::ExtractorClosure(
+            span,
+            params
+                .into_iter()
+                .map(|param| ClosureParam {
+                    name: param.name,
+                    ty: param.ty.map(|ty| rewrite_self_type(ty, target)),
+                    span: param.span,
+                })
+                .collect(),
+            Box::new(rewrite_self_ast(*body, target)),
+        ),
         Ast::Capture(span, capture_target, args) => Ast::Capture(
             span,
             Box::new(rewrite_self_ast(*capture_target, target)),

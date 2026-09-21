@@ -229,6 +229,8 @@ pub enum Ty {
 
     /// Compiler-owned Extractor result; never a general user value.
     MatchResult(Box<Ty>),
+    /// Dedicated first-class Extractor closure, with an underlying function signature.
+    ExtractorClosure(Box<Ty>),
 
     /// `Result<Ok, Err>`
     Result(Box<Ty>, Box<Ty>),

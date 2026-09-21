@@ -5,6 +5,8 @@ use diagnostics::{DiagnosticOrigin, PatternKind, SourceRole, TypeDiagnosticReaso
 impl Checker {
     pub(super) fn resolved_pattern_span(pattern: &ResolvedPattern) -> Span {
         match pattern {
+            ResolvedPattern::Deferred { pattern, .. } => Self::resolved_pattern_span(pattern),
+            ResolvedPattern::ExtractorApplication { head, .. } => head.span.clone(),
             ResolvedPattern::Var(id)
             | ResolvedPattern::Annotated(id, _)
             | ResolvedPattern::Pin(id) => id.span.clone(),
@@ -153,6 +155,8 @@ impl Checker {
     /// to `String`) and that constraint flows back into the scrutinee type.
     fn infer_match_pattern_ty(&mut self, pat: &ResolvedPattern) -> Option<Ty> {
         match pat {
+            ResolvedPattern::Deferred { pattern, .. } => self.infer_match_pattern_ty(pattern),
+            ResolvedPattern::ExtractorApplication { .. } => None,
             ResolvedPattern::Var(_) | ResolvedPattern::Wildcard(_) | ResolvedPattern::Pin(_) => {
                 None
             }
@@ -543,7 +547,28 @@ impl Checker {
         expected_ty: &Ty,
     ) -> Result<TypedMatchPattern, TypeError> {
         self.ensure_no_match_result_value(expected_ty, &Self::resolved_pattern_span(pat))?;
+        if let ResolvedPattern::Pin(id) = pat {
+            let canonical = self.canonical_pattern_id(id)?;
+            if canonical.unique_id != id.unique_id {
+                return self.check_match_subpattern(&ResolvedPattern::Pin(canonical), expected_ty);
+            }
+        }
         match pat {
+            ResolvedPattern::Deferred {
+                pattern,
+                bindings,
+                allow_bindings,
+            } => {
+                let result = self.check_match_subpattern(pattern, expected_ty)?;
+                let mut selected = HashSet::new();
+                Self::typed_match_pattern_bindings(&result, &mut selected)?;
+                self.finalize_pattern_bindings(bindings, &selected, *allow_bindings)?;
+                Ok(result)
+            }
+            ResolvedPattern::ExtractorApplication { head, args } => {
+                let selected = self.select_extractor_application(head, args)?;
+                self.check_match_subpattern(&selected, expected_ty)
+            }
             ResolvedPattern::Var(id) => {
                 self.env
                     .bind_var(id.unique_id, self.resolve_ty(expected_ty));
@@ -749,8 +774,9 @@ impl Checker {
                     self.env.push_var_scope();
                     let checked = (|| {
                         let typed_item = self.check_match_subpattern(item, expected_ty)?;
+                        Self::typed_match_pattern_bindings(&typed_item, &mut HashSet::new())?;
                         let mut ids = Vec::new();
-                        Self::collect_or_binding_ids(item, &mut ids);
+                        Self::collect_or_binding_ids(&typed_item, &mut ids);
                         let bindings = ids
                             .into_iter()
                             .map(|id| {
@@ -774,26 +800,22 @@ impl Checker {
                     let (typed_item, bindings) = checked?;
                     if let Some(common) = &common_bindings {
                         if common.len() != bindings.len() {
-                            return Err(self.typecheck_invariant_error(
-                                "resolved OR alternatives have different binding counts",
-                                &Self::resolved_pattern_span(item),
+                            return Err(Self::deferred_pattern_error(
+                                "Pattern alternatives must bind the same variables",
+                                &common
+                                    .first()
+                                    .or(bindings.first())
+                                    .expect("different binding counts have a binding")
+                                    .0,
+                                diagnostics::ResolveDiagnosticReason::Pattern,
                             ));
                         }
-                        for (expected_id, expected_ty) in common {
-                            let (id, actual_ty) = bindings
-                                .iter()
-                                .find(|(id, _)| id.unique_id == expected_id.unique_id)
-                                .ok_or_else(|| {
-                                    self.typecheck_invariant_error(
-                                        "resolved OR alternatives do not share binding identities",
-                                        &Self::resolved_pattern_span(item),
-                                    )
-                                })?;
-                            if expected_id.name != id.name {
-                                return Err(self.typecheck_invariant_error(
-                                    "resolved OR alternatives do not share binding names",
-                                    &id.span,
-                                ));
+                        for ((expected_id, expected_ty), (id, actual_ty)) in
+                            common.iter().zip(bindings.iter())
+                        {
+                            if expected_id.unique_id != id.unique_id || expected_id.name != id.name
+                            {
+                                return Err(Self::deferred_pattern_error("Pattern alternatives must bind the same variables in the same order", id, diagnostics::ResolveDiagnosticReason::Pattern));
                             }
                             if !self.types_compatible(expected_ty, actual_ty)
                                 || self.resolve_ty(expected_ty) != self.resolve_ty(actual_ty)
@@ -1194,37 +1216,30 @@ impl Checker {
         }
     }
 
-    fn collect_or_binding_ids(pat: &ResolvedPattern, out: &mut Vec<ResolvedId>) {
+    fn collect_or_binding_ids(pat: &TypedMatchPattern, out: &mut Vec<ResolvedId>) {
         match pat {
-            ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => out.push(id.clone()),
-            ResolvedPattern::As(inner, alias, _) => {
+            TypedMatchPattern::Binding(id) => out.push(id.clone()),
+            TypedMatchPattern::As(inner, alias) => {
                 Self::collect_or_binding_ids(inner, out);
                 out.push(alias.clone());
             }
-            ResolvedPattern::Or(items) => {
+            TypedMatchPattern::Or(items) => {
                 if let Some(first) = items.first() {
                     Self::collect_or_binding_ids(first, out);
                 }
             }
-            ResolvedPattern::Tuple(items)
-            | ResolvedPattern::Constructor(_, items)
-            | ResolvedPattern::Extractor(_, _, items) => {
+            TypedMatchPattern::Tuple(items)
+            | TypedMatchPattern::Constructor { fields: items, .. }
+            | TypedMatchPattern::Extractor { items, .. } => {
                 for item in items {
                     Self::collect_or_binding_ids(item, out);
                 }
             }
-            ResolvedPattern::ListCons(head, tail) => {
+            TypedMatchPattern::ListCons(head, tail) => {
                 Self::collect_or_binding_ids(head, out);
                 Self::collect_or_binding_ids(tail, out);
             }
-            ResolvedPattern::Pin(_)
-            | ResolvedPattern::Wildcard(_)
-            | ResolvedPattern::AnnotatedWildcard(_, _)
-            | ResolvedPattern::ListNil(_)
-            | ResolvedPattern::IntLit(_, _)
-            | ResolvedPattern::StrLit(_, _)
-            | ResolvedPattern::BoolLit(_, _)
-            | ResolvedPattern::DurationLit(_, _) => {}
+            _ => {}
         }
     }
 }

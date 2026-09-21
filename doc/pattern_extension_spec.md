@@ -33,6 +33,9 @@ Pattern AST は第一級の値にしない。一般関数の partial application
 
 - 2026-09-21: named / builtin Extractor の複数入力・事前引数を実装した。最後の入力を照合対象とし、signature で Expr / 子 Pattern 領域を確定する。入力と事前引数の通常型統一後に payload shape と総 arity を検査し、不足・余剰を切り捨てない。事前引数・pin・head は Pattern 開始時の外側 scope で解決し、到達時に左から一度だけ評価する。Unit 事前引数、UnitOnly 省略、attached deconstruct の末尾 self、generic payload、通常 Closure の capture、OR と短絡を検証した。役割選択まで保存した構文エラーは元の ParseError と source facts を保持して返す。独立レビュー指摘を解消後、CI workspace 1962件と標準 SRT 全件が成功。ExtractorClosure、apply_pattern / projection、Extractor::from_result は本項目に含めない。
 
+
+- 2026-09-21: ExtractorClosure literal `*{|params...| body}` と専用 signature 型を実装した。通常推論、lexical capture、helper の引数・戻り値、同 signature の if / match 選択、generic trait API の受け渡しを接続した。local head は lexical identity で確定し、signature で選んだ引数候補だけを検査する。通常 call、即時 head、通常 Closure との暗黙変換を拒否し、nested callable / do の failure target を分離した。REPL の入力間 capture・型署名・doc target と、元 Parse / Resolve 診断の保持を検証した。独立レビューで検出した OR binding 順序と canonical 型の逆変換を修正し、Facet 動的パスの capture 回帰も解消した。最終 CI workspace 1968件、標準 SRT 全件が成功。apply_pattern / projection、Extractor::from_result は本項目に含めない。
+
 ## 2. 現状と変更後
 
 本仕様の移行前の Extractor は一入力で `Option<Payload>` を返す。`Some(payload)` は子 Pattern の照合へ進み、`None` は不一致になる。SafeBind の `None` failure は共通 PatternMismatch Error となる。

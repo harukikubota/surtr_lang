@@ -60,3 +60,5 @@ cargo run -- test --quiet --all
 - 初回全体検証で検出した型queryのAnnotatedWildcard追従漏れ、REPL署名期待値、SafeBindの投影後入力型再注入、generic固定shapeの過剰拒否を修正し、最終全件Greenで確認した。
 
 - 第2単位: 複数入力、signature に基づく事前引数、外側 scope、遅延する構文診断を実装。レビューで見つかった通常 Closure の prearg capture 漏れと Forge の nominal 型表記差に対する過剰拒否を回帰テストとともに修正。最終 CI workspace 1962件成功（45 binaries）、標準 SRT 全件は終了コード0。旧診断期待2件と追加parserテストの入力を整合した後の最終差分で確認した。Extractor 標準テスト13件には複数事前引数・generic shape・capture・Unit・評価順・短絡を含む。
+
+- 第3単位: ExtractorClosure の専用 literal / 型・first-class 値・local Pattern head・推論 / capture・本文 SafeBind を実装。引数の両候補を lexical identity と元診断で保持し、signature 選択後の canonical UID だけを Typed IR へ渡す。REPL の capture・署名・doc target、通常 generic trait API の往復も検証。独立レビューの OR binding 順序と canonical 逆変換の指摘、既存 Facet 動的パスの capture 回帰を解消した。最終 CI は1968件成功（45 binaries）、標準 SRT 全件は終了コード0。専用 SRT 17件、拒否18例と REPL 回帰を含む。

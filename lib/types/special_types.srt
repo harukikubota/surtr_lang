@@ -27,6 +27,20 @@ defenum MatchResult<$Value> {
 }
 
 @doc """
+A first-class Extractor with a function signature and lexical captures.
+Create one with `*{|value: Int| MatchResult::OK(value)}` and bind it to a name.
+Its signature is `ExtractorClosure<(Int -> MatchResult<Int, Error>)>`.
+The last input is the matched value; earlier inputs are pre-arguments.
+Invoke it in a Pattern, such as `if_let(3, extract(value), value, 0)`.
+Ordinary function calls and implicit conversions from normal closures are rejected.
+
+extract = *{|value: Int| MatchResult::OK(value)}
+if_let(3, extract(value), value, 0)
+# 3
+"""
+@builtin type ExtractorClosure<$Signature>
+
+@doc """
 Compiler-reserved callable category marker for REPL and doc surfaces.
 `Closure` names the family of first-class callable values produced by function
 literals and capture forms.

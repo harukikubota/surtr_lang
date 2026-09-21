@@ -2907,7 +2907,10 @@ impl Checker {
                 });
             }
             if enum_surface_name == "MatchResult" {
-                if self.callable_context != CallableContext::Extractor {
+                if !matches!(
+                    self.callable_context,
+                    CallableContext::Extractor | CallableContext::ExtractorClosure
+                ) {
                     return Err(TypeError::new(
                         "MatchResult constructors are only allowed in an Extractor body",
                         span.clone(),
@@ -3735,9 +3738,9 @@ impl Checker {
             TypedInner::Var(id) => self.env.is_error_constructor(id.unique_id),
             TypedInner::App(func, args) if args.is_empty() => match &func.node {
                 TypedInner::Var(id) => self.env.is_error_constructor(id.unique_id),
-                TypedInner::Closure(_, _, body) | TypedInner::CaptureClosure(_, _, body) => {
-                    self.is_concrete_error_value(body)
-                }
+                TypedInner::Closure(_, _, body)
+                | TypedInner::ExtractorClosure(_, _, body)
+                | TypedInner::CaptureClosure(_, _, body) => self.is_concrete_error_value(body),
                 _ => false,
             },
             TypedInner::App(func, _) => {

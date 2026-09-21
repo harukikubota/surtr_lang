@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Extractor ext requires 1 pre-argument(s), got 0

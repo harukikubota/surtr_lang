@@ -29,7 +29,14 @@ impl From<String> for CompilePhaseFailure {
 impl From<scar::error::TypeError> for CompilePhaseFailure {
     fn from(error: scar::error::TypeError) -> Self {
         Self {
-            message: format!("phase=typecheck; message={error}"),
+            message: format!(
+                "phase={}; message={error}",
+                error
+                    .structured
+                    .as_ref()
+                    .map(diagnostics::compile_error_phase)
+                    .unwrap_or("typecheck")
+            ),
             type_error: Some(error),
             source_context: None,
         }

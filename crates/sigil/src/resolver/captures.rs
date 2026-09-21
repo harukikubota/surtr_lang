@@ -76,6 +76,7 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
                     Resolved::TypeAlias(_, _, _, _, _) => {}
                     Resolved::ResultCtorDecl(_, _, _, _, _) => {}
                     Resolved::Closure(_, params, _, _)
+                    | Resolved::ExtractorClosure(_, params, _, _)
                     | Resolved::CaptureClosure(_, params, _, _) => {
                         for param in params {
                             local_bound.insert(param.id.unique_id);
@@ -266,7 +267,9 @@ fn collect_captures_inner(node: &Resolved, bound: &mut HashSet<u32>, free: &mut 
             }
             collect_captures_inner(body, &mut fun_bound, free);
         }
-        Resolved::Closure(_, _, captures, _) | Resolved::CaptureClosure(_, _, captures, _) => {
+        Resolved::Closure(_, _, captures, _)
+        | Resolved::CaptureClosure(_, _, captures, _)
+        | Resolved::ExtractorClosure(_, _, captures, _) => {
             for cap in captures {
                 if !bound.contains(&cap.unique_id)
                     && !free.iter().any(|seen| seen.unique_id == cap.unique_id)
@@ -291,6 +294,8 @@ fn collect_pattern_captures(
     free: &mut Vec<ResolvedId>,
 ) {
     match pat {
+        // Signature-dependent captures are finalized from canonical Typed IDs.
+        ResolvedPattern::Deferred { .. } | ResolvedPattern::ExtractorApplication { .. } => {}
         ResolvedPattern::Pin(id) => {
             if !bound.contains(&id.unique_id)
                 && !free.iter().any(|seen| seen.unique_id == id.unique_id)
@@ -332,6 +337,8 @@ fn collect_pattern_captures(
 
 fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>) {
     match pat {
+        // Signature-dependent captures are finalized from canonical Typed IDs.
+        ResolvedPattern::Deferred { .. } | ResolvedPattern::ExtractorApplication { .. } => {}
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
             bound.insert(id.unique_id);
         }

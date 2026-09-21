@@ -1,0 +1,2 @@
+ext = *{|min: Int, value: Int| MatchResult::OK(value + min)}
+print(is_match(1, ext()))

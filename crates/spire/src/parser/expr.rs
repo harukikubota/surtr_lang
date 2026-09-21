@@ -1004,6 +1004,23 @@ impl Parser<'_> {
                 }
             }),
 
+            Token::Star => self.with_parse_nesting(sp.clone(), |parser| {
+                parser.advance();
+                parser.expect(&Token::LBrace)?;
+                parser.skip_newlines();
+                let Ast::Closure(span, params, body) = parser.parse_closure_literal(sp)? else {
+                    unreachable!()
+                };
+                if params.is_empty() {
+                    return Err(ParseError::syntax(
+                        crate::error::ParseErrorReason::ExpressionSyntax,
+                        "ExtractorClosure requires at least one input",
+                        span,
+                    ));
+                }
+                Ok(Ast::ExtractorClosure(span, params, body))
+            }),
+
             // Zero-argument closure expression: { stmt; stmt; expr }
             Token::LBrace => self.parse_trailing_block_expr_from_lbrace(sp),
 
@@ -3222,7 +3239,9 @@ fn bulk_update_proc_contains_operation_call(expr: &Ast) -> bool {
             bulk_update_proc_contains_operation_call(target)
                 || args.iter().any(bulk_update_proc_contains_operation_call)
         }
-        Ast::Closure(_, _, body) => bulk_update_proc_contains_operation_call(body),
+        Ast::Closure(_, _, body) | Ast::ExtractorClosure(_, _, body) => {
+            bulk_update_proc_contains_operation_call(body)
+        }
         Ast::Dbg(_, args) => args
             .iter()
             .any(|arg| bulk_update_proc_contains_operation_call(&arg.expr)),

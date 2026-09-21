@@ -3,6 +3,52 @@ use super::*;
 const DUPLICATE_PATTERN_LABELS: [&str; 5] = ["first", "second", "third", "fourth", "fifth"];
 
 impl Resolver {
+    fn pattern_id(&self, name: String, uid: u32, span: Span) -> ResolvedId {
+        ResolvedId {
+            symbol_info: self.symbol_info_for_uid(&name, uid),
+            name,
+            qualified_name: None,
+            unique_id: uid,
+            compiler_generated: false,
+            span,
+        }
+    }
+
+    pub(super) fn pattern_has_deferred_application(&self, pattern: &AstPattern) -> bool {
+        match pattern {
+            AstPattern::Call(_, name, args) => {
+                let kind = self
+                    .scope
+                    .lookup(name)
+                    .and_then(|uid| self.declaration_uid_kinds.get(&uid));
+                !matches!(
+                    kind,
+                    Some(
+                        DeclarationKind::Extractor
+                            | DeclarationKind::Enum
+                            | DeclarationKind::Struct
+                            | DeclarationKind::EnumVariant
+                            | DeclarationKind::ResultCtor
+                            | DeclarationKind::Record
+                    )
+                ) || args
+                    .iter()
+                    .filter_map(|arg| arg.pattern.as_deref())
+                    .any(|item| self.pattern_has_deferred_application(item))
+            }
+            AstPattern::Constructor(_, _, items)
+            | AstPattern::Tuple(_, items)
+            | AstPattern::Or(_, items) => items
+                .iter()
+                .any(|item| self.pattern_has_deferred_application(item)),
+            AstPattern::ListCons(_, head, tail) => {
+                self.pattern_has_deferred_application(head)
+                    || self.pattern_has_deferred_application(tail)
+            }
+            AstPattern::As(_, inner, _, _, _) => self.pattern_has_deferred_application(inner),
+            _ => false,
+        }
+    }
     pub(super) fn select_pattern_argument_roles(
         &self,
         mut pattern: AstPattern,
@@ -16,6 +62,19 @@ impl Resolver {
                     )
                 })?;
                 let kind = self.declaration_uid_kinds.get(&uid);
+                if !matches!(
+                    kind,
+                    Some(
+                        DeclarationKind::Extractor
+                            | DeclarationKind::Enum
+                            | DeclarationKind::Struct
+                            | DeclarationKind::EnumVariant
+                            | DeclarationKind::ResultCtor
+                            | DeclarationKind::Record
+                    )
+                ) {
+                    return Ok(pattern);
+                }
                 let extractor_uid = match kind {
                     Some(DeclarationKind::Extractor) => Some(uid),
                     Some(DeclarationKind::Struct) => self
@@ -94,6 +153,35 @@ impl Resolver {
     ) -> Result<ResolvedPattern, ResolveError> {
         let outer = self.scope.clone();
         let pat = self.select_pattern_argument_roles(pat)?;
+        if self.pattern_has_deferred_application(&pat) {
+            let mut candidates = Vec::new();
+            collect_candidate_binding_names(&pat, &mut candidates);
+            let mut proxies = HashMap::new();
+            let mut bindings = Vec::new();
+            for (name, span) in candidates {
+                if proxies.contains_key(&name) {
+                    continue;
+                }
+                let outer_id = outer
+                    .lookup(&name)
+                    .map(|uid| self.pattern_id(name.clone(), uid, span.clone()));
+                let uid = self.scope.define(&name, span.clone());
+                let proxy = self.pattern_id(name.clone(), uid, span);
+                proxies.insert(name, proxy.clone());
+                bindings.push(ResolvedPatternBinding {
+                    proxy,
+                    outer: outer_id,
+                });
+            }
+            let saved = self.pattern_proxies.replace(proxies);
+            let result = self.resolve_pattern_inner(pat, &mut HashMap::new(), &outer);
+            self.pattern_proxies = saved;
+            return result.map(|pattern| ResolvedPattern::Deferred {
+                pattern: Box::new(pattern),
+                bindings,
+                allow_bindings: true,
+            });
+        }
         if let Some(error) = duplicate_pattern_binding_error(&pat)? {
             return Err(error);
         }
@@ -107,6 +195,16 @@ impl Resolver {
         span: Span,
         seen: &mut HashMap<String, Span>,
     ) -> Result<ResolvedId, ResolveError> {
+        if let Some(proxies) = &self.pattern_proxies {
+            let mut id = proxies.get(&name).cloned().ok_or_else(|| {
+                let mut error =
+                    pattern_argument_error("Missing provisional Pattern binding", span.clone());
+                error.diagnostic.reason = crate::error::ResolveErrorReason::CompilerInvariant;
+                error
+            })?;
+            id.span = span;
+            return Ok(id);
+        }
         if let Some(prev_span) = seen.get(&name) {
             return Err(ResolveError {
                 message: format!("Duplicate binding in pattern: {}", name),
@@ -219,6 +317,60 @@ impl Resolver {
                     },
                     related_labels: Vec::new(),
                 })?;
+                if !matches!(
+                    self.declaration_uid_kinds.get(&head_uid),
+                    Some(
+                        DeclarationKind::Extractor
+                            | DeclarationKind::Enum
+                            | DeclarationKind::Struct
+                            | DeclarationKind::EnumVariant
+                            | DeclarationKind::ResultCtor
+                            | DeclarationKind::Record
+                    )
+                ) {
+                    let head = self.pattern_id(head_name, head_uid, span);
+                    let mut args = Vec::new();
+                    for argument in inners {
+                        let next_id = self.scope.next_id();
+                        let expr = match argument.expression {
+                            Some(expr) => self
+                                .with_child_scope(|child| {
+                                    child.scope = outer.clone();
+                                    child.scope.advance_next_id_to(next_id);
+                                    child.pattern_proxies = None;
+                                    child.resolve_node(*expr)
+                                })
+                                .map(Box::new),
+                            None => Err(deferred_pattern_parse_error(
+                                argument.expression_error,
+                                "Extractor pre-argument must be an expression",
+                                argument.span.clone(),
+                            )),
+                        };
+                        let next_id = self.scope.next_id();
+                        let pattern = match argument.pattern {
+                            Some(pattern) => self
+                                .with_child_scope(|child| {
+                                    child.scope = outer.clone();
+                                    child.scope.advance_next_id_to(next_id);
+                                    let pattern = child.select_pattern_argument_roles(*pattern)?;
+                                    child.resolve_pattern_inner(pattern, &mut HashMap::new(), outer)
+                                })
+                                .map(Box::new),
+                            None => Err(deferred_pattern_parse_error(
+                                argument.pattern_error,
+                                "Extractor payload argument must be a Pattern",
+                                argument.span.clone(),
+                            )),
+                        };
+                        args.push(ResolvedPatternArgument {
+                            span: argument.span,
+                            expr,
+                            pattern,
+                        });
+                    }
+                    return Ok(ResolvedPattern::ExtractorApplication { head, args });
+                }
                 let head_kind = self
                     .declaration_uid_kinds
                     .get(&head_uid)
@@ -258,6 +410,7 @@ impl Resolver {
                             let resolved = self.with_child_scope(|child| {
                                 child.scope = outer.clone();
                                 child.scope.advance_next_id_to(next_id);
+                                child.pattern_proxies = None;
                                 child.resolve_node(*expression)
                             })?;
                             pre_args.push(resolved);
@@ -382,6 +535,16 @@ impl Resolver {
                     .collect::<Result<Vec<_>, _>>()?,
             )),
             AstPattern::Or(span, items) => {
+                if self.pattern_proxies.is_some() {
+                    return Ok(ResolvedPattern::Or(
+                        items
+                            .into_iter()
+                            .map(|item| {
+                                self.resolve_pattern_inner(item, &mut HashMap::new(), outer)
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
+                    ));
+                }
                 let mut resolved_items = Vec::with_capacity(items.len());
                 let mut common_ids = HashMap::<String, u32>::new();
                 let mut common_bindings = Vec::<(String, Span)>::new();
@@ -463,6 +626,12 @@ fn remap_or_pattern_bindings(
     common_ids: &HashMap<String, u32>,
 ) -> Result<(), ResolveError> {
     match pattern {
+        ResolvedPattern::Deferred { .. } | ResolvedPattern::ExtractorApplication { .. } => {
+            return Err(pattern_argument_error(
+                "Deferred Pattern reached eager OR remapping",
+                Span { start: 0, end: 0 },
+            ))
+        }
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => {
             id.unique_id = common_ids
                 .get(&id.name)
@@ -520,6 +689,35 @@ fn remap_or_pattern_bindings(
         | ResolvedPattern::DurationLit(_, _) => {}
     }
     Ok(())
+}
+
+fn collect_candidate_binding_names(pattern: &AstPattern, out: &mut Vec<(String, Span)>) {
+    match pattern {
+        AstPattern::Var(span, name) | AstPattern::Annotated(span, name, _) => {
+            out.push((name.clone(), span.clone()))
+        }
+        AstPattern::As(_, inner, name, _, span) => {
+            collect_candidate_binding_names(inner, out);
+            out.push((name.clone(), span.clone()));
+        }
+        AstPattern::Call(_, _, args) => {
+            for inner in args.iter().filter_map(|arg| arg.pattern.as_deref()) {
+                collect_candidate_binding_names(inner, out);
+            }
+        }
+        AstPattern::Constructor(_, _, items)
+        | AstPattern::Tuple(_, items)
+        | AstPattern::Or(_, items) => {
+            for inner in items {
+                collect_candidate_binding_names(inner, out);
+            }
+        }
+        AstPattern::ListCons(_, head, tail) => {
+            collect_candidate_binding_names(head, out);
+            collect_candidate_binding_names(tail, out);
+        }
+        _ => {}
+    }
 }
 
 fn duplicate_pattern_binding_error(pat: &AstPattern) -> Result<Option<ResolveError>, ResolveError> {

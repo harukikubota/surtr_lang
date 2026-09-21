@@ -372,6 +372,7 @@ impl<'a> Parser<'a> {
             Ast::Capture(_, _, _)
             | Ast::FacetCapture(_, _)
             | Ast::Closure(_, _, _)
+            | Ast::ExtractorClosure(_, _, _)
             | Ast::Grouped(_, _)
             | Ast::FacetSegmentAccess(_, _, _)
             | Ast::App(_, _, _) => Some(stmt),
@@ -1366,6 +1367,20 @@ fn rewrite_process_owner_refs(node: Ast, old_name: &str, new_name: &str) -> Ast 
             attrs,
         ),
         Ast::Closure(span, params, body) => Ast::Closure(
+            span,
+            params
+                .into_iter()
+                .map(|param| ClosureParam {
+                    name: param.name,
+                    ty: param
+                        .ty
+                        .map(|ty| rewrite_process_owner_ty(ty, old_name, new_name)),
+                    span: param.span,
+                })
+                .collect(),
+            Box::new(rewrite_process_owner_refs(*body, old_name, new_name)),
+        ),
+        Ast::ExtractorClosure(span, params, body) => Ast::ExtractorClosure(
             span,
             params
                 .into_iter()
@@ -2658,6 +2673,18 @@ fn shift_ast_span(ast: Ast, delta: usize) -> Ast {
                 .collect(),
             Box::new(shift_ast_span(*body, delta)),
         ),
+        Ast::ExtractorClosure(span, params, body) => Ast::ExtractorClosure(
+            shift_span(span, delta),
+            params
+                .into_iter()
+                .map(|p| ClosureParam {
+                    name: p.name,
+                    ty: p.ty.map(|ty| shift_ast_ty(ty, delta)),
+                    span: shift_span(p.span, delta),
+                })
+                .collect(),
+            Box::new(shift_ast_span(*body, delta)),
+        ),
         Ast::Capture(span, target, args) => Ast::Capture(
             shift_span(span, delta),
             Box::new(shift_ast_span(*target, delta)),
@@ -2749,6 +2776,7 @@ impl Ast {
             | Ast::Import(s, _, _)
             | Ast::Include(s, _)
             | Ast::Closure(s, _, _)
+            | Ast::ExtractorClosure(s, _, _)
             | Ast::Capture(s, _, _)
             | Ast::CapturePlaceholder(s, _)
             | Ast::Semi(s, _) => s,

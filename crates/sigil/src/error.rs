@@ -1,6 +1,7 @@
+use serde::{Deserialize, Serialize};
 use spire::ast::Span;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResolveErrorReason {
     NameResolution,
     Namespace,
@@ -19,26 +20,26 @@ pub enum ResolveErrorReason {
     DeferredParse(spire::error::ParseError),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolveErrorDiagnostic {
     pub reason: ResolveErrorReason,
     pub subject: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolveSourceProvenance {
     pub stage_index: usize,
     pub source_index: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolveErrorLabel {
     pub span: Span,
     pub message: String,
     pub source: Option<ResolveSourceProvenance>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolveError {
     pub message: String,
     pub span: Span,

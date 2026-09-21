@@ -387,11 +387,13 @@ fn build_cached_script_compile_prefix(
                     .structured
                     .as_ref()
                     .map(|diagnostic| {
-                        diagnostics::structured_type_error_spec(
-                            &diagnostic.clone().map_source_locations(|span| {
-                                diagnostic_location_for_span(compile_sources, span)
-                            }),
-                        )
+                        let diagnostic = diagnostic.clone().map_source_locations(|span| {
+                            diagnostic_location_for_span(compile_sources, span)
+                        });
+                        let source = sources
+                            .source(diagnostic.primary.source_id)
+                            .expect("compile diagnostic source");
+                        diagnostics::structured_compile_error_spec(source, &diagnostic)
                     })
                     .unwrap_or_else(|| {
                         diagnostics::typecheck_invariant_spec_with_display(
@@ -401,7 +403,16 @@ fn build_cached_script_compile_prefix(
                             e.hint.clone(),
                         )
                     });
-                RuneError::diagnostic(1, sources, source_id, "typecheck", spec)
+                RuneError::diagnostic(
+                    1,
+                    sources,
+                    source_id,
+                    e.structured
+                        .as_ref()
+                        .map(diagnostics::compile_error_phase)
+                        .unwrap_or("typecheck"),
+                    spec,
+                )
             })?;
         let mut forge_session = std_snapshot.compile_prefix().forge_session();
         let (chunk, _) = forge_session
@@ -668,11 +679,13 @@ pub(crate) fn compile_source_with_measurement(
                 .structured
                 .as_ref()
                 .map(|diagnostic| {
-                    diagnostics::structured_type_error_spec(
-                        &diagnostic.clone().map_source_locations(|span| {
-                            diagnostic_location_for_span(compile_sources, span)
-                        }),
-                    )
+                    let diagnostic = diagnostic.clone().map_source_locations(|span| {
+                        diagnostic_location_for_span(compile_sources, span)
+                    });
+                    let source = sources
+                        .source(diagnostic.primary.source_id)
+                        .expect("compile diagnostic source");
+                    diagnostics::structured_compile_error_spec(source, &diagnostic)
                 })
                 .unwrap_or_else(|| {
                     diagnostics::typecheck_invariant_spec_with_display(
@@ -682,7 +695,16 @@ pub(crate) fn compile_source_with_measurement(
                         e.hint.clone(),
                     )
                 });
-            RuneError::diagnostic(1, sources, source_id, "typecheck", spec)
+            RuneError::diagnostic(
+                1,
+                sources,
+                source_id,
+                e.structured
+                    .as_ref()
+                    .map(diagnostics::compile_error_phase)
+                    .unwrap_or("typecheck"),
+                spec,
+            )
         })?;
     if let Some(measurement) = measurement.as_deref_mut() {
         measurement.typecheck = elapsed(typecheck_start);

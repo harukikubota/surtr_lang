@@ -349,6 +349,7 @@ impl ProjectRunnerExtractor {
             }
             Ast::Grouped(_, inner)
             | Ast::Closure(_, _, inner)
+            | Ast::ExtractorClosure(_, _, inner)
             | Ast::Capture(_, inner, _)
             | Ast::Semi(_, inner)
             | Ast::FieldAccess(_, inner, _)
@@ -599,6 +600,7 @@ fn collect_config_builder_facts(node: &Ast, project_file: &Path, facts: &mut Con
         }
         Ast::Grouped(_, inner)
         | Ast::Closure(_, _, inner)
+        | Ast::ExtractorClosure(_, _, inner)
         | Ast::Capture(_, inner, _)
         | Ast::Semi(_, inner)
         | Ast::FieldAccess(_, inner, _)

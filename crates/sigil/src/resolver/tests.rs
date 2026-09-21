@@ -8498,3 +8498,62 @@ fn extractor_prearguments_capture_outer_values_in_closures() {
         );
     }
 }
+
+#[test]
+fn local_extractor_argument_candidates_preserve_outer_and_provisional_identities() {
+    let resolved = parse_and_resolve("amount = 10\ne = *{|limit: Int, value: Int| value}\nmatch 1 { e(amount, out) => (amount, out), _ => (0, 0) }").unwrap();
+    let Resolved::Bind(_, ResolvedPattern::Var(outer), _) = &resolved[0] else {
+        panic!("outer binding");
+    };
+    let Resolved::Match(_, _, arms) = resolved.last().unwrap() else {
+        panic!("match");
+    };
+    let ResolvedPattern::Deferred {
+        pattern,
+        bindings,
+        allow_bindings,
+    } = &arms[0].pattern
+    else {
+        panic!("deferred Pattern");
+    };
+    assert!(*allow_bindings);
+    let ResolvedPattern::ExtractorApplication { args, .. } = pattern.as_ref() else {
+        panic!("local application");
+    };
+    let amount = bindings
+        .iter()
+        .find(|binding| binding.proxy.name == "amount")
+        .unwrap();
+    assert_eq!(amount.outer.as_ref().unwrap().unique_id, outer.unique_id);
+    assert_ne!(amount.proxy.unique_id, outer.unique_id);
+    assert!(
+        matches!(args[0].expr.as_deref(), Ok(Resolved::Var(_, id)) if id.unique_id == outer.unique_id)
+    );
+    assert!(
+        matches!(args[0].pattern.as_deref(), Ok(ResolvedPattern::Var(id)) if id.unique_id == amount.proxy.unique_id)
+    );
+    assert!(
+        args[1].expr.is_err(),
+        "undefined Expr is retained until role selection"
+    );
+    assert!(args[1].pattern.is_ok());
+    let Resolved::TupleLiteral(_, values) = &arms[0].body else {
+        panic!("tuple body");
+    };
+    assert!(matches!(&values[0], Resolved::Var(_, id) if id.unique_id == amount.proxy.unique_id));
+}
+
+#[test]
+fn local_extractor_predicate_defers_its_binding_prohibition() {
+    let resolved = parse_and_resolve("e = {|value| value}\nis_match(1, e(candidate))").unwrap();
+    let Resolved::Match(_, _, arms) = resolved.last().unwrap() else {
+        panic!("predicate match");
+    };
+    assert!(matches!(
+        &arms[0].pattern,
+        ResolvedPattern::Deferred {
+            allow_bindings: false,
+            ..
+        }
+    ));
+}

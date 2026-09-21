@@ -1,0 +1,3 @@
+defmod ClosureShadowSchema {
+  defextractor positive(value: Int) -> MatchResult<Unit, Error> { MatchResult::OK(()) }
+}

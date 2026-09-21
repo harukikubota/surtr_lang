@@ -48,3 +48,22 @@ pub use typecheck::{
     structured_type_error_spec, type_error_spec_from_structured, typecheck_invariant_spec,
     typecheck_invariant_spec_with_display,
 };
+
+/// Renders an error after type-directed syntax selection while preserving its producer phase.
+pub fn structured_compile_error_spec(source: &str, input: &StructuredDiagnostic) -> DiagnosticSpec {
+    match input.reason {
+        DiagnosticReason::Parse(_) => parse::structured_parse_error_spec(source, input),
+        DiagnosticReason::Resolve(_) => resolve::structured_resolve_error_spec(input),
+        DiagnosticReason::Type(_) => structured_type_error_spec(input),
+        _ => panic!("compile diagnostic must originate in parse, resolve, or typecheck"),
+    }
+}
+
+pub fn compile_error_phase(input: &StructuredDiagnostic) -> &'static str {
+    match input.reason {
+        DiagnosticReason::Parse(_) => "parse",
+        DiagnosticReason::Resolve(_) => "resolve",
+        DiagnosticReason::Type(_) => "typecheck",
+        _ => panic!("compile diagnostic must originate in parse, resolve, or typecheck"),
+    }
+}

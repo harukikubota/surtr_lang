@@ -1261,6 +1261,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     surface_case!(match_result_unitonly_rejects_wrong_child_shapes),
     surface_case!(match_result_payload_shape_must_be_resolved_before_execution),
     surface_case!(extractor_prearguments_follow_signature_and_infer_payload_shape),
+    surface_case!(extractor_closure_inference_and_callable_boundaries),
 ];
 
 #[test]
@@ -2351,6 +2352,17 @@ map_score = Facet::view(map_path, score_map)"#,
 }
 
 fn facet_dynamic_container_segments_accept_runtime_expressions() {
+    let captured = typecheck_with_builtin_prelude(
+        r#"index = 0
+view = {|values: List<Int>| Facet::view(List.[index + 1], values)}"#,
+    );
+    let TypedInner::Closure(_, captures, _) = &typed_bind_rhs(&captured, "view").node else {
+        panic!("closure");
+    };
+    assert!(
+        captures.iter().any(|id| id.name == "index"),
+        "dynamic Facet segment must retain its lexical capture"
+    );
     let typed = typecheck_with_builtin_prelude(
         r#"defrecord ScoreBook(scores: List<Int>, by_kind: HashMap<Int>)
 def find_index(values: List<Int>) -> Int { 1 }
@@ -8853,6 +8865,7 @@ fn bounded_add_generics_specialize_without_pending_trait_calls() {
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
@@ -8976,6 +8989,7 @@ fn range_duration_comparisons_specialize_without_pending_trait_calls() {
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => has_pending_trait_call(body),
             TypedInner::Lit(_)
             | TypedInner::Var(_)
@@ -11055,4 +11069,52 @@ doubled(1.5)
         })
         .collect::<Vec<_>>();
     assert_eq!(specialized.len(), 2);
+}
+
+fn extractor_closure_inference_and_callable_boundaries() {
+    let source = r#"limit = 2
+pick = *{|value: Int| True =? value > limit; MatchResult::OK(value) }
+match 5 { pick(value: Int) => value, _ => 0 }
+"#;
+    typecheck(resolve_with_builtin_prelude(source))
+        .expect("ExtractorClosure literal and local head");
+    for source in [
+        r#"identity = *{|value| MatchResult::OK(value)}
+match 1 { identity(n: Int) => n, _ => 0 }
+match "text" { identity(s: String) => s, _ => "" }
+match () { identity() => 1, _ => 0 }"#,
+        r#"typed: ExtractorClosure<(Int -> MatchResult<Int, Error>)> = *{|value| MatchResult::OK(value)}
+match 1 { typed(n) => n, _ => 0 }"#,
+        r#"def make(limit: Int) -> ExtractorClosure<(Int -> MatchResult<Int>)> {
+  *{|value| True =? value > limit; MatchResult::OK(value)}
+}
+def use(ext: ExtractorClosure<(Int -> MatchResult<Int>)>, value: Int) -> Int {
+  match value { ext(n) => n, _ => 0 }
+}
+use(make(2), 3)"#,
+        r#"value = 9
+ext = *{|pre: Int, input: Int| MatchResult::OK(input)}
+match 5 { ext(value, n) => value + n, _ => 0 }
+is_match(5, ext(value, _))"#,
+        r#"ext = *{|input: Int| MatchResult::OK(input)}
+match 1 { ext(value) | ext(value) => value, _ => 0 }"#,
+    ] {
+        typecheck(resolve_with_builtin_prelude(source))
+            .unwrap_or_else(|error| panic!("{source}\n{error:?}"));
+    }
+    for source in [
+        r#"ext = *{|value: Int| MatchResult::OK(value)}; ext(1)"#,
+        r#"ext = *{|value: Int| MatchResult::OK(value)}; is_match(1, ext(bound))"#,
+        r#"ext = *{|value: Int| MatchResult::OK(value)}; match 1 { ext(a) | ext(b) => 0, _ => 1 }"#,
+        r#"ext = *{|value: (Int, Int)| MatchResult::OK(value)}; match (1, 2) { ext(a, b) | ext(b, a) => a, _ => 0 }"#,
+        r#"ext = *{|value: Int| f = {|nested: Int| MatchResult::OK(nested)}; MatchResult::OK(value)}"#,
+        r#"ext = *{|value: Int| f = {|nested: Int| True =? nested > 0; nested}; MatchResult::OK(value)}"#,
+        r#"ext = *{|value: Int| Ok(value)}"#,
+        r#"ext = {|value: Int| value}; match 1 { ext(bound) => bound, _ => 0 }"#,
+    ] {
+        assert!(
+            typecheck(resolve_with_builtin_prelude(source)).is_err(),
+            "{source}"
+        );
+    }
 }

@@ -218,3 +218,8 @@ Pattern 開始時の外側 scope に名前がない場合は名前解決エラ�
 SafeBind は元 Error の source facts を保持し、consumer や Extractor 名から message を作り直さない。
 未知 tag / 不正 field 数 / discriminant / Err payload は内部契約違反として停止し、
 Result の利用者エラー、通常不一致、Alternative empty に変換しない。
+
+ExtractorClosure は専用 signature 型を持ち、通常 call と通常 Closure との暗黙変換を拒否する。
+local head は選ばれた lexical identity の型を検査し、named Extractor へ探し直さない。
+引数の Expr / Pattern 候補は signature で選択し、未選択候補の診断を発行しない。
+選択された候補の Parse / Resolve 診断は元の phase、reason、span、cursor、関連ラベルを保持する。

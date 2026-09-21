@@ -240,7 +240,8 @@ impl Resolver {
         let pattern = Self::pattern_from_parser_carrier(pattern_expr, "is_match")?;
         let pattern = self.select_pattern_argument_roles(pattern)?;
 
-        if pattern_has_binding_vars(&pattern) {
+        let deferred = self.pattern_has_deferred_application(&pattern);
+        if !deferred && pattern_has_binding_vars(&pattern) {
             return Err(ResolveError {
                 message: "`is_match` pattern does not allow binding variables. Use `_` to ignore a value, or use `if_let` / `match` when you need bindings.".into(),
                 span: ast_pattern_span(&pattern).clone(),
@@ -249,7 +250,7 @@ impl Resolver {
             });
         }
 
-        self.resolve_node(Ast::Match(
+        let mut resolved = self.resolve_node(Ast::Match(
             span.clone(),
             Box::new(term),
             vec![
@@ -264,7 +265,13 @@ impl Resolver {
                     body: Ast::Lit(span, Lit::Bool(false)),
                 },
             ],
-        ))
+        ))?;
+        if let Resolved::Match(_, _, arms) = &mut resolved {
+            if let ResolvedPattern::Deferred { allow_bindings, .. } = &mut arms[0].pattern {
+                *allow_bindings = false;
+            }
+        }
+        Ok(resolved)
     }
 
     fn pattern_from_parser_carrier(

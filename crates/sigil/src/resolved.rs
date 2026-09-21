@@ -401,6 +401,14 @@ pub enum Resolved {
         Box<Resolved>,
     ),
 
+    /// First-class Extractor literal with ordinary lexical capture identities.
+    ExtractorClosure(
+        Span,
+        Vec<ResolvedClosureParam>,
+        Vec<ResolvedId>,
+        Box<Resolved>,
+    ),
+
     /// Closure generated from a named capture expression. Keeps the source
     /// origin explicit after capture lowering.
     CaptureClosure(
@@ -456,6 +464,18 @@ pub enum ResolvedInterpolatedPart {
 /// Pattern in a binding (resolved).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ResolvedPattern {
+    /// Signature-dependent bindings, selected by Scar before checking the continuation.
+    Deferred {
+        pattern: Box<ResolvedPattern>,
+        bindings: Vec<ResolvedPatternBinding>,
+        /// False for is_match, whose selected payloads must not introduce names.
+        allow_bindings: bool,
+    },
+    /// A lexical head whose signature determines the argument roles.
+    ExtractorApplication {
+        head: ResolvedId,
+        args: Vec<ResolvedPatternArgument>,
+    },
     Var(ResolvedId),
     Annotated(ResolvedId, AstTy),
     Pin(ResolvedId),
@@ -472,6 +492,24 @@ pub enum ResolvedPattern {
     Tuple(Vec<ResolvedPattern>),
     Or(Vec<ResolvedPattern>),
     As(Box<ResolvedPattern>, ResolvedId, Option<AstTy>),
+}
+
+/// A lexical name provisionally introduced by an unclassified Pattern argument.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedPatternBinding {
+    pub proxy: ResolvedId,
+    /// Identity to retain when the candidate does not become a payload binding.
+    /// Absence is diagnosed only if a continuation actually references the proxy.
+    pub outer: Option<ResolvedId>,
+}
+
+/// Both legal roles keep their independently resolved identity or original error.
+/// Selecting one role never consults or evaluates the other candidate.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedPatternArgument {
+    pub span: Span,
+    pub expr: Result<Box<Resolved>, crate::error::ResolveError>,
+    pub pattern: Result<Box<ResolvedPattern>, crate::error::ResolveError>,
 }
 
 /// Record literal argument (resolved).

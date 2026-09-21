@@ -892,6 +892,7 @@ fn rebase_resolved_node(node: &mut Resolved, base: u32, offset: u32) {
         Resolved::TypeAlias(_, _, _, _, _) => {}
         Resolved::ResultCtorDecl(_, id, _, _, _) => rebase_resolved_id(id, base, offset),
         Resolved::Closure(_, params, captures, body)
+        | Resolved::ExtractorClosure(_, params, captures, body)
         | Resolved::CaptureClosure(_, params, captures, body) => {
             for param in params {
                 rebase_resolved_id(&mut param.id, base, offset);
@@ -918,6 +919,28 @@ fn rebase_record_arg(arg: &mut ResolvedRecordLitArg, base: u32, offset: u32) {
 
 fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
     match pattern {
+        ResolvedPattern::Deferred {
+            pattern, bindings, ..
+        } => {
+            rebase_pattern(pattern, base, offset);
+            for binding in bindings {
+                rebase_resolved_id(&mut binding.proxy, base, offset);
+                if let Some(outer) = &mut binding.outer {
+                    rebase_resolved_id(outer, base, offset);
+                }
+            }
+        }
+        ResolvedPattern::ExtractorApplication { head, args } => {
+            rebase_resolved_id(head, base, offset);
+            for arg in args {
+                if let Ok(expr) = &mut arg.expr {
+                    rebase_resolved_node(expr, base, offset);
+                }
+                if let Ok(pattern) = &mut arg.pattern {
+                    rebase_pattern(pattern, base, offset);
+                }
+            }
+        }
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) | ResolvedPattern::Pin(id) => {
             rebase_resolved_id(id, base, offset);
         }
@@ -1129,6 +1152,9 @@ pub fn effective_visible_entries(
 
 struct Resolver {
     scope: Scope,
+    /// Shared provisional identities while resolving one whole Pattern. Their
+    /// binding/outer choice is carried explicitly to Scar, never inferred here.
+    pattern_proxies: Option<HashMap<String, ResolvedId>>,
     /// Fresh IDs reserved in predeclaration order for each top-level declaration name.
     predeclared_ids: HashMap<String, VecDeque<u32>>,
     declaration_entries: HashMap<String, DeclarationEntry>,

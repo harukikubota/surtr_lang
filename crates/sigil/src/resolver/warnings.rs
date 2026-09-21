@@ -292,6 +292,7 @@ fn collect_node_usage(node: &Resolved, usage: &mut WarningUsage) {
         }
         Resolved::BuiltinDecl(..) | Resolved::BuiltinExtractorDecl(_, _, _, _, _) => {}
         Resolved::Closure(_, params, captures, body)
+        | Resolved::ExtractorClosure(_, params, captures, body)
         | Resolved::CaptureClosure(_, params, captures, body) => {
             for param in params {
                 usage.bind_id(&param.id);
@@ -314,6 +315,32 @@ fn collect_record_arg_usage(arg: &ResolvedRecordLitArg, usage: &mut WarningUsage
 
 fn collect_pattern_usage(pattern: &ResolvedPattern, usage: &mut WarningUsage) {
     match pattern {
+        ResolvedPattern::Deferred {
+            pattern, bindings, ..
+        } => {
+            // Role selection happens in Scar. Retain possible uses to avoid false
+            // unused warnings, but never publish candidate-only bindings.
+            let mut candidates = WarningUsage::default();
+            collect_pattern_usage(pattern, &mut candidates);
+            usage.used_uids.extend(candidates.used_uids);
+            usage.short_import_uses.extend(candidates.short_import_uses);
+            for binding in bindings {
+                if let Some(outer) = &binding.outer {
+                    usage.use_id(outer);
+                }
+            }
+        }
+        ResolvedPattern::ExtractorApplication { head, args } => {
+            usage.use_id(head);
+            for arg in args {
+                if let Ok(expr) = &arg.expr {
+                    collect_node_usage(expr, usage);
+                }
+                if let Ok(pattern) = &arg.pattern {
+                    collect_pattern_usage(pattern, usage);
+                }
+            }
+        }
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => usage.bind_id(id),
         ResolvedPattern::Pin(id) => usage.use_id(id),
         ResolvedPattern::Wildcard(_)

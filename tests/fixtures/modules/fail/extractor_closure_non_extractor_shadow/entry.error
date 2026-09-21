@@ -1,0 +1,2 @@
+phase: typecheck
+contains: Pattern head positive must have ExtractorClosure type

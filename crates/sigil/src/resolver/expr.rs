@@ -797,7 +797,9 @@ impl Resolver {
                 }
                 Ok(())
             }
-            Ast::Closure(_, _, body) => self.collect_capture_placeholders(body, false, true, used),
+            Ast::Closure(_, _, body) | Ast::ExtractorClosure(_, _, body) => {
+                self.collect_capture_placeholders(body, false, true, used)
+            }
             Ast::Capture(span, target, args) => {
                 if inside_placeholder_capture && !args.is_empty() {
                     return Err(ResolveError {
@@ -1387,6 +1389,11 @@ impl Resolver {
                 params,
                 Box::new(self.rewrite_capture_placeholders(*body, capture_span, false, true)?),
             )),
+            Ast::ExtractorClosure(span, params, body) => Ok(Ast::ExtractorClosure(
+                span,
+                params,
+                Box::new(self.rewrite_capture_placeholders(*body, capture_span, false, true)?),
+            )),
             Ast::Capture(span, target, args) => {
                 if inside_placeholder_capture && !args.is_empty() {
                     return Err(ResolveError {
@@ -1638,7 +1645,9 @@ impl Resolver {
                     }
                 })
             }
-            Ast::Closure(_, _, body) => Self::pipe_slot_span(body),
+            Ast::Closure(_, _, body) | Ast::ExtractorClosure(_, _, body) => {
+                Self::pipe_slot_span(body)
+            }
             Ast::Capture(_, target, args) => {
                 Self::pipe_slot_span(target).or_else(|| args.iter().find_map(Self::pipe_slot_span))
             }
@@ -1921,6 +1930,7 @@ impl Resolver {
     pub(super) fn new() -> Self {
         Self {
             scope: initialize_scope(),
+            pattern_proxies: None,
             predeclared_ids: HashMap::new(),
             declaration_entries: HashMap::new(),
             declaration_uids: HashMap::new(),
@@ -1943,6 +1953,7 @@ impl Resolver {
     pub(super) fn with_scope(scope: Scope) -> Self {
         Self {
             scope,
+            pattern_proxies: None,
             predeclared_ids: HashMap::new(),
             declaration_entries: HashMap::new(),
             declaration_uids: HashMap::new(),
@@ -2033,6 +2044,7 @@ impl Resolver {
         f: impl FnOnce(&mut Resolver) -> Result<T, ResolveError>,
     ) -> Result<T, ResolveError> {
         let mut child = Resolver::with_scope(self.scope.clone());
+        child.pattern_proxies = self.pattern_proxies.clone();
         child.declaration_uids = self.declaration_uids.clone();
         child.declaration_uid_kinds = self.declaration_uid_kinds.clone();
         child.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
@@ -2653,6 +2665,55 @@ impl Resolver {
         }
 
         self.resolve_node(expr)
+    }
+
+    fn resolve_literal_closure(
+        &mut self,
+        span: Span,
+        params: Vec<ClosureParam>,
+        body: Box<Ast>,
+        extractor: bool,
+    ) -> Result<Resolved, ResolveError> {
+        let mut closure_scope = self.scope.clone();
+        let mut resolved_params = Vec::new();
+        for param in params {
+            let uid = closure_scope.define(&param.name, param.span.clone());
+            resolved_params.push(ResolvedClosureParam {
+                id: ResolvedId {
+                    name: param.name,
+                    qualified_name: None,
+                    unique_id: uid,
+                    compiler_generated: false,
+                    symbol_info: None,
+                    span: param.span,
+                },
+                ty: param.ty,
+            });
+        }
+
+        let mut body_resolver = Resolver::with_scope(closure_scope);
+        body_resolver.declaration_uids = self.declaration_uids.clone();
+        body_resolver.declaration_entries = self
+            .declaration_entries
+            .iter()
+            .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
+            .map(|(key, entry)| (key.clone(), entry.clone()))
+            .collect();
+        body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
+        body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
+        body_resolver.owner_registry = self.owner_registry.clone();
+        body_resolver.current_module_path = self.current_module_path.clone();
+        body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
+        let resolved_body = body_resolver.resolve_node(*body)?;
+        self.scope.advance_next_id_to(body_resolver.scope.next_id());
+
+        let captures = collect_captures(&resolved_body, &resolved_params);
+
+        Ok(if extractor {
+            Resolved::ExtractorClosure(span, resolved_params, captures, Box::new(resolved_body))
+        } else {
+            Resolved::Closure(span, resolved_params, captures, Box::new(resolved_body))
+        })
     }
 
     pub(super) fn resolve_node(&mut self, node: Ast) -> Result<Resolved, ResolveError> {
@@ -4008,47 +4069,10 @@ impl Resolver {
             }),
 
             Ast::Closure(span, params, body) => {
-                let mut closure_scope = self.scope.clone();
-                let mut resolved_params = Vec::new();
-                for param in params {
-                    let uid = closure_scope.define(&param.name, param.span.clone());
-                    resolved_params.push(ResolvedClosureParam {
-                        id: ResolvedId {
-                            name: param.name,
-                            qualified_name: None,
-                            unique_id: uid,
-                            compiler_generated: false,
-                            symbol_info: None,
-                            span: param.span,
-                        },
-                        ty: param.ty,
-                    });
-                }
-
-                let mut body_resolver = Resolver::with_scope(closure_scope);
-                body_resolver.declaration_uids = self.declaration_uids.clone();
-                body_resolver.declaration_entries = self
-                    .declaration_entries
-                    .iter()
-                    .filter(|(_, entry)| matches!(entry.kind, DeclarationKind::Extractor))
-                    .map(|(key, entry)| (key.clone(), entry.clone()))
-                    .collect();
-                body_resolver.declaration_uid_kinds = self.declaration_uid_kinds.clone();
-                body_resolver.declaration_hidden_by_uid = self.declaration_hidden_by_uid.clone();
-                body_resolver.owner_registry = self.owner_registry.clone();
-                body_resolver.current_module_path = self.current_module_path.clone();
-                body_resolver.allow_top_level_shadowing = self.allow_top_level_shadowing;
-                let resolved_body = body_resolver.resolve_node(*body)?;
-                self.scope.advance_next_id_to(body_resolver.scope.next_id());
-
-                let captures = collect_captures(&resolved_body, &resolved_params);
-
-                Ok(Resolved::Closure(
-                    span,
-                    resolved_params,
-                    captures,
-                    Box::new(resolved_body),
-                ))
+                self.resolve_literal_closure(span, params, body, false)
+            }
+            Ast::ExtractorClosure(span, params, body) => {
+                self.resolve_literal_closure(span, params, body, true)
             }
 
             Ast::Capture(span, target, args) => {

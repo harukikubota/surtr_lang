@@ -488,7 +488,9 @@ impl Checker {
                     &allowed_enum_constructors,
                 )
             }
-            TypedInner::Closure(params, _, body) | TypedInner::CaptureClosure(params, _, body) => {
+            TypedInner::Closure(params, _, body)
+            | TypedInner::ExtractorClosure(params, _, body)
+            | TypedInner::CaptureClosure(params, _, body) => {
                 let mut allowed_enum_constructors = allowed_enum_constructor_vars.clone();
                 for parameter in params {
                     self.extend_allowed_vars(&parameter.ty, &mut allowed_enum_constructors);
@@ -1729,6 +1731,18 @@ impl Checker {
                     generated_defs,
                 )?,
             ),
+            TypedInner::ExtractorClosure(params, captures, body) => TypedInner::ExtractorClosure(
+                params,
+                captures,
+                self.rewrite_specializations_in_node(
+                    *body,
+                    defs_by_fun_idx,
+                    bound_tyvars_by_fun_idx,
+                    needs_specialization,
+                    specialization_fun_idxs,
+                    generated_defs,
+                )?,
+            ),
             TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
                 params,
                 captures,
@@ -2190,6 +2204,9 @@ impl Checker {
             Ty::Var(var) => CanonicalTyKey::Var(var),
             Ty::SelfApp(args) => {
                 CanonicalTyKey::SelfApp(args.iter().map(|arg| self.canonical_ty_key(arg)).collect())
+            }
+            Ty::ExtractorClosure(inner) => {
+                CanonicalTyKey::ExtractorClosure(Box::new(self.canonical_ty_key(&inner)))
             }
             Ty::MatchResult(inner) => {
                 CanonicalTyKey::MatchResult(Box::new(self.canonical_ty_key(&inner)))
@@ -2757,6 +2774,7 @@ impl Checker {
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => {
                 self.collect_pending_trait_receiver_tyvars_in_node(body, ordered, seen)
             }
@@ -2984,6 +3002,7 @@ impl Checker {
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => {
                 self.collect_bound_tyvars_in_node(body, ordered, seen);
             }
@@ -3007,9 +3026,10 @@ impl Checker {
                     ordered.push(var);
                 }
             }
-            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
-                self.collect_bound_tyvars_in_ty(&inner, ordered, seen)
-            }
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => self.collect_bound_tyvars_in_ty(&inner, ordered, seen),
             Ty::Facet(_, source, focus, update_source, update_focus) => {
                 self.collect_bound_tyvars_in_ty(&source, ordered, seen);
                 self.collect_bound_tyvars_in_ty(&focus, ordered, seen);
@@ -3565,6 +3585,17 @@ impl Checker {
                 captures,
                 Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
             ),
+            TypedInner::ExtractorClosure(params, captures, body) => TypedInner::ExtractorClosure(
+                params
+                    .into_iter()
+                    .map(|param| TypedClosureParam {
+                        id: param.id,
+                        ty: self.substitute_ty_with_mapping(&param.ty, mapping),
+                    })
+                    .collect(),
+                captures,
+                Box::new(self.substitute_typed_node_with_mapping(*body, mapping)),
+            ),
             TypedInner::CaptureClosure(params, captures, body) => TypedInner::CaptureClosure(
                 params
                     .into_iter()
@@ -3919,6 +3950,9 @@ impl Checker {
                     }
                 }
             }
+            Ty::ExtractorClosure(inner) => {
+                Ty::ExtractorClosure(Box::new(self.substitute_ty_with_mapping(inner, mapping)))
+            }
             Ty::MatchResult(inner) => {
                 Ty::MatchResult(Box::new(self.substitute_ty_with_mapping(inner, mapping)))
             }
@@ -4250,7 +4284,8 @@ impl Checker {
         children: usize,
         span: &Span,
     ) -> Result<(), TypeError> {
-        let ret = match self.resolve_ty(extractor_ty) {
+        let resolved = self.resolve_ty(extractor_ty);
+        let ret = match Self::extractor_signature_ty(&resolved) {
             Ty::UserFunc { ret, .. } | Ty::BuiltinFunc { ret, .. } | Ty::Func(_, ret) => ret,
             _ => {
                 return Err(TypeError::new(
@@ -4763,6 +4798,7 @@ impl Checker {
             TypedInner::Def(_, _, _, _, _, _, body, _)
             | TypedInner::ExtractorDef(_, _, _, _, _, body, _)
             | TypedInner::Closure(_, _, body)
+            | TypedInner::ExtractorClosure(_, _, body)
             | TypedInner::CaptureClosure(_, _, body) => {
                 Self::typed_node_has_pending_trait_call(body)
             }

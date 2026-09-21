@@ -338,3 +338,65 @@ fn parse_error_spec_guides_missing_process_state_with_concrete_meta_entry() {
         .iter()
         .any(|label| label.message == "process declaration"));
 }
+
+#[test]
+fn deferred_compile_diagnostics_keep_phase_cursor_and_resolve_labels() {
+    let parse = spire::error::ParseError::SyntaxError {
+        message: "The Unit type has no pattern matching.".into(),
+        span: Span {
+            start: 104,
+            end: 106,
+        },
+        reason: spire::error::ParseErrorReason::PatternSyntax,
+        expected_tokens: vec![],
+        cursor_span: Span {
+            start: 106,
+            end: 107,
+        },
+        guidance: Some(spire::error::ParseErrorGuidance::UnitPattern),
+        token_kind: None,
+    };
+    let input = crate::parse_error_spec(SourceId(0), "", &parse)
+        .structured
+        .unwrap()
+        .map_source_locations(|span| {
+            (
+                SourceId(1),
+                Span {
+                    start: span.start - 100,
+                    end: span.end - 100,
+                },
+            )
+        });
+    assert_eq!(crate::compile_error_phase(&input), "parse");
+    let rendered = crate::structured_compile_error_spec("ext(())", &input);
+    assert_eq!(rendered.kind, "ParseError");
+    assert!(rendered.help.is_some());
+    let DiagnosticData::Parse(data) = &input.data else {
+        panic!("parse facts");
+    };
+    assert_eq!(data.cursor_span, Span { start: 6, end: 7 });
+    assert_eq!(input.primary.span, Span { start: 4, end: 6 });
+
+    let input = resolve_error_spec(
+        SourceId(0),
+        "Duplicate binding in pattern: x",
+        Span { start: 0, end: 1 },
+        ResolveDiagnosticReason::Pattern,
+        Some("x".into()),
+        &[(
+            SourceId(1),
+            Span { start: 2, end: 3 },
+            "first binding".into(),
+        )],
+    )
+    .structured
+    .unwrap();
+    assert_eq!(crate::compile_error_phase(&input), "resolve");
+    let rendered = crate::structured_compile_error_spec("x x", &input);
+    assert_eq!(rendered.kind, "ResolveError");
+    assert!(rendered
+        .labels
+        .iter()
+        .any(|label| label.source_id == Some(SourceId(1)) && label.message == "first binding"));
+}

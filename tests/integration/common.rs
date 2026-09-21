@@ -565,11 +565,16 @@ pub fn assert_compile_error_matches(
                 .unwrap_or_else(|| (fallback_source_id, span.clone()))
         });
         let source_id = structured.primary.source_id;
-        let spec = diagnostics::structured_type_error_spec(&structured);
+        let spec = diagnostics::structured_compile_error_spec(
+            sources
+                .source(source_id)
+                .expect("fixture diagnostic source"),
+            &structured,
+        );
         let json = serde_json::to_value(diagnostics::serializable_diagnostic_by_id(
             &sources,
             source_id,
-            "typecheck",
+            diagnostics::compile_error_phase(&structured),
             &spec,
         ))
         .unwrap();

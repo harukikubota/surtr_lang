@@ -19,7 +19,7 @@ pattern の `[head, ..tail]` はこの alias です。
 deferror Rejected { "input rejected" }
 
 defmod Matchers {
-  defextractor never(self: Int) -> MatchResult<Int, Error> {
+  defextractor never(value: Int) -> MatchResult<Int, Error> {
     MatchResult::Err(Rejected)
   }
 }
@@ -62,7 +62,7 @@ MatchResult は通常の変数・引数・field に保持できず、通常 Clos
 deferror Outside { "outside range" }
 defmod Bounds {
   defextractor between(min: Int, max: Int, value: Int) -> MatchResult<Int, Error> {
-    if(min <= value && value <= max, MatchResult::OK(value), MatchResult::Err(Outside))
+    if(and(min <= value, value <= max), MatchResult::OK(value), MatchResult::Err(Outside))
   }
 }
 # 利用側
@@ -73,6 +73,31 @@ if_let(5, Bounds::between(0, 10, accepted), accepted, 0)
 事前引数はその occurrence に到達したときだけ左から一度ずつ評価します。
 同じ Pattern で新たに束縛する名前は参照できず、外側にある同名値を参照します。
 成功 payload が Unit なら、事前引数だけを書いて子 Pattern を省略できます。
+
+
+## ExtractorClosure
+
+REPL では `*{|value| ...}` で、capture を持つ ExtractorClosure を作れます。
+
+```surtr
+limit = 10
+greater = *{|value: Int|
+  True =? value > limit
+  MatchResult::OK(value)
+}
+if_let(12, greater(accepted), accepted, 0)
+# 12
+is_match(3, greater(_))
+# False
+```
+
+型は `ExtractorClosure<(Int -> MatchResult<Int, Error>)>` です。通常の変数・引数・戻り値として
+受け渡し、同じ signature の値を `if` や `match` で選択できます。引数の型注釈は推論できれば省略できます。
+事前引数、payload の分解、Unit 子の省略、本文の SafeBind は named Extractor と同じ契約です。
+
+Pattern head には bind 済みの名前を使います。`greater(12)` という通常 call、生成式を直接
+head にする形、普通の Closure との暗黙変換は許可しません。local の名前が named Extractor を
+shadow した場合は、その local の型を検査します。
 
 ## ルール
 

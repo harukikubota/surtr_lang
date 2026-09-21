@@ -505,6 +505,9 @@ fn rewrite_process_self_refs(node: Ast) -> Ast {
         Ast::Closure(span, params, body) => {
             Ast::Closure(span, params, Box::new(rewrite_process_self_refs(*body)))
         }
+        Ast::ExtractorClosure(span, params, body) => {
+            Ast::ExtractorClosure(span, params, Box::new(rewrite_process_self_refs(*body)))
+        }
         Ast::Capture(span, target, args) => Ast::Capture(
             span,
             Box::new(rewrite_process_self_refs(*target)),

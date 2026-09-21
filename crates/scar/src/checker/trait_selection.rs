@@ -442,6 +442,9 @@ impl Checker {
             Ty::Error => CanonicalTy::builtin(TypeName::Error, vec![]),
             Ty::Var(var) => CanonicalTy::variable(*var),
             Ty::Hole => CanonicalTy::new(CanonicalTypeHead::Hole, vec![]),
+            Ty::ExtractorClosure(ty) => {
+                CanonicalTy::builtin(TypeName::ExtractorClosure, vec![recurse(ty)?])
+            }
             Ty::MatchResult(ty) => CanonicalTy::builtin(TypeName::MatchResult, vec![recurse(ty)?]),
             Ty::List(ty) => CanonicalTy::builtin(TypeName::List, vec![recurse(ty)?]),
             Ty::Lazy(ty) => CanonicalTy::builtin(TypeName::Lazy, vec![recurse(ty)?]),
@@ -1978,6 +1981,21 @@ impl Checker {
             CanonicalTypeHead::Builtin(TypeName::Boolean) => Ty::Bool,
             CanonicalTypeHead::Builtin(TypeName::Unit) => Ty::Unit,
             CanonicalTypeHead::Builtin(TypeName::Error) => Ty::Error,
+            CanonicalTypeHead::Builtin(TypeName::MatchResult) => {
+                let [payload] = args.as_slice() else {
+                    return Err(invalid());
+                };
+                Ty::MatchResult(Box::new(payload.clone()))
+            }
+            CanonicalTypeHead::Builtin(TypeName::ExtractorClosure) => {
+                let [signature @ Ty::Func(params, ret)] = args.as_slice() else {
+                    return Err(invalid());
+                };
+                if params.is_empty() || !matches!(ret.as_ref(), Ty::MatchResult(_)) {
+                    return Err(invalid());
+                }
+                Ty::ExtractorClosure(Box::new(signature.clone()))
+            }
             CanonicalTypeHead::Builtin(TypeName::List) if args.len() == 1 => {
                 Ty::List(Box::new(args[0].clone()))
             }
@@ -3354,6 +3372,53 @@ impl Checker {
             }
             CandidateApplicability::Deferred(_) => Ok(Some(TraitDispatch::Pending)),
             CandidateApplicability::Rejected(_) => Ok(None),
+        }
+    }
+}
+
+#[cfg(test)]
+mod extractor_type_contract_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_extractor_types_round_trip() {
+        let checker = Checker::new(TypecheckContext::default());
+        for payload in [Ty::Int, Ty::Unit, Ty::Tuple(vec![Ty::Str, Ty::Var(7)])] {
+            let result = Ty::MatchResult(Box::new(payload));
+            let closure = Ty::ExtractorClosure(Box::new(Ty::Func(
+                vec![Ty::Int, Ty::Var(7)],
+                Box::new(result.clone()),
+            )));
+            for ty in [result, closure.clone(), Ty::List(Box::new(closure))] {
+                let canonical = checker
+                    .canonical_resolved_type(&ty)
+                    .expect("canonical type");
+                assert_eq!(
+                    checker
+                        .canonical_to_ty(&canonical)
+                        .expect("dedicated inverse"),
+                    ty
+                );
+            }
+        }
+        for (name, arguments) in [
+            (TypeName::MatchResult, vec![]),
+            (TypeName::ExtractorClosure, vec![]),
+            (
+                TypeName::ExtractorClosure,
+                vec![CanonicalTy::builtin(TypeName::Int, vec![])],
+            ),
+            (
+                TypeName::ExtractorClosure,
+                vec![CanonicalTy::new(
+                    CanonicalTypeHead::Function,
+                    vec![CanonicalTy::builtin(TypeName::Int, vec![])],
+                )],
+            ),
+        ] {
+            assert!(checker
+                .canonical_to_ty(&CanonicalTy::builtin(name, arguments))
+                .is_err());
         }
     }
 }

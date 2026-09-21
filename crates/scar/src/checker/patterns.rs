@@ -2,6 +2,261 @@ use super::*;
 use diagnostics::{PatternKind, TypeDiagnosticReason};
 
 impl Checker {
+    pub(super) fn deferred_pattern_error(
+        message: impl Into<String>,
+        id: &ResolvedId,
+        reason: diagnostics::ResolveDiagnosticReason,
+    ) -> TypeError {
+        let spec = diagnostics::resolve_error_spec(
+            diagnostics::SourceId(0),
+            message,
+            id.span.clone(),
+            reason,
+            Some(id.name.clone()),
+            &[],
+        );
+        TypeError {
+            message: spec.message,
+            span: id.span.clone(),
+            hint: None,
+            structured: spec.structured,
+        }
+    }
+
+    pub(super) fn selected_candidate_error(error: &sigil::error::ResolveError) -> TypeError {
+        use diagnostics::ResolveDiagnosticReason as D;
+        use sigil::error::ResolveErrorReason as R;
+        let reason = match &error.diagnostic.reason {
+            R::DeferredParse(parse) => {
+                let spec = diagnostics::parse_error_spec(diagnostics::SourceId(0), "", parse);
+                return TypeError {
+                    message: spec.message,
+                    span: error.span.clone(),
+                    hint: None,
+                    structured: spec.structured,
+                };
+            }
+            R::NameResolution => D::NameResolution,
+            R::Namespace => D::Namespace,
+            R::Visibility => D::Visibility,
+            R::Import => D::Import,
+            R::Capture => D::Capture,
+            R::Pattern => D::Pattern,
+            R::Declaration => D::Declaration,
+            R::SpecialForm => D::SpecialForm,
+            R::SourcePolicy => D::SourcePolicy,
+            R::InvalidIntrinsicSurfaceContract => D::InvalidIntrinsicSurfaceContract,
+            R::ReservedIntrinsicMarkerDeclaration => D::ReservedIntrinsicMarkerDeclaration,
+            R::ReservedIntrinsicMarkerImpl => D::ReservedIntrinsicMarkerImpl,
+            R::CompilerInvariant => D::CompilerInvariant,
+        };
+        let labels = error
+            .related_labels
+            .iter()
+            .map(|label| {
+                (
+                    diagnostics::SourceId(0),
+                    label.span.clone(),
+                    label.message.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let spec = diagnostics::resolve_error_spec(
+            diagnostics::SourceId(0),
+            &error.message,
+            error.span.clone(),
+            reason,
+            error.diagnostic.subject.clone(),
+            &labels,
+        );
+        TypeError {
+            message: spec.message,
+            span: error.span.clone(),
+            hint: None,
+            structured: spec.structured,
+        }
+    }
+
+    pub(super) fn canonical_pattern_id(&self, id: &ResolvedId) -> Result<ResolvedId, TypeError> {
+        let mut resolved = id.clone();
+        while let Some(outer) = self.pattern_binding_aliases.get(&resolved.unique_id) {
+            resolved = outer.clone().ok_or_else(|| {
+                Self::deferred_pattern_error(
+                    format!("Undefined variable: {}", id.name),
+                    id,
+                    diagnostics::ResolveDiagnosticReason::NameResolution,
+                )
+            })?;
+        }
+        resolved.span = id.span.clone();
+        Ok(resolved)
+    }
+
+    pub(super) fn select_extractor_application(
+        &mut self,
+        head: &ResolvedId,
+        args: &[ResolvedPatternArgument],
+    ) -> Result<ResolvedPattern, TypeError> {
+        let head = self.canonical_pattern_id(head)?;
+        let ty = self
+            .env
+            .lookup_var(head.unique_id)
+            .cloned()
+            .map(|ty| self.resolve_ty(&ty))
+            .ok_or_else(|| {
+                Self::deferred_pattern_error(
+                    format!("Undefined variable: {}", head.name),
+                    &head,
+                    diagnostics::ResolveDiagnosticReason::NameResolution,
+                )
+            })?;
+        let Ty::ExtractorClosure(signature) = ty else {
+            return Err(TypeError::new(
+                format!("Pattern head {} must have ExtractorClosure type", head.name),
+                head.span.clone(),
+            ));
+        };
+        let Ty::Func(params, _) = signature.as_ref() else {
+            return Err(TypeError::new(
+                "ExtractorClosure signature is unresolved",
+                head.span.clone(),
+            ));
+        };
+        let pre_arity = params.len().checked_sub(1).ok_or_else(|| {
+            TypeError::new(
+                "ExtractorClosure requires at least one input",
+                head.span.clone(),
+            )
+        })?;
+        if args.len() < pre_arity {
+            return Err(TypeError::new(
+                format!(
+                    "Extractor {} requires {} pre-argument(s), got {}",
+                    head.name,
+                    pre_arity,
+                    args.len()
+                ),
+                head.span.clone(),
+            ));
+        }
+        let pre_args = args[..pre_arity]
+            .iter()
+            .map(|arg| {
+                arg.expr
+                    .as_ref()
+                    .map(|expr| *expr.clone())
+                    .map_err(Self::selected_candidate_error)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let items = args[pre_arity..]
+            .iter()
+            .map(|arg| {
+                arg.pattern
+                    .as_ref()
+                    .map(|pat| *pat.clone())
+                    .map_err(Self::selected_candidate_error)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let selected = ResolvedPattern::Extractor(head, pre_args, items);
+        // Constructor-trait position checks run only for the chosen syntax roles.
+        let constructor_traits = self.contextual_constructor_trait_names(&[]);
+        self.validate_constructor_pattern(&selected, &constructor_traits)?;
+        Ok(selected)
+    }
+
+    pub(super) fn finalize_pattern_bindings(
+        &mut self,
+        bindings: &[ResolvedPatternBinding],
+        selected: &HashSet<u32>,
+        allow_bindings: bool,
+    ) -> Result<(), TypeError> {
+        for binding in bindings {
+            if selected.contains(&binding.proxy.unique_id) {
+                if !allow_bindings {
+                    return Err(Self::deferred_pattern_error(
+                        "is_match pattern cannot bind variables",
+                        &binding.proxy,
+                        diagnostics::ResolveDiagnosticReason::SpecialForm,
+                    ));
+                }
+            } else {
+                self.pattern_binding_aliases
+                    .insert(binding.proxy.unique_id, binding.outer.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn insert_pattern_binding(out: &mut HashSet<u32>, id: &ResolvedId) -> Result<(), TypeError> {
+        if out.insert(id.unique_id) {
+            Ok(())
+        } else {
+            Err(Self::deferred_pattern_error(
+                format!("Duplicate pattern binding: {}", id.name),
+                id,
+                diagnostics::ResolveDiagnosticReason::Pattern,
+            ))
+        }
+    }
+
+    pub(super) fn typed_pattern_bindings(
+        pattern: &TypedPattern,
+        out: &mut HashSet<u32>,
+    ) -> Result<(), TypeError> {
+        match pattern {
+            TypedPattern::Var(_, id) => Self::insert_pattern_binding(out, id)?,
+            TypedPattern::As(_, inner, id) => {
+                Self::typed_pattern_bindings(inner, out)?;
+                Self::insert_pattern_binding(out, id)?;
+            }
+            TypedPattern::Tuple(_, items)
+            | TypedPattern::Constructor { fields: items, .. }
+            | TypedPattern::Extractor { items, .. } => {
+                for item in items {
+                    Self::typed_pattern_bindings(item, out)?;
+                }
+            }
+            TypedPattern::ListCons(_, head, tail) => {
+                Self::typed_pattern_bindings(head, out)?;
+                Self::typed_pattern_bindings(tail, out)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub(super) fn typed_match_pattern_bindings(
+        pattern: &TypedMatchPattern,
+        out: &mut HashSet<u32>,
+    ) -> Result<(), TypeError> {
+        match pattern {
+            TypedMatchPattern::Binding(id) => Self::insert_pattern_binding(out, id)?,
+            TypedMatchPattern::As(inner, id) => {
+                Self::typed_match_pattern_bindings(inner, out)?;
+                Self::insert_pattern_binding(out, id)?;
+            }
+            TypedMatchPattern::Tuple(items)
+            | TypedMatchPattern::Constructor { fields: items, .. }
+            | TypedMatchPattern::Extractor { items, .. } => {
+                for item in items {
+                    Self::typed_match_pattern_bindings(item, out)?;
+                }
+            }
+            TypedMatchPattern::ListCons(head, tail) => {
+                Self::typed_match_pattern_bindings(head, out)?;
+                Self::typed_match_pattern_bindings(tail, out)?;
+            }
+            TypedMatchPattern::Or(items) => {
+                // Each alternative has already been checked for identical bindings.
+                if let Some(first) = items.first() {
+                    Self::typed_match_pattern_bindings(first, out)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
     /// Expression subtrees owned by patterns, including nested occurrences.
     /// Expression visitors must include these as well as ordinary Expr children.
     pub(super) fn pattern_expression_nodes(node: &TypedNode) -> Vec<&TypedNode> {
@@ -215,6 +470,8 @@ impl Checker {
 
     pub(super) fn is_total_bind_pattern(pat: &ResolvedPattern) -> bool {
         match pat {
+            ResolvedPattern::Deferred { pattern, .. } => Self::is_total_bind_pattern(pattern),
+            ResolvedPattern::ExtractorApplication { .. } => false,
             ResolvedPattern::Var(_)
             | ResolvedPattern::Annotated(_, _)
             | ResolvedPattern::AnnotatedWildcard(_, _)
@@ -241,7 +498,29 @@ impl Checker {
         span: &Span,
     ) -> Result<(TypedPattern, Ty), TypeError> {
         self.ensure_no_match_result_value(rhs_ty, span)?;
+        if let ResolvedPattern::Pin(id) = pat {
+            let canonical = self.canonical_pattern_id(id)?;
+            if canonical.unique_id != id.unique_id {
+                return self.check_pattern(&ResolvedPattern::Pin(canonical), rhs_ty, span);
+            }
+        }
         match pat {
+            ResolvedPattern::Deferred {
+                pattern,
+                bindings,
+                allow_bindings,
+            } => {
+                let result = self.check_pattern(pattern, rhs_ty, span)?;
+                let mut selected = HashSet::new();
+                Self::typed_pattern_bindings(&result.0, &mut selected)?;
+                self.finalize_pattern_bindings(bindings, &selected, *allow_bindings)?;
+                Ok(result)
+            }
+            ResolvedPattern::ExtractorApplication { head, args } => {
+                let selected = self.select_extractor_application(head, args)?;
+                self.check_pattern(&selected, rhs_ty, span)
+            }
+
             ResolvedPattern::Var(id) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 Ok((TypedPattern::Var(rhs_ty.clone(), id.clone()), rhs_ty))

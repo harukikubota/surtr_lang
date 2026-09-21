@@ -3738,6 +3738,11 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
         identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {
+        name: TypeName::ExtractorClosure.as_str(),
+        params: &["$Signature"],
+        identity: TypeIdentity::TypeConstructor,
+    },
+    BuiltinTypeMeta {
         name: TypeName::MatchResult.as_str(),
         params: &["$Value"],
         identity: TypeIdentity::TypeConstructor,

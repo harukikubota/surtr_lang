@@ -324,6 +324,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     ),
     repl_core_case!(core_sig_typed_call_queries_specialize_polymorphic_returns),
     repl_core_case!(core_sig_supports_closure_bindings_recapture_and_application),
+    repl_core_case!(core_extractor_closure_keeps_capture_signature_and_identity_across_chunks),
     repl_core_case!(core_completion_shows_signature_for_callable_binding_calls),
     repl_core_case!(core_callable_refs_and_signature_errors_are_ui_independent),
     repl_core_case!(
@@ -5900,4 +5901,52 @@ fn tempfile_dir(prefix: &str) -> std::path::PathBuf {
     ));
     fs::create_dir_all(&dir).expect("temp dir should be created");
     dir
+}
+
+fn core_extractor_closure_keeps_capture_signature_and_identity_across_chunks() {
+    let mut engine = engine();
+    for source in [
+        "limit = 10",
+        "ext = *{|value: Int| MatchResult::OK(value + limit)}",
+        "limit = 20",
+        "other = *{|value: Int| MatchResult::OK(value + limit)}",
+        "unrelated = {|value: Int| value * 2}",
+        "selected = if(True, ext, other)",
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            !matches!(
+                result.output,
+                ReplOutput::EvalError { .. } | ReplOutput::Diagnostic { .. }
+            ),
+            "{source}: {}",
+            rendered_text(&result)
+        );
+    }
+    let signature = signature_text(&engine.handle_line(":sig ext"));
+    assert!(
+        signature.contains("ExtractorClosure<(Int -> MatchResult<Int, Error>)>"),
+        "{signature}"
+    );
+    for (source, expected) in [
+        ("if_let(3, selected(value), value, 0)", "13"),
+        ("if_let(3, other(value), value, 0)", "23"),
+    ] {
+        let result = engine.handle_line(source);
+        assert!(
+            matches!(&result.output, ReplOutput::EvalSuccess { .. }),
+            "{}",
+            rendered_text(&result)
+        );
+        let actual = rendered_text(&result);
+        assert!(actual.contains(expected), "{actual}");
+    }
+    let invalid = rendered_text(&engine.handle_line("ext(3)"));
+    assert!(invalid.contains("ExtractorClosure"), "{invalid}");
+    let after = rendered_text(&engine.handle_line("if_let(4, ext(value), value, 0)"));
+    assert!(after.contains("14"), "{after}");
+    let doc = engine.handle_line(":doc ExtractorClosure");
+    let (symbol, signature) = doc_target(&doc);
+    assert_eq!(symbol, "ExtractorClosure");
+    assert_eq!(signature, Some("type ExtractorClosure<$Signature>"));
 }

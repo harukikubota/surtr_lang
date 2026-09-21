@@ -1984,9 +1984,10 @@ impl Checker {
                     out.push(*var);
                 }
             }
-            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
-                Self::collect_ty_vars(inner, out)
-            }
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => Self::collect_ty_vars(inner, out),
             Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);
@@ -2781,6 +2782,9 @@ impl Checker {
                     .collect::<HashMap<_, _>>();
                 self.substitute_ty_with_mapping(target_ty, &mapping)
             }
+            Ty::ExtractorClosure(inner) => Ty::ExtractorClosure(Box::new(
+                self.expand_trait_self_apps(*inner, target_ty, constructor_slot_vars)?,
+            )),
             Ty::MatchResult(inner) => Ty::MatchResult(Box::new(self.expand_trait_self_apps(
                 *inner,
                 target_ty,
@@ -3198,10 +3202,12 @@ impl Checker {
                     )?;
                 }
             }
-            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => self
-                .validate_nominal_declaration_constructor_applications(
-                    inner, parameters, owner, span,
-                )?,
+            Ty::List(inner)
+            | Ty::MatchResult(inner)
+            | Ty::ExtractorClosure(inner)
+            | Ty::Lazy(inner) => self.validate_nominal_declaration_constructor_applications(
+                inner, parameters, owner, span,
+            )?,
             Ty::Tuple(items) => {
                 for item in items {
                     self.validate_nominal_declaration_constructor_applications(

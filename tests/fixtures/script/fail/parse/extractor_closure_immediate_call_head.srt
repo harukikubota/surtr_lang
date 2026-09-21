@@ -1,0 +1,4 @@
+def make() -> ExtractorClosure<(Int -> MatchResult<Int, Error>)> {
+  *{|value: Int| MatchResult::OK(value)}
+}
+print(if_let(1, make()(result), result, 0))

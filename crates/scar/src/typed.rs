@@ -567,6 +567,9 @@ pub enum TypedInner {
     /// Closure literal — params + captures + body
     Closure(Vec<TypedClosureParam>, Vec<ResolvedId>, Box<TypedNode>),
 
+    /// Lexically captured extractor whose body returns MatchResult.
+    ExtractorClosure(Vec<TypedClosureParam>, Vec<ResolvedId>, Box<TypedNode>),
+
     /// Callable synthesized from a named capture expression. The runtime body
     /// is closure-shaped, but display metadata must preserve its Capture origin.
     CaptureClosure(Vec<TypedClosureParam>, Vec<ResolvedId>, Box<TypedNode>),
