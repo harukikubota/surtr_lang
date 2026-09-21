@@ -28,9 +28,11 @@ Pattern AST は第一級の値にしない。一般関数の partial application
 - 2026-09-19: 既存 Pattern surface の OR 文脈を明確化した。`match` と、変数テーブルへ書き込まない `is_match` は root / nested OR を許可する。`is_match` の全 alternative に通常 bind / as alias を禁止する既存規則は維持する。`=` / `=?`、do `<-` / `=?` の root / nested OR を Spire が `PatternSyntax` と `|` の span で拒否する。`if_let` / `if_let_then` は既存 Expr 文法による構文拒否を維持する。match の root OR 展開・guard 共有・nested OR と、input / RHS の通常 match 内 OR は維持した。MatchResult / ExtractorClosure / apply_pattern は未実装であり、本項目に含めない。
 - 2026-09-21: branch consumer の OR を拡張した。`match` の root / nested OR は同一 arm 内に保持し、`if_let` / `if_let_then` の第2引数も共通 Pattern 文法で解析する。OR alternative の bind 名・順序と canonical 型を一致させ、共通 scope / slot へ合流する。`match` の guard は OR 全体の照合成功後に一度だけ評価し、`if_let` 系は全候補失敗時だけ fallback へ進む。`is_match` の bind 禁止、binding operator の OR 拒否、未実装の `apply_pattern` は変更していない。
 
+- 2026-09-21: named / builtin Extractor を二状態の `MatchResult<P, Error>` へ移行した（短縮 `MatchResult<P>` も受理）。通常値位置・通常 callable・constructor capture / Pattern 分解と旧 Option 返却を拒否し、具象 deferror の明示 Err と compiler-owned な SafeBind の元 Error 保持を分離した。UnitOnly の子0/1、bind / wildcard 注釈、generic payload shape、nested callable / do 境界を接続した。runtime uncons と標準 Duration / Range を移行し、Option 専用 lowering、no-match tag、Extractor 再実行 fallback を削除した。canonical tag / payload metadata と VM の不正 carrier 検査を追加し、最適化 tag opcode でも維持する。独立レビュー指摘を解消後、CI workspace 1954件と標準 SRT 全件が成功。事前引数、ExtractorClosure、apply_pattern / projection、Extractor::from_result は本項目に含めない。
+
 ## 2. 現状と変更後
 
-現行 Extractor は一入力で `Option<Payload>` を返す。`Some(payload)` は子 Pattern の照合へ進み、`None` は不一致になる。SafeBind の `None` failure は共通 PatternMismatch Error となる。
+本仕様の移行前の Extractor は一入力で `Option<Payload>` を返す。`Some(payload)` は子 Pattern の照合へ進み、`None` は不一致になる。SafeBind の `None` failure は共通 PatternMismatch Error となる。
 
 変更後は、named Extractor と ExtractorClosure の両方を次の契約へ統一する。
 

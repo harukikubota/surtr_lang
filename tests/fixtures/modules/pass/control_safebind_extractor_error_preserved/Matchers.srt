@@ -1,0 +1,7 @@
+deferror ExtractorRejected { "input rejected" }
+
+defmod Matchers {
+  defextractor never(self: Int) -> MatchResult<Int> {
+    MatchResult::Err(ExtractorRejected)
+  }
+}

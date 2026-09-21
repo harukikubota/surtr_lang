@@ -409,6 +409,13 @@ impl TypecheckProfiler {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallableContext {
+    Function,
+    Closure,
+    Extractor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TypeSyntaxContext {
     General,
     BindingAnnotation,
@@ -726,7 +733,9 @@ pub fn typecheck_with_context_with_warnings(
 pub fn type_contains_unresolved_vars(ty: &Ty) -> bool {
     match ty {
         Ty::Var(_) => true,
-        Ty::List(inner) | Ty::Lazy(inner) => type_contains_unresolved_vars(inner),
+        Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
+            type_contains_unresolved_vars(inner)
+        }
         Ty::Tuple(items) | Ty::SelfApp(items) | Ty::Enum(_, items) => {
             items.iter().any(type_contains_unresolved_vars)
         }
@@ -1204,6 +1213,7 @@ enum CanonicalTyKey {
     Var(u32),
     SelfApp(Vec<CanonicalTyKey>),
     List(Box<CanonicalTyKey>),
+    MatchResult(Box<CanonicalTyKey>),
     Tuple(Vec<CanonicalTyKey>),
     Func {
         params: Vec<CanonicalTyKey>,
@@ -1738,7 +1748,9 @@ impl ScarSession {
 
     fn rewrite_fun_indices_in_ty(ty: &mut Ty, rewrites: &HashMap<u32, u32>) {
         match ty {
-            Ty::List(inner) | Ty::Lazy(inner) => Self::rewrite_fun_indices_in_ty(inner, rewrites),
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
+                Self::rewrite_fun_indices_in_ty(inner, rewrites)
+            }
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 for item in items {
                     Self::rewrite_fun_indices_in_ty(item, rewrites);
@@ -1995,7 +2007,8 @@ impl ScarSession {
                         Self::rewrite_fun_indices_in_ty(&mut target.carrier_ty, rewrites);
                         Self::rewrite_fun_indices_in_ty(&mut target.error_ty, rewrites);
                     }
-                    SafeBindFailureTarget::TopLevel => {}
+                    SafeBindFailureTarget::TopLevel
+                    | SafeBindFailureTarget::EnclosingMatchResultContext { .. } => {}
                 }
                 Self::rewrite_fun_indices_in_node(&mut control.continuation, rewrites);
             }
@@ -2557,7 +2570,7 @@ struct Checker {
     rigid_tyvars: HashSet<u32>,
     current_function_symbol: Option<String>,
     current_impl_struct_target: Option<String>,
-    in_extractor_body: bool,
+    callable_context: CallableContext,
     closure_depth: usize,
     facet_bindings: HashMap<u32, StoredFacetPath>,
     error_observer_bindings: HashSet<u32>,
@@ -2707,7 +2720,7 @@ impl Checker {
             rigid_tyvars: HashSet::new(),
             current_function_symbol: None,
             current_impl_struct_target: None,
-            in_extractor_body: false,
+            callable_context: CallableContext::Function,
             closure_depth: 0,
             facet_bindings: state.facet_bindings,
             error_observer_bindings: state.error_observer_bindings,
@@ -2765,7 +2778,7 @@ impl Checker {
         checker.rigid_tyvars = self.rigid_tyvars.clone();
         checker.current_function_symbol = self.current_function_symbol.clone();
         checker.current_impl_struct_target = self.current_impl_struct_target.clone();
-        checker.in_extractor_body = self.in_extractor_body;
+        checker.callable_context = self.callable_context;
         checker.closure_depth = self.closure_depth;
         checker.facet_bindings = self.facet_bindings.clone();
         checker.error_observer_bindings = self.error_observer_bindings.clone();
@@ -3312,7 +3325,9 @@ impl Checker {
             Ty::Result(ok, err) => {
                 self.ty_contains_process_init(&ok) || self.ty_contains_process_init(&err)
             }
-            Ty::List(inner) | Ty::Lazy(inner) => self.ty_contains_process_init(&inner),
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
+                self.ty_contains_process_init(&inner)
+            }
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 items.iter().any(|item| self.ty_contains_process_init(item))
             }
@@ -3736,7 +3751,7 @@ impl Checker {
                 self.ty_contains_handler_capability_pid(&ok, slots)
                     || self.ty_contains_handler_capability_pid(&err, slots)
             }
-            Ty::List(inner) | Ty::Lazy(inner) => {
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
                 self.ty_contains_handler_capability_pid(&inner, slots)
             }
             Ty::Tuple(items) | Ty::SelfApp(items) => items
@@ -4147,7 +4162,9 @@ impl Checker {
         constructor_traits: &HashSet<String>,
     ) -> Result<(), TypeError> {
         match pattern {
-            ResolvedPattern::Annotated(_, ty) | ResolvedPattern::As(_, _, Some(ty)) => {
+            ResolvedPattern::Annotated(_, ty)
+            | ResolvedPattern::AnnotatedWildcard(_, ty)
+            | ResolvedPattern::As(_, _, Some(ty)) => {
                 self.validate_constructor_ast_ty(ty, false, constructor_traits)?;
             }
             ResolvedPattern::ListCons(head, tail) => {

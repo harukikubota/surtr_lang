@@ -1,0 +1,42 @@
+include "./schema/extractor_schema.srt"
+
+import Test;
+import ExtractorSchema::{result_checked, nested_checked, positive, run_result, run_nested};
+
+test("Extractor result contract") {
+  it("preserves the Result error chain and stops its own body") {
+    capture_stdout()
+    failure = run_result(0)
+    assert_eq("Err(ExtractorContextError(\"extractor context\"))\n|_ ExtractorSourceError(\"source rejected\")", inspect(failure))
+    assert_eq([], capture_stdout())
+    match failure {
+      Err(error) => assert_eq(("ExtractorContextError", "extractor context"), (Error::kind(error), Error::message(error))),
+      Ok(_) => assert_true(False),
+    }
+  }
+
+  it("preserves nested Extractor errors and only continues after success") {
+    capture_stdout()
+    failure = run_nested(0)
+    assert_eq("Err(ExtractorContextError(\"extractor context\"))\n|_ ExtractorSourceError(\"source rejected\")", inspect(failure))
+    assert_eq([], capture_stdout())
+    assert_eq("Ok(3)", inspect(run_nested(3)))
+    assert_eq(["after-result", "after-extractor"], capture_stdout())
+  }
+
+  it("accepts omitted and explicit Unit children") {
+    assert_true(is_match(1, positive()))
+    assert_true(is_match(1, positive(_)))
+    assert_eq((), if_let(1, positive(unit: Unit), unit, ()))
+    assert_false(is_match(0, positive()))
+  }
+
+  it("discards Extractor errors in branch consumers") {
+    capture_stdout()
+    assert_eq("fallback", match 0 { nested_checked(_) => "unexpected", _ => "fallback" })
+    assert_eq("fallback", if_let(0, result_checked(value), to_string(value), "fallback"))
+    if_let_then(0, result_checked(value), print(to_string(value)))
+    assert_false(is_match(0, result_checked(_)))
+    assert_eq([], capture_stdout())
+  }
+}

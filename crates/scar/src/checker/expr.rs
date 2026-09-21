@@ -144,7 +144,9 @@ impl Checker {
     fn type_contains_constructor_application(ty: &Ty) -> bool {
         match ty {
             Ty::SelfApp(items) => Self::constructor_application_parts(items).is_some(),
-            Ty::List(inner) | Ty::Lazy(inner) => Self::type_contains_constructor_application(inner),
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
+                Self::type_contains_constructor_application(inner)
+            }
             Ty::Tuple(items) => items
                 .iter()
                 .any(Self::type_contains_constructor_application),
@@ -224,7 +226,7 @@ impl Checker {
                     outcome => Some(outcome),
                 }
             }
-            Ty::List(inner) | Ty::Lazy(inner) => {
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
                 self.unresolved_constructor_application_in_type(inner)
             }
             Ty::Tuple(items) => items
@@ -1672,6 +1674,7 @@ impl Checker {
                     }
                     }
                 }
+                self.ensure_no_match_result_value(&typed_rhs.ty, &typed_rhs.span)?;
                 let facet_path = if matches!(typed_rhs.ty, Ty::Facet(..)) {
                     Some(self.stored_facet_path_from_node(typed_rhs.clone(), span)?)
                 } else {
@@ -2400,7 +2403,7 @@ impl Checker {
             match ty {
                 Ty::Func(..) | Ty::BuiltinFunc { .. } | Ty::UserFunc { .. } => true,
                 Ty::SelfApp(items) => Checker::constructor_application_parts(items).is_some(),
-                Ty::List(inner) | Ty::Lazy(inner) => needs_context(inner),
+                Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => needs_context(inner),
                 Ty::Result(ok, error) => needs_context(ok) || needs_context(error),
                 Ty::Tuple(items) => items.iter().any(needs_context),
                 Ty::Struct(_, nominal) | Ty::Record(_, nominal) => {
@@ -2820,7 +2823,9 @@ impl Checker {
                 }
             }
             match (actual, expected) {
-                (Ty::List(left), Ty::List(right)) | (Ty::Lazy(left), Ty::Lazy(right)) => {
+                (Ty::MatchResult(left), Ty::MatchResult(right))
+                | (Ty::List(left), Ty::List(right))
+                | (Ty::Lazy(left), Ty::Lazy(right)) => {
                     find(checker, left, right, explicit_slot_for_var)
                 }
                 (Ty::Result(left_ok, left_err), Ty::Result(right_ok, right_err)) => {
@@ -3471,7 +3476,10 @@ impl Checker {
         rhs: &Resolved,
     ) -> Result<TypedNode, TypeError> {
         let mut checked = self.check_safebind_input(span, pat, rhs)?;
-        let failure_target = if let Some(ret_ty) = self.function_return_ty.clone() {
+        let failure_target = if self.callable_context == CallableContext::Extractor {
+            let (_, err_tag) = self.match_result_variant_tags(span)?;
+            SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
+        } else if let Some(ret_ty) = self.function_return_ty.clone() {
             let target = match self.resolve_result_effect(&ret_ty) {
                 ResultEffectResolution::Preserve(target) => target,
                 ResultEffectResolution::Unavailable | ResultEffectResolution::Deferred => {
@@ -5412,7 +5420,7 @@ impl Checker {
                         .iter()
                         .any(|item| contains_trait_constructor_input(item, trait_args))
                 }
-                Ty::List(inner) | Ty::Lazy(inner) => {
+                Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
                     contains_trait_constructor_input(inner, trait_args)
                 }
                 Ty::Result(ok, error) => {
@@ -7297,29 +7305,29 @@ impl Checker {
         )
     }
 
-    pub(super) fn option_variant_tags(&self, span: &Span) -> Result<(u32, u32, u32), TypeError> {
+    pub(super) fn match_result_variant_tags(&self, span: &Span) -> Result<(u32, u32), TypeError> {
         let variants = self
-            .lookup_enum_variants_of("Option")
+            .lookup_enum_variants_of("MatchResult")
             .ok_or_else(|| TypeError {
                 structured: None,
-                message: "Option enum is not available in the current environment".into(),
+                message: "MatchResult enum is not available in the current environment".into(),
                 span: span.clone(),
                 hint: None,
             })?;
-        let mut some_tag = None;
-        let mut none_tag = None;
+        let mut ok_tag = None;
+        let mut err_tag = None;
         for variant in variants {
             match variant.short_name.as_str() {
-                "Some" => some_tag = Some(variant.tag),
-                "None" => none_tag = Some(variant.tag),
+                "OK" => ok_tag = Some(variant.tag),
+                "Err" => err_tag = Some(variant.tag),
                 _ => {}
             }
         }
-        match (some_tag, none_tag) {
-            (Some(some), Some(none)) => Ok((some, none, 0)),
+        match (ok_tag, err_tag) {
+            (Some(ok), Some(err)) => Ok((ok, err)),
             _ => Err(TypeError {
                 structured: None,
-                message: "Option enum must define Some and None variants".into(),
+                message: "MatchResult enum must define OK and Err variants".into(),
                 span: span.clone(),
                 hint: None,
             }),
@@ -7329,19 +7337,9 @@ impl Checker {
     pub(super) fn extractor_contract(
         &mut self,
         extractor_id: &ResolvedId,
+        extractor_ty: &Ty,
         span: &Span,
-    ) -> Result<(Ty, Vec<Ty>, u32, u32, u32), TypeError> {
-        let extractor_ty = self
-            .env
-            .lookup_var(extractor_id.unique_id)
-            .cloned()
-            .ok_or_else(|| TypeError {
-                structured: None,
-                message: format!("Undefined extractor: {}", extractor_id.name),
-                span: span.clone(),
-                hint: None,
-            })?;
-        let extractor_ty = self.instantiate_callable_ty(&extractor_ty);
+    ) -> Result<(Ty, Vec<Ty>, u32, u32), TypeError> {
         let (params, ret) = match &extractor_ty {
             Ty::BuiltinFunc { params, ret, .. }
             | Ty::UserFunc { params, ret, .. }
@@ -7372,13 +7370,13 @@ impl Checker {
             });
         }
         let input_ty = params[0].clone();
-        let seq_tys = self.require_extractor_option_payload_ty(
+        let seq_tys = self.require_extractor_match_result_payload_ty(
             &self.resolve_ty(&ret),
             span,
             &extractor_id.name,
         )?;
-        let (success_tag, no_match_tag, err_tag) = self.option_variant_tags(span)?;
-        Ok((input_ty, seq_tys, success_tag, no_match_tag, err_tag))
+        let (success_tag, err_tag) = self.match_result_variant_tags(span)?;
+        Ok((input_ty, seq_tys, success_tag, err_tag))
     }
 
     pub(super) fn extractor_callable_ty(
@@ -7403,7 +7401,6 @@ impl Checker {
         let id = self
             .function_ids_by_name
             .get("Kernel::uncons")
-            .or_else(|| self.function_ids_by_name.get("uncons"))
             .cloned()
             .ok_or_else(|| TypeError {
                 structured: None,
@@ -7446,43 +7443,59 @@ impl Checker {
         extractor_id: &ResolvedId,
         observed_ty: &Ty,
         span: &Span,
-    ) -> Result<(Ty, Ty, Vec<Ty>, u32, u32, u32), TypeError> {
-        let extractor_ty = self.extractor_callable_ty(extractor_id, span)?;
-        let (input_ty, seq_tys, success_tag, no_match_tag, err_tag) = if matches!(&extractor_ty, Ty::BuiltinFunc { name, .. } if name == "uncons")
+    ) -> Result<(Ty, Ty, Vec<Ty>, u32, u32), TypeError> {
+        let mut extractor_ty = self.extractor_callable_ty(extractor_id, span)?;
+        let (input_ty, seq_tys, success_tag, err_tag) = if self
+            .function_ids_by_name
+            .get("Kernel::uncons")
+            .is_some_and(|id| id.unique_id == extractor_id.unique_id)
+            && matches!(&extractor_ty, Ty::BuiltinFunc { .. })
         {
             let (input_ty, seq_tys) = self.uncons_contract_for_input(observed_ty, span)?;
-            let (success_tag, no_match_tag, err_tag) = self.option_variant_tags(span)?;
-            (input_ty, seq_tys, success_tag, no_match_tag, err_tag)
+            let Ty::BuiltinFunc { params, ret, .. } = &mut extractor_ty else {
+                unreachable!()
+            };
+            *params = vec![input_ty.clone()];
+            *ret = Box::new(Ty::MatchResult(Box::new(Ty::Tuple(seq_tys.clone()))));
+            let (success_tag, err_tag) = self.match_result_variant_tags(span)?;
+            (input_ty, seq_tys, success_tag, err_tag)
         } else {
-            self.extractor_contract(extractor_id, span)?
+            // Instantiate once, then connect the observed input before choosing
+            // payload shape (in particular generic UnitOnly and tuple payloads).
+            if let Ty::UserFunc { params, .. }
+            | Ty::BuiltinFunc { params, .. }
+            | Ty::Func(params, _) = &extractor_ty
+            {
+                if let [input] = params.as_slice() {
+                    self.types_compatible(input, observed_ty);
+                }
+            }
+            self.extractor_contract(extractor_id, &extractor_ty, span)?
         };
         Ok((
-            input_ty,
+            self.resolve_ty(&input_ty),
             self.resolve_ty(&extractor_ty),
             seq_tys,
             success_tag,
-            no_match_tag,
             err_tag,
         ))
     }
 
-    pub(super) fn require_extractor_option_payload_ty(
+    pub(super) fn require_extractor_match_result_payload_ty(
         &self,
         ty: &Ty,
         span: &Span,
         context: &str,
     ) -> Result<Vec<Ty>, TypeError> {
         match self.resolve_ty(ty) {
-            Ty::Enum(name, args) if Self::surface_name(&name) == "Option" && args.len() == 1 => {
-                match &args[0] {
-                    Ty::Tuple(items) => Ok(items.clone()),
-                    other => Ok(vec![other.clone()]),
-                }
-            }
+            Ty::MatchResult(payload) => match payload.as_ref() {
+                Ty::Tuple(items) => Ok(items.clone()),
+                other => Ok(vec![other.clone()]),
+            },
             other => Err(TypeError {
                 structured: None,
                 message: format!(
-                    "{} must return Option<T> or Option<(...)>, got {}",
+                    "{} must return MatchResult<T, Error>, got {}",
                     context,
                     self.ty_name(&other)
                 ),
@@ -8758,7 +8771,9 @@ impl Checker {
     fn count_tyvar_occurrences(&self, ty: &Ty, needle: u32) -> usize {
         match ty {
             Ty::Var(var) => usize::from(*var == needle),
-            Ty::List(inner) | Ty::Lazy(inner) => self.count_tyvar_occurrences(inner, needle),
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
+                self.count_tyvar_occurrences(inner, needle)
+            }
             Ty::Tuple(items) | Ty::SelfApp(items) => items
                 .iter()
                 .map(|item| self.count_tyvar_occurrences(item, needle))
@@ -8833,7 +8848,8 @@ impl Checker {
                 }
                 Ok(())
             }
-            (Ty::List(template), Ty::List(replacement))
+            (Ty::MatchResult(template), Ty::MatchResult(replacement))
+            | (Ty::List(template), Ty::List(replacement))
             | (Ty::Lazy(template), Ty::Lazy(replacement)) => self
                 .collect_facet_rebuild_tyvar_replacements(
                     template,
@@ -9112,6 +9128,9 @@ impl Checker {
                 .get(var)
                 .cloned()
                 .unwrap_or_else(|| self.resolve_ty(ty)),
+            Ty::MatchResult(inner) => Ty::MatchResult(Box::new(
+                self.replace_facet_rebuild_tyvars(inner, replacements),
+            )),
             Ty::List(inner) => Ty::List(Box::new(
                 self.replace_facet_rebuild_tyvars(inner, replacements),
             )),
@@ -10027,6 +10046,9 @@ impl Checker {
         span: &Span,
         callee: &str,
     ) -> Result<(), TypeError> {
+        for arg in args {
+            self.ensure_no_match_result_value(&arg.ty, &arg.span)?;
+        }
         if let Some(arg) = args.iter().find(|arg| self.ty_contains_facet(&arg.ty)) {
             return Err(self.policy_error(
                 TypeDiagnosticReason::FacetCompileTimeOnly,
@@ -10051,6 +10073,7 @@ impl Checker {
         value: &TypedNode,
         context: &str,
     ) -> Result<(), TypeError> {
+        self.ensure_no_match_result_value(&value.ty, &value.span)?;
         if self.ty_contains_facet(&value.ty) {
             return Err(self.policy_error(
                 TypeDiagnosticReason::FacetCompileTimeOnly,
@@ -11567,7 +11590,11 @@ impl Checker {
         let saved_function_return_ty = self.function_return_ty.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
-        let saved_in_extractor_body = self.in_extractor_body;
+        let saved_callable_context = self.callable_context;
+        self.callable_context = CallableContext::Closure;
+        if matches!(self.function_return_ty, Some(Ty::MatchResult(_))) {
+            self.function_return_ty = Some(self.env.fresh_tyvar());
+        }
         let saved_closure_depth = self.closure_depth;
         let saved_facet_bindings = self.facet_bindings.clone();
 
@@ -11763,7 +11790,7 @@ impl Checker {
         self.function_return_ty = saved_function_return_ty;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
-        self.in_extractor_body = saved_in_extractor_body;
+        self.callable_context = saved_callable_context;
         self.closure_depth = saved_closure_depth;
         self.facet_bindings = saved_facet_bindings;
         result
@@ -11966,6 +11993,7 @@ impl Checker {
         } else {
             (self.check_node(target)?, None)
         };
+        self.ensure_no_match_result_value(&typed_target.ty, span)?;
         let mut target_ty = self.resolve_ty(&typed_target.ty);
         if let Some(expected_ty) = expected {
             let checkpoint = self.candidate_probe_checkpoint();

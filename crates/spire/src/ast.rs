@@ -312,6 +312,8 @@ pub enum AstPattern {
     Pin(Span, Symbol),
     /// `_`
     Wildcard(Span),
+    /// `_: Int`: checks the annotation without introducing a binding.
+    AnnotatedWildcard(Span, AstTy),
     /// `[]`
     ListNil(Span),
     /// `[head, ..tail]`

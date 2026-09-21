@@ -1624,6 +1624,7 @@ fn pattern_span(pat: &AstPattern) -> &Span {
         | AstPattern::Annotated(span, _, _)
         | AstPattern::Pin(span, _)
         | AstPattern::Wildcard(span)
+        | AstPattern::AnnotatedWildcard(span, _)
         | AstPattern::ListNil(span)
         | AstPattern::ListCons(span, _, _)
         | AstPattern::IntLit(span, _)
@@ -1729,6 +1730,9 @@ fn shift_pattern(pat: AstPattern, delta: usize) -> AstPattern {
         }
         AstPattern::Pin(span, name) => AstPattern::Pin(shift_span(span, delta), name),
         AstPattern::Wildcard(span) => AstPattern::Wildcard(shift_span(span, delta)),
+        AstPattern::AnnotatedWildcard(span, ty) => {
+            AstPattern::AnnotatedWildcard(shift_span(span, delta), shift_ast_ty(ty, delta))
+        }
         AstPattern::ListNil(span) => AstPattern::ListNil(shift_span(span, delta)),
         AstPattern::ListCons(span, head, tail) => AstPattern::ListCons(
             shift_span(span, delta),

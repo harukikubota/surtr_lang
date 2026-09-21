@@ -1,4 +1,4 @@
-use sindr::builtin::builtin_meta_by_id;
+use sindr::builtin::{builtin_meta_by_id, match_result_variant_meta};
 use sindr::ir::{
     line_column_for_offset, validate_chunk_function_table, validate_program_function_table,
     validate_type_registry_append_entries, Bytecode, BytecodeChunk, CallableTemplate,
@@ -5666,6 +5666,30 @@ impl VM {
         Ok(render_dbg_report(&file, source, template, &args))
     }
 
+    fn validate_match_result_representation(
+        &self,
+        tag: u32,
+        fields: &[Value],
+    ) -> Result<(), RuntimeError> {
+        let Some(entry) = self.type_registry().lookup(tag) else {
+            return Ok(());
+        };
+        let Some(meta) = match_result_variant_meta(&entry.name) else {
+            return Ok(());
+        };
+        if entry.kind != sindr::runtime::TypeKind::EnumVariant
+            || fields.len() != 2
+            || fields.first() != Some(&Value::Int(int(meta.discriminant)))
+            || (meta.carries_error && !matches!(fields.get(1), Some(Value::Error(_))))
+        {
+            return Err(RuntimeError::new(format!(
+                "Invalid MatchResult representation for {}",
+                meta.qualified_name
+            )));
+        }
+        Ok(())
+    }
+
     fn execute_opcode(
         &mut self,
         op: Opcode,
@@ -6134,7 +6158,8 @@ impl VM {
             Opcode::GetField { field_index } => {
                 let val = self.pop_stack()?;
                 match val {
-                    Value::Tagged { fields, .. } => {
+                    Value::Tagged { tag, fields } => {
+                        self.validate_match_result_representation(tag, &fields)?;
                         let field = fields.get(field_index as usize).cloned().ok_or_else(|| {
                             RuntimeError::new(format!("Field index {} out of bounds", field_index))
                         })?;
@@ -6148,7 +6173,10 @@ impl VM {
             Opcode::GetTag => {
                 let val = self.pop_stack()?;
                 match val {
-                    Value::Tagged { tag, .. } => self.stack.push(Value::Tag(tag)),
+                    Value::Tagged { tag, fields } => {
+                        self.validate_match_result_representation(tag, &fields)?;
+                        self.stack.push(Value::Tag(tag));
+                    }
                     _ => {
                         return Err(RuntimeError::new("GetTag on non-tagged value"));
                     }
@@ -6188,16 +6216,7 @@ impl VM {
                 tag_const_idx,
             } => {
                 let expected = self.constant_tag(tag_const_idx)?;
-                let actual = match self
-                    .current_frame()?
-                    .locals
-                    .get(local_idx as usize)
-                    .ok_or_else(|| {
-                        RuntimeError::new(format!("EqLocalTag local out of bounds: {}", local_idx))
-                    })? {
-                    Value::Tagged { tag, .. } => *tag,
-                    _ => return Err(RuntimeError::new("GetTag on non-tagged value")),
-                };
+                let actual = self.local_tag(local_idx, "EqLocalTag")?;
                 self.stack.push(Value::Bool(actual == expected));
             }
             Opcode::JumpIfLocalTagEq {
@@ -6962,7 +6981,10 @@ impl VM {
             .ok_or_else(|| {
                 RuntimeError::new(format!("{op_name} local out of bounds: {local_idx}"))
             })? {
-            Value::Tagged { tag, .. } => Ok(*tag),
+            Value::Tagged { tag, fields } => {
+                self.validate_match_result_representation(*tag, fields)?;
+                Ok(*tag)
+            }
             _ => Err(RuntimeError::new("GetTag on non-tagged value")),
         }
     }
@@ -10816,6 +10838,47 @@ mod tests {
     }
 
     #[test]
+    fn uncons_match_result_error_keeps_builtin_call_location() {
+        let source = r#"uncons("")"#.to_string();
+        let span_end = source.trim_end().len() as u32;
+        let mut bytecode = base_bytecode(vec![
+            Opcode::LoadConst(0),
+            Opcode::CallBuiltin {
+                builtin_id: sindr::builtin::builtin_id_by_name("uncons").unwrap(),
+                arity: 1,
+                span_start: 0,
+                span_end,
+            },
+            Opcode::GetField { field_index: 1 },
+            Opcode::Halt,
+        ]);
+        bytecode.constants = vec![Constant::Str(String::new())];
+        bytecode.type_registry.register(TypeEntry {
+            tag: 47,
+            name: sindr::builtin::MATCH_RESULT_ERR_VARIANT
+                .qualified_name
+                .into(),
+            kind: TypeKind::EnumVariant,
+            field_names: vec!["discriminant".into(), "error".into()],
+            private_flags: vec![false, false],
+        });
+        let mut vm = VM::new(bytecode).with_source(source, "extractor.srt".into());
+        vm.run().unwrap();
+        let Value::Error(error) = vm.last_value().unwrap() else {
+            panic!("expected preserved Error")
+        };
+        assert_eq!(error.kind, "PatternMismatch");
+        assert_eq!(error.message, "Pattern did not match.");
+        assert_eq!(error.location.file, "extractor.srt");
+        assert_eq!((error.location.line, error.location.column), (1, 1));
+        assert_eq!(
+            (error.location.span_start, error.location.span_end),
+            (0, span_end)
+        );
+        assert!(error.cause.is_none());
+    }
+
+    #[test]
     fn push_fails_when_constant_base_mismatches() {
         let bytecode = base_bytecode(vec![Opcode::Halt]);
         let mut vm = VM::new(bytecode);
@@ -11516,6 +11579,68 @@ mod tests {
                     other => panic!("expected Err(Error), got {other:?}"),
                 },
                 other => panic!("expected Err result, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn match_result_access_rejects_malformed_carriers() {
+        let malformed = [
+            ("MatchResult::OK", vec![Value::Int(int(0))]),
+            (
+                "MatchResult::OK",
+                vec![Value::Int(int(0)), Value::Unit, Value::Unit],
+            ),
+            ("MatchResult::OK", vec![Value::Int(int(1)), Value::Unit]),
+            ("MatchResult::OK", vec![Value::Unit, Value::Unit]),
+            ("Global::MatchResult::OK", vec![Value::Unit, Value::Unit]),
+            ("MatchResult::Err", vec![Value::Int(int(1)), Value::Unit]),
+        ];
+        for (name, fields) in malformed {
+            for opcode in [
+                Opcode::GetTag,
+                Opcode::GetField { field_index: 1 },
+                Opcode::EqLocalTag {
+                    local_idx: 0,
+                    tag_const_idx: 0,
+                },
+                Opcode::JumpIfLocalTagEq {
+                    local_idx: 0,
+                    tag_const_idx: 0,
+                    target_pc: 1,
+                },
+                Opcode::JumpIfLocalTagNe {
+                    local_idx: 0,
+                    tag_const_idx: 0,
+                    target_pc: 1,
+                },
+            ] {
+                let mut bytecode = base_bytecode(vec![opcode, Opcode::Halt]);
+                bytecode.constants = vec![Constant::Tag(47)];
+                bytecode.type_registry.register(TypeEntry {
+                    tag: 47,
+                    name: name.into(),
+                    kind: TypeKind::EnumVariant,
+                    field_names: vec!["discriminant".into(), "payload".into()],
+                    private_flags: vec![false, false],
+                });
+                let mut vm = VM::new(bytecode);
+                let mut context = top_level_context(0, 1);
+                let carrier = Value::Tagged {
+                    tag: 47,
+                    fields: fields.clone(),
+                };
+                context.stack.push(carrier.clone());
+                context.frames[0].locals[0] = carrier;
+                let error = match vm.step_context(&mut context) {
+                    StepOutcome::RuntimeError(error) => error,
+                    other => panic!("malformed carrier must fail closed, got {other:?}"),
+                };
+                assert!(
+                    error.message.contains("Invalid MatchResult representation"),
+                    "{}",
+                    error.message
+                );
             }
         }
     }

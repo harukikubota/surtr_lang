@@ -105,8 +105,8 @@ defmod Bootstrap {
   `=?` evaluates the right-hand side once. A canonical `Result` RHS is
   decomposed by one outer layer only, and its `Ok` payload is passed to the
   left-hand MatchBlock pattern. If it produces `Err(error)`, that value is
-  propagated to the current failure target. Extractor `Option::None` and a
-  general mismatch produce the shared `PatternMismatch` error; structural
+  propagated to the current failure target. Extractor `MatchResult::Err(error)`
+  preserves the original error. A general mismatch produces `PatternMismatch`; structural
   patterns retain their existing errors such as `EmptyList` or
   `IndexOutOfBounds`. A Result-effect target preserves that error; a do-local
   Alternative target discards it and returns `empty`.
@@ -141,7 +141,7 @@ defmod Bootstrap {
   - inside `do`, the current carrier may instead provide an Alternative target
   - only a canonical `Result` RHS is decomposed, by one outer layer
   - RHS `Err(...)` is propagated to the current failure target
-  - Extractor `None` and general mismatch become shared `PatternMismatch`; structural pattern errors keep their kind
+  - Extractor `MatchResult::Err` preserves its Error; general mismatch becomes `PatternMismatch`; structural pattern errors keep their kind
   - a non-Result RHS requires a partial pattern that inspects the whole value
   """
   @intrinsic def =?(pattern: $Pattern, value: $A) -> Unit

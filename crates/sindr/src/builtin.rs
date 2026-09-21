@@ -1,4 +1,4 @@
-use crate::names::{builtin_type_name, surface_path_name, TypeIdentity, TypeName};
+use crate::names::{builtin_type_name, surface_path_eq, surface_path_name, TypeIdentity, TypeName};
 pub use crate::signature::BuiltinId;
 use crate::signature::{
     CallableDeclarationKind, CallableIdentity, CallableSignature, CanonicalConstraint,
@@ -390,6 +390,31 @@ pub struct BuiltinTypeMeta {
 
 /// Builtin type declaration-head metadata accepted by standard sources.
 pub type BuiltinTypeHeadMeta = BuiltinTypeMeta;
+
+/// Canonical runtime layout of the compiler-owned Extractor result carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MatchResultVariantMeta {
+    pub qualified_name: &'static str,
+    pub discriminant: i64,
+    pub carries_error: bool,
+}
+
+pub const MATCH_RESULT_OK_VARIANT: MatchResultVariantMeta = MatchResultVariantMeta {
+    qualified_name: "MatchResult::OK",
+    discriminant: 0,
+    carries_error: false,
+};
+pub const MATCH_RESULT_ERR_VARIANT: MatchResultVariantMeta = MatchResultVariantMeta {
+    qualified_name: "MatchResult::Err",
+    discriminant: 1,
+    carries_error: true,
+};
+
+pub fn match_result_variant_meta(qualified_name: &str) -> Option<MatchResultVariantMeta> {
+    [MATCH_RESULT_OK_VARIANT, MATCH_RESULT_ERR_VARIANT]
+        .into_iter()
+        .find(|meta| surface_path_eq(meta.qualified_name, qualified_name))
+}
 
 /// Standard-library owners whose identities are not declared with `@builtin type`.
 ///
@@ -3586,6 +3611,22 @@ pub const BUILTIN_METAS: &[BuiltinMeta] = &[
             ),
         ],
     },
+    BuiltinMeta {
+        name: "uncons",
+        arity: 1,
+        sig_str: "($Tail) -> MatchResult<($Head, $Tail), Error>",
+        compiler_generated_surfaces: &[],
+        surfaces: &[
+            builtin_surface_spec(
+                Some("Kernel"),
+                "uncons",
+                &[],
+                &[builtin_surface_parameter("term", "$Tail")],
+                "MatchResult<($Head, $Tail), Error>",
+                &[],
+            ),
+        ],
+    },
 ];
 
 /// Function metadata view. Prefer this name when the caller needs runtime
@@ -3694,6 +3735,11 @@ pub const BUILTIN_TYPE_METAS: &[BuiltinTypeMeta] = &[
     BuiltinTypeMeta {
         name: TypeName::Generator.as_str(),
         params: &["$State", "$Item"],
+        identity: TypeIdentity::TypeConstructor,
+    },
+    BuiltinTypeMeta {
+        name: TypeName::MatchResult.as_str(),
+        params: &["$Value"],
         identity: TypeIdentity::TypeConstructor,
     },
     BuiltinTypeMeta {

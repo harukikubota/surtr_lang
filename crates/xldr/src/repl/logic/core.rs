@@ -3603,6 +3603,7 @@ impl ReplEngine {
                 | "Lazy"
                 | "StandbyInit"
                 | "Closure"
+                | "MatchResult"
         )
     }
 
@@ -5714,6 +5715,9 @@ impl ReplEngine {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Ty::MatchResult(payload) => {
+                format!("MatchResult<{}, Error>", Self::ty_to_string(payload))
+            }
             Ty::Result(ok, err) => {
                 format!(
                     "Result<{}, {}>",

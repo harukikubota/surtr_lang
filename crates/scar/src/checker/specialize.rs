@@ -1082,9 +1082,15 @@ impl Checker {
                     specialization_fun_idxs,
                     generated_defs,
                 )?;
+                let pattern_input_ty = match &projection {
+                    SafeBindRhsProjection::CanonicalResultOnce { payload_ty, .. } => payload_ty,
+                    SafeBindRhsProjection::PassThroughNonResultPartial { pattern_input_ty } => {
+                        pattern_input_ty
+                    }
+                };
                 let pattern = self.concretize_specialized_typed_pattern(
                     pattern,
-                    Some(&rhs.ty),
+                    Some(pattern_input_ty),
                     &span,
                     &mut SpecializationContext {
                         defs_by_fun_idx,
@@ -2166,6 +2172,9 @@ impl Checker {
             Ty::SelfApp(args) => {
                 CanonicalTyKey::SelfApp(args.iter().map(|arg| self.canonical_ty_key(arg)).collect())
             }
+            Ty::MatchResult(inner) => {
+                CanonicalTyKey::MatchResult(Box::new(self.canonical_ty_key(&inner)))
+            }
             Ty::List(inner) => CanonicalTyKey::List(Box::new(self.canonical_ty_key(&inner))),
             Ty::Tuple(items) => CanonicalTyKey::Tuple(
                 items
@@ -2964,7 +2973,7 @@ impl Checker {
                     ordered.push(var);
                 }
             }
-            Ty::List(inner) | Ty::Lazy(inner) => {
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
                 self.collect_bound_tyvars_in_ty(&inner, ordered, seen)
             }
             Ty::Facet(_, source, focus, update_source, update_focus) => {
@@ -3166,6 +3175,9 @@ impl Checker {
                         target.error_ty =
                             self.substitute_ty_with_mapping(&target.error_ty, mapping);
                         SafeBindFailureTarget::EnclosingResultContext(target)
+                    }
+                    SafeBindFailureTarget::EnclosingMatchResultContext { err_tag } => {
+                        SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
                     }
                     SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
                     SafeBindFailureTarget::DoResultContext(mut target) => {
@@ -3745,7 +3757,6 @@ impl Checker {
                 extractor,
                 extractor_ty,
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys,
                 items,
@@ -3754,7 +3765,6 @@ impl Checker {
                 extractor,
                 extractor_ty: self.substitute_ty_with_mapping(&extractor_ty, mapping),
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys: seq_tys
                     .into_iter()
@@ -3824,7 +3834,6 @@ impl Checker {
                 extractor,
                 extractor_ty,
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys,
                 items,
@@ -3833,7 +3842,6 @@ impl Checker {
                 extractor,
                 extractor_ty: self.substitute_ty_with_mapping(&extractor_ty, mapping),
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys: seq_tys
                     .into_iter()
@@ -3860,6 +3868,9 @@ impl Checker {
                         self.substitute_ty_with_mapping(&resolved, mapping)
                     }
                 }
+            }
+            Ty::MatchResult(inner) => {
+                Ty::MatchResult(Box::new(self.substitute_ty_with_mapping(inner, mapping)))
             }
             Ty::List(inner) => Ty::List(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_ty_with_mapping(inner, mapping))),
@@ -4161,6 +4172,56 @@ impl Checker {
         }
     }
 
+    fn validate_extractor_payload_shape(
+        &self,
+        extractor_ty: &Ty,
+        seq_tys: &[Ty],
+        children: usize,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        let ret = match self.resolve_ty(extractor_ty) {
+            Ty::UserFunc { ret, .. } | Ty::BuiltinFunc { ret, .. } | Ty::Func(_, ret) => ret,
+            _ => {
+                return Err(TypeError::new(
+                    "Extractor callable contract is unresolved",
+                    span.clone(),
+                ))
+            }
+        };
+        let Ty::MatchResult(payload) = ret.as_ref() else {
+            return Err(TypeError::new(
+                "Extractor payload requires canonical MatchResult",
+                span.clone(),
+            ));
+        };
+        // Only the outer payload constructor determines child arity. Generic
+        // types inside a known tuple or single-value container do not change
+        // the runtime layout and remain valid under ordinary type erasure.
+        if matches!(payload.as_ref(), Ty::Var(_) | Ty::SelfApp(_)) {
+            return Err(TypeError::new(
+                "Extractor payload shape must be resolved before execution",
+                span.clone(),
+            ));
+        }
+        let shape = match payload.as_ref() {
+            Ty::Tuple(items) => items.clone(),
+            other => vec![other.clone()],
+        };
+        let resolved_seq = seq_tys
+            .iter()
+            .map(|ty| self.resolve_ty(ty))
+            .collect::<Vec<_>>();
+        if shape != resolved_seq
+            || (children != shape.len() && !(children == 0 && shape == [Ty::Unit]))
+        {
+            return Err(TypeError::new(
+                "Extractor payload shape does not match its child patterns",
+                span.clone(),
+            ));
+        }
+        Ok(())
+    }
+
     fn concretize_specialized_typed_pattern(
         &mut self,
         pattern: TypedPattern,
@@ -4283,25 +4344,31 @@ impl Checker {
                 extractor,
                 extractor_ty,
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys,
                 items,
-            } => TypedPattern::Extractor {
-                input_ty: normalized_ty(self, &input_ty, expected_ty),
-                extractor,
-                extractor_ty: self.resolve_ty(&extractor_ty),
-                success_tag,
-                no_match_tag,
-                err_tag,
-                seq_tys: seq_tys.iter().map(|ty| self.resolve_ty(ty)).collect(),
-                items: items
-                    .into_iter()
-                    .map(|item| {
-                        self.concretize_specialized_typed_pattern(item, None, span, context)
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
+            } => {
+                self.validate_extractor_payload_shape(
+                    &extractor_ty,
+                    &seq_tys,
+                    items.len(),
+                    &extractor.span,
+                )?;
+                TypedPattern::Extractor {
+                    input_ty: self.resolve_ty(&input_ty),
+                    extractor,
+                    extractor_ty: self.resolve_ty(&extractor_ty),
+                    success_tag,
+                    err_tag,
+                    seq_tys: seq_tys.iter().map(|ty| self.resolve_ty(ty)).collect(),
+                    items: items
+                        .into_iter()
+                        .map(|item| {
+                            self.concretize_specialized_typed_pattern(item, None, span, context)
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                }
+            }
         })
     }
 
@@ -4354,23 +4421,29 @@ impl Checker {
                 extractor,
                 extractor_ty,
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys,
                 items,
-            } => TypedMatchPattern::Extractor {
-                input_ty,
-                extractor,
-                extractor_ty,
-                success_tag,
-                no_match_tag,
-                err_tag,
-                seq_tys,
-                items: items
-                    .into_iter()
-                    .map(|item| self.concretize_specialized_match_pattern(item, span, context))
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
+            } => {
+                self.validate_extractor_payload_shape(
+                    &extractor_ty,
+                    &seq_tys,
+                    items.len(),
+                    &extractor.span,
+                )?;
+                TypedMatchPattern::Extractor {
+                    input_ty,
+                    extractor,
+                    extractor_ty,
+                    success_tag,
+                    err_tag,
+                    seq_tys,
+                    items: items
+                        .into_iter()
+                        .map(|item| self.concretize_specialized_match_pattern(item, span, context))
+                        .collect::<Result<Vec<_>, _>>()?,
+                }
+            }
             other => other,
         })
     }

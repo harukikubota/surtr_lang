@@ -460,6 +460,7 @@ pub enum ResolvedPattern {
     Annotated(ResolvedId, AstTy),
     Pin(ResolvedId),
     Wildcard(Span),
+    AnnotatedWildcard(Span, AstTy),
     ListNil(Span),
     ListCons(Box<ResolvedPattern>, Box<ResolvedPattern>),
     IntLit(Span, SurtrInt),

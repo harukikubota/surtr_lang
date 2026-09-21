@@ -53,3 +53,8 @@ cargo run -- test --quiet --all
 ```
 
 既知失敗、未実行、timeout が残る場合は全工程完了としない。除外 / ignored 化 / timeout 延長で Green にしない。完了した機能と実測結果だけを入力仕様 §1.1 と本計画に記録する。main への merge は依頼に含まれないため、本ワークツリーの機能コミットを成果物にする。
+
+## 実行記録
+
+- 第1単位: named / builtin MatchResult 更改、UnitOnly、本文 SafeBind を実装。独立レビュー完了（指摘は全件解消）。最終差分で `rtk cargo nextest run --profile ci --workspace` は1954件成功、`cargo run -- test --quiet --all` は終了コード0。作業用ビルドキャッシュには `CARGO_TARGET_DIR=/Users/haruca/work/rust/surtr/target`、CIには `SURTR_TEST_CACHE=1` を使用した。
+- 初回全体検証で検出した型queryのAnnotatedWildcard追従漏れ、REPL署名期待値、SafeBindの投影後入力型再注入、generic固定shapeの過剰拒否を修正し、最終全件Greenで確認した。

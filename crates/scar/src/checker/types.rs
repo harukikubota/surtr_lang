@@ -508,7 +508,9 @@ impl Checker {
         match ty {
             Ty::Error => true,
             Ty::Result(ok, _) => Self::ty_exposes_error_value(ok),
-            Ty::List(inner) | Ty::Lazy(inner) => Self::ty_exposes_error_value(inner),
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
+                Self::ty_exposes_error_value(inner)
+            }
             Ty::Facet(_, source, focus, update_source, update_focus) => {
                 Self::ty_exposes_error_value(source)
                     || Self::ty_exposes_error_value(focus)
@@ -582,8 +584,43 @@ impl Checker {
         )
     }
 
+    pub(super) fn ensure_no_match_result_value(
+        &self,
+        ty: &Ty,
+        span: &Span,
+    ) -> Result<(), TypeError> {
+        fn contains(ty: &Ty) -> bool {
+            match ty {
+                Ty::MatchResult(_) => true,
+                Ty::List(inner) | Ty::Lazy(inner) => contains(inner),
+                Ty::Tuple(items) | Ty::Enum(_, items) | Ty::SelfApp(items) => {
+                    items.iter().any(contains)
+                }
+                Ty::Result(ok, err) => contains(ok) || contains(err),
+                Ty::Func(params, ret)
+                | Ty::UserFunc { params, ret, .. }
+                | Ty::BuiltinFunc { params, ret, .. } => {
+                    params.iter().any(contains) || contains(ret)
+                }
+                Ty::Struct(_, n) | Ty::Record(_, n) => {
+                    n.arguments.iter().any(contains) || n.iter().any(|(_, ty)| contains(ty))
+                }
+                Ty::Facet(_, a, b, c, d) => [a, b, c, d].iter().any(|ty| contains(ty)),
+                _ => false,
+            }
+        }
+        if contains(&self.resolve_ty(ty)) {
+            Err(TypeError::new(
+                "MatchResult cannot be held or passed as an ordinary value",
+                span.clone(),
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
     pub(super) fn local_type_syntax_context(&self) -> TypeSyntaxContext {
-        if self.in_extractor_body {
+        if self.callable_context == CallableContext::Extractor {
             TypeSyntaxContext::ExtractorBody
         } else {
             TypeSyntaxContext::BindingAnnotation
@@ -1028,6 +1065,7 @@ impl Checker {
                                 | TypeName::HashMap
                                 | TypeName::Generator
                                 | TypeName::Result
+                                | TypeName::MatchResult
                                 | TypeName::Duration
                                 | TypeName::StandbyInit
                                 | TypeName::Lazy
@@ -1171,6 +1209,19 @@ impl Checker {
                     let inner =
                         self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
                     Ok(Ty::Enum("TaskHandle".into(), vec![inner]))
+                }
+                "MatchResult" => {
+                    if context != TypeSyntaxContext::ExtractorReturn {
+                        return Err(TypeError::new("MatchResult is only allowed as an Extractor return type", span.clone()));
+                    }
+                    if !(1..=2).contains(&args.len()) {
+                        return Err(TypeError::new("MatchResult<P, Error> requires 1 or 2 type arguments", span.clone()));
+                    }
+                    if args.len() == 2 && !matches!(&args[1], AstTy::Named(_, name) if name == "Error") {
+                        return Err(TypeError::new("MatchResult second type argument must be canonical Error", Self::ast_ty_span(&args[1]).clone()));
+                    }
+                    let payload = self.resolve_ast_ty_in_context(&args[0], TypeSyntaxContext::General)?;
+                    Ok(Ty::MatchResult(Box::new(payload)))
                 }
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
@@ -2331,6 +2382,19 @@ impl Checker {
                     )?;
                     Ok(Ty::Enum("TaskHandle".into(), vec![inner]))
                 }
+                "MatchResult" => {
+                    if context != TypeSyntaxContext::ExtractorReturn {
+                        return Err(TypeError::new("MatchResult is only allowed as an Extractor return type", span.clone()));
+                    }
+                    if !(1..=2).contains(&args.len()) {
+                        return Err(TypeError::new("MatchResult<P, Error> requires 1 or 2 type arguments", span.clone()));
+                    }
+                    if args.len() == 2 && !matches!(&args[1], AstTy::Named(_, name) if name == "Error") {
+                        return Err(TypeError::new("MatchResult second type argument must be canonical Error", Self::ast_ty_span(&args[1]).clone()));
+                    }
+                    let payload = self.resolve_signature_like_ast_ty_in_context(&args[0], TypeSyntaxContext::General, tyvars, mode)?;
+                    Ok(Ty::MatchResult(Box::new(payload)))
+                }
                 "Result" => {
                     if args.is_empty() || args.len() > 2 {
                         return Err(TypeError {
@@ -2571,7 +2635,9 @@ impl Checker {
             | (Ty::Bool, Ty::Bool)
             | (Ty::Unit, Ty::Unit)
             | (Ty::Error, Ty::Error) => true,
-            (Ty::List(a), Ty::List(b)) => self.types_compatible(a, b),
+            (Ty::MatchResult(a), Ty::MatchResult(b)) | (Ty::List(a), Ty::List(b)) => {
+                self.types_compatible(a, b)
+            }
             (Ty::Lazy(a), Ty::Lazy(b)) => self.types_compatible(a, b),
             (Ty::Pid(a), Ty::Pid(b)) => {
                 Self::canonical_user_type_name(a) == Self::canonical_user_type_name(b)
@@ -3029,7 +3095,7 @@ impl Checker {
                     self.validate_nominal_type_well_formed(argument, span, defer_unresolved)?;
                 }
             }
-            Ty::List(inner) | Ty::Lazy(inner) => {
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
                 self.validate_nominal_type_well_formed(inner, span, defer_unresolved)?;
             }
             Ty::Result(ok, err) => {
@@ -3113,7 +3179,7 @@ impl Checker {
                         self.nominal_type_uses_capability(argument, &subject, capability)
                     })
             }
-            Ty::List(inner) | Ty::Lazy(inner) => {
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
                 self.nominal_type_uses_capability(inner, &subject, capability)
             }
             Ty::Result(ok, err) => {
@@ -3157,7 +3223,7 @@ impl Checker {
         match self.resolve_ty(ty) {
             Ty::Var(var) => var == needle,
             Ty::Hole => false,
-            Ty::List(inner) => self.ty_contains_var(&inner, needle),
+            Ty::MatchResult(inner) | Ty::List(inner) => self.ty_contains_var(&inner, needle),
             Ty::Lazy(inner) => self.ty_contains_var(&inner, needle),
             Ty::Pid(_) => false,
             Ty::Facet(_, source, focus, update_source, update_focus) => {
@@ -3204,6 +3270,7 @@ impl Checker {
                 Some(bound) => self.resolve_ty(bound),
                 None => Ty::Var(*var),
             },
+            Ty::MatchResult(inner) => Ty::MatchResult(Box::new(self.resolve_ty(inner))),
             Ty::List(inner) => Ty::List(Box::new(self.resolve_ty(inner))),
             Ty::Hole => Ty::Hole,
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.resolve_ty(inner))),
@@ -3339,6 +3406,9 @@ impl Checker {
                     instantiated
                 }
             }
+            Ty::MatchResult(inner) => {
+                Ty::MatchResult(Box::new(self.instantiate_ty_with_fresh(inner, fresh)))
+            }
             Ty::List(inner) => Ty::List(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
             Ty::Hole => Ty::Hole,
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.instantiate_ty_with_fresh(inner, fresh))),
@@ -3462,6 +3532,9 @@ impl Checker {
     pub(super) fn substitute_type_def_ty(&self, ty: &Ty, bindings: &HashMap<u32, Ty>) -> Ty {
         match ty {
             Ty::Var(var) => bindings.get(var).cloned().unwrap_or(Ty::Var(*var)),
+            Ty::MatchResult(inner) => {
+                Ty::MatchResult(Box::new(self.substitute_type_def_ty(inner, bindings)))
+            }
             Ty::List(inner) => Ty::List(Box::new(self.substitute_type_def_ty(inner, bindings))),
             Ty::Hole => Ty::Hole,
             Ty::Lazy(inner) => Ty::Lazy(Box::new(self.substitute_type_def_ty(inner, bindings))),
@@ -3696,6 +3769,10 @@ impl Checker {
                         .join(", ")
                 )
             }
+            Ty::MatchResult(inner) => format!(
+                "MatchResult<{}, Error>",
+                self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
+            ),
             Ty::List(inner) => format!(
                 "List<{}>",
                 self.diagnostic_ty_name_with_state(inner, tyvars, next_tyvar_index)
@@ -3825,6 +3902,7 @@ impl Checker {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Ty::MatchResult(inner) => format!("MatchResult<{}, Error>", self.ty_name(inner)),
             Ty::List(inner) => format!("List<{}>", self.ty_name(inner)),
             Ty::Lazy(inner) => format!("Lazy<{}>", self.ty_name(inner)),
             Ty::Pid(name) => format!("PID<{}>", Self::surface_name(name)),
@@ -3887,7 +3965,9 @@ impl Checker {
     pub(super) fn ty_contains_facet(&self, ty: &Ty) -> bool {
         match self.resolve_ty(ty) {
             Ty::Facet(..) => true,
-            Ty::List(inner) | Ty::Lazy(inner) => self.ty_contains_facet(inner.as_ref()),
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
+                self.ty_contains_facet(inner.as_ref())
+            }
             Ty::Tuple(items) | Ty::SelfApp(items) => {
                 items.iter().any(|item| self.ty_contains_facet(item))
             }
@@ -4167,6 +4247,9 @@ impl Checker {
                         target.carrier_ty = self.resolve_ty(&target.carrier_ty);
                         target.error_ty = self.resolve_ty(&target.error_ty);
                         SafeBindFailureTarget::EnclosingResultContext(target)
+                    }
+                    SafeBindFailureTarget::EnclosingMatchResultContext { err_tag } => {
+                        SafeBindFailureTarget::EnclosingMatchResultContext { err_tag }
                     }
                     SafeBindFailureTarget::TopLevel => SafeBindFailureTarget::TopLevel,
                     SafeBindFailureTarget::DoResultContext(mut target) => {
@@ -4581,7 +4664,6 @@ impl Checker {
                 extractor,
                 extractor_ty,
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys,
                 items,
@@ -4590,7 +4672,6 @@ impl Checker {
                 extractor,
                 extractor_ty: self.resolve_ty(&extractor_ty),
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys: seq_tys.into_iter().map(|ty| self.resolve_ty(&ty)).collect(),
                 items: items
@@ -4655,7 +4736,6 @@ impl Checker {
                 extractor,
                 extractor_ty,
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys,
                 items,
@@ -4664,7 +4744,6 @@ impl Checker {
                 extractor,
                 extractor_ty: self.resolve_ty(&extractor_ty),
                 success_tag,
-                no_match_tag,
                 err_tag,
                 seq_tys: seq_tys.into_iter().map(|ty| self.resolve_ty(&ty)).collect(),
                 items: items

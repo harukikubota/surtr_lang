@@ -1684,6 +1684,9 @@ fn rewrite_self_pattern(pat: AstPattern, target: &str) -> AstPattern {
         AstPattern::Annotated(span, name, ty) => {
             AstPattern::Annotated(span, name, rewrite_self_type(ty, target))
         }
+        AstPattern::AnnotatedWildcard(span, ty) => {
+            AstPattern::AnnotatedWildcard(span, rewrite_self_type(ty, target))
+        }
         AstPattern::ListCons(span, head, tail) => AstPattern::ListCons(
             span,
             Box::new(rewrite_self_pattern(*head, target)),

@@ -546,7 +546,7 @@ impl Checker {
             TypeSyntaxContext::ExtractorReturn,
             &mut tyvars,
         )?;
-        self.require_extractor_option_payload_ty(
+        self.require_extractor_match_result_payload_ty(
             &ret,
             &param.id.span,
             &format!("Extractor {}", id.name),
@@ -1165,7 +1165,7 @@ impl Checker {
         let saved_rigid_tyvars = self.rigid_tyvars.clone();
         let saved_current_function_symbol = self.current_function_symbol.clone();
         let saved_current_impl_struct_target = self.current_impl_struct_target.clone();
-        let saved_in_extractor_body = self.in_extractor_body;
+        let saved_callable_context = self.callable_context;
         let saved_closure_depth = self.closure_depth;
         let saved_facet_bindings = self.facet_bindings.clone();
         let saved_constructor_capabilities = self.constructor_capabilities.clone();
@@ -1188,7 +1188,11 @@ impl Checker {
         }
         self.current_function_symbol = Some(function_symbol);
         self.current_impl_struct_target = impl_target;
-        self.in_extractor_body = in_extractor_body;
+        self.callable_context = if in_extractor_body {
+            CallableContext::Extractor
+        } else {
+            CallableContext::Function
+        };
         self.active_capabilities = declaration_capabilities
             .iter()
             .chain(deferred_capabilities.iter())
@@ -1233,7 +1237,7 @@ impl Checker {
         self.rigid_tyvars = saved_rigid_tyvars;
         self.current_function_symbol = saved_current_function_symbol;
         self.current_impl_struct_target = saved_current_impl_struct_target;
-        self.in_extractor_body = saved_in_extractor_body;
+        self.callable_context = saved_callable_context;
         self.closure_depth = saved_closure_depth;
         self.facet_bindings = saved_facet_bindings;
         self.constructor_capabilities = saved_constructor_capabilities;
@@ -1784,7 +1788,7 @@ impl Checker {
                 hint: None,
             });
         }
-        self.require_extractor_option_payload_ty(
+        self.require_extractor_match_result_payload_ty(
             &expected_ret,
             &param.id.span,
             &format!("Extractor {}", id.name),
@@ -2429,6 +2433,26 @@ impl Checker {
                     self.seen_builtin_type_decls
                         .insert("Result".into(), (vec!["$T".into()], span.clone()));
                 }
+                "MatchResult" => {
+                    if type_params.len() != 1
+                        || variants.len() != 2
+                        || variants[0].id.name.rsplit("::").next() != Some("OK")
+                        || variants[1].id.name.rsplit("::").next() != Some("Err")
+                        || variants[0].payload.len() != 1
+                        || variants[1].payload.len() != 1
+                        || !matches!(&variants[0].payload[0], AstTy::Named(_, name) if name == &type_params[0].name)
+                        || !matches!(&variants[1].payload[0], AstTy::Named(_, name) if name == "Error")
+                    {
+                        return Err(TypeError::new(
+                            "Builtin MatchResult must define OK($Value) and Err(Error)",
+                            span.clone(),
+                        ));
+                    }
+                    self.seen_builtin_type_decls.insert(
+                        "MatchResult".into(),
+                        (vec![type_params[0].name.clone()], span.clone()),
+                    );
+                }
                 "Boolean" => {
                     if !type_params.is_empty()
                         || variants.len() != 2
@@ -2862,6 +2886,77 @@ impl Checker {
                     node: TypedInner::Lit(Lit::Bool(value)),
                 });
             }
+            if enum_surface_name == "MatchResult" {
+                if self.callable_context != CallableContext::Extractor {
+                    return Err(TypeError::new(
+                        "MatchResult constructors are only allowed in an Extractor body",
+                        span.clone(),
+                    ));
+                }
+                if args.len() != 1 {
+                    return Err(TypeError::new(
+                        "MatchResult constructors require exactly one value",
+                        span.clone(),
+                    ));
+                }
+                let ResolvedRecordLitArg::Positional(expr) = &args[0] else {
+                    return Err(TypeError::new(
+                        "MatchResult constructors require a positional value",
+                        span.clone(),
+                    ));
+                };
+                let expected_payload = expected.as_ref().and_then(|ty| match self.resolve_ty(ty) {
+                    Ty::MatchResult(payload) => Some(*payload),
+                    _ => None,
+                });
+                let inner = self.check_node_with_expected(
+                    expr,
+                    if variant.short_name == "OK" {
+                        expected_payload.as_ref()
+                    } else {
+                        None
+                    },
+                )?;
+                let inner = self.maybe_call_zero_arg_function(inner, span.clone());
+                self.ensure_no_runtime_facet_args(
+                    std::slice::from_ref(&inner),
+                    span,
+                    "MatchResult constructor",
+                )?;
+                let payload = match variant.short_name.as_str() {
+                    "OK" => inner.ty.clone(),
+                    "Err" => {
+                        if !self.is_concrete_error_value(&inner) {
+                            return Err(TypeError::new(
+                                "MatchResult::Err requires a concrete deferror value",
+                                inner.span.clone(),
+                            ));
+                        }
+                        expected_payload.unwrap_or_else(|| self.env.fresh_tyvar())
+                    }
+                    _ => {
+                        return Err(TypeError::new(
+                            "Invalid canonical MatchResult variant",
+                            span.clone(),
+                        ))
+                    }
+                };
+                return Ok(TypedNode {
+                    ty: Ty::MatchResult(Box::new(payload)),
+                    span: span.clone(),
+                    node: TypedInner::ConstructorCall(
+                        variant.tag,
+                        vec![
+                            TypedNode {
+                                ty: Ty::Int,
+                                span: span.clone(),
+                                node: TypedInner::Lit(Lit::Int(variant.discriminant)),
+                            },
+                            inner,
+                        ],
+                    ),
+                });
+            }
             if enum_surface_name == "Result" {
                 if args.len() != 1 {
                     return Err(TypeError::from_structured(
@@ -2891,6 +2986,7 @@ impl Checker {
                             }
                         });
                         let typed = self.check_node_with_expected(expr, inner_expected.as_ref())?;
+                        self.ensure_no_match_result_value(&typed.ty, &typed.span)?;
                         if self.ty_contains_facet(&typed.ty) {
                             return Err(TypeError {
                                 structured: None,
@@ -3461,7 +3557,10 @@ impl Checker {
             )?;
         }
 
-        if Self::surface_name(&variant.enum_name) == "Result" {
+        if matches!(
+            Self::surface_name(&variant.enum_name),
+            "Result" | "MatchResult"
+        ) {
             return self.check_constructor_call(span, id, args, Some(&enum_ty));
         }
 

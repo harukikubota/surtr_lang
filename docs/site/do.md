@@ -57,7 +57,7 @@ mismatch # Err(PatternMismatch("Pattern did not match."))
 
 SafeBindでも、RHSの`Err(error)`と、matcherの不一致から生成したErrorを保持します。
 list/string等の構造pattern固有Errorを一般的なErrorへ書き換えません。
-Extractorは現行の`Option`返却で、`None`は共通`PatternMismatch`になります。
+Extractor は `MatchResult` を返し、`Err` の元 Error を Result-effect route で保持します。Alternative route では破棄します。
 
 ```surtr
 checked: Result<Int> = do::<Result> {

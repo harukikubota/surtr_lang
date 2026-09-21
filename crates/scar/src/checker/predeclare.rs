@@ -1303,6 +1303,8 @@ impl Checker {
 
                     let enum_surface_name = Self::surface_name(&id.name);
                     let builtin_result_enum = attrs.builtin && enum_surface_name == "Result";
+                    let builtin_match_result_enum =
+                        attrs.builtin && enum_surface_name == "MatchResult";
                     let builtin_boolean_enum = attrs.builtin && enum_surface_name == "Boolean";
                     let enum_ty = if builtin_result_enum {
                         let ok_ty = enum_ty_args
@@ -1310,6 +1312,8 @@ impl Checker {
                             .cloned()
                             .unwrap_or_else(|| self.env.fresh_tyvar());
                         Ty::Result(Box::new(ok_ty), Box::new(Ty::Error))
+                    } else if builtin_match_result_enum {
+                        Ty::MatchResult(Box::new(enum_ty_args[0].clone()))
                     } else if builtin_boolean_enum {
                         Ty::Bool
                     } else {
@@ -1980,7 +1984,9 @@ impl Checker {
                     out.push(*var);
                 }
             }
-            Ty::List(inner) | Ty::Lazy(inner) => Self::collect_ty_vars(inner, out),
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => {
+                Self::collect_ty_vars(inner, out)
+            }
             Ty::Result(source, focus) => {
                 Self::collect_ty_vars(source, out);
                 Self::collect_ty_vars(focus, out);
@@ -2775,6 +2781,11 @@ impl Checker {
                     .collect::<HashMap<_, _>>();
                 self.substitute_ty_with_mapping(target_ty, &mapping)
             }
+            Ty::MatchResult(inner) => Ty::MatchResult(Box::new(self.expand_trait_self_apps(
+                *inner,
+                target_ty,
+                constructor_slot_vars,
+            )?)),
             Ty::List(inner) => Ty::List(Box::new(self.expand_trait_self_apps(
                 *inner,
                 target_ty,
@@ -3187,7 +3198,7 @@ impl Checker {
                     )?;
                 }
             }
-            Ty::List(inner) | Ty::Lazy(inner) => self
+            Ty::List(inner) | Ty::MatchResult(inner) | Ty::Lazy(inner) => self
                 .validate_nominal_declaration_constructor_applications(
                     inner, parameters, owner, span,
                 )?,

@@ -79,6 +79,12 @@ current working directory 基準で解決し、存在しない path や open/rea
 - 呼び出し元には返り値 1 つのみが push される
 - tail call が最適化された場合、途中フレームの `Return` は省略されうるが、観測上は最終返り値だけが呼び出し元へ渡る
 
+Extractor の返却は canonical `MatchResult::OK` / `MatchResult::Err` の enum 表現を使う。
+field 0 は variant discriminant、field 1 は payload とし、Err payload は runtime Error 値である。
+`GetTag` / `GetField` は canonical MatchResult の field 数・discriminant・Err payload を検査し、
+不正な表現を VM error にする。`Kernel::uncons` は通常 builtin として List / String を分解し、
+空入力の PatternMismatch Error と元の source location を返す。consumer 側は元 Error を保持または破棄する。
+
 ### 3.4 関数テーブル不変条件
 
 - `fun_idx` は実行時の関数テーブル添字と一致する（`functions[fun_idx as usize]`）

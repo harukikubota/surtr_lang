@@ -83,6 +83,7 @@ impl Checker {
         match pat {
             ResolvedPattern::Var(_)
             | ResolvedPattern::Annotated(_, _)
+            | ResolvedPattern::AnnotatedWildcard(_, _)
             | ResolvedPattern::Wildcard(_) => true,
             ResolvedPattern::As(inner, _, _) => Self::is_total_bind_pattern(inner),
             ResolvedPattern::Tuple(items) => items.iter().all(Self::is_total_bind_pattern),
@@ -105,10 +106,31 @@ impl Checker {
         rhs_ty: &Ty,
         span: &Span,
     ) -> Result<(TypedPattern, Ty), TypeError> {
+        self.ensure_no_match_result_value(rhs_ty, span)?;
         match pat {
             ResolvedPattern::Var(id) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
                 Ok((TypedPattern::Var(rhs_ty.clone(), id.clone()), rhs_ty))
+            }
+            ResolvedPattern::AnnotatedWildcard(pattern_span, ast_ty) => {
+                let expected =
+                    self.resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())?;
+                self.assert_type_relation(
+                    &expected,
+                    rhs_ty,
+                    self.type_fact(
+                        diagnostics::SourceRole::Annotation,
+                        Self::ast_ty_span(ast_ty),
+                        &expected,
+                    ),
+                    self.type_fact(diagnostics::SourceRole::Value, pattern_span, rhs_ty),
+                    TypeDiagnosticReason::AnnotationTypeMismatch,
+                    diagnostics::DiagnosticOrigin::Annotation,
+                    "_",
+                    0,
+                )?;
+                let expected = self.resolve_ty(&expected);
+                Ok((TypedPattern::Wildcard(expected.clone()), expected))
             }
             ResolvedPattern::Annotated(id, ast_ty) => {
                 let expected =
@@ -280,7 +302,7 @@ impl Checker {
                     }
                     Ty::Str => {
                         let extractor_id = self.kernel_uncons_id(span)?;
-                        let (input_ty, extractor_ty, seq_tys, success_tag, no_match_tag, err_tag) =
+                        let (input_ty, extractor_ty, seq_tys, success_tag, err_tag) =
                             self.extractor_contract_for_observed_ty(&extractor_id, &rhs_ty, span)?;
                         debug_assert_eq!(seq_tys.len(), 2);
                         let (typed_head, _) = self.check_pattern(head, &seq_tys[0], span)?;
@@ -291,7 +313,6 @@ impl Checker {
                                 extractor: extractor_id,
                                 extractor_ty,
                                 success_tag,
-                                no_match_tag,
                                 err_tag,
                                 seq_tys,
                                 items: vec![typed_head, typed_tail],
@@ -545,7 +566,7 @@ impl Checker {
             }
             ResolvedPattern::Extractor(extractor_id, items) => {
                 let rhs_ty = self.resolve_ty(rhs_ty);
-                let (input_ty, extractor_ty, seq_tys, success_tag, no_match_tag, err_tag) = self
+                let (input_ty, extractor_ty, seq_tys, success_tag, err_tag) = self
                     .extractor_contract_for_observed_ty(
                         extractor_id,
                         &rhs_ty,
@@ -574,7 +595,7 @@ impl Checker {
                     }
                     return Err(error);
                 }
-                if items.len() != seq_tys.len() {
+                if items.len() != seq_tys.len() && !(items.is_empty() && seq_tys == [Ty::Unit]) {
                     let success_types = seq_tys
                         .iter()
                         .map(|ty| self.diagnostic_ty_name(ty))
@@ -603,11 +624,10 @@ impl Checker {
                 }
                 Ok((
                     TypedPattern::Extractor {
-                        input_ty: rhs_ty.clone(),
+                        input_ty,
                         extractor: extractor_id.clone(),
                         extractor_ty,
                         success_tag,
-                        no_match_tag,
                         err_tag,
                         seq_tys,
                         items: typed_items,

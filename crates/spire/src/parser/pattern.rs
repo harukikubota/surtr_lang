@@ -6,14 +6,7 @@ use super::Parser;
 
 impl Parser<'_> {
     pub(super) fn parse_do_pattern_statement(&mut self) -> Result<AstDoStatement, ParseError> {
-        let mut pat = self.parse_pattern()?;
-        if let AstPattern::Var(name_span, name) = &pat {
-            if matches!(self.peek(), Token::Colon) {
-                self.advance();
-                let ty = self.parse_type()?;
-                pat = AstPattern::Annotated(name_span.clone(), name.clone(), ty);
-            }
-        }
+        let pat = self.parse_pattern()?;
         let operator = self.peek().clone();
         if !matches!(operator, Token::LeftArrow | Token::SafeBind) {
             return Err(ParseError::syntax(
@@ -254,6 +247,10 @@ impl Parser<'_> {
         match self.peek().clone() {
             Token::Ident(name) if name.starts_with('_') => {
                 self.advance();
+                if matches!(self.peek(), Token::Colon) {
+                    self.advance();
+                    return Ok(AstPattern::AnnotatedWildcard(sp, self.parse_type()?));
+                }
                 Ok(AstPattern::Wildcard(sp))
             }
             Token::Caret => {
@@ -392,6 +389,19 @@ impl Parser<'_> {
                     .and_then(|segment| segment.chars().next())
                     .map(|ch| ch.is_uppercase())
                     .unwrap_or(false);
+                // The lexer emits adjacent `()` as Unit. In a head application
+                // this denotes an empty argument list, not a Unit pattern.
+                if !is_ctor && matches!(self.peek(), Token::Unit) {
+                    let end = self.advance().span;
+                    return Ok(AstPattern::Call(
+                        Span {
+                            start: sp.start,
+                            end: end.end,
+                        },
+                        callee_name,
+                        Vec::new(),
+                    ));
+                }
                 if is_ctor {
                     let ctor_name = callee_name;
                     if matches!(self.peek(), Token::Unit) {
@@ -427,6 +437,10 @@ impl Parser<'_> {
                 }
 
                 self.ensure_non_const_identifier(&name, sp.clone(), "Pattern binding")?;
+                if matches!(self.peek(), Token::Colon) {
+                    self.advance();
+                    return Ok(AstPattern::Annotated(sp, name, self.parse_type()?));
+                }
                 Ok(AstPattern::Var(sp, name))
             }
             Token::LBrack => self.parse_list_bind_pattern(),
@@ -527,6 +541,7 @@ fn pattern_or_span(pattern: &AstPattern) -> Option<&Span> {
         AstPattern::Var(_, _)
         | AstPattern::Annotated(_, _, _)
         | AstPattern::Wildcard(_)
+        | AstPattern::AnnotatedWildcard(_, _)
         | AstPattern::Pin(_, _)
         | AstPattern::ListNil(_)
         | AstPattern::IntLit(_, _)
@@ -550,6 +565,7 @@ pub(super) fn pattern_contains_pin(pattern: &AstPattern) -> bool {
         AstPattern::Var(_, _)
         | AstPattern::Annotated(_, _, _)
         | AstPattern::Wildcard(_)
+        | AstPattern::AnnotatedWildcard(_, _)
         | AstPattern::ListNil(_)
         | AstPattern::IntLit(_, _)
         | AstPattern::StrLit(_, _)
@@ -571,6 +587,7 @@ pub(super) fn pattern_contains_binding_var(pattern: &AstPattern) -> bool {
         | AstPattern::Tuple(_, items)
         | AstPattern::Or(_, items) => items.iter().any(pattern_contains_binding_var),
         AstPattern::Wildcard(_)
+        | AstPattern::AnnotatedWildcard(_, _)
         | AstPattern::Pin(_, _)
         | AstPattern::ListNil(_)
         | AstPattern::IntLit(_, _)

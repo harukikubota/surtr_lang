@@ -204,3 +204,13 @@ cargo nextest run --workspace
 ```
 
 変更範囲に応じて focused test を先に実行し、最後に workspace 全体を実行する。失敗が既存か変更起因かを分けて記録する。
+
+### MatchResult の Extractor 境界
+
+Extractor の戻り型は `MatchResult<P, Error>`（短縮 `MatchResult<P>`）だけを受理する。
+旧 Option / 通常 Result、第二型引数の非 abstract Error、一般の値位置、通常 Closure の
+返却・構築、abstract Error の手書き Err 再投入を静的拒否する。
+Unit payload の子 Pattern は0または1であり、arity / annotation 不一致は型エラーとする。
+SafeBind は元 Error の source facts を保持し、consumer や Extractor 名から message を作り直さない。
+未知 tag / 不正 field 数 / discriminant / Err payload は内部契約違反として停止し、
+Result の利用者エラー、通常不一致、Alternative empty に変換しない。

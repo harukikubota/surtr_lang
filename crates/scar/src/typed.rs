@@ -544,7 +544,7 @@ pub enum TypedInner {
         Visibility,
     ),
 
-    /// Extractor definition — function-shaped runtime entry with Option return type.
+    /// Extractor definition — function-shaped runtime entry with MatchResult return type.
     ExtractorDef(
         u32,
         ResolvedId,
@@ -620,8 +620,6 @@ pub enum TypedPattern {
         extractor: ResolvedId,
         extractor_ty: Ty,
         success_tag: u32,
-        no_match_tag: u32,
-        /// Retained for typed-IR compatibility; Option lowering ignores it.
         err_tag: u32,
         seq_tys: Vec<Ty>,
         items: Vec<TypedPattern>,
@@ -659,6 +657,7 @@ pub struct DeferredDoFailureTarget {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SafeBindFailureTarget {
     EnclosingResultContext(Box<ResultPreserveTarget>),
+    EnclosingMatchResultContext { err_tag: u32 },
     TopLevel,
     DoResultContext(Box<ResultPreserveTarget>),
     DoAlternative { empty: Box<TypedNode> },
@@ -725,8 +724,6 @@ pub enum TypedMatchPattern {
         extractor: ResolvedId,
         extractor_ty: Ty,
         success_tag: u32,
-        no_match_tag: u32,
-        /// Retained for typed-IR compatibility; Option lowering ignores it.
         err_tag: u32,
         seq_tys: Vec<Ty>,
         items: Vec<TypedMatchPattern>,

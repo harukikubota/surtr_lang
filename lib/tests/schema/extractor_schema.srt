@@ -1,0 +1,34 @@
+deferror ExtractorSourceError { "source rejected" }
+deferror ExtractorContextError { "extractor context" }
+
+defmod ExtractorSchema {
+  def source(value: Int) -> Result<Int> {
+    if(value > 0, Ok(value), Result::cause(Err(ExtractorSourceError), ExtractorContextError))
+  }
+
+  defextractor result_checked(value: Int) -> MatchResult<Int, Error> {
+    accepted =? source(value)
+    print("after-result")
+    MatchResult::OK(accepted)
+  }
+
+  defextractor nested_checked(value: Int) -> MatchResult<Int, Error> {
+    result_checked(accepted) =? Ok(value)
+    print("after-extractor")
+    MatchResult::OK(accepted)
+  }
+
+  defextractor positive(value: Int) -> MatchResult<Unit, Error> {
+    if(value > 0, MatchResult::OK(()), MatchResult::Err(ExtractorSourceError))
+  }
+
+  def run_result(value: Int) -> Result<Int> {
+    result_checked(accepted) =? Ok(value)
+    Ok(accepted)
+  }
+
+  def run_nested(value: Int) -> Result<Int> {
+    nested_checked(accepted) =? Ok(value)
+    Ok(accepted)
+  }
+}

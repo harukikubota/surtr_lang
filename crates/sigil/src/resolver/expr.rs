@@ -32,7 +32,7 @@ fn ast_ty_owner_head(ty: &AstTy) -> Option<&str> {
 
 fn do_pattern_span(pattern: &AstPattern) -> Span {
     match pattern {
-        AstPattern::Annotated(span, _, ty) => Span {
+        AstPattern::Annotated(span, _, ty) | AstPattern::AnnotatedWildcard(span, ty) => Span {
             start: span.start,
             end: match ty {
                 AstTy::Named(ty_span, _)
@@ -2219,7 +2219,7 @@ impl Resolver {
         {
             return Err(ResolveError {
                 message: format!(
-                    "Extractor '{}' can only be used in MatchBlock/LHS positions. Use it on the left side of match, =?, or =. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
+                    "Extractor '{}' can only be used in MatchBlock/LHS positions. Use it in match or on the left side of =?. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
                     name
                 ),
                 span,

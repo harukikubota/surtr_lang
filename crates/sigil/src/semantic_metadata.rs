@@ -12,6 +12,9 @@ fn format_ast_ty(ty: &AstTy) -> String {
         AstTy::Named(_, name) => surface_path_name(name).to_string(),
         AstTy::ImplTrait(_, name) => format!("impl {}", surface_path_name(name)),
         AstTy::Generic(_, name, args) => {
+            if surface_path_name(name) == "MatchResult" && args.len() == 1 {
+                return format!("MatchResult<{}, Error>", format_ast_ty(&args[0]));
+            }
             let args = args
                 .iter()
                 .map(format_ast_ty)
@@ -189,6 +192,24 @@ fn builtin_special_enum_variant_signature(
             Some(format!("Ok({ok_ty}) -> Result<{ok_ty}, Error>"))
         }
         ("Result", "Err") => Some("Err(Error) -> Result<$T, Error>".to_string()),
+        ("MatchResult", "OK") => {
+            let [payload] = variant.payload.as_slice() else {
+                return None;
+            };
+            let payload = format_ast_ty(payload);
+            Some(format!(
+                "MatchResult::OK({payload}) -> MatchResult<{payload}, Error>"
+            ))
+        }
+        ("MatchResult", "Err") => {
+            let [param] = type_params else {
+                return None;
+            };
+            Some(format!(
+                "MatchResult::Err(Error) -> MatchResult<{}, Error>",
+                param.name
+            ))
+        }
         ("Boolean", "True") if type_params.is_empty() && variant.payload.is_empty() => {
             Some("True() -> Boolean".to_string())
         }
@@ -1145,4 +1166,28 @@ pub fn collect_signature_entries_with_base(
     let mut signatures = base_signatures.to_vec();
     collect_signature_entries_into(&mut signatures, module_stages, user_ast, user_module_path);
     signatures
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extractor_signature_expands_match_result_error_parameter() {
+        let ast = spire::parse_with_context(
+            "defextractor identity(value: Int) -> MatchResult<Int> { MatchResult::OK(value) }",
+            spire::ParserContext::module(0, Some("Checked".to_string()))
+                .with_rules(spire::ParseRules::permissive_for_tests()),
+        )
+        .unwrap();
+        let signatures = collect_signature_entries(&[], &ast, None);
+        let extractor = signatures
+            .iter()
+            .find(|entry| entry.qualified_name.ends_with("identity"))
+            .expect("extractor signature");
+        assert_eq!(
+            extractor.signature,
+            "identity(value: Int) -> MatchResult<Int, Error>"
+        );
+    }
 }

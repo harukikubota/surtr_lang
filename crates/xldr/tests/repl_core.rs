@@ -1400,6 +1400,7 @@ fn core_completion_shows_builtin_owner_surfaces_and_hides_special_types() {
 
     let excluded = [
         "MatchArms",
+        "MatchResult",
         "CondClauses",
         "BulkUpdateEntries",
         "Hole",
@@ -4251,18 +4252,20 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_doc = engine.handle_line(":doc Duration!()");
     let extractor_doc = doc_text(&extractor_doc);
     assert!(
-        extractor_doc.contains("Duration::deconstruct(self: Duration) -> Option<Int>"),
+        extractor_doc.contains("Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"),
         "{extractor_doc}"
     );
 
     let extractor_sig = engine.handle_line(":sig Duration!()");
     let extractor_sig = signature_text(&extractor_sig);
     assert!(
-        extractor_sig.contains("defined:\n  Duration::deconstruct(self: Duration) -> Option<Int>"),
+        extractor_sig.contains(
+            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
+        ),
         "{extractor_sig}"
     );
     assert!(
-        extractor_sig.contains("specialized:\n  Duration!() -> Option<Int>"),
+        extractor_sig.contains("specialized:\n  Duration!() -> MatchResult<Int, Error>"),
         "{extractor_sig}"
     );
 
@@ -4273,12 +4276,14 @@ fn core_doc_and_sig_commands_resolve_aliases_and_typed_queries() {
     let extractor_sig_explicit_self = engine.handle_line(":sig Duration!(Duration)");
     let extractor_sig_explicit_self = signature_text(&extractor_sig_explicit_self);
     assert!(
-        extractor_sig_explicit_self
-            .contains("defined:\n  Duration::deconstruct(self: Duration) -> Option<Int>"),
+        extractor_sig_explicit_self.contains(
+            "defined:\n  Duration::deconstruct(self: Duration) -> MatchResult<Int, Error>"
+        ),
         "{extractor_sig_explicit_self}"
     );
     assert!(
-        extractor_sig_explicit_self.contains("specialized:\n  Duration!(Duration) -> Option<Int>"),
+        extractor_sig_explicit_self
+            .contains("specialized:\n  Duration!(Duration) -> MatchResult<Int, Error>"),
         "{extractor_sig_explicit_self}"
     );
 
@@ -4834,18 +4839,19 @@ fn core_range_constructor_and_extractor_queries_use_repl_docs_and_signature_fall
         "{extractor_doc}"
     );
     assert!(
-        extractor_doc.contains("Option<($A, $A)>"),
+        extractor_doc.contains("MatchResult<($A, $A), Error>"),
         "{extractor_doc}"
     );
 
     let extractor_sig = signature_text(&engine.handle_line(":sig Range!()"));
     assert!(
-        extractor_sig
-            .contains("defined:\n  Range::deconstruct(self: Range<$A>) -> Option<($A, $A)>"),
+        extractor_sig.contains(
+            "defined:\n  Range::deconstruct(self: Range<$A>) -> MatchResult<($A, $A), Error>"
+        ),
         "{extractor_sig}"
     );
     assert!(
-        extractor_sig.contains("specialized:\n  Range!() -> Option<($A, $A)>"),
+        extractor_sig.contains("specialized:\n  Range!() -> MatchResult<($A, $A), Error>"),
         "{extractor_sig}"
     );
 

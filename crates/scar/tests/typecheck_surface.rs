@@ -1255,6 +1255,11 @@ const SURFACE_CASES: &[(&str, fn())] = &[
     ),
     surface_case!(trait_impl_return_type_arguments_must_match_the_trait_slots),
     surface_case!(explicit_function_type_arguments_follow_signature_order),
+    surface_case!(match_result_extractor_contract_boundaries),
+    surface_case!(match_result_extractor_rejects_ordinary_value_uses),
+    surface_case!(match_result_extractor_uses_own_safebind_target),
+    surface_case!(match_result_unitonly_rejects_wrong_child_shapes),
+    surface_case!(match_result_payload_shape_must_be_resolved_before_execution),
 ];
 
 #[test]
@@ -3490,8 +3495,8 @@ impl Single {
 Single { value: value }
   }
 
-  defextractor deconstruct(self: Self) -> Option<Int> {
-Option::Some(self.value)
+  defextractor deconstruct(self: Self) -> MatchResult<Int> {
+MatchResult::OK(self.value)
   }
 }
 
@@ -3515,8 +3520,8 @@ impl User {
   def new(name: String, age: Int) -> Self {
 User { name: name, age: age }
   }
-  defextractor deconstruct(self: Self) -> Option<(String, Int)> {
-Option::None
+  defextractor deconstruct(self: Self) -> MatchResult<(String, Int)> {
+MatchResult::Err(NoneError)
   }
 }
 user = User("alice", 30)
@@ -3558,10 +3563,10 @@ fn enum_impl_extractor_can_be_used_in_matchblock() {
   Green,
 }
 impl Light {
-  defextractor stop_code(self: Self) -> Option<Int> {
+  defextractor stop_code(self: Self) -> MatchResult<Int> {
 match self {
-  Light::Red => Option::Some(1),
-  _ => Option::None,
+  Light::Red => MatchResult::OK(1),
+  _ => MatchResult::Err(NoneError),
 }
   }
 }
@@ -4875,7 +4880,7 @@ defenum Option<$T> {
     let cases = [
         (
             "builtin extractor parameter",
-            r#"@builtin defextractor invalid(term: Context<Int>) -> Option<Int>"#,
+            r#"@builtin defextractor invalid(term: Context<Int>) -> MatchResult<Int>"#,
         ),
         (
             "ordinary extractor return",
@@ -4883,7 +4888,7 @@ defenum Option<$T> {
 
 impl Owner {
   def new() -> Self { Owner {} }
-  defextractor invalid(self: Self) -> Option<Context<Int>> { Option::None }
+  defextractor invalid(self: Self) -> MatchResult<Context<Int>> { () }
 }"#,
         ),
     ];
@@ -10922,4 +10927,97 @@ value: (String, Int) = reversed("ok", 1)"#,
         RuntimeSourcePolicy::script(),
     )
     .expect("declared generic slots should follow their declaration order");
+}
+
+fn match_result_extractor_contract_boundaries() {
+    let source = r#"impl Int {
+  defextractor value(value: Int) -> MatchResult<Int, Error> { MatchResult::OK(value) }
+  defextractor unit(value: Int) -> MatchResult<Unit> { MatchResult::OK(()) }
+  defextractor identity(value: $A) -> MatchResult<$A> { MatchResult::OK(value) }
+}
+match 1 { Int::value(value) => value, _ => 0 }
+match 1 { Int::unit(value: Unit) => value, _ => () }
+match 1 { Int::unit(_: Unit) => 1, _ => 0 }
+match 1 { Int::unit() => 1, _ => 0 }
+match () { Int::identity() => 1, _ => 0 }
+match (1, "x") { Int::identity(first: Int, second: String) => second, _ => "" }
+"#;
+    typecheck(resolve_with_builtin_prelude(source)).expect("MatchResult and UnitOnly contract");
+}
+
+fn match_result_extractor_rejects_ordinary_value_uses() {
+    for source in [
+        "impl Int { defextractor invalid(v: Int) -> Option<Int> { Option::Some(v) } }",
+        "def invalid(v: Int) -> MatchResult<Int> { MatchResult::OK(v) }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { saved = MatchResult::OK(v)\n saved } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { MatchResult::OK(MatchResult::OK(v)) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match MatchResult::OK(v) { _ => MatchResult::OK(v) } } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { f = {|x| MatchResult::OK(x)}\n MatchResult::OK(v) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int, Int> { MatchResult::OK(v) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { MatchResult::Err(v) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { match Err(NoneError) { Err(error) => MatchResult::Err(error), _ => MatchResult::OK(v) } } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { _ =? Ok(MatchResult::OK(v))\n MatchResult::OK(v) } }",
+        "impl Int { defextractor invalid(v: Int) -> MatchResult<Int> { if(is_match(MatchResult::OK(v), _), MatchResult::OK(v), MatchResult::OK(v)) } }",
+        "captured = &MatchResult::OK",
+    ] {
+        let result = typecheck(resolve_with_builtin_prelude(source));
+        assert!(result.is_err(), "must reject: {source}");
+    }
+}
+
+fn match_result_extractor_uses_own_safebind_target() {
+    let source = r#"impl Int {
+  defextractor checked(v: Int) -> MatchResult<Int> {
+    accepted =? Ok(v)
+    MatchResult::OK(accepted)
+  }
+}
+match 1 { Int::checked(value) => value, _ => 0 }
+"#;
+    let typed = typecheck(resolve_with_builtin_prelude(source)).expect("Extractor SafeBind target");
+    let TypedInner::ExtractorDef(_, _, _, _, _, body, _) = &typed[0].node else {
+        panic!("expected Extractor definition: {:?}", typed[0]);
+    };
+    let TypedInner::Block(items) = &body.node else {
+        panic!("expected block")
+    };
+    assert!(matches!(
+        &items[0].node,
+        TypedInner::SafeBind(
+            _,
+            _,
+            _,
+            SafeBindFailureTarget::EnclosingMatchResultContext { .. }
+        )
+    ));
+}
+
+fn match_result_unitonly_rejects_wrong_child_shapes() {
+    let prefix =
+        "impl Int { defextractor unit(v: Int) -> MatchResult<Unit> { MatchResult::OK(()) } }\n";
+    for pattern in ["Int::unit(x: Int)", "Int::unit(_: Int)", "Int::unit(x, y)"] {
+        let source = format!("{prefix}match 1 {{ {pattern} => 1, _ => 0 }}");
+        typecheck(resolve_with_builtin_prelude(&source))
+            .expect_err("wrong Unit child must be rejected");
+    }
+    let source = "impl Int { defextractor pair(v: Int) -> MatchResult<(Int, Unit)> { MatchResult::OK((v, ())) } }\nmatch 1 { Int::pair(x) => x, _ => 0 }";
+    typecheck(resolve_with_builtin_prelude(source)).expect_err("tuple Unit slot cannot be omitted");
+}
+
+fn match_result_payload_shape_must_be_resolved_before_execution() {
+    let prefix = "impl Int { defextractor trial(v: Int) -> MatchResult<$T> { MatchResult::Err(NoneError) } }\n";
+    let source = format!("{prefix}is_match(1, Int::trial(_))");
+    let error = typecheck(resolve_with_builtin_prelude(&source))
+        .expect_err("unresolved payload shape must be rejected");
+    assert!(error.message.contains("payload"), "{error:?}");
+    let source = format!("{prefix}is_match(1, Int::trial(_: Int))");
+    typecheck(resolve_with_builtin_prelude(&source))
+        .expect("payload annotation connects normal inference");
+    for source in [
+        "def wrapping(v: List<$A>) -> Boolean { is_match(v, uncons(_, _)) }",
+        "impl Int { defextractor pair(v: $A) -> MatchResult<($A, Int)> { MatchResult::OK((v, 1)) } }\ndef wrapping_pair(v: $A) -> Boolean { is_match(v, Int::pair(_, _)) }",
+        "impl Int { defextractor list(v: $A) -> MatchResult<List<$A>> { MatchResult::OK([v]) } }\ndef wrapping_list(v: $A) -> Boolean { is_match(v, Int::list(_)) }",
+    ] {
+        typecheck(resolve_with_builtin_prelude(source)).expect("fixed payload shape permits generic children");
+    }
 }

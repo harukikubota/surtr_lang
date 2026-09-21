@@ -81,7 +81,10 @@ fn define_global_surface_alias(scope: &mut Scope, canonical_name: &str, uid: u32
 }
 
 pub fn user_type_symbol_identity_info(owner: &OwnerRef) -> Option<SymbolIdentityInfo> {
-    if owner.kind == OwnerKind::BuiltinType {
+    if owner.kind == OwnerKind::BuiltinType
+        || sindr::names::builtin_type_name(global_surface_name(&owner.canonical_key))
+            == Some(sindr::names::TypeName::MatchResult)
+    {
         let capabilities = builtin_symbol_identity_info(&owner.canonical_key)
             .map(|builtin| builtin.capabilities)
             .unwrap_or_else(SymbolCapabilities::type_owner);
@@ -915,6 +918,7 @@ fn rebase_pattern(pattern: &mut ResolvedPattern, base: u32, offset: u32) {
             rebase_resolved_id(id, base, offset);
         }
         ResolvedPattern::Wildcard(_)
+        | ResolvedPattern::AnnotatedWildcard(_, _)
         | ResolvedPattern::ListNil(_)
         | ResolvedPattern::IntLit(..)
         | ResolvedPattern::StrLit(..)

@@ -291,7 +291,7 @@ fn extractor_nominal_constructor_parameter_requires_explicit_bound() {
 defstruct Matchers {{}}
 impl Matchers {{
   def new() -> Matchers {{ Matchers {{}} }}
-  defextractor read(value: OptionT<$M, Int>) -> Option<Int> {{ Option::None }}
+  defextractor read(value: OptionT<$M, Int>) -> MatchResult<Int> {{ MatchResult::Err(NoneError) }}
 }}
 "#
     ))
@@ -309,7 +309,7 @@ impl Matchers {{
 defstruct ConcreteMatchers {{}}
 impl ConcreteMatchers {{
   def new() -> ConcreteMatchers {{ ConcreteMatchers {{}} }}
-  defextractor read(value: OptionT<Result, Int>) -> Option<Int> {{ Option::None }}
+  defextractor read(value: OptionT<Result, Int>) -> MatchResult<Int> {{ MatchResult::Err(NoneError) }}
 }}
 "#
     ))

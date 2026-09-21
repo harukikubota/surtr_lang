@@ -133,8 +133,8 @@ impl User {
     User { name, age }
   }
 
-  defextractor deconstruct(self: Self) -> Option<(String, Int)> {
-    Option::Some((self.name, self.age))
+  defextractor deconstruct(self: Self) -> MatchResult<(String, Int), Error> {
+    MatchResult::OK((self.name, self.age))
   }
 }
 

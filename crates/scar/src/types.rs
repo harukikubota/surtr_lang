@@ -227,6 +227,9 @@ pub enum Ty {
     /// Named enum: `Direction`, `ReduceStep<Int>`
     Enum(Symbol, Vec<Ty>),
 
+    /// Compiler-owned Extractor result; never a general user value.
+    MatchResult(Box<Ty>),
+
     /// `Result<Ok, Err>`
     Result(Box<Ty>, Box<Ty>),
 

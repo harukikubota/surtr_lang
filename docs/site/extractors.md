@@ -16,9 +16,11 @@ pattern の `[head, ..tail]` はこの alias です。
 定義は file-oriented です。
 
 ```surtr
+deferror Rejected { "input rejected" }
+
 defmod Matchers {
-  defextractor never(self: Int) -> Option<Int> {
-    Option::None
+  defextractor never(self: Int) -> MatchResult<Int, Error> {
+    MatchResult::Err(Rejected)
   }
 }
 ```
@@ -36,14 +38,21 @@ print(match 1 {
 })
 ```
 
-この例では `never(...)` が常に `Option::None` を返すため、fallback 側に流れます。
+この例では `never(...)` が常に `MatchResult::Err(Rejected)` を返すため、fallback 側に流れます。
 
-Extractor は `Option<$A>` を返し、`Option::Some(payload)` は子 pattern の照合へ進み、
-`Option::None` は no-match になります。各 Extractor occurrence は到達時に一度だけ
-評価されます。`match` では `None` の場合に現在の arm を打ち切り、次の arm を
-試します。SafeBind `=?` では共通 `PatternMismatch` Error を構築して現在の
-failure target へ渡します。Result effect ではその Error を保持し、Alternative route では
-破棄して `empty` へ進みます。Extractor 定義ごとの Error payload、kind、message はありません。
+Extractor は `MatchResult<$A, Error>` を返します（`MatchResult<$A>` も可）。
+`MatchResult::OK(payload)` は子 pattern の照合へ進み、`MatchResult::Err(error)` は
+不一致になります。各 occurrence は到達時に一度だけ評価され、成功結果を再利用します。
+`match` / `if_let` / `is_match` は Error を破棄します。SafeBind `=?` は元 Error の
+kind / message / location / cause を保持して現在の failure target へ渡し、
+do の Alternative route は破棄して `empty` へ進みます。
+
+成功 payload が Unit の場合は `check()` と子 Pattern を省略でき、
+`check(value: Unit)` や `check(_)` と明示することもできます。
+単値は子 Pattern 1個、tuple は要素数と同じ個数が必要です。
+Extractor 本文でも SafeBind を使えます。失敗は本文自身の MatchResult::Err となり、
+成功終端には明示的な MatchResult::OK が必要です。
+MatchResult は通常の変数・引数・field に保持できず、通常 Closure へ利用権限は継承されません。
 
 ## ルール
 
@@ -65,5 +74,5 @@ failure target へ渡します。Result effect ではその Error を保持し�
 
 ## 躓きやすいポイント
 
-- extractor は普通の `def` ではなく、`Option` を返す pattern-side contract として読む必要があります。
+- extractor は普通の `def` ではなく、`MatchResult` を返す pattern-side contract として読む必要があります。
 - extractor の入力型と scrutinee 型、成功 payload の arity がずれると分かりにくい type error になりやすいです。

@@ -4,8 +4,8 @@ defmod Matchers {
     Ok(2)
   }
 
-  defextractor once(term: Int) -> Option<Int> {
+  defextractor once(term: Int) -> MatchResult<Int> {
     print("extractor")
-    Option::Some(term)
+    MatchResult::OK(term)
   }
 }

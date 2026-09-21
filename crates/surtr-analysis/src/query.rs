@@ -505,14 +505,14 @@ fn empty_argument_span(
 }
 
 fn parse_query_type(input: &str) -> Option<AstTy> {
-    let source = format!("__query__: {input} = ()");
+    let source = format!("_: {input} = ()");
     let ast = spire::parse_with_context(
         &source,
         spire::ParserContext::repl(0).with_rules(spire::ParseRules::repl_chunk()),
     )
     .ok()?;
     match ast.as_slice() {
-        [Ast::Bind(_, AstPattern::Annotated(_, _, ty), _)] => Some(ty.clone()),
+        [Ast::Bind(_, AstPattern::AnnotatedWildcard(_, ty), _)] => Some(ty.clone()),
         _ => None,
     }
 }

@@ -93,6 +93,9 @@ impl Resolver {
                 }))
             }
             AstPattern::Wildcard(span) => Ok(ResolvedPattern::Wildcard(span)),
+            AstPattern::AnnotatedWildcard(span, ty) => {
+                Ok(ResolvedPattern::AnnotatedWildcard(span, ty))
+            }
             AstPattern::ListNil(span) => Ok(ResolvedPattern::ListNil(span)),
             AstPattern::ListCons(_, head, tail) => Ok(ResolvedPattern::ListCons(
                 Box::new(self.resolve_pattern_inner(*head, seen)?),
@@ -410,6 +413,7 @@ fn remap_or_pattern_bindings(
         }
         ResolvedPattern::Pin(_)
         | ResolvedPattern::Wildcard(_)
+        | ResolvedPattern::AnnotatedWildcard(_, _)
         | ResolvedPattern::ListNil(_)
         | ResolvedPattern::IntLit(_, _)
         | ResolvedPattern::StrLit(_, _)
@@ -521,6 +525,7 @@ fn collect_pattern_bindings_preorder(
         }
         AstPattern::Pin(_, _)
         | AstPattern::Wildcard(_)
+        | AstPattern::AnnotatedWildcard(_, _)
         | AstPattern::ListNil(_)
         | AstPattern::IntLit(_, _)
         | AstPattern::StrLit(_, _)

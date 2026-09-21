@@ -442,6 +442,7 @@ impl Checker {
             Ty::Error => CanonicalTy::builtin(TypeName::Error, vec![]),
             Ty::Var(var) => CanonicalTy::variable(*var),
             Ty::Hole => CanonicalTy::new(CanonicalTypeHead::Hole, vec![]),
+            Ty::MatchResult(ty) => CanonicalTy::builtin(TypeName::MatchResult, vec![recurse(ty)?]),
             Ty::List(ty) => CanonicalTy::builtin(TypeName::List, vec![recurse(ty)?]),
             Ty::Lazy(ty) => CanonicalTy::builtin(TypeName::Lazy, vec![recurse(ty)?]),
             Ty::Result(ok, err) => {

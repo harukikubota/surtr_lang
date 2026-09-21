@@ -245,13 +245,14 @@ defmod Kernel {
   This alias is MatchBlock-only; expression position keeps list construction
   semantics, so `["t", ..source]` is still a list expression.
 
-  Empty input returns `Option::None`.
+  Empty input returns `MatchResult::Err` with `PatternMismatch("Pattern did not match.")`.
+  Branch consumers treat this as no match; `=?` preserves the Error.
 
   ## REPL
   xldr(1)> match [1, 2] { [head, ..tail] => to_string(head), [] => "empty", }
   "1"
   """
-  @builtin defextractor uncons(term: $Tail) -> Option<($Head, $Tail)>
+  @builtin defextractor uncons(term: $Tail) -> MatchResult<($Head, $Tail), Error>
 
   @doc """
   Print a string to stdout.

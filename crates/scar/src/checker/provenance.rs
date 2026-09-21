@@ -401,6 +401,7 @@ impl Checker {
                 parameters.iter().map(recurse).collect::<Result<_, _>>()?,
                 Box::new(recurse(result)?),
             )),
+            Ty::MatchResult(element) => Ok(Ty::MatchResult(Box::new(recurse(element)?))),
             Ty::List(element) => Ok(Ty::List(Box::new(recurse(element)?))),
             Ty::Tuple(items) => Ok(Ty::Tuple(
                 items.iter().map(recurse).collect::<Result<_, _>>()?,

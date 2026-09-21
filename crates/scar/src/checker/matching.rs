@@ -9,6 +9,7 @@ impl Checker {
             | ResolvedPattern::Annotated(id, _)
             | ResolvedPattern::Pin(id) => id.span.clone(),
             ResolvedPattern::Wildcard(span)
+            | ResolvedPattern::AnnotatedWildcard(span, _)
             | ResolvedPattern::ListNil(span)
             | ResolvedPattern::IntLit(span, _)
             | ResolvedPattern::StrLit(span, _)
@@ -48,6 +49,7 @@ impl Checker {
             Some(expected) => self.check_node_with_expected(scrutinee, Some(expected))?,
             None => self.check_node(scrutinee)?,
         };
+        self.ensure_no_match_result_value(&typed_scrut.ty, &typed_scrut.span)?;
         let mut typed_arms = Vec::new();
         let mut result_ty: Option<Ty> = None;
         let mut failure = None;
@@ -154,7 +156,8 @@ impl Checker {
             ResolvedPattern::Var(_) | ResolvedPattern::Wildcard(_) | ResolvedPattern::Pin(_) => {
                 None
             }
-            ResolvedPattern::Annotated(_, ast_ty) => self
+            ResolvedPattern::Annotated(_, ast_ty)
+            | ResolvedPattern::AnnotatedWildcard(_, ast_ty) => self
                 .resolve_ast_ty_in_context(ast_ty, self.local_type_syntax_context())
                 .ok(),
             ResolvedPattern::As(inner, _, alias_ty) => alias_ty
@@ -539,11 +542,16 @@ impl Checker {
         pat: &ResolvedPattern,
         expected_ty: &Ty,
     ) -> Result<TypedMatchPattern, TypeError> {
+        self.ensure_no_match_result_value(expected_ty, &Self::resolved_pattern_span(pat))?;
         match pat {
             ResolvedPattern::Var(id) => {
                 self.env
                     .bind_var(id.unique_id, self.resolve_ty(expected_ty));
                 Ok(TypedMatchPattern::Binding(id.clone()))
+            }
+            ResolvedPattern::AnnotatedWildcard(span, _) => {
+                self.check_pattern(pat, expected_ty, span)?;
+                Ok(TypedMatchPattern::Wildcard)
             }
             ResolvedPattern::Annotated(id, ast_ty) => {
                 let expected =
@@ -1052,8 +1060,8 @@ impl Checker {
                 Ty::Str => {
                     let pattern_span = Self::resolved_pattern_span(pat);
                     let extractor_id = self.kernel_uncons_id(&pattern_span)?;
-                    let (input_ty, extractor_ty, seq_tys, success_tag, no_match_tag, err_tag) =
-                        self.extractor_contract_for_observed_ty(
+                    let (input_ty, extractor_ty, seq_tys, success_tag, err_tag) = self
+                        .extractor_contract_for_observed_ty(
                             &extractor_id,
                             &Ty::Str,
                             &extractor_id.span,
@@ -1067,7 +1075,6 @@ impl Checker {
                         extractor: extractor_id,
                         extractor_ty,
                         success_tag,
-                        no_match_tag,
                         err_tag,
                         seq_tys,
                         items: typed_items,
@@ -1087,7 +1094,7 @@ impl Checker {
             },
             ResolvedPattern::Extractor(extractor_id, items) => {
                 let expected_ty = self.resolve_ty(expected_ty);
-                let (input_ty, extractor_ty, seq_tys, success_tag, no_match_tag, err_tag) = self
+                let (input_ty, extractor_ty, seq_tys, success_tag, err_tag) = self
                     .extractor_contract_for_observed_ty(
                         extractor_id,
                         &expected_ty,
@@ -1113,7 +1120,7 @@ impl Checker {
                             self.ty_name(&expected_ty)
                         )));
                 }
-                if items.len() != seq_tys.len() {
+                if items.len() != seq_tys.len() && !(items.is_empty() && seq_tys == [Ty::Unit]) {
                     return Err(self
                         .pattern_error(
                             TypeDiagnosticReason::ExtractorArityMismatch,
@@ -1140,11 +1147,10 @@ impl Checker {
                     typed_items.push(self.check_match_subpattern(item, item_ty)?);
                 }
                 Ok(TypedMatchPattern::Extractor {
-                    input_ty: expected_ty,
+                    input_ty,
                     extractor: extractor_id.clone(),
                     extractor_ty,
                     success_tag,
-                    no_match_tag,
                     err_tag,
                     seq_tys,
                     items: typed_items,
@@ -1209,6 +1215,7 @@ impl Checker {
             }
             ResolvedPattern::Pin(_)
             | ResolvedPattern::Wildcard(_)
+            | ResolvedPattern::AnnotatedWildcard(_, _)
             | ResolvedPattern::ListNil(_)
             | ResolvedPattern::IntLit(_, _)
             | ResolvedPattern::StrLit(_, _)

@@ -1,6 +1,6 @@
 # Compiler-special builtin type declarations.
 # This file intentionally has no module body; it only hosts canonical builtin
-# type heads reserved by the compiler.
+# type heads and Extractor result variants reserved by the compiler.
 
 @doc """
 Standard `Unit` type declaration.
@@ -8,6 +8,23 @@ Standard `Unit` type declaration.
 return a meaningful value.
 """
 @builtin type Unit
+
+@doc """
+The result carrier returned by an Extractor.
+`MatchResult::OK(payload)` proceeds to the child patterns;
+`MatchResult::Err(error)` reports failure with a concrete Error.
+The canonical signature is `MatchResult<Value, Error>`; `MatchResult<Value>`
+is accepted as shorthand. This carrier is restricted to Extractor signatures
+and return paths and cannot be stored or called as an ordinary value.
+
+Branch consumers discard the Error, while failure-aware binding preserves it.
+Use a normal `Result`-returning function for a value-level API.
+"""
+@builtin
+defenum MatchResult<$Value> {
+  OK($Value),
+  Err(Error),
+}
 
 @doc """
 Compiler-reserved callable category marker for REPL and doc surfaces.

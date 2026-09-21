@@ -387,7 +387,7 @@ Option::Some(saved) =? Option::Some(1)
 - 通常patternのannotation / constructor arity / Extractor契約エラーはSafeBind固有分類より先に報告する
 - `do` 外では、enclosing callableがcanonical `Result`または有効なResult-effect carrierを返す必要がある
 - `do` 内では、do-local carrierのResult effectを優先し、なければ`Alternative::empty`、どちらもなければcapability errorにする
-- Extractorの`Option::None`と一般の不一致は共通`PatternMismatch` Errorになり、list/string等の構造pattern固有Errorは維持する
+- Extractor の `MatchResult::Err` は元 Error を保持する。一般の不一致は `PatternMismatch`、list/string 等の構造 pattern 固有 Error は維持する
 - `[head, ..tail]` は MatchBlock では `List` / `String` の分解に使えるが、Expr 位置では list 構築のまま
 
 #### `do` と failure matcher

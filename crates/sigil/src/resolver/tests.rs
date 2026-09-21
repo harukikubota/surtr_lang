@@ -932,6 +932,7 @@ const FLAG: Int = 1
 deftrait Show {
   def show(self: Self) -> String
 }
+
 deftrait Applicative
 where
   Self: Functor
@@ -952,6 +953,7 @@ where
 @builtin type List<$A>
 @builtin defenum Option<$T> { Some($T), None }
 @builtin defenum Result<$T> { Ok($T), Err(Error) }
+@builtin defenum MatchResult<$T> { OK($T), Err(Error) }
 @builtin defenum Boolean { True, False }"#,
         spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
     )
@@ -995,6 +997,7 @@ where
         ("List", TypeIdentity::TypeConstructor),
         ("Option", TypeIdentity::TypeConstructor),
         ("Result", TypeIdentity::TypeConstructor),
+        ("MatchResult", TypeIdentity::TypeConstructor),
         ("Boolean", TypeIdentity::Enum),
         ("User", TypeIdentity::Struct),
         ("Pair", TypeIdentity::Record),
@@ -1014,6 +1017,11 @@ where
         assert_eq!(owners.identity_for_owner(name), Some(identity), "{name}");
     }
     assert_eq!(owners.get("Functor").unwrap().kind, OwnerKind::Trait);
+    let match_result = user_type_symbol_identity_info(&owners.owner_ref("MatchResult").unwrap())
+        .expect("canonical MatchResult owner metadata");
+    assert!(!match_result.capabilities.type_annotation);
+    assert!(!match_result.capabilities.impl_target);
+    assert_eq!(match_result.capabilities.facet_root_path, None);
     assert_eq!(owners.owner_ref("Option").unwrap().canonical_key, "Option");
     let mut resolver = Resolver::new();
     resolver.owner_registry = owners.clone();
@@ -1287,8 +1295,8 @@ impl User {
     self
   }
 
-  defextractor deconstruct(self: Self) -> Option<(String, Int)> {
-    Option::None
+  defextractor deconstruct(self: Self) -> MatchResult<(String, Int)> {
+    MatchResult::Err(NoneError())
   }
 }"#,
             "",
@@ -1329,8 +1337,8 @@ fn test_precollect_impl_extractors_for_enum_types() {
 }
 
 impl Light {
-  defextractor stop_code(self: Self) -> Option<Int> {
-    Option::None
+  defextractor stop_code(self: Self) -> MatchResult<Int> {
+    MatchResult::Err(NoneError())
   }
 }"#,
             "",
@@ -8348,4 +8356,43 @@ result = do::<Result> {
     assert_eq!(pinned.unique_id, whole.unique_id);
     assert_eq!(final_id.unique_id, extracted.unique_id);
     assert_ne!(value.unique_id, extracted.unique_id);
+}
+
+#[test]
+fn match_result_owner_is_reserved_for_the_standard_definition() {
+    let error = parse_and_resolve("defenum MatchResult<$T> { OK($T), Err(String) }")
+        .expect_err("a user enum must not replace canonical MatchResult");
+    assert!(error.message.contains("reserved"));
+    assert!(error.message.contains("MatchResult"));
+}
+
+#[test]
+fn match_result_constructors_keep_qualified_identity_without_bare_aliases() {
+    let ast = spire::parse_with_context(
+        "@builtin defenum MatchResult<$T> { OK($T), Err(Error) }",
+        spire::ParserContext::module(0, None).with_rules(spire::ParseRules::std_module()),
+    )
+    .unwrap();
+    let mut resolver = Resolver::new();
+    resolver
+        .resolve_program(ast)
+        .expect("standard enum should resolve");
+    let ok = resolver
+        .scope
+        .lookup("MatchResult::OK")
+        .expect("qualified OK");
+    let err = resolver
+        .scope
+        .lookup("MatchResult::Err")
+        .expect("qualified Err");
+    assert_eq!(
+        resolver.declaration_uid_kinds.get(&ok),
+        Some(&DeclarationKind::EnumVariant)
+    );
+    assert_eq!(
+        resolver.declaration_uid_kinds.get(&err),
+        Some(&DeclarationKind::EnumVariant)
+    );
+    assert!(resolver.scope.lookup("OK").is_none());
+    assert_ne!(resolver.scope.lookup("Err"), Some(err));
 }

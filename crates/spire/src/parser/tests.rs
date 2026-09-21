@@ -2331,6 +2331,28 @@ defenum Result<$T> {
 }
 
 #[test]
+fn test_unit_payload_extractor_pattern_preserves_empty_arguments() {
+    for head in ["check", "Checked::unit"] {
+        let source = format!("match value {{ {head}() => 1, _ => 0 }}");
+        let ast = parse(&source).expect("an Extractor head permits zero payload patterns");
+        let Ast::Match(_, _, arms) = &ast[0] else {
+            panic!("expected match expression");
+        };
+        assert!(matches!(&arms[0].pattern, AstPattern::Call(_, name, args)
+            if name == head && args.is_empty()));
+    }
+    assert!(parse("match value { check(()) => 1, _ => 0 }").is_err());
+}
+
+#[test]
+fn extractor_payload_pattern_preserves_binding_and_wildcard_annotations() {
+    for child in ["value: Unit", "_: Unit"] {
+        let source = format!("match input {{ Checked::unit({child}) => 1, _ => 0 }}");
+        parse(&source).expect("payload pattern permits a type-correct annotation");
+    }
+}
+
+#[test]
 fn test_std_module_builtin_defenum_boolean_is_accepted() {
     let ast = parse_with_context(
         r#"@builtin
@@ -5597,7 +5619,7 @@ fn test_module_compile_unit_rejects_top_level_def() {
 #[test]
 fn test_module_compile_unit_rejects_top_level_defextractor() {
     let err = parse_with_context(
-        "defextractor never(self: Int) -> Option<Int> { Option::None }",
+        "defextractor never(self: Int) -> MatchResult<Int> { MatchResult::Err(NoneError()) }",
         ParserContext::module(1, None),
     )
     .expect_err("module compile unit should require defmod wrappers for extractors");
@@ -5747,8 +5769,8 @@ fn test_impl_accepts_qualified_type_target() {
 fn test_defmod_body_accepts_defextractor() {
     let ast = parse_with_context(
         r#"defmod Matchers {
-  defextractor never(self: Int) -> Option<Int> {
-    Option::None
+  defextractor never(self: Int) -> MatchResult<Int> {
+    MatchResult::Err(NoneError())
   }
 }"#,
         ParserContext::module(1, None),
@@ -6097,7 +6119,7 @@ fn test_project_compile_unit_accepts_top_level_expression() {
 #[test]
 fn test_project_compile_unit_rejects_top_level_defextractor() {
     let err = parse_with_context(
-        "defextractor never(self: Int) -> Option<Int> { Option::None }",
+        "defextractor never(self: Int) -> MatchResult<Int> { MatchResult::Err(NoneError()) }",
         ParserContext::project(1),
     )
     .expect_err("project compile unit should reject top-level extractor declarations");

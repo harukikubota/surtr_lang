@@ -305,6 +305,7 @@ fn collect_pattern_captures(
         ResolvedPattern::Var(_)
         | ResolvedPattern::Annotated(_, _)
         | ResolvedPattern::Wildcard(_)
+        | ResolvedPattern::AnnotatedWildcard(_, _)
         | ResolvedPattern::ListNil(_)
         | ResolvedPattern::IntLit(_, _)
         | ResolvedPattern::StrLit(_, _)
@@ -342,6 +343,7 @@ fn collect_bind_pattern_bindings(pat: &ResolvedPattern, bound: &mut HashSet<u32>
             collect_bind_pattern_bindings(tail, bound);
         }
         ResolvedPattern::Wildcard(_)
+        | ResolvedPattern::AnnotatedWildcard(_, _)
         | ResolvedPattern::Pin(_)
         | ResolvedPattern::ListNil(_)
         | ResolvedPattern::IntLit(_, _)

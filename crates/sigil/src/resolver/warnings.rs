@@ -315,6 +315,7 @@ fn collect_pattern_usage(pattern: &ResolvedPattern, usage: &mut WarningUsage) {
         ResolvedPattern::Var(id) | ResolvedPattern::Annotated(id, _) => usage.bind_id(id),
         ResolvedPattern::Pin(id) => usage.use_id(id),
         ResolvedPattern::Wildcard(_)
+        | ResolvedPattern::AnnotatedWildcard(_, _)
         | ResolvedPattern::ListNil(_)
         | ResolvedPattern::IntLit(..)
         | ResolvedPattern::StrLit(..)
