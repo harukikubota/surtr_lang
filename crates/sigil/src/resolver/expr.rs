@@ -2354,7 +2354,7 @@ impl Resolver {
         {
             return Err(ResolveError {
                 message: format!(
-                    "Extractor '{}' can only be used in MatchBlock/LHS positions. Use it in match or on the left side of =?. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
+                    "Extractor '{}' can only be used in Pattern positions. Use it as a Pattern head in match, apply_pattern, or on the left side of =?. If you need a value-level API, write a normal def that returns Result or Option explicitly.",
                     name
                 ),
                 span,

@@ -475,7 +475,7 @@ impl Checker {
             message: "Seq is not a surface type in this version of Surtr".into(),
             span: span.clone(),
             hint: Some(
-                "Use tuple payloads for extractor success values, such as Option<(A, B)>.".into(),
+                "Use tuple payloads for extractor success values, such as MatchResult<(A, B), Error>.".into(),
             ),
         }
     }

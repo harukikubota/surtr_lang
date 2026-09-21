@@ -2,10 +2,10 @@
 
 ## 1. 状態・目的・範囲
 
-- 状態: 段階実装中の統合仕様。旧 Extractor 返却更改案、Matcher / projection 案、事前引数差分案を本書へ統合した。本書だけで変更後の契約を読めるものとし、削除する原案や添付には依存しない。実施済みの範囲は 1.1 に記録する。
+- 状態: 実装完了（2026-09-22、§11.1 の全17項目を検証済み）。旧 Extractor 返却更改案、Matcher / projection 案、事前引数差分案を本書へ統合した。本書だけで変更後の契約を読めるものとし、削除する原案や添付には依存しない。実施済みの範囲は 1.1 に記録する。
 - level: 4。構文、型規則、評価規則、SafeBind の失敗返却先、フェーズ間契約を変更する。
 - 現行動作の正本: [要件定義v9.md](要件定義v9.md)、[do intrinsic](../docs/dev/Do_intrinsic_spec.md)、[診断](../docs/dev/diagnostics.md)。本書と異なる現行契約は、実装に先立つ仕様反映で本書へ整合させる。文書作成だけで実装済みと扱わない。
-- 実装は依存順に1機能ずつ進め、完了範囲だけを 1.1 に追記する。未掲載の機能は未実装として扱う。
+- 残実装は依存順の5機能単位で完了した。実施記録は 1.1、計画・検証・受入証拠は [実装計画](pattern_extension_implementation_plan.md) を参照する。
 
 1つの修正タスクとして次を実施する。
 
@@ -20,7 +20,7 @@
 
 Pattern AST は第一級の値にしない。一般関数の partial application、通常 Closure との暗黙変換、独自の capture / lifetime 規則、MatchResult の Monad 化、専用 Opcode の追加は本タスクの機能要件に含めない。一般の Option / Result API は維持する。
 
-本書のコードは変更後の仕様例であり、実施済み項目を除いて現行 REPL で動く例ではない。
+本書のコードは実装済み契約の仕様例である。module / impl 配下の宣言はソースファイルに置き、REPLではロードして利用する。標準の利用例は `:doc Extractor` / `:doc Extractor::from_result` にも掲載する。
 
 ### 1.1 実施済み項目
 
@@ -37,6 +37,8 @@ Pattern AST は第一級の値にしない。一般関数の partial application
 - 2026-09-21: ExtractorClosure literal `*{|params...| body}` と専用 signature 型を実装した。通常推論、lexical capture、helper の引数・戻り値、同 signature の if / match 選択、generic trait API の受け渡しを接続した。local head は lexical identity で確定し、signature で選んだ引数候補だけを検査する。通常 call、即時 head、通常 Closure との暗黙変換を拒否し、nested callable / do の failure target を分離した。REPL の入力間 capture・型署名・doc target と、元 Parse / Resolve 診断の保持を検証した。独立レビューで検出した OR binding 順序と canonical 型の逆変換を修正し、Facet 動的パスの capture 回帰も解消した。最終 CI workspace 1968件、標準 SRT 全件が成功。apply_pattern / projection、Extractor::from_result は本項目に含めない。
 
 - 2026-09-22: `Kernel::apply_pattern` と projection を実装。入力全体を一度だけ照合し、番号順の0 / 1 / 複数slotを Result に返す。通常 Error 規則・Extractor 元 Error・scope / pin / 注釈・OR / pipe 制限を共通 Pattern engine へ接続した。4 consumer の予約名・canonical identity と Regex 通常 call / capture を分離し、Kernel consumer の値化・captureを拒否する。旧 fake Match carrier / surface-name consumer fallback を削除。独立レビュー完了、最終 CI 1972件と標準 SRT 全件が成功。`Extractor::from_result` と Extractor module の source @doc は次単位に残る。
+
+- 2026-09-22: `lib/extractor.srt` に通常 SRT の `Extractor::from_result` と module / function `@doc` を追加し、標準 loader に登録した。単項 callable、payload shape、外側 Result の一段 unwrap、元 Error・cause・source、capture / 評価回数、既存 Monad 接続を検証。module @doc は named 定義・uncons・Closure・事前引数・Unit・projection・SafeBind・変換を一通り説明し、7組25出力と named module 宣言例を実REPLで確認した。追加7件を含む Extractor SRT20件、4拒否fixture、canonical doc / signature のREPL契約が成功。独立レビューと全17項目の監査完了、最終CI1972件と標準SRT全件成功。残実装なし。
 
 ## 2. 現状と変更後
 
@@ -497,7 +499,7 @@ builtin の正本は `crates/sindr/src/builtin.rs` の BUILTIN_METAS とし、El
 - `docs/site/extractors.md`、`pattern-matching.md`、`language-reference.md`、`language-guide.md`、do / SafeBind / Closure / consumer の利用者説明。
 - 標準 Extractor / consumer / special type の @doc と REPL サンプル。
 
-現行動作の説明だけを先に将来契約へ書き換えない。未実装仕様である本書と、仕様反映後もまだ未実装の箇所を明確に区別する。
+正本・標準 @doc・利用者向け説明は本書の実装済み契約へ整合した。以後の仕様追加でも、現行動作の説明だけを先に将来契約へ書き換えず、実装状態を明示する。
 
 ## 11. 受入条件と検証
 

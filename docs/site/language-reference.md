@@ -728,3 +728,7 @@ Trait system の利用規則は [Trait システム](./trait-system.md) と [Tra
 - Extractor の元 Error と通常 Pattern の Error を `Err` に保持し、外側 callable から早期 return しない
 - OR、Pattern への pipe 注入、Pattern 引数の部分適用補完は拒否する。`value |> apply_pattern(pattern)` は第1 Expr 引数へ注入する
 - `if_let` / `if_let_then` / `is_match` / `apply_pattern` は予約 consumer 名。`Regex::is_match` は canonical identity により通常 call / capture として扱う
+
+### Result callable の Extractor 変換
+
+`Extractor::from_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B, Error>)>` は通常SRTの標準APIです。単項callableをcaptureし、各Pattern occurrenceで1回実行します。外側Resultだけをunwrapし、成功payloadと元Errorを保持します。Option/raw/入力0個/複数入力の暗黙変換はありません。

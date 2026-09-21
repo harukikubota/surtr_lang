@@ -64,3 +64,25 @@ cargo run -- test --quiet --all
 - 第3単位: ExtractorClosure の専用 literal / 型・first-class 値・local Pattern head・推論 / capture・本文 SafeBind を実装。引数の両候補を lexical identity と元診断で保持し、signature 選択後の canonical UID だけを Typed IR へ渡す。REPL の capture・署名・doc target、通常 generic trait API の往復も検証。独立レビューの OR binding 順序と canonical 逆変換の指摘、既存 Facet 動的パスの capture 回帰を解消した。最終 CI は1968件成功（45 binaries）、標準 SRT 全件は終了コード0。専用 SRT 17件、拒否18例と REPL 回帰を含む。
 
 - 第4単位: canonical `apply_pattern`、projection、予約名・OR・pipe・Regex通常call/captureを実装。共通 Pattern engine の明示consumer policyで local Result join を作り、既存のliteral/list Error規則と最初の失敗を維持する。専用SRT19件、拒否28fixture、REPLのscope・capture・doc/signature、capture合成を検証。独立レビューで指摘されたcapture rewrite漏れとKernel consumer値化の名前fallbackを解消。特殊化の再帰frameはhelper抽出で縮小し、既存8MiB/16段stack回帰をそのまま成功させた。fixture runnerは従来phase診断優先を保ちつつScarで確定する元Parse/Resolveエラーを検証する。最終CI1972件成功（45 binaries）、標準SRT全件終了コード0、未解消review指摘なし。
+
+- 第5単位: `Extractor::from_result` を専用builtinなしの通常SRTで追加し、標準loaderへ登録した。Extractor module/functionのsource @docに一通りの説明とREPL例を置き、標準module利用の7組25出力とnamed定義例を実行検証した。Extractor SRTは追加7件を含む20件成功、Option/raw/入力0個/複数入力の4拒否fixture成功。Error::formatを含む元Error比較、一段unwrap、生成時未評価とoccurrence回数、異payload branch、既存Monad成功/短絡、空list ORも検証した。REPL doc/signatureはcanonical targetと公開型を固定。旧Option guidance/struct説明を修正し、loader一覧の期待へExtractorを追加した。独立レビュー指摘なし、最終CI1972件成功（45 binaries）、標準SRT全件終了コード0。
+
+## 最終受入監査（完了）
+
+仕様 §11.1 の全17項目を独立した監査と実行結果へ対応付けた。残実装・未解消レビュー指摘なし。
+
+| 項目 | 主な検証先 |
+|---|---|
+| 1: MatchResultの返却・利用位置・Error制約 | Scar `typecheck_surface`、Extractor/Closure拒否fixtures |
+| 2–3: 事前引数・payload/Unit shape | `lib/tests/extractor.srt`、`extractor_closure.srt`、arity/annotation拒否fixtures |
+| 4–5: projection・型注釈 | `lib/tests/apply_pattern.srt`、Scar projection境界、parse/typecheck拒否fixtures |
+| 6–7: first-class値・capture・generic・禁止利用 | `extractor_closure.srt`、closure/helper/shadow拒否fixtures、Xldr REPL |
+| 8–9: 単一評価・短絡・consumer policy | Extractor/Closure/apply_pattern SRT、Forge共通Pattern engine |
+| 10–12: Error保存・一段unwrap・最も近いfailure target | Extractor/SafeBind/do SRT、Eldr runtime Error、Xldr継続/relocation |
+| 13: scope/pin/OR/予約名/Regex/pipe | Spire/Sigil/Scar、apply_pattern SRT/fixtures、空list OR、capture合成 |
+| 14: uncons・不正内部契約 | Eldr builtin/VM、Forge invalid carrier/tag/metadata tests |
+| 15: 旧経路と正本の整合 | Option/NoMatch/旧consumer fallback検索、診断・source @doc・site docs監査 |
+| 16: from_result | Extractor SRT追加7件、4拒否fixtures、Xldr canonical doc/signature |
+| 17: 異payload branchと既存Result/Monad接続 | Extractor SRT、apply_pattern内部bind非公開、REPL |
+
+検証は除外・ignored化・timeout/stack上限変更を行わず完了した。計画commitに加え、5機能を個別commitとして同じworktreeへ保持する。

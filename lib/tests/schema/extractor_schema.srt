@@ -87,6 +87,22 @@ defmod ExtractorSchema {
     if(value >= min, MatchResult::OK(()), MatchResult::Err(ExtractorSourceError))
   }
 
+  def adapt_result(f: ($A -> Result<$B>)) -> ExtractorClosure<($A -> MatchResult<$B, Error>)> {
+    Extractor::from_result(f)
+  }
+
+  def observed_result(amount: Int) -> (Int -> Result<Int>) {
+    print("capture")
+    {|value: Int|
+      print("converted:" ++ to_string(value))
+      Ok(value + amount)
+    }
+  }
+
+  def add_result(amount: Int, value: Int) -> Result<Int> {
+    Ok(value + amount)
+  }
+
 }
 
 defstruct ExtractorBox { value: Int }

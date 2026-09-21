@@ -894,3 +894,5 @@ value: Result<Int> = Ok(42)
 ### Pattern の照合結果を受け取る
 
 `apply_pattern` は Pattern の成功・失敗を通常の Result にします。`apply_pattern([10, 20], [_, _1: Int])` は `Ok(20)` を返します。複数の `_N` は1から連続で指定し、番号順の tuple を返します。Extractor の失敗 Error はそのまま保持し、外側関数からの早期 return は行いません。詳しくは [Pattern Matching](./pattern-matching.md) と [Extractors](./extractors.md) を参照してください。
+
+`Extractor::from_result(&Int::parse)` のように、入力1個のResult-returning関数をExtractorClosureへ変換できます。先に変数へ束縛してからPattern headで使います。`:doc Extractor` には関連機能を一通り試せるサンプルがあります。

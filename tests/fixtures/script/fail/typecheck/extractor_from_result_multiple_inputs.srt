@@ -1,0 +1,2 @@
+def source(left: Int, right: Int) -> Result<Int> { Ok(left + right) }
+ext = Extractor::from_result(&source)

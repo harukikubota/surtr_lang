@@ -114,6 +114,25 @@ Extractor の失敗は元の Error を保持した `Err` になります。普�
 
 projection は `apply_pattern` の Pattern 内専用です。事前引数では使えず、OR Pattern もこの consumer では使えません。`_` や `_name` は値を取り出さない wildcard のままです。
 
+## Result を返す関数を使う
+
+`Extractor::from_result` で、入力が1個の Result-returning callable を明示的に変換できます。
+
+```surtr
+decimal = Extractor::from_result(&Int::parse)
+apply_pattern("42", decimal(_1: Int))
+# Ok(42)
+is_match(apply_pattern("oops", decimal(_1)), Err(_))
+# True
+nested = Extractor::from_result({|value: Int| Ok(Ok(value))})
+apply_pattern(3, nested(_1))
+# Ok(Ok(3))
+```
+
+生成時には関数を実行しません。各 occurrence へ到達したときに一度だけ実行し、外側の Result だけを外します。成功 payload が tuple / Unit の場合も同じ規則で使えます。失敗した元 Error の cause や location は保持します。入力が複数の関数は、必要な値をcaptureした単項Closureで包んでから渡します。Option-returning callableや通常の値は受理しません。
+
+REPLで `:doc Extractor` を開くと、named Extractor、ExtractorClosure、事前引数、Unit、projection、SafeBindと変換のサンプルを参照できます。API単独の説明は `:doc Extractor::from_result` です。正本は `lib/extractor.srt` の `@doc` にあります。
+
 ## ルール
 
 - extractor 名は constructor-style の大文字始まりにしない

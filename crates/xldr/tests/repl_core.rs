@@ -326,6 +326,7 @@ const REPL_CORE_CASES: &[(&str, fn())] = &[
     repl_core_case!(core_sig_supports_closure_bindings_recapture_and_application),
     repl_core_case!(core_extractor_closure_keeps_capture_signature_and_identity_across_chunks),
     repl_core_case!(core_apply_pattern_keeps_projection_local_and_resolves_canonical_queries),
+    repl_core_case!(core_extractor_module_queries_and_from_result_work_across_chunks),
     repl_core_case!(core_completion_shows_signature_for_callable_binding_calls),
     repl_core_case!(core_callable_refs_and_signature_errors_are_ui_independent),
     repl_core_case!(
@@ -6012,5 +6013,43 @@ fn core_apply_pattern_keeps_projection_local_and_resolves_canonical_queries() {
     assert!(
         signature.contains("$Pattern") && signature.contains("Result<$Return"),
         "{signature}"
+    );
+}
+
+fn core_extractor_module_queries_and_from_result_work_across_chunks() {
+    let mut engine = engine();
+    let module = engine.handle_line(":doc Extractor");
+    assert_eq!(doc_target(&module).0, "Extractor");
+    let doc = engine.handle_line(":doc Extractor::from_result");
+    let (symbol, signature) = doc_target(&doc);
+    assert_eq!(symbol, "Extractor::from_result");
+    let signature = signature.expect("standard function signature");
+    assert!(
+        signature.contains("Result<$B") && signature.contains("ExtractorClosure<"),
+        "{signature}"
+    );
+    let query = signature_text(&engine.handle_line(":sig Extractor::from_result"));
+    assert!(query.contains(signature), "{query}: {signature}");
+    let created = engine.handle_line("converted = Extractor::from_result(&Int::parse)");
+    assert!(
+        matches!(created.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&created)
+    );
+    let signature = signature_text(&engine.handle_line(":sig converted"));
+    assert!(
+        signature.contains("ExtractorClosure<(String -> MatchResult<Int, Error>)>"),
+        "{signature}"
+    );
+    let result = engine.handle_line("apply_pattern(\"42\", converted(_1: Int))");
+    assert!(
+        matches!(result.output, ReplOutput::EvalSuccess { .. }),
+        "{}",
+        rendered_text(&result)
+    );
+    assert!(
+        rendered_text(&result).contains("Ok(42)"),
+        "{}",
+        rendered_text(&result)
     );
 }

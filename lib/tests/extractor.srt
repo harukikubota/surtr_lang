@@ -32,6 +32,8 @@ test("Extractor result contract") {
   }
 
   it("discards Extractor errors in branch consumers") {
+    assert_eq(1, if_let([], [] | [_, .._], 1, 0))
+    assert_true(is_match([], [] | [_, .._]))
     capture_stdout()
     assert_eq("fallback", match 0 { nested_checked(_) => "unexpected", _ => "fallback" })
     assert_eq("fallback", if_let(0, result_checked(value), to_string(value), "fallback"))
@@ -122,6 +124,94 @@ test("Extractor result contract") {
   it("accepts Unit as a pre-argument expression") {
     assert_eq(3, if_let(3, with_unit((), value), value, 0))
     assert_true(is_match(3, with_unit((), _)))
+  }
+
+  it("adapts a named Result callable and captured ordinary Closures") {
+    decimal = Extractor::from_result(&Int::parse)
+    assert_eq("Ok(42)", inspect(apply_pattern("42", decimal(_1: Int))))
+    assert_false(is_match("invalid", decimal(_)))
+    amount = 10
+    adjusted = Extractor::from_result({|value: Int| ExtractorSchema::add_result(amount, value)})
+    assert_eq("Ok(13)", inspect(apply_pattern(3, adjusted(_1))))
+  }
+
+  it("preserves scalar tuple and Unit payload shapes through generic helpers") {
+    scalar = ExtractorSchema::adapt_result({|value: Int| Ok(to_string(value))})
+    pair = ExtractorSchema::adapt_result({|value: Int| Ok((value, to_string(value)))})
+    unit = ExtractorSchema::adapt_result({|value: Int| Ok(())})
+    assert_eq("Ok(\"3\")", inspect(apply_pattern(3, scalar(_1))))
+    assert_eq("Ok((3, \"3\"))", inspect(apply_pattern(3, pair(_1, _2))))
+    assert_true(is_match(3, unit()))
+    assert_true(is_match(3, unit(_)))
+    assert_eq((), if_let(3, unit(value: Unit), value, ()))
+    assert_eq("Ok(())", inspect(apply_pattern(3, unit(_1: Unit))))
+    assert_eq("3", match 3 {
+      scalar("other") => "unexpected",
+      pair(_, text) => text,
+      _ => "fallback",
+    })
+  }
+
+  it("unwraps only the outer Result and retains a nested Result payload") {
+    nested_ok = Extractor::from_result({|value: Int| Ok(Ok(value))})
+    nested_err = Extractor::from_result({|value: Int| Ok(ExtractorSchema::source(value))})
+    assert_eq("Ok(Ok(3))", inspect(apply_pattern(3, nested_ok(_1))))
+    assert_true(is_match(0, nested_err(Err(_))))
+    projected: Result<Result<Int>> = apply_pattern(0, nested_err(_1))
+    assert_eq(inspect(Ok(ExtractorSchema::source(0))), inspect(projected))
+  }
+
+  it("preserves the original Error kind message source and cause chain") {
+    original = ExtractorSchema::source(0)
+    failure = Extractor::from_result({|value: Unit| original})
+    converted = apply_pattern((), failure(_1: Int))
+    assert_eq(inspect(original), inspect(converted))
+    match (original, converted) {
+      (Err(before), Err(after)) => assert_eq(
+        (Error::kind(before), Error::message(before), Error::format(before)),
+        (Error::kind(after), Error::message(after), Error::format(after)),
+      ),
+      _ => assert_true(False),
+    }
+  }
+
+  it("captures the callable once without executing its body during creation") {
+    capture_stdout()
+    observed = Extractor::from_result(ExtractorSchema::observed_result(10))
+    assert_eq(["capture"], capture_stdout())
+    assert_eq(13, if_let(3, observed(value), value, 0))
+    assert_eq(["converted:3"], capture_stdout())
+    assert_eq(14, if_let(4, observed(value), value, 0))
+    assert_eq(["converted:4"], capture_stdout())
+  }
+
+  it("executes each reached occurrence once and skips unreached occurrences") {
+    capture_stdout()
+    observed = Extractor::from_result(ExtractorSchema::observed_result(10))
+    assert_eq(["capture"], capture_stdout())
+    assert_false(is_match((0, 3), (positive(), observed(_))))
+    assert_eq([], capture_stdout())
+    assert_eq(13, match 3 {
+      observed(99) => 0,
+      observed(value) => value,
+      _ => 0,
+    })
+    assert_eq(["converted:3", "converted:3"], capture_stdout())
+  }
+
+  it("composes adapted Pattern results with the existing Result Monad") {
+    decimal = Extractor::from_result(&Int::parse)
+    assert_eq("Ok(43)", inspect(Monad::bind(
+      apply_pattern("42", decimal(_1)),
+      {|value: Int| Ok(value + 1)},
+    )))
+    capture_stdout()
+    rejected = Monad::bind(apply_pattern("invalid", decimal(_1)), {|value: Int|
+      print("unreached")
+      Ok(value + 1)
+    })
+    assert_true(Result::is_err(rejected))
+    assert_eq([], capture_stdout())
   }
 
 }
