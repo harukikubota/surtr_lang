@@ -786,6 +786,8 @@ keyword、local、scope、import、member、signature、type context の順で�
     `ProjectRunnerResult` に decode する。
   - `surtr-lsp` は `RunnerSelection.source` を受け取った時点で host が注入した VM 実行器を
     呼び、成功時は `RunnerSelection.runner_result` を `surtr-analysis` へ渡す。
+    注入済み実行器が失敗した場合は `ProjectRunner` diagnostics を返し、同じ source の
+    source-only 抽出へ進まない。
     VM 実行器が未注入の場合は、`surtr-analysis` の source-only project runner 抽出へ
     fallback する。
 - selected profile と normalized runner args を cache key に入れる

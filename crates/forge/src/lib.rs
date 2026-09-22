@@ -539,6 +539,103 @@ mod tests {
         compose_bytecode_with_chunk(prelude.bytecode.clone(), chunk)
     }
 
+    #[test]
+    fn codegen_rejects_call_arity_above_u8_limit() {
+        fn source_with_arity(arity: usize) -> String {
+            let params = (0..arity)
+                .map(|index| format!("a{index}: Int"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let args = vec!["1"; arity].join(", ");
+            format!(
+                "defmod Main {{\n def wide({params}) -> Int {{ a0 }}\n def main() -> Int {{ wide({args}) }}\n }}"
+            )
+        }
+
+        codegen_module_source_with_builtin_prelude(&source_with_arity(255))
+            .expect("255 arguments fit the bytecode arity");
+        let error = match codegen_module_source_with_builtin_prelude(&source_with_arity(256)) {
+            Ok(_) => panic!("256 arguments must not wrap to zero"),
+            Err(error) => error,
+        };
+        assert!(
+            error.message.contains("arity exceeds 255"),
+            "unexpected codegen error: {error:?}"
+        );
+    }
+
+    #[test]
+    fn codegen_rejects_oversize_callable_operands() {
+        let params = (0..256)
+            .map(|index| closure_param(&format!("a{index}"), index as u32 + 1, Ty::Int))
+            .collect::<Vec<_>>();
+        let closure = TypedNode {
+            ty: Ty::Func(vec![Ty::Int; 256], Box::new(Ty::Int)),
+            span: test_span(),
+            node: TypedInner::Closure(params, Vec::new(), Box::new(int_lit(1))),
+        };
+        let closure_error = match codegen(vec![closure]) {
+            Ok(_) => panic!("256 closure parameters must not wrap to zero"),
+            Err(error) => error,
+        };
+        assert!(closure_error.message.contains("arity exceeds 255"));
+
+        let callable = TypedNode {
+            ty: Ty::Func(vec![Ty::Int; 256], Box::new(Ty::Int)),
+            span: test_span(),
+            node: TypedInner::Var(resolved_id("callable", 1000)),
+        };
+        let call = TypedNode {
+            ty: Ty::Int,
+            span: test_span(),
+            node: TypedInner::App(Box::new(callable), vec![int_lit(1); 256]),
+        };
+        let call_error = match codegen(vec![call]) {
+            Ok(_) => panic!("256 call operands must not wrap to zero"),
+            Err(error) => error,
+        };
+        assert!(call_error.message.contains("arity exceeds 255"));
+
+        let injected = TypedNode {
+            ty: Ty::Func(vec![Ty::Int], Box::new(Ty::Int)),
+            span: test_span(),
+            node: TypedInner::InjectCall(
+                Box::new(TypedNode {
+                    ty: Ty::Func(vec![Ty::Int; 255], Box::new(Ty::Int)),
+                    span: test_span(),
+                    node: TypedInner::Var(resolved_id("callable", 1001)),
+                }),
+                vec![int_lit(1); 254],
+            ),
+        };
+        let inject_error = match codegen(vec![injected]) {
+            Ok(_) => panic!("generated wrapper arity must include hidden arguments"),
+            Err(error) => error,
+        };
+        assert!(inject_error.message.contains("arity exceeds 255"));
+
+        let debug = TypedNode {
+            ty: Ty::Unit,
+            span: test_span(),
+            node: TypedInner::Dbg(
+                (0..256)
+                    .map(|_| scar::typed::TypedDbgArg {
+                        span: test_span(),
+                        ty_name: "Int".to_string(),
+                        expr: int_lit(1),
+                    })
+                    .collect(),
+            ),
+        };
+        let debug_error = match codegen(vec![debug]) {
+            Ok(_) => panic!("256 debug arguments must not wrap to zero"),
+            Err(error) => error,
+        };
+        assert!(debug_error
+            .message
+            .contains("debug argument count exceeds 255"));
+    }
+
     macro_rules! semantic_prefix_case {
         ($case:ident) => {
             (stringify!($case), $case as fn())

@@ -40,6 +40,6 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node -e \"console.log('surtr-language-support: no automated test runner configured yet')\"",
-    "package": "npx @vscode/vsce package --no-dependencies"
+    "package": "vsce package --no-dependencies"
   }
 }

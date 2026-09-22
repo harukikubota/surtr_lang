@@ -1,4 +1,4 @@
-use crate::source::{char_span_to_byte_range, line_column_for_offset, normalized_char_span};
+use crate::source::{line_column_for_offset, normalized_char_span};
 use crate::{
     Color, DiagnosticData, DiagnosticSpec, SerializableDiagnostic, SerializableDiagnosticReport,
     SerializableSourceFact, SourceId, SourceRegistry,
@@ -72,7 +72,7 @@ fn build_report(
     spec: &DiagnosticSpec,
 ) -> Report<'static, (RenderSourceId, std::ops::Range<usize>)> {
     let primary = normalized_char_span(source, &spec.primary_span);
-    let primary_range = char_span_to_byte_range(source, &primary);
+    let primary_range = primary.start..primary.end;
     let suppress_primary_label = spec.structured.is_some() && !spec.labels.is_empty();
     let primary_source = RenderSourceId::Primary(file_name.to_string());
     let mut builder = Report::build(
@@ -91,7 +91,7 @@ fn build_report(
 
     for label in &spec.labels {
         let span = normalized_char_span(source, &label.span);
-        let range = char_span_to_byte_range(source, &span);
+        let range = span.start..span.end;
         builder = builder.with_label(match label.color {
             Some(color) => Label::new((primary_source.clone(), range))
                 .with_message(label.message.clone())
@@ -139,7 +139,7 @@ fn build_report_with_registry(
     let primary_source = primary_entry.source.as_str();
     let primary_file_name = primary_entry.file_name.clone();
     let primary = normalized_char_span(primary_source, &spec.primary_span);
-    let primary_range = char_span_to_byte_range(primary_source, &primary);
+    let primary_range = primary.start..primary.end;
     let suppress_primary_label = spec.structured.is_some() && !spec.labels.is_empty();
     let primary_render_source = RenderSourceId::Primary(primary_file_name.clone());
     let mut builder = Report::build(
@@ -164,7 +164,7 @@ fn build_report_with_registry(
             continue;
         };
         let label_span = normalized_char_span(&label_entry.source, &label.span);
-        let label_range = char_span_to_byte_range(&label_entry.source, &label_span);
+        let label_range = label_span.start..label_span.end;
         let label_render_source = if label.source_id.is_none() && label_source_id == source_id {
             primary_render_source.clone()
         } else {

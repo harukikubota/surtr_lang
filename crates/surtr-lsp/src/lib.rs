@@ -5,7 +5,8 @@ use std::sync::Arc;
 use surtr_analysis::{
     AnalysisContextRequest, AnalysisDiagnosticKind, AnalysisRange, AnalysisService,
     AnalysisSeverity, CompletionKind, DocumentVersion, ProjectRunnerResult,
-    ProjectRunnerSourceInput, RunnerSelection, SelectedContext, SemanticIndex, Utf16Position,
+    ProjectRunnerSourceInput, RunnerDiagnostic, RunnerDiagnosticKind, RunnerSelection,
+    SelectedContext, SemanticIndex, Utf16Position,
 };
 
 type ProjectRunnerExecutor =
@@ -95,6 +96,7 @@ pub struct LspAnalysisHost {
     selected_context: Option<SelectedContext>,
     runner_selection: Option<RunnerSelection>,
     project_runner_executor: Option<ProjectRunnerExecutor>,
+    project_runner_failure: Option<RunnerDiagnostic>,
     service: AnalysisService,
 }
 
@@ -108,6 +110,7 @@ impl fmt::Debug for LspAnalysisHost {
                 "project_runner_executor",
                 &self.project_runner_executor.as_ref().map(|_| "<executor>"),
             )
+            .field("project_runner_failure", &self.project_runner_failure)
             .field("service", &self.service)
             .finish()
     }
@@ -120,6 +123,7 @@ impl LspAnalysisHost {
             selected_context: None,
             runner_selection: None,
             project_runner_executor: None,
+            project_runner_failure: None,
             service: AnalysisService::new(),
         }
     }
@@ -147,7 +151,8 @@ impl LspAnalysisHost {
     }
 
     pub fn set_runner_selection(&mut self, runner_selection: Option<RunnerSelection>) {
-        self.runner_selection = runner_selection.map(|selection| {
+        let mut failure = None;
+        self.runner_selection = runner_selection.map(|mut selection| {
             if selection.runner_result.is_some() {
                 return selection;
             }
@@ -162,9 +167,19 @@ impl LspAnalysisHost {
                     runner_result: Some(result),
                     ..selection
                 },
-                Err(_) => selection,
+                Err(message) => {
+                    failure = Some(RunnerDiagnostic {
+                        kind: RunnerDiagnosticKind::ProjectExecutionFailure,
+                        path: Some(selection.project_file.clone()),
+                        span: None,
+                        message,
+                    });
+                    selection.source = None;
+                    selection
+                }
             }
         });
+        self.project_runner_failure = failure;
     }
 
     pub fn set_project_runner_executor<F>(&mut self, executor: Option<F>)
@@ -183,13 +198,19 @@ impl LspAnalysisHost {
 
     fn snapshot_for_uri(&self, uri: &str) -> Option<surtr_analysis::AnalysisSnapshot> {
         let active_file = file_uri_to_path(uri)?;
-        let context = self.service.resolve_context(AnalysisContextRequest {
+        let mut context = self.service.resolve_context(AnalysisContextRequest {
             workspace_root: self.workspace_root.clone(),
             active_file,
             selected_context: self.selected_context.clone(),
             runner_selection: self.runner_selection.clone(),
             open_documents: self.open_document_versions(),
         });
+        if let (Some(runner), Some(failure)) = (
+            context.runner.as_mut(),
+            self.project_runner_failure.as_ref(),
+        ) {
+            runner.diagnostics.push(failure.clone());
+        }
         Some(self.service.analyze(context))
     }
 

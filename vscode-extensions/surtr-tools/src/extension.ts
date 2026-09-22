@@ -134,9 +134,13 @@ async function runCliWithTerminal(args: string[]): Promise<void> {
   const compilerPath = vscode.workspace
     .getConfiguration()
     .get<string>("surtr.compiler.path", "surtr");
-  const terminal = vscode.window.createTerminal("Surtr");
+  const terminal = vscode.window.createTerminal({
+    name: "Surtr",
+    shellPath: compilerPath,
+    shellArgs: args,
+    cwd: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  });
   terminal.show();
-  terminal.sendText([compilerPath, ...args].map(shellEscape).join(" "));
 }
 
 function currentFilePath(expectedLanguageId?: string): string {
@@ -162,11 +166,4 @@ function stdoutFromError(error: unknown): string | undefined {
     return stdout.toString("utf8");
   }
   return undefined;
-}
-
-function shellEscape(value: string): string {
-  if (/^[A-Za-z0-9_./:-]+$/.test(value)) {
-    return value;
-  }
-  return JSON.stringify(value);
 }

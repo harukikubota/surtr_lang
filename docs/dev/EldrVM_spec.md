@@ -67,6 +67,7 @@ current working directory 基準で解決し、存在しない path や open/rea
 - `Callable` は `lexical_captures` を保持する
 - 関数呼び出し時、`locals` には `lexical_captures` → 実引数 の順で先頭から配置する
 - `Call` 実行後は、呼び出し先がフレーム完成状態で開始する
+- `FunctionEntry.arity`、`Call` / `CallClosure` / `CallBuiltin` の arity、closure capture 数、error template 引数数、`Dbg` 引数数は bytecode 上 `u8` であり、最大 255 とする。Forge は宣言・呼出し・生成 wrapper の隠れた引数を含め、表現できない個数を `CodegenError` で拒否し、切り詰めて命令を作らない
 - tail-position は、現在の関数 / closure / extractor / process handler の返り値そのものになる式位置を指す
 - user function への tail-position call は、次 opcode が `Return` の場合に限り current `CallFrame` を再利用してよい
 - 対象は direct `Call` と、target が user function の `CallClosure` / `TailCallClosure` に限る

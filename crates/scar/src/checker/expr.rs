@@ -7974,13 +7974,15 @@ impl Checker {
         None
     }
 
-    fn is_result_chain_auto_import(func: &Resolved) -> bool {
+    fn is_bare_result_chain_alias(func: &Resolved) -> bool {
         let Resolved::Var(_, id) = func else {
             return false;
         };
-        id.qualified_name
-            .as_deref()
-            .is_some_and(|qualified| Self::surface_name(qualified) == "Result::chain")
+        id.name == "chain"
+            && id
+                .qualified_name
+                .as_deref()
+                .is_some_and(|qualified| Self::surface_name(qualified) == "Result::chain")
     }
 
     fn looks_like_facet_path_expr(expr: &Resolved) -> bool {
@@ -10152,7 +10154,7 @@ impl Checker {
         func: &Resolved,
         args: &[ResolvedRecordLitArg],
     ) -> Result<Option<TypedNode>, TypeError> {
-        if Self::is_result_chain_auto_import(func) && args.len() == 2 {
+        if Self::is_bare_result_chain_alias(func) && args.len() == 2 {
             match self.check_facet_compose_intrinsic(span, args) {
                 Ok(node) => return Ok(Some(node)),
                 Err(err) if Self::facet_chain_candidate_args(args) => return Err(err),

@@ -241,6 +241,7 @@ const SURFACE_CASES: &[(&str, fn())] = &[
         "facet_chain_typecheck_success_and_mismatch",
         facet_chain_typecheck_success_and_mismatch as fn(),
     ),
+    surface_case!(qualified_result_chain_is_not_facet_chain),
     (
         "facet_slash_compose_typecheck_success_and_mismatch",
         facet_slash_compose_typecheck_success_and_mismatch as fn(),
@@ -2573,6 +2574,17 @@ chain(Profile.name, User.profile)"#,
     )
     .expect_err("mismatched chain should fail");
     assert!(!err.message.is_empty());
+}
+
+fn qualified_result_chain_is_not_facet_chain() {
+    let typed = typecheck_with_builtin_prelude(
+        r#"pair: (Result<Int>, Int) = (Ok(1), 2)
+Result::chain(pair._0, Ok(()))"#,
+    );
+    assert!(matches!(
+        typed.last().map(|node| &node.ty),
+        Some(Ty::Result(inner, _)) if matches!(inner.as_ref(), Ty::Int)
+    ));
 }
 
 fn facet_slash_compose_typecheck_success_and_mismatch() {

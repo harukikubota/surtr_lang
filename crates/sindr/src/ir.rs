@@ -1472,10 +1472,8 @@ fn decode_payloads(
     let functions = deserialize_required::<Vec<FunctionEntry>>(payloads, "Func")?;
     let type_registry = deserialize_required::<TypeRegistry>(payloads, "Type")?;
     let error_templates = deserialize_required::<Vec<ErrTemplate>>(payloads, "ErrT")?;
-    let dbg_templates =
-        deserialize_optional::<Vec<DbgTemplate>>(payloads, "DbgT")?.unwrap_or_default();
-    let callable_templates =
-        deserialize_optional::<Vec<CallableTemplate>>(payloads, "CalT")?.unwrap_or_default();
+    let dbg_templates = deserialize_required::<Vec<DbgTemplate>>(payloads, "DbgT")?;
+    let callable_templates = deserialize_required::<Vec<CallableTemplate>>(payloads, "CalT")?;
     let compile_info = deserialize_required::<CompileInfo>(payloads, "CInf")?;
     let labels = deserialize_required::<Vec<LabelEntry>>(payloads, "LblT")?;
     let imports = deserialize_required::<Vec<ImportEntry>>(payloads, "ImpT")?;
@@ -1488,10 +1486,8 @@ fn decode_payloads(
     let docs = deserialize_optional::<Vec<DocEntry>>(payloads, "Docs")?.unwrap_or_default();
     let signatures =
         deserialize_optional::<Vec<SignatureEntry>>(payloads, "SigT")?.unwrap_or_default();
-    let runtime_process_specs =
-        deserialize_optional::<RuntimeProcessSpecTable>(payloads, "Proc")?.unwrap_or_default();
-    let runtime_boot_plan =
-        deserialize_optional::<RuntimeBootPlan>(payloads, "Boot")?.unwrap_or_default();
+    let runtime_process_specs = deserialize_required::<RuntimeProcessSpecTable>(payloads, "Proc")?;
+    let runtime_boot_plan = deserialize_required::<RuntimeBootPlan>(payloads, "Boot")?;
 
     Ok(Bytecode {
         opcodes,
@@ -1530,7 +1526,7 @@ fn parse_container(bytes: &[u8]) -> Result<ParsedContainer<'_>, BytecodeFormatEr
     }
 
     let version = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
-    if version > Bytecode::VERSION {
+    if version != Bytecode::VERSION {
         return Err(BytecodeFormatError::UnsupportedVersion(version));
     }
 
@@ -1598,8 +1594,8 @@ fn parse_container(bytes: &[u8]) -> Result<ParsedContainer<'_>, BytecodeFormatEr
     }
 
     for required in [
-        "Code", "Cnst", "Func", "Type", "ErrT", "CInf", "LblT", "ImpT", "ExpT", "LitT", "Line",
-        "SpnT", "SrcP", "PcSp",
+        "Code", "Cnst", "Func", "Type", "ErrT", "DbgT", "CalT", "CInf", "LblT", "ImpT", "ExpT",
+        "LitT", "Line", "SpnT", "SrcP", "PcSp", "Proc", "Boot",
     ] {
         if !payloads.contains_key(required) {
             return Err(BytecodeFormatError::MissingRequiredChunk(
@@ -2452,10 +2448,37 @@ mod tests {
     }
 
     #[test]
-    fn decode_rejects_missing_code_chunk() {
-        let bytes = b"ELDR\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-        let err = Bytecode::decode(bytes).expect_err("decode must fail");
-        assert!(matches!(err, BytecodeFormatError::MissingRequiredChunk(_)));
+    fn decode_rejects_each_missing_required_chunk() {
+        let bytes = sample_bytecode(None)
+            .encode()
+            .expect("encode should succeed");
+        let inspected = Bytecode::inspect(&bytes).expect("inspect should succeed");
+        for tag in [
+            "Code", "Cnst", "Func", "Type", "ErrT", "DbgT", "CalT", "CInf", "LblT", "ImpT", "ExpT",
+            "LitT", "Line", "SpnT", "SrcP", "PcSp", "Proc", "Boot",
+        ] {
+            let mut without_chunk = bytes.clone();
+            let (index, chunk) = inspected
+                .chunks
+                .iter()
+                .enumerate()
+                .find(|(_, chunk)| chunk.tag == tag)
+                .expect("encoded bytecode must contain required chunk");
+            without_chunk.drain(chunk.payload_offset..chunk.payload_offset + chunk.padded_size);
+            let table_offset = Bytecode::HEADER_LEN + index * Bytecode::CHUNK_HEADER_LEN;
+            without_chunk.drain(table_offset..table_offset + Bytecode::CHUNK_HEADER_LEN);
+            without_chunk[12..16].copy_from_slice(&(inspected.header.num_chunks - 1).to_le_bytes());
+
+            for error in [
+                Bytecode::decode(&without_chunk).expect_err("decode must fail"),
+                Bytecode::inspect(&without_chunk).expect_err("inspect must fail"),
+            ] {
+                assert_eq!(
+                    error,
+                    BytecodeFormatError::MissingRequiredChunk(tag.to_string())
+                );
+            }
+        }
     }
 
     #[test]
@@ -2466,26 +2489,34 @@ mod tests {
     }
 
     #[test]
-    fn decode_accepts_previous_version_header() {
-        let bytecode = sample_bytecode(None);
-        let mut bytes = bytecode.encode().expect("encode should succeed");
-        bytes[4..8].copy_from_slice(&2u32.to_le_bytes());
-
-        let decoded = Bytecode::decode(&bytes).expect("decode should accept version 2");
-        assert_eq!(decoded.callable_templates, bytecode.callable_templates);
-        assert_eq!(decoded.compile_info.bytecode_version, 3);
+    fn decode_rejects_previous_version_headers() {
+        let bytes = sample_bytecode(None)
+            .encode()
+            .expect("encode should succeed");
+        for version in 0..Bytecode::VERSION {
+            let mut old_header = bytes.clone();
+            old_header[4..8].copy_from_slice(&version.to_le_bytes());
+            assert_eq!(
+                Bytecode::decode(&old_header).expect_err("decode must reject old header"),
+                BytecodeFormatError::UnsupportedVersion(version),
+            );
+            assert_eq!(
+                Bytecode::inspect(&old_header).expect_err("inspect must reject old header"),
+                BytecodeFormatError::UnsupportedVersion(version),
+            );
+        }
     }
 
     #[test]
     fn decode_rejects_truncated_chunk_header() {
-        let bytes = b"ELDR\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00Code";
+        let bytes = b"ELDR\x03\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00Code";
         let err = Bytecode::decode(bytes).expect_err("decode must fail");
         assert!(matches!(err, BytecodeFormatError::TruncatedChunkHeader));
     }
 
     #[test]
     fn decode_rejects_truncated_chunk_data() {
-        let bytes = b"ELDR\x01\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00Code\x04\x00\x00\x00\x01";
+        let bytes = b"ELDR\x03\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00Code\x04\x00\x00\x00\x01";
         let err = Bytecode::decode(bytes).expect_err("decode must fail");
         assert!(matches!(err, BytecodeFormatError::TruncatedChunkData));
     }

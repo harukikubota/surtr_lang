@@ -102,27 +102,6 @@ pub(crate) fn normalized_char_span(source: &str, span: &Span) -> Span {
     Span { start, end }
 }
 
-pub(crate) fn char_span_to_byte_range(source: &str, span: &Span) -> std::ops::Range<usize> {
-    let normalized = normalized_char_span(source, span);
-    char_offset_to_byte_offset(source, normalized.start)
-        ..char_offset_to_byte_offset(source, normalized.end)
-}
-
-pub(crate) fn char_offset_to_byte_offset(source: &str, offset: usize) -> usize {
-    if offset == 0 {
-        return 0;
-    }
-    let char_len = source.chars().count();
-    if offset >= char_len {
-        return source.len();
-    }
-    source
-        .char_indices()
-        .nth(offset)
-        .map(|(idx, _)| idx)
-        .unwrap_or(source.len())
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SourceId(pub u32);
 

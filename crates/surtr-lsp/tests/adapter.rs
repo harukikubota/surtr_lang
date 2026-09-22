@@ -705,6 +705,119 @@ fn completion_uses_injected_project_runner_executor() {
 }
 
 #[test]
+fn injected_project_runner_failure_is_diagnostic_without_source_fallback() {
+    let workspace = temp_workspace("project-runner-executor-error");
+    let src = workspace.join("src");
+    std::fs::create_dir_all(&src).expect("temporary src dir must be writable");
+    let helper_path = src.join("helper.srt");
+    let main_path = src.join("main.srt");
+    let project_file = workspace.join("project.srt");
+    std::fs::write(&helper_path, "defmod Helper { def helper() -> Int { 1 } }")
+        .expect("write helper source");
+
+    let uri = path_to_file_uri(&main_path);
+    let source = "Helper::he";
+    std::fs::write(&main_path, source).expect("write main source");
+    let project_source = r#"
+Project::config({|config|
+  Project::entrypoint(config, "dev", {|c|
+    Config::add_path(c, "./src/helper.srt")
+    |> Config::add_path("./src/main.srt")
+  })
+})
+"#;
+    let mut host = LspAnalysisHost::new(workspace.clone());
+    host.set_project_runner_executor(Some(|_input: surtr_analysis::ProjectRunnerSourceInput| {
+        Err("external input unavailable".to_string())
+    }));
+    host.did_open(uri.clone(), Some(1), source.to_string());
+    host.set_selected_context(Some(SelectedContext::ProjectProfile {
+        project_file: project_file.clone(),
+        profile: "dev".to_string(),
+    }));
+    host.set_runner_selection(Some(RunnerSelection {
+        project_file: project_file.clone(),
+        selected_profile: "dev".to_string(),
+        normalized_args: vec![("profile".to_string(), "dev".to_string())],
+        runner_result: None,
+        source: Some(surtr_analysis::ProjectRunnerSourceInput {
+            project_file: project_file.clone(),
+            selected_profile: "dev".to_string(),
+            normalized_args: vec![("profile".to_string(), "dev".to_string())],
+            active_file: Some(main_path),
+            source: project_source.to_string(),
+        }),
+    }));
+
+    let reported = diagnostics(&host, &uri);
+    assert!(
+        reported
+            .iter()
+            .any(|diagnostic| diagnostic.source == "surtr:project-runner"
+                && diagnostic.severity == DiagnosticSeverity::Warning
+                && diagnostic.message.contains("external input unavailable")),
+        "executor failure should be a project runner diagnostic: {reported:?}"
+    );
+
+    let items = completion_items(
+        &host,
+        &uri,
+        LspPosition {
+            line: 0,
+            character: source.len() as u32,
+        },
+    );
+    assert!(
+        !items.iter().any(|item| item.label == "Helper::helper"),
+        "failed VM execution must not use source-only project paths: {items:?}"
+    );
+
+    host.set_selected_context(Some(SelectedContext::DefinitionStandalone));
+    assert!(
+        diagnostics(&host, &uri)
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("external input unavailable")),
+        "project runner failure must not appear outside the project context"
+    );
+
+    host.set_selected_context(Some(SelectedContext::ProjectProfile {
+        project_file: project_file.clone(),
+        profile: "dev".to_string(),
+    }));
+    host.set_runner_selection(Some(RunnerSelection {
+        project_file: project_file.clone(),
+        selected_profile: "dev".to_string(),
+        normalized_args: vec![("profile".to_string(), "dev".to_string())],
+        runner_result: Some(ProjectRunnerResult {
+            profiles: vec![ProjectRunnerProfile {
+                name: "dev".to_string(),
+                entrypoint: "Main::main".to_string(),
+                paths: Vec::new(),
+            }],
+            boot_summary: ProjectBootSummary::default(),
+            external_inputs: Vec::new(),
+        }),
+        source: None,
+    }));
+    assert!(
+        diagnostics(&host, &uri)
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("external input unavailable")),
+        "a successful runner selection must clear the previous execution failure"
+    );
+
+    host.set_runner_selection(None);
+    assert!(
+        diagnostics(&host, &uri)
+            .iter()
+            .all(|diagnostic| !diagnostic.message.contains("external input unavailable")),
+        "clearing runner selection must clear the previous execution failure"
+    );
+
+    std::fs::remove_dir_all(workspace).expect("temporary workspace must be removable");
+}
+
+#[test]
 fn completion_uses_load_project_context_for_operational_script() {
     let workspace = temp_workspace("load-project-completion");
     let src = workspace.join("src");

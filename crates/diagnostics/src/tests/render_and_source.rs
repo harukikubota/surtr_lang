@@ -113,6 +113,60 @@ fn render_error_normalizes_empty_span_to_single_point_label() {
 }
 
 #[test]
+fn render_error_highlights_character_after_multibyte_prefix() {
+    let spec = simple_error("TypeError", "unexpected x", Span { start: 1, end: 2 }, None);
+    let rendered = strip_ansi(&render_error("main.srt", "あxyz", &spec));
+    assert!(rendered.contains("main.srt:1:2"), "{rendered}");
+}
+
+#[test]
+fn render_error_by_id_highlights_character_after_multibyte_prefix() {
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register("main.srt", "あxyz");
+    let spec = simple_error("TypeError", "unexpected x", Span { start: 1, end: 2 }, None);
+    let rendered = strip_ansi(&render_error_by_id(&sources, source_id, &spec));
+    assert!(rendered.contains("main.srt:1:2"), "{rendered}");
+}
+
+#[test]
+fn render_error_by_id_places_related_label_after_multibyte_prefix() {
+    let mut sources = SourceRegistry::new();
+    let source_id = sources.register("main.srt", "あxyz");
+    let related_id = sources.register("related.srt", "いxyz");
+    let mut spec = simple_error("TypeError", "unexpected x", Span { start: 1, end: 2 }, None);
+    spec.labels.push(DiagnosticLabel {
+        source_id: Some(related_id),
+        span: Span { start: 1, end: 2 },
+        message: "related x".into(),
+        color: None,
+    });
+
+    let rendered = strip_ansi(&render_error_by_id(&sources, source_id, &spec));
+    assert!(rendered.contains("main.srt:1:2"), "{rendered}");
+    assert!(rendered.contains("related.srt:1:2"), "{rendered}");
+    assert!(rendered.contains("related x"), "{rendered}");
+}
+
+#[test]
+fn debug_report_highlights_character_after_multibyte_prefix() {
+    let rendered = strip_ansi(&render_debug_report(
+        "main.srt",
+        "あxyz",
+        "TypeError",
+        "unexpected x",
+        1,
+        2,
+        &[DebugLabel {
+            span_start: 1,
+            span_end: 2,
+            message: "x".into(),
+            color: None,
+        }],
+    ));
+    assert!(rendered.contains("main.srt:1:2"), "{rendered}");
+}
+
+#[test]
 fn serializable_report_uses_character_offsets_for_utf8_source() {
     let mut sources = SourceRegistry::new();
     let source_id = sources.register("main.srt", "あx");
@@ -275,12 +329,6 @@ fn rejected_trait_candidates_preserve_structured_failure_details() {
         report.errors[0].data["failures"][0]["detail"],
         "right-hand side returns Int"
     );
-}
-
-#[test]
-fn char_span_to_byte_range_converts_only_at_render_boundary() {
-    let range = char_span_to_byte_range("あx", &Span { start: 1, end: 2 });
-    assert_eq!(range, "あ".len().."あx".len());
 }
 
 #[test]

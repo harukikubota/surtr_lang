@@ -95,6 +95,22 @@ fn codegen_validation_error(error: impl std::fmt::Display) -> CodegenError {
     }
 }
 
+fn checked_u8_arity(count: usize, span: &Span) -> Result<u8, CodegenError> {
+    u8::try_from(count).map_err(|_| CodegenError {
+        message: "callable arity exceeds 255".into(),
+        span: span.clone(),
+    })
+}
+
+fn checked_u8_arity_sum(left: usize, right: usize, span: &Span) -> Result<u8, CodegenError> {
+    left.checked_add(right)
+        .and_then(|count| u8::try_from(count).ok())
+        .ok_or_else(|| CodegenError {
+            message: "callable arity exceeds 255".into(),
+            span: span.clone(),
+        })
+}
+
 fn validate_required_singletons(
     nodes: &[TypedNode],
     process_specs: &[TypedProcessSpec],
@@ -6526,6 +6542,7 @@ impl Codegen {
                     .filter(|id| self.state.slot_map.contains_key(&id.unique_id))
                     .cloned()
                     .collect();
+                checked_u8_arity_sum(filtered_captures.len(), params.len(), &node.span)?;
                 Ok(self
                     .partial_direct_call_template_for_closure(params, &filtered_captures, body)?
                     .is_some())
@@ -6594,6 +6611,7 @@ impl Codegen {
         display: Option<&ReplCallableDisplay>,
         signature: &str,
     ) -> Result<(), CodegenError> {
+        let arity = checked_u8_arity_sum(captures.len(), params.len(), &body.span)?;
         let saved_slot_map = self.state.slot_map.clone();
         let saved_next_slot = self.state.next_slot;
 
@@ -6612,7 +6630,6 @@ impl Codegen {
         self.state.next_slot = slot;
 
         let entry_pc = self.current_pos() as u32;
-        let total_arity = captures.len() + params.len();
         let prev_in_function = self.in_function;
         self.in_function = true;
         self.emit_tail_node(body)?;
@@ -6630,7 +6647,7 @@ impl Codegen {
             fun_idx,
             entry_pc,
             num_locals: self.state.next_slot,
-            arity: total_arity as u8,
+            arity,
             qualified_name,
             signature,
             end_pc: 0,
@@ -6850,6 +6867,7 @@ impl Codegen {
         display: Option<&ReplCallableDisplay>,
         signature: &str,
     ) -> Result<(), CodegenError> {
+        let arity = checked_u8_arity_sum(extra_arg_count, 2, span)?;
         let saved_slot_map = self.state.slot_map.clone();
         let saved_next_slot = self.state.next_slot;
 
@@ -6868,7 +6886,7 @@ impl Codegen {
             self.emit(Opcode::LoadLocal((offset + 1) as u32));
         }
         self.emit(Opcode::CallClosure {
-            arity: (extra_arg_count + 1) as u8,
+            arity: arity - 1,
             span_start: span.start as u32,
             span_end: span.end as u32,
         });
@@ -6887,7 +6905,7 @@ impl Codegen {
             fun_idx,
             entry_pc,
             num_locals: self.state.next_slot,
-            arity: (extra_arg_count + 2) as u8,
+            arity,
             qualified_name,
             signature,
             end_pc: 0,
@@ -7170,9 +7188,10 @@ impl Codegen {
 
         for stmt in &stmts {
             if let TypedInner::DeferrorDef(_, fun_idx, id, params, _) = &stmt.node {
+                let arity = checked_u8_arity(params.len(), &stmt.span)?;
                 self.state
                     .error_ctor_funs
-                    .insert(id.name.clone(), (*fun_idx, params.len() as u8));
+                    .insert(id.name.clone(), (*fun_idx, arity));
             }
             match &stmt.node {
                 TypedInner::Def(fun_idx, id, ..)
@@ -7258,6 +7277,8 @@ impl Codegen {
             }
         };
 
+        let arity = checked_u8_arity(params.len(), &node.span)?;
+
         let saved_slot_map = self.state.slot_map.clone();
         let saved_next_slot = self.state.next_slot;
 
@@ -7280,7 +7301,7 @@ impl Codegen {
             fun_idx: *fun_idx,
             entry_pc,
             num_locals,
-            arity: params.len() as u8,
+            arity,
             qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
             signature: Some(format_function_signature(
                 &id.name,
@@ -7322,6 +7343,8 @@ impl Codegen {
             }
         };
 
+        let arity = checked_u8_arity(params.len(), &node.span)?;
+
         let template_id = self.state.error_templates.len() as u32;
         self.state.error_templates.push(ErrTemplate {
             id: template_id,
@@ -7331,7 +7354,7 @@ impl Codegen {
             line: 0,
             column: 0,
             format: String::new(),
-            num_params: params.len() as u8,
+            num_params: arity,
             diagnostic: None,
         });
 
@@ -7359,7 +7382,7 @@ impl Codegen {
             fun_idx: *fun_idx,
             entry_pc,
             num_locals,
-            arity: params.len() as u8,
+            arity,
             qualified_name: id.qualified_name.clone().or_else(|| Some(id.name.clone())),
             signature: Some(format_error_constructor_signature(&id.name, params)),
             end_pc: 0,
@@ -7376,7 +7399,7 @@ impl Codegen {
         });
         self.state
             .error_ctor_funs
-            .insert(id.name.clone(), (*fun_idx, params.len() as u8));
+            .insert(id.name.clone(), (*fun_idx, arity));
 
         self.state.slot_map = saved_slot_map;
         self.state.next_slot = saved_next_slot;
@@ -7760,12 +7783,13 @@ impl Codegen {
                     TraitDispatch::Static(TraitDispatchTarget::UserFunction {
                         fun_idx, ..
                     }) => {
+                        let arity = checked_u8_arity(args.len(), &node.span)?;
                         for arg in args {
                             self.emit_node(arg)?;
                         }
                         self.emit(Opcode::Call {
                             fun_idx: *fun_idx,
-                            arity: args.len() as u8,
+                            arity,
                             span_start: node.span.start as u32,
                             span_end: node.span.end as u32,
                         });
@@ -7783,9 +7807,11 @@ impl Codegen {
                         display.as_ref(),
                         &signature,
                     )? {
+                    checked_u8_arity_sum(args.len(), 1, &node.span)?;
                     self.emit_callable_template_ref(template_id);
                     args.len()
                 } else {
+                    checked_u8_arity_sum(args.len(), 2, &node.span)?;
                     let fun_idx = self.reserve_fun_idx();
                     self.pending_inject_calls.push(PendingInjectCall {
                         fun_idx,
@@ -7801,7 +7827,10 @@ impl Codegen {
                 for arg in args {
                     self.emit_node(arg)?;
                 }
-                self.emit(Opcode::CaptureClosure(capture_count as u8));
+                self.emit(Opcode::CaptureClosure(checked_u8_arity(
+                    capture_count,
+                    &node.span,
+                )?));
                 if capture_count == args.len() + 1 {
                     self.emit(Opcode::SetCallableOriginSource(0));
                 }
@@ -7826,11 +7855,12 @@ impl Codegen {
                 }
                 if let TypedInner::InjectCall(func, args) = &right.node {
                     if let Some(target) = self.direct_callable_target_for_ref(func)? {
+                        let arity = checked_u8_arity_sum(args.len(), 1, &node.span)?;
                         self.emit_node(left)?;
                         for arg in args {
                             self.emit_node(arg)?;
                         }
-                        self.emit_direct_call(target, (args.len() + 1) as u8, &node.span);
+                        self.emit_direct_call(target, arity, &node.span);
                         return Ok(());
                     }
                 }
@@ -7931,13 +7961,17 @@ impl Codegen {
             }
 
             TypedInner::Dbg(args) => {
+                let arg_count = u8::try_from(args.len()).map_err(|_| CodegenError {
+                    message: "debug argument count exceeds 255".into(),
+                    span: node.span.clone(),
+                })?;
                 for arg in args {
                     self.emit_node(&arg.expr)?;
                 }
                 let template_id = self.add_dbg_template(node.span.clone(), args);
                 self.emit(Opcode::Dbg {
                     template_id,
-                    arg_count: args.len() as u8,
+                    arg_count,
                 });
             }
 
@@ -8099,6 +8133,8 @@ impl Codegen {
                     .filter(|id| self.state.slot_map.contains_key(&id.unique_id))
                     .cloned()
                     .collect();
+                checked_u8_arity_sum(filtered_captures.len(), params.len(), &node.span)?;
+                let capture_count = checked_u8_arity(filtered_captures.len(), &node.span)?;
                 let display = callable_display_for_node(node);
                 let signature = ty_to_string(&node.ty);
                 if let Some(kind) =
@@ -8122,7 +8158,7 @@ impl Codegen {
                         self.emit(Opcode::LoadLocal(slot));
                     }
                     if !filtered_captures.is_empty() {
-                        self.emit(Opcode::CaptureClosure(filtered_captures.len() as u8));
+                        self.emit(Opcode::CaptureClosure(capture_count));
                     }
                     if matches!(&node.node, TypedInner::CaptureClosure(..)) {
                         if let Some(index) = callable_origin_source_index(body, &filtered_captures)
@@ -8150,7 +8186,7 @@ impl Codegen {
                     self.emit(Opcode::LoadLocal(slot));
                 }
                 if !filtered_captures.is_empty() {
-                    self.emit(Opcode::CaptureClosure(filtered_captures.len() as u8));
+                    self.emit(Opcode::CaptureClosure(capture_count));
                 }
                 if matches!(&node.node, TypedInner::CaptureClosure(..)) {
                     if let Some(index) = callable_origin_source_index(body, &filtered_captures) {
@@ -11374,6 +11410,7 @@ impl Codegen {
         func: &TypedNode,
         args: &[TypedNode],
     ) -> Result<(), CodegenError> {
+        let arity = checked_u8_arity(args.len(), &call_span)?;
         match &func.ty {
             Ty::BuiltinFunc { name, .. } => {
                 for arg in args {
@@ -11388,7 +11425,7 @@ impl Codegen {
                     })?;
                     self.emit(Opcode::CallBuiltin {
                         builtin_id,
-                        arity: args.len() as u8,
+                        arity,
                         span_start: call_span.start as u32,
                         span_end: call_span.end as u32,
                     });
@@ -11412,7 +11449,7 @@ impl Codegen {
                 }
                 self.emit(Opcode::Call {
                     fun_idx: *fun_idx,
-                    arity: args.len() as u8,
+                    arity,
                     span_start: call_span.start as u32,
                     span_end: call_span.end as u32,
                 });
@@ -11433,7 +11470,7 @@ impl Codegen {
                     self.emit_node(arg)?;
                 }
                 self.emit(Opcode::CallClosure {
-                    arity: args.len() as u8,
+                    arity,
                     span_start: call_span.start as u32,
                     span_end: call_span.end as u32,
                 });
@@ -12495,12 +12532,13 @@ impl Codegen {
                 self.emit_trait_builtin(*id, args.len(), span)?;
             }
             TraitDispatch::Static(TraitDispatchTarget::UserFunction { fun_idx, .. }) => {
+                let arity = checked_u8_arity(args.len(), span)?;
                 for arg in args {
                     self.emit_node(arg)?;
                 }
                 self.emit(Opcode::Call {
                     fun_idx: *fun_idx,
-                    arity: args.len() as u8,
+                    arity,
                     span_start: span.start as u32,
                     span_end: span.end as u32,
                 });

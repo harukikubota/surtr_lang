@@ -105,7 +105,8 @@ fn validate_test_selector(selector: &str) -> RuneResult<()> {
     if selector == "--all" {
         return Ok(());
     }
-    let path = Path::new(selector);
+    let normalized = selector.replace('\\', "/");
+    let path = Path::new(&normalized);
     if path.is_absolute()
         || path.components().any(|component| {
             matches!(
@@ -267,8 +268,8 @@ fn run_all_tests(env: ExecutionEnv, quiet: bool) -> RuneResult<()> {
 }
 
 fn load_test_script(selector: &str) -> RuneResult<TestScript> {
-    let path = resolve_test_script_path(selector);
-    let source = fs::read_to_string(&path).map_err(|e| {
+    let path = resolve_test_script_path(selector)?;
+    let read_error = |e| {
         RuneError::message(
             1,
             format!(
@@ -278,7 +279,15 @@ fn load_test_script(selector: &str) -> RuneResult<TestScript> {
                 e
             ),
         )
-    })?;
+    };
+    let canonical_path = fs::canonicalize(&path).map_err(read_error)?;
+    let canonical_root = fs::canonicalize(Path::new("lib/tests")).map_err(read_error)?;
+    if !canonical_path.starts_with(canonical_root) {
+        return Err(RuneError::usage(
+            "test: selector must stay within lib/tests",
+        ));
+    }
+    let source = fs::read_to_string(&canonical_path).map_err(read_error)?;
 
     Ok(TestScript {
         selector: selector.trim_end_matches(".srt").to_string(),
@@ -287,7 +296,8 @@ fn load_test_script(selector: &str) -> RuneResult<TestScript> {
     })
 }
 
-fn resolve_test_script_path(selector: &str) -> PathBuf {
+fn resolve_test_script_path(selector: &str) -> RuneResult<PathBuf> {
+    validate_test_selector(selector)?;
     let trimmed = selector.trim().replace('\\', "/");
     let without_prefix = trimmed.trim_start_matches("./");
     let normalized = without_prefix.trim_start_matches("lib/tests/");
@@ -297,7 +307,7 @@ fn resolve_test_script_path(selector: &str) -> PathBuf {
     } else {
         format!("{normalized}.srt")
     };
-    Path::new("lib").join("tests").join(relative)
+    Ok(Path::new("lib").join("tests").join(relative))
 }
 
 fn collect_all_test_selectors() -> RuneResult<Vec<String>> {
@@ -879,6 +889,12 @@ mod tests {
             parse_test_options(&["../string".to_string()]).expect_err("parent selector must fail");
 
         assert_eq!(err.summary(), "test: selector must stay within lib/tests");
+
+        for selector in [r"..\..\lib\kernel", r"lib\tests\..\kernel"] {
+            let err = parse_test_options(&[selector.to_string()])
+                .expect_err("backslash parent selector must fail");
+            assert_eq!(err.summary(), "test: selector must stay within lib/tests");
+        }
     }
 
     #[test]
@@ -886,6 +902,10 @@ mod tests {
         let err = parse_test_options(&["/tmp/string".to_string()])
             .expect_err("absolute selector must fail");
 
+        assert_eq!(err.summary(), "test: selector must stay within lib/tests");
+
+        let err = parse_test_options(&[r"\tmp\string".to_string()])
+            .expect_err("backslash absolute selector must fail");
         assert_eq!(err.summary(), "test: selector must stay within lib/tests");
     }
 
@@ -899,12 +919,16 @@ mod tests {
     #[test]
     fn selector_resolves_into_lib_tests() {
         assert_eq!(
-            resolve_test_script_path("string"),
+            resolve_test_script_path("string").unwrap(),
             Path::new("lib").join("tests").join("string.srt")
         );
         assert_eq!(
-            resolve_test_script_path("string.srt"),
+            resolve_test_script_path("string.srt").unwrap(),
             Path::new("lib").join("tests").join("string.srt")
+        );
+        assert_eq!(
+            resolve_test_script_path(r"lib\tests\spec\example.srt").unwrap(),
+            Path::new("lib").join("tests").join("spec/example.srt")
         );
     }
 

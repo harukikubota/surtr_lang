@@ -1,5 +1,5 @@
 pub(super) use crate::render::*;
-pub(super) use crate::source::{char_span_to_byte_range, slice_chars};
+pub(super) use crate::source::slice_chars;
 pub(super) use crate::*;
 pub(super) use ariadne::Color;
 pub(super) use spire::ast::Span;

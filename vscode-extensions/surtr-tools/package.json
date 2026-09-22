@@ -43,7 +43,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node -e \"console.log('surtr-tools: no automated test runner configured yet')\"",
-    "package": "npx @vscode/vsce package --no-dependencies"
+    "test": "npm run build && node --test tests/*.test.cjs",
+    "package": "vsce package --no-dependencies"
   }
 }

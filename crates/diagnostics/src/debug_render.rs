@@ -1,4 +1,4 @@
-use crate::source::char_span_to_byte_range;
+use crate::source::normalized_char_span;
 use crate::Color;
 use ariadne::{Label, Report, ReportKind};
 use spire::ast::Span;
@@ -52,7 +52,8 @@ fn build_report(
         start: span_start as usize,
         end: span_end as usize,
     };
-    let primary_range = char_span_to_byte_range(source, &primary_span);
+    let primary = normalized_char_span(source, &primary_span);
+    let primary_range = primary.start..primary.end;
     let mut builder = Report::build(
         ReportKind::Custom(kind, Color::Cyan),
         (file_name.to_string(), primary_range),
@@ -60,13 +61,14 @@ fn build_report(
     .with_message(message.to_string());
 
     for label in labels {
-        let range = char_span_to_byte_range(
+        let span = normalized_char_span(
             source,
             &Span {
                 start: label.span_start as usize,
                 end: label.span_end as usize,
             },
         );
+        let range = span.start..span.end;
         builder = builder.with_label(match label.color {
             Some(color) => Label::new((file_name.to_string(), range))
                 .with_message(label.message.clone())

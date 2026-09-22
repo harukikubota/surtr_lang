@@ -108,6 +108,45 @@ test("Math") {
     let _ = fs::remove_dir_all(temp);
 }
 
+#[cfg(unix)]
+#[test]
+fn test_command_rejects_test_file_symlink_outside_lib_tests() {
+    use std::os::unix::fs::symlink;
+
+    let temp = unique_temp_dir("surtr_test_command_symlink_escape");
+    write_source(&temp.join("private/secret.srt"), "not valid Surtr source");
+    fs::create_dir_all(temp.join("lib/tests")).expect("create test directory");
+    symlink(
+        "../../private/secret.srt",
+        temp.join("lib/tests/escape.srt"),
+    )
+    .expect("create escaping test symlink");
+
+    let output = run_surtr(&temp, &["test", "escape"]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("test: selector must stay within lib/tests"),
+        "unexpected diagnostic: {stderr}"
+    );
+
+    write_source(
+        &temp.join("lib/tests/inside.srt"),
+        "import Test;\ntest(\"Inside\") { describe(\"link\") { it(\"passes\") { assert_eq(1, 1) } } }\n",
+    );
+    symlink("inside.srt", temp.join("lib/tests/alias.srt"))
+        .expect("create test symlink within lib/tests");
+    let output = run_surtr(&temp, &["test", "alias"]);
+    assert!(
+        output.status.success(),
+        "symlink within lib/tests should run\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_dir_all(temp);
+}
+
 #[test]
 fn test_command_reports_assertion_failures_from_it() {
     let temp = unique_temp_dir("surtr_test_command_assertion_failure");

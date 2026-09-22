@@ -100,6 +100,7 @@ pub enum RunnerDiagnosticKind {
     ProjectFileMismatch,
     ProjectProfileMismatch,
     ProjectProfileUnknown,
+    ProjectExecutionFailure,
     ProjectSourceParseError,
     GlobNoMatch,
     UnreadablePath,
